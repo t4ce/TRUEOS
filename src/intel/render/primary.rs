@@ -15,6 +15,10 @@ pub(crate) struct RenderJokerResult {
     pub(crate) submit_name: &'static str,
     pub(crate) target: &'static str,
     pub(crate) completed: bool,
+    pub(crate) ps_state_marker: bool,
+    pub(crate) raster_packet: bool,
+    pub(crate) clip_counter: bool,
+    pub(crate) ps_observed: bool,
 }
 
 pub(crate) struct RenderOaControlResult {
@@ -2104,6 +2108,60 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
     result
 }
 
+pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
+    vertices: [[f32; 3]; N],
+) -> Result<RenderJokerResult, &'static str> {
+    if N == 0 || N % TRIANGLE_DRAW_VERTICES != 0 {
+        return Err("vertex-count");
+    }
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let (variant, submit_name, geometry_label, source_label) = match N {
+        TRIANGLE_DRAW_VERTICES => (
+            "font-clip-field-vf-vue-isolate-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-scratch",
+            "font-tessel-clip-field-vf-vue-isolate",
+            "lyon-font-mirrored-clip-field-isolate-first-triangle/vf-vue",
+        ),
+        n if n == TRIANGLE_DRAW_VERTICES * 2 => (
+            "font-clip-field-vf-vue-isolate-two-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-two-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-two",
+            "lyon-font-mirrored-clip-field-isolate-first-two-triangles/vf-vue",
+        ),
+        crate::graphics::font::FONT_CLIP_FIELD_VERTICES => (
+            "font-clip-field-vf-vue-isolate-all-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-all-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-all",
+            "lyon-font-mirrored-clip-field-isolate-all-triangles/vf-vue",
+        ),
+        _ => (
+            "font-clip-field-vf-vue-isolate-n-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-n-scratch",
+            "font-tessel-clip-field-vf-vue-isolate-n",
+            "lyon-font-mirrored-clip-field-isolate-n-triangles/vf-vue",
+        ),
+    };
+    let result = submit_render_custom_triangle_probe_locked(
+        &vertices,
+        variant,
+        submit_name,
+        geometry_label,
+        source_label,
+        BackendProbeMode::PsBindingTableCountZero,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+        TriangleBatchMode::VfScreenSpaceDraw,
+        StreamoutProofExperiment::PositionSlot0,
+    );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
 pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 -> Result<RenderJokerResult, &'static str> {
     let vertices = [
@@ -2279,12 +2337,17 @@ fn submit_render_custom_triangle_probe_locked(
         submit_name,
         completed as u8,
     );
+    let frontier = latest_render_frontier_summary();
 
     Ok(RenderJokerResult {
         variant,
         submit_name,
         target: "scratch",
         completed,
+        ps_state_marker: frontier.ps_state_marker,
+        raster_packet: frontier.raster_packet,
+        clip_counter: frontier.clip_counter,
+        ps_observed: frontier.ps_observed,
     })
 }
 
@@ -2531,12 +2594,17 @@ fn submit_render_joker_probe_locked(
         target_label,
         completed as u8,
     );
+    let frontier = latest_render_frontier_summary();
 
     Ok(RenderJokerResult {
         variant: spec.variant,
         submit_name: spec.submit_name,
         target: target_label,
         completed,
+        ps_state_marker: frontier.ps_state_marker,
+        raster_packet: frontier.raster_packet,
+        clip_counter: frontier.clip_counter,
+        ps_observed: frontier.ps_observed,
     })
 }
 

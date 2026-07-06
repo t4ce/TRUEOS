@@ -339,8 +339,27 @@ async fn font_tessel_boot_probe_task() {
     let mut clip_field_isolate_completed = None;
     let mut clip_field_isolate_two_completed = None;
     let mut clip_field_all_completed = None;
+    let mut clip_field_vf_vue_isolate_completed = None;
+    let mut clip_field_vf_vue_two_completed = None;
+    let mut clip_field_vf_vue_all_completed = None;
     let mut clip_counter_sweep_completed = None;
     let mut clip_counter_vf_vue_completed = None;
+    let mut clip_accept_one = false;
+    let mut clip_accept_two = false;
+    let mut clip_accept_all = false;
+    let mut clip_accept_big = false;
+    let mut clip_accept_one_route = "none";
+    let mut clip_accept_two_route = "none";
+    let mut clip_accept_all_route = "none";
+    let mut clip_accept_big_route = "none";
+    let mut candidate_accept_one = false;
+    let mut candidate_accept_two = false;
+    let mut candidate_accept_all = false;
+    let mut candidate_accept_big = false;
+    let mut candidate_accept_one_route = "none";
+    let mut candidate_accept_two_route = "none";
+    let mut candidate_accept_all_route = "none";
+    let mut candidate_accept_big_route = "none";
 
     match crate::graphics::font::font_tessellated_scratch_triangle() {
         Some(triangle) => {
@@ -395,6 +414,14 @@ async fn font_tessel_boot_probe_task() {
             match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated) {
                 Ok(render) => {
                     clip_field_isolate_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_one = true;
+                        clip_accept_one_route = "screen-space-default";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_one = true;
+                        candidate_accept_one_route = "screen-space-default";
+                    }
                     crate::log!(
                         "font-boot-tessel-render-font-field-isolate-result: variant={} submit={} target={} completed={}\n",
                         render.variant,
@@ -433,6 +460,14 @@ async fn font_tessel_boot_probe_task() {
             match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_two) {
                 Ok(render) => {
                     clip_field_isolate_two_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_two = true;
+                        clip_accept_two_route = "clip-normal";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_two = true;
+                        candidate_accept_two_route = "clip-normal";
+                    }
                     crate::log!(
                         "font-boot-tessel-render-font-field-isolate-two-result: variant={} submit={} target={} completed={}\n",
                         render.variant,
@@ -473,6 +508,14 @@ async fn font_tessel_boot_probe_task() {
             match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_all) {
                 Ok(render) => {
                     clip_field_all_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_all = true;
+                        clip_accept_all_route = "clip-sf-sync";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_all = true;
+                        candidate_accept_all_route = "clip-sf-sync";
+                    }
                     crate::log!(
                         "font-boot-tessel-render-font-field-isolate-all-result: variant={} submit={} target={} completed={}\n",
                         render.variant,
@@ -483,6 +526,89 @@ async fn font_tessel_boot_probe_task() {
                 }
                 Err(err) => crate::log!(
                     "font-boot-tessel-render-font-field-isolate-all-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            crate::log!(
+                "font-boot-tessel-render-font-field-vf-vue-isolate: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=clip-acceptance\n"
+            );
+            match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated) {
+                Ok(render) => {
+                    clip_field_vf_vue_isolate_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_one = true;
+                        clip_accept_one_route = "vf-vue";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_one = true;
+                        candidate_accept_one_route = "vf-vue";
+                    }
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-vf-vue-isolate-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-vf-vue-isolate-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            crate::log!(
+                "font-boot-tessel-render-font-field-vf-vue-two: source=first-two-triangles upload_vertices=6 upload_triangles=2 path=vf-synthesized-vue goal=clip-acceptance\n"
+            );
+            match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated_two) {
+                Ok(render) => {
+                    clip_field_vf_vue_two_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_two = true;
+                        clip_accept_two_route = "vf-vue";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_two = true;
+                        candidate_accept_two_route = "vf-vue";
+                    }
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-vf-vue-two-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-vf-vue-two-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            crate::log!(
+                "font-boot-tessel-render-font-field-vf-vue-all: source=full-field upload_vertices={} upload_triangles={} path=vf-synthesized-vue goal=clip-acceptance\n",
+                isolated_all.len(),
+                isolated_all.len() / 3
+            );
+            match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated_all) {
+                Ok(render) => {
+                    clip_field_vf_vue_all_completed = Some(render.completed);
+                    if render_clip_accepted(&render) {
+                        clip_accept_all = true;
+                        clip_accept_all_route = "vf-vue";
+                    }
+                    if render_fragment_candidate_ready(&render) {
+                        candidate_accept_all = true;
+                        candidate_accept_all_route = "vf-vue";
+                    }
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-vf-vue-all-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-vf-vue-all-result: status=skipped reason={}\n",
                     err
                 ),
             }
@@ -498,6 +624,14 @@ async fn font_tessel_boot_probe_task() {
     match crate::intel::render::submit_render_font_clip_counter_sweep_probe() {
         Ok(render) => {
             clip_counter_sweep_completed = Some(render.completed);
+            if render_clip_accepted(&render) {
+                clip_accept_big = true;
+                clip_accept_big_route = "known-vs-big-inbounds";
+            }
+            if render_fragment_candidate_ready(&render) {
+                candidate_accept_big = true;
+                candidate_accept_big_route = "known-vs-big-inbounds";
+            }
             crate::log!(
                 "font-boot-tessel-render-clip-counter-sweep-result: variant={} submit={} target={} completed={}\n",
                 render.variant,
@@ -517,6 +651,14 @@ async fn font_tessel_boot_probe_task() {
     match crate::intel::render::submit_render_font_clip_counter_vf_vue_probe() {
         Ok(render) => {
             clip_counter_vf_vue_completed = Some(render.completed);
+            if render_clip_accepted(&render) {
+                clip_accept_big = true;
+                clip_accept_big_route = "vf-vue-big-inbounds";
+            }
+            if render_fragment_candidate_ready(&render) {
+                candidate_accept_big = true;
+                candidate_accept_big_route = "vf-vue-big-inbounds";
+            }
             crate::log!(
                 "font-boot-tessel-render-clip-counter-vf-vue-result: variant={} submit={} target={} completed={}\n",
                 render.variant,
@@ -531,12 +673,66 @@ async fn font_tessel_boot_probe_task() {
         ),
     }
 
+    let all_clip_counts_ready =
+        clip_accept_one && clip_accept_two && clip_accept_all && clip_accept_big;
+    crate::log!(
+        "font-boot-tessel-clip-acceptance: one={} route_one={} two={} route_two={} all={} route_all={} big={} route_big={} all_counts={} gate={}\n",
+        clip_accept_one as u8,
+        clip_accept_one_route,
+        clip_accept_two as u8,
+        clip_accept_two_route,
+        clip_accept_all as u8,
+        clip_accept_all_route,
+        clip_accept_big as u8,
+        clip_accept_big_route,
+        all_clip_counts_ready as u8,
+        if all_clip_counts_ready {
+            "ready"
+        } else {
+            "wait"
+        }
+    );
+    let all_candidate_counts_ready = candidate_accept_one
+        && candidate_accept_two
+        && candidate_accept_all
+        && candidate_accept_big;
+    crate::log!(
+        "font-boot-tessel-final-candidate: one={} route_one={} two={} route_two={} all={} route_all={} big={} route_big={} all_counts={} gate={} markers=ps_state+raster_packet+clip_counter+no_ps\n",
+        candidate_accept_one as u8,
+        candidate_accept_one_route,
+        candidate_accept_two as u8,
+        candidate_accept_two_route,
+        candidate_accept_all as u8,
+        candidate_accept_all_route,
+        candidate_accept_big as u8,
+        candidate_accept_big_route,
+        all_candidate_counts_ready as u8,
+        if all_candidate_counts_ready {
+            "ready"
+        } else {
+            "wait"
+        }
+    );
+    crate::log!(
+        "font-boot-tessel-gate: clip={} final_candidate={} next={}\n",
+        all_clip_counts_ready as u8,
+        all_candidate_counts_ready as u8,
+        if all_candidate_counts_ready {
+            "ps-launch"
+        } else {
+            "finish-frontier-candidate"
+        }
+    );
+
     let frontier = crate::intel::render::latest_render_frontier_summary();
     crate::log!(
-        "font-boot-tessel-verdict: clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} clip_counter_sweep={} clip_counter_vf_vue={} sweep=one:screen-space-default,two:clip-normal,all:clip-sf-sync,clip-counter:known-vs-big-inbounds,vf-vue-big-inbounds latest_launch=font-clip-counter-vf-vue-big-inbounds completed={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}\n",
+        "font-boot-tessel-verdict: clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} vf_vue_isolate={} vf_vue_two={} vf_vue_all={} clip_counter_sweep={} clip_counter_vf_vue={} sweep=one:screen-space-default,two:clip-normal,all:clip-sf-sync,vf-vue:one/two/all/big,clip-counter:known-vs-big-inbounds latest_launch=font-clip-counter-vf-vue-big-inbounds completed={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}\n",
         probe_status_word(clip_field_isolate_completed),
         probe_status_word(clip_field_isolate_two_completed),
         probe_status_word(clip_field_all_completed),
+        probe_status_word(clip_field_vf_vue_isolate_completed),
+        probe_status_word(clip_field_vf_vue_two_completed),
+        probe_status_word(clip_field_vf_vue_all_completed),
         probe_status_word(clip_counter_sweep_completed),
         probe_status_word(clip_counter_vf_vue_completed),
         frontier.completed as u8,
@@ -559,7 +755,7 @@ async fn font_tessel_boot_probe_task() {
     );
 
     crate::log!(
-        "font-boot-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all+big-inbounds-known-vs+big-inbounds-vf-vue intel=rcs-marker+3d-pipe-marker+clip-field-screen-space-default+clip-field-two-clip-normal+clip-field-all-clip-sf-sync+clip-counter-sweep raster_pixels=scratch-observational production-path=unchanged\n"
+        "font-boot-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all+vf-vue-one/two/all+big-inbounds-known-vs+big-inbounds-vf-vue intel=rcs-marker+3d-pipe-marker+clip-field-screen-space-default+clip-field-two-clip-normal+clip-field-all-clip-sf-sync+clip-counter-sweep raster_pixels=scratch-observational production-path=unchanged\n"
     );
 }
 
@@ -573,6 +769,14 @@ fn probe_status_word(value: Option<bool>) -> &'static str {
         Some(false) => "stalled",
         None => "skipped",
     }
+}
+
+fn render_clip_accepted(render: &crate::intel::render::RenderJokerResult) -> bool {
+    render.clip_counter && render.raster_packet
+}
+
+fn render_fragment_candidate_ready(render: &crate::intel::render::RenderJokerResult) -> bool {
+    render.ps_state_marker && render.raster_packet && render.clip_counter && !render.ps_observed
 }
 
 fn clip_field_next_step(

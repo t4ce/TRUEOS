@@ -255,6 +255,7 @@ pub enum VmBootMode {
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
     TokioRuntime,
+    AudioPlayer,
     NetworkClient,
     NetworkServer,
     ServerRuntime,
@@ -266,6 +267,7 @@ impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
             Self::TokioRuntime => "tokio-runtime",
+            Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
             Self::NetworkServer => "network-server",
             Self::ServerRuntime => "server-runtime",
@@ -993,6 +995,15 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
+    let audio_player_signal = archive_has(archive, "scope-tui")
+        || archive_has(archive, "scope_tui")
+        || import_name_has(imports, "trueos_cabi_audio_")
+        || import_name_has(imports, "audio_open_playback")
+        || import_name_has(imports, "audio_write_i16");
+    if audio_player_signal {
+        return BlueprintMemoryClass::AudioPlayer;
+    }
+
     let network_server_signal = archive_has(archive, "server")
         || import_name_has(imports, "trueos_mio_tcp_listener_")
         || import_name_has(imports, "tcp_listener");
@@ -1058,6 +1069,14 @@ fn estimate_blueprint_memory_profile(
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
+                256,
+                8,
+                16,
+                64,
+            ),
+            BlueprintMemoryClass::AudioPlayer => (
+                128,
+                round_pow2_mib(base_live_mib.saturating_mul(24).saturating_add(128)).max(256),
                 256,
                 8,
                 16,

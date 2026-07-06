@@ -11,6 +11,7 @@
 
 use crate::hv::hvlogf;
 use crate::hv::memory::kernel_va_to_pa;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ── op codes (u32, written by guest before vmcall) ──────────────────────────
@@ -82,6 +83,9 @@ pub const OP_BP_ENV_ALL: u32 = 0x6E; // response payload is newline-separated ke
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F; // payload path -> response payload tree text
 pub const OP_BP_FS_LIST_DIR: u32 = 0x81; // arg0 offset, arg1 cap; payload path -> newline children
 pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99; // payload bytes -> shell2 raw surface, no log mirror
+pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A; // payload i16 stereo 48k bytes -> frames/rc
+pub const OP_BP_AUDIO_STOP: u32 = 0x9B; // stop host overlay lane
+pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C; // response is host overlay pending frames
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -1033,6 +1037,41 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let data = unsafe { &(&(*p).payload)[..n] };
             let written = crate::hv::blueprint_console_raw_write(vm_id, data);
             write_response(vm_id, seq, STATUS_OK, written as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_WRITE_I16_STEREO_48K => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if n == 0 || (n & 1) != 0 {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data = unsafe { &(&(*p).payload)[..n] };
+            let mut samples = Vec::with_capacity(n / 2);
+            for bytes in data.chunks_exact(2) {
+                samples.push(i16::from_le_bytes([bytes[0], bytes[1]]));
+            }
+            let rc = match crate::aud::pcm_lane::submit_i16_stereo_48k(
+                "blueprint-audio-vmcall",
+                samples,
+            ) {
+                Ok(frames) => frames as i64,
+                Err(_) => -5,
+            };
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_STOP => {
+            let generation = crate::aud::pcm_lane::request_stop();
+            write_response(vm_id, seq, STATUS_OK, generation as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_PENDING_FRAMES => {
+            let frames = crate::aud::pcm_lane::pending_frames();
+            write_response(vm_id, seq, STATUS_OK, frames as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SHELL_ATTACHED_READ_BYTE => {

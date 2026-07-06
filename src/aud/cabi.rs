@@ -56,6 +56,19 @@ fn ensure_supported(format: u32, channels: u32, rate_hz: u32) -> Result<(), i32>
     Ok(())
 }
 
+fn ensure_supported_shape(format: u32, channels: u32, rate_hz: u32) -> Result<(), i32> {
+    if format != TRUEOS_AUDIO_FORMAT_S16LE {
+        return Err(EINVAL);
+    }
+    if channels != hda::PCM_CHANNELS as u32 {
+        return Err(EINVAL);
+    }
+    if rate_hz != hda::PCM_SAMPLE_RATE_HZ {
+        return Err(EINVAL);
+    }
+    Ok(())
+}
+
 fn write_samples(label: &'static str, samples: &[i16]) -> Result<usize, i32> {
     if samples.len() % hda::PCM_CHANNELS != 0 {
         return Err(EINVAL);
@@ -67,6 +80,63 @@ fn write_samples(label: &'static str, samples: &[i16]) -> Result<usize, i32> {
     crate::aud::pcm_lane::submit_i16_stereo_48k(label, Vec::from(samples)).map_err(|_| EIO)
 }
 
+fn guest_audio_write_samples(samples: &[i16]) -> Result<usize, i32> {
+    if samples.len() % hda::PCM_CHANNELS != 0 {
+        return Err(EINVAL);
+    }
+    if samples.is_empty() {
+        return Ok(0);
+    }
+
+    let bytes = unsafe {
+        core::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), core::mem::size_of_val(samples))
+    };
+    let mut written_frames = 0usize;
+    let mut offset = 0usize;
+    let max_payload = trueos_vm::vmcall::PAYLOAD_CAP & !1;
+    while offset < bytes.len() {
+        let end = core::cmp::min(offset.saturating_add(max_payload), bytes.len()) & !1;
+        if end <= offset {
+            return Err(EIO);
+        }
+        let chunk = &bytes[offset..end];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_AUDIO_WRITE_I16_STEREO_48K,
+            0,
+            0,
+            chunk,
+            &mut [],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return Err(EIO);
+        }
+        let frames = (rc as i64) as isize;
+        if frames < 0 {
+            return Err((-frames) as i32);
+        }
+        if frames == 0 {
+            break;
+        }
+        written_frames = written_frames.saturating_add(frames as usize);
+        offset = end;
+    }
+    Ok(written_frames)
+}
+
+fn guest_audio_stop() {
+    let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_AUDIO_STOP, 0, 0);
+}
+
+fn guest_audio_pending_frames() -> usize {
+    let (status, frames) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_AUDIO_PENDING_FRAMES, 0, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        frames as usize
+    } else {
+        0
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
     format: u32,
@@ -76,6 +146,21 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
 ) -> i32 {
     if out_handle.is_null() {
         return -EFAULT;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if let Err(err) = ensure_supported_shape(format, channels, rate_hz) {
+            return -err;
+        }
+        let mut state = AUDIO_CABI_STATE.lock();
+        if state.open {
+            return -EBUSY;
+        }
+        state.open = true;
+        state.running = false;
+        unsafe {
+            out_handle.write(TRUEOS_AUDIO_HANDLE);
+        }
+        return 0;
     }
     if let Err(err) = ensure_supported(format, channels, rate_hz) {
         return -err;
@@ -101,6 +186,9 @@ pub extern "C" fn trueos_cabi_audio_close(handle: u32) -> i32 {
         return -EBADF;
     }
 
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_audio_stop();
+    }
     let mut state = AUDIO_CABI_STATE.lock();
     state.open = false;
     state.running = false;
@@ -116,6 +204,10 @@ pub extern "C" fn trueos_cabi_audio_start(handle: u32) -> i32 {
     let mut state = AUDIO_CABI_STATE.lock();
     if !state.open {
         return -ENODEV;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        state.running = true;
+        return 0;
     }
     crate::aud::pcm_lane::set_paused(false);
     state.running = true;
@@ -133,6 +225,10 @@ pub extern "C" fn trueos_cabi_audio_drop(handle: u32) -> i32 {
         return -ENODEV;
     }
     state.running = false;
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_audio_stop();
+        return 0;
+    }
     crate::aud::pcm_lane::request_stop();
     0
 }
@@ -146,6 +242,9 @@ pub extern "C" fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32 
         return -ENODEV;
     }
 
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return 0;
+    }
     crate::aud::pcm_lane::set_paused(paused != 0);
     0
 }
@@ -159,6 +258,9 @@ pub extern "C" fn trueos_cabi_audio_paused(handle: u32) -> i32 {
         return -ENODEV;
     }
 
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return 0;
+    }
     i32::from(crate::aud::pcm_lane::paused())
 }
 
@@ -171,6 +273,9 @@ pub extern "C" fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32
         return -ENODEV;
     }
 
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return percent.min(u16::MAX as u32).min(100) as i32;
+    }
     crate::aud::pcm_lane::set_volume_percent(percent.min(u16::MAX as u32) as u16) as i32
 }
 
@@ -183,6 +288,9 @@ pub extern "C" fn trueos_cabi_audio_volume_percent(handle: u32) -> i32 {
         return -ENODEV;
     }
 
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return 100;
+    }
     crate::aud::pcm_lane::volume_percent() as i32
 }
 
@@ -193,6 +301,9 @@ pub extern "C" fn trueos_cabi_audio_drain(handle: u32, _timeout_ms: u64) -> i32 
     }
     if !AUDIO_CABI_STATE.lock().open {
         return -ENODEV;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return 0;
     }
     0
 }
@@ -218,6 +329,15 @@ pub unsafe extern "C" fn trueos_cabi_audio_write_i16_interleaved(
     } else {
         unsafe { core::slice::from_raw_parts(samples_ptr, sample_count) }
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return match guest_audio_write_samples(samples) {
+            Ok(frames) => {
+                AUDIO_CABI_STATE.lock().running = true;
+                frames as isize
+            }
+            Err(err) => -(err as isize),
+        };
+    }
     match write_samples("blueprint-audio-pcm", samples) {
         Ok(frames) => {
             AUDIO_CABI_STATE.lock().running = true;
@@ -244,6 +364,15 @@ pub unsafe extern "C" fn trueos_cabi_audio_write_i16_stereo_48k(
     } else {
         unsafe { core::slice::from_raw_parts(samples_ptr, sample_count) }
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return match guest_audio_write_samples(samples) {
+            Ok(frames) => frames as isize,
+            Err(err) => -(err as isize),
+        };
+    }
+    if !hda::is_initialized() {
+        return -(ENODEV as isize);
+    }
     match write_samples("blueprint-audio-direct", samples) {
         Ok(frames) => frames as isize,
         Err(err) => -(err as isize),
@@ -257,6 +386,9 @@ pub extern "C" fn trueos_cabi_audio_queued_frames(handle: u32) -> isize {
     }
     if !AUDIO_CABI_STATE.lock().open {
         return -(ENODEV as isize);
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_audio_pending_frames() as isize;
     }
     crate::aud::pcm_lane::pending_frames() as isize
 }
