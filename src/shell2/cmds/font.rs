@@ -84,114 +84,16 @@ fn print_tessel(io: &'static dyn ShellBackend2) {
         .as_str(),
     );
 
-    let marker = crate::intel::gpgpu::submit_direct_rcs_marker_probe_now();
     print_shell_line(
         io,
-        format!(
-            "font-tessel-intel: probe=rcs-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={}",
-            marker.available as u8,
-            marker.forcewake_ok as u8,
-            marker.mapped_ok as u8,
-            marker.ppgtt_ok as u8,
-            marker.batch_ok as u8,
-            marker.submitted as u8,
-            marker.retired as u8
-        )
-        .as_str(),
-    );
-    print_shell_line(
-        io,
-        format!(
-            "font-tessel-intel-marker: observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}",
-            marker.observed,
-            marker.expected,
-            marker.retire_ms,
-            marker.submit_seq
-        )
-        .as_str(),
-    );
-    print_shell_line(
-        io,
-        format!(
-            "font-tessel-intel-regs: head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
-            marker.head,
-            marker.tail,
-            marker.acthd,
-            marker.ipeir,
-            marker.ipehr,
-            marker.eir
-        )
-        .as_str(),
-    );
-    print_shell_line(io, "font-tessel-intel-note: triangle-rasterizer-not-wired");
-
-    let pipe = crate::intel::gpgpu::submit_direct_rcs_3d_pipe_marker_probe_now();
-    print_shell_line(
-        io,
-        format!(
-            "font-tessel-intel: probe=3d-pipe-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={}",
-            pipe.available as u8,
-            pipe.forcewake_ok as u8,
-            pipe.mapped_ok as u8,
-            pipe.ppgtt_ok as u8,
-            pipe.batch_ok as u8,
-            pipe.submitted as u8,
-            pipe.retired as u8
-        )
-        .as_str(),
-    );
-    print_shell_line(
-        io,
-        format!(
-            "font-tessel-intel-3d-marker: observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}",
-            pipe.observed, pipe.expected, pipe.retire_ms, pipe.submit_seq
-        )
-        .as_str(),
-    );
-    print_shell_line(
-        io,
-        format!(
-            "font-tessel-intel-3d-regs: head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
-            pipe.head, pipe.tail, pipe.acthd, pipe.ipeir, pipe.ipehr, pipe.eir
-        )
-        .as_str(),
-    );
-    print_shell_line(
-        io,
-        "font-tessel-intel-3d-note: pipeline-select-3d+pipe-control-post-sync no-3dstate no-draw",
+        "font-tessel-intel-note: marker-preflight=skipped render-helper-recovers-and-submits",
     );
 
-    match crate::intel::render::submit_render_joker_probe("screen-rect-scratch") {
-        Ok(render) => {
-            print_shell_line(
-                io,
-                format!(
-                    "font-tessel-render: probe=min-front-half variant={} submit={} target={} completed={}",
-                    render.variant,
-                    render.submit_name,
-                    render.target,
-                    render.completed as u8
-                )
-                .as_str(),
-            );
-            print_shell_line(
-                io,
-                "font-tessel-render-note: fixed-screen-rect scratch-rt real-vs-contract optional-stages-disabled simple-raster constant/backend-probe",
-            );
-        }
-        Err(err) => {
-            print_shell_line(
-                io,
-                format!("font-tessel-render: probe=min-front-half status=skipped reason={}", err)
-                    .as_str(),
-            );
-        }
-    }
-
-    let mut clip_field_trilist_control_completed = None;
     let mut clip_field_isolate_completed = None;
     let mut clip_field_isolate_two_completed = None;
     let mut clip_field_all_completed = None;
+    let mut clip_counter_sweep_completed = None;
+    let mut clip_counter_vf_vue_completed = None;
 
     match crate::graphics::font::font_tessellated_scratch_triangle() {
         Some(triangle) => {
@@ -257,32 +159,6 @@ fn print_tessel(io: &'static dyn ShellBackend2) {
                 )
                 .as_str(),
             );
-            match crate::intel::render::submit_render_font_clip_field_trilist_control_probe() {
-                Ok(render) => {
-                    clip_field_trilist_control_completed = Some(render.completed);
-                    print_shell_line(
-                        io,
-                        format!(
-                            "font-tessel-render-font-field-trilist-control-result: variant={} submit={} target={} completed={}",
-                            render.variant,
-                            render.submit_name,
-                            render.target,
-                            render.completed as u8,
-                        )
-                        .as_str(),
-                    );
-                }
-                Err(err) => {
-                    print_shell_line(
-                        io,
-                        format!(
-                            "font-tessel-render-font-field-trilist-control-result: status=skipped reason={}",
-                            err
-                        )
-                        .as_str(),
-                    );
-                }
-            }
             let isolated = field.isolated_scratch_triangle();
             print_shell_line(
                 io,
@@ -409,17 +285,91 @@ fn print_tessel(io: &'static dyn ShellBackend2) {
 
     print_shell_line(
         io,
+        "font-tessel-render-clip-counter-sweep: source=big-inbounds-screen-space upload_vertices=3 target=scratch path=known-vs viewport=default-scratch-8x8 scissor=full-scratch sample_mask=normal cull=none goal=clip-counter-or-pixel-proof",
+    );
+    match crate::intel::render::submit_render_font_clip_counter_sweep_probe() {
+        Ok(render) => {
+            clip_counter_sweep_completed = Some(render.completed);
+            print_shell_line(
+                io,
+                format!(
+                    "font-tessel-render-clip-counter-sweep-result: variant={} submit={} target={} completed={}",
+                    render.variant,
+                    render.submit_name,
+                    render.target,
+                    render.completed as u8,
+                )
+                .as_str(),
+            );
+        }
+        Err(err) => {
+            print_shell_line(
+                io,
+                format!(
+                    "font-tessel-render-clip-counter-sweep-result: status=skipped reason={}",
+                    err
+                )
+                .as_str(),
+            );
+        }
+    }
+    print_shell_line(
+        io,
+        "font-tessel-render-clip-counter-vf-vue: source=big-inbounds-screen-space upload_vertices=3 target=scratch path=vf-synthesized-vue vs=disabled viewport=default-scratch-8x8 goal=separate-vs-export-from-clip",
+    );
+    match crate::intel::render::submit_render_font_clip_counter_vf_vue_probe() {
+        Ok(render) => {
+            clip_counter_vf_vue_completed = Some(render.completed);
+            print_shell_line(
+                io,
+                format!(
+                    "font-tessel-render-clip-counter-vf-vue-result: variant={} submit={} target={} completed={}",
+                    render.variant,
+                    render.submit_name,
+                    render.target,
+                    render.completed as u8,
+                )
+                .as_str(),
+            );
+        }
+        Err(err) => {
+            print_shell_line(
+                io,
+                format!(
+                    "font-tessel-render-clip-counter-vf-vue-result: status=skipped reason={}",
+                    err
+                )
+                .as_str(),
+            );
+        }
+    }
+
+    let frontier = crate::intel::render::latest_render_frontier_summary();
+    print_shell_line(
+        io,
         format!(
-            "font-tessel-verdict: trilist_control={} clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} raster_packet=marker-only pixel_coverage=not-proven next={}",
-            probe_status_word(clip_field_trilist_control_completed),
+            "font-tessel-verdict: clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} clip_counter_sweep={} clip_counter_vf_vue={} sweep=one:screen-space-default,two:clip-normal,all:clip-sf-sync,clip-counter:known-vs-big-inbounds,vf-vue-big-inbounds completed={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}",
             probe_status_word(clip_field_isolate_completed),
             probe_status_word(clip_field_isolate_two_completed),
             probe_status_word(clip_field_all_completed),
+            probe_status_word(clip_counter_sweep_completed),
+            probe_status_word(clip_counter_vf_vue_completed),
+            frontier.completed as u8,
+            frontier.ps_state_marker as u8,
+            frontier.raster_packet as u8,
+            frontier.clip_counter as u8,
+            frontier.ps_observed as u8,
+            frontier.fragment_candidate_ready as u8,
+            frontier.fragment_observed as u8,
             clip_field_next_step(
-                clip_field_trilist_control_completed,
                 clip_field_isolate_completed,
                 clip_field_isolate_two_completed,
                 clip_field_all_completed,
+                clip_counter_sweep_completed,
+                clip_counter_vf_vue_completed,
+                frontier.clip_counter,
+                frontier.ps_observed,
+                frontier.fragment_observed,
             )
         )
         .as_str(),
@@ -427,7 +377,7 @@ fn print_tessel(io: &'static dyn ShellBackend2) {
 
     print_shell_line(
         io,
-        "font-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all intel=rcs-marker+3d-pipe-marker+min-front-half+trilist-control+clip-field-isolate-trilist+clip-field-isolate-two+clip-field-isolate-all raster_pixels=scratch-observational production-path=unchanged",
+        "font-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all+big-inbounds-known-vs+big-inbounds-vf-vue intel=rcs-marker+3d-pipe-marker+clip-field-screen-space-default+clip-field-two-clip-normal+clip-field-all-clip-sf-sync+clip-counter-sweep raster_pixels=scratch-observational production-path=unchanged",
     );
 }
 
@@ -444,17 +394,37 @@ fn probe_status_word(value: Option<bool>) -> &'static str {
 }
 
 fn clip_field_next_step(
-    control_completed: Option<bool>,
     isolate_completed: Option<bool>,
     isolate_two_completed: Option<bool>,
     isolate_all_completed: Option<bool>,
+    clip_counter_sweep_completed: Option<bool>,
+    clip_counter_vf_vue_completed: Option<bool>,
+    clip_counter: bool,
+    ps_observed: bool,
+    fragment_observed: bool,
 ) -> &'static str {
-    match (control_completed, isolate_completed, isolate_two_completed, isolate_all_completed) {
-        (Some(false), _, _, _) => "debug-custom-trilist-helper",
-        (Some(true), Some(false), _, _) => "compare-font-isolate-state",
-        (_, Some(true), Some(false), _) => "compare-two-triangle-state",
-        (_, _, Some(true), Some(false)) => "compare-full-field-state",
-        (_, _, _, Some(true)) => "clip-counter-contract",
-        _ => "repeat-trilist-control",
+    match (
+        isolate_completed,
+        isolate_two_completed,
+        isolate_all_completed,
+        clip_counter_sweep_completed,
+        clip_counter_vf_vue_completed,
+    ) {
+        (Some(false), _, _, _, _) => "compare-font-isolate-state",
+        (Some(true), Some(false), _, _, _) => "compare-two-triangle-state",
+        (_, Some(true), Some(false), _, _) => "compare-full-field-state",
+        (_, _, Some(true), Some(false), _) => "compare-known-vs-big-inbounds-submit-state",
+        (_, _, Some(true), _, Some(false)) => "compare-vf-vue-submit-state",
+        (_, _, Some(true), Some(true), Some(true)) if fragment_observed => {
+            "inspect-scratch-rt-write"
+        }
+        (_, _, Some(true), Some(true), Some(true)) if ps_observed => {
+            "inspect-fragment-to-rt-boundary"
+        }
+        (_, _, Some(true), Some(true), Some(true)) if clip_counter => "ps-launch-frontier",
+        (_, _, Some(true), Some(true), Some(true)) => "clip-counter-still-zero-vs-bypass-too",
+        (_, _, Some(true), Some(true), None) => "compare-vf-vue-clip-counter",
+        (_, _, Some(true), None, _) => "compare-known-vs-clip-counter",
+        _ => "repeat-font-isolate",
     }
 }

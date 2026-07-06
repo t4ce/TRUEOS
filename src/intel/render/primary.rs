@@ -2054,30 +2054,39 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
         return Err("in-flight");
     }
 
-    let (variant, submit_name, geometry_label, source_label) = match N {
+    let (variant, submit_name, geometry_label, source_label, backend_probe_mode, sync_variant) =
+        match N {
         TRIANGLE_DRAW_VERTICES => (
-            "font-clip-field-isolate-scratch",
+            "font-clip-field-isolate-default-scratch",
             "font-tessel-clip-field-isolate-scratch",
             "font-tessel-clip-field-isolate",
-            "lyon-font-mirrored-clip-field-isolate-first-triangle",
+            "lyon-font-mirrored-clip-field-isolate-first-triangle/default",
+            BackendProbeMode::PsBindingTableCountZero,
+            PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         n if n == TRIANGLE_DRAW_VERTICES * 2 => (
-            "font-clip-field-isolate-two-scratch",
-            "font-tessel-clip-field-isolate-two-scratch",
+            "font-clip-field-isolate-two-clip-normal-scratch",
+            "font-tessel-clip-field-isolate-two-clip-normal-scratch",
             "font-tessel-clip-field-isolate-two",
-            "lyon-font-mirrored-clip-field-isolate-first-two-triangles",
+            "lyon-font-mirrored-clip-field-isolate-first-two-triangles/clip-normal",
+            BackendProbeMode::RasterWmInputOaClipNormal,
+            PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         crate::graphics::font::FONT_CLIP_FIELD_VERTICES => (
-            "font-clip-field-isolate-all-scratch",
-            "font-tessel-clip-field-isolate-all-scratch",
+            "font-clip-field-isolate-all-clip-sf-sync-scratch",
+            "font-tessel-clip-field-isolate-all-clip-sf-sync-scratch",
             "font-tessel-clip-field-isolate-all",
-            "lyon-font-mirrored-clip-field-isolate-all-triangles",
+            "lyon-font-mirrored-clip-field-isolate-all-triangles/clip-sf-sync",
+            BackendProbeMode::RasterWmInputOaPipeControlClipSf,
+            PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         _ => (
             "font-clip-field-isolate-n-scratch",
             "font-tessel-clip-field-isolate-n-scratch",
             "font-tessel-clip-field-isolate-n",
-            "lyon-font-mirrored-clip-field-isolate-n-triangles",
+            "lyon-font-mirrored-clip-field-isolate-n-triangles/default",
+            BackendProbeMode::PsBindingTableCountZero,
+            PostDrawSyncVariant::LightPostSyncNoCs,
         ),
     };
     let result = submit_render_custom_triangle_probe_locked(
@@ -2086,13 +2095,23 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
         submit_name,
         geometry_label,
         source_label,
+        backend_probe_mode,
+        sync_variant,
+        TriangleBatchMode::DrawScreenSpace,
+        StreamoutProofExperiment::PositionSlot1,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
 }
 
-pub(crate) fn submit_render_font_clip_field_trilist_control_probe()
+pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 -> Result<RenderJokerResult, &'static str> {
+    let vertices = [
+        [0.25, 0.25, 0.0],
+        [7.75, 0.25, 0.0],
+        [0.25, 7.75, 0.0],
+    ];
+
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -2100,13 +2119,46 @@ pub(crate) fn submit_render_font_clip_field_trilist_control_probe()
         return Err("in-flight");
     }
 
-    let vertices = [[0.5, 0.5, 0.0], [7.5, 0.5, 0.0], [0.5, 7.5, 0.0]];
     let result = submit_render_custom_triangle_probe_locked(
         &vertices,
-        "font-clip-field-trilist-control-scratch",
-        "font-tessel-clip-field-trilist-control-scratch",
-        "font-tessel-clip-field-trilist-control",
-        "known-screen-triangle-through-font-trilist-helper",
+        "font-clip-counter-sweep-known-vs-big-inbounds-scratch",
+        "font-tessel-clip-counter-sweep-known-vs-big-inbounds-scratch",
+        "font-tessel-clip-counter-sweep-known-vs-big-inbounds",
+        "font-lyon-big-inbounds-screen-space/known-vs-clip-counter-sweep",
+        BackendProbeMode::PsBindingTableCountZero,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+        TriangleBatchMode::DrawScreenSpace,
+        StreamoutProofExperiment::PositionSlot1,
+    );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
+pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
+-> Result<RenderJokerResult, &'static str> {
+    let vertices = [
+        [0.25, 0.25, 0.0],
+        [7.75, 0.25, 0.0],
+        [0.25, 7.75, 0.0],
+    ];
+
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let result = submit_render_custom_triangle_probe_locked(
+        &vertices,
+        "font-clip-counter-vf-vue-big-inbounds-scratch",
+        "font-tessel-clip-counter-vf-vue-big-inbounds-scratch",
+        "font-tessel-clip-counter-vf-vue-big-inbounds",
+        "font-lyon-big-inbounds-screen-space/vf-synthesized-vue-clip-counter",
+        BackendProbeMode::PsBindingTableCountZero,
+        PostDrawSyncVariant::LightPostSyncNoCs,
+        TriangleBatchMode::VfScreenSpaceDraw,
+        StreamoutProofExperiment::PositionSlot0,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
@@ -2132,6 +2184,10 @@ fn submit_render_custom_triangle_probe_locked(
     submit_name: &'static str,
     geometry_label: &'static str,
     source_label: &'static str,
+    backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
+    batch_mode: TriangleBatchMode,
+    streamout_experiment: StreamoutProofExperiment,
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
@@ -2194,9 +2250,9 @@ fn submit_render_custom_triangle_probe_locked(
         "intel/render: custom-triangle begin seq={} submit={} target=scratch backend={} blend={} sync={} front_end={} source={}\n",
         probe_seq,
         submit_name,
-        BackendProbeMode::PsBindingTableCountZero.label(),
+        backend_probe_mode.label(),
         TriangleBlendProbeMode::MesaZeroedState.label(),
-        PostDrawSyncVariant::LightPostSyncNoCs.label(),
+        post_draw_sync_variant.label(),
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT.label,
         source_label,
     );
@@ -2212,8 +2268,10 @@ fn submit_render_custom_triangle_probe_locked(
         geometry_label,
         submit_name,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-        BackendProbeMode::PsBindingTableCountZero,
-        PostDrawSyncVariant::LightPostSyncNoCs,
+        backend_probe_mode,
+        post_draw_sync_variant,
+        batch_mode,
+        streamout_experiment,
     );
     intel_render_focus_log!(
         "intel/render: custom-triangle end seq={} submit={} target=scratch completed={}\n",
@@ -5211,6 +5269,8 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     front_end_contract: TriangleFrontEndContract,
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
+    batch_mode: TriangleBatchMode,
+    streamout_experiment: StreamoutProofExperiment,
 ) -> bool {
     let Some(draw) = prepare_triangle_draw_resources_for_vertex_slice(
         warm,
@@ -5269,12 +5329,19 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         post_draw_sync_variant.label(),
         crate::intel::shader::triangle_pipeline_note()
     );
+    let sf_viewport_transform = !batch_mode.screen_space_raster();
+    let coverage_contract = if sf_viewport_transform {
+        "font-lyon-clip-field-viewport-transform"
+    } else {
+        "font-lyon-clip-field-screen-space"
+    };
     intel_render_focus_log!(
-        "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=trilist vertices={} triangles={} sf_viewport_transform=0 first_vertices=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract=font-lyon-clip-field does_not_prove=raster_samples_or_ps\n",
+        "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=trilist vertices={} triangles={} sf_viewport_transform={} first_vertices=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
         submit_name,
         geometry_label,
         vertices.len(),
         vertices.len() / 3,
+        sf_viewport_transform as u8,
         vertices[0][0],
         vertices[0][1],
         vertices[0][2],
@@ -5286,6 +5353,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         vertices[2][2],
         draw.target_w,
         draw.target_h,
+        coverage_contract,
     );
 
     let programmed_vs_urb_output_length = front_end_contract
@@ -5387,8 +5455,8 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         RCS_EXEC_RESULT_DRAW_PRE3D,
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
-        TriangleBatchMode::DrawScreenSpace,
-        StreamoutProofExperiment::PositionSlot1,
+        batch_mode,
+        streamout_experiment,
         front_end_contract,
         backend_probe_mode,
         post_draw_sync_variant,
