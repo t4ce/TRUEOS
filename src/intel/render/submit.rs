@@ -13,6 +13,7 @@ fn submit_warm_render_batch(
     };
     if is_triangle_debug_submit_name(submit_name) {
         log_triangle_stage_stats(submit_name, "before-submit", true, stats_before, None);
+        recover_render_engine_after_nonretired_submit(dev, warm, "triangle-pre-submit");
     }
     if is_gpgpu_submit_name(submit_name) {
         recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
@@ -90,6 +91,7 @@ fn submit_warm_render_batch(
             read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD);
         let result_final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
         let result_pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
+        let result_batch_entry = read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD);
         let observed = match expected_result_slot_dword {
             RESULT_SLOT_PRE3D_DWORD => result0,
             RESULT_SLOT_POST3D_DWORD => result1,
@@ -105,6 +107,7 @@ fn submit_warm_render_batch(
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD => result_post3d_light_hi,
             RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD => result_final_after_light,
             RESULT_SLOT_PRE_LIGHT_PC_DWORD => result_pre_light_pc,
+            RESULT_SLOT_BATCH_ENTRY_DWORD => result_batch_entry,
             RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD => {
                 read_result_dword(warm, RESULT_SLOT_GPGPU_PREFLIGHT_MARKER_DWORD)
             }
@@ -138,9 +141,10 @@ fn submit_warm_render_batch(
                 result2
             );
             intel_render_verbose_log!(
-                "intel/render: {} poll-stage iter={} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
+                "intel/render: {} poll-stage iter={} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
                 submit_name,
                 iter,
+                result_batch_entry,
                 result3,
                 result4,
                 result5,
@@ -194,14 +198,16 @@ fn submit_warm_render_batch(
         read_result_dword(warm, RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_HI_DWORD);
     let result_final_after_light = read_result_dword(warm, RESULT_SLOT_FINAL_AFTER_LIGHT_DWORD);
     let result_pre_light_pc = read_result_dword(warm, RESULT_SLOT_PRE_LIGHT_PC_DWORD);
+    let result_batch_entry = read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
             submit_name,
             completed as u8,
             result0,
             result1,
             result2,
+            result_batch_entry,
             result3,
             result4,
             result5,
@@ -220,9 +226,10 @@ fn submit_warm_render_batch(
     }
     if is_triangle_debug_submit_name(submit_name) {
         intel_render_focus_log!(
-            "intel/render: {} batch-submit-proof completed={} start_marker={} pre_light_pc_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
+            "intel/render: {} batch-submit-proof completed={} batch_entry_marker={} start_marker={} pre_light_pc_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
             submit_name,
             completed as u8,
+            (result_batch_entry == RCS_EXEC_RESULT_DRAW_BATCH_ENTRY) as u8,
             (result0 == RCS_EXEC_RESULT_DRAW_PRE3D) as u8,
             (result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC) as u8,
             (result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0)
@@ -236,8 +243,9 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
         intel_render_focus_log!(
-            "intel/render: 3dprimitive-result completed={} pre3d={} pre_light_pc={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf={} vs={} ps_state={} clip={} raster={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_pre_light_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} acthd=0x{:08X} ipehr=0x{:08X}\n",
+            "intel/render: 3dprimitive-result completed={} batch_entry={} pre3d={} pre_light_pc={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf_packet={} vs_packet={} ps_state_packet={} clip_packet={} raster_packet={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_pre_light_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} pixel_raster=not_proven acthd=0x{:08X} ipehr=0x{:08X}\n",
             completed as u8,
+            result_batch_entry == RCS_EXEC_RESULT_DRAW_BATCH_ENTRY,
             result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
             result_pre_light_pc == RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
             result_post3d_light == RCS_EXEC_RESULT_DRAW_POST3D && result_post3d_light_hi == 0,
@@ -1317,6 +1325,13 @@ fn log_triangle_named_proofs(
     let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
     let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
     let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
+    record_render_frontier_summary(
+        completed,
+        ps_state_marker_ok,
+        raster_packet_accept,
+        clip_accept,
+        ps_accept,
+    );
 
     intel_render_focus_log!(
         "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} does_not_prove=vs_or_pixels\n",
@@ -1686,7 +1701,7 @@ fn log_triangle_stage_frontier(
         "draw_retired"
     };
     intel_render_focus_log!(
-        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_before_light={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} note={}\n",
+        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_before_light={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} packet_marker_semantics=not_pixel_coverage note={}\n",
         submit_name,
         completed as u8,
         pre_raster_packets,

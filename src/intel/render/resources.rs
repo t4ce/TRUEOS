@@ -305,6 +305,67 @@ fn prepare_triangle_draw_resources_for_geometry(
     })
 }
 
+fn prepare_triangle_draw_resources_for_vertices(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    triangle: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_for_vertex_slice(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        label,
+        &triangle,
+    )
+}
+
+fn prepare_triangle_draw_resources_for_vertex_slice(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    vertices: &[[f32; 3]],
+) -> Option<TriangleDrawPrep> {
+    let target_w = u32::try_from(rect_w).ok()?;
+    let target_h = u32::try_from(rect_h).ok()?;
+    let rt_pitch = u32::try_from(pitch).ok()?;
+    if vertices.is_empty() || vertices.len() % 3 != 0 {
+        return None;
+    }
+    if warm.vertex_len < vertices.len().saturating_mul(TRIANGLE_DRAW_VERTEX_STRIDE) {
+        return None;
+    }
+    if warm.draw_state_len == 0 {
+        return None;
+    }
+
+    let vertex_proof = write_triangle_vertex_slice(warm, label, vertices)?;
+
+    unsafe {
+        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    }
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+
+    Some(TriangleDrawPrep {
+        vertex_count: vertex_proof.vertex_count,
+        vertex_stride: vertex_proof.vertex_stride,
+        vertex_gpu_addr: vertex_proof.gpu_addr,
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_pitch,
+        target_w,
+        target_h,
+    })
+}
+
 fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
     write_triangle_vertices_for_geometry(warm, VfPrimitiveGeometry::Canonical)
 }
@@ -313,9 +374,23 @@ fn write_triangle_vertices_for_geometry(
     warm: RenderWarmState,
     geometry: VfPrimitiveGeometry,
 ) -> Option<TriangleVertexUploadProof> {
-    let triangle = geometry.vertices();
+    write_triangle_vertices(warm, geometry.label(), geometry.vertices())
+}
 
-    let byte_len = TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE;
+fn write_triangle_vertices(
+    warm: RenderWarmState,
+    label: &'static str,
+    triangle: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+) -> Option<TriangleVertexUploadProof> {
+    write_triangle_vertex_slice(warm, label, &triangle)
+}
+
+fn write_triangle_vertex_slice(
+    warm: RenderWarmState,
+    label: &'static str,
+    triangle: &[[f32; 3]],
+) -> Option<TriangleVertexUploadProof> {
+    let byte_len = triangle.len().checked_mul(TRIANGLE_DRAW_VERTEX_STRIDE)?;
     if warm.vertex_len < byte_len || warm.vertex_virt.is_null() {
         return None;
     }
@@ -343,24 +418,25 @@ fn write_triangle_vertices_for_geometry(
 
     for (dst, src) in vertices
         .chunks_exact_mut(TRIANGLE_DRAW_VERTEX_DWORDS)
-        .take(TRIANGLE_DRAW_VERTICES)
+        .take(triangle.len())
         .zip(triangle.iter())
     {
         dst.copy_from_slice(src);
     }
 
-    let mut expected = [0u32; TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS];
-    for (dst, src) in expected.iter_mut().zip(triangle.iter().flatten()) {
-        *dst = src.to_bits();
-    }
-
     let readback = unsafe {
         core::slice::from_raw_parts(
             warm.vertex_virt as *const u32,
-            TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_DWORDS,
+            triangle.len() * TRIANGLE_DRAW_VERTEX_DWORDS,
         )
     };
-    let cpu_readback_ok = readback == expected.as_slice();
+    let mut cpu_readback_ok = true;
+    for (actual, expected) in readback.iter().zip(triangle.iter().flatten()) {
+        if *actual != expected.to_bits() {
+            cpu_readback_ok = false;
+            break;
+        }
+    }
 
     crate::intel::dma_flush(warm.vertex_virt, byte_len);
 
@@ -370,10 +446,10 @@ fn write_triangle_vertices_for_geometry(
     intel_render_focus_log!(
         "intel/render: vertex-upload-proof accepted={} stage=cpu-write-readback geometry={} bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
         cpu_readback_ok as u8,
-        geometry.label(),
+        label,
         byte_len,
         TRIANGLE_DRAW_VERTEX_STRIDE,
-        TRIANGLE_DRAW_VERTICES,
+        triangle.len(),
         GPU_VA_VERTEX_BASE,
         cpu_readback_ok as u8,
         signed_area_2x,
@@ -390,7 +466,7 @@ fn write_triangle_vertices_for_geometry(
     );
 
     Some(TriangleVertexUploadProof {
-        vertex_count: TRIANGLE_DRAW_VERTICES as u32,
+        vertex_count: u32::try_from(triangle.len()).ok()?,
         vertex_stride: TRIANGLE_DRAW_VERTEX_STRIDE as u32,
         byte_len,
         gpu_addr: GPU_VA_VERTEX_BASE,

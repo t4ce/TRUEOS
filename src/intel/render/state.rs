@@ -1495,6 +1495,11 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-trilist-control-scratch"
+            | "font-tessel-clip-field-isolate-scratch"
+            | "font-tessel-clip-field-isolate-two-scratch"
+            | "font-tessel-clip-field-isolate-all-scratch"
+            | "font-tessel-clip-field-isolate-n-scratch"
             | "screen-rect-oa-early"
     )
 }
@@ -1768,6 +1773,11 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-trilist-control-scratch"
+            | "font-tessel-clip-field-isolate-scratch"
+            | "font-tessel-clip-field-isolate-two-scratch"
+            | "font-tessel-clip-field-isolate-all-scratch"
+            | "font-tessel-clip-field-isolate-n-scratch"
             | "screen-rect-oa-early"
             | "postdraw-light-only-retire"
             | "postdraw-flush-bit5"
@@ -1933,6 +1943,11 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-trilist-control-scratch"
+            | "font-tessel-clip-field-isolate-scratch"
+            | "font-tessel-clip-field-isolate-two-scratch"
+            | "font-tessel-clip-field-isolate-all-scratch"
+            | "font-tessel-clip-field-isolate-n-scratch"
             | "screen-rect-oa-early"
     )
 }
@@ -1960,6 +1975,43 @@ fn record_fragment_boundary_probe(candidate_ready: bool, fragment_observed: bool
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RenderFrontierSummary {
+    pub(crate) completed: bool,
+    pub(crate) ps_state_marker: bool,
+    pub(crate) raster_packet: bool,
+    pub(crate) clip_counter: bool,
+    pub(crate) ps_observed: bool,
+    pub(crate) fragment_candidate_ready: bool,
+    pub(crate) fragment_observed: bool,
+}
+
+fn record_render_frontier_summary(
+    completed: bool,
+    ps_state_marker: bool,
+    raster_packet: bool,
+    clip_counter: bool,
+    ps_observed: bool,
+) {
+    RENDER_FRONTIER_COMPLETED.store(completed, Ordering::Release);
+    RENDER_FRONTIER_PS_STATE_MARKER.store(ps_state_marker, Ordering::Release);
+    RENDER_FRONTIER_RASTER_PACKET.store(raster_packet, Ordering::Release);
+    RENDER_FRONTIER_CLIP_COUNTER.store(clip_counter, Ordering::Release);
+    RENDER_FRONTIER_PS_OBSERVED.store(ps_observed, Ordering::Release);
+}
+
+pub(crate) fn latest_render_frontier_summary() -> RenderFrontierSummary {
+    RenderFrontierSummary {
+        completed: RENDER_FRONTIER_COMPLETED.load(Ordering::Acquire),
+        ps_state_marker: RENDER_FRONTIER_PS_STATE_MARKER.load(Ordering::Acquire),
+        raster_packet: RENDER_FRONTIER_RASTER_PACKET.load(Ordering::Acquire),
+        clip_counter: RENDER_FRONTIER_CLIP_COUNTER.load(Ordering::Acquire),
+        ps_observed: RENDER_FRONTIER_PS_OBSERVED.load(Ordering::Acquire),
+        fragment_candidate_ready: fragment_candidate_ready(),
+        fragment_observed: fragment_boundary_observed(),
+    }
+}
+
 fn fragment_candidate_ready() -> bool {
     FRAGMENT_CANDIDATE_READY.load(Ordering::Acquire)
 }
@@ -1977,6 +2029,11 @@ static PRIMARY_PROBE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_MI_SCANOUT_PROOF_SUBMITTED: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_CANDIDATE_READY: AtomicBool = AtomicBool::new(false);
 static FRAGMENT_BOUNDARY_OBSERVED: AtomicBool = AtomicBool::new(false);
+static RENDER_FRONTIER_COMPLETED: AtomicBool = AtomicBool::new(false);
+static RENDER_FRONTIER_PS_STATE_MARKER: AtomicBool = AtomicBool::new(false);
+static RENDER_FRONTIER_RASTER_PACKET: AtomicBool = AtomicBool::new(false);
+static RENDER_FRONTIER_CLIP_COUNTER: AtomicBool = AtomicBool::new(false);
+static RENDER_FRONTIER_PS_OBSERVED: AtomicBool = AtomicBool::new(false);
 static WARM_BUFFERS_MAPPED: AtomicBool = AtomicBool::new(false);
 static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);

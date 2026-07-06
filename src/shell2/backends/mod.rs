@@ -13,6 +13,7 @@ pub(crate) use net_tcp::NET_TCP_SHELL_BACKEND;
 pub(crate) use uart::UART1_COM1_BACKEND;
 pub(crate) use ui3::{
     UI3_SHELL_BACKEND, Ui3ShellCell, Ui3ShellScreenSnapshot, queue_ui3_keyboard_event,
-    ui3_shell_attach_window, ui3_shell_last_rendered_seq, ui3_shell_line_width,
-    ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width, ui3_shell_snapshot,
+    ui3_shell_attach_window, ui3_shell_blit_snapshot, ui3_shell_last_rendered_seq,
+    ui3_shell_line_width, ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width,
+    ui3_shell_set_size, ui3_shell_snapshot,
 };

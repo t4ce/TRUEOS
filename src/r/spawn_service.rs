@@ -71,6 +71,7 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
+    FONT_TESSEL_BOOT_PROBE_STARTED,
     UART_SHELL_STARTED,
     NET_TCP_SHELL_STARTED,
     UI3_SHELL_STARTED,
@@ -281,6 +282,298 @@ fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ram_probe::boot_factory_ram_probe_task())
+}
+
+#[embassy_executor::task]
+async fn font_tessel_boot_probe_task() {
+    Timer::after(EmbassyDuration::from_secs(10)).await;
+    crate::log!("font-boot-tessel: begin delay_s=10\n");
+
+    let tessel = crate::graphics::font::tessellate_default_text();
+    crate::log!(
+        "font-boot-tessel: status={} reason={} text=\"{}\" font={} file={} px={} vertices={} indices={} triangles={} total_ms={}\n",
+        tessel.status,
+        tessel.reason,
+        tessel.text,
+        tessel.font_name,
+        tessel.font_file,
+        tessel.px_size as u32,
+        tessel.vertices,
+        tessel.indices,
+        tessel.triangles,
+        tessel.total_ms
+    );
+
+    let marker = crate::intel::gpgpu::submit_direct_rcs_marker_probe_now();
+    crate::log!(
+        "font-boot-tessel-intel: probe=rcs-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={} observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}\n",
+        marker.available as u8,
+        marker.forcewake_ok as u8,
+        marker.mapped_ok as u8,
+        marker.ppgtt_ok as u8,
+        marker.batch_ok as u8,
+        marker.submitted as u8,
+        marker.retired as u8,
+        marker.observed,
+        marker.expected,
+        marker.retire_ms,
+        marker.submit_seq
+    );
+
+    let pipe = crate::intel::gpgpu::submit_direct_rcs_3d_pipe_marker_probe_now();
+    crate::log!(
+        "font-boot-tessel-intel: probe=3d-pipe-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={} observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}\n",
+        pipe.available as u8,
+        pipe.forcewake_ok as u8,
+        pipe.mapped_ok as u8,
+        pipe.ppgtt_ok as u8,
+        pipe.batch_ok as u8,
+        pipe.submitted as u8,
+        pipe.retired as u8,
+        pipe.observed,
+        pipe.expected,
+        pipe.retire_ms,
+        pipe.submit_seq
+    );
+
+    match crate::intel::render::submit_render_joker_probe("screen-rect-scratch") {
+        Ok(render) => crate::log!(
+            "font-boot-tessel-render: probe=min-front-half variant={} submit={} target={} completed={}\n",
+            render.variant,
+            render.submit_name,
+            render.target,
+            render.completed as u8
+        ),
+        Err(err) => crate::log!(
+            "font-boot-tessel-render: probe=min-front-half status=skipped reason={}\n",
+            err
+        ),
+    }
+
+    let mut clip_field_trilist_control_completed = None;
+    let mut clip_field_isolate_completed = None;
+    let mut clip_field_isolate_two_completed = None;
+    let mut clip_field_all_completed = None;
+
+    match crate::graphics::font::font_tessellated_scratch_triangle() {
+        Some(triangle) => {
+            crate::log!(
+                "font-boot-tessel-render-font: probe=font-triangle-scratch source_vertices={} source_indices={} source_triangles={} selected_indices=[{},{},{}] source_area2={:.3} scratch_area2={:.3}\n",
+                triangle.source_vertex_count,
+                triangle.source_index_count,
+                triangle.source_triangle_count,
+                triangle.source_indices[0],
+                triangle.source_indices[1],
+                triangle.source_indices[2],
+                triangle.source_area2,
+                triangle.scratch_area2
+            );
+
+            let field = triangle.mirrored_clip_field();
+            crate::log!(
+                "font-boot-tessel-render-font-field: vertices={} triangles={} axes={} rings={} radii=({:.0},{:.0},{:.0}) sizes=({:.0},{:.0},{:.0}) rot_deg=({},{},{}) bounds=({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})\n",
+                field.vertex_count,
+                field.triangle_count,
+                field.axes,
+                field.rings,
+                field.radii[0],
+                field.radii[1],
+                field.radii[2],
+                field.sizes[0],
+                field.sizes[1],
+                field.sizes[2],
+                field.rotations_deg[0],
+                field.rotations_deg[1],
+                field.rotations_deg[2],
+                field.min_x,
+                field.min_y,
+                field.min_z,
+                field.max_x,
+                field.max_y,
+                field.max_z
+            );
+            match crate::intel::render::submit_render_font_clip_field_trilist_control_probe() {
+                Ok(render) => {
+                    clip_field_trilist_control_completed = Some(render.completed);
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-trilist-control-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-trilist-control-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            let isolated = field.isolated_scratch_triangle();
+            crate::log!(
+                "font-boot-tessel-render-font-field-isolate: source=first-triangle upload_vertices=3 vertices=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})\n",
+                isolated[0][0],
+                isolated[0][1],
+                isolated[0][2],
+                isolated[1][0],
+                isolated[1][1],
+                isolated[1][2],
+                isolated[2][0],
+                isolated[2][1],
+                isolated[2][2]
+            );
+            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated) {
+                Ok(render) => {
+                    clip_field_isolate_completed = Some(render.completed);
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-isolate-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-isolate-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            let isolated_two = field.isolated_scratch_two_triangles();
+            crate::log!(
+                "font-boot-tessel-render-font-field-isolate-two: source=first-two-triangles upload_vertices=6 upload_triangles=2 t0=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2}) t1=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})\n",
+                isolated_two[0][0],
+                isolated_two[0][1],
+                isolated_two[0][2],
+                isolated_two[1][0],
+                isolated_two[1][1],
+                isolated_two[1][2],
+                isolated_two[2][0],
+                isolated_two[2][1],
+                isolated_two[2][2],
+                isolated_two[3][0],
+                isolated_two[3][1],
+                isolated_two[3][2],
+                isolated_two[4][0],
+                isolated_two[4][1],
+                isolated_two[4][2],
+                isolated_two[5][0],
+                isolated_two[5][1],
+                isolated_two[5][2]
+            );
+            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_two) {
+                Ok(render) => {
+                    clip_field_isolate_two_completed = Some(render.completed);
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-isolate-two-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-isolate-two-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+            let isolated_all = field.isolated_scratch_all_triangles();
+            crate::log!(
+                "font-boot-tessel-render-font-field-isolate-all: source=full-field upload_vertices={} upload_triangles={} first=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2}) last=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})\n",
+                isolated_all.len(),
+                isolated_all.len() / 3,
+                isolated_all[0][0],
+                isolated_all[0][1],
+                isolated_all[0][2],
+                isolated_all[1][0],
+                isolated_all[1][1],
+                isolated_all[1][2],
+                isolated_all[2][0],
+                isolated_all[2][1],
+                isolated_all[2][2],
+                isolated_all[isolated_all.len() - 3][0],
+                isolated_all[isolated_all.len() - 3][1],
+                isolated_all[isolated_all.len() - 3][2],
+                isolated_all[isolated_all.len() - 2][0],
+                isolated_all[isolated_all.len() - 2][1],
+                isolated_all[isolated_all.len() - 2][2],
+                isolated_all[isolated_all.len() - 1][0],
+                isolated_all[isolated_all.len() - 1][1],
+                isolated_all[isolated_all.len() - 1][2]
+            );
+            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_all) {
+                Ok(render) => {
+                    clip_field_all_completed = Some(render.completed);
+                    crate::log!(
+                        "font-boot-tessel-render-font-field-isolate-all-result: variant={} submit={} target={} completed={}\n",
+                        render.variant,
+                        render.submit_name,
+                        render.target,
+                        render.completed as u8
+                    );
+                }
+                Err(err) => crate::log!(
+                    "font-boot-tessel-render-font-field-isolate-all-result: status=skipped reason={}\n",
+                    err
+                ),
+            }
+        }
+        None => crate::log!(
+            "font-boot-tessel-render-font: probe=font-triangle-scratch status=skipped reason=no-font-triangle\n"
+        ),
+    }
+
+    let frontier = crate::intel::render::latest_render_frontier_summary();
+    crate::log!(
+        "font-boot-tessel-verdict: trilist_control={} clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} latest_launch=font-clip-field-isolate-all completed={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}\n",
+        probe_status_word(clip_field_trilist_control_completed),
+        probe_status_word(clip_field_isolate_completed),
+        probe_status_word(clip_field_isolate_two_completed),
+        probe_status_word(clip_field_all_completed),
+        frontier.completed as u8,
+        frontier.ps_state_marker as u8,
+        frontier.raster_packet as u8,
+        frontier.clip_counter as u8,
+        frontier.ps_observed as u8,
+        frontier.fragment_candidate_ready as u8,
+        frontier.fragment_observed as u8,
+        clip_field_next_step(
+            clip_field_trilist_control_completed,
+            clip_field_isolate_completed,
+            clip_field_isolate_two_completed,
+            clip_field_all_completed,
+        )
+    );
+
+    crate::log!(
+        "font-boot-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all intel=rcs-marker+3d-pipe-marker+min-front-half+trilist-control+clip-field-isolate-trilist+clip-field-isolate-two+clip-field-isolate-all raster_pixels=scratch-observational production-path=unchanged\n"
+    );
+}
+
+fn spawn_font_tessel_boot_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| font_tessel_boot_probe_task())
+}
+
+fn probe_status_word(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "completed",
+        Some(false) => "stalled",
+        None => "skipped",
+    }
+}
+
+fn clip_field_next_step(
+    control_completed: Option<bool>,
+    isolate_completed: Option<bool>,
+    isolate_two_completed: Option<bool>,
+    isolate_all_completed: Option<bool>,
+) -> &'static str {
+    match (control_completed, isolate_completed, isolate_two_completed, isolate_all_completed) {
+        (Some(false), _, _, _) => "debug-custom-trilist-helper",
+        (Some(true), Some(false), _, _) => "compare-font-isolate-state",
+        (_, Some(true), Some(false), _) => "compare-two-triangle-state",
+        (_, _, Some(true), Some(false)) => "compare-full-field-state",
+        (_, _, _, Some(true)) => "debug-fragment-samples-after-full-field-isolate",
+        _ => "repeat-trilist-control",
+    }
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -1137,7 +1430,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1160,6 +1453,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_codec_service,
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
+    TaskSpec::enabled(
+        "font-tessel-boot-probe",
+        0,
+        &FONT_TESSEL_BOOT_PROBE_STARTED,
+        spawn_font_tessel_boot_probe,
+    ),
     TaskSpec::enabled(
         "qjs-async-fs-service",
         0,

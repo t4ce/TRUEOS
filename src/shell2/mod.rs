@@ -26,8 +26,9 @@ pub(crate) use crate::shell2::backends::{
     Ui3ShellCell, Ui3ShellScreenSnapshot, container_shell_drain_output,
     container_shell_read_output_byte, container_shell_submit_input, crlf,
     queue_ui3_keyboard_event as queue_ui3_shell_keyboard_event, uart1_com1,
-    ui3_shell_attach_window, ui3_shell_last_rendered_seq, ui3_shell_line_width,
-    ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width, ui3_shell_snapshot,
+    ui3_shell_attach_window, ui3_shell_blit_snapshot, ui3_shell_last_rendered_seq,
+    ui3_shell_line_width, ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width,
+    ui3_shell_set_size, ui3_shell_snapshot,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
@@ -233,14 +234,16 @@ impl<'a> AlignedWriter<'a> {
         snapshot: &Ui3ShellScreenSnapshot,
         allow_snapshot_cursor: bool,
     ) {
-        let cols = snapshot.cols as usize;
-        let rows = snapshot.rows as usize;
+        let cols = (snapshot.cols as usize).min(self.line_width().max(1));
+        let rows = (snapshot.rows as usize).min(self.transcript_view_rows.get().max(1));
         for row in 0..rows {
             self.move_to(top_row + row, 1);
+            self.clear_line();
             let mut current_fg: Option<(u8, u8, u8)> = None;
             let mut current_bg: Option<(u8, u8, u8)> = None;
+            let snapshot_cols = snapshot.cols as usize;
             for col in 0..cols {
-                let idx = row.saturating_mul(cols).saturating_add(col);
+                let idx = row.saturating_mul(snapshot_cols).saturating_add(col);
                 let Some(cell) = snapshot.cells.get(idx) else {
                     break;
                 };
@@ -689,11 +692,23 @@ fn render_active_slot_content(
     transcript: &VecDeque<TranscriptEntry>,
 ) -> bool {
     if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
-        out.render_terminal_snapshot(
-            slot_content_top_row(output_mask),
-            &snapshot,
-            active_terminal_hotkey_mode(output_mask),
-        );
+        let top_row = slot_content_top_row(output_mask);
+        if (output_mask & OUTPUT_UI3_MASK) != 0 && snapshot.userspace_owns_slot {
+            let width = (snapshot.cols as usize).max(minimum_line_width_for_output(output_mask));
+            let rows = top_row
+                .saturating_sub(1)
+                .saturating_add(snapshot.rows as usize)
+                .max(1);
+            ui3_shell_set_size(width, rows);
+            out.set_line_width(width);
+            out.set_transcript_view_rows(rows.saturating_sub(top_row.saturating_sub(1)).max(1));
+        }
+        let allow_snapshot_cursor = active_terminal_hotkey_mode(output_mask);
+        if (output_mask & OUTPUT_UI3_MASK) != 0 {
+            ui3_shell_blit_snapshot(top_row, &snapshot, allow_snapshot_cursor);
+        } else {
+            out.render_terminal_snapshot(top_row, &snapshot, allow_snapshot_cursor);
+        }
         true
     } else {
         out.render_transcript_at(slot_content_top_row(output_mask), transcript);
@@ -1445,10 +1460,7 @@ fn apply_mode_toggle(
         cmd_status_text,
         running_go2_phase,
     );
-    out.prompt(output_mask);
-    for ch in line.chars() {
-        out.user_char(ch);
-    }
+    render_prompt_line(out, output_mask, line);
 }
 
 fn redraw_clock_preserving_cursor(out: &AlignedWriter<'_>, output_mask: u8, time_text: &str) {
@@ -1527,6 +1539,13 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
+fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
+    out.prompt(output_mask);
+    for ch in line.chars() {
+        out.user_char(ch);
+    }
+}
+
 fn set_input_line(
     out: &AlignedWriter<'_>,
     output_mask: u8,
@@ -1539,10 +1558,7 @@ fn set_input_line(
             break;
         }
     }
-    out.prompt(output_mask);
-    for ch in line.chars() {
-        out.user_char(ch);
-    }
+    render_prompt_line(out, output_mask, line);
 }
 
 fn handle_control_c(
@@ -1679,7 +1695,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             } else {
                 render_active_slot_content(&out, output_mask, &next_transcript);
             }
-            out.prompt(output_mask);
+            render_prompt_line(&out, output_mask, &line);
             transcript = next_transcript;
         }
 
@@ -1930,10 +1946,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                             );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
+                            render_prompt_line(&out, output_mask, &line);
                         }
                         ShellMode2::Qjs => {
                             cmd_status_text = None;
@@ -1947,10 +1960,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                             );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
+                            render_prompt_line(&out, output_mask, &line);
                         }
                         ShellMode2::Apps => {
                             cmd_status_text = None;
@@ -1964,10 +1974,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 cmd_status_text.as_deref(),
                                 running_go2_phase,
                             );
-                            out.prompt(output_mask);
-                            for ch in line.chars() {
-                                out.user_char(ch);
-                            }
+                            render_prompt_line(&out, output_mask, &line);
                         }
                         ShellMode2::Cmd => {
                             if line.is_empty() {

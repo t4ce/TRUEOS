@@ -1028,6 +1028,13 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "PIPELINE_SELECT");
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM batch-entry");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_BATCH_ENTRY_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_BATCH_ENTRY,
+    )?;
 
     if device_is_gfx12(warm.device_id) {
         let l3alloc = if device_is_gfx125(warm.device_id) {
@@ -2733,6 +2740,13 @@ fn encode_minimal_streamout_proof_batch(
 
     log_batch_offset(cursor, "PIPELINE_SELECT");
     push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    log_batch_offset(cursor, "MI_STORE_DATA_IMM batch-entry");
+    push_store_data_imm(
+        batch_dwords,
+        &mut cursor,
+        result_gpu_addr + (RESULT_SLOT_BATCH_ENTRY_DWORD as u64) * 4,
+        RCS_EXEC_RESULT_DRAW_BATCH_ENTRY,
+    )?;
 
     if device_is_gfx12(warm.device_id) {
         let l3alloc = if device_is_gfx125(warm.device_id) {

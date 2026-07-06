@@ -1277,6 +1277,7 @@ struct KonsoleFrameState {
     cols: u32,
     rows: u32,
     reserved_top_rows: u32,
+    ode_to_userspace: bool,
     cursor_row: u32,
     cursor_col: u32,
     cursor_visible: bool,
@@ -1311,6 +1312,20 @@ fn konsole_write_fmt(args: fmt::Arguments<'_>) -> usize {
 fn konsole_frame_push_fmt(bytes: &mut Vec<u8>, args: fmt::Arguments<'_>) {
     let text = alloc::format!("{}", args);
     bytes.extend_from_slice(text.as_bytes());
+}
+
+fn konsole_frame_push_hex_byte(bytes: &mut Vec<u8>, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    bytes.push(HEX[(byte >> 4) as usize]);
+    bytes.push(HEX[(byte & 0x0f) as usize]);
+}
+
+fn konsole_frame_push_row_packet(bytes: &mut Vec<u8>, row: u32, col: u32, data: &[u8]) {
+    konsole_frame_push_fmt(bytes, format_args!("\x1b]777;konsole_row={},{};", row, col));
+    for &byte in data {
+        konsole_frame_push_hex_byte(bytes, byte);
+    }
+    bytes.push(0x07);
 }
 
 #[unsafe(no_mangle)]
@@ -1370,6 +1385,7 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         return -1;
     }
 
+    let ode_to_userspace = (reserved_top_rows & KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE) != 0;
     let state = KonsoleFrameState {
         cols: cols.min(512),
         rows: rows.min(512),
@@ -1378,6 +1394,7 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         } else {
             (reserved_top_rows & KONSOLE_RESERVED_TOP_ROWS_MASK).min(32)
         },
+        ode_to_userspace,
         cursor_row: 0,
         cursor_col: 0,
         cursor_visible: false,
@@ -1388,11 +1405,15 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     states.insert(key, state);
     if let Some(state) = states.get_mut(&key) {
         state.bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
-        if (reserved_top_rows & KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE) != 0 {
+        if state.ode_to_userspace {
             state
                 .bytes
                 .extend_from_slice(b"\x1b]777;ode_to_userspace=1\x07");
         }
+        konsole_frame_push_fmt(
+            &mut state.bytes,
+            format_args!("\x1b]777;konsole_size={}x{}\x07", state.cols, state.rows),
+        );
     }
     0
 }
@@ -1415,6 +1436,16 @@ pub unsafe extern "C" fn trueos_cabi_konsole_write_row(
         return -1;
     }
 
+    if state.ode_to_userspace {
+        let data = if data_len == 0 {
+            &[][..]
+        } else {
+            unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
+        };
+        konsole_frame_push_row_packet(&mut state.bytes, row, col, data);
+        return 0;
+    }
+
     let terminal_row = state
         .reserved_top_rows
         .saturating_add(row)
@@ -1422,7 +1453,7 @@ pub unsafe extern "C" fn trueos_cabi_konsole_write_row(
     let terminal_col = col.saturating_add(1);
     konsole_frame_push_fmt(
         &mut state.bytes,
-        format_args!("\x1b[{};{}H", terminal_row, terminal_col),
+        format_args!("\x1b[{};{}H\x1b[2K", terminal_row, terminal_col),
     );
     if data_len != 0 {
         let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
@@ -1468,11 +1499,13 @@ pub extern "C" fn trueos_cabi_konsole_end_frame() -> i32 {
         );
     } else {
         state.bytes.extend_from_slice(b"\x1b[?25l");
-        let terminal_row = state
-            .reserved_top_rows
-            .saturating_add(state.rows)
-            .saturating_add(1);
-        konsole_frame_push_fmt(&mut state.bytes, format_args!("\x1b[{};1H", terminal_row));
+        if !state.ode_to_userspace {
+            let terminal_row = state
+                .reserved_top_rows
+                .saturating_add(state.rows.saturating_sub(1))
+                .saturating_add(1);
+            konsole_frame_push_fmt(&mut state.bytes, format_args!("\x1b[{};1H", terminal_row));
+        }
     }
     let _ = konsole_write_bytes(state.bytes.as_slice());
     0

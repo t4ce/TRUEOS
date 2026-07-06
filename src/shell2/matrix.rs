@@ -431,12 +431,15 @@ pub(crate) fn active_terminal_snapshot(
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     let terminal = guard.slots[idx].terminal.as_mut()?;
     let before = terminal.snapshot();
-    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
-    let after = terminal.snapshot();
-    if before != after {
-        bump_slot_revision(&mut guard, idx);
+    if !before.userspace_owns_slot {
+        terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+        let after = terminal.snapshot();
+        if before != after {
+            bump_slot_revision(&mut guard, idx);
+        }
+        return Some(after);
     }
-    Some(after)
+    Some(before)
 }
 
 pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
@@ -486,7 +489,9 @@ pub(crate) fn record_raw_in_live_slot(
     let terminal = guard.slots[idx]
         .terminal
         .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
-    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    if !terminal.snapshot().userspace_owns_slot {
+        terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    }
     let before = terminal.snapshot();
     terminal.feed_bytes(bytes);
     let after = terminal.snapshot();
