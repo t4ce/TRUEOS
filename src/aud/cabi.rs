@@ -234,3 +234,40 @@ pub extern "C" fn trueos_cabi_audio_state(handle: u32) -> i32 {
         (false, _) => STATE_CLOSED,
     }
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64 {
+    crate::tst::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(u64::MAX)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_audio_monitor_read_i16_since(
+    cursor: u64,
+    out_ptr: *mut i16,
+    out_cap: usize,
+    out_next_cursor: *mut u64,
+) -> isize {
+    if out_ptr.is_null() && out_cap != 0 {
+        return -(EFAULT as isize);
+    }
+    if out_next_cursor.is_null() {
+        return -(EFAULT as isize);
+    }
+
+    let mut samples = Vec::with_capacity(out_cap);
+    let Some(next) = crate::tst::esynth::live_pcm_read_since(cursor, &mut samples, out_cap) else {
+        return -(ENODEV as isize);
+    };
+
+    let out = if out_cap == 0 {
+        &mut []
+    } else {
+        unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) }
+    };
+    let count = samples.len().min(out.len());
+    out[..count].copy_from_slice(&samples[..count]);
+    unsafe {
+        out_next_cursor.write(next);
+    }
+    count as isize
+}

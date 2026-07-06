@@ -33,6 +33,7 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod executor_cache;
+mod font_probe;
 mod gb_demo;
 mod globalog;
 #[cfg(target_arch = "x86_64")]

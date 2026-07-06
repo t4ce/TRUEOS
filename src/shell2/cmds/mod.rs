@@ -5,6 +5,7 @@ pub(crate) mod aud;
 pub(crate) mod c4;
 pub(crate) mod diashow;
 pub(crate) mod disc;
+pub(crate) mod font;
 pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod gboy;

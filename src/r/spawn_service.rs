@@ -945,6 +945,8 @@ async fn bp_autostart_task() {
         }
     }
 
+    crate::font_probe::log_boot_font_probe();
+
     //let html = crate::surfer::html_shack::Html::new(
     //    "inline://trueos/input.html",
     //    include_str!("../../crates/trueos-qjs/src/html/input.html"),
@@ -1250,7 +1252,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "unix-fd-probe",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
         &UNIX_FD_PROBE_STARTED,

@@ -9,6 +9,7 @@ pub const ERR_BUSY: i32 = -16;
 pub const ERR_FAULT: i32 = -14;
 pub const ERR_INVALID: i32 = -22;
 pub const ERR_NO_DEVICE: i32 = -19;
+const INVALID_CURSOR: u64 = u64::MAX;
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -124,6 +125,41 @@ pub fn play_i16_stereo_48k(samples: &[i16]) -> Result<usize, i32> {
     let frames =
         unsafe { vcabi::trueos_cabi_audio_write_i16_stereo_48k(samples.as_ptr(), samples.len()) };
     frames_result(frames)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Monitor {
+    cursor: u64,
+}
+
+impl Monitor {
+    pub fn open(preroll_samples: usize) -> Result<Self, i32> {
+        let cursor = unsafe { vcabi::trueos_cabi_audio_monitor_start_cursor(preroll_samples) };
+        if cursor == INVALID_CURSOR {
+            Err(ERR_NO_DEVICE)
+        } else {
+            Ok(Self { cursor })
+        }
+    }
+
+    pub const fn cursor(self) -> u64 {
+        self.cursor
+    }
+
+    pub fn read_i16(&mut self, out: &mut [i16]) -> Result<usize, i32> {
+        let mut next = self.cursor;
+        let samples = unsafe {
+            vcabi::trueos_cabi_audio_monitor_read_i16_since(
+                self.cursor,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut next,
+            )
+        };
+        let count = frames_result(samples)?;
+        self.cursor = next;
+        Ok(count)
+    }
 }
 
 fn rc_unit(rc: i32) -> Result<(), i32> {

@@ -271,6 +271,13 @@ unsafe extern "C" {
     pub fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
     pub fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
     pub fn trueos_cabi_audio_state(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64;
+    pub fn trueos_cabi_audio_monitor_read_i16_since(
+        cursor: u64,
+        out_ptr: *mut i16,
+        out_cap: usize,
+        out_next_cursor: *mut u64,
+    ) -> isize;
 
     pub fn trueos_cabi_input_pop_mouse(
         out_buttons: *mut u8,
