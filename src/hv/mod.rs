@@ -587,7 +587,7 @@ pub fn hvlogf(args: core::fmt::Arguments<'_>) {
     }
 
     if hvlog_console_enabled(line.as_str(), level) {
-        crate::globalog::log_with_concept_level("hv", level, format_args!("{}\n", line.as_str()));
+        crate::globalog::log_with_target_level("hv", level, format_args!("{}\n", line.as_str()));
     }
 }
 
@@ -605,11 +605,8 @@ fn hvlog_console_level(line: &str) -> log::Level {
     }
 }
 
-fn hvlog_console_enabled(line: &str, level: log::Level) -> bool {
-    if line.starts_with("portal:") {
-        return crate::logflag::PORTAL_LOGS;
-    }
-    crate::logflag::HV_LOGS && crate::logflag::concept_log_enabled("hv", level)
+fn hvlog_console_enabled(_line: &str, level: log::Level) -> bool {
+    crate::logflag::HV_LOGS && crate::logflag::area_log_enabled(crate::logflag::LogArea::Hv, level)
 }
 
 pub fn status() -> HvStatus {
@@ -1526,7 +1523,9 @@ fn blueprint_console_mirror_global_log(vm_id: u8, data: &[u8]) {
         if line.is_empty() {
             continue;
         }
-        crate::globalog::log_with_purpose(
+        crate::globalog::log_with_area_purpose(
+            crate::logflag::LogArea::Blueprint,
+            log::Level::Info,
             Some("blueprint"),
             format_args!("vm{}: {}\n", vm_id, line.as_str()),
         );

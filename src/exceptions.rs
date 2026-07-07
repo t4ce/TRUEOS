@@ -210,7 +210,9 @@ fn log_fault_alloc_trace() {
         trace.payload_start,
         trace.aligned_used,
     );
-    crate::globalog::log_with_purpose(
+    crate::globalog::log_with_area_purpose(
+        crate::logflag::LogArea::Global,
+        log::Level::Info,
         Some("info"),
         format_args!(
             "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",

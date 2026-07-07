@@ -199,13 +199,20 @@ enum BackendProbeMode {
     PsBindingTableCountZero,
     PsBindingTableCountOne,
     WmNormalDispatch,
+    PsExtraBeforePs,
+    PsWmReemitAfterPsExtra,
+    PsOmitWmHzOp,
+    PsSampleAll,
+    PsSbeRead0,
+    PsNoPrimitiveReplication,
+    PsNoWriteableRt,
+    PsNoCcPointer,
     PsDispatchSlot0,
     PsDispatchSlot1,
     PsDispatchSlot2,
     PsDispatchAllKspSlots,
     PsSimd16,
     PsEotOnly,
-    PsEotRasterWmOa,
     PsCpsDisabled,
     PsPayloadPushConstant,
     PsPayloadAttributeEnable,
@@ -397,13 +404,20 @@ impl BackendProbeMode {
             Self::PsBindingTableCountZero => "ps-bt-count-0",
             Self::PsBindingTableCountOne => "ps-bt-count-1",
             Self::WmNormalDispatch => "wm-normal-dispatch",
+            Self::PsExtraBeforePs => "ps-extra-before-ps",
+            Self::PsWmReemitAfterPsExtra => "ps-wm-reemit-after-ps-extra",
+            Self::PsOmitWmHzOp => "ps-omit-wm-hz-op",
+            Self::PsSampleAll => "ps-sample-all",
+            Self::PsSbeRead0 => "ps-sbe-read0",
+            Self::PsNoPrimitiveReplication => "ps-no-primitive-replication",
+            Self::PsNoWriteableRt => "ps-no-writeable-rt",
+            Self::PsNoCcPointer => "ps-no-cc-pointer",
             Self::PsDispatchSlot0 => "ps-dispatch-slot0",
             Self::PsDispatchSlot1 => "ps-dispatch-slot1",
             Self::PsDispatchSlot2 => "ps-dispatch-slot2",
             Self::PsDispatchAllKspSlots => "ps-dispatch-all-ksp-slots",
             Self::PsSimd16 => "ps-simd16",
             Self::PsEotOnly => "ps-eot-only",
-            Self::PsEotRasterWmOa => "ps-eot-raster-wm-oa",
             Self::PsCpsDisabled => "ps-cps-disabled",
             Self::PsPayloadPushConstant => "ps-payload-push-constant",
             Self::PsPayloadAttributeEnable => "ps-payload-attribute-enable",
@@ -575,8 +589,7 @@ impl BackendProbeMode {
     fn uses_raster_wm_oa(self) -> bool {
         matches!(
             self,
-            Self::PsEotRasterWmOa
-                | Self::RasterWmInputOa
+            Self::RasterWmInputOa
                 | Self::RasterWmInputOaSurfaceHalign128
                 | Self::RasterWmInputOaKillOff
                 | Self::RasterWmInputOaSmoothPoint
@@ -681,7 +694,8 @@ impl BackendProbeMode {
     fn dx_multisample_raster(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaMsRaster
+            Self::PsSampleAll
+                | Self::RasterWmInputOaMsRaster
                 | Self::RasterWmInputOaMsRasterForced
                 | Self::RasterWmInputOaEarlyMsRasterForced
                 | Self::RasterWmInputOaSampleAll
@@ -694,7 +708,8 @@ impl BackendProbeMode {
     fn force_multisample_raster(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaMsRasterForced
+            Self::PsSampleAll
+                | Self::RasterWmInputOaMsRasterForced
                 | Self::RasterWmInputOaEarlyMsRasterForced
                 | Self::RasterWmInputOaSampleAll
                 | Self::RasterWmInputOaSampleAllWmHandoff
@@ -753,7 +768,8 @@ impl BackendProbeMode {
     fn omit_wm_hz_op(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaNoHzOp
+            Self::PsOmitWmHzOp
+                | Self::RasterWmInputOaNoHzOp
                 | Self::RasterWmInputOaOmitHzOp
                 | Self::RasterWmInputOaPointWidth64OmitHzOp
         )
@@ -771,10 +787,23 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::RasterWmInputOaWmReemitAfterPsExtra
+                | Self::PsWmReemitAfterPsExtra
                 | Self::RasterWmInputOaPointWidth64WmReemitAfterPsExtra
                 | Self::RasterWmInputOaWmHandoff
                 | Self::RasterWmInputOaSampleAllWmHandoff
         )
+    }
+
+    fn ps_extra_before_ps(self) -> bool {
+        matches!(self, Self::PsExtraBeforePs)
+    }
+
+    fn disable_ps_blend_writeable_rt(self) -> bool {
+        matches!(self, Self::PsNoWriteableRt)
+    }
+
+    fn zero_cc_state_pointer(self) -> bool {
+        matches!(self, Self::PsNoCcPointer)
     }
 
     fn disable_ps_contract(self) -> bool {
@@ -849,7 +878,7 @@ impl BackendProbeMode {
     }
 
     fn enable_raster_scissor(self) -> bool {
-        self.early_sample_state()
+        (self.early_sample_state() && !matches!(self, Self::PsEotOnly))
             || matches!(
                 self,
                 Self::RasterWmInputOaPointWidth1023Scissor
@@ -868,7 +897,9 @@ impl BackendProbeMode {
     fn force_sample_generation(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaSampleAll | Self::RasterWmInputOaSampleAllWmHandoff
+            Self::PsSampleAll
+                | Self::RasterWmInputOaSampleAll
+                | Self::RasterWmInputOaSampleAllWmHandoff
         )
     }
 
@@ -917,7 +948,7 @@ impl BackendProbeMode {
     }
 
     fn force_sbe_read0(self) -> bool {
-        matches!(self, Self::RasterWmInputOaSbeRead0)
+        matches!(self, Self::PsSbeRead0 | Self::RasterWmInputOaSbeRead0)
     }
 
     fn pipe_control_between_clip_sf(self) -> bool {
@@ -992,7 +1023,10 @@ impl BackendProbeMode {
     }
 
     fn disable_primitive_replication(self) -> bool {
-        matches!(self, Self::RasterWmInputOaNoPrimitiveReplication)
+        matches!(
+            self,
+            Self::PsNoPrimitiveReplication | Self::RasterWmInputOaNoPrimitiveReplication
+        )
     }
 
     fn force_vf_geometry_distribution(self) -> bool {
@@ -1384,11 +1418,18 @@ fn is_vs_draw_frontier_scratch_submit_name(submit_name: &str) -> bool {
         || submit_name.starts_with("vs-draw-frontier-scratch-")
 }
 
+fn is_font_vf_vue_ps_replay_submit_name(submit_name: &str) -> bool {
+    submit_name.starts_with("font-tessel-clip-field-vf-vue-ps-replay-")
+        || submit_name.starts_with("font-tessel-clip-field-vf-vue-ps-admit-")
+}
+
 fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_scratch_rt_submit_name(base);
     }
-    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+    if is_vs_draw_frontier_scratch_submit_name(submit_name)
+        || is_font_vf_vue_ps_replay_submit_name(submit_name)
+    {
         return true;
     }
     matches!(
@@ -1650,10 +1691,6 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early"
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
-            | "font-tessel-clip-field-vf-vue-isolate-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
             | "screen-rect-oa-early"
     )
 }
@@ -1662,7 +1699,9 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_surface_draw_submit_name(base);
     }
-    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+    if is_vs_draw_frontier_scratch_submit_name(submit_name)
+        || is_font_vf_vue_ps_replay_submit_name(submit_name)
+    {
         return true;
     }
     matches!(
@@ -1857,7 +1896,9 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_fragment_candidate_submit_name(base);
     }
-    if is_vs_draw_frontier_scratch_submit_name(submit_name) {
+    if is_vs_draw_frontier_scratch_submit_name(submit_name)
+        || is_font_vf_vue_ps_replay_submit_name(submit_name)
+    {
         return true;
     }
     matches!(

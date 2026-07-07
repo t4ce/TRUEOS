@@ -1827,14 +1827,16 @@ fn is_gpgpu_submit_name(name: &str) -> bool {
 }
 
 fn is_font_vf_vue_clip_submit_name(name: &str) -> bool {
-    matches!(
+    name.starts_with("font-tessel-clip-field-vf-vue-ps-replay-")
+        || name.starts_with("font-tessel-clip-field-vf-vue-ps-admit-")
+        || matches!(
         name,
         "font-tessel-clip-field-vf-vue-isolate-scratch"
             | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
             | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
             | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
             | "font-tessel-clip-counter-vf-vue-big-inbounds-scratch"
-    )
+        )
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {

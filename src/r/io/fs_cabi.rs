@@ -81,10 +81,9 @@ fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
 }
 
 fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
-    if !crate::logflag::blueprint_log_enabled(level) {
-        return;
-    }
-    crate::globalog::log_with_purpose(
+    crate::globalog::log_with_area_purpose(
+        crate::logflag::LogArea::Blueprint,
+        level,
         Some(purpose_for_level(level)),
         format_args!("{}: {}\n", source, message),
     );

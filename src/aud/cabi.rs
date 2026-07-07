@@ -77,7 +77,13 @@ fn write_samples(label: &'static str, samples: &[i16]) -> Result<usize, i32> {
         return Ok(0);
     }
 
-    crate::aud::pcm_lane::submit_i16_stereo_48k(label, Vec::from(samples)).map_err(|_| EIO)
+    crate::aud::pcm_lane::submit_i16_stereo_48k(label, Vec::from(samples)).map_err(|err| {
+        match err {
+            crate::aud::pcm_lane::PcmLaneError::QueueFull => EBUSY,
+            crate::aud::pcm_lane::PcmLaneError::BadShape => EINVAL,
+            crate::aud::pcm_lane::PcmLaneError::EmptyBuffer => EIO,
+        }
+    })
 }
 
 fn guest_audio_write_samples(samples: &[i16]) -> Result<usize, i32> {
@@ -112,7 +118,11 @@ fn guest_audio_write_samples(samples: &[i16]) -> Result<usize, i32> {
         }
         let frames = (rc as i64) as isize;
         if frames < 0 {
-            return Err((-frames) as i32);
+            let err = (-frames) as i32;
+            if err == EBUSY && written_frames != 0 {
+                return Ok(written_frames);
+            }
+            return Err(err);
         }
         if frames == 0 {
             break;
@@ -155,6 +165,7 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
         if state.open {
             return -EBUSY;
         }
+        guest_audio_stop();
         state.open = true;
         state.running = false;
         unsafe {
@@ -170,6 +181,7 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
     if state.open {
         return -EBUSY;
     }
+    crate::aud::pcm_lane::request_stop();
     state.open = true;
     state.running = false;
     crate::aud::pcm_lane::set_paused(false);

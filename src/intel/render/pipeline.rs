@@ -787,12 +787,7 @@ fn encode_triangle_probe_batch(
     let force_wm_thread_dispatch = (matches!(backend_probe_mode, BackendProbeMode::WmLateReemit)
         || (batch_mode.vf_synthesized_vue()
             && !mesa_simple_rect_stack
-            && !matches!(
-                backend_probe_mode,
-                BackendProbeMode::WmNormalDispatch
-                    | BackendProbeMode::PsEotOnly
-                    | BackendProbeMode::PsEotRasterWmOa
-            )))
+            && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)))
         && !backend_probe_mode.suppress_forced_wm_thread_dispatch();
     let wm_dw1 = (1 << 31)
         | if batch_mode.point_raster() && !backend_probe_mode.suppress_wm_point_rule() {
@@ -818,7 +813,10 @@ fn encode_triangle_probe_batch(
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
-    let ps_blend_dw1 = if backend_probe_mode.disable_ps_contract() {
+    let ps_blend_dw1 =
+        if backend_probe_mode.disable_ps_contract()
+            || backend_probe_mode.disable_ps_blend_writeable_rt()
+        {
         0
     } else {
         1 << 30
@@ -855,13 +853,20 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::MesaLike
         | BackendProbeMode::PsBindingTableCountZero
         | BackendProbeMode::WmNormalDispatch
+        | BackendProbeMode::PsExtraBeforePs
+        | BackendProbeMode::PsWmReemitAfterPsExtra
+        | BackendProbeMode::PsOmitWmHzOp
+        | BackendProbeMode::PsSampleAll
+        | BackendProbeMode::PsSbeRead0
+        | BackendProbeMode::PsNoPrimitiveReplication
+        | BackendProbeMode::PsNoWriteableRt
+        | BackendProbeMode::PsNoCcPointer
         | BackendProbeMode::PsDispatchSlot0
         | BackendProbeMode::PsDispatchSlot1
         | BackendProbeMode::PsDispatchSlot2
         | BackendProbeMode::PsDispatchAllKspSlots
         | BackendProbeMode::PsSimd16
         | BackendProbeMode::PsEotOnly
-        | BackendProbeMode::PsEotRasterWmOa
         | BackendProbeMode::PsCpsDisabled
         | BackendProbeMode::PsPayloadPushConstant
         | BackendProbeMode::PsPayloadAttributeEnable
@@ -997,7 +1002,8 @@ fn encode_triangle_probe_batch(
     };
     let ps_ksp2 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
+        BackendProbeMode::PsDispatchSlot2
+            | BackendProbeMode::PsDispatchAllKspSlots
     ) {
         ps_ksp_base
     } else {
@@ -1188,6 +1194,12 @@ fn encode_triangle_probe_batch(
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
     push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+
+    if device_is_gfx12(warm.device_id) {
+        log_batch_offset(cursor, "3DSTATE_CONSTANT_ALL empty-all-stages pre-ps");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES)?;
+        push(batch_dwords, &mut cursor, RENDER_MOCS)?;
+    }
 
     log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_CC");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VIEWPORT_STATE_POINTERS_CC)?;
@@ -1844,7 +1856,15 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_CC_STATE_POINTERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_CC_STATE_POINTERS)?;
-    push(batch_dwords, &mut cursor, probe_state.color_calc_state_offset_bytes | 1)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if backend_probe_mode.zero_cc_state_pointer() {
+            0
+        } else {
+            probe_state.color_calc_state_offset_bytes | 1
+        },
+    )?;
 
     log_batch_offset(cursor, "3DSTATE_BLEND_STATE_POINTERS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
@@ -1898,7 +1918,7 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
-    let ps_extra_before_ps = false;
+    let ps_extra_before_ps = backend_probe_mode.ps_extra_before_ps();
     if ps_extra_before_ps {
         log_batch_offset(cursor, "3DSTATE_PS_EXTRA before-ps");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
@@ -2081,12 +2101,6 @@ fn encode_triangle_probe_batch(
             result_gpu_addr + (RESULT_OA_BEGIN_DWORD as u64) * 4,
             RESULT_OA_RASTER_WM_BEGIN_ID,
         )?;
-    }
-
-    if device_is_gfx12(warm.device_id) {
-        log_batch_offset(cursor, "3DSTATE_CONSTANT_ALL empty-all-stages");
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES)?;
-        push(batch_dwords, &mut cursor, RENDER_MOCS)?;
     }
 
     log_batch_offset(cursor, "3DPRIMITIVE");

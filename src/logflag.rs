@@ -1,23 +1,25 @@
 use core::sync::atomic::AtomicBool;
 use log::{Level, LevelFilter};
+pub(crate) use log_os::{LogArea, LogLevelPolicy};
 use spin::Once;
 
-pub(crate) const GLOBAL_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const BOOT_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const SERVICE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const NET_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const USB_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const STORAGE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const GFX_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const GPGPU_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const RENDER_LOG_LEVEL: LevelFilter = LevelFilter::Info;
-pub(crate) const HDA_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const HV_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const APPS_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LevelFilter = LevelFilter::Warn;
-pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
-pub(crate) const BLUEPRINT_LOG_LEVEL: LevelFilter = LevelFilter::Trace;
+pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
+    LogLevelPolicy::up(LevelFilter::Trace);
+pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
 
 pub(crate) const NET_LOG_RX_TAP: bool = false;
 pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -43,7 +45,6 @@ pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
 pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
 pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
 pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
-pub(crate) const USB_XHCI_TRANSFER_TRACE_LOGS: bool = false;
 pub(crate) const STORAGE_TRACE_LOGS: bool = false;
 pub(crate) const NVME_VERBOSE: bool = false;
 pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
@@ -51,62 +52,27 @@ pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
 pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
 
-fn canonical_concept(concept: &str) -> &str {
-    match concept {
-        "crabusb" => "usb",
-        other => other,
+pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+    match area {
+        LogArea::Global => GLOBAL_LOG_LEVEL,
+        LogArea::Boot => BOOT_LOG_LEVEL,
+        LogArea::Service => SERVICE_LOG_LEVEL,
+        LogArea::Net => NET_LOG_LEVEL,
+        LogArea::Usb => USB_LOG_LEVEL,
+        LogArea::Storage => STORAGE_LOG_LEVEL,
+        LogArea::Gfx => GFX_LOG_LEVEL,
+        LogArea::Gpgpu => GPGPU_LOG_LEVEL,
+        LogArea::Render => RENDER_LOG_LEVEL,
+        LogArea::Hda => HDA_LOG_LEVEL,
+        LogArea::Hv => HV_LOG_LEVEL,
+        LogArea::Apps => APPS_LOG_LEVEL,
+        LogArea::ExecutorRealm => EXECUTOR_REALM_LOG_LEVEL,
+        LogArea::ExecutorCache => EXECUTOR_CACHE_LOG_LEVEL,
+        LogArea::IntelMediaNgin => INTEL_MEDIA_NGIN_LOG_LEVEL,
+        LogArea::Blueprint => BLUEPRINT_LOG_LEVEL,
     }
 }
 
-pub(crate) fn usb_log_enabled(level: Level) -> bool {
-    level_enabled(USB_LOG_LEVEL, level)
-}
-
-pub(crate) fn blueprint_log_enabled(level: Level) -> bool {
-    level_enabled(BLUEPRINT_LOG_LEVEL, level)
-}
-
-pub(crate) fn intel_media_ngin_log_enabled(level: Level) -> bool {
-    level_enabled(INTEL_MEDIA_NGIN_LOG_LEVEL, level)
-}
-
-pub(crate) fn concept_log_enabled(concept: &str, level: Level) -> bool {
-    match canonical_concept(concept) {
-        "media" | "intel/media" | "intel/media2" | "intel/hw_pic" | "intel/hw_pic-stage" => {
-            return intel_media_ngin_log_enabled(level);
-        }
-        _ => {}
-    }
-
-    let filter = match canonical_concept(concept) {
-        "boot" | "cpu" | "tokio" | "rapl" | "tga" => BOOT_LOG_LEVEL,
-        "service" | "spawn-svc" | "http" => SERVICE_LOG_LEVEL,
-        "net" | "dns" | "dhcp" | "tls" | "icmp" => NET_LOG_LEVEL,
-        "usb" => USB_LOG_LEVEL,
-        "fs" | "storage" | "trueosfs" | "nvme" => STORAGE_LOG_LEVEL,
-        "gfx" | "intel" | "display" => GFX_LOG_LEVEL,
-        "gpgpu" | "intel/gpgpu" => GPGPU_LOG_LEVEL,
-        "render" | "intel/render" => RENDER_LOG_LEVEL,
-        "hda" | "audio" => HDA_LOG_LEVEL,
-        "hv" => HV_LOG_LEVEL,
-        "apps" | "blueprint" | "bp" => APPS_LOG_LEVEL,
-        "executor-cache" => EXECUTOR_CACHE_LOG_LEVEL,
-        "executor-realm" => EXECUTOR_REALM_LOG_LEVEL,
-        _ => GLOBAL_LOG_LEVEL,
-    };
-
-    level_enabled(filter, level)
-}
-
-pub(crate) fn level_enabled(filter: LevelFilter, level: Level) -> bool {
-    match filter {
-        LevelFilter::Off => false,
-        LevelFilter::Error => matches!(level, Level::Error),
-        LevelFilter::Warn => matches!(level, Level::Warn | Level::Error),
-        LevelFilter::Info => matches!(level, Level::Info | Level::Warn | Level::Error),
-        LevelFilter::Debug => {
-            matches!(level, Level::Debug | Level::Info | Level::Warn | Level::Error)
-        }
-        LevelFilter::Trace => true,
-    }
+pub(crate) fn area_log_enabled(area: LogArea, level: Level) -> bool {
+    log_os::level_enabled(area_log_policy(area), level)
 }

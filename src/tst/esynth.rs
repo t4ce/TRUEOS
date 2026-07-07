@@ -21,6 +21,12 @@ const PCM_DUMP_SECONDS: usize = 10;
 const PCM_DUMP_PATH: &str = "audio/tinyaudio-prehda.wav";
 const PCM_DUMP_POLL_MS: u64 = 1_000;
 const LIVE_PCM_RING_SECONDS: usize = 4;
+const PIANO_PRODUCER_VOLUME: f32 = 1.0;
+const PIANO_PRODUCER_DUCKED_VOLUME: f32 = 0.22;
+const TONE_PRODUCER_VOLUME: f32 = 1.0;
+const BLUEPRINT_PCM_PRODUCER_VOLUME: f32 = 0.86;
+const OUTPUT_LIMITER_KNEE: f32 = 0.82;
+const OUTPUT_LIMITER_CEILING: f32 = 0.995;
 
 static CALLBACKS: AtomicU32 = AtomicU32::new(0);
 static SAMPLES_WRITTEN: AtomicU32 = AtomicU32::new(0);
@@ -78,9 +84,16 @@ impl TinyaudioDemoMixer {
         SAMPLES_WRITTEN.fetch_add(data.len().min(u32::MAX as usize) as u32, Ordering::AcqRel);
 
         data.fill(0.0);
-        self.piano.mix_into(data);
-        self.tone.mix_into(data);
+        let blueprint_active = self.overlay.active_or_pending();
+        let piano_volume = if blueprint_active {
+            PIANO_PRODUCER_DUCKED_VOLUME
+        } else {
+            PIANO_PRODUCER_VOLUME
+        };
+        self.piano.mix_into(data, piano_volume);
+        self.tone.mix_into(data, TONE_PRODUCER_VOLUME);
         self.overlay.mix_into(data);
+        apply_output_limiter(data);
     }
 }
 
@@ -210,7 +223,7 @@ impl PianoSource {
         }
     }
 
-    fn mix_into(&mut self, data: &mut [f32]) {
+    fn mix_into(&mut self, data: &mut [f32], volume: f32) {
         if !self.enabled || data.len() != self.buffer.len() {
             return;
         }
@@ -222,7 +235,7 @@ impl PianoSource {
         }
 
         for (dst, src) in data.iter_mut().zip(self.buffer.iter().copied()) {
-            *dst += src as f32 / 32_767.0;
+            *dst += src as f32 / 32_767.0 * volume;
         }
     }
 }
@@ -267,38 +280,68 @@ impl PcmOverlaySource {
         }
     }
 
+    fn active_or_pending(&self) -> bool {
+        self.current.is_some() || crate::aud::pcm_lane::urgent_pending()
+    }
+
     fn mix_into(&mut self, data: &mut [f32]) {
         if self.apply_control() {
             return;
         }
 
-        self.take_pending();
+        let volume =
+            crate::aud::pcm_lane::volume_percent() as f32 / 100.0 * BLUEPRINT_PCM_PRODUCER_VOLUME;
+        let mut out_offset = 0usize;
+        while out_offset < data.len() {
+            if self.current.is_none() {
+                self.take_pending();
+            }
 
-        let Some(current) = self.current.as_ref() else {
-            return;
-        };
+            let Some(current) = self.current.as_ref() else {
+                return;
+            };
 
-        let remaining = current.samples.len().saturating_sub(self.cursor);
-        let take = data.len().min(remaining);
-        let volume = crate::aud::pcm_lane::volume_percent() as f32 / 100.0;
-        for (dst, src) in data.iter_mut().zip(
-            current.samples[self.cursor..self.cursor + take]
-                .iter()
-                .copied(),
-        ) {
-            *dst += src as f32 / 32_767.0 * volume;
+            let remaining = current.samples.len().saturating_sub(self.cursor);
+            let take = data.len().saturating_sub(out_offset).min(remaining);
+            if take == 0 {
+                self.current = None;
+                self.cursor = 0;
+                continue;
+            }
+
+            for (dst, src) in data[out_offset..out_offset + take].iter_mut().zip(
+                current.samples[self.cursor..self.cursor + take]
+                    .iter()
+                    .copied(),
+            ) {
+                *dst += src as f32 / 32_767.0 * volume;
+            }
+
+            self.cursor += take;
+            out_offset += take;
+            if self.cursor >= current.samples.len() {
+                crate::log!(
+                    "tinyaudio-service: overlay done label={} samples={}\n",
+                    current.label,
+                    current.samples.len()
+                );
+                self.current = None;
+                self.cursor = 0;
+            }
         }
+    }
+}
 
-        self.cursor += take;
-        if self.cursor >= current.samples.len() {
-            crate::log!(
-                "tinyaudio-service: overlay done label={} samples={}\n",
-                current.label,
-                current.samples.len()
-            );
-            self.current = None;
-            self.cursor = 0;
+fn apply_output_limiter(data: &mut [f32]) {
+    for sample in data {
+        let abs = sample.abs();
+        if abs <= OUTPUT_LIMITER_KNEE {
+            continue;
         }
+        let sign = if *sample < 0.0 { -1.0 } else { 1.0 };
+        let over = abs - OUTPUT_LIMITER_KNEE;
+        let limited = OUTPUT_LIMITER_KNEE + over / (1.0 + over);
+        *sample = sign * limited.min(OUTPUT_LIMITER_CEILING);
     }
 }
 
@@ -312,14 +355,15 @@ impl ToneSource {
         }
     }
 
-    fn mix_into(&mut self, data: &mut [f32]) {
+    fn mix_into(&mut self, data: &mut [f32], volume: f32) {
         if !self.enabled {
             return;
         }
 
         for frame in data.chunks_mut(CHANNELS) {
             let idx = (self.phase >> SINE_TABLE_SHIFT) as usize;
-            let sample = crate::aud::tables::SINE_TABLE[idx] as f32 / 32_767.0 * self.gain;
+            let sample =
+                crate::aud::tables::SINE_TABLE[idx] as f32 / 32_767.0 * self.gain * volume;
             self.phase = self.phase.wrapping_add(self.phase_step);
 
             for out in frame.iter_mut() {

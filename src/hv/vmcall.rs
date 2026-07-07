@@ -1059,7 +1059,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 samples,
             ) {
                 Ok(frames) => frames as i64,
-                Err(_) => -5,
+                Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -16,
+                Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -22,
+                Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -5,
             };
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume

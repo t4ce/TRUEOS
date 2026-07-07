@@ -1,10 +1,12 @@
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use spin::Mutex;
 
 use crate::hda;
 
-static PCM_LANE_REQUEST: Mutex<Option<PcmLaneRequest>> = Mutex::new(None);
+const PCM_LANE_MAX_QUEUED_FRAMES: usize = hda::PCM_SAMPLE_RATE_HZ as usize;
+
+static PCM_LANE_REQUESTS: Mutex<VecDeque<PcmLaneRequest>> = Mutex::new(VecDeque::new());
 static PCM_LANE_PAUSED: AtomicBool = AtomicBool::new(false);
 static PCM_LANE_VOLUME_PERCENT: AtomicU16 = AtomicU16::new(100);
 static PCM_LANE_STOP_GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -14,46 +16,64 @@ pub struct PcmLaneRequest {
     pub samples: Vec<i16>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PcmLaneError {
+    EmptyBuffer,
+    BadShape,
+    QueueFull,
+}
+
 pub fn submit_i16_stereo_48k(
     label: &'static str,
     samples: Vec<i16>,
-) -> Result<usize, &'static str> {
+) -> Result<usize, PcmLaneError> {
     if samples.is_empty() {
-        return Err("empty PCM buffer");
+        return Err(PcmLaneError::EmptyBuffer);
     }
     if samples.len() % hda::PCM_CHANNELS != 0 {
-        return Err("PCM buffer must be stereo interleaved");
+        return Err(PcmLaneError::BadShape);
     }
 
     let sample_count = samples.len();
-    *PCM_LANE_REQUEST.lock() = Some(PcmLaneRequest { label, samples });
+    let frames = sample_count / hda::PCM_CHANNELS;
+    let mut requests = PCM_LANE_REQUESTS.lock();
+    let queued_frames = requests
+        .iter()
+        .map(|request| request.samples.len() / hda::PCM_CHANNELS)
+        .sum::<usize>();
+    if queued_frames.saturating_add(frames) > PCM_LANE_MAX_QUEUED_FRAMES {
+        return Err(PcmLaneError::QueueFull);
+    }
+
+    requests.push_back(PcmLaneRequest { label, samples });
     crate::log!(
-        "pcm-lane: queued label={} samples={} frames={} format=s16le/stereo/48k\n",
+        "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
         label,
         sample_count,
-        sample_count / hda::PCM_CHANNELS
+        frames,
+        queued_frames.saturating_add(frames)
     );
-    Ok(sample_count / hda::PCM_CHANNELS)
+    Ok(frames)
 }
 
 pub fn urgent_pending() -> bool {
-    PCM_LANE_REQUEST.lock().is_some()
+    !PCM_LANE_REQUESTS.lock().is_empty()
 }
 
 pub fn pending_frames() -> usize {
-    PCM_LANE_REQUEST
+    PCM_LANE_REQUESTS
         .lock()
-        .as_ref()
+        .iter()
         .map(|request| request.samples.len() / hda::PCM_CHANNELS)
-        .unwrap_or(0)
+        .sum()
 }
 
 pub fn take_pending() -> Option<PcmLaneRequest> {
-    PCM_LANE_REQUEST.lock().take()
+    PCM_LANE_REQUESTS.lock().pop_front()
 }
 
 pub fn request_stop() -> u32 {
-    PCM_LANE_REQUEST.lock().take();
+    PCM_LANE_REQUESTS.lock().clear();
     PCM_LANE_PAUSED.store(false, Ordering::Release);
     PCM_LANE_STOP_GENERATION
         .fetch_add(1, Ordering::AcqRel)

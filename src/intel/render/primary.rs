@@ -2101,6 +2101,7 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
         submit_name,
         geometry_label,
         source_label,
+        TriangleBlendProbeMode::MesaZeroedState,
         backend_probe_mode,
         sync_variant,
         VS_DRAW_FRONTIER_CONTRACTS[2],
@@ -2150,13 +2151,33 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
             "lyon-font-mirrored-clip-field-isolate-n-triangles/vf-vue",
         ),
     };
+    let coverage_vertices = [[0.5, 0.5, 0.5], [7.5, 0.5, 0.5], [0.5, 7.5, 0.5]];
+    let launch_vertices: &[[f32; 3]] = if N == TRIANGLE_DRAW_VERTICES {
+        intel_render_focus_log!(
+            "intel/render: {} coverage-override accepted=1 source=hardcoded-screen-space target=8x8 vf_slot=position0 implicit_w=1 sf_viewport_transform=0 v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] note=single-triangle-valley\n",
+            submit_name,
+            coverage_vertices[0][0],
+            coverage_vertices[0][1],
+            coverage_vertices[0][2],
+            coverage_vertices[1][0],
+            coverage_vertices[1][1],
+            coverage_vertices[1][2],
+            coverage_vertices[2][0],
+            coverage_vertices[2][1],
+            coverage_vertices[2][2],
+        );
+        &coverage_vertices
+    } else {
+        &vertices
+    };
     let result = submit_render_custom_triangle_probe_locked(
-        &vertices,
+        launch_vertices,
         variant,
         submit_name,
         geometry_label,
         source_label,
-        BackendProbeMode::PsEotRasterWmOa,
+        TriangleBlendProbeMode::MesaZeroedState,
+        BackendProbeMode::MesaLike,
         PostDrawSyncVariant::LightPostSyncNoCs,
         VF_VUE_REAL_VS_FRONT_END_CONTRACT,
         TriangleBatchMode::VfScreenSpaceDraw,
@@ -2164,6 +2185,310 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
+}
+
+#[derive(Copy, Clone)]
+struct FontPsLaunchReplayCase {
+    index: u8,
+    variant: &'static str,
+    submit_name: &'static str,
+    geometry_label: &'static str,
+    source_label: &'static str,
+    backend: BackendProbeMode,
+    batch_mode: TriangleBatchMode,
+    screen_space: bool,
+    note: &'static str,
+}
+
+const FONT_PS_LAUNCH_REPLAY_CASES: [FontPsLaunchReplayCase; 5] = [
+    FontPsLaunchReplayCase {
+        index: 1,
+        variant: "font-clip-field-vf-vue-ps-replay-01-mesa-clip-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-replay-01-mesa-clip-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-replay-01-mesa-clip",
+        source_label: "hardcoded-full-coverage-clip-space/normal-ps",
+        backend: BackendProbeMode::MesaLike,
+        batch_mode: TriangleBatchMode::VfDraw,
+        screen_space: false,
+        note: "full-coverage-clip-normal-ps",
+    },
+    FontPsLaunchReplayCase {
+        index: 2,
+        variant: "font-clip-field-vf-vue-ps-replay-02-wm-normal-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-replay-02-wm-normal-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-replay-02-wm-normal",
+        source_label: "hardcoded-full-coverage-clip-space/wm-normal-dispatch",
+        backend: BackendProbeMode::WmNormalDispatch,
+        batch_mode: TriangleBatchMode::VfDraw,
+        screen_space: false,
+        note: "wm-force-dispatch-off",
+    },
+    FontPsLaunchReplayCase {
+        index: 3,
+        variant: "font-clip-field-vf-vue-ps-replay-03-ps-extra-before-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-replay-03-ps-extra-before-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-replay-03-ps-extra-before",
+        source_label: "hardcoded-full-coverage-clip-space/ps-extra-before-ps",
+        backend: BackendProbeMode::PsExtraBeforePs,
+        batch_mode: TriangleBatchMode::VfDraw,
+        screen_space: false,
+        note: "ps-extra-before-ps",
+    },
+    FontPsLaunchReplayCase {
+        index: 4,
+        variant: "font-clip-field-vf-vue-ps-replay-04-wm-reemit-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-replay-04-wm-reemit-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-replay-04-wm-reemit",
+        source_label: "hardcoded-full-coverage-clip-space/wm-reemit-after-ps-extra",
+        backend: BackendProbeMode::PsWmReemitAfterPsExtra,
+        batch_mode: TriangleBatchMode::VfDraw,
+        screen_space: false,
+        note: "wm-reemit-after-ps-extra",
+    },
+    FontPsLaunchReplayCase {
+        index: 5,
+        variant: "font-clip-field-vf-vue-ps-replay-05-no-hz-op-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-replay-05-no-hz-op-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-replay-05-no-hz-op",
+        source_label: "hardcoded-full-coverage-clip-space/omit-wm-hz-op",
+        backend: BackendProbeMode::PsOmitWmHzOp,
+        batch_mode: TriangleBatchMode::VfDraw,
+        screen_space: false,
+        note: "omit-wm-hz-op",
+    },
+];
+
+pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
+    _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+) -> Result<RenderJokerResult, &'static str> {
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let clip_vertices = [[-1.0, -1.0, 0.5], [3.0, -1.0, 0.5], [-1.0, 3.0, 0.5]];
+    let screen_vertices = [[0.5, 0.5, 0.5], [7.5, 0.5, 0.5], [0.5, 7.5, 0.5]];
+    let mut last_result = None;
+    let mut completed_count = 0u8;
+
+    for case in FONT_PS_LAUNCH_REPLAY_CASES {
+        let launch_vertices: &[[f32; 3]] = if case.screen_space {
+            &screen_vertices
+        } else {
+            &clip_vertices
+        };
+        intel_render_focus_log!(
+            "intel/render: {} ps-replay-case begin index={} backend={} batch={:?} vertices={} note={}\n",
+            case.submit_name,
+            case.index,
+            case.backend.label(),
+            case.batch_mode,
+            if case.screen_space {
+                "hardcoded-screen-space-8x8"
+            } else {
+                "hardcoded-full-coverage-clip"
+            },
+            case.note
+        );
+        match submit_render_custom_triangle_probe_locked(
+            launch_vertices,
+            case.variant,
+            case.submit_name,
+            case.geometry_label,
+            case.source_label,
+            TriangleBlendProbeMode::MesaZeroedState,
+            case.backend,
+            PostDrawSyncVariant::HeavyAll,
+            VF_VUE_REAL_VS_FRONT_END_CONTRACT,
+            case.batch_mode,
+            StreamoutProofExperiment::PositionSlot0,
+        ) {
+            Ok(render) => {
+                completed_count += render.completed as u8;
+                intel_render_focus_log!(
+                    "intel/render: {} ps-replay-case result index={} completed={} target={} note={}\n",
+                    case.submit_name,
+                    case.index,
+                    render.completed as u8,
+                    render.target,
+                    case.note
+                );
+                last_result = Some(render);
+            }
+            Err(err) => intel_render_focus_log!(
+                "intel/render: {} ps-replay-case result index={} status=error reason={} note={}\n",
+                case.submit_name,
+                case.index,
+                err,
+                case.note
+            ),
+        }
+    }
+
+    intel_render_focus_log!(
+        "intel/render: font-tessel-clip-field-vf-vue-ps-replay-suite completed_cases={} total_cases={} latest=shot-5 note=replayable-ps-frontier-regression\n",
+        completed_count,
+        FONT_PS_LAUNCH_REPLAY_CASES.len()
+    );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    last_result.ok_or("no-replay-result")
+}
+
+#[derive(Copy, Clone)]
+struct FontPsAdmissionLadderCase {
+    index: u8,
+    variant: &'static str,
+    submit_name: &'static str,
+    geometry_label: &'static str,
+    source_label: &'static str,
+    blend_mode: TriangleBlendProbeMode,
+    backend: BackendProbeMode,
+    note: &'static str,
+}
+
+const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
+    FontPsAdmissionLadderCase {
+        index: 1,
+        variant: "font-clip-field-vf-vue-ps-admit-01-baseline-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-01-baseline-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-01-baseline",
+        source_label: "ps-admission/full-coverage-clip/mesa-zeroed",
+        blend_mode: TriangleBlendProbeMode::MesaZeroedState,
+        backend: BackendProbeMode::MesaLike,
+        note: "baseline-mesa-zeroed-cc-valid",
+    },
+    FontPsAdmissionLadderCase {
+        index: 2,
+        variant: "font-clip-field-vf-vue-ps-admit-02-explicit-rt0-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-02-explicit-rt0-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-02-explicit-rt0",
+        source_label: "ps-admission/full-coverage-clip/explicit-rt0-blend",
+        blend_mode: TriangleBlendProbeMode::ExplicitRt0,
+        backend: BackendProbeMode::MesaLike,
+        note: "explicit-rt0-blend-state",
+    },
+    FontPsAdmissionLadderCase {
+        index: 3,
+        variant: "font-clip-field-vf-vue-ps-admit-03-no-blend-ptr-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-03-no-blend-ptr-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-03-no-blend-ptr",
+        source_label: "ps-admission/full-coverage-clip/no-blend-pointer",
+        blend_mode: TriangleBlendProbeMode::MesaZeroedNoBlendPointer,
+        backend: BackendProbeMode::MesaLike,
+        note: "zero-blend-state-pointer",
+    },
+    FontPsAdmissionLadderCase {
+        index: 4,
+        variant: "font-clip-field-vf-vue-ps-admit-04-no-cc-ptr-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-04-no-cc-ptr-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-04-no-cc-ptr",
+        source_label: "ps-admission/full-coverage-clip/no-cc-pointer",
+        blend_mode: TriangleBlendProbeMode::MesaZeroedState,
+        backend: BackendProbeMode::PsNoCcPointer,
+        note: "zero-cc-state-pointer",
+    },
+    FontPsAdmissionLadderCase {
+        index: 5,
+        variant: "font-clip-field-vf-vue-ps-admit-05-bt1-explicit-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-05-bt1-explicit-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-05-bt1-explicit",
+        source_label: "ps-admission/full-coverage-clip/bt1-explicit-rt0",
+        blend_mode: TriangleBlendProbeMode::ExplicitRt0,
+        backend: BackendProbeMode::PsBindingTableCountOne,
+        note: "bt-count-one-plus-explicit-rt0",
+    },
+    FontPsAdmissionLadderCase {
+        index: 6,
+        variant: "font-clip-field-vf-vue-ps-admit-06-no-writeable-rt-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-06-no-writeable-rt-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-06-no-writeable-rt",
+        source_label: "ps-admission/full-coverage-clip/no-writeable-rt",
+        blend_mode: TriangleBlendProbeMode::MesaZeroedState,
+        backend: BackendProbeMode::PsNoWriteableRt,
+        note: "ps-blend-writeable-rt-off-force-wm-on",
+    },
+];
+
+const FONT_PS_ADMISSION_ACTIVE_RUNG: u8 = 5;
+
+pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
+    _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+) -> Result<RenderJokerResult, &'static str> {
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let clip_vertices = [[-1.0, -1.0, 0.5], [3.0, -1.0, 0.5], [-1.0, 3.0, 0.5]];
+    let mut last_result = None;
+    let mut completed_count = 0u8;
+    let mut positive_index = 0u8;
+
+    for case in FONT_PS_ADMISSION_LADDER_CASES {
+        if case.index != FONT_PS_ADMISSION_ACTIVE_RUNG {
+            continue;
+        }
+        intel_render_focus_log!(
+            "intel/render: {} ps-admission-ladder begin index={} backend={} blend={} vertices=hardcoded-full-coverage-clip suspect=rt-cc-blend-state note={}\n",
+            case.submit_name,
+            case.index,
+            case.backend.label(),
+            case.blend_mode.label(),
+            case.note
+        );
+        match submit_render_custom_triangle_probe_locked(
+            &clip_vertices,
+            case.variant,
+            case.submit_name,
+            case.geometry_label,
+            case.source_label,
+            case.blend_mode,
+            case.backend,
+            PostDrawSyncVariant::LightPostSyncNoCs,
+            VF_VUE_REAL_VS_FRONT_END_CONTRACT,
+            TriangleBatchMode::VfDraw,
+            StreamoutProofExperiment::PositionSlot0,
+        ) {
+            Ok(render) => {
+                completed_count += render.completed as u8;
+                let positive = render.ps_observed;
+                intel_render_focus_log!(
+                    "intel/render: {} ps-admission-ladder result index={} completed={} ps_observed={} target={} note={}\n",
+                    case.submit_name,
+                    case.index,
+                    render.completed as u8,
+                    positive as u8,
+                    render.target,
+                    case.note
+                );
+                if positive {
+                    positive_index = case.index;
+                }
+                last_result = Some(render);
+            }
+            Err(err) => intel_render_focus_log!(
+                "intel/render: {} ps-admission-ladder result index={} status=error reason={} note={}\n",
+                case.submit_name,
+                case.index,
+                err,
+                case.note
+            ),
+        }
+    }
+
+    intel_render_focus_log!(
+        "intel/render: font-tessel-clip-field-vf-vue-ps-admission-ladder active_rung={} completed_cases={} total_cases={} positive_index={} note=rt-cc-blend-state-ladder\n",
+        FONT_PS_ADMISSION_ACTIVE_RUNG,
+        completed_count,
+        FONT_PS_ADMISSION_LADDER_CASES.len(),
+        positive_index
+    );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    last_result.ok_or("no-admission-result")
 }
 
 pub(crate) fn submit_render_font_clip_counter_sweep_probe()
@@ -2187,6 +2512,7 @@ pub(crate) fn submit_render_font_clip_counter_sweep_probe()
         "font-tessel-clip-counter-sweep-known-vs-big-inbounds-scratch",
         "font-tessel-clip-counter-sweep-known-vs-big-inbounds",
         "font-lyon-big-inbounds-screen-space/known-vs-clip-counter-sweep",
+        TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -2218,6 +2544,7 @@ pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
         "font-tessel-clip-counter-vf-vue-big-inbounds-scratch",
         "font-tessel-clip-counter-vf-vue-big-inbounds",
         "font-lyon-big-inbounds-screen-space/vf-synthesized-vue-clip-counter",
+        TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
         VF_VUE_REAL_VS_FRONT_END_CONTRACT,
@@ -2265,6 +2592,7 @@ fn submit_render_custom_triangle_probe_locked(
     submit_name: &'static str,
     geometry_label: &'static str,
     source_label: &'static str,
+    blend_mode: TriangleBlendProbeMode,
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
     front_end_contract: TriangleFrontEndContract,
@@ -2333,7 +2661,7 @@ fn submit_render_custom_triangle_probe_locked(
         probe_seq,
         submit_name,
         backend_probe_mode.label(),
-        TriangleBlendProbeMode::MesaZeroedState.label(),
+        blend_mode.label(),
         post_draw_sync_variant.label(),
         front_end_contract.label,
         source_label,
@@ -2345,7 +2673,7 @@ fn submit_render_custom_triangle_probe_locked(
         8 * core::mem::size_of::<u32>(),
         8,
         8,
-        TriangleBlendProbeMode::MesaZeroedState,
+        blend_mode,
         vertices,
         geometry_label,
         submit_name,
@@ -3886,7 +4214,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
             crate::intel::shader::triangle_pipeline_simd16(),
             crate::intel::shader::triangle_pipeline_simd16_note(),
         ),
-        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
+        BackendProbeMode::PsEotOnly => (
             crate::intel::shader::triangle_pipeline_ps_eot(),
             crate::intel::shader::triangle_pipeline_ps_eot_note(),
         ),
@@ -5049,7 +5377,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             crate::intel::shader::triangle_pipeline_simd16(),
             crate::intel::shader::triangle_pipeline_simd16_note(),
         ),
-        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
+        BackendProbeMode::PsEotOnly => (
             crate::intel::shader::triangle_pipeline_ps_eot(),
             crate::intel::shader::triangle_pipeline_ps_eot_note(),
         ),
@@ -5404,7 +5732,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             crate::intel::shader::triangle_pipeline_simd16(),
             crate::intel::shader::triangle_pipeline_simd16_note(),
         ),
-        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
+        BackendProbeMode::PsEotOnly => (
             crate::intel::shader::triangle_pipeline_ps_eot(),
             crate::intel::shader::triangle_pipeline_ps_eot_note(),
         ),
@@ -5699,12 +6027,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             delta.cps_invocations,
             delta.ps_depth,
         );
-        if is_raster_wm_oa_submit_name(submit_name) {
-            log_raster_wm_oa_probe(submit_name, warm, completed, draw, delta);
-        }
-    }
-    if is_raster_wm_oa_submit_name(submit_name) {
-        disable_raster_wm_oa_context(dev, submit_name);
     }
     completed
 }

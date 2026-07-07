@@ -74,7 +74,8 @@ fn snapshot_for_handle(handle: v::vnet::NetHandle) -> Option<trueos_esp::gate::D
 }
 
 pub(crate) fn publish_swarm_heartbeat_v4(from: v::vnet::EndpointV4) {
-    crate::globalog::log_with_level(
+    crate::globalog::log_with_area_level(
+        crate::logflag::LogArea::Net,
         log::Level::Trace,
         format_args!(
             "esp-gate: heartbeat=swarm from {}.{}.{}.{} upload_port={}\n",

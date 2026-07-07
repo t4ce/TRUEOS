@@ -1,18 +1,34 @@
-use core::{
-    fmt,
-    sync::atomic::{AtomicU64, Ordering},
-};
-use log::{Metadata, Record};
+use core::fmt;
 
 extern crate alloc;
 
-static USB_XHCI_COMPLETION_LAST_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+struct TrueOsLogSink;
+
+impl log_os::GlobalLogSink for TrueOsLogSink {
+    fn enabled(&self, area: crate::logflag::LogArea, level: log::Level) -> bool {
+        crate::logflag::area_log_enabled(area, level)
+    }
+
+    fn write(&self, purpose: Option<&str>, args: fmt::Arguments<'_>) {
+        write_with_purpose(purpose, args);
+    }
+}
+
+static TRUEOS_LOG_SINK: TrueOsLogSink = TrueOsLogSink;
+static KERNEL_LOG_FACADE: log_os::GlobalLogFacade<TrueOsLogSink> =
+    log_os::GlobalLogFacade::new(&TRUEOS_LOG_SINK);
 
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_purpose(Some($purpose), format_args!($($tt)*));
+        $crate::globalog::log_with_area_purpose(
+            $crate::logflag::LogArea::Global,
+            log::Level::Info,
+            Some($purpose),
+            format_args!($($tt)*),
+        );
     }};
     ($($tt:tt)*) => {{
         $crate::globalog::log(format_args!($($tt)*));
@@ -22,14 +38,14 @@ macro_rules! log {
 #[macro_export]
 macro_rules! log_trace {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             $target,
             log::Level::Trace,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             "boot",
             log::Level::Trace,
             format_args!($($tt)*),
@@ -40,14 +56,14 @@ macro_rules! log_trace {
 #[macro_export]
 macro_rules! log_debug {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             $target,
             log::Level::Debug,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             "boot",
             log::Level::Debug,
             format_args!($($tt)*),
@@ -58,14 +74,14 @@ macro_rules! log_debug {
 #[macro_export]
 macro_rules! log_info {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             $target,
             log::Level::Info,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             "boot",
             log::Level::Info,
             format_args!($($tt)*),
@@ -76,14 +92,14 @@ macro_rules! log_info {
 #[macro_export]
 macro_rules! log_warn {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             $target,
             log::Level::Warn,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             "boot",
             log::Level::Warn,
             format_args!($($tt)*),
@@ -94,14 +110,14 @@ macro_rules! log_warn {
 #[macro_export]
 macro_rules! log_error {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             $target,
             log::Level::Error,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_concept_level(
+        $crate::globalog::log_with_target_level(
             "boot",
             log::Level::Error,
             format_args!($($tt)*),
@@ -110,49 +126,10 @@ macro_rules! log_error {
 }
 
 pub fn log(args: fmt::Arguments<'_>) {
-    log_with_level(log::Level::Info, args);
+    log_os::log(&TRUEOS_LOG_SINK, args);
 }
 
-fn inferred_concept_for_rendered(rendered: &str) -> Option<&'static str> {
-    let rendered = rendered.trim_start();
-    if rendered.starts_with("crabusb:") || rendered.starts_with("crabusb/") {
-        return Some("usb");
-    }
-    if rendered.starts_with("gfx-cabi:") || rendered.starts_with("gfx-cabi/") {
-        return Some("gfx");
-    }
-    if rendered.starts_with("intel/gpgpu:") {
-        return Some("gpgpu");
-    }
-    if rendered.starts_with("intel/render:") && rendered.contains("gpgpu_probe=") {
-        return Some("gpgpu");
-    }
-    if rendered.starts_with("intel/media:")
-        || rendered.starts_with("intel/media2:")
-        || rendered.starts_with("intel/hw_pic:")
-        || rendered.starts_with("intel/hw_pic-stage:")
-        || (rendered.starts_with("intel/display:") && rendered.contains("hw-logo"))
-    {
-        return Some("media");
-    }
-    None
-}
-
-fn is_usb_vendor_metadata(metadata: &Metadata<'_>) -> bool {
-    let target = metadata.target();
-    target.contains("crab_usb") || target.contains("crab-usb")
-}
-
-fn is_usb_vendor_record(record: &Record<'_>) -> bool {
-    let module_path = record.module_path().unwrap_or("");
-    let target = record.target();
-    module_path.contains("crab_usb")
-        || module_path.contains("crab-usb")
-        || target.contains("crab_usb")
-        || target.contains("crab-usb")
-}
-
-pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
+fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 
     struct PurposeWriter<'a> {
@@ -181,106 +158,26 @@ pub fn log_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _ = fmt::write(&mut writer, args);
 }
 
-pub fn purpose_for_level(level: log::Level) -> &'static str {
-    match level {
-        log::Level::Trace => "trace",
-        log::Level::Debug => "debug",
-        log::Level::Info => "info",
-        log::Level::Warn => "warn",
-        log::Level::Error => "error",
-    }
+pub fn log_with_area_level(
+    area: crate::logflag::LogArea,
+    level: log::Level,
+    args: fmt::Arguments<'_>,
+) {
+    log_os::log_with_area_level(&TRUEOS_LOG_SINK, area, level, args);
 }
 
-pub fn log_with_level(level: log::Level, args: fmt::Arguments<'_>) {
-    let rendered = alloc::format!("{}", args);
-    if let Some(concept) = inferred_concept_for_rendered(rendered.as_str()) {
-        if !crate::logflag::concept_log_enabled(concept, level) {
-            return;
-        }
-    }
-    log_with_purpose(Some(purpose_for_level(level)), format_args!("{}", rendered));
+pub fn log_with_area_purpose(
+    area: crate::logflag::LogArea,
+    level: log::Level,
+    purpose: Option<&str>,
+    args: fmt::Arguments<'_>,
+) {
+    log_os::log_with_area_purpose(&TRUEOS_LOG_SINK, area, level, purpose, args);
 }
 
-pub fn log_with_concept_level(concept: &str, level: log::Level, args: fmt::Arguments<'_>) {
-    if !crate::logflag::concept_log_enabled(concept, level) {
-        return;
-    }
-    log_with_level(level, args);
+pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {
+    log_os::log_with_target_level(&TRUEOS_LOG_SINK, target, level, args);
 }
-
-fn one_second_rate_limit_allows(last_marker: &AtomicU64) -> bool {
-    let interval = embassy_time_driver::TICK_HZ.max(1);
-    let now = embassy_time_driver::now();
-    let now_marker = now.saturating_add(1);
-    let mut previous_marker = last_marker.load(Ordering::Relaxed);
-
-    loop {
-        if previous_marker != 0 {
-            let previous = previous_marker.saturating_sub(1);
-            if now >= previous && now.saturating_sub(previous) < interval {
-                return false;
-            }
-        }
-
-        match last_marker.compare_exchange_weak(
-            previous_marker,
-            now_marker,
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => return true,
-            Err(actual) => previous_marker = actual,
-        }
-    }
-}
-
-fn usb_vendor_rendered_log_allowed(rendered: &str) -> bool {
-    if !crate::logflag::USB_XHCI_TRANSFER_TRACE_LOGS
-        && (rendered.starts_with("[Transfer] >>")
-            || rendered.starts_with("Transfer data length:")
-            || rendered.starts_with("xhci: event transfer ")
-            || rendered.starts_with("xhci: dispatch transfer event ")
-            || rendered.starts_with("xhci: event ring drained command=0 port=0 transfer="))
-    {
-        return false;
-    }
-    if rendered.starts_with("crabusb/xhci/ep: completion") {
-        return one_second_rate_limit_allows(&USB_XHCI_COMPLETION_LAST_LOG_TICK);
-    }
-    true
-}
-
-struct KernelLogFacade;
-
-impl log::Log for KernelLogFacade {
-    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        if is_usb_vendor_metadata(metadata) {
-            return crate::logflag::usb_log_enabled(metadata.level());
-        }
-        true
-    }
-
-    fn log(&self, record: &Record<'_>) {
-        if !self.enabled(record.metadata()) {
-            return;
-        }
-        let purpose = purpose_for_level(record.level());
-        if is_usb_vendor_record(record) {
-            let rendered = alloc::format!("{}", record.args());
-            if !usb_vendor_rendered_log_allowed(rendered.as_str()) {
-                return;
-            }
-            let rendered = rendered.trim_end();
-            log_with_purpose(Some(purpose), format_args!("crabusb: {}\n", rendered));
-            return;
-        }
-        log_with_purpose(Some(purpose), format_args!("{}\n", record.args()));
-    }
-
-    fn flush(&self) {}
-}
-
-static KERNEL_LOG_FACADE: KernelLogFacade = KernelLogFacade;
 
 pub fn init_log_facade() {
     let _ = log::set_logger(&KERNEL_LOG_FACADE);
