@@ -782,7 +782,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                     let opcode =
                         u16::from_be_bytes([packet[l2_off + 6], packet[l2_off + 7]]);
                     // Always log replies; sample requests.
-                    if crate::logflag::NET_LOG_ARP_RX && (opcode == 2 || arp_count <= 32) {
+                    if crate::log_os::flags::NET_LOG_ARP_RX && (opcode == 2 || arp_count <= 32) {
                         let sha = &packet[l2_off + 8..l2_off + 14];
                         let spa = [
                             packet[l2_off + 14],
@@ -955,7 +955,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
                                             opt_i += olen;
                                         }
                                     }
-                                    if crate::logflag::NET_LOG_DHCP_VERBOSE
+                                    if crate::log_os::flags::NET_LOG_DHCP_VERBOSE
                                         && (chaddr_match != 0 || offer_count == 1)
                                     {
                                         crate::log_info!(target: "net"; 
@@ -996,7 +996,7 @@ impl<'a> Device for AdapterDeviceAt<'a> {
             }
 
             // Cheap RX tap for bring-up: log the first few frames per NIC.
-            if crate::logflag::NET_LOG_RX_TAP && new_dev_total <= 8 {
+            if crate::log_os::flags::NET_LOG_RX_TAP && new_dev_total <= 8 {
                 if packet.len() >= 14 {
                     let dst = &packet[0..6];
                     let src = &packet[6..12];
@@ -1110,7 +1110,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
 
         // TX tap: only log IPv4/TCP frames for bring-up. This avoids drowning in
         // NDP/ARP chatter while still letting us confirm SYN emission.
-        if (crate::logflag::NET_LOG_TX_TAP || crate::logflag::NET_LOG_TCP_CONNECT_WIRE)
+        if (crate::log_os::flags::NET_LOG_TX_TAP || crate::log_os::flags::NET_LOG_TCP_CONNECT_WIRE)
             && new_dev_total <= 8192
         {
             if buf.len() >= 14 {
@@ -1246,7 +1246,7 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                                         u16::from_be_bytes([buf[tcp_off + 2], buf[tcp_off + 3]]);
                                     let flags = buf[tcp_off + 13];
                                     let control = (flags & 0x07) != 0;
-                                    let sampled_data = crate::logflag::NET_LOG_TX_TAP
+                                    let sampled_data = crate::log_os::flags::NET_LOG_TX_TAP
                                         && net_log_once_per_second(&NET_TX_TAP_TCP_LAST_LOG_NS);
                                     if control || sampled_data {
                                         crate::log_trace!(target: "net";
@@ -1280,7 +1280,10 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
                             let udp_off = l2_off + ihl;
                             let sport = u16::from_be_bytes([buf[udp_off], buf[udp_off + 1]]);
                             let dport = u16::from_be_bytes([buf[udp_off + 2], buf[udp_off + 3]]);
-                            if crate::logflag::NET_LOG_DHCP_VERBOSE && sport == 68 && dport == 67 {
+                            if crate::log_os::flags::NET_LOG_DHCP_VERBOSE
+                                && sport == 68
+                                && dport == 67
+                            {
                                 crate::log_trace!(target: "net";
                                     "net: tx-tap dev={} saw dhcp client (udp 68->67)\n",
                                     self.index
@@ -1727,7 +1730,7 @@ impl NetService {
             dhcp6_iaid,
             dhcp6_dns6: [[0u8; 16]; DHCP6_DNS6_MAX],
             dhcp6_dns6_count: 0,
-            dhcp6_rx_samples_left: crate::logflag::NET_LOG_DHCP6_SAMPLES as u8,
+            dhcp6_rx_samples_left: crate::log_os::flags::NET_LOG_DHCP6_SAMPLES as u8,
 
             ra_seen: false,
             ra_managed: false,
@@ -2320,7 +2323,7 @@ impl NetService {
             last_tcp_state: None,
         });
 
-        if crate::logflag::NET_LOG_TCP_FLOW {
+        if crate::log_os::flags::NET_LOG_TCP_FLOW {
             crate::log_info!(target: "net";
                 "net: loopback tcp connect port={} client={} server={}\n",
                 remote.port,
@@ -2360,7 +2363,7 @@ impl NetService {
             IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::from_octets(remote_addr)), remote_port);
 
         let local_octets = local_ip.octets();
-        if crate::logflag::NET_LOG_TCP_FLOW {
+        if crate::log_os::flags::NET_LOG_TCP_FLOW {
             crate::log_info!(target: "net";
                 "net: tcp connect owner={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{}\n",
                 owner,
@@ -2385,7 +2388,7 @@ impl NetService {
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
-        if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
+        if crate::log_os::flags::NET_LOG_TCP_CONNECT_STATES {
             crate::log_info!(target: "net";
                 "net: tcp connect-open owner={} handle={} local={}.{}.{}.{}:{} remote={}.{}.{}.{}:{} state={:?}\n",
                 owner,
@@ -2462,7 +2465,7 @@ impl NetService {
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
-        if crate::logflag::NET_LOG_TCP_CONNECT_STATES {
+        if crate::log_os::flags::NET_LOG_TCP_CONNECT_STATES {
             crate::log_info!(target: "net";
                 "net: tcp6 connect-open owner={} handle={} local_port={} remote6={:02x}{:02x}:{:02x}{:02x}:...:{} state={:?}\n",
                 owner,
@@ -2610,7 +2613,7 @@ impl NetService {
         }
 
         if total_sent != 0 {
-            if crate::logflag::NET_LOG_TCP_SEND_FLUSH {
+            if crate::log_os::flags::NET_LOG_TCP_SEND_FLUSH {
                 if owner == "logtotcp" {
                     LOGTOTCP_SEND_FLUSH_SUPPRESSED.fetch_add(1, Ordering::Relaxed);
                     LOGTOTCP_SEND_FLUSH_BYTES.fetch_add(total_sent as u64, Ordering::Relaxed);
@@ -2790,7 +2793,7 @@ impl NetService {
             );
         }
 
-        if crate::logflag::NET_LOG_IPV6_RA {
+        if crate::log_os::flags::NET_LOG_IPV6_RA {
             crate::log_info!(target: "net";
                 "net: ipv6 rs dev={} src_ll={:02x}{:02x}:{:02x}{:02x}:... -> ff02::2\n",
                 self.device_index,
@@ -2873,7 +2876,7 @@ impl NetService {
             // Prefer global-unicast for Internet connectivity.
             let raw_slaac_prefix = Self::pick_slaac_prefix_from_ra_icmpv6(ipv6.payload());
 
-            if crate::logflag::NET_LOG_IPV6_RA {
+            if crate::log_os::flags::NET_LOG_IPV6_RA {
                 crate::log_info!(target: "net";
                     "net: ipv6 ra dev={} from={:02x}{:02x}:{:02x}{:02x}:... lifetime_ms={} prefix_present={}\n",
                     self.device_index,
@@ -3135,7 +3138,7 @@ impl NetService {
         if found {
             self.ra_dns6 = out;
             self.ra_dns6_count = count;
-            if crate::logflag::NET_LOG_IPV6_RA {
+            if crate::log_os::flags::NET_LOG_IPV6_RA {
                 crate::log_info!(target: "net";
                     "net: ipv6 rdnss dev={} count={}\n",
                     self.device_index,
@@ -3602,7 +3605,7 @@ impl NetService {
                 } else {
                     match self.open_tcp_connect(owner, remote) {
                         Ok(handle) => {
-                            if crate::logflag::NET_LOG_TCP_FLOW {
+                            if crate::log_os::flags::NET_LOG_TCP_FLOW {
                                 crate::log_info!(target: "net";
                                     "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
                                     owner,
@@ -3726,7 +3729,7 @@ impl NetService {
                         let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
                         return;
                     }
-                    if crate::logflag::NET_LOG_TCP_FLOW && data.starts_with(b"GET ") {
+                    if crate::log_os::flags::NET_LOG_TCP_FLOW && data.starts_with(b"GET ") {
                         crate::log_info!(target: "net";
                             "net: sendtcp cmd owner={} handle={} bytes={}\n",
                             owner,
@@ -3862,8 +3865,9 @@ impl NetService {
             let last = self.records[idx].last_tcp_state;
             if last != Some(state) {
                 self.records[idx].last_tcp_state = Some(state);
-                if crate::logflag::NET_LOG_TCP_FLOW
-                    || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
+                if crate::log_os::flags::NET_LOG_TCP_FLOW
+                    || (crate::log_os::flags::NET_LOG_TCP_CONNECT_STATES
+                        && self.records[idx].tcp_connect)
                 {
                     log_tcp_connect_record_state("net: tcp state", &self.records[idx], state);
                 }
@@ -3915,7 +3919,7 @@ impl NetService {
                 && !socket.can_recv()
                 && self.records[idx].tcp_tx.is_empty()
             {
-                if crate::logflag::NET_LOG_TCP_FLOW {
+                if crate::log_os::flags::NET_LOG_TCP_FLOW {
                     crate::log_info!(target: "net";
                         "net: tcp closewait owner={} handle={} rx_bytes_this_poll={} rx_events={} rx_drops={}\n",
                         owner,
@@ -3938,7 +3942,7 @@ impl NetService {
         self.flush_tcp_tx(idx);
 
         if state == tcp::State::Established && !self.records[idx].established {
-            if crate::logflag::NET_LOG_TCP_FLOW {
+            if crate::log_os::flags::NET_LOG_TCP_FLOW {
                 crate::log_info!(target: "net"; "net: tcp established branch owner={} handle={}\n", owner, handle.0);
             }
             self.records[idx].established = true;
@@ -3950,8 +3954,9 @@ impl NetService {
                     peer6: self.records[idx].tcp_remote_v6,
                 },
             );
-            if crate::logflag::NET_LOG_TCP_FLOW
-                || (crate::logflag::NET_LOG_TCP_CONNECT_STATES && self.records[idx].tcp_connect)
+            if crate::log_os::flags::NET_LOG_TCP_FLOW
+                || (crate::log_os::flags::NET_LOG_TCP_CONNECT_STATES
+                    && self.records[idx].tcp_connect)
             {
                 log_tcp_connect_record_state(
                     "net: tcp established event",
@@ -4121,7 +4126,7 @@ impl NetService {
                     let _ = addrs.push(IpCidr::Ipv4(config.address));
                 });
 
-                if crate::logflag::NET_LOG_DHCP_VERBOSE {
+                if crate::log_os::flags::NET_LOG_DHCP_VERBOSE {
                     crate::log_info!(target: "net";
                         "net: dhcp apply dev={} ipv4_cidr={}.{}.{}.{} /{} iface_addrs={}\n",
                         self.device_index,

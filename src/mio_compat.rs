@@ -219,7 +219,7 @@ fn compat_addr_is_ipv4_loopback(addr: CompatAddr) -> bool {
 
 fn probe_tcp_socket(socket: &MioSocketState) -> bool {
     socket.kind == MioSocketKind::TcpStream
-        && (crate::logflag::NET_LOG_TCP_FLOW
+        && (crate::log_os::flags::NET_LOG_TCP_FLOW
             || matches!(compat_addr_port(socket.local), Some(4 | 5))
             || matches!(compat_addr_port(socket.peer), Some(80 | 443 | 4242 | 4965 | 7822)))
 }
@@ -904,7 +904,7 @@ impl MioCompat {
                         }
                         MioSocketKind::TcpListener => {
                             socket.listen_handles.push(handle);
-                            if crate::logflag::NET_LOG_TCP_FLOW {
+                            if crate::log_os::flags::NET_LOG_TCP_FLOW {
                                 crate::log!(
                                     "mio_compat: tcp listener opened socket={} owner={} handle={} listen_port={} handles={} pending_opens={}\n",
                                     socket.id,
@@ -934,7 +934,7 @@ impl MioCompat {
                         listener.listen_handles.retain(|h| *h != handle);
                         let mut inherited_rx = VecDeque::new();
                         core::mem::swap(&mut inherited_rx, &mut listener.rx_stream);
-                        if crate::logflag::NET_LOG_TCP_FLOW && !inherited_rx.is_empty() {
+                        if crate::log_os::flags::NET_LOG_TCP_FLOW && !inherited_rx.is_empty() {
                             crate::log!(
                                 "mio_compat: tcp established inherited listener bytes listener={} child={} handle={} bytes={}\n",
                                 listener_id,
@@ -972,7 +972,7 @@ impl MioCompat {
 
                     if let Some(listener) = self.socket_mut(listener_id) {
                         listener.accept_queue.push_back(child_id);
-                        if crate::logflag::NET_LOG_TCP_FLOW {
+                        if crate::log_os::flags::NET_LOG_TCP_FLOW {
                             crate::log!(
                                 "mio_compat: tcp listener accept queued listener={} child={} handle={} pending={} handles={}\n",
                                 listener_id,
@@ -1001,7 +1001,7 @@ impl MioCompat {
                     }
                     let socket_id = socket.id;
                     self.queue_loopback_accept_from_client(socket_id, handle);
-                } else if crate::logflag::NET_LOG_TCP_FLOW {
+                } else if crate::log_os::flags::NET_LOG_TCP_FLOW {
                     let mut listener_count = 0usize;
                     let mut first_listener_socket = 0u32;
                     let mut first_listener_handle = 0u32;
@@ -1038,7 +1038,7 @@ impl MioCompat {
                     let log_queue = should_log_tcp_rx_queue_growth(queued_before, queued_after);
 
                     if log_queue
-                        && crate::logflag::NET_LOG_TCP_FLOW
+                        && crate::log_os::flags::NET_LOG_TCP_FLOW
                         && socket.kind == MioSocketKind::TcpListener
                     {
                         crate::log!(
@@ -1220,7 +1220,7 @@ impl MioCompat {
                         socket.closed as u8
                     );
                 }
-                if crate::logflag::NET_LOG_TCP_FLOW
+                if crate::log_os::flags::NET_LOG_TCP_FLOW
                     && socket.kind == MioSocketKind::Udp
                     && (readiness & READY_WRITABLE) != 0
                 {
@@ -1235,7 +1235,7 @@ impl MioCompat {
                         );
                     }
                 }
-                if crate::logflag::NET_LOG_TCP_FLOW
+                if crate::log_os::flags::NET_LOG_TCP_FLOW
                     && socket.kind == MioSocketKind::TcpStream
                     && (readiness & READY_WRITABLE) != 0
                 {
@@ -2320,7 +2320,7 @@ pub(crate) unsafe fn mio_tcp_listener_accept_host(
             *out_socket_id = child_id;
             *out_addr = peer_addr.to_raw();
         }
-        if crate::logflag::NET_LOG_TCP_FLOW {
+        if crate::log_os::flags::NET_LOG_TCP_FLOW {
             crate::log!(
                 "mio_compat: tcp listener accept ok listener={} child={} pending={}\n",
                 socket_id,
@@ -2564,7 +2564,7 @@ pub(crate) unsafe fn mio_selector_poll_host(
             return 0;
         }
 
-        if crate::logflag::NET_LOG_TCP_FLOW {
+        if crate::log_os::flags::NET_LOG_TCP_FLOW {
             static MIO_SELECTOR_PARK_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
             if once_per_second(&MIO_SELECTOR_PARK_LAST_LOG_NS) {
                 let (regs, sockets, listeners, accepts, pending_opens) = with_compat(|compat| {

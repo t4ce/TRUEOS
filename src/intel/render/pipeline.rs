@@ -3,7 +3,8 @@ const CPS_STATE_VIEWPORTS: usize = 16;
 const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPORTS;
 
 fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
-    if !crate::logflag::INTEL_RENDER_NGIN_LOGS || crate::logflag::INTEL_STAGE1_LOGS {
+    if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS
+    {
         return;
     }
     let rt_gpu_addr = rt_gpu_addr.unwrap_or(0);
@@ -35,7 +36,8 @@ fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
 }
 
 fn log_render_packet_encodings() {
-    if !crate::logflag::INTEL_RENDER_NGIN_LOGS || crate::logflag::INTEL_STAGE1_LOGS {
+    if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS
+    {
         return;
     }
     let (ctx_desc_lo, ctx_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
@@ -55,7 +57,8 @@ fn log_triangle_probe_state(
     shader_layout: TriangleShaderLayout,
     probe_state: TriangleProbeStateLayout,
 ) {
-    if !crate::logflag::INTEL_RENDER_NGIN_LOGS || crate::logflag::INTEL_STAGE1_LOGS {
+    if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS
+    {
         return;
     }
     let dwords = unsafe {
@@ -825,10 +828,9 @@ fn encode_triangle_probe_batch(
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
-    let ps_blend_dw1 =
-        if backend_probe_mode.disable_ps_contract()
-            || backend_probe_mode.disable_ps_blend_writeable_rt()
-        {
+    let ps_blend_dw1 = if backend_probe_mode.disable_ps_contract()
+        || backend_probe_mode.disable_ps_blend_writeable_rt()
+    {
         0
     } else {
         1 << 30
@@ -981,18 +983,9 @@ fn encode_triangle_probe_batch(
             || matches!(backend_probe_mode, BackendProbeMode::PsWmNormalBt0)
             || matches!(backend_probe_mode, BackendProbeMode::PsWmNormalBt0CpDep)
             || matches!(backend_probe_mode, BackendProbeMode::PsPrmEarlyRasterGate)
-            || matches!(
-                backend_probe_mode,
-                BackendProbeMode::PsPrmRasterGateSbeBeforeSf
-            )
-            || matches!(
-                backend_probe_mode,
-                BackendProbeMode::PsPrmSbeNoAttrSwizzle
-            )
-            || matches!(
-                backend_probe_mode,
-                BackendProbeMode::PsPrmNoPrimitiveReplication
-            )
+            || matches!(backend_probe_mode, BackendProbeMode::PsPrmRasterGateSbeBeforeSf)
+            || matches!(backend_probe_mode, BackendProbeMode::PsPrmSbeNoAttrSwizzle)
+            || matches!(backend_probe_mode, BackendProbeMode::PsPrmNoPrimitiveReplication)
             || (backend_probe_mode.uses_raster_wm_oa()
                 && !backend_probe_mode.keep_ps_binding_table_count())
         {
@@ -1036,8 +1029,7 @@ fn encode_triangle_probe_batch(
     };
     let ps_ksp2 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot2
-            | BackendProbeMode::PsDispatchAllKspSlots
+        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
     ) {
         ps_ksp_base
     } else {
@@ -2321,8 +2313,7 @@ fn encode_triangle_probe_batch(
     let ps_kills = (ps_extra_dw1 >> 28) & 0x1;
     let ps_blend_has_writeable_rt = (ps_blend_dw1 >> 30) & 0x1;
     let wm_force_thread_dispatch = (wm_dw1 >> 19) & 0x3;
-    let wm_hz_op_active =
-        ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
+    let wm_hz_op_active = ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
     let wm_depth_test_enable = (wm_depth_stencil_dw1 >> 1) & 0x1;
     let wm_stencil_test_enable = (wm_depth_stencil_dw1 >> 3) & 0x1;
     let wm_depth_write_enable = (wm_depth_stencil_dw1 >> 28) & 0x1;
@@ -2340,8 +2331,7 @@ fn encode_triangle_probe_batch(
         "ps-uav"
     } else if ps_kills != 0 {
         "ps-kill"
-    } else if ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0)
-    {
+    } else if ps_computed_depth != 0 && (wm_depth_test_enable != 0 || wm_depth_write_enable != 0) {
         "computed-depth"
     } else if ps_computes_stencil != 0 && wm_stencil_test_enable != 0 {
         "computed-stencil"
@@ -2358,11 +2348,9 @@ fn encode_triangle_probe_batch(
             | "computed-stencil"
     ) as u32;
     let ps_bary_coeffs = ((ps_extra_dw1
-        & (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
-            | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
+        & (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
         != 0) as u8;
-    let ps_source_depth_w =
-        ((ps_extra_dw1 & PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE) != 0) as u8;
+    let ps_source_depth_w = ((ps_extra_dw1 & PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE) != 0) as u8;
     let no_varying_payload = (pipeline.ps.meta.num_varying_inputs == 0
         && !ps_push_constant_enable
         && ps_attribute_enable == 0
@@ -2432,28 +2420,22 @@ fn encode_triangle_probe_batch(
     let vp_xmax = f32::from_bits(sf_vp[13]);
     let vp_ymin = f32::from_bits(sf_vp[14]);
     let vp_ymax = f32::from_bits(sf_vp[15]);
-    let cc_min_depth = f32::from_bits(
-        state_words[probe_state.cc_viewport_offset_bytes as usize / 4],
-    );
-    let cc_max_depth = f32::from_bits(
-        state_words[probe_state.cc_viewport_offset_bytes as usize / 4 + 1],
-    );
+    let cc_min_depth =
+        f32::from_bits(state_words[probe_state.cc_viewport_offset_bytes as usize / 4]);
+    let cc_max_depth =
+        f32::from_bits(state_words[probe_state.cc_viewport_offset_bytes as usize / 4 + 1]);
     let scissor_xmin = scissor[0] & 0xFFFF;
     let scissor_ymin = (scissor[0] >> 16) & 0xFFFF;
     let scissor_xmax = scissor[1] & 0xFFFF;
     let scissor_ymax = (scissor[1] >> 16) & 0xFFFF;
     let primitive_replication_count = primitive_replication_dw1 & 0xF;
     let primitive_replication_mask = (primitive_replication_dw1 >> 16) & 0xFFFF;
-    let vp_extents_ok = vp_xmin <= vp_xmax
-        && vp_ymin <= vp_ymax
-        && vp_xmax > 0.0
-        && vp_ymax > 0.0;
+    let vp_extents_ok = vp_xmin <= vp_xmax && vp_ymin <= vp_ymax && vp_xmax > 0.0 && vp_ymax > 0.0;
     let draw_rect_ok = draw.target_w != 0 && draw.target_h != 0;
     let sample_mask_ok = backend_probe_mode.sample_mask_dw() != 0;
     let cull_none = ((raster_dw1 >> 16) & 0x3) == 1;
     let checkbook_clip_enable = (clip_dw2 >> 31) & 0x1;
-    let prim_repl_ok =
-        primitive_replication_count == 0 || primitive_replication_mask != 0;
+    let prim_repl_ok = primitive_replication_count == 0 || primitive_replication_mask != 0;
     let fixed_admit_ok = vp_extents_ok
         && draw_rect_ok
         && sample_mask_ok

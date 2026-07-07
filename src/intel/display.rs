@@ -20,7 +20,7 @@ pub(super) use self::regs::*;
 
 macro_rules! intel_display_focus_log {
     ($($arg:tt)*) => {
-        if crate::logflag::INTEL_STAGE1_LOGS || crate::logflag::INTEL_DISPLAY_NGIN_LOGS {
+        if crate::log_os::flags::INTEL_STAGE1_LOGS || crate::log_os::flags::INTEL_DISPLAY_NGIN_LOGS {
             crate::log!($($arg)*);
         }
     };
@@ -28,7 +28,7 @@ macro_rules! intel_display_focus_log {
 
 macro_rules! intel_display_verbose_log {
     ($($arg:tt)*) => {
-        if crate::logflag::INTEL_DISPLAY_NGIN_LOGS && !crate::logflag::INTEL_STAGE1_LOGS {
+        if crate::log_os::flags::INTEL_DISPLAY_NGIN_LOGS && !crate::log_os::flags::INTEL_STAGE1_LOGS {
             crate::log!($($arg)*);
         }
     };
@@ -3762,7 +3762,7 @@ fn primary_plane_surface_regs_match(
 
 #[inline]
 fn should_log_primary_present(seq: u32) -> bool {
-    if crate::logflag::INTEL_STAGE1_LOGS {
+    if crate::log_os::flags::INTEL_STAGE1_LOGS {
         return false;
     }
     seq <= 8 || seq.is_multiple_of(60)

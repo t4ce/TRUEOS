@@ -81,8 +81,8 @@ fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
 }
 
 fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
-    crate::globalog::log_with_area_purpose(
-        crate::logflag::LogArea::Blueprint,
+    crate::log_os::log_with_area_purpose(
+        crate::log_os::flags::LogArea::Blueprint,
         level,
         Some(purpose_for_level(level)),
         format_args!("{}: {}\n", source, message),
@@ -90,7 +90,7 @@ fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
 }
 
 fn emit_plain_stream_line(_stream: ConsoleStream, line: &str) {
-    crate::globalog::log(format_args!("{}\n", line));
+    crate::log_os::log(format_args!("{}\n", line));
 }
 
 fn emit_console_stream_line(stream: ConsoleStream, line: &str) {

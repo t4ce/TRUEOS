@@ -1138,6 +1138,30 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, frames as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_AUDIO_SET_VOLUME_PERCENT => {
+            let requested = (arg0 as u32).min(100);
+            let applied = crate::aud::pcm_lane::set_volume_percent(requested as u16);
+            crate::log_info!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} set-volume requested={} applied={}\n",
+                vm_id,
+                requested,
+                applied
+            );
+            write_response(vm_id, seq, STATUS_OK, applied as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_VOLUME_PERCENT => {
+            let percent = crate::aud::pcm_lane::volume_percent();
+            crate::log_trace!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} volume percent={}\n",
+                vm_id,
+                percent
+            );
+            write_response(vm_id, seq, STATUS_OK, percent as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_SHELL_ATTACHED_READ_BYTE => {
             let byte = crate::hv::blueprint_console_read_byte(vm_id)
                 .map(u64::from)

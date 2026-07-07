@@ -568,7 +568,7 @@ async fn hid_boot_stream_task(
         {
             None => {
                 timeout_logs = timeout_logs.wrapping_add(1);
-                if crate::logflag::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
+                if crate::log_os::flags::USB_LOG_ALL.load(core::sync::atomic::Ordering::Relaxed)
                     && (timeout_logs <= 8 || timeout_logs.is_multiple_of(32))
                 {
                     crate::log_info!(target: "usb";

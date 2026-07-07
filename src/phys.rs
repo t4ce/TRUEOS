@@ -116,7 +116,7 @@ pub fn init_pmm_from_limine() {
         let first = state.regions.first().copied().unwrap();
         let last = state.regions.last().copied().unwrap();
         *guard = Some(state);
-        if crate::logflag::BOOT_INFO_LOGS {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
             crate::log!(
                 "pmm: regions={} span=0x{:X}..0x{:X} total={} MiB\n",
                 region_count,

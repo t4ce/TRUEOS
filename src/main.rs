@@ -34,7 +34,6 @@ mod exceptions;
 mod exceptions;
 mod executor_cache;
 mod gb_demo;
-mod globalog;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
 #[cfg(target_arch = "x86_64")]
@@ -48,6 +47,7 @@ mod intel_hda_audio_demo;
 mod iso9660;
 mod limine;
 mod locale;
+mod log_os;
 mod microcode;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;
@@ -174,14 +174,14 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();
     }
-    globalog::init_log_facade();
+    log_os::init_log_facade();
     crate::log_info!(
         target: "boot";
         "boot: stage=bsp-early log_config boot_level={:?}\n",
-        crate::logflag::BOOT_LOG_LEVEL
+        crate::log_os::flags::BOOT_LOG_LEVEL
     );
     exceptions::init();
-    if crate::logflag::BOOT_INFO_LOGS {
+    if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     }
     phys::register_memory_metadata();
@@ -192,7 +192,7 @@ pub extern "C" fn kmain() -> ! {
         crate::log!("heap: failed to reserve/install any heap arena\n");
     }
 
-    if crate::logflag::BOOT_INFO_LOGS
+    if crate::log_os::flags::BOOT_INFO_LOGS
         && let Some(perf) = limine::bootloader_performance()
     {
         crate::log!(
@@ -319,7 +319,7 @@ fn _loop(executor: &'static Executor) -> ! {
         //    let _ = crate::tst::coreticks_demo::coreticks_tick_tile_index(0);
         //}
         //if counter.is_multiple_of(10_000_000) {
-        //    globalog::debugcon_write_byte_raw(b'0');
+        //    log_os::debugcon_write_byte_raw(b'0');
         //}
         core::hint::spin_loop()
     }

@@ -336,7 +336,7 @@ pub fn init() {
         }
     }
 
-    if crate::logflag::BOOT_INFO_LOGS {
+    if crate::log_os::flags::BOOT_INFO_LOGS {
         for dev in r8139::detect_all() {
             dormant_detected += 1;
             crate::log_info!(target: "net";
@@ -364,13 +364,13 @@ pub fn init() {
             }
         }
         PRIMARY_DEVICE_INDEX.store(chosen, Ordering::Relaxed);
-        if crate::logflag::BOOT_INFO_LOGS {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
             crate::log_info!(target: "net"; "net: primary={} (link-up preference)\n", chosen);
         }
     }
 
     if added == 0 {
-        if crate::logflag::BOOT_INFO_LOGS {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
             if dormant_detected == 0 {
                 crate::log_info!(target: "net"; "net: no supported NIC detected.\n");
             } else {
@@ -381,7 +381,7 @@ pub fn init() {
             }
         }
     } else {
-        if crate::logflag::BOOT_INFO_LOGS {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
             crate::log_info!(target: "net"; "net: detected {} NIC(s)\n", added);
 
             // Device inventory helps interpret logs like "tx-batch dev=0".
@@ -407,7 +407,7 @@ pub fn init() {
         }
     }
 
-    if crate::logflag::BOOT_INFO_LOGS {
+    if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log_info!(target: "net";
             "net: hint: prefer virtio-net in QEMU (e.g. -netdev user,id=net0,hostfwd=tcp::4245-:4245 -device virtio-net-pci,netdev=net0)\n"
         );

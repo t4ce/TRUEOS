@@ -279,7 +279,7 @@ impl R8125Adapter {
             let imr_rb = self.mmio.read_u32(REG_INTR_MASK_8125);
 
             self.dbg_doorbells = self.dbg_doorbells.saturating_add(1);
-            if crate::logflag::R8125_VERBOSE_LOGS
+            if crate::log_os::flags::R8125_VERBOSE_LOGS
                 && (self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST
                     || (self.dbg_doorbells & 0x3FF) == 0)
             {
@@ -425,7 +425,7 @@ impl R8125Adapter {
     fn init_from_device(dev: pci::PciDevice) -> Result<Self, ()> {
         pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
         let cmd = pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!("net/r8125: pci cmd=0x{:04x}\n", cmd);
         }
 
@@ -434,13 +434,13 @@ impl R8125Adapter {
         let map_size = match usize::try_from(bar_size) {
             Ok(size) if size != 0 => size,
             _ => {
-                if crate::logflag::R8125_VERBOSE_LOGS {
+                if crate::log_os::flags::R8125_VERBOSE_LOGS {
                     crate::log!("net/r8125: bar{} size unknown; using 0x1000\n", bar_index);
                 }
                 0x1000
             }
         };
-        if crate::logflag::R8125_VERBOSE_LOGS && bar_size != 0 {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS && bar_size != 0 {
             crate::log!("net/r8125: bar{} size=0x{:x}\n", bar_index, bar_size);
         }
         let mapped = match pci::mmio::map_mmio_region_exact(bar_phys, map_size) {
@@ -457,7 +457,7 @@ impl R8125Adapter {
         };
         let mmio = Mmio { base: mapped };
 
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: found {:02x}:{:02x}.{} vid={:04x} did={:04x} bar{}=0x{:x}\n",
                 dev.bus,
@@ -503,18 +503,18 @@ impl R8125Adapter {
         // Allocate descriptor rings
         let rx_desc_bytes = core::mem::size_of::<RxDesc>() * RX_DESC_COUNT;
         let tx_desc_bytes = core::mem::size_of::<TxDesc>() * TX_DESC_COUNT;
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!("net/r8125: alloc rx_desc bytes=0x{:x}\n", rx_desc_bytes);
         }
         let rx_desc_mem = DmaRegion::alloc(rx_desc_bytes, 256).ok_or(())?;
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!("net/r8125: alloc tx_desc bytes=0x{:x}\n", tx_desc_bytes);
         }
         let tx_desc_mem = DmaRegion::alloc(tx_desc_bytes, 256).ok_or(())?;
 
         let rx_desc_phys = rx_desc_mem.phys();
         let tx_desc_phys = tx_desc_mem.phys();
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: rx_desc phys=0x{:x} align256_ok={} tx_desc phys=0x{:x} align256_ok={}\n",
                 rx_desc_phys,
@@ -528,7 +528,7 @@ impl R8125Adapter {
         let tx_desc = tx_desc_mem.virt() as *mut TxDesc;
 
         // Allocate buffers and initialize descriptors
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: alloc rx bufs count={} size=0x{:x}\n",
                 RX_DESC_COUNT,
@@ -552,7 +552,7 @@ impl R8125Adapter {
             rx_bufs.push(buf);
         }
 
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: alloc tx bufs count={} size=0x{:x}\n",
                 TX_DESC_COUNT,
@@ -596,7 +596,7 @@ impl R8125Adapter {
                 }
             }
             let mcu1 = mmio.read_u8(REG_MCU);
-            if crate::logflag::R8125_VERBOSE_LOGS {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: mcu oob mcu0=0x{:02x} mcu1=0x{:02x} llrdy={}\n",
                     mcu0,
@@ -646,7 +646,7 @@ impl R8125Adapter {
         let (rcr_rb, tcr_rb, cplus_rb) = unsafe {
             (mmio.read_u32(REG_RCR), mmio.read_u32(REG_TCR), mmio.read_u16(REG_CPLUS_CMD))
         };
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: cfg rb rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x}\n",
                 rcr_rb,
@@ -671,7 +671,7 @@ impl R8125Adapter {
             );
         }
         let cplus_after = unsafe { mmio.read_u16(REG_CPLUS_CMD) };
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: cplus=0x{:04x} force_off={}\n",
                 cplus_after,
@@ -684,7 +684,7 @@ impl R8125Adapter {
             );
         }
         let phy = unsafe { mmio.read_u8(REG_PHYSTAT) };
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!("net/r8125: phystat=0x{:02x} (raw)\n", phy);
         }
 
@@ -925,7 +925,7 @@ impl R8125Adapter {
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
 
-        if crate::logflag::R8125_VERBOSE_LOGS
+        if crate::log_os::flags::R8125_VERBOSE_LOGS
             && self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY)
         {
             self.log_hw_state("periodic");
@@ -951,7 +951,7 @@ impl R8125Adapter {
             self.dbg_last_tnpds_lo = tnp_lo_now;
             self.dbg_last_tnpds_hi = tnp_hi_now;
 
-            if crate::logflag::R8125_VERBOSE_LOGS {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: reg change cmd 0x{:02x}->0x{:02x} imr 0x{:08x}->0x{:08x} tnpds 0x{:08x}{:08x}->0x{:08x}{:08x}\n",
                     old_cmd,
@@ -971,7 +971,7 @@ impl R8125Adapter {
         let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
         if phy != self.dbg_last_phystat {
             self.dbg_last_phystat = phy;
-            if crate::logflag::R8125_VERBOSE_LOGS {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: phystat=0x{:02x} (changed) link_bit0={}\n",
                     phy,
@@ -986,7 +986,7 @@ impl R8125Adapter {
             self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
             // ISR can be chatty (e.g. link-related or RX OK); keep a small sample
             // and then only very occasionally.
-            if crate::logflag::R8125_VERBOSE_LOGS
+            if crate::log_os::flags::R8125_VERBOSE_LOGS
                 && (self.dbg_isr_nonzero <= 2 || (self.dbg_isr_nonzero & 0xFFF) == 0)
             {
                 crate::log!(
@@ -1396,7 +1396,7 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
             continue;
         }
         if (bar_lo & 0x1) != 0 {
-            if crate::logflag::R8125_VERBOSE_LOGS {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!("net/r8125: bar{} is IO (raw=0x{:08x})\n", i, bar_lo);
             }
             i += 1;
@@ -1408,14 +1408,14 @@ fn find_mmio_bar_phys(dev: &pci::PciDevice) -> Result<(u8, u64), ()> {
         let hi = bar_hi.unwrap_or(0) as u64;
         let phys = lo | (hi << 32);
         if phys == 0 {
-            if crate::logflag::R8125_VERBOSE_LOGS {
+            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!("net/r8125: bar{} is zero\n", i);
             }
             i += 1;
             continue;
         }
 
-        if crate::logflag::R8125_VERBOSE_LOGS {
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
                 "net/r8125: bar{} mmio raw=0x{:08x}{} => 0x{:x}\n",
                 i,

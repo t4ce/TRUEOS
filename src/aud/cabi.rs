@@ -455,13 +455,22 @@ pub extern "C" fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let percent = percent.min(100);
         crate::log_info!(
             target: "audio";
-            "audio-cabi: guest-set-volume handle={} percent={} noop=host-owned\n",
+            "audio-cabi: guest-set-volume handle={} percent={}\n",
             handle,
-            percent.min(u16::MAX as u32).min(100)
+            percent
         );
-        return percent.min(u16::MAX as u32).min(100) as i32;
+        let (status, applied) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_AUDIO_SET_VOLUME_PERCENT,
+            percent as u64,
+            0,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -EIO;
+        }
+        return applied.min(100) as i32;
     }
     let applied = crate::aud::pcm_lane::set_volume_percent(percent.min(u16::MAX as u32) as u16);
     crate::log_info!(
@@ -484,7 +493,12 @@ pub extern "C" fn trueos_cabi_audio_volume_percent(handle: u32) -> i32 {
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return 100;
+        let (status, percent) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_AUDIO_VOLUME_PERCENT, 0, 0);
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -EIO;
+        }
+        return percent.min(100) as i32;
     }
     crate::aud::pcm_lane::volume_percent() as i32
 }

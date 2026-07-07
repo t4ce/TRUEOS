@@ -675,16 +675,7 @@ fn device_is_gfx125(device_id: u16) -> bool {
 fn device_is_gfx12(device_id: u16) -> bool {
     matches!(
         device_id,
-        0x4680
-            | 0x4682
-            | 0x4688
-            | 0x468A
-            | 0x468B
-            | 0x4690
-            | 0x4692
-            | 0x4693
-            | 0x46D1
-            | 0xA780
+        0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693 | 0x46D1 | 0xA780
     ) || device_is_gfx125(device_id)
 }
 
@@ -1155,7 +1146,7 @@ fn log_triangle_stage_stats(
     stats: TriangleStageStats,
     before: Option<TriangleStageStats>,
 ) {
-    if crate::logflag::INTEL_STAGE1_LOGS {
+    if crate::log_os::flags::INTEL_STAGE1_LOGS {
         return;
     }
     if let Some(before) = before {
@@ -1320,12 +1311,9 @@ fn log_triangle_named_proofs(
     let clip_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let vf_vue_vf_frontier_accept =
         is_font_vf_vue_clip_submit_name(submit_name) && clip_accept && vf_marker_ok;
-    let vf_accept =
-        delta.ia_vertices > 0 || delta.ia_primitives > 0 || vf_vue_vf_frontier_accept;
-    let vf_vue_clip_frontier_accept = is_font_vf_vue_clip_submit_name(submit_name)
-        && vf_accept
-        && clip_accept
-        && vs_marker_ok;
+    let vf_accept = delta.ia_vertices > 0 || delta.ia_primitives > 0 || vf_vue_vf_frontier_accept;
+    let vf_vue_clip_frontier_accept =
+        is_font_vf_vue_clip_submit_name(submit_name) && vf_accept && clip_accept && vs_marker_ok;
     let vs_accept = delta.vs_invocations > 0 || vf_vue_clip_frontier_accept;
     let raster_packet_accept = clip_marker_ok && raster_marker_ok;
     let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_accept;
@@ -1832,12 +1820,12 @@ fn is_font_vf_vue_clip_submit_name(name: &str) -> bool {
     name.starts_with("font-tessel-clip-field-vf-vue-ps-replay-")
         || name.starts_with("font-tessel-clip-field-vf-vue-ps-admit-")
         || matches!(
-        name,
-        "font-tessel-clip-field-vf-vue-isolate-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
-            | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
-            | "font-tessel-clip-counter-vf-vue-big-inbounds-scratch"
+            name,
+            "font-tessel-clip-field-vf-vue-isolate-scratch"
+                | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
+                | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
+                | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
+                | "font-tessel-clip-counter-vf-vue-big-inbounds-scratch"
         )
 }
 

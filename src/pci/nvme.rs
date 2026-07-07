@@ -5,7 +5,7 @@ use crate::{disc::block, pci::mmio};
 
 macro_rules! nvme_verbose_log {
     ($($arg:tt)*) => {
-        if crate::logflag::NVME_VERBOSE {
+        if crate::log_os::flags::NVME_VERBOSE {
             crate::log!($($arg)*);
         }
     };

@@ -396,7 +396,7 @@ pub(crate) fn rustc_runtime_import_note(name: &str) -> Option<&'static str> {
 }
 
 fn portal_logf(args: core::fmt::Arguments<'_>) {
-    if crate::logflag::PORTAL_LOGS {
+    if crate::log_os::flags::PORTAL_LOGS {
         crate::log!("{}\n", args);
     }
 }
@@ -1398,9 +1398,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_vlayer_pci_snapshot_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_pci_snapshot_read as *const () as usize)
         }
-        "trueos_vlayer_thermal_snapshot_read" => Some(
-            crate::r::net::vlayer::trueos_vlayer_thermal_snapshot_read as *const () as usize,
-        ),
+        "trueos_vlayer_thermal_snapshot_read" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_thermal_snapshot_read as *const () as usize)
+        }
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }
@@ -1534,7 +1534,7 @@ unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {
         unsafe { crate::allocators::alloc_raw(layout) }
     };
     let trace_index = PORTAL_RUST_ALLOC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
-    if crate::logflag::PORTAL_LOGS
+    if crate::log_os::flags::PORTAL_LOGS
         && (trace_index < 128
             || layout.size() >= 1024 * 1024
             || trace_index.is_power_of_two()

@@ -174,7 +174,7 @@ impl VNet {
         let mac = self.mac_address();
         let _ = api::EndpointV4::new([127, 0, 0, 1], 0);
 
-        if crate::logflag::VNET_EXERCISE_LOGS {
+        if crate::log_os::flags::VNET_EXERCISE_LOGS {
             match mac {
                 Some(api::MacAddr(bytes)) => {
                     crate::log!(

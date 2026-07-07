@@ -50,10 +50,10 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
                         continue;
                     }
                 }
-                if crate::logflag::BOOT_INFO_LOGS && ssdt_count != 0 {
+                if crate::log_os::flags::BOOT_INFO_LOGS && ssdt_count != 0 {
                     crate::log!("ACPI TABLE SSDT count={} (see ssdt::log_once)\n", ssdt_count);
                 }
-                if crate::logflag::BOOT_INFO_LOGS {
+                if crate::log_os::flags::BOOT_INFO_LOGS {
                     crate::log!(
                         "ACPI RSDP raw=0x{:X} phys=0x{:X} tables={}\n",
                         rsdp_raw,

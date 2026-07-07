@@ -11,7 +11,7 @@ pub mod mediacontrol;
 pub mod midi;
 pub mod mouse;
 pub mod tablet;
-pub(crate) use crate::logflag::HID_DEBUG_REPORT_LOGS;
+pub(crate) use crate::log_os::flags::HID_DEBUG_REPORT_LOGS;
 pub use v::vinput::TrueosHidCursorEvent;
 
 const HID_MOUSE_NORM_PER_DELTA: f64 = 1.0 / 1024.0;

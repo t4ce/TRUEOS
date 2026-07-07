@@ -6,7 +6,7 @@ pub(crate) mod flags {
     use core::sync::atomic::AtomicBool;
 
     use log::{Level, LevelFilter};
-    pub(crate) use log_os::{LogArea, LogLevelPolicy};
+    pub(crate) use log_os_core::{LogArea, LogLevelPolicy};
     use spin::Once;
 
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
@@ -76,12 +76,12 @@ pub(crate) mod flags {
             LogArea::ExecutorCache => EXECUTOR_CACHE_LOG_LEVEL,
             LogArea::IntelMediaNgin => INTEL_MEDIA_NGIN_LOG_LEVEL,
             LogArea::Blueprint => BLUEPRINT_LOG_LEVEL,
-            _ => log_os::default_area_log_policy(area),
+            _ => log_os_core::default_area_log_policy(area),
         }
     }
 
     pub(crate) fn area_log_enabled(area: LogArea, level: Level) -> bool {
-        log_os::level_enabled(area_log_policy(area), level)
+        log_os_core::level_enabled(area_log_policy(area), level)
     }
 }
 
@@ -89,15 +89,15 @@ static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 
 struct TcpLogSink;
 
-impl log_os::GlobalLogSink for TcpLogSink {
-    fn spec(&self) -> log_os::GlobalLogSinkSpec {
-        log_os::GlobalLogSinkSpec::new(
-            log_os::LogAreaSet::ALL,
-            log_os::LogLevelPolicy::up(log::LevelFilter::Trace),
+impl log_os_core::GlobalLogSink for TcpLogSink {
+    fn spec(&self) -> log_os_core::GlobalLogSinkSpec {
+        log_os_core::GlobalLogSinkSpec::new(
+            log_os_core::LogAreaSet::ALL,
+            log_os_core::LogLevelPolicy::up(log::LevelFilter::Trace),
         )
     }
 
-    fn level_policy(&self, area: flags::LogArea) -> log_os::LogLevelPolicy {
+    fn level_policy(&self, area: flags::LogArea) -> log_os_core::LogLevelPolicy {
         flags::area_log_policy(area)
     }
 
@@ -107,37 +107,38 @@ impl log_os::GlobalLogSink for TcpLogSink {
 }
 
 static TCP_LOG_SINK: TcpLogSink = TcpLogSink;
-static TRUEOS_LOG_SINKS: [&'static dyn log_os::GlobalLogSink; 1] = [&TCP_LOG_SINK];
-static TRUEOS_LOG_ROUTER: log_os::GlobalLogRouter = log_os::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
-static KERNEL_LOG_FACADE: log_os::GlobalLogFacade<log_os::GlobalLogRouter> =
-    log_os::GlobalLogFacade::new(&TRUEOS_LOG_ROUTER);
+static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 1] = [&TCP_LOG_SINK];
+static TRUEOS_LOG_ROUTER: log_os_core::GlobalLogRouter =
+    log_os_core::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
+static KERNEL_LOG_FACADE: log_os_core::GlobalLogFacade<log_os_core::GlobalLogRouter> =
+    log_os_core::GlobalLogFacade::new(&TRUEOS_LOG_ROUTER);
 
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_area_purpose(
-            $crate::globalog::flags::LogArea::Global,
+        $crate::log_os::log_with_area_purpose(
+            $crate::log_os::flags::LogArea::Global,
             log::Level::Info,
             Some($purpose),
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log(format_args!($($tt)*));
+        $crate::log_os::log(format_args!($($tt)*));
     }};
 }
 
 #[macro_export]
 macro_rules! log_trace {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             $target,
             log::Level::Trace,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             "boot",
             log::Level::Trace,
             format_args!($($tt)*),
@@ -148,14 +149,14 @@ macro_rules! log_trace {
 #[macro_export]
 macro_rules! log_debug {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             $target,
             log::Level::Debug,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             "boot",
             log::Level::Debug,
             format_args!($($tt)*),
@@ -166,14 +167,14 @@ macro_rules! log_debug {
 #[macro_export]
 macro_rules! log_info {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             $target,
             log::Level::Info,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             "boot",
             log::Level::Info,
             format_args!($($tt)*),
@@ -184,14 +185,14 @@ macro_rules! log_info {
 #[macro_export]
 macro_rules! log_warn {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             $target,
             log::Level::Warn,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             "boot",
             log::Level::Warn,
             format_args!($($tt)*),
@@ -202,14 +203,14 @@ macro_rules! log_warn {
 #[macro_export]
 macro_rules! log_error {
     (target: $target:expr; $($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             $target,
             log::Level::Error,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::globalog::log_with_target_level(
+        $crate::log_os::log_with_target_level(
             "boot",
             log::Level::Error,
             format_args!($($tt)*),
@@ -220,12 +221,12 @@ macro_rules! log_error {
 #[macro_export]
 macro_rules! audio_probe {
     ($($tt:tt)*) => {{
-        $crate::globalog::audio_probe(format_args!($($tt)*));
+        $crate::log_os::audio_probe(format_args!($($tt)*));
     }};
 }
 
 pub fn log(args: fmt::Arguments<'_>) {
-    log_os::log(&TRUEOS_LOG_ROUTER, args);
+    log_os_core::log(&TRUEOS_LOG_ROUTER, args);
 }
 
 pub(crate) fn audio_probe(args: fmt::Arguments<'_>) {
@@ -264,7 +265,7 @@ fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
 }
 
 pub fn log_with_area_level(area: flags::LogArea, level: log::Level, args: fmt::Arguments<'_>) {
-    log_os::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);
+    log_os_core::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);
 }
 
 pub fn log_with_area_purpose(
@@ -273,11 +274,11 @@ pub fn log_with_area_purpose(
     purpose: Option<&str>,
     args: fmt::Arguments<'_>,
 ) {
-    log_os::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
+    log_os_core::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
 }
 
 pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {
-    log_os::log_with_target_level(&TRUEOS_LOG_ROUTER, target, level, args);
+    log_os_core::log_with_target_level(&TRUEOS_LOG_ROUTER, target, level, args);
 }
 
 pub fn init_log_facade() {

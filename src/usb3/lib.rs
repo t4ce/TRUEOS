@@ -48,7 +48,7 @@ impl crabusb::DmaOp for TrueosCrabKernel {
                 }
             }
 
-            if crate::logflag::USB_MASS_UAS_TRACE_LOGS {
+            if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS {
                 crate::log!(
                     "crabusb: dma remap size={} align={} orig_phys=0x{:X} bounce_phys=0x{:X}\n",
                     size,

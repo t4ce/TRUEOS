@@ -122,7 +122,7 @@ fn init_hpet() -> Option<Hpet> {
         hpet.configure(true, false);
     }
 
-    if crate::logflag::BOOT_INFO_LOGS {
+    if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log!(
             "HPET @0x{:X} freq={}Hz comps={} counter_{}bit legacy_capable={}\n",
             hpet.info.base_address,

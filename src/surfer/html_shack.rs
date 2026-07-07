@@ -160,7 +160,7 @@ impl HtmlShack {
         auto_handoff_callback: Option<HtmlAutoHandoffCallback>,
     ) -> usize {
         let request = HtmlRequest::new(url, road, auto_handoff_callback);
-        if crate::logflag::HTML_SHACK_VERBOSE {
+        if crate::log_os::flags::HTML_SHACK_VERBOSE {
             crate::log!(
                 "html_shack: enqueue url={} road={:?} pending_before={}\n",
                 request.url,
@@ -176,7 +176,7 @@ impl HtmlShack {
         let dropped = self.html_request_queue.len().saturating_sub(1);
         let latest = self.html_request_queue.pop_back()?;
         self.html_request_queue.clear();
-        if crate::logflag::HTML_SHACK_VERBOSE {
+        if crate::log_os::flags::HTML_SHACK_VERBOSE {
             crate::log!(
                 "html_shack: pop_latest url={} dropped={} pending_after=0\n",
                 latest.url,
@@ -187,7 +187,7 @@ impl HtmlShack {
     }
 
     fn push_byte_fetch(&mut self, request: ByteFetchRequest) -> usize {
-        if crate::logflag::HTML_SHACK_VERBOSE {
+        if crate::log_os::flags::HTML_SHACK_VERBOSE {
             crate::log!(
                 "html_shack: enqueue byte_fetch id={} url={} pending_before={}\n",
                 request.id,
@@ -1572,7 +1572,7 @@ pub async fn html_fetch_worker_task() {
         }
 
         let Some((request, dropped_requests)) = pop_latest_request() else {
-            if crate::logflag::HTML_SHACK_IDLE_LOGS {
+            if crate::log_os::flags::HTML_SHACK_IDLE_LOGS {
                 let n = HTML_FETCH_IDLE_LOGS.fetch_add(1, Ordering::Relaxed);
                 if n.is_multiple_of(256) {
                     crate::log!("html_shack: fetch service idle polls={}\n", n + 1);

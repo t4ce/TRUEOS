@@ -293,7 +293,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             1
         };
         let total_bytes = bs.saturating_mul(blocks);
-        let trace = crate::logflag::STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+        let trace = crate::log_os::flags::STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
         let start_ms = trueosfs_trace_now_ms();
         let mut last_log_ms = start_ms;
         let mut last_log_bytes = 0usize;
@@ -416,7 +416,7 @@ impl trueos_fs::BlockIo for KernelBlockIo {
         } else {
             1
         };
-        let trace = crate::logflag::STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
+        let trace = crate::log_os::flags::STORAGE_TRACE_LOGS && total_bytes >= 128 * 1024;
         let start_ms = trueosfs_trace_now_ms();
         let mut last_log_ms = start_ms;
         let mut last_log_bytes = 0usize;

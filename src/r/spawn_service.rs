@@ -734,7 +734,7 @@ fn spawn_resource_monitor(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::globalog::logtotcp::logtotcp_task())
+    spawn_local(spawner, |_spawner| crate::log_os::logtotcp::logtotcp_task())
 }
 
 fn spawn_silk_service(spawner: Spawner) -> SpawnAttempt {

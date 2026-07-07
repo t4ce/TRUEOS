@@ -589,8 +589,8 @@ pub fn try_init() -> bool {
         found = devices.iter().copied().find(is_tga);
     });
     let Some(dev) = found else {
-        if crate::logflag::BOOT_INFO_LOGS {
-            crate::logflag::TGA_MISSING_LOG_ONCE.call_once(|| {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
+            crate::log_os::flags::TGA_MISSING_LOG_ONCE.call_once(|| {
                 crate::log!(
                     "tga: device not found (vid=0x{:04X} did=0x{:04X}, scanned {} devices)\n",
                     TGA_VENDOR_ID,
@@ -837,7 +837,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
 
 #[embassy_executor::task]
 pub(crate) async fn tga_task() {
-    crate::logflag::TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
+    crate::log_os::flags::TGA_TASK_STARTED_LOG_ONCE.call_once(|| {
         crate::log_info!(target: "boot"; "tga: task started\n");
     });
     let mut presence_miss_streak: u8 = 0;

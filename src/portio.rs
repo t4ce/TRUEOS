@@ -1,7 +1,7 @@
 // ARMTODO: `portio` is x86 I/O-port machinery
 // The current non-x86 stub is only here to keep the ARM build moving.
 // Known caller impact if this stays stubbed on ARM:
-// - src/globalog.rs and src/exceptions.rs use port 0xE9 style debug output.
+// - src/log_os.rs and src/exceptions.rs use port 0xE9 style debug output.
 //   That is cheap to lose.
 // - src/shell2/backends/uart1_com1.rs is legacy COM1 serial. Also fine to
 //   lose on ARM.

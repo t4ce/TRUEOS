@@ -17,7 +17,7 @@ static mut BGRT_PIXELS: [u32; MAX_PIXELS] = [0; MAX_PIXELS];
 static mut PALETTE: [u32; MAX_PALETTE] = [0; MAX_PALETTE];
 
 pub fn log_once() {
-    crate::logflag::BGRT_LOG_ONCE.call_once(|| {
+    crate::log_os::flags::BGRT_LOG_ONCE.call_once(|| {
         BGRT_IMAGE_INFO.store(0, Ordering::Relaxed);
 
         let Some(tables) = ensure_tables() else {

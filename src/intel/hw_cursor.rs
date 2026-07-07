@@ -643,7 +643,7 @@ fn disable_kernel_hw_cursor(dev: crate::intel::Dev, preferred_pipe: Option<PipeI
 
 #[inline]
 fn kernel_cursor_probe_logs_enabled() -> bool {
-    crate::logflag::INTEL_CURSOR_PROBE_LOGS
+    crate::log_os::flags::INTEL_CURSOR_PROBE_LOGS
 }
 
 fn log_kernel_cursor_probe(

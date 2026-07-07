@@ -13,7 +13,7 @@ pub fn init_from_limine() {
     }
 
     DMA_READY.store(true, Ordering::Release);
-    if crate::logflag::BOOT_INFO_LOGS {
+    if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log!("dma: pmm-backed DMA allocator active\n");
     }
 }

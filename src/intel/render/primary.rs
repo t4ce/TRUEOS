@@ -2062,39 +2062,39 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
     let ndc_vertices = scratch_vertices_to_ndc(vertices);
     let (variant, submit_name, geometry_label, source_label, backend_probe_mode, sync_variant) =
         match N {
-        TRIANGLE_DRAW_VERTICES => (
-            "font-clip-field-real-vs-urb2-isolate-scratch",
-            "font-tessel-clip-field-real-vs-urb2-isolate-scratch",
-            "font-tessel-clip-field-real-vs-urb2-isolate",
-            "lyon-font-mirrored-clip-field-isolate-first-triangle/real-vs-urb2",
-            BackendProbeMode::WmLateReemit,
-            PostDrawSyncVariant::LightPostSyncNoCs,
-        ),
-        n if n == TRIANGLE_DRAW_VERTICES * 2 => (
-            "font-clip-field-real-vs-urb2-two-scratch",
-            "font-tessel-clip-field-real-vs-urb2-two-scratch",
-            "font-tessel-clip-field-real-vs-urb2-two",
-            "lyon-font-mirrored-clip-field-isolate-first-two-triangles/real-vs-urb2",
-            BackendProbeMode::WmLateReemit,
-            PostDrawSyncVariant::LightPostSyncNoCs,
-        ),
-        crate::graphics::font::FONT_CLIP_FIELD_VERTICES => (
-            "font-clip-field-real-vs-urb2-all-scratch",
-            "font-tessel-clip-field-real-vs-urb2-all-scratch",
-            "font-tessel-clip-field-real-vs-urb2-all",
-            "lyon-font-mirrored-clip-field-isolate-all-triangles/real-vs-urb2",
-            BackendProbeMode::WmLateReemit,
-            PostDrawSyncVariant::LightPostSyncNoCs,
-        ),
-        _ => (
-            "font-clip-field-real-vs-urb2-n-scratch",
-            "font-tessel-clip-field-real-vs-urb2-n-scratch",
-            "font-tessel-clip-field-real-vs-urb2-n",
-            "lyon-font-mirrored-clip-field-isolate-n-triangles/real-vs-urb2",
-            BackendProbeMode::WmLateReemit,
-            PostDrawSyncVariant::LightPostSyncNoCs,
-        ),
-    };
+            TRIANGLE_DRAW_VERTICES => (
+                "font-clip-field-real-vs-urb2-isolate-scratch",
+                "font-tessel-clip-field-real-vs-urb2-isolate-scratch",
+                "font-tessel-clip-field-real-vs-urb2-isolate",
+                "lyon-font-mirrored-clip-field-isolate-first-triangle/real-vs-urb2",
+                BackendProbeMode::WmLateReemit,
+                PostDrawSyncVariant::LightPostSyncNoCs,
+            ),
+            n if n == TRIANGLE_DRAW_VERTICES * 2 => (
+                "font-clip-field-real-vs-urb2-two-scratch",
+                "font-tessel-clip-field-real-vs-urb2-two-scratch",
+                "font-tessel-clip-field-real-vs-urb2-two",
+                "lyon-font-mirrored-clip-field-isolate-first-two-triangles/real-vs-urb2",
+                BackendProbeMode::WmLateReemit,
+                PostDrawSyncVariant::LightPostSyncNoCs,
+            ),
+            crate::graphics::font::FONT_CLIP_FIELD_VERTICES => (
+                "font-clip-field-real-vs-urb2-all-scratch",
+                "font-tessel-clip-field-real-vs-urb2-all-scratch",
+                "font-tessel-clip-field-real-vs-urb2-all",
+                "lyon-font-mirrored-clip-field-isolate-all-triangles/real-vs-urb2",
+                BackendProbeMode::WmLateReemit,
+                PostDrawSyncVariant::LightPostSyncNoCs,
+            ),
+            _ => (
+                "font-clip-field-real-vs-urb2-n-scratch",
+                "font-tessel-clip-field-real-vs-urb2-n-scratch",
+                "font-tessel-clip-field-real-vs-urb2-n",
+                "lyon-font-mirrored-clip-field-isolate-n-triangles/real-vs-urb2",
+                BackendProbeMode::WmLateReemit,
+                PostDrawSyncVariant::LightPostSyncNoCs,
+            ),
+        };
     let result = submit_render_custom_triangle_probe_locked(
         &ndc_vertices,
         variant,
@@ -2493,11 +2493,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
 
 pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 -> Result<RenderJokerResult, &'static str> {
-    let vertices = [
-        [0.25, 0.25, 0.0],
-        [7.75, 0.25, 0.0],
-        [0.25, 7.75, 0.0],
-    ];
+    let vertices = [[0.25, 0.25, 0.0], [7.75, 0.25, 0.0], [0.25, 7.75, 0.0]];
 
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -2525,11 +2521,7 @@ pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 
 pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
 -> Result<RenderJokerResult, &'static str> {
-    let vertices = [
-        [0.25, 0.25, 0.0],
-        [7.75, 0.25, 0.0],
-        [0.25, 7.75, 0.0],
-    ];
+    let vertices = [[0.25, 0.25, 0.0], [7.75, 0.25, 0.0], [0.25, 7.75, 0.0]];
 
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -2616,7 +2608,10 @@ fn submit_render_custom_triangle_probe_locked(
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("intel/render: custom-triangle skipped reason=no-device submit={}\n", submit_name);
+        crate::log!(
+            "intel/render: custom-triangle skipped reason=no-device submit={}\n",
+            submit_name
+        );
         return Err("no-device");
     };
     let warm = warm_once(dev);
@@ -5281,7 +5276,7 @@ fn should_log_primary_probe(reason: &str, seq: u32) -> bool {
 }
 
 fn should_log_primary_probe_detail() -> bool {
-    if crate::logflag::INTEL_STAGE1_LOGS {
+    if crate::log_os::flags::INTEL_STAGE1_LOGS {
         return false;
     }
     let seq = PRIMARY_PROBE_SEQ.load(Ordering::Acquire);

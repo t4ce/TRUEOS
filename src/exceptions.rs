@@ -210,8 +210,8 @@ fn log_fault_alloc_trace() {
         trace.payload_start,
         trace.aligned_used,
     );
-    crate::globalog::log_with_area_purpose(
-        crate::logflag::LogArea::Global,
+    crate::log_os::log_with_area_purpose(
+        crate::log_os::flags::LogArea::Global,
         log::Level::Info,
         Some("info"),
         format_args!(

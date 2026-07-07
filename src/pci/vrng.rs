@@ -364,12 +364,12 @@ pub fn init_once() {
     match VirtioRng::init() {
         Ok(dev) => {
             *guard = Some(dev);
-            if crate::logflag::BOOT_INFO_LOGS {
+            if crate::log_os::flags::BOOT_INFO_LOGS {
                 crate::log!("pci/vrng: attached\n");
             }
         }
         Err(Error::NotFound) => {
-            if crate::logflag::BOOT_INFO_LOGS {
+            if crate::log_os::flags::BOOT_INFO_LOGS {
                 crate::log!("pci/vrng: not present\n");
             }
         }

@@ -122,7 +122,7 @@ fn maybe_log(ctx: &VmNetContext, cpl: &VmNetCompletion) {
 }
 
 fn emit_console_line(text: &str) {
-    crate::globalog::log(format_args!("{}\n", text));
+    crate::log_os::log(format_args!("{}\n", text));
 }
 
 fn push_console_bytes(ctx: &mut VmNetContext, bytes: &[u8]) {

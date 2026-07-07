@@ -198,7 +198,7 @@ pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
                 }
                 crabusb::Event::TransferActivity { count } => {
                     active = true;
-                    if crate::logflag::USB_MASS_UAS_TRACE_LOGS {
+                    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS {
                         crate::log!("crabusb: event transfer-activity count={}\n", count);
                     }
                 }

@@ -72,7 +72,7 @@ pub fn init() {
     CAPS.call_once(detect_caps_cpuid_only);
 
     if let Some(caps) = caps() {
-        if crate::logflag::BOOT_INFO_LOGS {
+        if crate::log_os::flags::BOOT_INFO_LOGS {
             crate::log!(
                 "POWER: intel={} msr={} eist={} hwp={} msr_armed={} idle={}\n",
                 caps.vendor_intel,
@@ -84,7 +84,7 @@ pub fn init() {
             );
         }
 
-        if crate::logflag::BOOT_INFO_LOGS
+        if crate::log_os::flags::BOOT_INFO_LOGS
             && let Some(d) = msr_details()
         {
             crate::log!(
