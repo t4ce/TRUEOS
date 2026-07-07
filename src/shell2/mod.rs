@@ -318,7 +318,7 @@ impl<'a> AlignedWriter<'a> {
         cmd_status_text: Option<&str>,
         running_go2_phase: usize,
     ) {
-        if active_terminal_hotkey_mode(output_mask) {
+        if active_terminal_handoff_mode(output_mask) || active_terminal_hotkey_mode(output_mask) {
             return;
         }
         self.move_to(STATUS_ROW, 1);
@@ -459,7 +459,7 @@ impl<'a> AlignedWriter<'a> {
     fn vmx_status(&self) {
         let mut text = AllocString::new();
         for command in [
-            "host", "home", "env", "smp", "hotkey", "stop", "pause", "preserve",
+            "tui", "host", "home", "env", "smp", "hotkey", "stop", "pause", "preserve",
         ] {
             if !text.is_empty() {
                 self.push_plain(&mut text, " ");
@@ -667,7 +667,9 @@ fn transcript_view_rows_for_output(output_mask: u8) -> usize {
 }
 
 fn slot_content_top_row(output_mask: u8) -> usize {
-    if active_matrix_slot_is_vmx(output_mask) && active_terminal_hotkey_mode(output_mask) {
+    if active_matrix_slot_is_vmx(output_mask)
+        && (active_terminal_handoff_mode(output_mask) || active_terminal_hotkey_mode(output_mask))
+    {
         VM_HOTKEY_TERMINAL_TOP_ROW
     } else {
         SCROLL_TOP_ROW
@@ -686,6 +688,14 @@ fn active_terminal_snapshot_for_output(output_mask: u8) -> Option<Ui3ShellScreen
     )
 }
 
+fn active_terminal_handoff_mode(output_mask: u8) -> bool {
+    matrix::active_terminal_handoff_mode(output_mask)
+}
+
+fn active_terminal_direct_input_mode(output_mask: u8) -> bool {
+    active_terminal_handoff_mode(output_mask) || active_terminal_hotkey_mode(output_mask)
+}
+
 fn render_active_slot_content(
     out: &AlignedWriter<'_>,
     output_mask: u8,
@@ -693,7 +703,7 @@ fn render_active_slot_content(
 ) -> bool {
     if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
         let top_row = slot_content_top_row(output_mask);
-        if (output_mask & OUTPUT_UI3_MASK) != 0 && snapshot.userspace_owns_slot {
+        if (output_mask & OUTPUT_UI3_MASK) != 0 && snapshot.terminal_handoff {
             let width = (snapshot.cols as usize).max(minimum_line_width_for_output(output_mask));
             let rows = top_row
                 .saturating_sub(1)
@@ -703,7 +713,7 @@ fn render_active_slot_content(
             out.set_line_width(width);
             out.set_transcript_view_rows(rows.saturating_sub(top_row.saturating_sub(1)).max(1));
         }
-        let allow_snapshot_cursor = active_terminal_hotkey_mode(output_mask);
+        let allow_snapshot_cursor = active_terminal_direct_input_mode(output_mask);
         if (output_mask & OUTPUT_UI3_MASK) != 0 {
             ui3_shell_blit_snapshot(top_row, &snapshot, allow_snapshot_cursor);
         } else {
@@ -1160,6 +1170,10 @@ fn is_vmx_control_command(submitted: &str) -> bool {
     )
 }
 
+fn is_vmx_tui_command(submitted: &str) -> bool {
+    matches!(submitted.split_whitespace().next().unwrap_or(""), "tui" | "terminal" | "term")
+}
+
 #[derive(Clone, Copy)]
 enum VmxHotkeyCommand {
     Toggle,
@@ -1235,6 +1249,34 @@ fn apply_vmx_hotkey_command(
         VmxHotkeyCommand::Status => current,
     };
     let _ = matrix::set_active_terminal_hotkey_mode(output_mask, next);
+    redraw_active_view(
+        out,
+        io,
+        output_mask,
+        mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text,
+        running_go2_phase,
+        minute_text,
+    )
+}
+
+fn apply_vmx_tui_command(
+    out: &AlignedWriter<'_>,
+    io: &'static dyn ShellBackend2,
+    output_mask: u8,
+    mode: ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+    running_go2_phase: usize,
+    minute_text: &str,
+) -> VecDeque<TranscriptEntry> {
+    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
+    let _ = matrix::set_active_terminal_handoff_mode(output_mask, true);
     redraw_active_view(
         out,
         io,
@@ -1540,6 +1582,9 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
 }
 
 fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
+    if active_terminal_handoff_mode(output_mask) {
+        return;
+    }
     out.prompt(output_mask);
     for ch in line.chars() {
         out.user_char(ch);
@@ -1726,6 +1771,22 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         running_go2_phase,
                         minute_text.as_str(),
                     );
+                } else if active_terminal_handoff_mode(output_mask)
+                    && active_matrix_slot_is_vmx(output_mask)
+                {
+                    line.clear();
+                    transcript = switch_to_default_slot_and_refresh(
+                        &out,
+                        io,
+                        output_mask,
+                        &mut mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                        running_go2_phase,
+                        minute_text.as_str(),
+                    );
                 }
                 continue;
             }
@@ -1772,7 +1833,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 continue;
             }
-            if active_terminal_hotkey_mode(output_mask) {
+            if active_terminal_direct_input_mode(output_mask) {
                 if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
                     .or_else(|| active_matrix_vm_id(output_mask))
                 {
@@ -2062,7 +2123,20 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                            if is_vmx_tui_command(submitted) {
+                                transcript = apply_vmx_tui_command(
+                                    &out,
+                                    io,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    minute_text.as_str(),
+                                );
+                            } else if let Some(command) = parse_vmx_hotkey_command(submitted) {
                                 transcript = apply_vmx_hotkey_command(
                                     &out,
                                     io,
@@ -2093,7 +2167,20 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                            if is_vmx_tui_command(submitted) {
+                                transcript = apply_vmx_tui_command(
+                                    &out,
+                                    io,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    minute_text.as_str(),
+                                );
+                            } else if let Some(command) = parse_vmx_hotkey_command(submitted) {
                                 transcript = apply_vmx_hotkey_command(
                                     &out,
                                     io,

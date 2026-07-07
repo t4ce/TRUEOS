@@ -316,6 +316,8 @@ pub fn attached_retarget_slot(slot: &str) -> bool {
     unsafe { vcabi::trueos_cabi_shell_attached_retarget_slot(slot.as_ptr(), slot.len()) == 0 }
 }
 
+pub const KONSOLE_FRAME_TERMINAL_HANDOFF: u32 = 1 << 31;
+
 #[inline]
 pub fn konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32 {
     unsafe { vcabi::trueos_cabi_konsole_begin_frame(cols, rows, reserved_top_rows) }

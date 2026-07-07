@@ -56,16 +56,6 @@ fn level_from_tag(level: &str) -> Option<log::Level> {
     }
 }
 
-fn purpose_for_level(level: log::Level) -> &'static str {
-    match level {
-        log::Level::Error => "error",
-        log::Level::Warn => "warn",
-        log::Level::Info => "info",
-        log::Level::Debug => "debug",
-        log::Level::Trace => "trace",
-    }
-}
-
 fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
     let rest = line.strip_prefix('[')?;
     let end = rest.find(']')?;
@@ -84,7 +74,7 @@ fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
     crate::log_os::log_with_area_purpose(
         crate::log_os::flags::LogArea::Blueprint,
         level,
-        Some(purpose_for_level(level)),
+        Some(crate::log_os::purpose_for_level(level)),
         format_args!("{}: {}\n", source, message),
     );
 }
@@ -1276,14 +1266,14 @@ struct KonsoleFrameState {
     cols: u32,
     rows: u32,
     reserved_top_rows: u32,
-    ode_to_userspace: bool,
+    terminal_handoff: bool,
     cursor_row: u32,
     cursor_col: u32,
     cursor_visible: bool,
     bytes: Vec<u8>,
 }
 
-const KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE: u32 = 1 << 31;
+const KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF: u32 = 1 << 31;
 const KONSOLE_RESERVED_TOP_ROWS_MASK: u32 = 0x0000_FFFF;
 
 static KONSOLE_FRAME_STATES: spin::Mutex<BTreeMap<u32, KonsoleFrameState>> =
@@ -1384,7 +1374,7 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         return -1;
     }
 
-    let ode_to_userspace = (reserved_top_rows & KONSOLE_FRAME_FLAG_ODE_TO_USERSPACE) != 0;
+    let terminal_handoff = (reserved_top_rows & KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF) != 0;
     let state = KonsoleFrameState {
         cols: cols.min(512),
         rows: rows.min(512),
@@ -1393,7 +1383,7 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
         } else {
             (reserved_top_rows & KONSOLE_RESERVED_TOP_ROWS_MASK).min(32)
         },
-        ode_to_userspace,
+        terminal_handoff,
         cursor_row: 0,
         cursor_col: 0,
         cursor_visible: false,
@@ -1404,10 +1394,10 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     states.insert(key, state);
     if let Some(state) = states.get_mut(&key) {
         state.bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
-        if state.ode_to_userspace {
+        if state.terminal_handoff {
             state
                 .bytes
-                .extend_from_slice(b"\x1b]777;ode_to_userspace=1\x07");
+                .extend_from_slice(b"\x1b]777;terminal_handoff=1\x07");
         }
         konsole_frame_push_fmt(
             &mut state.bytes,
@@ -1435,7 +1425,7 @@ pub unsafe extern "C" fn trueos_cabi_konsole_write_row(
         return -1;
     }
 
-    if state.ode_to_userspace {
+    if state.terminal_handoff {
         let data = if data_len == 0 {
             &[][..]
         } else {
@@ -1498,7 +1488,7 @@ pub extern "C" fn trueos_cabi_konsole_end_frame() -> i32 {
         );
     } else {
         state.bytes.extend_from_slice(b"\x1b[?25l");
-        if !state.ode_to_userspace {
+        if !state.terminal_handoff {
             let terminal_row = state
                 .reserved_top_rows
                 .saturating_add(state.rows.saturating_sub(1))

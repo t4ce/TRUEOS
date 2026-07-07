@@ -36,7 +36,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!("intel/render: warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
+        crate::log!("warm alloc failed part=ring size=0x{:X}\n", WARM_RING_BYTES);
         return warm;
     };
     let Some((context_phys, context_virt)) =
@@ -73,10 +73,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=context size=0x{:X}\n",
-            WARM_CONTEXT_BYTES
-        );
+        crate::log!("warm alloc failed part=context size=0x{:X}\n", WARM_CONTEXT_BYTES);
         return warm;
     };
     let Some((batch_phys, batch_virt)) =
@@ -113,7 +110,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!("intel/render: warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
+        crate::log!("warm alloc failed part=batch size=0x{:X}\n", WARM_BATCH_BYTES);
         return warm;
     };
     let Some((draw_state_phys, draw_state_virt)) =
@@ -150,10 +147,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=draw-state size=0x{:X}\n",
-            WARM_DRAW_STATE_BYTES
-        );
+        crate::log!("warm alloc failed part=draw-state size=0x{:X}\n", WARM_DRAW_STATE_BYTES);
         return warm;
     };
     let Some((vertex_phys, vertex_virt)) =
@@ -190,7 +184,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!("intel/render: warm alloc failed part=vertex size=0x{:X}\n", WARM_VERTEX_BYTES);
+        crate::log!("warm alloc failed part=vertex size=0x{:X}\n", WARM_VERTEX_BYTES);
         return warm;
     };
     let Some((result_phys, result_virt)) =
@@ -227,7 +221,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!("intel/render: warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
+        crate::log!("warm alloc failed part=result size=0x{:X}\n", WARM_RESULT_BYTES);
         return warm;
     };
     let Some((streamout_phys, streamout_virt)) =
@@ -264,24 +258,23 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
             gpgpu_arena_len: 0,
         };
         *WARM_STATE.lock() = Some(warm);
-        crate::log!(
-            "intel/render: warm alloc failed part=streamout size=0x{:X}\n",
-            WARM_STREAMOUT_BYTES
-        );
+        crate::log!("warm alloc failed part=streamout size=0x{:X}\n", WARM_STREAMOUT_BYTES);
         return warm;
     };
-    let (gpgpu_arena_phys, gpgpu_arena_virt, gpgpu_arena_len) =
-        match crate::dma::alloc(GPGPU_TILE_ARENA_BYTES, crate::intel::WARM_ALIGN) {
-            Some((phys, virt)) => (phys, virt, GPGPU_TILE_ARENA_BYTES),
-            None => {
-                crate::log!(
-                    "intel/gpgpu: arena alloc failed arena_bytes=0x{:X} tile_rows={} max_tiles=0 enough_for_shape=0\n",
-                    GPGPU_TILE_ARENA_BYTES,
-                    GPGPU_TILE_ROWS,
-                );
-                (0, core::ptr::null_mut(), 0)
-            }
-        };
+    let (gpgpu_arena_phys, gpgpu_arena_virt, gpgpu_arena_len) = match crate::dma::alloc(
+        GPGPU_TILE_ARENA_BYTES,
+        crate::intel::WARM_ALIGN,
+    ) {
+        Some((phys, virt)) => (phys, virt, GPGPU_TILE_ARENA_BYTES),
+        None => {
+            crate::log!(
+                "intel/gpgpu: arena alloc failed arena_bytes=0x{:X} tile_rows={} max_tiles=0 enough_for_shape=0\n",
+                GPGPU_TILE_ARENA_BYTES,
+                GPGPU_TILE_ROWS,
+            );
+            (0, core::ptr::null_mut(), 0)
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(ring_virt, 0, WARM_RING_BYTES);
@@ -413,7 +406,7 @@ pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
+            "forcewake render_cleared={} render_ack=0x{:08X} gt_ack=0x{:08X} cs_debug_mode1=0x{:08X} ff_dop_cg_disable={} ok={}\n",
             render_cleared as u8,
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_RENDER),
             crate::intel::mmio_read(dev, FORCEWAKE_ACK_GT),
@@ -440,7 +433,7 @@ fn apply_gfx125_raster_workarounds(dev: crate::intel::Dev) {
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} tbimr_batch_override={} tbimr_open_batch={} tbimr_fast_clip={}\n",
+            "gfx125-raster-wa chicken_raster_2 before=0x{:08X} after=0x{:08X} tbimr_batch_override={} tbimr_open_batch={} tbimr_fast_clip={}\n",
             before,
             after,
             ((after & TBIMR_BATCH_SIZE_OVERRIDE) != 0) as u8,
@@ -660,7 +653,7 @@ pub fn forcewake_render_sanity(warm: RenderWarmState) {
     crate::intel::mmio_write(dev, RCS_RING_IMR, before);
     let restored = crate::intel::mmio_read(dev, RCS_RING_IMR);
     intel_render_verbose_log!(
-        "intel/render: sanity reg=RCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
+        "sanity reg=RCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
         before,
         toggled,
         after,

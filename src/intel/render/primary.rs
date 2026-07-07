@@ -263,7 +263,7 @@ pub(crate) fn render_oa_control_action(
     let before_oar = crate::intel::mmio_read(dev, OAR_OACONTROL);
     let before_ctx = crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL);
     intel_render_focus_log!(
-        "intel/render: oa-control begin action={} oactx=0x{:08X} oar=0x{:08X} ctx_ctrl=0x{:08X}\n",
+        "oa-control begin action={} oactx=0x{:08X} oar=0x{:08X} ctx_ctrl=0x{:08X}\n",
         action,
         before_oactx,
         before_oar,
@@ -321,7 +321,7 @@ pub(crate) fn render_oa_control_action(
     let after_oar = crate::intel::mmio_read(dev, OAR_OACONTROL);
     let after_ctx = crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL);
     intel_render_focus_log!(
-        "intel/render: oa-control end action={} oactx=0x{:08X}->0x{:08X} oar=0x{:08X}->0x{:08X} ctx_ctrl=0x{:08X}->0x{:08X}\n",
+        "oa-control end action={} oactx=0x{:08X}->0x{:08X} oar=0x{:08X}->0x{:08X} ctx_ctrl=0x{:08X}->0x{:08X}\n",
         action,
         before_oactx,
         after_oactx,
@@ -2154,7 +2154,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
     let coverage_vertices = [[0.5, 0.5, 0.5], [7.5, 0.5, 0.5], [0.5, 7.5, 0.5]];
     let launch_vertices: &[[f32; 3]] = if N == TRIANGLE_DRAW_VERTICES {
         intel_render_focus_log!(
-            "intel/render: {} coverage-override accepted=1 source=hardcoded-screen-space target=8x8 vf_slot=position0 implicit_w=1 sf_viewport_transform=0 v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] note=single-triangle-valley\n",
+            "{} coverage-override accepted=1 source=hardcoded-screen-space target=8x8 vf_slot=position0 implicit_w=1 sf_viewport_transform=0 v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] note=single-triangle-valley\n",
             submit_name,
             coverage_vertices[0][0],
             coverage_vertices[0][1],
@@ -2280,7 +2280,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
             &clip_vertices
         };
         intel_render_focus_log!(
-            "intel/render: {} ps-replay-case begin index={} backend={} batch={:?} vertices={} note={}\n",
+            "{} ps-replay-case begin index={} backend={} batch={:?} vertices={} note={}\n",
             case.submit_name,
             case.index,
             case.backend.label(),
@@ -2308,7 +2308,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
             Ok(render) => {
                 completed_count += render.completed as u8;
                 intel_render_focus_log!(
-                    "intel/render: {} ps-replay-case result index={} completed={} target={} note={}\n",
+                    "{} ps-replay-case result index={} completed={} target={} note={}\n",
                     case.submit_name,
                     case.index,
                     render.completed as u8,
@@ -2318,7 +2318,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
                 last_result = Some(render);
             }
             Err(err) => intel_render_focus_log!(
-                "intel/render: {} ps-replay-case result index={} status=error reason={} note={}\n",
+                "{} ps-replay-case result index={} status=error reason={} note={}\n",
                 case.submit_name,
                 case.index,
                 err,
@@ -2328,7 +2328,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
     }
 
     intel_render_focus_log!(
-        "intel/render: font-tessel-clip-field-vf-vue-ps-replay-suite completed_cases={} total_cases={} latest=shot-5 note=replayable-ps-frontier-regression\n",
+        "font-tessel-clip-field-vf-vue-ps-replay-suite completed_cases={} total_cases={} latest=shot-5 note=replayable-ps-frontier-regression\n",
         completed_count,
         FONT_PS_LAUNCH_REPLAY_CASES.len()
     );
@@ -2433,7 +2433,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
             continue;
         }
         intel_render_focus_log!(
-            "intel/render: {} ps-admission-probe begin index={} backend={} blend={} vertices=hardcoded-full-coverage-clip suspect=prm-vue-position-xywz note={}\n",
+            "{} ps-admission-probe begin index={} backend={} blend={} vertices=hardcoded-full-coverage-clip suspect=prm-vue-position-xywz note={}\n",
             case.submit_name,
             case.index,
             case.backend.label(),
@@ -2457,7 +2457,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
                 completed_count += render.completed as u8;
                 let positive = render.ps_observed;
                 intel_render_focus_log!(
-                    "intel/render: {} ps-admission-probe result index={} completed={} ps_observed={} target={} note={}\n",
+                    "{} ps-admission-probe result index={} completed={} ps_observed={} target={} note={}\n",
                     case.submit_name,
                     case.index,
                     render.completed as u8,
@@ -2471,7 +2471,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
                 last_result = Some(render);
             }
             Err(err) => intel_render_focus_log!(
-                "intel/render: {} ps-admission-probe result index={} status=error reason={} note={}\n",
+                "{} ps-admission-probe result index={} status=error reason={} note={}\n",
                 case.submit_name,
                 case.index,
                 err,
@@ -2481,7 +2481,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
     }
 
     intel_render_focus_log!(
-        "intel/render: font-tessel-clip-field-vf-vue-ps-admission active_case={} completed_cases={} total_cases={} positive_index={} note=vf-written-vue-prm-header-xywz+early-raster-gate+sbe-before-sf+no-attr-swizzle+no-primitive-replication+sf-vp-extents\n",
+        "font-tessel-clip-field-vf-vue-ps-admission active_case={} completed_cases={} total_cases={} positive_index={} note=vf-written-vue-prm-header-xywz+early-raster-gate+sbe-before-sf+no-attr-swizzle+no-primitive-replication+sf-vp-extents\n",
         FONT_PS_ADMISSION_ACTIVE_CASE,
         completed_count,
         FONT_PS_ADMISSION_PROBE_CASES.len(),
@@ -2594,24 +2594,21 @@ fn submit_render_custom_triangle_probe_locked(
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
         crate::log!(
-            "intel/render: custom-triangle skipped reason=disabled seq={} submit={}\n",
+            "custom-triangle skipped reason=disabled seq={} submit={}\n",
             probe_seq,
             submit_name
         );
         return Err("disabled");
     } else if PRIMARY_DISABLE_RENDER_BRINGUP {
         intel_render_focus_log!(
-            "intel/render: custom-triangle override primary-disabled seq={} submit={} reason=manual-scratch-probe\n",
+            "custom-triangle override primary-disabled seq={} submit={} reason=manual-scratch-probe\n",
             probe_seq,
             submit_name
         );
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!(
-            "intel/render: custom-triangle skipped reason=no-device submit={}\n",
-            submit_name
-        );
+        crate::log!("custom-triangle skipped reason=no-device submit={}\n", submit_name);
         return Err("no-device");
     };
     let warm = warm_once(dev);
@@ -2624,24 +2621,15 @@ fn submit_render_custom_triangle_probe_locked(
         || warm.streamout_len < 8 * 8 * core::mem::size_of::<u32>()
         || warm.streamout_virt.is_null()
     {
-        crate::log!(
-            "intel/render: custom-triangle skipped reason=warm-buffers submit={}\n",
-            submit_name
-        );
+        crate::log!("custom-triangle skipped reason=warm-buffers submit={}\n", submit_name);
         return Err("warm-buffers");
     }
     if !forcewake_render_acquire(warm) {
-        crate::log!(
-            "intel/render: custom-triangle skipped reason=forcewake submit={}\n",
-            submit_name
-        );
+        crate::log!("custom-triangle skipped reason=forcewake submit={}\n", submit_name);
         return Err("forcewake");
     }
     if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!(
-            "intel/render: custom-triangle skipped reason=ggtt-map submit={}\n",
-            submit_name
-        );
+        crate::log!("custom-triangle skipped reason=ggtt-map submit={}\n", submit_name);
         return Err("ggtt-map");
     }
 
@@ -2652,7 +2640,7 @@ fn submit_render_custom_triangle_probe_locked(
     crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
 
     intel_render_focus_log!(
-        "intel/render: custom-triangle begin seq={} submit={} target=scratch backend={} blend={} sync={} front_end={} source={}\n",
+        "custom-triangle begin seq={} submit={} target=scratch backend={} blend={} sync={} front_end={} source={}\n",
         probe_seq,
         submit_name,
         backend_probe_mode.label(),
@@ -2679,7 +2667,7 @@ fn submit_render_custom_triangle_probe_locked(
         streamout_experiment,
     );
     intel_render_focus_log!(
-        "intel/render: custom-triangle end seq={} submit={} target=scratch completed={}\n",
+        "custom-triangle end seq={} submit={} target=scratch completed={}\n",
         probe_seq,
         submit_name,
         completed as u8,
@@ -2702,7 +2690,7 @@ fn submit_render_custom_triangle_probe_locked(
 fn submit_render_artificial_fragment_sentinel_locked()
 -> Result<RenderArtificialFragmentResult, &'static str> {
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=no-device\n");
+        crate::log!("artificial-fragment-sentinel skipped reason=no-device\n");
         return Err("no-device");
     };
     let warm = warm_once(dev);
@@ -2710,15 +2698,15 @@ fn submit_render_artificial_fragment_sentinel_locked()
         || warm.streamout_virt.is_null()
         || warm.streamout_phys == 0
     {
-        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=warm-scratch\n");
+        crate::log!("artificial-fragment-sentinel skipped reason=warm-scratch\n");
         return Err("warm-scratch");
     }
     if !forcewake_render_acquire(warm) {
-        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=forcewake\n");
+        crate::log!("artificial-fragment-sentinel skipped reason=forcewake\n");
         return Err("forcewake");
     }
     if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!("intel/render: artificial-fragment-sentinel skipped reason=ggtt-map\n");
+        crate::log!("artificial-fragment-sentinel skipped reason=ggtt-map\n");
         return Err("ggtt-map");
     }
 
@@ -2766,7 +2754,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
     WARM_BUFFERS_MAPPED.store(remapped_render, Ordering::Release);
     let ok = completed && after == SENTINEL_COLOR && remapped_render;
     intel_render_focus_log!(
-        "intel/render: artificial-fragment-sentinel mode=mi-store ok={} completed={} stores=1 rt_gpu=0x{:X} size=8x8 pitch=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-fragment-not-wm does_not_prove=raster_or_ps\n",
+        "artificial-fragment-sentinel mode=mi-store ok={} completed={} stores=1 rt_gpu=0x{:X} size=8x8 pitch=0x{:X} before=0x{:08X} after=0x{:08X} remapped_render={} meaning=artificial-fragment-not-wm does_not_prove=raster_or_ps\n",
         ok as u8,
         completed as u8,
         GPU_VA_STREAMOUT_BASE,
@@ -2792,37 +2780,33 @@ fn submit_render_joker_probe_locked(
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
-        crate::log!(
-            "intel/render: joker skipped reason=disabled variant={} seq={}\n",
-            spec.variant,
-            probe_seq
-        );
+        crate::log!("joker skipped reason=disabled variant={} seq={}\n", spec.variant, probe_seq);
         return Err("disabled");
     } else if PRIMARY_DISABLE_RENDER_BRINGUP {
         intel_render_focus_log!(
-            "intel/render: joker override primary-disabled variant={} seq={} reason=manual-scratch-probe\n",
+            "joker override primary-disabled variant={} seq={} reason=manual-scratch-probe\n",
             spec.variant,
             probe_seq
         );
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("intel/render: joker skipped reason=no-device variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=no-device variant={}\n", spec.variant);
         return Err("no-device");
     };
     let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
-        crate::log!("intel/render: joker skipped reason=no-surface variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=no-surface variant={}\n", spec.variant);
         return Err("no-surface");
     };
     let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
-        crate::log!("intel/render: joker skipped reason=no-dimensions variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=no-dimensions variant={}\n", spec.variant);
         return Err("no-dimensions");
     };
     let Some(pitch_bytes) = width
         .checked_mul(4)
         .and_then(|v| crate::intel::align_up(v as usize, 64))
     else {
-        crate::log!("intel/render: joker skipped reason=bad-pitch width={}\n", width);
+        crate::log!("joker skipped reason=bad-pitch width={}\n", width);
         return Err("bad-pitch");
     };
 
@@ -2835,15 +2819,15 @@ fn submit_render_joker_probe_locked(
         || warm.result_len == 0
         || warm.streamout_len == 0
     {
-        crate::log!("intel/render: joker skipped reason=warm-buffers variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=warm-buffers variant={}\n", spec.variant);
         return Err("warm-buffers");
     }
     if !forcewake_render_acquire(warm) {
-        crate::log!("intel/render: joker skipped reason=forcewake variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=forcewake variant={}\n", spec.variant);
         return Err("forcewake");
     }
     if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!("intel/render: joker skipped reason=ggtt-map variant={}\n", spec.variant);
+        crate::log!("joker skipped reason=ggtt-map variant={}\n", spec.variant);
         return Err("ggtt-map");
     }
 
@@ -2868,7 +2852,7 @@ fn submit_render_joker_probe_locked(
         .or(streamout_kind)
         .unwrap_or("vf-synthesized");
     intel_render_focus_log!(
-        "intel/render: joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={} front_end={}\n",
+        "joker begin seq={} variant={} submit={} target={} backend={} geometry={} blend={} sync={} front_end={}\n",
         probe_seq,
         spec.variant,
         spec.submit_name,
@@ -2935,7 +2919,7 @@ fn submit_render_joker_probe_locked(
         )
     };
     intel_render_focus_log!(
-        "intel/render: joker end seq={} variant={} submit={} target={} completed={}\n",
+        "joker end seq={} variant={} submit={} target={} completed={}\n",
         probe_seq,
         spec.variant,
         spec.submit_name,
@@ -2963,32 +2947,28 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        crate::log!("intel/render: primary-probe skipped reason=in-flight trigger={}\n", reason);
+        crate::log!("primary-probe skipped reason=in-flight trigger={}\n", reason);
         return false;
     }
 
     if PRIMARY_DISABLE_RENDER_BRINGUP {
-        crate::log!(
-            "intel/render: primary-probe skipped reason=disabled trigger={} seq={}\n",
-            reason,
-            probe_seq
-        );
+        crate::log!("primary-probe skipped reason=disabled trigger={} seq={}\n", reason, probe_seq);
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
 
     let Some(dev) = crate::intel::claimed_device() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-device\n");
+        crate::log!("primary-triangle skipped reason=no-device\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
     let Some(surface_gpu) = crate::intel::display::primary_surface_gpu_addr() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-surface\n");
+        crate::log!("primary-triangle skipped reason=no-surface\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
     let Some((width, height)) = crate::intel::display::active_scanout_dimensions() else {
-        crate::log!("intel/render: primary-triangle skipped reason=no-dimensions\n");
+        crate::log!("primary-triangle skipped reason=no-dimensions\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
@@ -2996,7 +2976,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         .checked_mul(4)
         .and_then(|v| crate::intel::align_up(v as usize, 64))
     else {
-        crate::log!("intel/render: primary-triangle skipped reason=bad-pitch width={}\n", width);
+        crate::log!("primary-triangle skipped reason=bad-pitch width={}\n", width);
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     };
@@ -3010,17 +2990,17 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         || warm.result_len == 0
         || warm.streamout_len == 0
     {
-        crate::log!("intel/render: primary-triangle skipped reason=warm-buffers\n");
+        crate::log!("primary-triangle skipped reason=warm-buffers\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
     if !forcewake_render_acquire(warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=forcewake\n");
+        crate::log!("primary-triangle skipped reason=forcewake\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
     if !ensure_smoke_buffers_mapped(dev, warm) {
-        crate::log!("intel/render: primary-triangle skipped reason=ggtt-map\n");
+        crate::log!("primary-triangle skipped reason=ggtt-map\n");
         PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
         return false;
     }
@@ -3037,10 +3017,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             height as usize,
         );
         if !accepted {
-            intel_render_verbose_log!(
-                "intel/render: primary-mi-scanout-store proof failed trigger={}\n",
-                reason
-            );
+            intel_render_verbose_log!("primary-mi-scanout-store proof failed trigger={}\n", reason);
         }
     }
     let completed = if PRIMARY_USE_DRAW_PATH_BOOT_ONCE && reason == "boot-once" {
@@ -3054,7 +3031,7 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
         );
         if !completed {
             intel_render_verbose_log!(
-                "intel/render: primary-draw-path submit failed trigger={} mode=clean-boot-once\n",
+                "primary-draw-path submit failed trigger={} mode=clean-boot-once\n",
                 reason
             );
         }
@@ -3069,19 +3046,13 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             height as usize,
         );
         if !completed {
-            intel_render_verbose_log!(
-                "intel/render: primary-mi-stripes submit failed trigger={}\n",
-                reason
-            );
+            intel_render_verbose_log!("primary-mi-stripes submit failed trigger={}\n", reason);
         }
         completed
     } else if PRIMARY_USE_3D_NO_DRAW_PROBE {
         let completed = submit_3d_no_draw_probe(dev, warm);
         if !completed {
-            intel_render_verbose_log!(
-                "intel/render: primary-3d-no-draw submit failed trigger={}\n",
-                reason
-            );
+            intel_render_verbose_log!("primary-3d-no-draw submit failed trigger={}\n", reason);
         }
         completed
     } else if submit_primary_triangle_with_retries(
@@ -3103,16 +3074,13 @@ fn submit_primary_probe_now(reason: &'static str) -> bool {
             height as usize,
         );
         if !completed {
-            intel_render_verbose_log!(
-                "intel/render: primary-triangle submit failed trigger={}\n",
-                reason
-            );
+            intel_render_verbose_log!("primary-triangle submit failed trigger={}\n", reason);
         }
         completed
     };
     if should_log_primary_probe(reason, probe_seq) {
         intel_render_verbose_log!(
-            "intel/render: primary-probe seq={} trigger={} completed={} mode={}\n",
+            "primary-probe seq={} trigger={} completed={} mode={}\n",
             probe_seq,
             reason,
             completed as u8,
@@ -3162,13 +3130,13 @@ fn submit_primary_triangle_with_retries(
             PostDrawSyncVariant::HeavyAll,
         );
         intel_render_focus_log!(
-            "intel/render: primary-single-submit completed={} action=stop-after-one-submit reason=boot-3d-probes-disabled\n",
+            "primary-single-submit completed={} action=stop-after-one-submit reason=boot-3d-probes-disabled\n",
             completed as u8,
         );
         return completed;
     }
     intel_render_focus_log!(
-        "intel/render: primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-trilist-split\n",
+        "primary-boot-3d-probes enabled=1 action=run-frontier-ladder vf_streamout=1 ps_spectrum=1 vs_frontier=1 revision=nonvisual-vs-scratch-rt32-trilist-split\n",
     );
 
     let initial_streamout_experiment =
@@ -3183,7 +3151,7 @@ fn submit_primary_triangle_with_retries(
         initial_streamout_experiment,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-vf-streamout-precheck experiment={} accepted={}\n",
+        "primary-vf-streamout-precheck experiment={} accepted={}\n",
         initial_streamout_experiment.label(),
         vf_streamout_precheck as u8,
     );
@@ -3204,10 +3172,7 @@ fn submit_primary_triangle_with_retries(
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
     );
-    intel_render_verbose_log!(
-        "intel/render: primary-vf-draw-precheck completed={}\n",
-        vf_draw_precheck as u8,
-    );
+    intel_render_verbose_log!("primary-vf-draw-precheck completed={}\n", vf_draw_precheck as u8,);
     if vf_draw_precheck {
         return true;
     }
@@ -3226,7 +3191,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-launch-big-primitive completed={}\n",
+        "primary-ps-launch-big-primitive completed={}\n",
         ps_launch_big_primitive as u8,
     );
     if ps_launch_big_primitive {
@@ -3249,12 +3214,9 @@ fn submit_primary_triangle_with_retries(
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
-    intel_render_verbose_log!(
-        "intel/render: primary-ps-bt0-scratch-rt completed={}\n",
-        ps_bt0_scratch_rt as u8,
-    );
+    intel_render_verbose_log!("primary-ps-bt0-scratch-rt completed={}\n", ps_bt0_scratch_rt as u8,);
     intel_render_focus_log!(
-        "intel/render: primary-ps-bt0-scratch-rt diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
+        "primary-ps-bt0-scratch-rt diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
         ps_bt0_scratch_rt as u8,
     );
     if ps_bt0_scratch_rt {
@@ -3276,11 +3238,11 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::LightPostSyncNoCs,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-raster-wm-oa-probe completed={}\n",
+        "primary-raster-wm-oa-probe completed={}\n",
         raster_wm_oa_probe as u8,
     );
     intel_render_focus_log!(
-        "intel/render: primary-raster-wm-oa-probe diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
+        "primary-raster-wm-oa-probe diagnostic completed={} note=no-cs-tail-completion-is-not-a-fence\n",
         raster_wm_oa_probe as u8,
     );
     if raster_wm_oa_probe {
@@ -3290,7 +3252,7 @@ fn submit_primary_triangle_with_retries(
     let fragment_candidate_ready = fragment_candidate_ready();
     let fragment_boundary_seen = fragment_boundary_observed();
     intel_render_focus_log!(
-        "intel/render: primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
+        "primary-fragment-boundary-gate candidate_ready={} fragment_observed={} action={} reason=shape_to_fragment_boundary_precedes_ps_spectrum\n",
         fragment_candidate_ready as u8,
         fragment_boundary_seen as u8,
         if fragment_boundary_seen {
@@ -3314,7 +3276,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-bt1-big-primitive completed={}\n",
+        "primary-ps-bt1-big-primitive completed={}\n",
         ps_bt1_big_primitive as u8,
     );
     if ps_bt1_big_primitive {
@@ -3335,7 +3297,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-wm-normal-big-primitive completed={}\n",
+        "primary-ps-wm-normal-big-primitive completed={}\n",
         ps_wm_normal_big_primitive as u8,
     );
     if ps_wm_normal_big_primitive {
@@ -3356,7 +3318,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-dispatch-slot0-big-primitive completed={}\n",
+        "primary-ps-dispatch-slot0-big-primitive completed={}\n",
         ps_dispatch_slot0_big_primitive as u8,
     );
     if ps_dispatch_slot0_big_primitive {
@@ -3377,7 +3339,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-dispatch-slot1-big-primitive completed={}\n",
+        "primary-ps-dispatch-slot1-big-primitive completed={}\n",
         ps_dispatch_slot1_big_primitive as u8,
     );
     if ps_dispatch_slot1_big_primitive {
@@ -3398,7 +3360,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-dispatch-slot2-big-primitive completed={}\n",
+        "primary-ps-dispatch-slot2-big-primitive completed={}\n",
         ps_dispatch_slot2_big_primitive as u8,
     );
     if ps_dispatch_slot2_big_primitive {
@@ -3427,7 +3389,7 @@ fn submit_primary_triangle_with_retries(
             PostDrawSyncVariant::HeavyAll,
         );
         intel_render_verbose_log!(
-            "intel/render: primary-{} completed={}\n",
+            "primary-{} completed={}\n",
             payload_submit_name,
             completed as u8,
         );
@@ -3457,11 +3419,7 @@ fn submit_primary_triangle_with_retries(
             grf_mode,
             PostDrawSyncVariant::HeavyAll,
         );
-        intel_render_verbose_log!(
-            "intel/render: primary-{} completed={}\n",
-            grf_submit_name,
-            completed as u8,
-        );
+        intel_render_verbose_log!("primary-{} completed={}\n", grf_submit_name, completed as u8,);
         if completed {
             return true;
         }
@@ -3481,7 +3439,7 @@ fn submit_primary_triangle_with_retries(
         PostDrawSyncVariant::HeavyAll,
     );
     intel_render_verbose_log!(
-        "intel/render: primary-ps-dispatch-all-big-primitive completed={}\n",
+        "primary-ps-dispatch-all-big-primitive completed={}\n",
         ps_dispatch_all_big_primitive as u8,
     );
     if ps_dispatch_all_big_primitive {
@@ -3491,7 +3449,7 @@ fn submit_primary_triangle_with_retries(
     reset_fragment_boundary_probe();
     let fragment_shape_frontier = run_fragment_shape_frontier_spectrum(dev, warm);
     intel_render_focus_log!(
-        "intel/render: primary-fragment-shape-spectrum completed={} observed={} note=shape_clip_sf_axis_after_ps_state_axis\n",
+        "primary-fragment-shape-spectrum completed={} observed={} note=shape_clip_sf_axis_after_ps_state_axis\n",
         fragment_shape_frontier as u8,
         fragment_boundary_observed() as u8,
     );
@@ -3501,7 +3459,7 @@ fn submit_primary_triangle_with_retries(
 
     let vs_draw_frontier_scratch = submit_triangle_vs_draw_frontier_to_scratch(dev, warm);
     intel_render_focus_log!(
-        "intel/render: primary-vs-draw-frontier-scratch completed={} observed={} note=nonvisual-vs-clip-join-probe\n",
+        "primary-vs-draw-frontier-scratch completed={} observed={} note=nonvisual-vs-clip-join-probe\n",
         vs_draw_frontier_scratch as u8,
         fragment_boundary_observed() as u8,
     );
@@ -3509,7 +3467,7 @@ fn submit_primary_triangle_with_retries(
         return true;
     }
     intel_render_focus_log!(
-        "intel/render: primary-vs-draw-frontier-precheck skipped reason=scratch-frontier-unobserved avoid_visible_scanout_flash surface=0x{:X} size={}x{} pitch=0x{:X}\n",
+        "primary-vs-draw-frontier-precheck skipped reason=scratch-frontier-unobserved avoid_visible_scanout_flash surface=0x{:X} size={}x{} pitch=0x{:X}\n",
         surface_gpu,
         width,
         height,
@@ -3529,7 +3487,7 @@ fn submit_primary_triangle_with_retries(
             vs_streamout_experiment,
         );
         intel_render_verbose_log!(
-            "intel/render: primary-vs-streamout-precheck experiment={} accepted={} attempt={}/3\n",
+            "primary-vs-streamout-precheck experiment={} accepted={} attempt={}/3\n",
             vs_streamout_experiment.label(),
             accepted as u8,
             attempt
@@ -3557,7 +3515,7 @@ fn submit_primary_triangle_with_retries(
             streamout_experiment,
         );
         intel_render_verbose_log!(
-            "intel/render: primary-streamout-precheck experiment={} accepted={} attempt={}/3\n",
+            "primary-streamout-precheck experiment={} accepted={} attempt={}/3\n",
             streamout_experiment.label(),
             accepted as u8,
             attempt
@@ -3585,7 +3543,7 @@ fn submit_primary_triangle_with_retries(
             blend_mode,
         );
         intel_render_verbose_log!(
-            "intel/render: primary-triangle attempt={}/{} target=0x{:X} blend_probe={} completed={}\n",
+            "primary-triangle attempt={}/{} target=0x{:X} blend_probe={} completed={}\n",
             attempt,
             PRIMARY_TRIANGLE_SUBMIT_ATTEMPTS,
             surface_gpu,
@@ -3595,7 +3553,7 @@ fn submit_primary_triangle_with_retries(
         completed_any |= completed;
         if !completed {
             intel_render_verbose_log!(
-                "intel/render: primary-streamout-proof skipped trigger=draw-fail attempt={} reason=post-hang-state-not-clean\n",
+                "primary-streamout-proof skipped trigger=draw-fail attempt={} reason=post-hang-state-not-clean\n",
                 attempt,
             );
             break;
@@ -3919,7 +3877,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
     ];
 
     intel_render_focus_log!(
-        "intel/render: primary-fragment-shape-spectrum begin probes={} target=scratch-8x8+rt32 truth=fragment_boundary_observed\n",
+        "primary-fragment-shape-spectrum begin probes={} target=scratch-8x8+rt32 truth=fragment_boundary_observed\n",
         probes.len() + aligned_target_probes.len(),
     );
     for (submit_name, geometry, backend, vf_experiment) in probes {
@@ -3940,7 +3898,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
         );
         let observed = fragment_boundary_observed();
         intel_render_focus_log!(
-            "intel/render: primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
+            "primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
             submit_name,
             geometry.label(),
             backend.label(),
@@ -3974,7 +3932,7 @@ fn run_fragment_shape_frontier_spectrum(dev: crate::intel::Dev, warm: RenderWarm
         );
         let observed = fragment_boundary_observed();
         intel_render_focus_log!(
-            "intel/render: primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
+            "primary-fragment-shape-spectrum submit={} geometry={} backend={} vf_contract={} completed={} candidate_ready={} observed={}\n",
             submit_name,
             geometry.label(),
             backend.label(),
@@ -4017,14 +3975,14 @@ fn run_postdraw_pc_retire_spectrum(
             variant,
         );
         intel_render_focus_log!(
-            "intel/render: postdraw-pc-retire-spectrum submit={} variant={} completed={} note=diagnostic_only\n",
+            "postdraw-pc-retire-spectrum submit={} variant={} completed={} note=diagnostic_only\n",
             submit_name,
             variant.label(),
             completed as u8,
         );
         if completed {
             intel_render_focus_log!(
-                "intel/render: postdraw-pc-retire-spectrum cleanup submit={} variant={} reason=completed-diagnostic-not-a-fence\n",
+                "postdraw-pc-retire-spectrum cleanup submit={} variant={} reason=completed-diagnostic-not-a-fence\n",
                 submit_name,
                 variant.label(),
             );
@@ -4052,7 +4010,7 @@ fn submit_triangle_vf_streamout_proof(
         VfPrimitiveGeometry::Canonical,
     ) else {
         crate::log!(
-            "intel/render: vf-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "vf-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
             pitch
@@ -4062,10 +4020,7 @@ fn submit_triangle_vf_streamout_proof(
     let slice_hash_table_offset = match write_vf_streamout_probe_state(warm) {
         Ok(offset) => offset,
         Err(reason) => {
-            crate::log!(
-                "intel/render: vf-streamout-proof skipped reason=probe-state detail={}\n",
-                reason
-            );
+            crate::log!("vf-streamout-proof skipped reason=probe-state detail={}\n", reason);
             return false;
         }
     };
@@ -4096,13 +4051,13 @@ fn submit_triangle_vf_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: vf-streamout-proof batch build failed detail={}\n", reason);
+            crate::log!("vf-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     intel_render_verbose_log!(
-        "intel/render: vf-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        "vf-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
         batch_tail_bytes,
         GPU_VA_STREAMOUT_BASE,
@@ -4194,7 +4149,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         geometry,
     ) else {
         crate::log!(
-            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
+            "{} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
             rect_w,
             rect_h,
@@ -4222,7 +4177,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
-            "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
+            "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
             submit_name,
             draw.rt_gpu_addr,
             draw.vertex_gpu_addr,
@@ -4241,7 +4196,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} vf_contract={} backend={} postdraw_sync={} note={}\n",
+        "{} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} vf_contract={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -4258,7 +4213,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     );
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
+            "{} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
             draw.target_w.saturating_sub(1),
@@ -4269,7 +4224,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
             .point_width_raw_override()
             .unwrap_or(0x200);
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=pointlist ndc=center point_width_raw=0x{:X} point_width_source={} vf_contract={} screen_center=[{},{}] coverage_contract=giant-point does_not_prove=raster_samples_or_ps\n",
+            "{} fragment-candidate-shape accepted=1 geometry={} topology=pointlist ndc=center point_width_raw=0x{:X} point_width_source={} vf_contract={} screen_center=[{},{}] coverage_contract=giant-point does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
             point_width_raw,
@@ -4284,7 +4239,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         );
     } else if geometry.line_candidate() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=linelist vf_contract={} target={}x{} coverage_contract=diagonal-line does_not_prove=raster_samples_or_ps\n",
+            "{} fragment-candidate-shape accepted=1 geometry={} topology=linelist vf_contract={} target={}x{} coverage_contract=diagonal-line does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
             vf_experiment.vf_slot_contract(),
@@ -4297,7 +4252,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
+                "{} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
                 pipeline_note
@@ -4350,7 +4305,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     };
     let ps_ksp_contract_ok = baked_ps_first != 0 && baked_ps_first == uploaded_ps_first;
     intel_render_focus_log!(
-        "intel/render: {} ps-ksp-proof accepted={} backend={} ksp0=0x{:X} ksp1=0x{:X} ksp2=0x{:X} ksp_off=0x{:X} first_dw=0x{:08X} baked_first=0x{:08X} dispatch={:?} does_not_prove=ps_thread_launch\n",
+        "{} ps-ksp-proof accepted={} backend={} ksp0=0x{:X} ksp1=0x{:X} ksp2=0x{:X} ksp_off=0x{:X} first_dw=0x{:08X} baked_first=0x{:08X} dispatch={:?} does_not_prove=ps_thread_launch\n",
         submit_name,
         ps_ksp_contract_ok as u8,
         backend_probe_mode.label(),
@@ -4364,7 +4319,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     );
 
     intel_render_verbose_log!(
-        "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} backend={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} geometry={} backend={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
         submit_name,
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
@@ -4401,7 +4356,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
             Ok(layout) => layout,
             Err(reason) => {
                 crate::log!(
-                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    "{} staging skipped reason=probe-state-error detail={}\n",
                     submit_name,
                     reason
                 );
@@ -4455,7 +4410,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
+                "{} staging skipped reason=probe-batch-error detail={}\n",
                 submit_name,
                 reason
             );
@@ -4465,7 +4420,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     intel_render_verbose_log!(
-        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={}\n",
+        "{} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={}\n",
         submit_name,
         batch_tail_bytes,
         probe_state.binding_table_offset_bytes,
@@ -4477,7 +4432,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         geometry.label(),
     );
     intel_render_verbose_log!(
-        "intel/render: {} blend-probe={} geometry={}\n",
+        "{} blend-probe={} geometry={}\n",
         submit_name,
         blend_mode.label(),
         geometry.label(),
@@ -4559,7 +4514,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
             ps_counter_accept || (!artificial_markers && rt_changed) || possible_draw_window_write;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} artificial={} artificial_pre_marker={} artificial_post_marker={} possible_draw_window_write={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
+            "{} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} artificial={} artificial_pre_marker={} artificial_post_marker={} possible_draw_window_write={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
@@ -4604,7 +4559,7 @@ fn disable_raster_wm_oa_context(dev: crate::intel::Dev, submit_name: &'static st
         masked_bits_update(0, CTX_CTRL_OAC_CONTEXT_ENABLE),
     );
     intel_render_focus_log!(
-        "intel/render: {} raster-wm-oa cleanup oactx=0 oar=0 reason=diagnostic-counter-disable\n",
+        "{} raster-wm-oa cleanup oactx=0 oar=0 reason=diagnostic-counter-disable\n",
         submit_name,
     );
 }
@@ -4678,7 +4633,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         i += 1;
     }
     intel_render_verbose_log!(
-        "intel/render: {} oa-raw-a-delta changed={} a00={} a01={} a02={} a03={} a04={} a05={} a06={} a07={} a08={} a09={} a10={} a11={}\n",
+        "{} oa-raw-a-delta changed={} a00={} a01={} a02={} a03={} a04={} a05={} a06={} a07={} a08={} a09={} a10={} a11={}\n",
         submit_name,
         changed,
         a[0],
@@ -4695,7 +4650,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         a[11],
     );
     intel_render_verbose_log!(
-        "intel/render: {} oa-raw-a-delta a12={} a13={} a14={} a15={} a16={} a17={} a18={} a19={} a20={} a21={} a22={} a23={}\n",
+        "{} oa-raw-a-delta a12={} a13={} a14={} a15={} a16={} a17={} a18={} a19={} a20={} a21={} a22={} a23={}\n",
         submit_name,
         a[12],
         a[13],
@@ -4711,7 +4666,7 @@ fn log_raster_wm_oa_raw_deltas(submit_name: &'static str, begin: &[u32], end: &[
         a[23],
     );
     intel_render_verbose_log!(
-        "intel/render: {} oa-raw-a-delta a24={} a25={} a26={} a27={} a28={} a29={} a30={} a31={} a32={} a33={} a34={} a35={} note=raw-counter-index-audit\n",
+        "{} oa-raw-a-delta a24={} a25={} a26={} a27={} a28={} a29={} a30={} a31={} a32={} a33={} a34={} a35={} note=raw-counter-index-audit\n",
         submit_name,
         a[24],
         a[25],
@@ -4780,7 +4735,7 @@ fn log_raster_wm_oa_probe(
     }
     record_fragment_boundary_probe(true, accepted);
     intel_render_focus_log!(
-        "intel/render: {} raster-wm-input-proof accepted={} completed={} reports_valid={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
+        "{} raster-wm-input-proof accepted={} completed={} reports_valid={} begin_id=0x{:08X} end_id=0x{:08X} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} raster_samples_delta={} ps_threads_delta={} samples_killed_delta={} postps_fail_delta={} pixel_write_delta={} pixel_blend_delta={} ps_delta={} cps_delta={} ps_depth_delta={} observable=oar-mi-rpc-a21 does_not_prove=rt_visible\n",
         submit_name,
         accepted as u8,
         completed as u8,
@@ -4815,7 +4770,7 @@ fn submit_triangle_vs_streamout_proof(
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
         crate::log!(
-            "intel/render: vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "vs-streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
             pitch
@@ -4824,26 +4779,20 @@ fn submit_triangle_vs_streamout_proof(
     };
     let pipeline = crate::intel::shader::triangle_pipeline();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!("intel/render: vs-streamout-proof skipped reason=placeholder-pipeline\n");
+        crate::log!("vs-streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
     let slice_hash_table_offset = match write_vf_streamout_probe_state(warm) {
         Ok(offset) => offset,
         Err(reason) => {
-            crate::log!(
-                "intel/render: vs-streamout-proof skipped reason=probe-state detail={}\n",
-                reason
-            );
+            crate::log!("vs-streamout-proof skipped reason=probe-state detail={}\n", reason);
             return false;
         }
     };
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
-                "intel/render: vs-streamout-proof skipped reason=shader-layout detail={}\n",
-                reason
-            );
+            crate::log!("vs-streamout-proof skipped reason=shader-layout detail={}\n", reason);
             return false;
         }
     };
@@ -4854,7 +4803,7 @@ fn submit_triangle_vs_streamout_proof(
             > slice_hash_table_offset as usize
     {
         crate::log!(
-            "intel/render: vs-streamout-proof skipped reason=slice-hash-overlap used_end=0x{:X} slice_hash_off=0x{:X}\n",
+            "vs-streamout-proof skipped reason=slice-hash-overlap used_end=0x{:X} slice_hash_off=0x{:X}\n",
             shader_layout.used_bytes,
             slice_hash_table_offset
         );
@@ -4891,13 +4840,13 @@ fn submit_triangle_vs_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: vs-streamout-proof batch build failed detail={}\n", reason);
+            crate::log!("vs-streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     intel_render_verbose_log!(
-        "intel/render: vs-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        "vs-streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
         batch_tail_bytes,
         GPU_VA_STREAMOUT_BASE,
@@ -4948,7 +4897,7 @@ fn submit_triangle_streamout_proof(
     let Some(draw) = prepare_triangle_draw_resources(warm, dst_gpu_addr, pitch, rect_w, rect_h)
     else {
         crate::log!(
-            "intel/render: streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
+            "streamout-proof skipped reason=resource-layout size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
             pitch
@@ -4957,16 +4906,13 @@ fn submit_triangle_streamout_proof(
     };
     let pipeline = crate::intel::shader::triangle_pipeline();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
-        crate::log!("intel/render: streamout-proof skipped reason=placeholder-pipeline\n");
+        crate::log!("streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
     let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
-                "intel/render: streamout-proof skipped reason=shader-layout detail={}\n",
-                reason
-            );
+            crate::log!("streamout-proof skipped reason=shader-layout detail={}\n", reason);
             return false;
         }
     };
@@ -4979,10 +4925,7 @@ fn submit_triangle_streamout_proof(
     ) {
         Ok(layout) => layout,
         Err(reason) => {
-            crate::log!(
-                "intel/render: streamout-proof skipped reason=probe-state detail={}\n",
-                reason
-            );
+            crate::log!("streamout-proof skipped reason=probe-state detail={}\n", reason);
             return false;
         }
     };
@@ -5021,13 +4964,13 @@ fn submit_triangle_streamout_proof(
     ) {
         Ok(bytes) => bytes,
         Err(reason) => {
-            crate::log!("intel/render: streamout-proof batch build failed detail={}\n", reason);
+            crate::log!("streamout-proof batch build failed detail={}\n", reason);
             return false;
         }
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
     intel_render_verbose_log!(
-        "intel/render: streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
+        "streamout-proof batch-ready experiment={} bytes=0x{:X} so_gpu=0x{:X} so_pitch={} vertices={}\n",
         experiment.label(),
         batch_tail_bytes,
         GPU_VA_STREAMOUT_BASE,
@@ -5088,7 +5031,7 @@ fn submit_triangle_vs_draw_frontier_to_surface(
             contract,
         );
         intel_render_verbose_log!(
-            "intel/render: primary-vs-draw-frontier-contract variant={} completed={}\n",
+            "primary-vs-draw-frontier-contract variant={} completed={}\n",
             contract.label,
             completed as u8,
         );
@@ -5106,7 +5049,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
     let scratch_pitch = 32 * core::mem::size_of::<u32>();
     if warm.streamout_len < scratch_pitch * 32 {
         intel_render_focus_log!(
-            "intel/render: vs-draw-frontier-scratch skipped reason=streamout-too-small len=0x{:X} required=0x{:X}\n",
+            "vs-draw-frontier-scratch skipped reason=streamout-too-small len=0x{:X} required=0x{:X}\n",
             warm.streamout_len,
             scratch_pitch * 32,
         );
@@ -5158,7 +5101,7 @@ fn submit_triangle_vs_draw_frontier_to_scratch(
             );
             let observed = fragment_boundary_observed();
             intel_render_focus_log!(
-                "intel/render: vs-draw-frontier-scratch variant={} geometry={} contract={} completed={} observed={} target=scratch-rt32\n",
+                "vs-draw-frontier-scratch variant={} geometry={} contract={} completed={} observed={} target=scratch-rt32\n",
                 submit_name,
                 geometry.label(),
                 contract.label,
@@ -5227,7 +5170,7 @@ fn log_render_memory_proof(warm: RenderWarmState) {
     let streamout_rb = read_first_dword(warm.streamout_virt, warm.streamout_len);
 
     intel_render_focus_log!(
-        "intel/render: memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
+        "memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=all readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
         warm.ring_phys,
         GPU_VA_RING_BASE,
         warm.ring_len,
@@ -5357,7 +5300,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         geometry,
     ) else {
         crate::log!(
-            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
+            "{} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
             rect_w,
             rect_h,
@@ -5385,7 +5328,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
-            "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
+            "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
             submit_name,
             draw.rt_gpu_addr,
             draw.vertex_gpu_addr,
@@ -5403,7 +5346,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
+        "{} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -5419,7 +5362,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     );
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
+            "{} fragment-candidate-shape accepted=1 geometry={} ndc=v0[-1.000,-1.000] v1[3.000,-1.000] v2[-1.000,3.000] screen_bbox=[0,0..{},{}] sample_points=full-surface coverage_contract=oversized-triangle does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
             draw.target_w.saturating_sub(1),
@@ -5427,7 +5370,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         );
     } else if geometry.screen_space_candidate() {
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=trilist sf_viewport_transform=0 screen_vertices=v0[0.5,0.5] v1[7.5,0.5] v2[0.5,7.5] target={}x{} coverage_contract=screen-space-scratch-triangle does_not_prove=raster_samples_or_ps\n",
+            "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist sf_viewport_transform=0 screen_vertices=v0[0.5,0.5] v1[7.5,0.5] v2[0.5,7.5] target={}x{} coverage_contract=screen-space-scratch-triangle does_not_prove=raster_samples_or_ps\n",
             submit_name,
             geometry.label(),
             draw.target_w,
@@ -5440,7 +5383,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         .unwrap_or(pipeline.vs.meta.urb_entry_output_length);
     if submit_name == "vs-draw-frontier" {
         intel_render_focus_log!(
-            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            "{} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
             submit_name,
             front_end_contract.label,
             pipeline.vs.meta.urb_entry_output_length,
@@ -5453,7 +5396,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         );
     } else {
         intel_render_verbose_log!(
-            "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+            "{} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
             submit_name,
             front_end_contract.label,
             pipeline.vs.meta.urb_entry_output_length,
@@ -5470,7 +5413,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
+                "{} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
                 pipeline_note
@@ -5481,7 +5424,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
-        "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
         submit_name,
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
@@ -5516,7 +5459,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             Ok(layout) => layout,
             Err(reason) => {
                 crate::log!(
-                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    "{} staging skipped reason=probe-state-error detail={}\n",
                     submit_name,
                     reason
                 );
@@ -5566,7 +5509,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
+                "{} staging skipped reason=probe-batch-error detail={}\n",
                 submit_name,
                 reason
             );
@@ -5576,7 +5519,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     intel_render_verbose_log!(
-        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={} backend={}\n",
+        "{} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={} backend={}\n",
         submit_name,
         batch_tail_bytes,
         probe_state.binding_table_offset_bytes,
@@ -5588,7 +5531,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         geometry.label(),
         backend_probe_mode.label(),
     );
-    intel_render_verbose_log!("intel/render: {} blend-probe={}\n", submit_name, blend_mode.label());
+    intel_render_verbose_log!("{} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
     let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
@@ -5662,7 +5605,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         let accepted = ps_counter_accept || rt_changed;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=real-vs does_not_prove=display_scanout\n",
+            "{} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=real-vs does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
@@ -5726,7 +5669,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     };
     let Some(draw) = draw else {
         crate::log!(
-            "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
+            "{} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,
             rect_w,
             rect_h,
@@ -5754,7 +5697,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
         crate::log!(
-            "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
+            "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=awaiting-igc-or-spec-triangle-shaders vs_src={} ps_src={} note={}\n",
             submit_name,
             draw.rt_gpu_addr,
             draw.vertex_gpu_addr,
@@ -5772,7 +5715,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     }
 
     intel_render_verbose_log!(
-        "intel/render: {} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
+        "{} ps-meta dispatch={:?} grf_start={} grf_used={} ksp_off=0x{:X} size={} header_only={} geometry={} backend={} postdraw_sync={} note={}\n",
         submit_name,
         pipeline.ps.meta.kernel.dispatch_mode,
         pipeline.ps.meta.kernel.grf_start_register,
@@ -5793,7 +5736,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         "font-lyon-clip-field-screen-space"
     };
     intel_render_focus_log!(
-        "intel/render: {} fragment-candidate-shape accepted=1 geometry={} topology=trilist vertices={} triangles={} sf_viewport_transform={} first_vertices=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
+        "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist vertices={} triangles={} sf_viewport_transform={} first_vertices=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
         submit_name,
         geometry_label,
         vertices.len(),
@@ -5818,7 +5761,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
         .unwrap_or(pipeline.vs.meta.urb_entry_output_length);
     intel_render_verbose_log!(
-        "intel/render: {} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
+        "{} contract variant={} baked_vs_urb_out_len={} programmed_vs_urb_out_len={} sbe[read_offset={} read_length={} force_offset={} force_length={} num_sf_attrs={}]\n",
         submit_name,
         front_end_contract.label,
         pipeline.vs.meta.urb_entry_output_length,
@@ -5834,7 +5777,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
+                "{} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
                 pipeline_note
@@ -5845,7 +5788,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
-        "intel/render: {} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
         submit_name,
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
@@ -5880,7 +5823,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             Ok(layout) => layout,
             Err(reason) => {
                 crate::log!(
-                    "intel/render: {} staging skipped reason=probe-state-error detail={}\n",
+                    "{} staging skipped reason=probe-state-error detail={}\n",
                     submit_name,
                     reason
                 );
@@ -5921,7 +5864,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         Ok(bytes) => bytes,
         Err(reason) => {
             crate::log!(
-                "intel/render: {} staging skipped reason=probe-batch-error detail={}\n",
+                "{} staging skipped reason=probe-batch-error detail={}\n",
                 submit_name,
                 reason
             );
@@ -5931,7 +5874,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
 
     intel_render_verbose_log!(
-        "intel/render: {} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={} backend={}\n",
+        "{} batch-ready bytes=0x{:X} bt_off=0x{:X} samp_off=0x{:X} blend_off=0x{:X} cc_state_off=0x{:X} cc_vp_off=0x{:X} sf_vp_off=0x{:X} geometry={} backend={}\n",
         submit_name,
         batch_tail_bytes,
         probe_state.binding_table_offset_bytes,
@@ -5943,7 +5886,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         geometry_label,
         backend_probe_mode.label(),
     );
-    intel_render_verbose_log!("intel/render: {} blend-probe={}\n", submit_name, blend_mode.label());
+    intel_render_verbose_log!("{} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
     let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
@@ -6017,7 +5960,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         let accepted = ps_counter_accept || rt_changed;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "intel/render: {} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=font-lyon-triangle does_not_prove=display_scanout\n",
+            "{} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=font-lyon-triangle does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
@@ -6055,7 +5998,7 @@ fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> b
     let Ok(batch_tail_bytes) =
         encode_result_store_probe_batch(batch, GPU_VA_RESULT_BASE, RCS_EXEC_RESULT_MI_PROBE_DONE)
     else {
-        crate::log!("intel/render: mi-store-probe batch build failed\n");
+        crate::log!("mi-store-probe batch build failed\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
@@ -6089,7 +6032,7 @@ fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> boo
         RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
         None,
     ) else {
-        crate::log!("intel/render: 3d-no-draw-probe batch build failed\n");
+        crate::log!("3d-no-draw-probe batch build failed\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);

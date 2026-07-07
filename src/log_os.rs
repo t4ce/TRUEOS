@@ -101,8 +101,14 @@ impl log_os_core::GlobalLogSink for TcpLogSink {
         flags::area_log_policy(area)
     }
 
-    fn write_accepted(&self, purpose: Option<&str>, args: fmt::Arguments<'_>) {
-        write_with_purpose(purpose, args);
+    fn write_accepted(
+        &self,
+        area: flags::LogArea,
+        _level: log::Level,
+        purpose: Option<&str>,
+        args: fmt::Arguments<'_>,
+    ) {
+        write_with_tags(area, purpose, args);
     }
 }
 
@@ -116,15 +122,19 @@ static KERNEL_LOG_FACADE: log_os_core::GlobalLogFacade<log_os_core::GlobalLogRou
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
-        $crate::log_os::log_with_area_purpose(
-            $crate::log_os::flags::LogArea::Global,
+        $crate::log_os::log_with_target_purpose(
+            module_path!(),
             log::Level::Info,
             Some($purpose),
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
-        $crate::log_os::log(format_args!($($tt)*));
+        $crate::log_os::log_with_target_level(
+            module_path!(),
+            log::Level::Info,
+            format_args!($($tt)*),
+        );
     }};
 }
 
@@ -221,7 +231,12 @@ macro_rules! log_error {
 #[macro_export]
 macro_rules! audio_probe {
     ($($tt:tt)*) => {{
-        $crate::log_os::audio_probe(format_args!($($tt)*));
+        $crate::log_os::log_with_area_purpose(
+            $crate::log_os::flags::LogArea::Hda,
+            log::Level::Trace,
+            Some("audio"),
+            format_args!($($tt)*),
+        );
     }};
 }
 
@@ -229,23 +244,23 @@ pub fn log(args: fmt::Arguments<'_>) {
     log_os_core::log(&TRUEOS_LOG_ROUTER, args);
 }
 
-pub(crate) fn audio_probe(args: fmt::Arguments<'_>) {
-    let _guard = LOG_WRITE_LOCK.lock();
-    logtotcp::log(format_args!("[audio] "));
-    logtotcp::log(args);
+pub(crate) fn purpose_for_level(level: log::Level) -> &'static str {
+    log_os_core::purpose_for_level(level)
 }
 
-fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
+fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 
-    struct PurposeWriter<'a> {
+    struct TagWriter<'a> {
+        area: flags::LogArea,
         purpose: Option<&'a str>,
         wrote_prefix: bool,
     }
 
-    impl fmt::Write for PurposeWriter<'_> {
+    impl fmt::Write for TagWriter<'_> {
         fn write_str(&mut self, s: &str) -> fmt::Result {
             if !self.wrote_prefix {
+                logtotcp::log(format_args!("[{}] ", log_os_core::area_tag(self.area)));
                 if let Some(purpose) = self.purpose {
                     logtotcp::log(format_args!("[{}] ", purpose));
                 }
@@ -257,7 +272,8 @@ fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     }
 
     //crate::usb::truekey::push_fmt(args);
-    let mut writer = PurposeWriter {
+    let mut writer = TagWriter {
+        area,
         purpose,
         wrote_prefix: false,
     };
@@ -275,6 +291,16 @@ pub fn log_with_area_purpose(
     args: fmt::Arguments<'_>,
 ) {
     log_os_core::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
+}
+
+#[allow(dead_code)]
+pub fn log_with_target_purpose(
+    target: &str,
+    level: log::Level,
+    purpose: Option<&str>,
+    args: fmt::Arguments<'_>,
+) {
+    log_os_core::log_with_target_purpose(&TRUEOS_LOG_ROUTER, target, level, purpose, args);
 }
 
 pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {

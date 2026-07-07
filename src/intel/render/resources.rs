@@ -178,7 +178,7 @@ fn log_uploaded_triangle_shader_verification(
     let vs_uploaded_last = uploaded_vs.last().copied().unwrap_or(0);
     if submit_name == "vs-draw-frontier" {
         intel_render_focus_log!(
-            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -194,7 +194,7 @@ fn log_uploaded_triangle_shader_verification(
         );
     } else {
         intel_render_verbose_log!(
-            "intel/render: {} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -486,7 +486,7 @@ fn write_triangle_vertex_slice(
         - (triangle[2][0] - triangle[0][0]) * (triangle[1][1] - triangle[0][1]);
 
     intel_render_focus_log!(
-        "intel/render: vertex-upload-proof accepted={} stage=cpu-write-readback geometry={} bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
+        "vertex-upload-proof accepted={} stage=cpu-write-readback geometry={} bytes={} stride={} count={} gpu=0x{:X} readback_ok={} flush=1 area2={:.3} winding={} v0=[{:.3},{:.3},{:.3}] v1=[{:.3},{:.3},{:.3}] v2=[{:.3},{:.3},{:.3}] does_not_prove=vf_fetch\n",
         cpu_readback_ok as u8,
         label,
         byte_len,
@@ -554,7 +554,7 @@ fn write_vf_vue_vertex_slice(
                 words[base + 6] = pos[2].to_bits();
                 words[base + 7] = 1.0f32.to_bits();
                 intel_render_focus_log!(
-                    "intel/render: vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     label,
                     words[base + 0],
@@ -578,7 +578,7 @@ fn write_vf_vue_vertex_slice(
                 words[base + 6] = 1.0f32.to_bits();
                 words[base + 7] = pos[2].to_bits();
                 intel_render_focus_log!(
-                    "intel/render: vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     label,
                     words[base + 0],
@@ -620,16 +620,12 @@ fn write_vf_vue_vertex_slice(
 
     let signed_area_2x = (triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
         - (triangle[2][0] - triangle[0][0]) * (triangle[1][1] - triangle[0][1]);
-    let readback = unsafe {
-        core::slice::from_raw_parts(warm.vertex_virt as *const u32, byte_len / 4)
-    };
-    let cpu_readback_ok = readback
-        .iter()
-        .take(byte_len / 4)
-        .any(|word| *word != 0);
+    let readback =
+        unsafe { core::slice::from_raw_parts(warm.vertex_virt as *const u32, byte_len / 4) };
+    let cpu_readback_ok = readback.iter().take(byte_len / 4).any(|word| *word != 0);
 
     intel_render_focus_log!(
-        "intel/render: vf-vue-upload-proof accepted={} stage=cpu-write-readback geometry={} experiment={} bytes={} stride={} count={} gpu=0x{:X} readback_nonzero={} flush=1 area2={:.3} winding={} slot_contract={} does_not_prove=vf_fetch\n",
+        "vf-vue-upload-proof accepted={} stage=cpu-write-readback geometry={} experiment={} bytes={} stride={} count={} gpu=0x{:X} readback_nonzero={} flush=1 area2={:.3} winding={} slot_contract={} does_not_prove=vf_fetch\n",
         cpu_readback_ok as u8,
         label,
         experiment.label(),
@@ -685,7 +681,7 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 2] = pos[2].to_bits();
                 words[base + 3] = 1.0f32.to_bits();
                 intel_render_verbose_log!(
-                    "intel/render: vf-streamout-source v{} experiment={} geometry={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-streamout-source v{} experiment={} geometry={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
                     geometry.label(),
@@ -710,7 +706,7 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 6] = pos[2].to_bits();
                 words[base + 7] = 1.0f32.to_bits();
                 intel_render_focus_log!(
-                    "intel/render: vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
                     geometry.label(),
@@ -735,7 +731,7 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 6] = 1.0f32.to_bits();
                 words[base + 7] = pos[2].to_bits();
                 intel_render_focus_log!(
-                    "intel/render: vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
                     geometry.label(),
@@ -760,7 +756,7 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 6] = pos[2].to_bits();
                 words[base + 7] = 1.0f32.to_bits();
                 intel_render_verbose_log!(
-                    "intel/render: vf-streamout-source v{} experiment={} geometry={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-streamout-source v{} experiment={} geometry={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
                     geometry.label(),
@@ -789,7 +785,7 @@ fn prepare_vf_streamout_proof_resources(
                 words[base + 6] = 0.0f32.to_bits();
                 words[base + 7] = 0.0f32.to_bits();
                 intel_render_verbose_log!(
-                    "intel/render: vf-streamout-source v{} experiment={} geometry={} point_size=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] point_size_f={:.3} pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "vf-streamout-source v{} experiment={} geometry={} point_size=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] point_size_f={:.3} pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     idx,
                     experiment.label(),
                     geometry.label(),
@@ -885,7 +881,7 @@ fn submit_triangle_to_surface(
         RCS_EXEC_RESULT_DONE,
     ) else {
         crate::log!(
-            "intel/render: primary-triangle batch build failed size={}x{} pitch=0x{:X}\n",
+            "primary-triangle batch build failed size={}x{} pitch=0x{:X}\n",
             rect_w,
             rect_h,
             pitch
@@ -932,7 +928,7 @@ fn submit_vertical_stripes_to_surface(
         RCS_EXEC_RESULT_DONE,
     ) else {
         crate::log!(
-            "intel/render: primary-mi-stripes batch build failed size={}x{} pitch=0x{:X} batch=0x{:X} phase={}\n",
+            "primary-mi-stripes batch build failed size={}x{} pitch=0x{:X} batch=0x{:X} phase={}\n",
             rect_w,
             rect_h,
             pitch,
@@ -945,7 +941,7 @@ fn submit_vertical_stripes_to_surface(
 
     if should_log_primary_probe("periodic", PRIMARY_PROBE_SEQ.load(Ordering::Acquire)) {
         crate::log!(
-            "intel/render: primary-mi-stripes phase={} step={} stripes={} width={}\n",
+            "primary-mi-stripes phase={} step={} stripes={} width={}\n",
             stripe_x_phase,
             MI_STRIPE_X_STEP_PX,
             MI_STRIPE_COUNT,
@@ -965,7 +961,7 @@ fn submit_mi_scanout_store_proof(
     rect_h: usize,
 ) -> bool {
     if rect_w == 0 || rect_h == 0 {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=empty-target\n");
+        crate::log!("mi-scanout-store-proof accepted=0 reason=empty-target\n");
         return false;
     }
 
@@ -973,7 +969,7 @@ fn submit_mi_scanout_store_proof(
     let y = (rect_h / 2).min(rect_h.saturating_sub(1));
     let Some(before) = crate::intel::display::sample_primary_surface_pixel(x as u32, y as u32)
     else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
+        crate::log!("mi-scanout-store-proof accepted=0 reason=no-before-sample\n");
         return false;
     };
     let color = before ^ 0x00FF_FFFF;
@@ -981,7 +977,7 @@ fn submit_mi_scanout_store_proof(
         .checked_mul(pitch)
         .and_then(|v| v.checked_add(x.saturating_mul(4)))
     else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
+        crate::log!("mi-scanout-store-proof accepted=0 reason=offset-overflow\n");
         return false;
     };
     let pixel_gpu = dst_gpu_addr.saturating_add(pixel_offset as u64);
@@ -1004,7 +1000,7 @@ fn submit_mi_scanout_store_proof(
         GPU_VA_RESULT_BASE,
         RCS_EXEC_RESULT_MI_SCANOUT_DONE,
     ) else {
-        crate::log!("intel/render: mi-scanout-store-proof accepted=0 reason=batch-build\n");
+        crate::log!("mi-scanout-store-proof accepted=0 reason=batch-build\n");
         return false;
     };
     crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
@@ -1024,7 +1020,7 @@ fn submit_mi_scanout_store_proof(
         completed && marker == RCS_EXEC_RESULT_MI_SCANOUT_DONE && after == color && before != after;
 
     intel_render_focus_log!(
-        "intel/render: mi-scanout-store-proof accepted={} completed={} marker=0x{:08X} xy={}x{} gpu=0x{:X} pitch=0x{:X} before=0x{:08X} after=0x{:08X} color=0x{:08X} does_not_prove=3d_pipeline_or_ps\n",
+        "mi-scanout-store-proof accepted={} completed={} marker=0x{:08X} xy={}x{} gpu=0x{:X} pitch=0x{:X} before=0x{:08X} after=0x{:08X} color=0x{:08X} does_not_prove=3d_pipeline_or_ps\n",
         accepted as u8,
         completed as u8,
         marker,

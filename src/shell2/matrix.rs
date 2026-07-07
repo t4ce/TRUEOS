@@ -431,7 +431,7 @@ pub(crate) fn active_terminal_snapshot(
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     let terminal = guard.slots[idx].terminal.as_mut()?;
     let before = terminal.snapshot();
-    if !before.userspace_owns_slot {
+    if !before.terminal_handoff {
         terminal.resize_preserving_contents(cols.max(1), rows.max(1));
         let after = terminal.snapshot();
         if before != after {
@@ -449,6 +449,17 @@ pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
     guard.slots[idx].hotkey_mode
 }
 
+pub(crate) fn active_terminal_handoff_mode(output_mask: u8) -> bool {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    guard.slots[idx]
+        .terminal
+        .as_ref()
+        .map(|terminal| terminal.snapshot().terminal_handoff)
+        .unwrap_or(false)
+}
+
 pub(crate) fn set_active_terminal_hotkey_mode(output_mask: u8, enabled: bool) -> bool {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
@@ -458,6 +469,22 @@ pub(crate) fn set_active_terminal_hotkey_mode(output_mask: u8, enabled: bool) ->
         bump_slot_revision(&mut guard, idx);
     }
     enabled
+}
+
+pub(crate) fn set_active_terminal_handoff_mode(output_mask: u8, enabled: bool) -> bool {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    let Some(terminal) = guard.slots[idx].terminal.as_mut() else {
+        return false;
+    };
+    let before = terminal.snapshot();
+    terminal.set_terminal_handoff(enabled);
+    let after = terminal.snapshot();
+    if before != after {
+        bump_slot_revision(&mut guard, idx);
+    }
+    after.terminal_handoff
 }
 
 pub(crate) fn active_slot_app_label(output_mask: u8) -> Option<AllocString> {
@@ -489,7 +516,7 @@ pub(crate) fn record_raw_in_live_slot(
     let terminal = guard.slots[idx]
         .terminal
         .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
-    if !terminal.snapshot().userspace_owns_slot {
+    if !terminal.snapshot().terminal_handoff {
         terminal.resize_preserving_contents(cols.max(1), rows.max(1));
     }
     let before = terminal.snapshot();
@@ -498,8 +525,9 @@ pub(crate) fn record_raw_in_live_slot(
     let hotkey_mode = guard.slots[idx].hotkey_mode;
     let visual_changed = before.cols != after.cols
         || before.rows != after.rows
+        || before.terminal_handoff != after.terminal_handoff
         || before.cells != after.cells
-        || (hotkey_mode
+        || ((hotkey_mode || after.terminal_handoff)
             && (before.cursor_col != after.cursor_col
                 || before.cursor_row != after.cursor_row
                 || before.cursor_visible != after.cursor_visible));

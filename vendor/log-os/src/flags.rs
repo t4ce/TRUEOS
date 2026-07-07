@@ -25,6 +25,27 @@ impl LogArea {
         LogAreaSet(1 << self.index())
     }
 
+    pub const fn tag(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Boot => "boot",
+            Self::Service => "service",
+            Self::Net => "net",
+            Self::Usb => "usb",
+            Self::Storage => "storage",
+            Self::Gfx => "gfx",
+            Self::Gpgpu => "gpgpu",
+            Self::Render => "render",
+            Self::Hda => "hda",
+            Self::Hv => "hv",
+            Self::Apps => "apps",
+            Self::ExecutorRealm => "executor-realm",
+            Self::ExecutorCache => "executor-cache",
+            Self::IntelMediaNgin => "intel-media",
+            Self::Blueprint => "blueprint",
+        }
+    }
+
     const fn index(self) -> u32 {
         match self {
             Self::Global => 0,
@@ -128,6 +149,10 @@ pub const DEFAULT_AREA_LOG_POLICY: LogLevelPolicy = LogLevelPolicy::up(LevelFilt
 
 pub const fn default_area_log_policy(_area: LogArea) -> LogLevelPolicy {
     DEFAULT_AREA_LOG_POLICY
+}
+
+pub const fn area_tag(area: LogArea) -> &'static str {
+    area.tag()
 }
 
 const fn level_bit(level: Level) -> LogLevelSet {

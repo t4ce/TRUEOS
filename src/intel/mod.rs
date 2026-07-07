@@ -188,8 +188,9 @@ pub fn init_once() {
         if RENDER_BOOT_PROBE_DELAY_MS == 0 {
             self::render::submit_primary_triangle_once();
         } else {
-            crate::log!(
-                "intel/render: scheduled boot probe delay_ms={}\n",
+            crate::log_info!(
+                target: "render";
+                "scheduled boot probe delay_ms={}\n",
                 RENDER_BOOT_PROBE_DELAY_MS
             );
             crate::wait::spawn_local_detached(async move {

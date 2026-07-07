@@ -16,7 +16,13 @@ pub trait GlobalLogSink: Sync {
         self.spec().areas.contains(area) && level_enabled(self.level_policy(area), level)
     }
 
-    fn write_accepted(&self, purpose: Option<&str>, args: fmt::Arguments<'_>);
+    fn write_accepted(
+        &self,
+        area: LogArea,
+        level: log::Level,
+        purpose: Option<&str>,
+        args: fmt::Arguments<'_>,
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,7 +65,7 @@ impl<T: GlobalLogSink> GlobalLogDispatch for T {
         args: fmt::Arguments<'_>,
     ) {
         if self.accepts(area, level) {
-            self.write_accepted(purpose, args);
+            self.write_accepted(area, level, purpose, args);
         }
     }
 }
@@ -88,7 +94,7 @@ impl GlobalLogDispatch for GlobalLogRouter {
     ) {
         for sink in self.sinks {
             if sink.accepts(area, level) {
-                sink.write_accepted(purpose, args);
+                sink.write_accepted(area, level, purpose, args);
             }
         }
     }
@@ -125,6 +131,17 @@ pub fn log_with_area_purpose<D: GlobalLogDispatch>(
     args: fmt::Arguments<'_>,
 ) {
     dispatch.emit(area, level, purpose, args);
+}
+
+pub fn log_with_target_purpose<D: GlobalLogDispatch>(
+    dispatch: &D,
+    target: &str,
+    level: log::Level,
+    purpose: Option<&str>,
+    args: fmt::Arguments<'_>,
+) {
+    let area = target_log_area(target);
+    log_with_area_purpose(dispatch, area, level, purpose, args);
 }
 
 pub fn log_with_target_level<D: GlobalLogDispatch>(

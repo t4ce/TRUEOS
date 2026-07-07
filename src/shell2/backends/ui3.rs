@@ -39,7 +39,7 @@ pub(crate) struct Ui3ShellScreenSnapshot {
     pub cursor_col: u32,
     pub cursor_row: u32,
     pub cursor_visible: bool,
-    pub userspace_owns_slot: bool,
+    pub terminal_handoff: bool,
     pub cells: Vec<Ui3ShellCell>,
 }
 
@@ -91,7 +91,7 @@ pub(crate) struct TerminalState {
     utf8_buf: [u8; 4],
     utf8_len: usize,
     utf8_expected: usize,
-    userspace_owns_slot: bool,
+    terminal_handoff: bool,
 }
 
 impl TerminalState {
@@ -115,7 +115,7 @@ impl TerminalState {
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
-            userspace_owns_slot: false,
+            terminal_handoff: false,
         };
         out.resize(cols, rows);
         out
@@ -138,7 +138,7 @@ impl TerminalState {
         self.osc_buf.clear();
         self.utf8_len = 0;
         self.utf8_expected = 0;
-        self.userspace_owns_slot = false;
+        self.terminal_handoff = false;
     }
 
     pub(crate) fn resize_preserving_contents(&mut self, cols: usize, rows: usize) {
@@ -195,7 +195,7 @@ impl TerminalState {
             cursor_col: self.cursor_col as u32,
             cursor_row: self.cursor_row as u32,
             cursor_visible: self.cursor_visible,
-            userspace_owns_slot: self.userspace_owns_slot,
+            terminal_handoff: self.terminal_handoff,
             cells: self.cells.clone(),
         }
     }
@@ -399,14 +399,17 @@ impl TerminalState {
             return;
         };
         match raw {
-            "777;ode_to_userspace=1" => {
-                self.userspace_owns_slot = true;
+            "777;terminal_handoff=1" => {
+                let was_handoff = self.terminal_handoff;
+                self.terminal_handoff = true;
                 self.cursor_visible = false;
                 self.cursor_col = 0;
                 self.cursor_row = 0;
-                self.clear_all();
+                if !was_handoff {
+                    self.clear_all();
+                }
             }
-            "777;ode_to_userspace=0" => self.userspace_owns_slot = false,
+            "777;terminal_handoff=0" => self.terminal_handoff = false,
             _ => {
                 if let Some((cols, rows)) = parse_konsole_size_osc(raw) {
                     self.resize_preserving_contents(cols, rows);
@@ -450,6 +453,18 @@ impl TerminalState {
         self.cursor_col = saved_col.min(self.cols.saturating_sub(1));
         self.cursor_row = saved_row.min(self.rows.saturating_sub(1));
         self.cursor_visible = saved_visible;
+    }
+
+    pub(crate) fn set_terminal_handoff(&mut self, enabled: bool) {
+        if self.terminal_handoff == enabled {
+            return;
+        }
+        self.terminal_handoff = enabled;
+        if enabled {
+            self.cursor_visible = false;
+            self.cursor_col = 0;
+            self.cursor_row = 0;
+        }
     }
 
     fn feed_text_byte(&mut self, b: u8) {

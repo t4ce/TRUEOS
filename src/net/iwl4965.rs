@@ -237,7 +237,7 @@ static WIFI_FIRMWARE: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
 
 /// Store WiFi firmware data for later loading by the driver
 pub fn set_firmware_data(data: &[u8]) {
-    crate::log!("[IWL4965] Firmware data available: {} bytes", data.len());
+    crate::log!("iwl4965: Firmware data available: {} bytes", data.len());
     *WIFI_FIRMWARE.lock() = Some(data.to_vec());
 }
 
@@ -635,7 +635,7 @@ impl Iwl4965 {
 
     fn write_prph(&self, addr: u32, val: u32) {
         if !self.grab_nic_access() {
-            crate::log!("[IWL4965] write_prph FAILED: no NIC access for {:#X}", addr);
+            crate::log!("iwl4965: write_prph FAILED: no NIC access for {:#X}", addr);
             return;
         }
         self.write_reg(HBUS_TARG_PRPH_WADDR, (addr & 0x000F_FFFF) | (3 << 24));
@@ -646,7 +646,7 @@ impl Iwl4965 {
     /// Read from a peripheral (PRPH) register via HBUS indirect access
     fn read_prph(&self, addr: u32) -> u32 {
         if !self.grab_nic_access() {
-            crate::log!("[IWL4965] read_prph FAILED: no NIC access for {:#X}", addr);
+            crate::log!("iwl4965: read_prph FAILED: no NIC access for {:#X}", addr);
             return 0xFFFFFFFF;
         }
         self.write_reg(HBUS_TARG_PRPH_RADDR, (addr & 0x000F_FFFF) | (3 << 24));
@@ -658,7 +658,7 @@ impl Iwl4965 {
     /// Write to NIC SRAM via HBUS target memory access
     fn write_targ_mem(&self, addr: u32, val: u32) {
         if !self.grab_nic_access() {
-            crate::log!("[IWL4965] write_targ_mem FAILED: no NIC access for {:#X}", addr);
+            crate::log!("iwl4965: write_targ_mem FAILED: no NIC access for {:#X}", addr);
             return;
         }
         self.write_reg(HBUS_TARG_MEM_WADDR, addr);
@@ -690,7 +690,7 @@ impl Iwl4965 {
         self.mmio_base = virt_addr as usize;
 
         crate::log!(
-            "[IWL4965] MMIO phys: {:#X} -> virt: {:#X}, size: {:#X}",
+            "iwl4965: MMIO phys: {:#X} -> virt: {:#X}, size: {:#X}",
             phys_addr,
             virt_addr,
             self.mmio_size
@@ -748,7 +748,7 @@ impl Iwl4965 {
             let val = self.read_reg(CSR_GP_CNTRL);
             if val & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
                 crate::log!(
-                    "[IWL4965] MAC clock ready after {} iterations, GP_CNTRL={:#010X}",
+                    "iwl4965: MAC clock ready after {} iterations, GP_CNTRL={:#010X}",
                     i,
                     val
                 );
@@ -761,7 +761,7 @@ impl Iwl4965 {
                 let mut mac_access_ok = false;
                 for j in 0..10_000u32 {
                     if self.read_reg(CSR_GP_CNTRL) & CSR_GP_CNTRL_REG_VAL_MAC_ACCESS_EN != 0 {
-                        crate::log!("[IWL4965] MAC access granted after {} iters", j);
+                        crate::log!("iwl4965: MAC access granted after {} iters", j);
                         mac_access_ok = true;
                         break;
                     }
@@ -770,7 +770,7 @@ impl Iwl4965 {
                 }
                 if !mac_access_ok {
                     crate::log!(
-                        "[IWL4965] WARNING: MAC access not granted, GP={:#010X}",
+                        "iwl4965: WARNING: MAC access not granted, GP={:#010X}",
                         self.read_reg(CSR_GP_CNTRL)
                     );
                 }
@@ -797,7 +797,7 @@ impl Iwl4965 {
         }
 
         let gp = self.read_reg(CSR_GP_CNTRL);
-        crate::log!("[IWL4965] APM init FAILED: MAC clock not ready, GP_CNTRL={:#010X}", gp);
+        crate::log!("iwl4965: APM init FAILED: MAC clock not ready, GP_CNTRL={:#010X}", gp);
         Err("MAC clock not ready")
     }
 
@@ -819,18 +819,18 @@ impl Iwl4965 {
             0x07 => "6000",
             _ => "unknown",
         };
-        crate::log!("[IWL4965] HW rev: {:#010X} (type: {} = {})", self.hw_rev, hw_type, hw_name);
+        crate::log!("iwl4965: HW rev: {:#010X} (type: {} = {})", self.hw_rev, hw_type, hw_name);
 
         // 3. APM init: NIC_READY → INIT_DONE → wait MAC clock → enable APMG clocks
         self.apm_init()?;
 
-        crate::log!("[IWL4965] APM init complete");
+        crate::log!("iwl4965: APM init complete");
 
         // 6. Read MAC address from EEPROM
         self.read_eeprom_mac()?;
 
         crate::log!(
-            "[IWL4965] MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            "iwl4965: MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             self.mac_addr[0],
             self.mac_addr[1],
             self.mac_addr[2],
@@ -860,7 +860,7 @@ impl Iwl4965 {
             }
         }
 
-        crate::log!("[IWL4965] EEPROM read timeout at addr {:#06X}", addr);
+        crate::log!("iwl4965: EEPROM read timeout at addr {:#06X}", addr);
         0
     }
 
@@ -881,7 +881,7 @@ impl Iwl4965 {
         if self.mac_addr == [0; 6] || self.mac_addr == [0xFF; 6] {
             // Some cards need the NIC_LOCK before EEPROM access
             // Try reading HW_IF_CONFIG for alternative MAC
-            crate::log!("[IWL4965] EEPROM MAC invalid, generating from PCI");
+            crate::log!("iwl4965: EEPROM MAC invalid, generating from PCI");
             // Generate deterministic MAC from PCI location
             self.mac_addr = [
                 0x00,
@@ -915,16 +915,16 @@ impl Iwl4965 {
 
         let total = hdr_size + inst_size + data_size + init_size + init_data_size + boot_size;
         if data.len() < total {
-            crate::log!("[IWL4965] FW: need {} bytes, have {}", total, data.len());
+            crate::log!("iwl4965: FW: need {} bytes, have {}", total, data.len());
             return Err("Firmware file truncated");
         }
 
         let major = (ver >> 24) & 0xFF;
         let minor = (ver >> 16) & 0xFF;
         let api = (ver >> 8) & 0xFF;
-        crate::log!("[IWL4965] FW version: {}.{}.{} (raw {:#010X})", major, minor, api, ver);
+        crate::log!("iwl4965: FW version: {}.{}.{} (raw {:#010X})", major, minor, api, ver);
         crate::log!(
-            "[IWL4965] FW sections: inst={} data={} init={} init_data={} boot={}",
+            "iwl4965: FW sections: inst={} data={} init={} init_data={} boot={}",
             inst_size,
             data_size,
             init_size,
@@ -989,7 +989,7 @@ impl Iwl4965 {
         // ── Phase 1: Init firmware (calibration) ──
         if !fw.init_inst.is_empty() {
             crate::log!("iwl4965: phase 1 init firmware (calibration)\n");
-            crate::log!("[IWL4965] === INIT firmware phase ===");
+            crate::log!("iwl4965: === INIT firmware phase ===");
 
             crate::log!("iwl4965: stop_device");
             self.stop_device()?;
@@ -1052,7 +1052,7 @@ impl Iwl4965 {
                         if i == 25 {
                             let int_val = self.read_reg(CSR_INT);
                             crate::log!(
-                                "[IWL4965] Init cal progress: INT={:#X} rxpkts so far",
+                                "iwl4965: Init cal progress: INT={:#X} rxpkts so far",
                                 int_val
                             );
                         }
@@ -1070,7 +1070,7 @@ impl Iwl4965 {
         // Do NOT call apm_stop()/SW_RESET — that wipes SRAM (calibration data).
         // NEVO_RESET only resets the embedded processor, SRAM stays powered.
         crate::log!("iwl4965: phase 2 runtime firmware\n");
-        crate::log!("[IWL4965] === RUNTIME firmware phase (soft reset) ===");
+        crate::log!("iwl4965: === RUNTIME firmware phase (soft reset) ===");
 
         // 1. Stop master DMA
         self.write_reg(CSR_RESET, CSR_RESET_REG_FLAG_STOP_MASTER);
@@ -1139,7 +1139,7 @@ impl Iwl4965 {
         self.firmware_loaded = true;
         self.fw_alive = true;
         crate::log!("iwl4965: runtime firmware alive\n");
-        crate::log!("[IWL4965] Runtime firmware loaded and alive!");
+        crate::log!("iwl4965: Runtime firmware loaded and alive!");
 
         Ok(())
     }
@@ -1214,7 +1214,7 @@ impl Iwl4965 {
             crate::pci::config_read_u16(self.pci_bus, self.pci_device, self.pci_function, 0x04)
                 as u32;
         if cmd & 0x04 == 0 {
-            crate::log!("[IWL4965] Re-enabling PCI bus master after reset");
+            crate::log!("iwl4965: Re-enabling PCI bus master after reset");
             crate::pci::config_write_u16(
                 self.pci_bus,
                 self.pci_device,
@@ -1279,7 +1279,7 @@ impl Iwl4965 {
             );
         }
         crate::log!(
-            "[IWL4965] Bootstrap: {} dwords written to SRAM @ {:#X}, verify={}",
+            "iwl4965: Bootstrap: {} dwords written to SRAM @ {:#X}, verify={}",
             dword_count,
             BSM_SRAM_LOWER_BOUND,
             if verify0 == expect0 { "OK" } else { "FAIL" }
@@ -1304,7 +1304,7 @@ impl Iwl4965 {
             self.write_prph(BSM_DRAM_INST_PTR_REG, (phys >> 4) as u32);
             self.write_prph(BSM_DRAM_INST_BYTECOUNT_REG, inst.len() as u32);
             crate::log!(
-                "[IWL4965] FW inst @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
+                "iwl4965: FW inst @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
                 phys,
                 phys >> 4,
                 inst.len()
@@ -1324,7 +1324,7 @@ impl Iwl4965 {
             self.write_prph(BSM_DRAM_DATA_PTR_REG, (phys >> 4) as u32);
             self.write_prph(BSM_DRAM_DATA_BYTECOUNT_REG, data.len() as u32);
             crate::log!(
-                "[IWL4965] FW data @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
+                "iwl4965: FW data @ phys {:#010X} >> 4 = {:#010X} ({} bytes)",
                 phys,
                 phys >> 4,
                 data.len()
@@ -1356,7 +1356,7 @@ impl Iwl4965 {
         // Set the number of dwords to copy — THIS IS CRITICAL
         let dword_count = (boot_size + 3) / 4;
         self.write_prph(BSM_WR_DWCOUNT_REG, dword_count as u32);
-        crate::log!("[IWL4965] BSM: src=0 dst=0 dwcount={}", dword_count);
+        crate::log!("iwl4965: BSM: src=0 dst=0 dwcount={}", dword_count);
 
         // Start BSM (bit 31 only — Linux uses BSM_WR_CTRL_REG_BIT_START = 0x80000000)
         self.write_prph(BSM_WR_CTRL_REG, BSM_WR_CTRL_START);
@@ -1365,7 +1365,7 @@ impl Iwl4965 {
         for _ in 0..10000u32 {
             let ctrl = self.read_prph(BSM_WR_CTRL_REG);
             if ctrl & BSM_WR_CTRL_START == 0 {
-                crate::log!("[IWL4965] BSM load complete");
+                crate::log!("iwl4965: BSM load complete");
                 // Enable future boot loads (BSM auto-reload from DRAM on CPU release)
                 // Linux: il_wr_prph(il, BSM_WR_CTRL_REG, BSM_WR_CTRL_REG_BIT_START_EN)
                 self.write_prph(BSM_WR_CTRL_REG, BSM_WR_CTRL_START_EN);
@@ -1379,7 +1379,7 @@ impl Iwl4965 {
         // BSM may still complete — check if device is running
         let gp = self.read_reg(CSR_GP_CNTRL);
         if gp & CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY != 0 {
-            crate::log!("[IWL4965] BSM: device appears running (GP_CNTRL={:#X})", gp);
+            crate::log!("iwl4965: BSM: device appears running (GP_CNTRL={:#X})", gp);
             return Ok(());
         }
 
@@ -1414,7 +1414,7 @@ impl Iwl4965 {
                     attempt
                 );
                 crate::log!(
-                    "[IWL4965] FW alive: INT={:#X} GP1={:#X} UCODE={:#X}",
+                    "iwl4965: FW alive: INT={:#X} GP1={:#X} UCODE={:#X}",
                     int_status,
                     gp1,
                     gp_ucode
@@ -1451,7 +1451,7 @@ impl Iwl4965 {
             let gp_ucode = self.read_reg(CSR_GP_UCODE);
             if gp_ucode != 0 && gp_ucode != 0xFFFFFFFF {
                 crate::log!("iwl4965: alive via gp_ucode={:#X} attempt={}\n", gp_ucode, attempt);
-                crate::log!("[IWL4965] FW alive via GP_UCODE: {:#X}", gp_ucode);
+                crate::log!("iwl4965: FW alive via GP_UCODE: {:#X}", gp_ucode);
                 return Ok(());
             }
 
@@ -1495,7 +1495,7 @@ impl Iwl4965 {
             int_val
         );
         crate::log!(
-            "[IWL4965] FW ALIVE TIMEOUT: RST={:#X} GP={:#X} GP1={:#X} UCODE={:#X} INT={:#X}",
+            "iwl4965: FW ALIVE TIMEOUT: RST={:#X} GP={:#X} GP1={:#X} UCODE={:#X} INT={:#X}",
             rst,
             gp,
             gp1,
@@ -1510,7 +1510,7 @@ impl Iwl4965 {
 
     /// Initialize all TX queues and the RX queue for DMA
     fn init_queues(&mut self) -> Result<(), &'static str> {
-        crate::log!("[IWL4965] Initializing DMA queues...");
+        crate::log!("iwl4965: Initializing DMA queues...");
 
         // Allocate TX queues (0-3: EDCA data, 4: HCMD)
         self.tx_queues.clear();
@@ -1520,7 +1520,7 @@ impl Iwl4965 {
 
             // Tell the device where this queue's TFD ring lives
             self.write_reg(FH_MEM_CBBC_QUEUE + (q as u32) * 4, phys as u32);
-            crate::log!("[IWL4965]   TXQ{}: TFD ring @ phys {:#X}", q, phys);
+            crate::log!("iwl4965:   TXQ{}: TFD ring @ phys {:#X}", q, phys);
 
             self.tx_queues.push(txq);
         }
@@ -1553,7 +1553,7 @@ impl Iwl4965 {
         self.write_reg(FH_RSCSR_CHNL0_RBDCB_WPTR_REG, (RX_QUEUE_SIZE as u32) & !0x7);
 
         crate::log!(
-            "[IWL4965]   RXQ: CONFIG={:#010X} BASE={:#X} STTS={:#X} WPTR={}",
+            "iwl4965:   RXQ: CONFIG={:#010X} BASE={:#X} STTS={:#X} WPTR={}",
             rx_config,
             (rb_phys >> 8) as u32,
             (stts_phys >> 4) as u32,
@@ -1565,7 +1565,7 @@ impl Iwl4965 {
         // Enable TX scheduling on all queues (SCD is on PRPH bus)
         self.write_prph(SCD_TXFACT, (1 << IWL_TX_QUEUE_COUNT) - 1);
 
-        crate::log!("[IWL4965] DMA queues initialized");
+        crate::log!("iwl4965: DMA queues initialized");
         Ok(())
     }
 
@@ -1620,7 +1620,7 @@ impl Iwl4965 {
 
         self.cmd_seq = self.cmd_seq.wrapping_add(1);
 
-        crate::log!("[IWL4965] HCMD sent: cmd={:#04X} len={} idx={}", cmd_id, total_len, idx);
+        crate::log!("iwl4965: HCMD sent: cmd={:#04X} len={} idx={}", cmd_id, total_len, idx);
         Ok(())
     }
 
@@ -1638,7 +1638,7 @@ impl Iwl4965 {
             // Re-enable interrupts after ACK (iwl4965 requires this)
             self.write_reg(CSR_INT_MASK, 0xAB00_000B);
             if csr_int & 0x80000000 != 0 {
-                crate::log!("[IWL4965] poll_rx: INT={:#010X} (FH_RX fired)", csr_int);
+                crate::log!("iwl4965: poll_rx: INT={:#010X} (FH_RX fired)", csr_int);
             }
         }
 
@@ -1647,7 +1647,7 @@ impl Iwl4965 {
             let rxq = match self.rx_queue.as_ref() {
                 Some(q) => q,
                 None => {
-                    crate::log!("[IWL4965] poll_rx: no RX queue");
+                    crate::log!("iwl4965: poll_rx: no RX queue");
                     return;
                 }
             };
@@ -1665,7 +1665,7 @@ impl Iwl4965 {
             return;
         }
 
-        crate::log!("[IWL4965] poll_rx: hw_write={} read={} — new packets!", hw_write, read);
+        crate::log!("iwl4965: poll_rx: hw_write={} read={} — new packets!", hw_write, read);
 
         // Collect packets first to avoid borrow conflicts with self
         let mut packets: Vec<(u8, Vec<u8>)> = Vec::new();
@@ -1707,18 +1707,18 @@ impl Iwl4965 {
     fn process_rx_packet(&mut self, cmd_id: u8, data: &[u8]) {
         match cmd_id {
             REPLY_ALIVE => {
-                crate::log!("[IWL4965] RX: ALIVE notification");
+                crate::log!("iwl4965: RX: ALIVE notification");
                 self.fw_alive = true;
             }
             REPLY_ERROR => {
-                crate::log!("[IWL4965] RX: ERROR from firmware");
+                crate::log!("iwl4965: RX: ERROR from firmware");
             }
             SCAN_RESULTS_NOTIFICATION => {
-                crate::log!("[IWL4965] RX: Scan results notification ({} bytes)", data.len());
+                crate::log!("iwl4965: RX: Scan results notification ({} bytes)", data.len());
                 self.parse_scan_notification(data);
             }
             REPLY_SCAN_COMPLETE | REPLY_SCAN_CMD => {
-                crate::log!("[IWL4965] RX: Scan complete/response");
+                crate::log!("iwl4965: RX: Scan complete/response");
                 self.scanning = false;
                 self.wifi_state = if self.connected_ssid.is_some() {
                     WifiState::Connected
@@ -1727,7 +1727,7 @@ impl Iwl4965 {
                 };
             }
             REPLY_RXON | REPLY_RXON_ASSOC => {
-                crate::log!("[IWL4965] RX: RXON response");
+                crate::log!("iwl4965: RX: RXON response");
             }
             REPLY_TX => {}
             // RX data frames from firmware (typically cmd IDs 0xC0+ are data)
@@ -1742,7 +1742,7 @@ impl Iwl4965 {
                 }
             }
             _ => {
-                crate::log!("[IWL4965] RX: Unknown cmd {:#04X} ({} bytes)", cmd_id, data.len());
+                crate::log!("iwl4965: RX: Unknown cmd {:#04X} ({} bytes)", cmd_id, data.len());
             }
         }
     }
@@ -1760,7 +1760,7 @@ impl Iwl4965 {
         }
 
         let count = data[8] as usize;
-        crate::log!("[IWL4965] Scan: {} network(s) reported", count);
+        crate::log!("iwl4965: Scan: {} network(s) reported", count);
 
         let mut offset = 12; // Start of first result
         for _ in 0..count {
@@ -1859,7 +1859,7 @@ impl Iwl4965 {
 
         // Report firmware/queue state
         crate::log!(
-            "[IWL4965] Scan: fw_loaded={} fw_alive={} queues={} rx={}",
+            "iwl4965: Scan: fw_loaded={} fw_alive={} queues={} rx={}",
             self.firmware_loaded,
             self.fw_alive,
             self.tx_queues.len(),
@@ -1878,7 +1878,7 @@ impl Iwl4965 {
         let gp1 = self.read_reg(CSR_UCODE_DRV_GP1);
         let fh = self.read_reg(CSR_FH_INT_STATUS);
         crate::log!(
-            "[IWL4965] Pre-scan CSR: GP={:#X} INT={:#X} GP1={:#X} FH={:#X}",
+            "iwl4965: Pre-scan CSR: GP={:#X} INT={:#X} GP1={:#X} FH={:#X}",
             gp,
             int,
             gp1,
@@ -1893,7 +1893,7 @@ impl Iwl4965 {
 
         if self.firmware_loaded && self.fw_alive {
             // Firmware-based scan: first send RXON to turn on the radio
-            crate::log!("[IWL4965] Sending RXON to enable radio...");
+            crate::log!("iwl4965: Sending RXON to enable radio...");
             self.send_rxon()?;
             // Give firmware time to process RXON and poll for response
             for _ in 0..500_000 {
@@ -1901,14 +1901,14 @@ impl Iwl4965 {
             }
             self.poll_rx(); // Check if firmware ACKed RXON
             let int_after_rxon = self.read_reg(CSR_INT);
-            crate::log!("[IWL4965] Post-RXON: INT={:#X}", int_after_rxon);
+            crate::log!("iwl4965: Post-RXON: INT={:#X}", int_after_rxon);
 
-            crate::log!("[IWL4965] Starting firmware-based scan (2.4 GHz + 5 GHz)...");
+            crate::log!("iwl4965: Starting firmware-based scan (2.4 GHz + 5 GHz)...");
             self.send_scan_request()?;
         } else {
             // Passive monitoring — no firmware, limited capability
             self.write_reg(CSR_INT_COALESCING, 0x40);
-            crate::log!("[IWL4965] Passive scan started (no firmware)");
+            crate::log!("iwl4965: Passive scan started (no firmware)");
             crate::log!("iwl4965: no firmware, passive scan only");
         }
 
@@ -1973,7 +1973,7 @@ impl Iwl4965 {
 
         self.send_hcmd(REPLY_RXON, &rxon)?;
         crate::log!(
-            "[IWL4965] RXON sent: ch=1 STA flags={:#X} filter={:#X} rx_chain={:#X}",
+            "iwl4965: RXON sent: ch=1 STA flags={:#X} filter={:#X} rx_chain={:#X}",
             flags,
             filter,
             rx_chain
@@ -2077,7 +2077,7 @@ impl Iwl4965 {
         self.send_hcmd(REPLY_SCAN_CMD, &cmd)?;
 
         crate::log!(
-            "[IWL4965] Scan request sent: {} channels, {} bytes, passive mode",
+            "iwl4965: Scan request sent: {} channels, {} bytes, passive mode",
             chan_count,
             total_len
         );
@@ -2104,7 +2104,7 @@ impl Iwl4965 {
             } else {
                 WifiState::Disconnected
             };
-            crate::log!("[IWL4965] Scan complete: {} networks", self.scan_results.len());
+            crate::log!("iwl4965: Scan complete: {} networks", self.scan_results.len());
 
             // If no hardware results (firmware not loaded), do a discovery
             if self.scan_results.is_empty() {
@@ -2124,13 +2124,13 @@ impl Iwl4965 {
         let gpio = self.read_reg(CSR_GPIO_IN);
         let gp_cntrl = self.read_reg(CSR_GP_CNTRL);
 
-        crate::log!("[IWL4965] GPIO: {:#010X}, GP_CNTRL: {:#010X}", gpio, gp_cntrl);
+        crate::log!("iwl4965: GPIO: {:#010X}, GP_CNTRL: {:#010X}", gpio, gp_cntrl);
 
         // Read EEPROM for channel capabilities
         let sku = self.eeprom_read(EEPROM_SKU_CAP);
         let has_24ghz = (sku & 0x01) != 0 || sku == 0; // Default to yes
         let has_5ghz = (sku & 0x02) != 0;
-        crate::log!("[IWL4965] SKU: {:#06X}, 2.4GHz: {}, 5GHz: {}", sku, has_24ghz, has_5ghz);
+        crate::log!("iwl4965: SKU: {:#06X}, 2.4GHz: {}, 5GHz: {}", sku, has_24ghz, has_5ghz);
 
         // Without firmware loading, we report the hardware as ready
         // but scanning returns hardware-detected channel info
@@ -2151,7 +2151,7 @@ impl Iwl4965 {
         match network {
             Some(net) => {
                 crate::log!(
-                    "[IWL4965] Connecting to '{}' on ch{} ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
+                    "iwl4965: Connecting to '{}' on ch{} ({:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X})",
                     ssid,
                     net.channel,
                     net.bssid[0],
@@ -2181,7 +2181,7 @@ impl Iwl4965 {
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
                             crate::log!(
-                                "[IWL4965] Connected to '{}' (Open, {} dBm)",
+                                "iwl4965: Connected to '{}' (Open, {} dBm)",
                                 ssid,
                                 net.signal_dbm
                             );
@@ -2191,7 +2191,7 @@ impl Iwl4965 {
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
                             crate::log!(
-                                "[IWL4965] Associated to '{}' (WPA2, {} dBm) — key exchange TODO",
+                                "iwl4965: Associated to '{}' (WPA2, {} dBm) — key exchange TODO",
                                 ssid,
                                 net.signal_dbm
                             );
@@ -2200,7 +2200,7 @@ impl Iwl4965 {
                             self.connected_ssid = Some(String::from(ssid));
                             self.wifi_state = WifiState::Connected;
                             crate::log!(
-                                "[IWL4965] Connected to '{}' ({} dBm)",
+                                "iwl4965: Connected to '{}' ({} dBm)",
                                 ssid,
                                 net.signal_dbm
                             );
@@ -2210,14 +2210,14 @@ impl Iwl4965 {
                     // No firmware — can't really connect
                     self.connected_ssid = Some(String::from(ssid));
                     self.wifi_state = WifiState::Connected;
-                    crate::log!("[IWL4965] Connected to '{}' (no firmware — limited)", ssid);
+                    crate::log!("iwl4965: Connected to '{}' (no firmware — limited)", ssid);
                 }
 
                 Ok(())
             }
             None => {
                 crate::log!(
-                    "[IWL4965] Network '{}' not in scan results, attempting blind connect",
+                    "iwl4965: Network '{}' not in scan results, attempting blind connect",
                     ssid
                 );
                 self.wifi_state = WifiState::Connecting;
@@ -2266,7 +2266,7 @@ impl Iwl4965 {
 
         self.send_hcmd(REPLY_RXON, &rxon)?;
         crate::log!(
-            "[IWL4965] RXON sent: ch{} BSSID {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            "iwl4965: RXON sent: ch{} BSSID {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
             net.channel,
             net.bssid[0],
             net.bssid[1],
@@ -2334,14 +2334,14 @@ impl Driver for Iwl4965 {
             match self.load_firmware() {
                 Ok(()) => {
                     crate::log!("wifi/iwl4965: firmware loaded and alive\n");
-                    crate::log!("[IWL4965] Firmware loaded and alive");
+                    crate::log!("iwl4965: Firmware loaded and alive");
 
                     // NOW init DMA queues (after firmware is alive, matching Linux il4965_alive_start)
                     crate::log!("wifi/iwl4965: init_queues");
                     match self.init_queues() {
                         Ok(()) => {
                             crate::log!("wifi/iwl4965: dma queues ready\n");
-                            crate::log!("[IWL4965] DMA queues ready — full WiFi mode");
+                            crate::log!("iwl4965: DMA queues ready — full WiFi mode");
                         }
                         Err(e) => {
                             crate::log!("wifi/iwl4965: queue init failed: {}", e);
@@ -2354,7 +2354,7 @@ impl Driver for Iwl4965 {
                 }
                 Err(e) => {
                     crate::log!("wifi/iwl4965: firmware load failed: {}", e);
-                    crate::log!("[IWL4965] Firmware load failed: {} — passive mode", e);
+                    crate::log!("iwl4965: Firmware load failed: {} — passive mode", e);
                 }
             }
         } else {
@@ -2460,9 +2460,9 @@ impl WifiDriver for Iwl4965 {
     fn scan(&mut self) -> Result<(), &'static str> {
         // Lazy init: start hardware on first use
         if !self.initialized {
-            crate::log!("[IWL4965] Lazy start: initializing hardware...");
+            crate::log!("iwl4965: Lazy start: initializing hardware...");
             self.start().map_err(|e| {
-                crate::log!("[IWL4965] Lazy start failed: {}", e);
+                crate::log!("iwl4965: Lazy start failed: {}", e);
                 "WiFi hardware init failed"
             })?;
         }
@@ -2475,7 +2475,7 @@ impl WifiDriver for Iwl4965 {
 
     fn connect(&mut self, ssid: &str, password: &str) -> Result<(), &'static str> {
         if !self.initialized {
-            crate::log!("[IWL4965] Lazy start for connect...");
+            crate::log!("iwl4965: Lazy start for connect...");
             self.start().map_err(|_| "WiFi hardware init failed")?;
         }
         self.do_connect(ssid, password)
@@ -2487,7 +2487,7 @@ impl WifiDriver for Iwl4965 {
         self.current_channel = 0;
         self.signal_dbm = 0;
         self.wifi_state = WifiState::Disconnected;
-        crate::log!("[IWL4965] Disconnected");
+        crate::log!("iwl4965: Disconnected");
         Ok(())
     }
 
@@ -2537,7 +2537,7 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
     }
 
     crate::log!(
-        "[IWL4965] Probing Intel WiFi {:04X}:{:04X}...",
+        "iwl4965: Probing Intel WiFi {:04X}:{:04X}...",
         pci_dev.vendor_id,
         pci_dev.device_id
     );
@@ -2548,14 +2548,14 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
             // Don't call start() during boot — it does hw_init + firmware load
             // which can hang on real hardware. Start is deferred to first use.
             crate::log!(
-                "[IWL4965] PCI probe OK for {:04X}:{:04X} — start deferred",
+                "iwl4965: PCI probe OK for {:04X}:{:04X} — start deferred",
                 pci_dev.vendor_id,
                 pci_dev.device_id
             );
             Some(Box::new(driver))
         }
         Err(e) => {
-            crate::log!("[IWL4965] Probe failed: {}", e);
+            crate::log!("iwl4965: Probe failed: {}", e);
             None
         }
     }

@@ -55,7 +55,7 @@ fn submit_warm_render_batch(
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
+            "{} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
             submit_name,
             context_desc_hi,
             context_desc_lo,
@@ -125,7 +125,7 @@ fn submit_warm_render_batch(
         {
             let poll_stats = capture_triangle_stage_stats(dev);
             crate::log!(
-                "intel/render: {} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
+                "{} poll iter={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} execlist_lo=0x{:08X} execlist_hi=0x{:08X} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X}\n",
                 submit_name,
                 iter,
                 crate::intel::mmio_read(dev, RCS_RING_HEAD),
@@ -141,7 +141,7 @@ fn submit_warm_render_batch(
                 result2
             );
             intel_render_verbose_log!(
-                "intel/render: {} poll-stage iter={} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
+                "{} poll-stage iter={} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
                 submit_name,
                 iter,
                 result_batch_entry,
@@ -158,7 +158,7 @@ fn submit_warm_render_batch(
                 result_post3d_eop_hi
             );
             intel_render_verbose_log!(
-                "intel/render: {} poll-counters iter={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
+                "{} poll-counters iter={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
                 submit_name,
                 iter,
                 poll_stats.ia_vertices,
@@ -201,7 +201,7 @@ fn submit_warm_render_batch(
     let result_batch_entry = read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
-            "intel/render: {} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            "{} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
             submit_name,
             completed as u8,
             result0,
@@ -226,7 +226,7 @@ fn submit_warm_render_batch(
     }
     if is_triangle_debug_submit_name(submit_name) {
         intel_render_focus_log!(
-            "intel/render: {} batch-submit-proof completed={} batch_entry_marker={} start_marker={} pre_light_pc_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
+            "{} batch-submit-proof completed={} batch_entry_marker={} start_marker={} pre_light_pc_marker={} post3d_light_marker={} final_after_light_marker={} post3d_marker={} final_marker={} expected_slot={} expected=0x{:08X} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=3d_stage_progress\n",
             submit_name,
             completed as u8,
             (result_batch_entry == RCS_EXEC_RESULT_DRAW_BATCH_ENTRY) as u8,
@@ -243,7 +243,7 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_IPEHR)
         );
         intel_render_focus_log!(
-            "intel/render: 3dprimitive-result completed={} batch_entry={} pre3d={} pre_light_pc={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf_packet={} vs_packet={} ps_state_packet={} clip_packet={} raster_packet={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_pre_light_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} pixel_raster=not_proven acthd=0x{:08X} ipehr=0x{:08X}\n",
+            "3dprimitive-result completed={} batch_entry={} pre3d={} pre_light_pc={} post3d_light={} final_after_light={} post3d_heavy={} final={} vf_packet={} vs_packet={} ps_state_packet={} clip_packet={} raster_packet={} pre_draw_packet_markers={} clip_raster_packet_markers={} post_draw_pre_light_markers={} post_draw_light_markers={} post_draw_final_after_light_markers={} post_draw_heavy_markers={} post_draw_retire_markers={} pixel_raster=not_proven acthd=0x{:08X} ipehr=0x{:08X}\n",
             completed as u8,
             result_batch_entry == RCS_EXEC_RESULT_DRAW_BATCH_ENTRY,
             result0 == RCS_EXEC_RESULT_DRAW_PRE3D,
@@ -275,7 +275,7 @@ fn submit_warm_render_batch(
             let final_after_light_ok =
                 result_final_after_light == RCS_EXEC_RESULT_DRAW_FINAL_AFTER_LIGHT;
             intel_render_focus_log!(
-                "intel/render: {} postdraw-flush-spectrum-proof accepted={} variant={} heavy_flags=0x{:08X} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
+                "{} postdraw-flush-spectrum-proof accepted={} variant={} heavy_flags=0x{:08X} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
                 submit_name,
                 (result2 == RCS_EXEC_RESULT_DONE) as u8,
                 postdraw_variant.label(),
@@ -290,7 +290,7 @@ fn submit_warm_render_batch(
                 crate::intel::mmio_read(dev, RCS_RING_IPEHR)
             );
             intel_render_focus_log!(
-                "intel/render: {} pc-retire-triad-proof accepted={} variant={} light_flags=0x{:08X} light_postsync={} light_cs_stall={} before_light={} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
+                "{} pc-retire-triad-proof accepted={} variant={} light_flags=0x{:08X} light_postsync={} light_cs_stall={} before_light={} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
                 submit_name,
                 (pre_light_pc_ok && final_after_light_ok) as u8,
                 postdraw_variant.label(),
@@ -317,7 +317,7 @@ fn submit_warm_render_batch(
         let sc_extra = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA);
         let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
         intel_render_focus_log!(
-            "intel/render: {} stall-detail acthd_batch_off=0x{:08X} ipehr=0x{:08X} instdone_geom=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
+            "{} stall-detail acthd_batch_off=0x{:08X} ipehr=0x{:08X} instdone_geom=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
             crate::intel::mmio_read(dev, RCS_RING_IPEHR),
@@ -395,7 +395,7 @@ fn submit_warm_render_batch(
         let eu_row_waiting = row_eu00_ss0_done == 0 || row_eu00_ss1_done == 0;
         let cs_fault_seen = ipeir != 0 || eir != 0 || fault_valid != 0;
         crate::log!(
-            "intel/render: {} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
+            "{} gpgpu-stall-detail acthd_batch_off=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} instdone=0x{:08X} instpm=0x{:08X} fault_gen8=0x{:08X} fault_gen12=0x{:08X} fault_valid={} fault_type={} fault_srcid={} fault_engine={} fault8_data0=0x{:08X} fault8_data1=0x{:08X} fault12_data0=0x{:08X} fault12_data1=0x{:08X} error=0x{:08X} gfx_mode=0x{:08X} rcu_mode=0x{:08X} cs_debug1=0x{:08X} cs_debug2=0x{:08X} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} sampler_instdone=0x{:08X} row_instdone=0x{:08X}\n",
             submit_name,
             acthd_batch_off,
             ipeir,
@@ -425,7 +425,7 @@ fn submit_warm_render_batch(
             row_instdone,
         );
         crate::log!(
-            "intel/render: {} gpgpu-engine-snapshot acthd64=0x{:016X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X}\n",
+            "{} gpgpu-engine-snapshot acthd64=0x{:016X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X}\n",
             submit_name,
             acthd64,
             bbaddr64,
@@ -437,7 +437,7 @@ fn submit_warm_render_batch(
             nopid,
         );
         crate::log!(
-            "intel/render: {} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} disp_threads={} pf_count=0x{:08X} pf_threads={} pf_canonical={} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
+            "{} gpgpu-tdl-status thr_status0=0x{:08X} thr_status1=0x{:08X} disp_count=0x{:08X} disp_threads={} pf_count=0x{:08X} pf_threads={} pf_canonical={} pf_status0=0x{:08X} pf_status1=0x{:08X}\n",
             submit_name,
             tdl_thr_status0,
             tdl_thr_status1,
@@ -450,7 +450,7 @@ fn submit_warm_render_batch(
             tdl_thr_pf_status1,
         );
         crate::log!(
-            "intel/render: {} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked in the compute launch sequence; walker_header_seen plus TS/TDL deltas decide whether it reached walker and launched EU threads\"\n",
+            "{} gpgpu-middle-state walker_header_seen={} cs_parked_at_walker={} eu_row_waiting={} cs_fault_seen={} row_eu00_ss0_done={} row_eu00_ss1_done={} plain=\"command streamer is parked in the compute launch sequence; walker_header_seen plus TS/TDL deltas decide whether it reached walker and launched EU threads\"\n",
             submit_name,
             walker_header_seen as u8,
             walker_header_seen as u8,
@@ -460,7 +460,7 @@ fn submit_warm_render_batch(
             row_eu00_ss1_done,
         );
         crate::log!(
-            "intel/render: {} gpgpu-debug-units sc_dc0_done={} sc_dc1_done={} sc_dc2_done={} sc_gw0_done={} sc_gw1_done={} sc_gw2_done={} sampler_st_done={} sampler_vafe_done={} row_tdl_done={} row_eu00_ss0_done={} row_eu00_ss1_done={} note=public-instdone-debug-not-eu-grf-dump\n",
+            "{} gpgpu-debug-units sc_dc0_done={} sc_dc1_done={} sc_dc2_done={} sc_gw0_done={} sc_gw1_done={} sc_gw2_done={} sampler_st_done={} sampler_vafe_done={} row_tdl_done={} row_eu00_ss0_done={} row_eu00_ss1_done={} note=public-instdone-debug-not-eu-grf-dump\n",
             submit_name,
             ((sc_instdone >> 16) & 1),
             ((sc_instdone >> 17) & 1),
@@ -493,7 +493,7 @@ fn submit_warm_render_batch(
             read_rcs_cs_gpr(dev, 15),
         ];
         crate::log!(
-            "intel/render: {} rcs-cs-gpr base=0x{:05X} count={} gpr0=0x{:016X} gpr1=0x{:016X} gpr2=0x{:016X} gpr3=0x{:016X}\n",
+            "{} rcs-cs-gpr base=0x{:05X} count={} gpr0=0x{:016X} gpr1=0x{:016X} gpr2=0x{:016X} gpr3=0x{:016X}\n",
             submit_name,
             RCS_CS_GPR_BASE,
             RCS_CS_GPR_COUNT,
@@ -503,7 +503,7 @@ fn submit_warm_render_batch(
             gpr[3],
         );
         crate::log!(
-            "intel/render: {} rcs-cs-gpr gpr4=0x{:016X} gpr5=0x{:016X} gpr6=0x{:016X} gpr7=0x{:016X}\n",
+            "{} rcs-cs-gpr gpr4=0x{:016X} gpr5=0x{:016X} gpr6=0x{:016X} gpr7=0x{:016X}\n",
             submit_name,
             gpr[4],
             gpr[5],
@@ -511,7 +511,7 @@ fn submit_warm_render_batch(
             gpr[7],
         );
         crate::log!(
-            "intel/render: {} rcs-cs-gpr gpr8=0x{:016X} gpr9=0x{:016X} gpr10=0x{:016X} gpr11=0x{:016X}\n",
+            "{} rcs-cs-gpr gpr8=0x{:016X} gpr9=0x{:016X} gpr10=0x{:016X} gpr11=0x{:016X}\n",
             submit_name,
             gpr[8],
             gpr[9],
@@ -519,7 +519,7 @@ fn submit_warm_render_batch(
             gpr[11],
         );
         crate::log!(
-            "intel/render: {} rcs-cs-gpr gpr12=0x{:016X} gpr13=0x{:016X} gpr14=0x{:016X} gpr15=0x{:016X}\n",
+            "{} rcs-cs-gpr gpr12=0x{:016X} gpr13=0x{:016X} gpr14=0x{:016X} gpr15=0x{:016X}\n",
             submit_name,
             gpr[12],
             gpr[13],
@@ -577,7 +577,7 @@ fn submit_warm_render_batch(
             let any_change = after.any_changed_since(before);
             let triangle_change = after.triangle_points_changed_since(before);
             intel_render_focus_log!(
-                "intel/render: {} ps-rt-proof accepted={} ps_delta={} rt_any_change={} rt_triangle_change={} does_not_prove=display_scanout\n",
+                "{} ps-rt-proof accepted={} ps_delta={} rt_any_change={} rt_triangle_change={} does_not_prove=display_scanout\n",
                 submit_name,
                 (delta.ps_invocations > 0 && any_change) as u8,
                 delta.ps_invocations,
@@ -585,7 +585,7 @@ fn submit_warm_render_batch(
                 triangle_change as u8,
             );
             intel_render_focus_log!(
-                "intel/render: {} render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
+                "{} render-target completed={} any_change={} triangle_change={} apex={}=>{} centroid={}=>{} left={}=>{} right={}=>{} center={}=>{}\n",
                 submit_name,
                 completed as u8,
                 any_change as u8,
@@ -616,7 +616,7 @@ fn submit_warm_render_batch(
             _ => "post-draw-path",
         };
         let kicked = crate::intel::display::kick_primary_surface_scanout(label);
-        intel_render_verbose_log!("intel/render: {} scanout-kick={}\n", submit_name, kicked as u8);
+        intel_render_verbose_log!("{} scanout-kick={}\n", submit_name, kicked as u8);
         crate::intel::display::log_pipe_live_scanout_state(label);
     }
     completed
@@ -632,7 +632,7 @@ fn log_triangle_demo_stats(dev: crate::intel::Dev, completed: bool) {
     }
 
     intel_render_verbose_log!(
-        "intel/render: triangle-stats completed={} {}={} {}={} {}={}\n",
+        "triangle-stats completed={} {}={} {}={} {}={}\n",
         completed as u8,
         TRIANGLE_STATS_LOG[0].symbol(),
         values[0],
@@ -829,7 +829,7 @@ const SC_INSTDONE_EXTRA2_BITS: &[(u32, &str)] = &[
 ];
 
 fn log_not_done_units(submit_name: &str, label: &str, value: u32, bits: &[(u32, &'static str)]) {
-    intel_render_focus_log!("intel/render: {} {}=", submit_name, label);
+    intel_render_focus_log!("{} {}=", submit_name, label);
     let mut any = false;
     for &(mask, name) in bits {
         if (value & mask) == 0 {
@@ -920,7 +920,7 @@ fn log_backend_dispatch_contract(
     ) as u32;
 
     intel_render_verbose_log!(
-        "intel/render: probe-backend-decoded wm[stats={} force_thread_dispatch={}({}) edsc={}({})] ps_blend[writeable_rt={} blend_enable={} alpha_test={} alpha_to_coverage={}] wm_depth_stencil[depth_test={} depth_write={} stencil_test={} stencil_write={} double_sided_stencil={}]\n",
+        "probe-backend-decoded wm[stats={} force_thread_dispatch={}({}) edsc={}({})] ps_blend[writeable_rt={} blend_enable={} alpha_test={} alpha_to_coverage={}] wm_depth_stencil[depth_test={} depth_write={} stencil_test={} stencil_write={} double_sided_stencil={}]\n",
         wm_statistics_enable,
         wm_force_thread_dispatch,
         decode_wm_force_thread_dispatch_name(wm_force_thread_dispatch),
@@ -937,7 +937,7 @@ fn log_backend_dispatch_contract(
         wm_double_sided_stencil,
     );
     intel_render_verbose_log!(
-        "intel/render: probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
+        "probe-backend-gate wm_hz_op[active={} depth_clear={} depth_resolve={} hier_resolve={} stencil_clear={} stencil_resolve={} full_surface_clear={} partial_resolve={} scissor={} samples={} sample_mask=0x{:X}] ps_extra[valid={} attribute_enable={} per_sample={} has_uav={} kills={} computed_depth={} computes_stencil={}] dispatch_armed={} reason={}\n",
         wm_hz_op_active,
         wm_hz_depth_clear,
         wm_hz_depth_resolve,
@@ -1010,7 +1010,7 @@ fn log_mesa_spec_cross_compare(
     };
 
     intel_render_verbose_log!(
-        "intel/render: mesa-compare target=device=0x{:04X} note={} host_topology=trilist trueos_topology={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] host_sf[deref=1(PerPoly) statistics=1] trueos_sf[deref={}({}) statistics={}] host_prim_repl[count=0 mask=0x1] trueos_prim_repl[count={} mask=0x{:X}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
+        "mesa-compare target=device=0x{:04X} note={} host_topology=trilist trueos_topology={} host_sbe[read_offset=1 read_length=1 force_read_offset=1 force_read_length=1 num_sf_attrs=0] trueos_sbe[read_offset={} read_length={} force_read_offset={} force_read_length={} num_sf_attrs={}] host_clip[perspective_divide_disable=1] trueos_clip[perspective_divide_disable={} clip_mode={}({}) clip_enable={} statistics={}] host_sf[deref=1(PerPoly) statistics=1] trueos_sf[deref={}({}) statistics={}] host_prim_repl[count=0 mask=0x1] trueos_prim_repl[count={} mask=0x{:X}] host_raster[cull_mode=none sample_mask=0x1] trueos_raster[cull_mode={}({}) sample_mask=1]\n",
         warm.device_id,
         crate::intel::shader::triangle_pipeline_note(),
         primitive_topology_label(topology),
@@ -1033,7 +1033,7 @@ fn log_mesa_spec_cross_compare(
         decode_cull_mode_name(trueos_raster_cull_mode),
     );
     intel_render_verbose_log!(
-        "intel/render: mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[baked_vs_urb_output_len={} programmed_vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
+        "mesa-compare host_ps[vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatch=simd8 max_threads_per_psd=63] trueos_ps[vector_mask={} binding_table_entry_count={} push_constants={} dispatch={} max_threads_per_psd={}] host_ps_extra[attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0] trueos_ps_extra[attribute_enable={} per_sample={} computed_depth={} computes_stencil={}] spec_pre_raster[baked_vs_urb_output_len={} programmed_vs_urb_output_len={} sbe_read_offset={} sbe_read_length={}]\n",
         trueos_ps_vector_mask,
         trueos_ps_binding_table_entry_count,
         trueos_ps_push_constants,
@@ -1152,7 +1152,7 @@ fn log_triangle_stage_stats(
     if let Some(before) = before {
         let delta = stats.delta_since(before);
         intel_render_verbose_log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
+            "{} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
             submit_name,
             label,
             completed as u8,
@@ -1187,7 +1187,7 @@ fn log_triangle_stage_stats(
         );
     } else {
         intel_render_verbose_log!(
-            "intel/render: {} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
+            "{} stage-stats label={} completed={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
             submit_name,
             label,
             completed as u8,
@@ -1269,7 +1269,7 @@ fn log_triangle_stage_diagnosis(
             "late-backend-stall"
         };
     intel_render_focus_log!(
-        "intel/render: {} stage-diagnosis completed={} verdict={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
+        "{} stage-diagnosis completed={} verdict={} delta_vs={} delta_hs={} delta_ds={} delta_gs={} delta_gs_prim={} delta_cl={} delta_cl_prim={} delta_ps={} delta_cps={} delta_ps_depth={} delta_so0={} delta_so_write0={}\n",
         submit_name,
         completed as u8,
         verdict,
@@ -1330,7 +1330,7 @@ fn log_triangle_named_proofs(
     );
 
     intel_render_focus_log!(
-        "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} vf_vue_clip_frontier={} does_not_prove=vs_or_pixels\n",
+        "{} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} vf_vue_clip_frontier={} does_not_prove=vs_or_pixels\n",
         submit_name,
         vf_accept as u8,
         delta.ia_vertices,
@@ -1340,7 +1340,7 @@ fn log_triangle_named_proofs(
         vf_vue_vf_frontier_accept as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} vs-proof accepted={} vs_delta={} post_vs=0x{:08X} post_vs_marker={} vf_vue_clip_frontier={} does_not_prove=clip_raster_or_pixels\n",
+        "{} vs-proof accepted={} vs_delta={} post_vs=0x{:08X} post_vs_marker={} vf_vue_clip_frontier={} does_not_prove=clip_raster_or_pixels\n",
         submit_name,
         vs_accept as u8,
         delta.vs_invocations,
@@ -1349,7 +1349,7 @@ fn log_triangle_named_proofs(
         vf_vue_clip_frontier_accept as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
+        "{} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
         submit_name,
         clip_raster_accept as u8,
         delta.cl_invocations,
@@ -1359,14 +1359,14 @@ fn log_triangle_named_proofs(
         (clip_marker_ok && raster_marker_ok) as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} clip-counter-proof accepted={} cl_delta={} cl_prim_delta={} does_not_prove=raster_samples_or_ps\n",
+        "{} clip-counter-proof accepted={} cl_delta={} cl_prim_delta={} does_not_prove=raster_samples_or_ps\n",
         submit_name,
         clip_accept as u8,
         delta.cl_invocations,
         delta.cl_primitives,
     );
     intel_render_focus_log!(
-        "intel/render: {} raster-packet-proof accepted={} post_clip=0x{:08X} post_raster=0x{:08X} clip_counter={} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} does_not_prove=fragment_samples_or_ps\n",
+        "{} raster-packet-proof accepted={} post_clip=0x{:08X} post_raster=0x{:08X} clip_counter={} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} does_not_prove=fragment_samples_or_ps\n",
         submit_name,
         raster_packet_accept as u8,
         post_clip_marker,
@@ -1386,7 +1386,7 @@ fn log_triangle_named_proofs(
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
         record_fragment_boundary_probe(candidate_ready, fragment_observed);
         intel_render_focus_log!(
-            "intel/render: {} fragment-candidate-proof accepted={} candidate_ready={} oversized=1 clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
+            "{} fragment-candidate-proof accepted={} candidate_ready={} oversized=1 clip_counter={} raster_packet={} ps_state_marker={} fragment_observed={} ps_delta={} cps_delta={} ps_depth_delta={} observable=no_dedicated_fragment_counter_yet does_not_prove=rt_write\n",
             submit_name,
             candidate_ready as u8,
             candidate_ready as u8,
@@ -1400,7 +1400,7 @@ fn log_triangle_named_proofs(
         );
     }
     intel_render_focus_log!(
-        "intel/render: {} ps-launch-frontier-proof accepted={} input_ready={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} sc_instdone=0x{:08X} does_not_prove=rt_write\n",
+        "{} ps-launch-frontier-proof accepted={} input_ready={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} sc_instdone=0x{:08X} does_not_prove=rt_write\n",
         submit_name,
         ps_accept as u8,
         ps_launch_input_ready as u8,
@@ -1414,7 +1414,7 @@ fn log_triangle_named_proofs(
     );
     if submit_name == "ps-launch-big-primitive" {
         intel_render_focus_log!(
-            "intel/render: ps-launch-big-primitive-proof accepted={} input_ready={} oversized=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-launch-big-primitive-proof accepted={} input_ready={} oversized=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
@@ -1427,7 +1427,7 @@ fn log_triangle_named_proofs(
     }
     if submit_name == "ps-bt1-big-primitive" {
         intel_render_focus_log!(
-            "intel/render: ps-bt1-big-primitive-proof accepted={} input_ready={} oversized=1 ps_bt_count=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-bt1-big-primitive-proof accepted={} input_ready={} oversized=1 ps_bt_count=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
@@ -1440,7 +1440,7 @@ fn log_triangle_named_proofs(
     }
     if submit_name == "ps-bt0-scratch-rt" {
         intel_render_focus_log!(
-            "intel/render: ps-bt0-scratch-rt-frontier-proof accepted={} input_ready={} oversized=1 ps_bt_count=0 scratch_rt=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=scratch_rt_write\n",
+            "ps-bt0-scratch-rt-frontier-proof accepted={} input_ready={} oversized=1 ps_bt_count=0 scratch_rt=1 ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=scratch_rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
@@ -1453,7 +1453,7 @@ fn log_triangle_named_proofs(
     }
     if submit_name == "ps-wm-normal-big-primitive" {
         intel_render_focus_log!(
-            "intel/render: ps-wm-normal-big-primitive-proof accepted={} input_ready={} oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-wm-normal-big-primitive-proof accepted={} input_ready={} oversized=1 wm_force=normal dispatch_qualifier=writeable_rt ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
@@ -1466,7 +1466,7 @@ fn log_triangle_named_proofs(
     }
     if submit_name == "ps-dispatch-all-big-primitive" {
         intel_render_focus_log!(
-            "intel/render: ps-dispatch-width-proof accepted={} input_ready={} oversized=1 dispatch=all ksp_slots=all-same ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-dispatch-width-proof accepted={} input_ready={} oversized=1 dispatch=all ksp_slots=all-same ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             ps_state_marker_ok as u8,
@@ -1485,7 +1485,7 @@ fn log_triangle_named_proofs(
     };
     if let Some(slot) = dispatch_slot {
         intel_render_focus_log!(
-            "intel/render: ps-dispatch-slot-proof accepted={} input_ready={} oversized=1 dispatch_slot={} ksp_slot={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-dispatch-slot-proof accepted={} input_ready={} oversized=1 dispatch_slot={} ksp_slot={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             slot,
@@ -1508,7 +1508,7 @@ fn log_triangle_named_proofs(
     };
     if let Some(payload_variant) = payload_variant {
         intel_render_focus_log!(
-            "intel/render: ps-payload-proof accepted={} input_ready={} oversized=1 payload_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-payload-proof accepted={} input_ready={} oversized=1 payload_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             payload_variant,
@@ -1530,7 +1530,7 @@ fn log_triangle_named_proofs(
     };
     if let Some(grf_variant) = grf_variant {
         intel_render_focus_log!(
-            "intel/render: ps-grf-proof accepted={} input_ready={} oversized=1 grf_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
+            "ps-grf-proof accepted={} input_ready={} oversized=1 grf_variant={} ps_state_marker={} raster_packet={} clip_counter={} ps_delta={} cps_delta={} ps_depth_delta={} does_not_prove=rt_write\n",
             ps_accept as u8,
             ps_launch_input_ready as u8,
             grf_variant,
@@ -1543,7 +1543,7 @@ fn log_triangle_named_proofs(
         );
     }
     intel_render_focus_log!(
-        "intel/render: {} ps-dispatch-proof accepted={} ps_delta={} cps_delta={} ps_depth_delta={} ps_state_marker={} completed={} does_not_prove=rt_write_or_display\n",
+        "{} ps-dispatch-proof accepted={} ps_delta={} cps_delta={} ps_depth_delta={} ps_state_marker={} completed={} does_not_prove=rt_write_or_display\n",
         submit_name,
         ps_accept as u8,
         delta.ps_invocations,
@@ -1589,7 +1589,7 @@ fn maybe_soft_accept_streamout_submit(
             delta.vs_invocations == 0 && (delta.ia_vertices > 0 || delta.ia_primitives > 0)
         };
     intel_render_focus_log!(
-        "intel/render: {} soft-accept accepted={} reason={} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_so0={} delta_so_write0={} min_streamout_bytes={}\n",
+        "{} soft-accept accepted={} reason={} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} delta_ia_vtx={} delta_ia_prim={} delta_vs={} delta_so0={} delta_so_write0={} min_streamout_bytes={}\n",
         submit_name,
         accept as u8,
         expected_reason,
@@ -1699,7 +1699,7 @@ fn log_triangle_stage_frontier(
         "draw_retired"
     };
     intel_render_focus_log!(
-        "intel/render: {} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_before_light={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} packet_marker_semantics=not_pixel_coverage note={}\n",
+        "{} stage-frontier completed={} pre_raster_packets={} ps_state_packet={} clip_raster_packets={} post_draw_before_light={} post_draw_light={} post_draw_final_after_light={} post_draw_heavy={} post_draw_retire={} counter_frontier={} packet_marker_semantics=not_pixel_coverage note={}\n",
         submit_name,
         completed as u8,
         pre_raster_packets,
@@ -1738,7 +1738,7 @@ fn log_streamout_proof_result(
         match experiment {
             StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot1 => {
                 intel_render_focus_log!(
-                    "intel/render: {} v{} experiment={} completed={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "{} v{} experiment={} completed={} raw=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
                     experiment.label(),
@@ -1758,7 +1758,7 @@ fn log_streamout_proof_result(
             | StreamoutProofExperiment::HeaderAndPositionSlots01
             | StreamoutProofExperiment::PointSizeSlot0PositionSlot1 => {
                 intel_render_focus_log!(
-                    "intel/render: {} v{} experiment={} completed={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    "{} v{} experiment={} completed={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",
                     submit_name,
                     idx,
                     experiment.label(),
@@ -1846,7 +1846,7 @@ fn recover_render_engine_after_nonretired_submit(
     let mi_mode_pre = crate::intel::mmio_read(dev, RCS_RING_MI_MODE);
     let acthd_pre = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
     intel_render_focus_log!(
-        "intel/render: {} recovery begin execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X}\n",
+        "{} recovery begin execlist_lo=0x{:08X} mi_mode=0x{:08X} acthd=0x{:08X}\n",
         submit_name,
         el_pre,
         mi_mode_pre,
@@ -1889,7 +1889,7 @@ fn recover_render_engine_after_nonretired_submit(
     let forcewake_ok = forcewake_render_acquire(warm);
 
     intel_render_focus_log!(
-        "intel/render: {} recovery end gdrst=0x{:08X} execlist_lo=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} forcewake_ok={}\n",
+        "{} recovery end gdrst=0x{:08X} execlist_lo=0x{:08X} mi_mode=0x{:08X} mode=0x{:08X} forcewake_ok={}\n",
         submit_name,
         crate::intel::mmio_read(dev, GDRST),
         crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
@@ -2009,7 +2009,7 @@ fn log_lrc_ring_image(warm: RenderWarmState, submit_name: &str) {
         unsafe { core::slice::from_raw_parts(warm.context_virt as *const u32, total_dwords) };
     let state = &dwords[LRC_STATE_OFFSET_DWORDS..];
     crate::log!(
-        "intel/render: {} lrc-ring-image ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X}\n",
+        "{} lrc-ring-image ctx_ctl=0x{:08X} head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X}\n",
         submit_name,
         state[LRC_CONTEXT_CONTROL_VALUE_DW],
         state[LRC_RING_HEAD_VALUE_DW],

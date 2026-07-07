@@ -80,7 +80,9 @@ pub fn probe_dma_latency() -> u64 {
 
     // Generate a short click (1 ms of 1 kHz sine)
     let click = hda::generate_sine(CLICK_FREQ_HZ, 2, 16000);
-    if click.is_empty() { return 0; }
+    if click.is_empty() {
+        return 0;
+    }
 
     // Stop any current playback
     let _ = hda::stop();
@@ -117,7 +119,7 @@ pub fn probe_dma_latency() -> u64 {
         let now = crate::gui::engine::now_us();
         if now - start_us > timeout_us {
             let _ = hda::stop();
-            log::info!("[SYNC] DMA probe timeout (200ms)");
+            log::info!("sync: DMA probe timeout (200ms)");
             return 0;
         }
 
@@ -126,8 +128,12 @@ pub fn probe_dma_latency() -> u64 {
             let latency = now - start_us;
             let _ = hda::stop();
             DMA_LATENCY_US.store(latency, Ordering::SeqCst);
-            log::info!("[SYNC] DMA probe: click at byte {} reached after {} µs ({} ms)",
-                click_byte_offset, latency, latency / 1000);
+            log::info!(
+                "sync: DMA probe: click at byte {} reached after {} µs ({} ms)",
+                click_byte_offset,
+                latency,
+                latency / 1000
+            );
             return latency;
         }
 
@@ -144,7 +150,7 @@ pub fn probe_dma_latency() -> u64 {
 
 /// Beat interval in microseconds
 fn beat_interval_us() -> u64 {
-    60_000_000 / METRONOME_BPM as u64  // 120 BPM → 500_000 µs
+    60_000_000 / METRONOME_BPM as u64 // 120 BPM → 500_000 µs
 }
 
 /// Generate a short click suitable for one metronome beat.
@@ -174,8 +180,11 @@ pub fn start_session() {
     SESSION_START_US.store(now, Ordering::SeqCst);
     LAST_BEAT_US.store(0, Ordering::SeqCst);
 
-    log::info!("[SYNC] Metronome calibration started ({} BPM, {} taps needed)",
-        METRONOME_BPM, TAP_SAMPLES_NEEDED);
+    log::info!(
+        "sync: Metronome calibration started ({} BPM, {} taps needed)",
+        METRONOME_BPM,
+        TAP_SAMPLES_NEEDED
+    );
 
     // Play the first click immediately
     play_click();
@@ -187,7 +196,7 @@ pub fn start_session() {
 pub fn cancel_session() {
     SYNC_ACTIVE.store(false, Ordering::SeqCst);
     let _ = crate::hda::stop();
-    log::info!("[SYNC] Calibration cancelled");
+    log::info!("sync: Calibration cancelled");
 }
 
 /// Must be called each frame while a session is active.
@@ -249,8 +258,13 @@ pub fn record_tap(tap_us: u64) {
     }
 
     let count = TAP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    log::info!("[SYNC] Tap {}/{}: delta = {} µs ({} ms)",
-        count, TAP_SAMPLES_NEEDED, delta_us, delta_us / 1000);
+    log::info!(
+        "sync: Tap {}/{}: delta = {} µs ({} ms)",
+        count,
+        TAP_SAMPLES_NEEDED,
+        delta_us,
+        delta_us / 1000
+    );
 
     // Check if done
     if count as usize >= TAP_SAMPLES_NEEDED {
@@ -278,7 +292,7 @@ fn finish_session() {
     };
 
     if deltas.is_empty() {
-        log::info!("[SYNC] No taps recorded");
+        log::info!("sync: No taps recorded");
         return;
     }
 
@@ -297,12 +311,14 @@ fn finish_session() {
     let mean_us = sum / sorted.len() as i64;
 
     // Standard deviation for confidence (integer approximation, skip sqrt in no_std)
-    let variance_us2: i64 = sorted.iter()
+    let variance_us2: i64 = sorted
+        .iter()
         .map(|&d| {
             let diff = d - mean_us;
             diff * diff
         })
-        .sum::<i64>() / sorted.len() as i64;
+        .sum::<i64>()
+        / sorted.len() as i64;
     // Approximate stddev via integer sqrt (Newton's method)
     let stddev_us = isqrt_i64(variance_us2);
     let stddev_ms = stddev_us / 1000;
@@ -311,23 +327,24 @@ fn finish_session() {
     // This is approximate; the user will see the final value and can adjust.
     let human_reaction_us: i64 = 80_000;
     let audio_latency_us = median_us - human_reaction_us;
-    let offset_ms = (audio_latency_us / 1000).clamp(-MAX_OFFSET_MS as i64, MAX_OFFSET_MS as i64) as i32;
+    let offset_ms =
+        (audio_latency_us / 1000).clamp(-MAX_OFFSET_MS as i64, MAX_OFFSET_MS as i64) as i32;
 
     COMPUTED_OFFSET_MS.store(offset_ms, Ordering::SeqCst);
     RESULT_READY.store(true, Ordering::SeqCst);
 
-    log::info!("[SYNC] ---- Calibration Results ----");
-    log::info!("[SYNC]   Taps collected: {}", sorted.len());
-    log::info!("[SYNC]   Median tap delta: {} ms", median_us / 1000);
-    log::info!("[SYNC]   Mean tap delta:   {} ms", mean_us / 1000);
-    log::info!("[SYNC]   Std deviation:    {} ms", stddev_ms);
-    log::info!("[SYNC]   Human reaction:  -{} ms (subtracted)", human_reaction_us / 1000);
-    log::info!("[SYNC]   Computed A/V offset: {} ms", offset_ms);
+    log::info!("sync: ---- Calibration Results ----");
+    log::info!("sync:   Taps collected: {}", sorted.len());
+    log::info!("sync:   Median tap delta: {} ms", median_us / 1000);
+    log::info!("sync:   Mean tap delta:   {} ms", mean_us / 1000);
+    log::info!("sync:   Std deviation:    {} ms", stddev_ms);
+    log::info!("sync:   Human reaction:  -{} ms (subtracted)", human_reaction_us / 1000);
+    log::info!("sync:   Computed A/V offset: {} ms", offset_ms);
 
     // DMA latency for reference
     let dma_us = DMA_LATENCY_US.load(Ordering::SeqCst);
     if dma_us > 0 {
-        log::info!("[SYNC]   DMA pipeline:    {} ms (measured)", dma_us / 1000);
+        log::info!("sync:   DMA pipeline:    {} ms (measured)", dma_us / 1000);
     }
 }
 
@@ -367,7 +384,9 @@ pub fn dma_latency_us() -> u64 {
 
 /// Integer square root (Newton's method). Returns floor(√n) for n ≥ 0.
 fn isqrt_i64(n: i64) -> i64 {
-    if n <= 0 { return 0; }
+    if n <= 0 {
+        return 0;
+    }
     let mut x = n;
     let mut y = (x + 1) / 2;
     while y < x {

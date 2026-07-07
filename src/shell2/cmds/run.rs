@@ -401,6 +401,8 @@ fn classify_blueprint_memory(
 ) -> BlueprintMemoryClass {
     let audio_player_signal = archive_has(archive, "scope-tui")
         || archive_has(archive, "scope_tui")
+        || archive_has(archive, "aud-player-scope-tui")
+        || archive_has(archive, "aud_player_scope_tui")
         || import_name_has(imports, "trueos_cabi_audio_")
         || import_name_has(imports, "audio_open_playback")
         || import_name_has(imports, "audio_write_i16");

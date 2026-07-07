@@ -79,7 +79,7 @@ pub fn init() -> Result<(), &'static str> {
     // Create player
     *PLAYER.lock() = Some(PatternPlayer::new());
 
-    log::info!("[AUDIO] TrustSynth engine + pattern bank initialized");
+    log::info!("audio: TrustSynth engine + pattern bank initialized");
     Ok(())
 }
 
