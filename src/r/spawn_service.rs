@@ -336,30 +336,27 @@ async fn font_tessel_boot_probe_task() {
         pipe.submit_seq
     );
 
-    let mut clip_field_isolate_completed = None;
-    let mut clip_field_isolate_two_completed = None;
-    let mut clip_field_all_completed = None;
     let mut clip_field_vf_vue_isolate_completed = None;
-    let mut clip_field_vf_vue_two_completed = None;
-    let mut clip_field_vf_vue_all_completed = None;
-    let mut clip_counter_sweep_completed = None;
-    let mut clip_counter_vf_vue_completed = None;
+    let clip_field_vf_vue_two_completed = None;
+    let clip_field_vf_vue_all_completed = None;
     let mut clip_accept_one = false;
-    let mut clip_accept_two = false;
-    let mut clip_accept_all = false;
-    let mut clip_accept_big = false;
+    let clip_accept_two = false;
+    let clip_accept_all = false;
     let mut clip_accept_one_route = "none";
-    let mut clip_accept_two_route = "none";
-    let mut clip_accept_all_route = "none";
-    let mut clip_accept_big_route = "none";
+    let clip_accept_two_route = "none";
+    let clip_accept_all_route = "none";
     let mut candidate_accept_one = false;
-    let mut candidate_accept_two = false;
-    let mut candidate_accept_all = false;
-    let mut candidate_accept_big = false;
+    let candidate_accept_two = false;
+    let candidate_accept_all = false;
     let mut candidate_accept_one_route = "none";
-    let mut candidate_accept_two_route = "none";
-    let mut candidate_accept_all_route = "none";
-    let mut candidate_accept_big_route = "none";
+    let candidate_accept_two_route = "none";
+    let candidate_accept_all_route = "none";
+    let mut vs_candidate_accept_one = false;
+    let vs_candidate_accept_two = false;
+    let vs_candidate_accept_all = false;
+    let mut vs_candidate_accept_one_route = "none";
+    let vs_candidate_accept_two_route = "none";
+    let vs_candidate_accept_all_route = "none";
 
     match crate::graphics::font::font_tessellated_scratch_triangle() {
         Some(triangle) => {
@@ -411,126 +408,8 @@ async fn font_tessel_boot_probe_task() {
                 isolated[2][1],
                 isolated[2][2]
             );
-            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated) {
-                Ok(render) => {
-                    clip_field_isolate_completed = Some(render.completed);
-                    if render_clip_accepted(&render) {
-                        clip_accept_one = true;
-                        clip_accept_one_route = "screen-space-default";
-                    }
-                    if render_fragment_candidate_ready(&render) {
-                        candidate_accept_one = true;
-                        candidate_accept_one_route = "screen-space-default";
-                    }
-                    crate::log!(
-                        "font-boot-tessel-render-font-field-isolate-result: variant={} submit={} target={} completed={}\n",
-                        render.variant,
-                        render.submit_name,
-                        render.target,
-                        render.completed as u8
-                    );
-                }
-                Err(err) => crate::log!(
-                    "font-boot-tessel-render-font-field-isolate-result: status=skipped reason={}\n",
-                    err
-                ),
-            }
-            let isolated_two = field.isolated_scratch_two_triangles();
             crate::log!(
-                "font-boot-tessel-render-font-field-isolate-two: source=first-two-triangles upload_vertices=6 upload_triangles=2 t0=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2}) t1=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})\n",
-                isolated_two[0][0],
-                isolated_two[0][1],
-                isolated_two[0][2],
-                isolated_two[1][0],
-                isolated_two[1][1],
-                isolated_two[1][2],
-                isolated_two[2][0],
-                isolated_two[2][1],
-                isolated_two[2][2],
-                isolated_two[3][0],
-                isolated_two[3][1],
-                isolated_two[3][2],
-                isolated_two[4][0],
-                isolated_two[4][1],
-                isolated_two[4][2],
-                isolated_two[5][0],
-                isolated_two[5][1],
-                isolated_two[5][2]
-            );
-            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_two) {
-                Ok(render) => {
-                    clip_field_isolate_two_completed = Some(render.completed);
-                    if render_clip_accepted(&render) {
-                        clip_accept_two = true;
-                        clip_accept_two_route = "clip-normal";
-                    }
-                    if render_fragment_candidate_ready(&render) {
-                        candidate_accept_two = true;
-                        candidate_accept_two_route = "clip-normal";
-                    }
-                    crate::log!(
-                        "font-boot-tessel-render-font-field-isolate-two-result: variant={} submit={} target={} completed={}\n",
-                        render.variant,
-                        render.submit_name,
-                        render.target,
-                        render.completed as u8
-                    );
-                }
-                Err(err) => crate::log!(
-                    "font-boot-tessel-render-font-field-isolate-two-result: status=skipped reason={}\n",
-                    err
-                ),
-            }
-            let isolated_all = field.isolated_scratch_all_triangles();
-            crate::log!(
-                "font-boot-tessel-render-font-field-isolate-all: source=full-field upload_vertices={} upload_triangles={} first=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2}) last=({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})/({:.2},{:.2},{:.2})\n",
-                isolated_all.len(),
-                isolated_all.len() / 3,
-                isolated_all[0][0],
-                isolated_all[0][1],
-                isolated_all[0][2],
-                isolated_all[1][0],
-                isolated_all[1][1],
-                isolated_all[1][2],
-                isolated_all[2][0],
-                isolated_all[2][1],
-                isolated_all[2][2],
-                isolated_all[isolated_all.len() - 3][0],
-                isolated_all[isolated_all.len() - 3][1],
-                isolated_all[isolated_all.len() - 3][2],
-                isolated_all[isolated_all.len() - 2][0],
-                isolated_all[isolated_all.len() - 2][1],
-                isolated_all[isolated_all.len() - 2][2],
-                isolated_all[isolated_all.len() - 1][0],
-                isolated_all[isolated_all.len() - 1][1],
-                isolated_all[isolated_all.len() - 1][2]
-            );
-            match crate::intel::render::submit_render_font_clip_field_isolate_probe(isolated_all) {
-                Ok(render) => {
-                    clip_field_all_completed = Some(render.completed);
-                    if render_clip_accepted(&render) {
-                        clip_accept_all = true;
-                        clip_accept_all_route = "clip-sf-sync";
-                    }
-                    if render_fragment_candidate_ready(&render) {
-                        candidate_accept_all = true;
-                        candidate_accept_all_route = "clip-sf-sync";
-                    }
-                    crate::log!(
-                        "font-boot-tessel-render-font-field-isolate-all-result: variant={} submit={} target={} completed={}\n",
-                        render.variant,
-                        render.submit_name,
-                        render.target,
-                        render.completed as u8
-                    );
-                }
-                Err(err) => crate::log!(
-                    "font-boot-tessel-render-font-field-isolate-all-result: status=skipped reason={}\n",
-                    err
-                ),
-            }
-            crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-isolate: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=clip-acceptance\n"
+                "font-boot-tessel-render-font-field-vf-vue-isolate: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=ps-launch-eot-raster-wm-oa\n"
             );
             match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated) {
                 Ok(render) => {
@@ -542,6 +421,10 @@ async fn font_tessel_boot_probe_task() {
                     if render_fragment_candidate_ready(&render) {
                         candidate_accept_one = true;
                         candidate_accept_one_route = "vf-vue";
+                    }
+                    if render_vs_fragment_candidate_ready(&render) {
+                        vs_candidate_accept_one = true;
+                        vs_candidate_accept_one_route = "vf-vue";
                     }
                     crate::log!(
                         "font-boot-tessel-render-font-field-vf-vue-isolate-result: variant={} submit={} target={} completed={}\n",
@@ -557,134 +440,26 @@ async fn font_tessel_boot_probe_task() {
                 ),
             }
             crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-two: source=first-two-triangles upload_vertices=6 upload_triangles=2 path=vf-synthesized-vue goal=clip-acceptance\n"
+                "font-boot-tessel-render-font-field-vf-vue-two-result: status=skipped reason=single-ps-launch-iteration\n"
             );
-            match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated_two) {
-                Ok(render) => {
-                    clip_field_vf_vue_two_completed = Some(render.completed);
-                    if render_clip_accepted(&render) {
-                        clip_accept_two = true;
-                        clip_accept_two_route = "vf-vue";
-                    }
-                    if render_fragment_candidate_ready(&render) {
-                        candidate_accept_two = true;
-                        candidate_accept_two_route = "vf-vue";
-                    }
-                    crate::log!(
-                        "font-boot-tessel-render-font-field-vf-vue-two-result: variant={} submit={} target={} completed={}\n",
-                        render.variant,
-                        render.submit_name,
-                        render.target,
-                        render.completed as u8
-                    );
-                }
-                Err(err) => crate::log!(
-                    "font-boot-tessel-render-font-field-vf-vue-two-result: status=skipped reason={}\n",
-                    err
-                ),
-            }
             crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-all: source=full-field upload_vertices={} upload_triangles={} path=vf-synthesized-vue goal=clip-acceptance\n",
-                isolated_all.len(),
-                isolated_all.len() / 3
+                "font-boot-tessel-render-font-field-vf-vue-all-result: status=skipped reason=single-ps-launch-iteration\n"
             );
-            match crate::intel::render::submit_render_font_clip_field_vf_vue_probe(isolated_all) {
-                Ok(render) => {
-                    clip_field_vf_vue_all_completed = Some(render.completed);
-                    if render_clip_accepted(&render) {
-                        clip_accept_all = true;
-                        clip_accept_all_route = "vf-vue";
-                    }
-                    if render_fragment_candidate_ready(&render) {
-                        candidate_accept_all = true;
-                        candidate_accept_all_route = "vf-vue";
-                    }
-                    crate::log!(
-                        "font-boot-tessel-render-font-field-vf-vue-all-result: variant={} submit={} target={} completed={}\n",
-                        render.variant,
-                        render.submit_name,
-                        render.target,
-                        render.completed as u8
-                    );
-                }
-                Err(err) => crate::log!(
-                    "font-boot-tessel-render-font-field-vf-vue-all-result: status=skipped reason={}\n",
-                    err
-                ),
-            }
         }
         None => crate::log!(
             "font-boot-tessel-render-font: probe=font-triangle-scratch status=skipped reason=no-font-triangle\n"
         ),
     }
 
+    let all_clip_counts_ready = clip_accept_one;
     crate::log!(
-        "font-boot-tessel-render-clip-counter-sweep: source=big-inbounds-screen-space upload_vertices=3 target=scratch path=known-vs viewport=default-scratch-8x8 scissor=full-scratch sample_mask=normal cull=none goal=clip-counter-or-pixel-proof\n"
-    );
-    match crate::intel::render::submit_render_font_clip_counter_sweep_probe() {
-        Ok(render) => {
-            clip_counter_sweep_completed = Some(render.completed);
-            if render_clip_accepted(&render) {
-                clip_accept_big = true;
-                clip_accept_big_route = "known-vs-big-inbounds";
-            }
-            if render_fragment_candidate_ready(&render) {
-                candidate_accept_big = true;
-                candidate_accept_big_route = "known-vs-big-inbounds";
-            }
-            crate::log!(
-                "font-boot-tessel-render-clip-counter-sweep-result: variant={} submit={} target={} completed={}\n",
-                render.variant,
-                render.submit_name,
-                render.target,
-                render.completed as u8
-            );
-        }
-        Err(err) => crate::log!(
-            "font-boot-tessel-render-clip-counter-sweep-result: status=skipped reason={}\n",
-            err
-        ),
-    }
-    crate::log!(
-        "font-boot-tessel-render-clip-counter-vf-vue: source=big-inbounds-screen-space upload_vertices=3 target=scratch path=vf-synthesized-vue vs=disabled viewport=default-scratch-8x8 goal=separate-vs-export-from-clip\n"
-    );
-    match crate::intel::render::submit_render_font_clip_counter_vf_vue_probe() {
-        Ok(render) => {
-            clip_counter_vf_vue_completed = Some(render.completed);
-            if render_clip_accepted(&render) {
-                clip_accept_big = true;
-                clip_accept_big_route = "vf-vue-big-inbounds";
-            }
-            if render_fragment_candidate_ready(&render) {
-                candidate_accept_big = true;
-                candidate_accept_big_route = "vf-vue-big-inbounds";
-            }
-            crate::log!(
-                "font-boot-tessel-render-clip-counter-vf-vue-result: variant={} submit={} target={} completed={}\n",
-                render.variant,
-                render.submit_name,
-                render.target,
-                render.completed as u8
-            );
-        }
-        Err(err) => crate::log!(
-            "font-boot-tessel-render-clip-counter-vf-vue-result: status=skipped reason={}\n",
-            err
-        ),
-    }
-
-    let all_clip_counts_ready =
-        clip_accept_one && clip_accept_two && clip_accept_all && clip_accept_big;
-    crate::log!(
-        "font-boot-tessel-clip-acceptance: one={} route_one={} two={} route_two={} all={} route_all={} big={} route_big={} all_counts={} gate={}\n",
+        "font-boot-tessel-clip-acceptance: one={} route_one={} two={} route_two={} all={} route_all={} all_counts={} gate={}\n",
         clip_accept_one as u8,
         clip_accept_one_route,
         clip_accept_two as u8,
         clip_accept_two_route,
         clip_accept_all as u8,
         clip_accept_all_route,
-        clip_accept_big as u8,
-        clip_accept_big_route,
         all_clip_counts_ready as u8,
         if all_clip_counts_ready {
             "ready"
@@ -692,20 +467,15 @@ async fn font_tessel_boot_probe_task() {
             "wait"
         }
     );
-    let all_candidate_counts_ready = candidate_accept_one
-        && candidate_accept_two
-        && candidate_accept_all
-        && candidate_accept_big;
+    let all_candidate_counts_ready = candidate_accept_one;
     crate::log!(
-        "font-boot-tessel-final-candidate: one={} route_one={} two={} route_two={} all={} route_all={} big={} route_big={} all_counts={} gate={} markers=ps_state+raster_packet+clip_counter+no_ps\n",
+        "font-boot-tessel-final-candidate: one={} route_one={} two={} route_two={} all={} route_all={} all_counts={} gate={} markers=ps_state+raster_packet+clip_counter+no_ps\n",
         candidate_accept_one as u8,
         candidate_accept_one_route,
         candidate_accept_two as u8,
         candidate_accept_two_route,
         candidate_accept_all as u8,
         candidate_accept_all_route,
-        candidate_accept_big as u8,
-        candidate_accept_big_route,
         all_candidate_counts_ready as u8,
         if all_candidate_counts_ready {
             "ready"
@@ -713,12 +483,31 @@ async fn font_tessel_boot_probe_task() {
             "wait"
         }
     );
+    let all_vs_candidate_counts_ready = vs_candidate_accept_one;
     crate::log!(
-        "font-boot-tessel-gate: clip={} final_candidate={} next={}\n",
+        "font-boot-tessel-vs-final-candidate: one={} route_one={} two={} route_two={} all={} route_all={} all_counts={} gate={} markers=vs+ps_state+raster_packet+clip_counter+no_ps\n",
+        vs_candidate_accept_one as u8,
+        vs_candidate_accept_one_route,
+        vs_candidate_accept_two as u8,
+        vs_candidate_accept_two_route,
+        vs_candidate_accept_all as u8,
+        vs_candidate_accept_all_route,
+        all_vs_candidate_counts_ready as u8,
+        if all_vs_candidate_counts_ready {
+            "ready"
+        } else {
+            "wait"
+        }
+    );
+    crate::log!(
+        "font-boot-tessel-gate: clip={} final_candidate={} vs_final_candidate={} next={}\n",
         all_clip_counts_ready as u8,
         all_candidate_counts_ready as u8,
-        if all_candidate_counts_ready {
+        all_vs_candidate_counts_ready as u8,
+        if all_vs_candidate_counts_ready {
             "ps-launch"
+        } else if all_candidate_counts_ready {
+            "fix-vs-to-clip"
         } else {
             "finish-frontier-candidate"
         }
@@ -726,16 +515,12 @@ async fn font_tessel_boot_probe_task() {
 
     let frontier = crate::intel::render::latest_render_frontier_summary();
     crate::log!(
-        "font-boot-tessel-verdict: clip_field_isolate={} clip_field_isolate_two={} clip_field_all={} vf_vue_isolate={} vf_vue_two={} vf_vue_all={} clip_counter_sweep={} clip_counter_vf_vue={} sweep=one:screen-space-default,two:clip-normal,all:clip-sf-sync,vf-vue:one/two/all/big,clip-counter:known-vs-big-inbounds latest_launch=font-clip-counter-vf-vue-big-inbounds completed={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}\n",
-        probe_status_word(clip_field_isolate_completed),
-        probe_status_word(clip_field_isolate_two_completed),
-        probe_status_word(clip_field_all_completed),
+        "font-boot-tessel-verdict: vf_vue_isolate={} vf_vue_two={} vf_vue_all={} sweep=vf-vue:one latest_launch=font-clip-field-vf-vue-isolate completed={} vs_counter={} ps_state_marker={} raster_packet={} clip_counter={} ps_observed={} fragment_candidate={} fragment_observed={} pixel_coverage=not-proven next={}\n",
         probe_status_word(clip_field_vf_vue_isolate_completed),
         probe_status_word(clip_field_vf_vue_two_completed),
         probe_status_word(clip_field_vf_vue_all_completed),
-        probe_status_word(clip_counter_sweep_completed),
-        probe_status_word(clip_counter_vf_vue_completed),
         frontier.completed as u8,
+        frontier.vs_counter as u8,
         frontier.ps_state_marker as u8,
         frontier.raster_packet as u8,
         frontier.clip_counter as u8,
@@ -743,11 +528,10 @@ async fn font_tessel_boot_probe_task() {
         frontier.fragment_candidate_ready as u8,
         frontier.fragment_observed as u8,
         clip_field_next_step(
-            clip_field_isolate_completed,
-            clip_field_isolate_two_completed,
-            clip_field_all_completed,
-            clip_counter_sweep_completed,
-            clip_counter_vf_vue_completed,
+            clip_field_vf_vue_isolate_completed,
+            clip_field_vf_vue_two_completed,
+            clip_field_vf_vue_all_completed,
+            frontier.vs_counter,
             frontier.clip_counter,
             frontier.ps_observed,
             frontier.fragment_observed,
@@ -755,7 +539,7 @@ async fn font_tessel_boot_probe_task() {
     );
 
     crate::log!(
-        "font-boot-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-isolate-all+vf-vue-one/two/all+big-inbounds-known-vs+big-inbounds-vf-vue intel=rcs-marker+3d-pipe-marker+clip-field-screen-space-default+clip-field-two-clip-normal+clip-field-all-clip-sf-sync+clip-counter-sweep raster_pixels=scratch-observational production-path=unchanged\n"
+        "font-boot-tessel-boundary: input=graphics-font-outline-cache output=mirrored-clip-field-vf-vue-one intel=rcs-marker+3d-pipe-marker+clip-field-vf-vue-one ps_contract=eot-wm-normal+raster-wm-oa raster_pixels=scratch-observational production-path=unchanged\n"
     );
 }
 
@@ -779,38 +563,35 @@ fn render_fragment_candidate_ready(render: &crate::intel::render::RenderJokerRes
     render.ps_state_marker && render.raster_packet && render.clip_counter && !render.ps_observed
 }
 
+fn render_vs_fragment_candidate_ready(render: &crate::intel::render::RenderJokerResult) -> bool {
+    render.vs_counter
+        && render.ps_state_marker
+        && render.raster_packet
+        && render.clip_counter
+        && !render.ps_observed
+}
+
 fn clip_field_next_step(
     isolate_completed: Option<bool>,
     isolate_two_completed: Option<bool>,
     isolate_all_completed: Option<bool>,
-    clip_counter_sweep_completed: Option<bool>,
-    clip_counter_vf_vue_completed: Option<bool>,
+    vs_counter: bool,
     clip_counter: bool,
     ps_observed: bool,
     fragment_observed: bool,
 ) -> &'static str {
-    match (
-        isolate_completed,
-        isolate_two_completed,
-        isolate_all_completed,
-        clip_counter_sweep_completed,
-        clip_counter_vf_vue_completed,
-    ) {
-        (Some(false), _, _, _, _) => "compare-font-isolate-state",
-        (Some(true), Some(false), _, _, _) => "compare-two-triangle-state",
-        (_, Some(true), Some(false), _, _) => "compare-full-field-state",
-        (_, _, Some(true), Some(false), _) => "compare-known-vs-big-inbounds-submit-state",
-        (_, _, Some(true), _, Some(false)) => "compare-vf-vue-submit-state",
-        (_, _, Some(true), Some(true), Some(true)) if fragment_observed => {
-            "inspect-scratch-rt-write"
-        }
-        (_, _, Some(true), Some(true), Some(true)) if ps_observed => {
-            "inspect-fragment-to-rt-boundary"
-        }
-        (_, _, Some(true), Some(true), Some(true)) if clip_counter => "ps-launch-frontier",
-        (_, _, Some(true), Some(true), Some(true)) => "clip-counter-still-zero-vs-bypass-too",
-        (_, _, Some(true), Some(true), None) => "compare-vf-vue-clip-counter",
-        (_, _, Some(true), None, _) => "compare-known-vs-clip-counter",
+    match (isolate_completed, isolate_two_completed, isolate_all_completed) {
+        (Some(false), _, _) => "compare-font-isolate-state",
+        (Some(true), _, _) if fragment_observed => "inspect-scratch-rt-write",
+        (Some(true), _, _) if ps_observed => "inspect-fragment-to-rt-boundary",
+        (Some(true), _, _) if clip_counter && !vs_counter => "fix-vs-to-clip",
+        (Some(true), _, _) if clip_counter => "ps-launch-frontier",
+        (Some(true), _, _) => "clip-counter-still-zero-vs-bypass-too",
+        (_, _, Some(true)) if fragment_observed => "inspect-scratch-rt-write",
+        (_, _, Some(true)) if ps_observed => "inspect-fragment-to-rt-boundary",
+        (_, _, Some(true)) if clip_counter && !vs_counter => "fix-vs-to-clip",
+        (_, _, Some(true)) if clip_counter => "ps-launch-frontier",
+        (_, _, Some(true)) => "clip-counter-still-zero-vs-bypass-too",
         _ => "repeat-font-isolate",
     }
 }

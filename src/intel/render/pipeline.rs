@@ -323,6 +323,8 @@ fn encode_triangle_probe_batch(
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
     let vf_synthesized_vue = batch_mode.vf_synthesized_vue();
+    let force_vs_with_vf_synthesized_vue =
+        vf_synthesized_vue && front_end_contract.force_vs_with_vf_synthesized_vue;
 
     fn log_batch_offset(cursor: usize, label: &str) {
         intel_render_batch_log!(
@@ -785,7 +787,12 @@ fn encode_triangle_probe_batch(
     let force_wm_thread_dispatch = (matches!(backend_probe_mode, BackendProbeMode::WmLateReemit)
         || (batch_mode.vf_synthesized_vue()
             && !mesa_simple_rect_stack
-            && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)))
+            && !matches!(
+                backend_probe_mode,
+                BackendProbeMode::WmNormalDispatch
+                    | BackendProbeMode::PsEotOnly
+                    | BackendProbeMode::PsEotRasterWmOa
+            )))
         && !backend_probe_mode.suppress_forced_wm_thread_dispatch();
     let wm_dw1 = (1 << 31)
         | if batch_mode.point_raster() && !backend_probe_mode.suppress_wm_point_rule() {
@@ -854,6 +861,7 @@ fn encode_triangle_probe_batch(
         | BackendProbeMode::PsDispatchAllKspSlots
         | BackendProbeMode::PsSimd16
         | BackendProbeMode::PsEotOnly
+        | BackendProbeMode::PsEotRasterWmOa
         | BackendProbeMode::PsCpsDisabled
         | BackendProbeMode::PsPayloadPushConstant
         | BackendProbeMode::PsPayloadAttributeEnable
@@ -1437,7 +1445,7 @@ fn encode_triangle_probe_batch(
     )?;
     push(batch_dwords, &mut cursor, TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16))?;
 
-    if vf_synthesized_vue {
+    if vf_synthesized_vue && !force_vs_with_vf_synthesized_vue {
         log_batch_offset(cursor, "3DSTATE_VS disabled");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VS)?;
         for _ in 0..8 {
@@ -1890,6 +1898,17 @@ fn encode_triangle_probe_batch(
         )?;
     }
 
+    let ps_extra_before_ps = false;
+    if ps_extra_before_ps {
+        log_batch_offset(cursor, "3DSTATE_PS_EXTRA before-ps");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+        push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+        intel_render_focus_log!(
+            "intel/render: probe-ps-extra-order backend={} order=before-ps does_not_prove=ps_thread_launch\n",
+            backend_probe_mode.label(),
+        );
+    }
+
     if backend_probe_mode.disable_ps_contract() {
         log_batch_offset(cursor, "3DSTATE_PS disabled");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
@@ -1912,9 +1931,11 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
 
-    log_batch_offset(cursor, "3DSTATE_PS_EXTRA");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
-    push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+    if !ps_extra_before_ps {
+        log_batch_offset(cursor, "3DSTATE_PS_EXTRA");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+        push(batch_dwords, &mut cursor, ps_extra_dw1)?;
+    }
     if backend_probe_mode.reemit_wm_after_ps_extra() {
         log_batch_offset(cursor, "3DSTATE_WM after-ps-extra-reemit");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
@@ -2291,7 +2312,7 @@ fn encode_triangle_probe_batch(
         && ps_bary_coeffs == 0
         && ps_source_depth_w == 0) as u8;
     intel_render_focus_log!(
-        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={}] raster[dw1=0x{:08X} msaa={} forced_ms={} forced_samples={} scissor={} sample_mask=0x{:X}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
+        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={} vf_synth_vs_on={}] raster[dw1=0x{:08X} msaa={} forced_ms={} forced_samples={} scissor={} sample_mask=0x{:X}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
         submit_name,
         backend_probe_mode.label(),
         primitive_topology_label(batch_mode.topology()),
@@ -2304,6 +2325,7 @@ fn encode_triangle_probe_batch(
         baked_vs_urb_output_length,
         programmed_vs_urb_output_length,
         vf_synthesized_vue as u8,
+        force_vs_with_vf_synthesized_vue as u8,
         raster_dw1,
         (raster_dw1 >> 14) & 0x1,
         (raster_dw1 >> 12) & 0x1,

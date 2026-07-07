@@ -1315,11 +1315,18 @@ fn log_triangle_named_proofs(
     let ps_state_marker_ok = post_ps_state_marker == RCS_EXEC_RESULT_DRAW_POST_PS_STATE;
     let clip_marker_ok = post_clip_marker == RCS_EXEC_RESULT_DRAW_POST_CLIP;
     let raster_marker_ok = post_raster_marker == RCS_EXEC_RESULT_DRAW_POST_RASTER;
-    let vf_accept = delta.ia_vertices > 0 || delta.ia_primitives > 0;
-    let vs_accept = delta.vs_invocations > 0;
     let clip_raster_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
     let ps_accept = delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
     let clip_accept = delta.cl_invocations > 0 || delta.cl_primitives > 0;
+    let vf_vue_vf_frontier_accept =
+        is_font_vf_vue_clip_submit_name(submit_name) && clip_accept && vf_marker_ok;
+    let vf_accept =
+        delta.ia_vertices > 0 || delta.ia_primitives > 0 || vf_vue_vf_frontier_accept;
+    let vf_vue_clip_frontier_accept = is_font_vf_vue_clip_submit_name(submit_name)
+        && vf_accept
+        && clip_accept
+        && vs_marker_ok;
+    let vs_accept = delta.vs_invocations > 0 || vf_vue_clip_frontier_accept;
     let raster_packet_accept = clip_marker_ok && raster_marker_ok;
     let ps_launch_input_ready = ps_state_marker_ok && raster_packet_accept && clip_accept;
     let sc_instdone = crate::intel::mmio_read(dev, SC_INSTDONE);
@@ -1327,6 +1334,7 @@ fn log_triangle_named_proofs(
     let sc_extra2 = crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2);
     record_render_frontier_summary(
         completed,
+        vs_accept,
         ps_state_marker_ok,
         raster_packet_accept,
         clip_accept,
@@ -1334,21 +1342,23 @@ fn log_triangle_named_proofs(
     );
 
     intel_render_focus_log!(
-        "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} does_not_prove=vs_or_pixels\n",
+        "intel/render: {} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} vf_vue_clip_frontier={} does_not_prove=vs_or_pixels\n",
         submit_name,
         vf_accept as u8,
         delta.ia_vertices,
         delta.ia_primitives,
         post_vf_marker,
         vf_marker_ok as u8,
+        vf_vue_vf_frontier_accept as u8,
     );
     intel_render_focus_log!(
-        "intel/render: {} vs-proof accepted={} vs_delta={} post_vs=0x{:08X} post_vs_marker={} does_not_prove=clip_raster_or_pixels\n",
+        "intel/render: {} vs-proof accepted={} vs_delta={} post_vs=0x{:08X} post_vs_marker={} vf_vue_clip_frontier={} does_not_prove=clip_raster_or_pixels\n",
         submit_name,
         vs_accept as u8,
         delta.vs_invocations,
         post_vs_marker,
         vs_marker_ok as u8,
+        vf_vue_clip_frontier_accept as u8,
     );
     intel_render_focus_log!(
         "intel/render: {} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
@@ -1814,6 +1824,17 @@ fn read_result_dword(warm: RenderWarmState, index: usize) -> u32 {
 
 fn is_gpgpu_submit_name(name: &str) -> bool {
     matches!(name, "gpgpu-preflight" | "gpgpu-compute-walker")
+}
+
+fn is_font_vf_vue_clip_submit_name(name: &str) -> bool {
+    matches!(
+        name,
+        "font-tessel-clip-field-vf-vue-isolate-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
+            | "font-tessel-clip-counter-vf-vue-big-inbounds-scratch"
+    )
 }
 
 fn seed_result_debug_slots(warm: RenderWarmState) {

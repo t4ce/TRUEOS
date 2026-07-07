@@ -135,6 +135,7 @@ struct TriangleFrontEndContract {
     sbe_read_length: u8,
     force_sbe_read_offset: bool,
     force_sbe_read_length: bool,
+    force_vs_with_vf_synthesized_vue: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -204,6 +205,7 @@ enum BackendProbeMode {
     PsDispatchAllKspSlots,
     PsSimd16,
     PsEotOnly,
+    PsEotRasterWmOa,
     PsCpsDisabled,
     PsPayloadPushConstant,
     PsPayloadAttributeEnable,
@@ -401,6 +403,7 @@ impl BackendProbeMode {
             Self::PsDispatchAllKspSlots => "ps-dispatch-all-ksp-slots",
             Self::PsSimd16 => "ps-simd16",
             Self::PsEotOnly => "ps-eot-only",
+            Self::PsEotRasterWmOa => "ps-eot-raster-wm-oa",
             Self::PsCpsDisabled => "ps-cps-disabled",
             Self::PsPayloadPushConstant => "ps-payload-push-constant",
             Self::PsPayloadAttributeEnable => "ps-payload-attribute-enable",
@@ -572,7 +575,8 @@ impl BackendProbeMode {
     fn uses_raster_wm_oa(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOa
+            Self::PsEotRasterWmOa
+                | Self::RasterWmInputOa
                 | Self::RasterWmInputOaSurfaceHalign128
                 | Self::RasterWmInputOaKillOff
                 | Self::RasterWmInputOaSmoothPoint
@@ -932,6 +936,8 @@ impl BackendProbeMode {
         matches!(
             self,
             Self::PsPayloadAttributeEnable
+                | Self::PsPayloadSourceDepthW
+                | Self::PsPayloadBaryPlanes
                 | Self::RasterWmInputOaPayloadAttributeEnable
                 | Self::RasterWmInputOaPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadBaryPlanes
@@ -967,7 +973,10 @@ impl BackendProbeMode {
     fn force_one_sbe_attribute(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaPayloadAttributeEnable
+            Self::PsPayloadAttributeEnable
+                | Self::PsPayloadSourceDepthW
+                | Self::PsPayloadBaryPlanes
+                | Self::RasterWmInputOaPayloadAttributeEnable
                 | Self::RasterWmInputOaPayloadSourceDepthW
                 | Self::RasterWmInputOaPayloadBaryPlanes
                 | Self::RasterWmInputOaWmHandoff
@@ -1495,6 +1504,22 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-two-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-all-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-n-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-two-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-all-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-n-scratch"
             | "font-tessel-clip-field-isolate-scratch"
             | "font-tessel-clip-field-isolate-two-scratch"
             | "font-tessel-clip-field-isolate-two-clip-normal-scratch"
@@ -1625,6 +1650,10 @@ fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early"
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
+            | "font-tessel-clip-field-vf-vue-isolate-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-two-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-all-scratch"
+            | "font-tessel-clip-field-vf-vue-isolate-n-scratch"
             | "screen-rect-oa-early"
     )
 }
@@ -1781,6 +1810,22 @@ fn is_surface_draw_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-two-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-all-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-n-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-two-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-all-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-n-scratch"
             | "font-tessel-clip-field-isolate-scratch"
             | "font-tessel-clip-field-isolate-two-scratch"
             | "font-tessel-clip-field-isolate-two-clip-normal-scratch"
@@ -1959,6 +2004,22 @@ fn is_fragment_candidate_submit_name(submit_name: &str) -> bool {
             | "vf-tri-ndc-oa-early-clipxy"
             | "vf-tri-ndc-cw-oa-early"
             | "screen-rect-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-two-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-all-scratch"
+            | "font-tessel-clip-field-real-vs-urb2-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-wmforce-n-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-two-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-all-scratch"
+            | "font-tessel-clip-field-real-vs-ndc-n-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-isolate-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-two-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-all-scratch"
+            | "font-tessel-clip-field-real-vs-slot0-n-scratch"
             | "font-tessel-clip-field-isolate-scratch"
             | "font-tessel-clip-field-isolate-two-scratch"
             | "font-tessel-clip-field-isolate-two-clip-normal-scratch"

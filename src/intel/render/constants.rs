@@ -390,6 +390,7 @@ const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFr
     sbe_read_length: 1,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    force_vs_with_vf_synthesized_vue: false,
 };
 const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -400,6 +401,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         sbe_read_length: 1,
         force_sbe_read_offset: true,
         force_sbe_read_length: true,
+        force_vs_with_vf_synthesized_vue: false,
     },
     TriangleFrontEndContract {
         label: "urb2",
@@ -408,6 +410,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         sbe_read_length: 1,
         force_sbe_read_offset: true,
         force_sbe_read_length: true,
+        force_vs_with_vf_synthesized_vue: false,
     },
     TriangleFrontEndContract {
         label: "urb2-slot0-read",
@@ -416,6 +419,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
         sbe_read_length: 1,
         force_sbe_read_offset: true,
         force_sbe_read_length: true,
+        force_vs_with_vf_synthesized_vue: false,
     },
 ];
 const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
@@ -425,6 +429,16 @@ const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndCon
     sbe_read_length: 0,
     force_sbe_read_offset: true,
     force_sbe_read_length: true,
+    force_vs_with_vf_synthesized_vue: false,
+};
+const VF_VUE_REAL_VS_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
+    label: "vf-vue-clip",
+    vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+    sbe_read_offset: 1,
+    sbe_read_length: 1,
+    force_sbe_read_offset: true,
+    force_sbe_read_length: true,
+    force_vs_with_vf_synthesized_vue: false,
 };
 const GFX125_GEOMETRY_DSS_ENABLE: usize = 0x913C;
 const GFX125_PIXEL_PIPES: usize = 3;

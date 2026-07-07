@@ -15,6 +15,7 @@ pub(crate) struct RenderJokerResult {
     pub(crate) submit_name: &'static str,
     pub(crate) target: &'static str,
     pub(crate) completed: bool,
+    pub(crate) vs_counter: bool,
     pub(crate) ps_state_marker: bool,
     pub(crate) raster_packet: bool,
     pub(crate) clip_counter: bool,
@@ -2058,51 +2059,53 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
         return Err("in-flight");
     }
 
+    let ndc_vertices = scratch_vertices_to_ndc(vertices);
     let (variant, submit_name, geometry_label, source_label, backend_probe_mode, sync_variant) =
         match N {
         TRIANGLE_DRAW_VERTICES => (
-            "font-clip-field-isolate-default-scratch",
-            "font-tessel-clip-field-isolate-scratch",
-            "font-tessel-clip-field-isolate",
-            "lyon-font-mirrored-clip-field-isolate-first-triangle/default",
-            BackendProbeMode::PsBindingTableCountZero,
+            "font-clip-field-real-vs-urb2-isolate-scratch",
+            "font-tessel-clip-field-real-vs-urb2-isolate-scratch",
+            "font-tessel-clip-field-real-vs-urb2-isolate",
+            "lyon-font-mirrored-clip-field-isolate-first-triangle/real-vs-urb2",
+            BackendProbeMode::WmLateReemit,
             PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         n if n == TRIANGLE_DRAW_VERTICES * 2 => (
-            "font-clip-field-isolate-two-clip-normal-scratch",
-            "font-tessel-clip-field-isolate-two-clip-normal-scratch",
-            "font-tessel-clip-field-isolate-two",
-            "lyon-font-mirrored-clip-field-isolate-first-two-triangles/clip-normal",
-            BackendProbeMode::RasterWmInputOaClipNormal,
+            "font-clip-field-real-vs-urb2-two-scratch",
+            "font-tessel-clip-field-real-vs-urb2-two-scratch",
+            "font-tessel-clip-field-real-vs-urb2-two",
+            "lyon-font-mirrored-clip-field-isolate-first-two-triangles/real-vs-urb2",
+            BackendProbeMode::WmLateReemit,
             PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         crate::graphics::font::FONT_CLIP_FIELD_VERTICES => (
-            "font-clip-field-isolate-all-clip-sf-sync-scratch",
-            "font-tessel-clip-field-isolate-all-clip-sf-sync-scratch",
-            "font-tessel-clip-field-isolate-all",
-            "lyon-font-mirrored-clip-field-isolate-all-triangles/clip-sf-sync",
-            BackendProbeMode::RasterWmInputOaPipeControlClipSf,
+            "font-clip-field-real-vs-urb2-all-scratch",
+            "font-tessel-clip-field-real-vs-urb2-all-scratch",
+            "font-tessel-clip-field-real-vs-urb2-all",
+            "lyon-font-mirrored-clip-field-isolate-all-triangles/real-vs-urb2",
+            BackendProbeMode::WmLateReemit,
             PostDrawSyncVariant::LightPostSyncNoCs,
         ),
         _ => (
-            "font-clip-field-isolate-n-scratch",
-            "font-tessel-clip-field-isolate-n-scratch",
-            "font-tessel-clip-field-isolate-n",
-            "lyon-font-mirrored-clip-field-isolate-n-triangles/default",
-            BackendProbeMode::PsBindingTableCountZero,
+            "font-clip-field-real-vs-urb2-n-scratch",
+            "font-tessel-clip-field-real-vs-urb2-n-scratch",
+            "font-tessel-clip-field-real-vs-urb2-n",
+            "lyon-font-mirrored-clip-field-isolate-n-triangles/real-vs-urb2",
+            BackendProbeMode::WmLateReemit,
             PostDrawSyncVariant::LightPostSyncNoCs,
         ),
     };
     let result = submit_render_custom_triangle_probe_locked(
-        &vertices,
+        &ndc_vertices,
         variant,
         submit_name,
         geometry_label,
         source_label,
         backend_probe_mode,
         sync_variant,
-        TriangleBatchMode::DrawScreenSpace,
-        StreamoutProofExperiment::PositionSlot1,
+        VS_DRAW_FRONTIER_CONTRACTS[2],
+        TriangleBatchMode::Draw,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
@@ -2153,8 +2156,9 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
         submit_name,
         geometry_label,
         source_label,
-        BackendProbeMode::PsBindingTableCountZero,
+        BackendProbeMode::PsEotRasterWmOa,
         PostDrawSyncVariant::LightPostSyncNoCs,
+        VF_VUE_REAL_VS_FRONT_END_CONTRACT,
         TriangleBatchMode::VfScreenSpaceDraw,
         StreamoutProofExperiment::PositionSlot0,
     );
@@ -2185,6 +2189,7 @@ pub(crate) fn submit_render_font_clip_counter_sweep_probe()
         "font-lyon-big-inbounds-screen-space/known-vs-clip-counter-sweep",
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::DrawScreenSpace,
         StreamoutProofExperiment::PositionSlot1,
     );
@@ -2215,11 +2220,29 @@ pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
         "font-lyon-big-inbounds-screen-space/vf-synthesized-vue-clip-counter",
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
+        VF_VUE_REAL_VS_FRONT_END_CONTRACT,
         TriangleBatchMode::VfScreenSpaceDraw,
         StreamoutProofExperiment::PositionSlot0,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
+}
+
+fn scratch_vertices_to_ndc<const N: usize>(vertices: [[f32; 3]; N]) -> [[f32; 3]; N] {
+    let mut ndc = vertices;
+    for vertex in &mut ndc {
+        vertex[0] = (vertex[0] / 4.0) - 1.0;
+        vertex[1] = 1.0 - (vertex[1] / 4.0);
+        vertex[2] = vertex[2].clamp(-1.0, 1.0);
+    }
+    for triangle in ndc.chunks_exact_mut(3) {
+        let area2 = (triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
+            - (triangle[1][1] - triangle[0][1]) * (triangle[2][0] - triangle[0][0]);
+        if area2 < 0.0 {
+            triangle.swap(1, 2);
+        }
+    }
+    ndc
 }
 
 pub(crate) fn submit_render_artificial_fragment_sentinel()
@@ -2244,6 +2267,7 @@ fn submit_render_custom_triangle_probe_locked(
     source_label: &'static str,
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
+    front_end_contract: TriangleFrontEndContract,
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> Result<RenderJokerResult, &'static str> {
@@ -2311,7 +2335,7 @@ fn submit_render_custom_triangle_probe_locked(
         backend_probe_mode.label(),
         TriangleBlendProbeMode::MesaZeroedState.label(),
         post_draw_sync_variant.label(),
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT.label,
+        front_end_contract.label,
         source_label,
     );
     let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
@@ -2325,7 +2349,7 @@ fn submit_render_custom_triangle_probe_locked(
         vertices,
         geometry_label,
         submit_name,
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        front_end_contract,
         backend_probe_mode,
         post_draw_sync_variant,
         batch_mode,
@@ -2344,6 +2368,7 @@ fn submit_render_custom_triangle_probe_locked(
         submit_name,
         target: "scratch",
         completed,
+        vs_counter: frontier.vs_counter,
         ps_state_marker: frontier.ps_state_marker,
         raster_packet: frontier.raster_packet,
         clip_counter: frontier.clip_counter,
@@ -2601,6 +2626,7 @@ fn submit_render_joker_probe_locked(
         submit_name: spec.submit_name,
         target: target_label,
         completed,
+        vs_counter: frontier.vs_counter,
         ps_state_marker: frontier.ps_state_marker,
         raster_packet: frontier.raster_packet,
         clip_counter: frontier.clip_counter,
@@ -3860,7 +3886,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
             crate::intel::shader::triangle_pipeline_simd16(),
             crate::intel::shader::triangle_pipeline_simd16_note(),
         ),
-        BackendProbeMode::PsEotOnly => (
+        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
             crate::intel::shader::triangle_pipeline_ps_eot(),
             crate::intel::shader::triangle_pipeline_ps_eot_note(),
         ),
@@ -5018,7 +5044,20 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         return false;
     };
 
-    let pipeline = crate::intel::shader::triangle_pipeline();
+    let (pipeline, pipeline_note) = match backend_probe_mode {
+        BackendProbeMode::PsSimd16 => (
+            crate::intel::shader::triangle_pipeline_simd16(),
+            crate::intel::shader::triangle_pipeline_simd16_note(),
+        ),
+        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
+            crate::intel::shader::triangle_pipeline_ps_eot(),
+            crate::intel::shader::triangle_pipeline_ps_eot_note(),
+        ),
+        _ => (
+            crate::intel::shader::triangle_pipeline(),
+            crate::intel::shader::triangle_pipeline_note(),
+        ),
+    };
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
@@ -5035,7 +5074,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             draw.vertex_stride,
             crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
             crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
-            crate::intel::shader::triangle_pipeline_note()
+            pipeline_note
         );
         return false;
     }
@@ -5053,7 +5092,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         geometry.label(),
         backend_probe_mode.label(),
         post_draw_sync_variant.label(),
-        crate::intel::shader::triangle_pipeline_note()
+        pipeline_note
     );
     if geometry.fullscreen_candidate() {
         intel_render_focus_log!(
@@ -5111,7 +5150,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
                 "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
-                crate::intel::shader::triangle_pipeline_note()
+                pipeline_note
             );
             return false;
         }
@@ -5360,7 +5399,20 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         return false;
     };
 
-    let pipeline = crate::intel::shader::triangle_pipeline();
+    let (pipeline, pipeline_note) = match backend_probe_mode {
+        BackendProbeMode::PsSimd16 => (
+            crate::intel::shader::triangle_pipeline_simd16(),
+            crate::intel::shader::triangle_pipeline_simd16_note(),
+        ),
+        BackendProbeMode::PsEotOnly | BackendProbeMode::PsEotRasterWmOa => (
+            crate::intel::shader::triangle_pipeline_ps_eot(),
+            crate::intel::shader::triangle_pipeline_ps_eot_note(),
+        ),
+        _ => (
+            crate::intel::shader::triangle_pipeline(),
+            crate::intel::shader::triangle_pipeline_note(),
+        ),
+    };
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
@@ -5377,7 +5429,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             draw.vertex_stride,
             crate::intel::shader::TRIANGLE_VERTEX_SOURCE_PATH,
             crate::intel::shader::TRIANGLE_FRAGMENT_SOURCE_PATH,
-            crate::intel::shader::triangle_pipeline_note()
+            pipeline_note
         );
         return false;
     }
@@ -5395,7 +5447,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         geometry_label,
         backend_probe_mode.label(),
         post_draw_sync_variant.label(),
-        crate::intel::shader::triangle_pipeline_note()
+        pipeline_note
     );
     let sf_viewport_transform = !batch_mode.screen_space_raster();
     let coverage_contract = if sf_viewport_transform {
@@ -5448,7 +5500,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 "intel/render: {} staging skipped reason=shader-layout-error detail={} note={}\n",
                 submit_name,
                 reason,
-                crate::intel::shader::triangle_pipeline_note()
+                pipeline_note
             );
             return false;
         }
@@ -5647,6 +5699,12 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             delta.cps_invocations,
             delta.ps_depth,
         );
+        if is_raster_wm_oa_submit_name(submit_name) {
+            log_raster_wm_oa_probe(submit_name, warm, completed, draw, delta);
+        }
+    }
+    if is_raster_wm_oa_submit_name(submit_name) {
+        disable_raster_wm_oa_context(dev, submit_name);
     }
     completed
 }
