@@ -263,6 +263,17 @@ fn write_triangle_probe_state(
     sf_clip_viewport[9] = 32768.0f32.to_bits();
     sf_clip_viewport[10] = (-32768.0f32).to_bits();
     sf_clip_viewport[11] = 32768.0f32.to_bits();
+    sf_clip_viewport[12] = 0.0f32.to_bits();
+    sf_clip_viewport[13] = (draw.target_w as f32).to_bits();
+    sf_clip_viewport[14] = 0.0f32.to_bits();
+    sf_clip_viewport[15] = (draw.target_h as f32).to_bits();
+    intel_render_focus_log!(
+        "intel/render: sf-clip-viewport-extents target={}x{} xmin=0.000 xmax={:.3} ymin=0.000 ymax={:.3} prm=viewport-transform-final-clip-rectangle\n",
+        draw.target_w,
+        draw.target_h,
+        draw.target_w as f32,
+        draw.target_h as f32,
+    );
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];
     scissor_rect[0] = 0;
@@ -644,8 +655,9 @@ fn encode_triangle_probe_batch(
     } else {
         pipeline.ps.meta.num_varying_inputs
     };
+    let sbe_attr_swizzle_enable = !backend_probe_mode.disable_sbe_attr_swizzle();
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
-        | (1 << 21)
+        | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
         | (u32::from(front_end_contract.force_sbe_read_offset) << 28)
         | (u32::from(front_end_contract.force_sbe_read_length) << 29)
@@ -853,11 +865,18 @@ fn encode_triangle_probe_batch(
         BackendProbeMode::MesaLike
         | BackendProbeMode::PsBindingTableCountZero
         | BackendProbeMode::WmNormalDispatch
+        | BackendProbeMode::PsWmNormalBt0
+        | BackendProbeMode::PsWmNormalBt0CpDep
+        | BackendProbeMode::PsPrmEarlyRasterGate
+        | BackendProbeMode::PsPrmRasterGateSbeBeforeSf
+        | BackendProbeMode::PsPrmSbeNoAttrSwizzle
+        | BackendProbeMode::PsPrmNoPrimitiveReplication
         | BackendProbeMode::PsExtraBeforePs
         | BackendProbeMode::PsWmReemitAfterPsExtra
         | BackendProbeMode::PsOmitWmHzOp
         | BackendProbeMode::PsSampleAll
         | BackendProbeMode::PsSbeRead0
+        | BackendProbeMode::PsSbeBeforeSf
         | BackendProbeMode::PsNoPrimitiveReplication
         | BackendProbeMode::PsNoWriteableRt
         | BackendProbeMode::PsNoCcPointer
@@ -959,6 +978,21 @@ fn encode_triangle_probe_batch(
     };
     let ps_binding_table_entry_count =
         if matches!(backend_probe_mode, BackendProbeMode::PsBindingTableCountZero)
+            || matches!(backend_probe_mode, BackendProbeMode::PsWmNormalBt0)
+            || matches!(backend_probe_mode, BackendProbeMode::PsWmNormalBt0CpDep)
+            || matches!(backend_probe_mode, BackendProbeMode::PsPrmEarlyRasterGate)
+            || matches!(
+                backend_probe_mode,
+                BackendProbeMode::PsPrmRasterGateSbeBeforeSf
+            )
+            || matches!(
+                backend_probe_mode,
+                BackendProbeMode::PsPrmSbeNoAttrSwizzle
+            )
+            || matches!(
+                backend_probe_mode,
+                BackendProbeMode::PsPrmNoPrimitiveReplication
+            )
             || (backend_probe_mode.uses_raster_wm_oa()
                 && !backend_probe_mode.keep_ps_binding_table_count())
         {
@@ -1018,6 +1052,8 @@ fn encode_triangle_probe_batch(
         | (u32::from(ps_extra_attribute_enable) * PS_EXTRA_ATTRIBUTE_ENABLE)
         | (u32::from(matches!(backend_probe_mode, BackendProbeMode::PsPayloadSimpleHint))
             * PS_EXTRA_SIMPLE_PS_HINT)
+        | (u32::from(backend_probe_mode.force_ps_dependency_on_cpsize_change())
+            * PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE)
         | (u32::from(backend_probe_mode.force_ps_source_depth_w())
             * (PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE
                 | PS_EXTRA_USES_SOURCE_W
@@ -1302,7 +1338,9 @@ fn encode_triangle_probe_batch(
                     VFCOMP_STORE_1_FP,
                 )?;
             }
-            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+            | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+            | StreamoutProofExperiment::HeaderAndPositionSlots01 => {
                 push_vertex_element_state(
                     batch_dwords,
                     &mut cursor,
@@ -1564,7 +1602,12 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword2)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword3)?;
-        if matches!(streamout_experiment, StreamoutProofExperiment::HeaderAndPositionSlots01) {
+        if matches!(
+            streamout_experiment,
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+                | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+                | StreamoutProofExperiment::HeaderAndPositionSlots01
+        ) {
             push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
             push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
         }
@@ -2326,7 +2369,7 @@ fn encode_triangle_probe_batch(
         && ps_bary_coeffs == 0
         && ps_source_depth_w == 0) as u8;
     intel_render_focus_log!(
-        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={} vf_synth_vs_on={}] raster[dw1=0x{:08X} msaa={} forced_ms={} forced_samples={} scissor={} sample_mask=0x{:X}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
+        "intel/render: {} pre-ps-contract backend={} topo={} sbe[dw1=0x{:08X} read_offset={} read_len={} attrs={} force_off={} force_len={}] vue[vs_baked={} vs_prog={} vf_synth={} vf_synth_vs_on={}] raster[dw1=0x{:08X} msaa={} forced_ms={} forced_samples={} scissor={} sample_mask=0x{:X}] wm[dw1=0x{:08X} stats={} bary=0x{:X} force_dispatch={} hz_active={} hz_sample_mask=0x{:X}] ps[dw3=0x{:08X} dw6=0x{:08X} dw7=0x{:08X} extra=0x{:08X} valid={} bt_count={} dispatch_bits={}{}{} push={} attr={} cpdep={} bary={} src_depth_w={} grf_start={} max_threads={}] rt[writeable={} bt_ptr=0x{:X} surf=0x{:X}] launch_qualifier={} dispatch_armed={} no_varying_payload={} note=pre-ps-frontier\n",
         submit_name,
         backend_probe_mode.label(),
         primitive_topology_label(batch_mode.topology()),
@@ -2363,6 +2406,7 @@ fn encode_triangle_probe_batch(
         ps_dispatch_32,
         ps_push_constant_enable as u8,
         ps_attribute_enable,
+        ((ps_extra_dw1 & PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE) != 0) as u8,
         ps_bary_coeffs,
         ps_source_depth_w,
         ps_grf_start,
@@ -2373,6 +2417,126 @@ fn encode_triangle_probe_batch(
         dispatch_reason,
         dispatch_armed,
         no_varying_payload,
+    );
+    let state_words = unsafe {
+        core::slice::from_raw_parts(warm.draw_state_virt as *const u32, warm.draw_state_len / 4)
+    };
+    let sf_vp = &state_words[probe_state.sf_clip_viewport_offset_bytes as usize / 4
+        ..probe_state.sf_clip_viewport_offset_bytes as usize / 4 + 16];
+    let scissor = &state_words[probe_state.scissor_rect_offset_bytes as usize / 4
+        ..probe_state.scissor_rect_offset_bytes as usize / 4 + 2];
+    let surface = &state_words[probe_state.surface_state_offset_bytes as usize / 4
+        ..probe_state.surface_state_offset_bytes as usize / 4 + 16];
+    let bt_entry0 = state_words[probe_state.binding_table_offset_bytes as usize / 4];
+    let vp_xmin = f32::from_bits(sf_vp[12]);
+    let vp_xmax = f32::from_bits(sf_vp[13]);
+    let vp_ymin = f32::from_bits(sf_vp[14]);
+    let vp_ymax = f32::from_bits(sf_vp[15]);
+    let cc_min_depth = f32::from_bits(
+        state_words[probe_state.cc_viewport_offset_bytes as usize / 4],
+    );
+    let cc_max_depth = f32::from_bits(
+        state_words[probe_state.cc_viewport_offset_bytes as usize / 4 + 1],
+    );
+    let scissor_xmin = scissor[0] & 0xFFFF;
+    let scissor_ymin = (scissor[0] >> 16) & 0xFFFF;
+    let scissor_xmax = scissor[1] & 0xFFFF;
+    let scissor_ymax = (scissor[1] >> 16) & 0xFFFF;
+    let primitive_replication_count = primitive_replication_dw1 & 0xF;
+    let primitive_replication_mask = (primitive_replication_dw1 >> 16) & 0xFFFF;
+    let vp_extents_ok = vp_xmin <= vp_xmax
+        && vp_ymin <= vp_ymax
+        && vp_xmax > 0.0
+        && vp_ymax > 0.0;
+    let draw_rect_ok = draw.target_w != 0 && draw.target_h != 0;
+    let sample_mask_ok = backend_probe_mode.sample_mask_dw() != 0;
+    let cull_none = ((raster_dw1 >> 16) & 0x3) == 1;
+    let checkbook_clip_enable = (clip_dw2 >> 31) & 0x1;
+    let prim_repl_ok =
+        primitive_replication_count == 0 || primitive_replication_mask != 0;
+    let fixed_admit_ok = vp_extents_ok
+        && draw_rect_ok
+        && sample_mask_ok
+        && cull_none
+        && prim_repl_ok
+        && checkbook_clip_enable != 0
+        && ((sf_dw1 >> 1) & 0x1) != 0;
+    let rt_width = ((surface[2] >> 14) & 0x3FFF) + 1;
+    let rt_height = (surface[2] & 0x3FFF) + 1;
+    let surface_base = ((surface[8] as u64) << 32) | u64::from(surface[1] & !0x3F);
+    let sbe_ps_attr_match = (sbe_num_sf_attrs != 0) == (ps_attribute_enable != 0);
+    let sbe_read_valid = sbe_vertex_read_length != 0;
+    let ps_dispatch_bits_ok = (ps_dispatch_8 | ps_dispatch_16 | ps_dispatch_32) != 0;
+    let ps_reserved_mbz_ok = (ps_extra_dw1 & (1 << 17)) == 0;
+    let rt_binding_ok = ps_blend_has_writeable_rt != 0
+        && bt_entry0 == probe_state.surface_state_offset_bytes
+        && rt_width == draw.target_w
+        && rt_height == draw.target_h;
+    let ps_admit_ok = ps_valid != 0
+        && dispatch_armed != 0
+        && ps_dispatch_bits_ok
+        && sbe_ps_attr_match
+        && sbe_read_valid
+        && ps_reserved_mbz_ok
+        && rt_binding_ok
+        && wm_force_thread_dispatch != 1
+        && wm_hz_op_active == 0
+        && wm_depth_test_enable == 0
+        && wm_depth_write_enable == 0
+        && wm_stencil_test_enable == 0;
+    intel_render_focus_log!(
+        "intel/render: {} launch-checkbook-fixed accepted={} vf_vue={} clip_enable={} sf_vp_transform={} vp_extents_ok={} vp=[{:.1},{:.1}..{:.1},{:.1}] draw_rect_ok={} draw_rect=[0,0..{},{}] scissor_enable={} scissor=[{},{}..{},{}] sample_mask_ok={} sample_mask=0x{:X} cull_none={} prim_repl_ok={} prim_repl_count={} prim_repl_mask=0x{:X} note=fixed-function-admission\n",
+        submit_name,
+        fixed_admit_ok as u8,
+        vf_synthesized_vue as u8,
+        checkbook_clip_enable,
+        (sf_dw1 >> 1) & 0x1,
+        vp_extents_ok as u8,
+        vp_xmin,
+        vp_ymin,
+        vp_xmax,
+        vp_ymax,
+        draw_rect_ok as u8,
+        draw.target_w.saturating_sub(1),
+        draw.target_h.saturating_sub(1),
+        (raster_dw1 >> 1) & 0x1,
+        scissor_xmin,
+        scissor_ymin,
+        scissor_xmax,
+        scissor_ymax,
+        sample_mask_ok as u8,
+        backend_probe_mode.sample_mask_dw(),
+        cull_none as u8,
+        prim_repl_ok as u8,
+        primitive_replication_count,
+        primitive_replication_mask,
+    );
+    intel_render_focus_log!(
+        "intel/render: {} launch-checkbook-ps accepted={} ps_valid={} dispatch_armed={} dispatch_bits={}{}{} wm_force={} wm_hz_clear={} depth_stencil_off={} sbe_read_valid={} sbe_attr_ps_match={} sbe_attrs={} ps_attr={} ps_reserved_mbz={} rt_binding_ok={} bt0=0x{:X} surf_off=0x{:X} rt={}x{} rt_gpu=0x{:X} cc_depth=[{:.1},{:.1}] note=ps-dispatch-admission\n",
+        submit_name,
+        ps_admit_ok as u8,
+        ps_valid,
+        dispatch_armed,
+        ps_dispatch_8,
+        ps_dispatch_16,
+        ps_dispatch_32,
+        wm_force_thread_dispatch,
+        (wm_hz_op_active == 0) as u8,
+        (wm_depth_test_enable == 0 && wm_depth_write_enable == 0 && wm_stencil_test_enable == 0)
+            as u8,
+        sbe_read_valid as u8,
+        sbe_ps_attr_match as u8,
+        sbe_num_sf_attrs,
+        ps_attribute_enable,
+        ps_reserved_mbz_ok as u8,
+        rt_binding_ok as u8,
+        bt_entry0,
+        probe_state.surface_state_offset_bytes,
+        rt_width,
+        rt_height,
+        surface_base,
+        cc_min_depth,
+        cc_max_depth,
     );
     let clip_mode = (clip_dw2 >> 13) & 0x7;
     let api_mode = (clip_dw2 >> 30) & 0x1;
@@ -2481,7 +2645,7 @@ fn encode_triangle_probe_batch(
         batch_mode.streamout_enabled() as u8,
     );
     intel_render_verbose_log!(
-        "intel/render: probe-ps-payload-decoded backend={} push_constant_enable={} push_constant_bytes={} scratch=0x{:X} grf_start={} grf_used={} ps_extra=0x{:08X} attr_enable={} simple_hint={} src_depth={} src_w={} src_depth_w_coeff={} bary_coeffs={} wm_bary=0x{:X} ps_dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
+        "intel/render: probe-ps-payload-decoded backend={} push_constant_enable={} push_constant_bytes={} scratch=0x{:X} grf_start={} grf_used={} ps_extra=0x{:08X} attr_enable={} simple_hint={} cpdep={} src_depth={} src_w={} src_depth_w_coeff={} bary_coeffs={} wm_bary=0x{:X} ps_dispatch_bits={}{}{} does_not_prove=ps_thread_launch\n",
         backend_probe_mode.label(),
         ps_push_constant_enable as u8,
         pipeline.ps.meta.kernel.push_constant_bytes,
@@ -2491,6 +2655,7 @@ fn encode_triangle_probe_batch(
         ps_extra_dw1,
         ((ps_extra_dw1 & PS_EXTRA_ATTRIBUTE_ENABLE) != 0) as u8,
         ((ps_extra_dw1 & PS_EXTRA_SIMPLE_PS_HINT) != 0) as u8,
+        ((ps_extra_dw1 & PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE) != 0) as u8,
         ((ps_extra_dw1 & PS_EXTRA_USES_SOURCE_DEPTH) != 0) as u8,
         ((ps_extra_dw1 & PS_EXTRA_USES_SOURCE_W) != 0) as u8,
         ((ps_extra_dw1 & PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE) != 0) as u8,
@@ -2966,7 +3131,9 @@ fn encode_minimal_streamout_proof_batch(
                     VFCOMP_STORE_SRC,
                 )?;
             }
-            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+            | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+            | StreamoutProofExperiment::HeaderAndPositionSlots01 => {
                 push_vertex_element_state(
                     batch_dwords,
                     &mut cursor,
@@ -3181,7 +3348,12 @@ fn encode_minimal_streamout_proof_batch(
     push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
     push(batch_dwords, &mut cursor, streamout_decl_dword2)?;
     push(batch_dwords, &mut cursor, streamout_decl_dword3)?;
-    if matches!(streamout_experiment, StreamoutProofExperiment::HeaderAndPositionSlots01) {
+    if matches!(
+        streamout_experiment,
+        StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+            | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+            | StreamoutProofExperiment::HeaderAndPositionSlots01
+    ) {
         push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
         push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
     }

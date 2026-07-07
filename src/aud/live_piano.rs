@@ -429,14 +429,15 @@ pub async fn task() {
             Err(err) => {
                 if init_warn_count < 4 {
                     init_warn_count = init_warn_count.saturating_add(1);
-                    crate::log!("esp-piano-audio: hda init pending err={}\n", err);
+                    crate::log_warn!(target: "audio"; "esp-piano-audio: hda init pending err={}\n", err);
                 }
                 Timer::after(Duration::from_millis(INIT_RETRY_MS)).await;
             }
         }
     }
 
-    crate::log!(
+    crate::log_info!(
+        target: "audio";
         "esp-piano-audio: live synth ready voices={} chunk_ms={} rate={} backing_bpm={} backing_vol={}%\n",
         super::synth::MAX_VOICES,
         RENDER_MS,
@@ -479,7 +480,7 @@ pub async fn task() {
         if !active_audio {
             if stream.is_started() {
                 stream.stop_reset();
-                crate::log!("esp-piano-audio: stream idle stop/reset\n");
+                crate::log_info!(target: "audio"; "esp-piano-audio: stream idle stop/reset\n");
             }
             Timer::after(Duration::from_millis(1)).await;
             continue;
@@ -516,7 +517,7 @@ pub async fn task() {
         if let Err(err) = stream.push_samples(buffer.as_slice()) {
             if !logged_push_err {
                 logged_push_err = true;
-                crate::log!("esp-piano-audio: hda push err={}\n", err);
+                crate::log_warn!(target: "audio"; "esp-piano-audio: hda push err={}\n", err);
             }
             Timer::after(Duration::from_millis(INIT_RETRY_MS)).await;
             continue;

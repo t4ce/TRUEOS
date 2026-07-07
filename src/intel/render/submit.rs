@@ -1765,7 +1765,9 @@ fn log_streamout_proof_result(
                     f32::from_bits(words[3])
                 );
             }
-            StreamoutProofExperiment::HeaderAndPositionSlots01
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+            | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+            | StreamoutProofExperiment::HeaderAndPositionSlots01
             | StreamoutProofExperiment::PointSizeSlot0PositionSlot1 => {
                 intel_render_focus_log!(
                     "intel/render: {} v{} experiment={} completed={} hdr=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pos_f=[{:.3},{:.3},{:.3},{:.3}]\n",

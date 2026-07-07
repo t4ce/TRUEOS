@@ -42,11 +42,36 @@ pub fn submit_i16_stereo_48k(
         .map(|request| request.samples.len() / hda::PCM_CHANNELS)
         .sum::<usize>();
     if queued_frames.saturating_add(frames) > PCM_LANE_MAX_QUEUED_FRAMES {
+        crate::log_warn!(
+            target: "audio";
+            "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
+            label,
+            sample_count,
+            frames,
+            queued_frames,
+            PCM_LANE_MAX_QUEUED_FRAMES
+        );
+        crate::audio_probe!(
+            "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
+            label,
+            sample_count,
+            frames,
+            queued_frames,
+            PCM_LANE_MAX_QUEUED_FRAMES
+        );
         return Err(PcmLaneError::QueueFull);
     }
 
     requests.push_back(PcmLaneRequest { label, samples });
-    crate::log!(
+    crate::log_info!(
+        target: "audio";
+        "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
+        label,
+        sample_count,
+        frames,
+        queued_frames.saturating_add(frames)
+    );
+    crate::audio_probe!(
         "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
         label,
         sample_count,
@@ -73,11 +98,31 @@ pub fn take_pending() -> Option<PcmLaneRequest> {
 }
 
 pub fn request_stop() -> u32 {
-    PCM_LANE_REQUESTS.lock().clear();
+    let cleared_frames = {
+        let mut requests = PCM_LANE_REQUESTS.lock();
+        let frames = requests
+            .iter()
+            .map(|request| request.samples.len() / hda::PCM_CHANNELS)
+            .sum::<usize>();
+        requests.clear();
+        frames
+    };
     PCM_LANE_PAUSED.store(false, Ordering::Release);
-    PCM_LANE_STOP_GENERATION
+    let generation = PCM_LANE_STOP_GENERATION
         .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
+        .wrapping_add(1);
+    crate::log_info!(
+        target: "audio";
+        "pcm-lane: stop generation={} cleared_frames={}\n",
+        generation,
+        cleared_frames
+    );
+    crate::audio_probe!(
+        "pcm-lane: stop generation={} cleared_frames={}\n",
+        generation,
+        cleared_frames
+    );
+    generation
 }
 
 pub fn stop_generation() -> u32 {
@@ -86,6 +131,7 @@ pub fn stop_generation() -> u32 {
 
 pub fn set_paused(paused: bool) {
     PCM_LANE_PAUSED.store(paused, Ordering::Release);
+    crate::log_info!(target: "audio"; "pcm-lane: paused={}\n", paused);
 }
 
 pub fn paused() -> bool {
@@ -95,6 +141,12 @@ pub fn paused() -> bool {
 pub fn set_volume_percent(percent: u16) -> u16 {
     let clamped = percent.min(100);
     PCM_LANE_VOLUME_PERCENT.store(clamped, Ordering::Release);
+    crate::log_info!(
+        target: "audio";
+        "pcm-lane: volume percent={} applied={}\n",
+        percent,
+        clamped
+    );
     clamped
 }
 

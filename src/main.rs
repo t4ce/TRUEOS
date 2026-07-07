@@ -48,7 +48,6 @@ mod intel_hda_audio_demo;
 mod iso9660;
 mod limine;
 mod locale;
-mod logflag;
 mod microcode;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod mio_compat;

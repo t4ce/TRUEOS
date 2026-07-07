@@ -86,6 +86,8 @@ pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99; // payload bytes -> shell2 raw surf
 pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A; // payload i16 stereo 48k bytes -> frames/rc
 pub const OP_BP_AUDIO_STOP: u32 = 0x9B; // stop host overlay lane
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C; // response is host overlay pending frames
+pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D; // arg0 percent -> applied percent
+pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E; // response is host overlay volume percent
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -1042,10 +1044,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_AUDIO_WRITE_I16_STEREO_48K => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             if n == 0 || (n & 1) != 0 {
+                crate::log_warn!(
+                    target: "audio";
+                    "blueprint-audio-vmcall: vm={} bad-len bytes={} req_len={}\n",
+                    vm_id,
+                    n,
+                    req_len
+                );
                 write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
                 return DispatchOutcome::Resume;
             }
             let Some(p) = host_ptr(vm_id) else {
+                crate::log_error!(
+                    target: "audio";
+                    "blueprint-audio-vmcall: vm={} missing-host-ptr bytes={}\n",
+                    vm_id,
+                    n
+                );
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
@@ -1054,6 +1069,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             for bytes in data.chunks_exact(2) {
                 samples.push(i16::from_le_bytes([bytes[0], bytes[1]]));
             }
+            crate::log_trace!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} write bytes={} samples={} frames={} pending_before={}\n",
+                vm_id,
+                n,
+                samples.len(),
+                samples.len() / crate::hda::PCM_CHANNELS,
+                crate::aud::pcm_lane::pending_frames()
+            );
+            crate::audio_probe!(
+                "blueprint-audio-vmcall: vm={} write bytes={} samples={} frames={} pending_before={}\n",
+                vm_id,
+                n,
+                samples.len(),
+                samples.len() / crate::hda::PCM_CHANNELS,
+                crate::aud::pcm_lane::pending_frames()
+            );
             let rc = match crate::aud::pcm_lane::submit_i16_stereo_48k(
                 "blueprint-audio-vmcall",
                 samples,
@@ -1063,16 +1095,46 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -22,
                 Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -5,
             };
+            crate::log_trace!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} write-rc={} pending_after={}\n",
+                vm_id,
+                rc,
+                crate::aud::pcm_lane::pending_frames()
+            );
+            crate::audio_probe!(
+                "blueprint-audio-vmcall: vm={} write-rc={} pending_after={}\n",
+                vm_id,
+                rc,
+                crate::aud::pcm_lane::pending_frames()
+            );
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_AUDIO_STOP => {
             let generation = crate::aud::pcm_lane::request_stop();
+            crate::log_info!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} stop generation={}\n",
+                vm_id,
+                generation
+            );
+            crate::audio_probe!(
+                "blueprint-audio-vmcall: vm={} stop generation={}\n",
+                vm_id,
+                generation
+            );
             write_response(vm_id, seq, STATUS_OK, generation as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_AUDIO_PENDING_FRAMES => {
             let frames = crate::aud::pcm_lane::pending_frames();
+            crate::log_trace!(
+                target: "audio";
+                "blueprint-audio-vmcall: vm={} pending frames={}\n",
+                vm_id,
+                frames
+            );
             write_response(vm_id, seq, STATUS_OK, frames as u64, 0);
             DispatchOutcome::Resume
         }

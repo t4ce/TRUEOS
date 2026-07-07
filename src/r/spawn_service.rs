@@ -409,15 +409,15 @@ async fn font_tessel_boot_probe_task() {
                 isolated[2][2]
             );
             crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-isolate: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=ps-admission-active-rung replay=retained-first-5-not-run\n"
+                "font-boot-tessel-render-font-field-vf-vue-isolate: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=wm-normal-ps-bt0-cpdep replay=retained-first-5-not-run\n"
             );
             crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-replay-result: status=skipped reason=active-ps-admission-ladder retained_cases=5\n"
+                "font-boot-tessel-render-font-field-vf-vue-replay-result: status=skipped reason=active-ps-admission-probe retained_cases=5\n"
             );
             crate::log!(
-                "font-boot-tessel-render-font-field-vf-vue-ps-admission: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=rt-cc-blend-state-ladder\n"
+                "font-boot-tessel-render-font-field-vf-vue-ps-admission: source=first-triangle upload_vertices=3 path=vf-synthesized-vue goal=wm-normal-ps-bt0-cpdep\n"
             );
-            match crate::intel::render::submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
+            match crate::intel::render::submit_render_font_clip_field_vf_vue_ps_admission_probe(
                 isolated,
             ) {
                 Ok(render) => {

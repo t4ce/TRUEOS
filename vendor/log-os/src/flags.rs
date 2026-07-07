@@ -124,6 +124,12 @@ impl LogLevelPolicy {
     }
 }
 
+pub const DEFAULT_AREA_LOG_POLICY: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+
+pub const fn default_area_log_policy(_area: LogArea) -> LogLevelPolicy {
+    DEFAULT_AREA_LOG_POLICY
+}
+
 const fn level_bit(level: Level) -> LogLevelSet {
     match level {
         Level::Error => LogLevelSet::ERROR,
@@ -183,7 +189,8 @@ pub fn target_log_area(target: &str) -> LogArea {
         "media" | "intel/media" | "intel/media2" | "intel/hw_pic" | "intel/hw_pic-stage" => {
             LogArea::IntelMediaNgin
         }
-        "hda" | "audio" => LogArea::Hda,
+        "hda" => LogArea::Hda,
+        "audio" => LogArea::Apps,
         "hv" => LogArea::Hv,
         "apps" => LogArea::Apps,
         "blueprint" | "bp" => LogArea::Blueprint,

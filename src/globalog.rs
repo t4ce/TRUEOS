@@ -2,29 +2,121 @@ use core::fmt;
 
 extern crate alloc;
 
-static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+pub(crate) mod flags {
+    use core::sync::atomic::AtomicBool;
 
-struct TrueOsLogSink;
+    use log::{Level, LevelFilter};
+    pub(crate) use log_os::{LogArea, LogLevelPolicy};
+    use spin::Once;
 
-impl log_os::GlobalLogSink for TrueOsLogSink {
-    fn enabled(&self, area: crate::logflag::LogArea, level: log::Level) -> bool {
-        crate::logflag::area_log_enabled(area, level)
+    pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
+        LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
+        LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
+        LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+
+    pub(crate) const NET_LOG_RX_TAP: bool = false;
+    pub(crate) const NET_LOG_TX_TAP: bool = false;
+    pub(crate) const NET_LOG_TCP_FLOW: bool = false;
+    pub(crate) const NET_LOG_TCP_CONNECT_STATES: bool = false;
+    pub(crate) const NET_LOG_TCP_CONNECT_WIRE: bool = false;
+    pub(crate) const NET_LOG_TCP_SEND_FLUSH: bool = false;
+    pub(crate) const NET_LOG_ARP_RX: bool = false;
+    pub(crate) const NET_LOG_DHCP_VERBOSE: bool = false;
+    pub(crate) const NET_LOG_IPV6_RA: bool = false;
+    pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
+    pub(crate) const VNET_EXERCISE_LOGS: bool = false;
+    pub(crate) const R8125_VERBOSE_LOGS: bool = false;
+    pub(crate) const BOOT_INFO_LOGS: bool = false;
+    pub(crate) const HV_LOGS: bool = true;
+    pub(crate) const PORTAL_LOGS: bool = true;
+    pub(crate) const HTML_SHACK_VERBOSE: bool = false;
+    pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
+    pub(crate) const INTEL_STAGE1_LOGS: bool = true;
+    pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
+    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = false;
+    pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
+    pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
+    pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
+    pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
+    pub(crate) const STORAGE_TRACE_LOGS: bool = false;
+    pub(crate) const NVME_VERBOSE: bool = false;
+    pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
+    pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
+    pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
+    pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
+
+    pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        match area {
+            LogArea::Global => GLOBAL_LOG_LEVEL,
+            LogArea::Boot => BOOT_LOG_LEVEL,
+            LogArea::Service => SERVICE_LOG_LEVEL,
+            LogArea::Net => NET_LOG_LEVEL,
+            LogArea::Usb => USB_LOG_LEVEL,
+            LogArea::Storage => STORAGE_LOG_LEVEL,
+            LogArea::Gfx => GFX_LOG_LEVEL,
+            LogArea::Gpgpu => GPGPU_LOG_LEVEL,
+            LogArea::Hda => HDA_LOG_LEVEL,
+            LogArea::Hv => HV_LOG_LEVEL,
+            LogArea::Apps => APPS_LOG_LEVEL,
+            LogArea::ExecutorRealm => EXECUTOR_REALM_LOG_LEVEL,
+            LogArea::ExecutorCache => EXECUTOR_CACHE_LOG_LEVEL,
+            LogArea::IntelMediaNgin => INTEL_MEDIA_NGIN_LOG_LEVEL,
+            LogArea::Blueprint => BLUEPRINT_LOG_LEVEL,
+            _ => log_os::default_area_log_policy(area),
+        }
     }
 
-    fn write(&self, purpose: Option<&str>, args: fmt::Arguments<'_>) {
+    pub(crate) fn area_log_enabled(area: LogArea, level: Level) -> bool {
+        log_os::level_enabled(area_log_policy(area), level)
+    }
+}
+
+static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
+struct TcpLogSink;
+
+impl log_os::GlobalLogSink for TcpLogSink {
+    fn spec(&self) -> log_os::GlobalLogSinkSpec {
+        log_os::GlobalLogSinkSpec::new(
+            log_os::LogAreaSet::ALL,
+            log_os::LogLevelPolicy::up(log::LevelFilter::Trace),
+        )
+    }
+
+    fn level_policy(&self, area: flags::LogArea) -> log_os::LogLevelPolicy {
+        flags::area_log_policy(area)
+    }
+
+    fn write_accepted(&self, purpose: Option<&str>, args: fmt::Arguments<'_>) {
         write_with_purpose(purpose, args);
     }
 }
 
-static TRUEOS_LOG_SINK: TrueOsLogSink = TrueOsLogSink;
-static KERNEL_LOG_FACADE: log_os::GlobalLogFacade<TrueOsLogSink> =
-    log_os::GlobalLogFacade::new(&TRUEOS_LOG_SINK);
+static TCP_LOG_SINK: TcpLogSink = TcpLogSink;
+static TRUEOS_LOG_SINKS: [&'static dyn log_os::GlobalLogSink; 1] = [&TCP_LOG_SINK];
+static TRUEOS_LOG_ROUTER: log_os::GlobalLogRouter = log_os::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
+static KERNEL_LOG_FACADE: log_os::GlobalLogFacade<log_os::GlobalLogRouter> =
+    log_os::GlobalLogFacade::new(&TRUEOS_LOG_ROUTER);
 
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
         $crate::globalog::log_with_area_purpose(
-            $crate::logflag::LogArea::Global,
+            $crate::globalog::flags::LogArea::Global,
             log::Level::Info,
             Some($purpose),
             format_args!($($tt)*),
@@ -125,8 +217,21 @@ macro_rules! log_error {
     }};
 }
 
+#[macro_export]
+macro_rules! audio_probe {
+    ($($tt:tt)*) => {{
+        $crate::globalog::audio_probe(format_args!($($tt)*));
+    }};
+}
+
 pub fn log(args: fmt::Arguments<'_>) {
-    log_os::log(&TRUEOS_LOG_SINK, args);
+    log_os::log(&TRUEOS_LOG_ROUTER, args);
+}
+
+pub(crate) fn audio_probe(args: fmt::Arguments<'_>) {
+    let _guard = LOG_WRITE_LOCK.lock();
+    logtotcp::log(format_args!("[audio] "));
+    logtotcp::log(args);
 }
 
 fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
@@ -158,25 +263,21 @@ fn write_with_purpose(purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _ = fmt::write(&mut writer, args);
 }
 
-pub fn log_with_area_level(
-    area: crate::logflag::LogArea,
-    level: log::Level,
-    args: fmt::Arguments<'_>,
-) {
-    log_os::log_with_area_level(&TRUEOS_LOG_SINK, area, level, args);
+pub fn log_with_area_level(area: flags::LogArea, level: log::Level, args: fmt::Arguments<'_>) {
+    log_os::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);
 }
 
 pub fn log_with_area_purpose(
-    area: crate::logflag::LogArea,
+    area: flags::LogArea,
     level: log::Level,
     purpose: Option<&str>,
     args: fmt::Arguments<'_>,
 ) {
-    log_os::log_with_area_purpose(&TRUEOS_LOG_SINK, area, level, purpose, args);
+    log_os::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
 }
 
 pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {
-    log_os::log_with_target_level(&TRUEOS_LOG_SINK, target, level, args);
+    log_os::log_with_target_level(&TRUEOS_LOG_ROUTER, target, level, args);
 }
 
 pub fn init_log_facade() {
@@ -258,7 +359,7 @@ pub mod logtotcp {
 
     static RING: Mutex<TcpLogRing> = Mutex::new(TcpLogRing::new());
 
-    pub(super) fn log(args: fmt::Arguments<'_>) {
+    pub(crate) fn log(args: fmt::Arguments<'_>) {
         struct Writer;
 
         impl fmt::Write for Writer {

@@ -198,12 +198,19 @@ enum BackendProbeMode {
     MesaLike,
     PsBindingTableCountZero,
     PsBindingTableCountOne,
+    PsWmNormalBt0,
+    PsWmNormalBt0CpDep,
+    PsPrmEarlyRasterGate,
+    PsPrmRasterGateSbeBeforeSf,
+    PsPrmSbeNoAttrSwizzle,
+    PsPrmNoPrimitiveReplication,
     WmNormalDispatch,
     PsExtraBeforePs,
     PsWmReemitAfterPsExtra,
     PsOmitWmHzOp,
     PsSampleAll,
     PsSbeRead0,
+    PsSbeBeforeSf,
     PsNoPrimitiveReplication,
     PsNoWriteableRt,
     PsNoCcPointer,
@@ -403,12 +410,19 @@ impl BackendProbeMode {
             Self::MesaLike => "mesa-like",
             Self::PsBindingTableCountZero => "ps-bt-count-0",
             Self::PsBindingTableCountOne => "ps-bt-count-1",
+            Self::PsWmNormalBt0 => "ps-wm-normal-bt0",
+            Self::PsWmNormalBt0CpDep => "ps-wm-normal-bt0-cpdep",
+            Self::PsPrmEarlyRasterGate => "ps-prm-early-raster-gate",
+            Self::PsPrmRasterGateSbeBeforeSf => "ps-prm-raster-gate-sbe-before-sf",
+            Self::PsPrmSbeNoAttrSwizzle => "ps-prm-sbe-no-attr-swizzle",
+            Self::PsPrmNoPrimitiveReplication => "ps-prm-no-primitive-replication",
             Self::WmNormalDispatch => "wm-normal-dispatch",
             Self::PsExtraBeforePs => "ps-extra-before-ps",
             Self::PsWmReemitAfterPsExtra => "ps-wm-reemit-after-ps-extra",
             Self::PsOmitWmHzOp => "ps-omit-wm-hz-op",
             Self::PsSampleAll => "ps-sample-all",
             Self::PsSbeRead0 => "ps-sbe-read0",
+            Self::PsSbeBeforeSf => "ps-sbe-before-sf",
             Self::PsNoPrimitiveReplication => "ps-no-primitive-replication",
             Self::PsNoWriteableRt => "ps-no-writeable-rt",
             Self::PsNoCcPointer => "ps-no-cc-pointer",
@@ -778,9 +792,19 @@ impl BackendProbeMode {
     fn suppress_forced_wm_thread_dispatch(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaWmNormalDispatch
+            Self::PsWmNormalBt0
+                | Self::PsWmNormalBt0CpDep
+                | Self::PsPrmEarlyRasterGate
+                | Self::PsPrmRasterGateSbeBeforeSf
+                | Self::PsPrmSbeNoAttrSwizzle
+                | Self::PsPrmNoPrimitiveReplication
+                | Self::RasterWmInputOaWmNormalDispatch
                 | Self::RasterWmInputOaPointWidth64WmNormalDispatch
         )
+    }
+
+    fn force_ps_dependency_on_cpsize_change(self) -> bool {
+        matches!(self, Self::PsWmNormalBt0CpDep)
     }
 
     fn reemit_wm_after_ps_extra(self) -> bool {
@@ -858,14 +882,24 @@ impl BackendProbeMode {
     fn early_sample_mask_only(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaSampleMaskEarlyOnly | Self::RasterWmInputOaSampleAll
+            Self::RasterWmInputOaSampleMaskEarlyOnly
+                | Self::RasterWmInputOaSampleAll
+                | Self::PsPrmEarlyRasterGate
+                | Self::PsPrmRasterGateSbeBeforeSf
+                | Self::PsPrmSbeNoAttrSwizzle
+                | Self::PsPrmNoPrimitiveReplication
         )
     }
 
     fn early_draw_rect_only(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaDrawRectEarlyOnly | Self::RasterWmInputOaSampleAll
+            Self::RasterWmInputOaDrawRectEarlyOnly
+                | Self::RasterWmInputOaSampleAll
+                | Self::PsPrmEarlyRasterGate
+                | Self::PsPrmRasterGateSbeBeforeSf
+                | Self::PsPrmSbeNoAttrSwizzle
+                | Self::PsPrmNoPrimitiveReplication
         )
     }
 
@@ -943,7 +977,19 @@ impl BackendProbeMode {
     fn sbe_before_sf(self) -> bool {
         matches!(
             self,
-            Self::RasterWmInputOaSbeBeforeSf | Self::RasterWmInputOaPointWidth64SbeBeforeSf
+            Self::PsSbeBeforeSf
+                | Self::PsPrmRasterGateSbeBeforeSf
+                | Self::PsPrmSbeNoAttrSwizzle
+                | Self::PsPrmNoPrimitiveReplication
+                | Self::RasterWmInputOaSbeBeforeSf
+                | Self::RasterWmInputOaPointWidth64SbeBeforeSf
+        )
+    }
+
+    fn disable_sbe_attr_swizzle(self) -> bool {
+        matches!(
+            self,
+            Self::PsPrmSbeNoAttrSwizzle | Self::PsPrmNoPrimitiveReplication
         )
     }
 
@@ -1025,7 +1071,9 @@ impl BackendProbeMode {
     fn disable_primitive_replication(self) -> bool {
         matches!(
             self,
-            Self::PsNoPrimitiveReplication | Self::RasterWmInputOaNoPrimitiveReplication
+            Self::PsPrmNoPrimitiveReplication
+                | Self::PsNoPrimitiveReplication
+                | Self::RasterWmInputOaNoPrimitiveReplication
         )
     }
 
@@ -1230,6 +1278,8 @@ impl VfPrimitiveGeometry {
 enum StreamoutProofExperiment {
     PositionSlot0,
     PositionSlot1,
+    PrmVueHeaderPositionSlots01,
+    PrmVueHeaderPositionXywzSlots01,
     HeaderAndPositionSlots01,
     PointSizeSlot0PositionSlot1,
 }
@@ -1241,6 +1291,8 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 => "pos-slot0",
             Self::PositionSlot1 => "pos-slot1",
+            Self::PrmVueHeaderPositionSlots01 => "prm-vue-header+pos-slots01",
+            Self::PrmVueHeaderPositionXywzSlots01 => "prm-vue-header+pos-xywz-slots01",
             Self::HeaderAndPositionSlots01 => "header+pos-slots01",
             Self::PointSizeSlot0PositionSlot1 => "point-size-slot0+pos-slot1",
         }
@@ -1250,6 +1302,8 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 => Self::PositionSlot1,
             Self::PositionSlot1 => Self::HeaderAndPositionSlots01,
+            Self::PrmVueHeaderPositionSlots01 => Self::PositionSlot0,
+            Self::PrmVueHeaderPositionXywzSlots01 => Self::PositionSlot0,
             Self::HeaderAndPositionSlots01 => Self::PositionSlot0,
             Self::PointSizeSlot0PositionSlot1 => Self::PositionSlot1,
         }
@@ -1258,7 +1312,10 @@ impl StreamoutProofExperiment {
     fn vertex_bytes(self) -> usize {
         match self {
             Self::PositionSlot0 | Self::PositionSlot1 => 16,
-            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => 32,
+            Self::PrmVueHeaderPositionSlots01
+            | Self::PrmVueHeaderPositionXywzSlots01
+            | Self::HeaderAndPositionSlots01
+            | Self::PointSizeSlot0PositionSlot1 => 32,
         }
     }
 
@@ -1271,9 +1328,10 @@ impl StreamoutProofExperiment {
             Self::PositionSlot0 | Self::PositionSlot1 => {
                 3 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
             }
-            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => {
-                5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
-            }
+            Self::PrmVueHeaderPositionSlots01
+            | Self::PrmVueHeaderPositionXywzSlots01
+            | Self::HeaderAndPositionSlots01
+            | Self::PointSizeSlot0PositionSlot1 => 5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
         }
     }
 
@@ -1284,7 +1342,10 @@ impl StreamoutProofExperiment {
     fn so_decl_num_entries(self) -> u32 {
         match self {
             Self::PositionSlot0 | Self::PositionSlot1 => 1,
-            Self::HeaderAndPositionSlots01 | Self::PointSizeSlot0PositionSlot1 => 2,
+            Self::PrmVueHeaderPositionSlots01
+            | Self::PrmVueHeaderPositionXywzSlots01
+            | Self::HeaderAndPositionSlots01
+            | Self::PointSizeSlot0PositionSlot1 => 2,
         }
     }
 
@@ -1292,6 +1353,12 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 => [0x0000_000F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
             Self::PositionSlot1 => [0x0000_001F, 0x0000_0000, 0x0000_0000, 0x0000_0000],
+            Self::PrmVueHeaderPositionSlots01 => {
+                [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000]
+            }
+            Self::PrmVueHeaderPositionXywzSlots01 => {
+                [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000]
+            }
             Self::HeaderAndPositionSlots01 => [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000],
             Self::PointSizeSlot0PositionSlot1 => {
                 [0x0000_000F, 0x0000_0000, 0x0000_001F, 0x0000_0000]
@@ -1307,6 +1374,8 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 => "slot0=position",
             Self::PositionSlot1 => "slot0=zero slot1=position",
+            Self::PrmVueHeaderPositionSlots01 => "slot0=prm-vue-header slot1=position",
+            Self::PrmVueHeaderPositionXywzSlots01 => "slot0=prm-vue-header slot1=position-xywz",
             Self::HeaderAndPositionSlots01 => "slot0=header slot1=position",
             Self::PointSizeSlot0PositionSlot1 => "slot0=point-size slot1=position",
         }
@@ -1316,6 +1385,8 @@ impl StreamoutProofExperiment {
         match self {
             Self::PositionSlot0 => 1,
             Self::PositionSlot1
+            | Self::PrmVueHeaderPositionSlots01
+            | Self::PrmVueHeaderPositionXywzSlots01
             | Self::HeaderAndPositionSlots01
             | Self::PointSizeSlot0PositionSlot1 => 2,
         }

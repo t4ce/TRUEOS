@@ -19,12 +19,14 @@ const TONE_SOURCE_ENABLED: bool = false;
 const PCM_DUMP_ENABLED: bool = false;
 const PCM_DUMP_SECONDS: usize = 10;
 const PCM_DUMP_PATH: &str = "audio/tinyaudio-prehda.wav";
+const BLUEPRINT_PCM_DUMP_ENABLED: bool = true;
+const BLUEPRINT_PCM_DUMP_SECONDS: usize = 15;
+const BLUEPRINT_PCM_DUMP_PATH: &str = "audio/blueprint-prehda.wav";
 const PCM_DUMP_POLL_MS: u64 = 1_000;
 const LIVE_PCM_RING_SECONDS: usize = 4;
 const PIANO_PRODUCER_VOLUME: f32 = 1.0;
-const PIANO_PRODUCER_DUCKED_VOLUME: f32 = 0.22;
 const TONE_PRODUCER_VOLUME: f32 = 1.0;
-const BLUEPRINT_PCM_PRODUCER_VOLUME: f32 = 0.86;
+const BLUEPRINT_PCM_PRODUCER_VOLUME: f32 = 1.0;
 const OUTPUT_LIMITER_KNEE: f32 = 0.82;
 const OUTPUT_LIMITER_CEILING: f32 = 0.995;
 
@@ -56,6 +58,7 @@ struct PcmDumpCapture {
     target_samples: usize,
     complete: bool,
     taken: bool,
+    armed: bool,
 }
 
 struct LivePcmRing {
@@ -79,20 +82,23 @@ impl TinyaudioDemoMixer {
         }
     }
 
+    fn blueprint_active(&self) -> bool {
+        self.overlay.active_or_pending()
+    }
+
     fn render(&mut self, data: &mut [f32]) {
         CALLBACKS.fetch_add(1, Ordering::AcqRel);
         SAMPLES_WRITTEN.fetch_add(data.len().min(u32::MAX as usize) as u32, Ordering::AcqRel);
 
         data.fill(0.0);
-        let blueprint_active = self.overlay.active_or_pending();
-        let piano_volume = if blueprint_active {
-            PIANO_PRODUCER_DUCKED_VOLUME
-        } else {
-            PIANO_PRODUCER_VOLUME
-        };
-        self.piano.mix_into(data, piano_volume);
+        if self.blueprint_active() {
+            self.overlay.mix_into(data);
+            clamp_output(data);
+            return;
+        }
+
+        self.piano.mix_into(data, PIANO_PRODUCER_VOLUME);
         self.tone.mix_into(data, TONE_PRODUCER_VOLUME);
-        self.overlay.mix_into(data);
         apply_output_limiter(data);
     }
 }
@@ -105,11 +111,12 @@ impl PcmDumpCapture {
             target_samples,
             complete: target_samples == 0,
             taken: false,
+            armed: true,
         }
     }
 
     fn capture_f32(&mut self, data: &[f32]) {
-        if self.complete || self.taken {
+        if !self.armed || self.complete || self.taken {
             return;
         }
 
@@ -123,12 +130,28 @@ impl PcmDumpCapture {
         }
     }
 
+    fn capture_f32_when(&mut self, active: bool, data: &[f32]) {
+        if self.complete || self.taken {
+            return;
+        }
+        if active {
+            self.armed = true;
+        }
+        self.capture_f32(data);
+    }
+
     fn take_samples_if_complete(&mut self) -> Option<Vec<i16>> {
         if !self.complete || self.taken {
             return None;
         }
         self.taken = true;
         Some(core::mem::take(&mut self.samples))
+    }
+
+    fn disarmed(seconds: usize) -> Self {
+        let mut capture = Self::new(seconds);
+        capture.armed = false;
+        capture
     }
 }
 
@@ -254,7 +277,13 @@ impl PcmOverlaySource {
         if generation != self.stop_generation {
             self.stop_generation = generation;
             if let Some(current) = self.current.take() {
-                crate::log!(
+                crate::log_info!(
+                    target: "audio";
+                    "tinyaudio-service: overlay stop label={} samples={}\n",
+                    current.label,
+                    current.samples.len()
+                );
+                crate::audio_probe!(
                     "tinyaudio-service: overlay stop label={} samples={}\n",
                     current.label,
                     current.samples.len()
@@ -269,7 +298,14 @@ impl PcmOverlaySource {
     fn take_pending(&mut self) {
         let next = crate::aud::pcm_lane::take_pending();
         if let Some(next) = next {
-            crate::log!(
+            crate::log_info!(
+                target: "audio";
+                "tinyaudio-service: overlay start label={} samples={} frames={}\n",
+                next.label,
+                next.samples.len(),
+                next.samples.len() / CHANNELS
+            );
+            crate::audio_probe!(
                 "tinyaudio-service: overlay start label={} samples={} frames={}\n",
                 next.label,
                 next.samples.len(),
@@ -320,7 +356,13 @@ impl PcmOverlaySource {
             self.cursor += take;
             out_offset += take;
             if self.cursor >= current.samples.len() {
-                crate::log!(
+                crate::log_info!(
+                    target: "audio";
+                    "tinyaudio-service: overlay done label={} samples={}\n",
+                    current.label,
+                    current.samples.len()
+                );
+                crate::audio_probe!(
                     "tinyaudio-service: overlay done label={} samples={}\n",
                     current.label,
                     current.samples.len()
@@ -345,6 +387,12 @@ fn apply_output_limiter(data: &mut [f32]) {
     }
 }
 
+fn clamp_output(data: &mut [f32]) {
+    for sample in data {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
+}
+
 impl ToneSource {
     fn new(freq_hz: u32, sample_rate: usize, gain: f32, enabled: bool) -> Self {
         Self {
@@ -362,8 +410,7 @@ impl ToneSource {
 
         for frame in data.chunks_mut(CHANNELS) {
             let idx = (self.phase >> SINE_TABLE_SHIFT) as usize;
-            let sample =
-                crate::aud::tables::SINE_TABLE[idx] as f32 / 32_767.0 * self.gain * volume;
+            let sample = crate::aud::tables::SINE_TABLE[idx] as f32 / 32_767.0 * self.gain * volume;
             self.phase = self.phase.wrapping_add(self.phase_step);
 
             for out in frame.iter_mut() {
@@ -435,11 +482,17 @@ fn wav_pcm_s16_stereo_48k(samples: &[i16]) -> Vec<u8> {
     wav
 }
 
-async fn write_pcm_dump(samples: Vec<i16>) {
+async fn write_pcm_dump(path: &'static str, seconds: usize, samples: Vec<i16>) {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!(
+        crate::log_warn!(
+            target: "audio";
             "tinyaudio-service: pcm-dump skipped path={} samples={} err=no-root\n",
-            PCM_DUMP_PATH,
+            path,
+            samples.len()
+        );
+        crate::audio_probe!(
+            "tinyaudio-service: pcm-dump skipped path={} samples={} err=no-root\n",
+            path,
             samples.len()
         );
         return;
@@ -447,27 +500,48 @@ async fn write_pcm_dump(samples: Vec<i16>) {
 
     let wav = wav_pcm_s16_stereo_48k(samples.as_slice());
     let bytes = wav.len();
-    match crate::r::fs::trueosfs::file_in_async(disk, PCM_DUMP_PATH, wav.as_slice()).await {
+    match crate::r::fs::trueosfs::file_in_async(disk, path, wav.as_slice()).await {
         Ok(true) => {
-            crate::log!(
+            crate::log_info!(
+                target: "audio";
                 "tinyaudio-service: pcm-dump wrote path={} bytes={} samples={} seconds={}\n",
-                PCM_DUMP_PATH,
+                path,
                 bytes,
                 samples.len(),
-                PCM_DUMP_SECONDS
+                seconds
+            );
+            crate::audio_probe!(
+                "tinyaudio-service: pcm-dump wrote path={} bytes={} samples={} seconds={}\n",
+                path,
+                bytes,
+                samples.len(),
+                seconds
             );
         }
         Ok(false) => {
-            crate::log!(
+            crate::log_warn!(
+                target: "audio";
                 "tinyaudio-service: pcm-dump failed path={} bytes={} err=no-space\n",
-                PCM_DUMP_PATH,
+                path,
+                bytes
+            );
+            crate::audio_probe!(
+                "tinyaudio-service: pcm-dump failed path={} bytes={} err=no-space\n",
+                path,
                 bytes
             );
         }
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(
+                target: "audio";
                 "tinyaudio-service: pcm-dump failed path={} bytes={} err={:?}\n",
-                PCM_DUMP_PATH,
+                path,
+                bytes,
+                err
+            );
+            crate::audio_probe!(
+                "tinyaudio-service: pcm-dump failed path={} bytes={} err={:?}\n",
+                path,
                 bytes,
                 err
             );
@@ -480,7 +554,12 @@ pub async fn tinyaudio_service_task() {
     CALLBACKS.store(0, Ordering::Release);
     SAMPLES_WRITTEN.store(0, Ordering::Release);
 
-    crate::log!(
+    crate::log_info!(
+        target: "audio";
+        "tinyaudio-service: audio task start slot={} policy=ap1-ui-service\n",
+        crate::percpu::current_slot()
+    );
+    crate::audio_probe!(
         "tinyaudio-service: audio task start slot={} policy=ap1-ui-service\n",
         crate::percpu::current_slot()
     );
@@ -492,7 +571,8 @@ pub async fn tinyaudio_service_task() {
         channel_sample_count: CHANNEL_SAMPLE_COUNT,
     };
     let (backing_enabled, backing_bpm, backing_volume_pct) = backing_config();
-    crate::log!(
+    crate::log_info!(
+        target: "audio";
         "tinyaudio-service: config channels={} rate={} frames={} piano={} tone={} backing={} backing_bpm={} backing_vol={}%\n",
         params.channels_count,
         params.sample_rate,
@@ -510,17 +590,42 @@ pub async fn tinyaudio_service_task() {
         None
     };
     let dump_for_callback = dump.as_ref().map(Arc::clone);
+    let blueprint_dump = if BLUEPRINT_PCM_DUMP_ENABLED {
+        Some(Arc::new(Mutex::new(PcmDumpCapture::disarmed(BLUEPRINT_PCM_DUMP_SECONDS))))
+    } else {
+        None
+    };
+    let blueprint_dump_for_callback = blueprint_dump.as_ref().map(Arc::clone);
     let mut mixer = TinyaudioDemoMixer::new(params);
+    let mut blueprint_dump_was_active = false;
     let device = match run_output_device(params, move |data| {
+        let blueprint_active = mixer.blueprint_active();
+        if blueprint_active && !blueprint_dump_was_active {
+            crate::log_info!(
+                target: "audio";
+                "tinyaudio-service: blueprint-prehda-dump armed path={} seconds={}\n",
+                BLUEPRINT_PCM_DUMP_PATH,
+                BLUEPRINT_PCM_DUMP_SECONDS
+            );
+            crate::audio_probe!(
+                "tinyaudio-service: blueprint-prehda-dump armed path={} seconds={}\n",
+                BLUEPRINT_PCM_DUMP_PATH,
+                BLUEPRINT_PCM_DUMP_SECONDS
+            );
+        }
+        blueprint_dump_was_active = blueprint_active;
         mixer.render(data);
         live_pcm_push_f32(data);
         if let Some(dump) = dump_for_callback.as_ref() {
             dump.lock().capture_f32(data);
         }
+        if let Some(dump) = blueprint_dump_for_callback.as_ref() {
+            dump.lock().capture_f32_when(blueprint_active, data);
+        }
     }) {
         Ok(device) => device,
         Err(err) => {
-            crate::log_warn!(target: "service"; "tinyaudio-service: open err={}\n", err);
+            crate::log_warn!(target: "audio"; "tinyaudio-service: open err={}\n", err);
             return;
         }
     };
@@ -534,13 +639,21 @@ pub async fn tinyaudio_service_task() {
         if let Some(dump) = dump.as_ref() {
             let samples = { dump.lock().take_samples_if_complete() };
             if let Some(samples) = samples {
-                write_pcm_dump(samples).await;
+                write_pcm_dump(PCM_DUMP_PATH, PCM_DUMP_SECONDS, samples).await;
+            }
+        }
+
+        if let Some(dump) = blueprint_dump.as_ref() {
+            let samples = { dump.lock().take_samples_if_complete() };
+            if let Some(samples) = samples {
+                write_pcm_dump(BLUEPRINT_PCM_DUMP_PATH, BLUEPRINT_PCM_DUMP_SECONDS, samples).await;
             }
         }
 
         if heartbeat_elapsed_ms >= SERVICE_HEARTBEAT_MS {
             heartbeat_elapsed_ms = 0;
-            crate::log!(
+            crate::log_info!(
+                target: "audio";
                 "tinyaudio-service: live callbacks={} samples={}\n",
                 CALLBACKS.load(Ordering::Acquire),
                 SAMPLES_WRITTEN.load(Ordering::Acquire)

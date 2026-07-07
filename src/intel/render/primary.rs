@@ -2337,7 +2337,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
 }
 
 #[derive(Copy, Clone)]
-struct FontPsAdmissionLadderCase {
+struct FontPsAdmissionProbeCase {
     index: u8,
     variant: &'static str,
     submit_name: &'static str,
@@ -2348,8 +2348,8 @@ struct FontPsAdmissionLadderCase {
     note: &'static str,
 }
 
-const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
-    FontPsAdmissionLadderCase {
+const FONT_PS_ADMISSION_PROBE_CASES: [FontPsAdmissionProbeCase; 6] = [
+    FontPsAdmissionProbeCase {
         index: 1,
         variant: "font-clip-field-vf-vue-ps-admit-01-baseline-scratch",
         submit_name: "font-tessel-clip-field-vf-vue-ps-admit-01-baseline-scratch",
@@ -2359,7 +2359,7 @@ const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
         backend: BackendProbeMode::MesaLike,
         note: "baseline-mesa-zeroed-cc-valid",
     },
-    FontPsAdmissionLadderCase {
+    FontPsAdmissionProbeCase {
         index: 2,
         variant: "font-clip-field-vf-vue-ps-admit-02-explicit-rt0-scratch",
         submit_name: "font-tessel-clip-field-vf-vue-ps-admit-02-explicit-rt0-scratch",
@@ -2369,7 +2369,7 @@ const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
         backend: BackendProbeMode::MesaLike,
         note: "explicit-rt0-blend-state",
     },
-    FontPsAdmissionLadderCase {
+    FontPsAdmissionProbeCase {
         index: 3,
         variant: "font-clip-field-vf-vue-ps-admit-03-no-blend-ptr-scratch",
         submit_name: "font-tessel-clip-field-vf-vue-ps-admit-03-no-blend-ptr-scratch",
@@ -2379,7 +2379,7 @@ const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
         backend: BackendProbeMode::MesaLike,
         note: "zero-blend-state-pointer",
     },
-    FontPsAdmissionLadderCase {
+    FontPsAdmissionProbeCase {
         index: 4,
         variant: "font-clip-field-vf-vue-ps-admit-04-no-cc-ptr-scratch",
         submit_name: "font-tessel-clip-field-vf-vue-ps-admit-04-no-cc-ptr-scratch",
@@ -2389,7 +2389,7 @@ const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
         backend: BackendProbeMode::PsNoCcPointer,
         note: "zero-cc-state-pointer",
     },
-    FontPsAdmissionLadderCase {
+    FontPsAdmissionProbeCase {
         index: 5,
         variant: "font-clip-field-vf-vue-ps-admit-05-bt1-explicit-scratch",
         submit_name: "font-tessel-clip-field-vf-vue-ps-admit-05-bt1-explicit-scratch",
@@ -2399,21 +2399,21 @@ const FONT_PS_ADMISSION_LADDER_CASES: [FontPsAdmissionLadderCase; 6] = [
         backend: BackendProbeMode::PsBindingTableCountOne,
         note: "bt-count-one-plus-explicit-rt0",
     },
-    FontPsAdmissionLadderCase {
+    FontPsAdmissionProbeCase {
         index: 6,
-        variant: "font-clip-field-vf-vue-ps-admit-06-no-writeable-rt-scratch",
-        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-06-no-writeable-rt-scratch",
-        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-06-no-writeable-rt",
-        source_label: "ps-admission/full-coverage-clip/no-writeable-rt",
+        variant: "font-clip-field-vf-vue-ps-admit-06-prm-vue-xywz-scratch",
+        submit_name: "font-tessel-clip-field-vf-vue-ps-admit-06-prm-vue-xywz-scratch",
+        geometry_label: "font-tessel-clip-field-vf-vue-ps-admit-06-prm-vue-xywz",
+        source_label: "ps-admission/full-coverage-clip/prm-vue-xywz+raster-gate+sbe-before-sf+no-swizzle+no-prim-repl+vp-extents",
         blend_mode: TriangleBlendProbeMode::MesaZeroedState,
-        backend: BackendProbeMode::PsNoWriteableRt,
-        note: "ps-blend-writeable-rt-off-force-wm-on",
+        backend: BackendProbeMode::PsPrmNoPrimitiveReplication,
+        note: "vf-written-vue-prm-header-xywz+early-raster-gate+sbe-before-sf+no-attr-swizzle+no-primitive-replication+sf-vp-extents",
     },
 ];
 
-const FONT_PS_ADMISSION_ACTIVE_RUNG: u8 = 5;
+const FONT_PS_ADMISSION_ACTIVE_CASE: u8 = 6;
 
-pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
+pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
     _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
 ) -> Result<RenderJokerResult, &'static str> {
     if PRIMARY_PROBE_IN_FLIGHT
@@ -2428,12 +2428,12 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
     let mut completed_count = 0u8;
     let mut positive_index = 0u8;
 
-    for case in FONT_PS_ADMISSION_LADDER_CASES {
-        if case.index != FONT_PS_ADMISSION_ACTIVE_RUNG {
+    for case in FONT_PS_ADMISSION_PROBE_CASES {
+        if case.index != FONT_PS_ADMISSION_ACTIVE_CASE {
             continue;
         }
         intel_render_focus_log!(
-            "intel/render: {} ps-admission-ladder begin index={} backend={} blend={} vertices=hardcoded-full-coverage-clip suspect=rt-cc-blend-state note={}\n",
+            "intel/render: {} ps-admission-probe begin index={} backend={} blend={} vertices=hardcoded-full-coverage-clip suspect=prm-vue-position-xywz note={}\n",
             case.submit_name,
             case.index,
             case.backend.label(),
@@ -2451,13 +2451,13 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
             PostDrawSyncVariant::LightPostSyncNoCs,
             VF_VUE_REAL_VS_FRONT_END_CONTRACT,
             TriangleBatchMode::VfDraw,
-            StreamoutProofExperiment::PositionSlot0,
+            StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01,
         ) {
             Ok(render) => {
                 completed_count += render.completed as u8;
                 let positive = render.ps_observed;
                 intel_render_focus_log!(
-                    "intel/render: {} ps-admission-ladder result index={} completed={} ps_observed={} target={} note={}\n",
+                    "intel/render: {} ps-admission-probe result index={} completed={} ps_observed={} target={} note={}\n",
                     case.submit_name,
                     case.index,
                     render.completed as u8,
@@ -2471,7 +2471,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
                 last_result = Some(render);
             }
             Err(err) => intel_render_focus_log!(
-                "intel/render: {} ps-admission-ladder result index={} status=error reason={} note={}\n",
+                "intel/render: {} ps-admission-probe result index={} status=error reason={} note={}\n",
                 case.submit_name,
                 case.index,
                 err,
@@ -2481,10 +2481,10 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_ladder_probe(
     }
 
     intel_render_focus_log!(
-        "intel/render: font-tessel-clip-field-vf-vue-ps-admission-ladder active_rung={} completed_cases={} total_cases={} positive_index={} note=rt-cc-blend-state-ladder\n",
-        FONT_PS_ADMISSION_ACTIVE_RUNG,
+        "intel/render: font-tessel-clip-field-vf-vue-ps-admission active_case={} completed_cases={} total_cases={} positive_index={} note=vf-written-vue-prm-header-xywz+early-raster-gate+sbe-before-sf+no-attr-swizzle+no-primitive-replication+sf-vp-extents\n",
+        FONT_PS_ADMISSION_ACTIVE_CASE,
         completed_count,
-        FONT_PS_ADMISSION_LADDER_CASES.len(),
+        FONT_PS_ADMISSION_PROBE_CASES.len(),
         positive_index
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
@@ -5707,15 +5707,29 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> bool {
-    let Some(draw) = prepare_triangle_draw_resources_for_vertex_slice(
-        warm,
-        dst_gpu_addr,
-        pitch,
-        rect_w,
-        rect_h,
-        geometry_label,
-        vertices,
-    ) else {
+    let draw = if batch_mode.vf_synthesized_vue() {
+        prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
+            warm,
+            dst_gpu_addr,
+            pitch,
+            rect_w,
+            rect_h,
+            geometry_label,
+            vertices,
+            streamout_experiment,
+        )
+    } else {
+        prepare_triangle_draw_resources_for_vertex_slice(
+            warm,
+            dst_gpu_addr,
+            pitch,
+            rect_w,
+            rect_h,
+            geometry_label,
+            vertices,
+        )
+    };
+    let Some(draw) = draw else {
         crate::log!(
             "intel/render: {} staging skipped reason=resource-layout size={}x{} pitch=0x{:X} geometry={}\n",
             submit_name,

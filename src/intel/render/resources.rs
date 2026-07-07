@@ -366,6 +366,48 @@ fn prepare_triangle_draw_resources_for_vertex_slice(
     })
 }
 
+fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    vertices: &[[f32; 3]],
+    experiment: StreamoutProofExperiment,
+) -> Option<TriangleDrawPrep> {
+    let target_w = u32::try_from(rect_w).ok()?;
+    let target_h = u32::try_from(rect_h).ok()?;
+    let rt_pitch = u32::try_from(pitch).ok()?;
+    if vertices.is_empty() || vertices.len() % 3 != 0 {
+        return None;
+    }
+    if warm.vertex_len < vertices.len().saturating_mul(experiment.vertex_bytes()) {
+        return None;
+    }
+    if warm.draw_state_len == 0 {
+        return None;
+    }
+
+    let vertex_proof = write_vf_vue_vertex_slice(warm, label, vertices, experiment)?;
+
+    unsafe {
+        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    }
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+
+    Some(TriangleDrawPrep {
+        vertex_count: vertex_proof.vertex_count,
+        vertex_stride: vertex_proof.vertex_stride,
+        vertex_gpu_addr: vertex_proof.gpu_addr,
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_pitch,
+        target_w,
+        target_h,
+    })
+}
+
 fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
     write_triangle_vertices_for_geometry(warm, VfPrimitiveGeometry::Canonical)
 }
@@ -475,6 +517,142 @@ fn write_triangle_vertex_slice(
     })
 }
 
+fn write_vf_vue_vertex_slice(
+    warm: RenderWarmState,
+    label: &'static str,
+    triangle: &[[f32; 3]],
+    experiment: StreamoutProofExperiment,
+) -> Option<TriangleVertexUploadProof> {
+    let vertex_stride = experiment.vertex_bytes();
+    let byte_len = triangle.len().checked_mul(vertex_stride)?;
+    if warm.vertex_len < byte_len || warm.vertex_virt.is_null() {
+        return None;
+    }
+
+    let words = unsafe {
+        core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4)
+    };
+    words.fill(0);
+
+    for (idx, pos) in triangle.iter().enumerate() {
+        match experiment {
+            StreamoutProofExperiment::PositionSlot0 | StreamoutProofExperiment::PositionSlot1 => {
+                let base = idx * 4;
+                words[base + 0] = pos[0].to_bits();
+                words[base + 1] = pos[1].to_bits();
+                words[base + 2] = pos[2].to_bits();
+                words[base + 3] = 1.0f32.to_bits();
+            }
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01 => {
+                let base = idx * 8;
+                words[base + 0] = 0;
+                words[base + 1] = 0;
+                words[base + 2] = 0;
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = pos[0].to_bits();
+                words[base + 5] = pos[1].to_bits();
+                words[base + 6] = pos[2].to_bits();
+                words[base + 7] = 1.0f32.to_bits();
+                intel_render_focus_log!(
+                    "intel/render: vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    idx,
+                    label,
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    words[base + 3],
+                    f32::from_bits(words[base + 4]),
+                    f32::from_bits(words[base + 5]),
+                    f32::from_bits(words[base + 6]),
+                    f32::from_bits(words[base + 7]),
+                );
+            }
+            StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01 => {
+                let base = idx * 8;
+                words[base + 0] = 0;
+                words[base + 1] = 0;
+                words[base + 2] = 0;
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = pos[0].to_bits();
+                words[base + 5] = pos[1].to_bits();
+                words[base + 6] = 1.0f32.to_bits();
+                words[base + 7] = pos[2].to_bits();
+                intel_render_focus_log!(
+                    "intel/render: vf-prm-vue-header-source v{} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    idx,
+                    label,
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    words[base + 3],
+                    f32::from_bits(words[base + 4]),
+                    f32::from_bits(words[base + 5]),
+                    f32::from_bits(words[base + 6]),
+                    f32::from_bits(words[base + 7]),
+                );
+            }
+            StreamoutProofExperiment::HeaderAndPositionSlots01 => {
+                let base = idx * 8;
+                words[base + 0] = 0x5155_0000 | idx as u32;
+                words[base + 1] = 0x5155_1000 | idx as u32;
+                words[base + 2] = 0x5155_2000 | idx as u32;
+                words[base + 3] = 0x5155_3000 | idx as u32;
+                words[base + 4] = pos[0].to_bits();
+                words[base + 5] = pos[1].to_bits();
+                words[base + 6] = pos[2].to_bits();
+                words[base + 7] = 1.0f32.to_bits();
+            }
+            StreamoutProofExperiment::PointSizeSlot0PositionSlot1 => {
+                let base = idx * 8;
+                words[base + 0] = pos[0].to_bits();
+                words[base + 1] = pos[1].to_bits();
+                words[base + 2] = pos[2].to_bits();
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = 64.0f32.to_bits();
+                words[base + 5] = 0.0f32.to_bits();
+                words[base + 6] = 0.0f32.to_bits();
+                words[base + 7] = 0.0f32.to_bits();
+            }
+        }
+    }
+
+    crate::intel::dma_flush(warm.vertex_virt, byte_len);
+
+    let signed_area_2x = (triangle[1][0] - triangle[0][0]) * (triangle[2][1] - triangle[0][1])
+        - (triangle[2][0] - triangle[0][0]) * (triangle[1][1] - triangle[0][1]);
+    let readback = unsafe {
+        core::slice::from_raw_parts(warm.vertex_virt as *const u32, byte_len / 4)
+    };
+    let cpu_readback_ok = readback
+        .iter()
+        .take(byte_len / 4)
+        .any(|word| *word != 0);
+
+    intel_render_focus_log!(
+        "intel/render: vf-vue-upload-proof accepted={} stage=cpu-write-readback geometry={} experiment={} bytes={} stride={} count={} gpu=0x{:X} readback_nonzero={} flush=1 area2={:.3} winding={} slot_contract={} does_not_prove=vf_fetch\n",
+        cpu_readback_ok as u8,
+        label,
+        experiment.label(),
+        byte_len,
+        vertex_stride,
+        triangle.len(),
+        GPU_VA_VERTEX_BASE,
+        cpu_readback_ok as u8,
+        signed_area_2x,
+        if signed_area_2x >= 0.0 { "ccw" } else { "cw" },
+        experiment.vf_slot_contract(),
+    );
+
+    Some(TriangleVertexUploadProof {
+        vertex_count: u32::try_from(triangle.len()).ok()?,
+        vertex_stride: vertex_stride as u32,
+        byte_len,
+        gpu_addr: GPU_VA_VERTEX_BASE,
+        signed_area_2x,
+        cpu_readback_ok,
+    })
+}
+
 fn prepare_vf_streamout_proof_resources(
     warm: RenderWarmState,
     dst_gpu_addr: u64,
@@ -519,6 +697,56 @@ fn prepare_vf_streamout_proof_resources(
                     f32::from_bits(words[base + 1]),
                     f32::from_bits(words[base + 2]),
                     f32::from_bits(words[base + 3]),
+                );
+            }
+            StreamoutProofExperiment::PrmVueHeaderPositionSlots01 => {
+                let base = idx * 8;
+                words[base + 0] = 0;
+                words[base + 1] = 0;
+                words[base + 2] = 0;
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = pos[0].to_bits();
+                words[base + 5] = pos[1].to_bits();
+                words[base + 6] = pos[2].to_bits();
+                words[base + 7] = 1.0f32.to_bits();
+                intel_render_focus_log!(
+                    "intel/render: vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xyzw=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    idx,
+                    experiment.label(),
+                    geometry.label(),
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    words[base + 3],
+                    f32::from_bits(words[base + 4]),
+                    f32::from_bits(words[base + 5]),
+                    f32::from_bits(words[base + 6]),
+                    f32::from_bits(words[base + 7]),
+                );
+            }
+            StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01 => {
+                let base = idx * 8;
+                words[base + 0] = 0;
+                words[base + 1] = 0;
+                words[base + 2] = 0;
+                words[base + 3] = 1.0f32.to_bits();
+                words[base + 4] = pos[0].to_bits();
+                words[base + 5] = pos[1].to_bits();
+                words[base + 6] = 1.0f32.to_bits();
+                words[base + 7] = pos[2].to_bits();
+                intel_render_focus_log!(
+                    "intel/render: vf-prm-vue-header-source v{} experiment={} geometry={} header=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] position_xywz=[{:.3},{:.3},{:.3},{:.3}]\n",
+                    idx,
+                    experiment.label(),
+                    geometry.label(),
+                    words[base + 0],
+                    words[base + 1],
+                    words[base + 2],
+                    words[base + 3],
+                    f32::from_bits(words[base + 4]),
+                    f32::from_bits(words[base + 5]),
+                    f32::from_bits(words[base + 6]),
+                    f32::from_bits(words[base + 7]),
                 );
             }
             StreamoutProofExperiment::HeaderAndPositionSlots01 => {

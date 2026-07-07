@@ -7,6 +7,7 @@ const TRUEOS_AUDIO_HANDLE: u32 = 1;
 const TRUEOS_AUDIO_BUFFER_FRAMES: usize = hda::PCM_SAMPLE_RATE_HZ as usize * 30;
 
 const TRUEOS_AUDIO_FORMAT_S16LE: u32 = 1;
+const TRUEOS_AUDIO_FRAME_BYTES: usize = core::mem::size_of::<i16>() * hda::PCM_CHANNELS;
 
 const EIO: i32 = 5;
 const EBADF: i32 = 9;
@@ -71,41 +72,92 @@ fn ensure_supported_shape(format: u32, channels: u32, rate_hz: u32) -> Result<()
 
 fn write_samples(label: &'static str, samples: &[i16]) -> Result<usize, i32> {
     if samples.len() % hda::PCM_CHANNELS != 0 {
+        crate::log_warn!(
+            target: "audio";
+            "audio-cabi: host-write bad-shape label={} samples={} channels={}\n",
+            label,
+            samples.len(),
+            hda::PCM_CHANNELS
+        );
         return Err(EINVAL);
     }
     if samples.is_empty() {
+        crate::log_trace!(
+            target: "audio";
+            "audio-cabi: host-write empty label={}\n",
+            label
+        );
         return Ok(0);
     }
 
-    crate::aud::pcm_lane::submit_i16_stereo_48k(label, Vec::from(samples)).map_err(|err| {
-        match err {
+    crate::aud::pcm_lane::submit_i16_stereo_48k(label, Vec::from(samples)).map_err(
+        |err| match err {
             crate::aud::pcm_lane::PcmLaneError::QueueFull => EBUSY,
             crate::aud::pcm_lane::PcmLaneError::BadShape => EINVAL,
             crate::aud::pcm_lane::PcmLaneError::EmptyBuffer => EIO,
-        }
-    })
+        },
+    )
 }
 
 fn guest_audio_write_samples(samples: &[i16]) -> Result<usize, i32> {
     if samples.len() % hda::PCM_CHANNELS != 0 {
+        crate::log_warn!(
+            target: "audio";
+            "audio-cabi: guest-write bad-shape samples={} channels={}\n",
+            samples.len(),
+            hda::PCM_CHANNELS
+        );
         return Err(EINVAL);
     }
     if samples.is_empty() {
+        crate::log_trace!(target: "audio"; "audio-cabi: guest-write empty\n");
         return Ok(0);
     }
 
     let bytes = unsafe {
         core::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), core::mem::size_of_val(samples))
     };
+    crate::log_trace!(
+        target: "audio";
+        "audio-cabi: guest-write begin samples={} frames={} bytes={} frame_bytes={} max_payload={}\n",
+        samples.len(),
+        samples.len() / hda::PCM_CHANNELS,
+        bytes.len(),
+        TRUEOS_AUDIO_FRAME_BYTES,
+        trueos_vm::vmcall::PAYLOAD_CAP & !(TRUEOS_AUDIO_FRAME_BYTES - 1)
+    );
+    crate::audio_probe!(
+        "audio-cabi: guest-write begin samples={} frames={} bytes={} frame_bytes={} max_payload={}\n",
+        samples.len(),
+        samples.len() / hda::PCM_CHANNELS,
+        bytes.len(),
+        TRUEOS_AUDIO_FRAME_BYTES,
+        trueos_vm::vmcall::PAYLOAD_CAP & !(TRUEOS_AUDIO_FRAME_BYTES - 1)
+    );
     let mut written_frames = 0usize;
     let mut offset = 0usize;
-    let max_payload = trueos_vm::vmcall::PAYLOAD_CAP & !1;
+    let max_payload = trueos_vm::vmcall::PAYLOAD_CAP & !(TRUEOS_AUDIO_FRAME_BYTES - 1);
     while offset < bytes.len() {
-        let end = core::cmp::min(offset.saturating_add(max_payload), bytes.len()) & !1;
+        let end = core::cmp::min(offset.saturating_add(max_payload), bytes.len())
+            & !(TRUEOS_AUDIO_FRAME_BYTES - 1);
         if end <= offset {
+            crate::log_error!(
+                target: "audio";
+                "audio-cabi: guest-write chunk-align-failed offset={} bytes={} max_payload={}\n",
+                offset,
+                bytes.len(),
+                max_payload
+            );
             return Err(EIO);
         }
         let chunk = &bytes[offset..end];
+        crate::log_trace!(
+            target: "audio";
+            "audio-cabi: guest-write vmcall offset={} chunk_bytes={} chunk_frames={}\n",
+            offset,
+            chunk.len(),
+            chunk.len() / TRUEOS_AUDIO_FRAME_BYTES
+        );
         let (status, rc) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_AUDIO_WRITE_I16_STEREO_48K,
             0,
@@ -114,32 +166,89 @@ fn guest_audio_write_samples(samples: &[i16]) -> Result<usize, i32> {
             &mut [],
         );
         if status != trueos_vm::vmcall::STATUS_OK {
+            crate::log_error!(
+                target: "audio";
+                "audio-cabi: guest-write vmcall-status status={} offset={} chunk_bytes={}\n",
+                status,
+                offset,
+                chunk.len()
+            );
             return Err(EIO);
         }
         let frames = (rc as i64) as isize;
         if frames < 0 {
             let err = (-frames) as i32;
             if err == EBUSY && written_frames != 0 {
+                crate::log_warn!(
+                    target: "audio";
+                    "audio-cabi: guest-write queue-busy partial_frames={} offset={} chunk_bytes={}\n",
+                    written_frames,
+                    offset,
+                    chunk.len()
+                );
                 return Ok(written_frames);
             }
+            crate::log_warn!(
+                target: "audio";
+                "audio-cabi: guest-write failed err={} offset={} chunk_bytes={} partial_frames={}\n",
+                err,
+                offset,
+                chunk.len(),
+                written_frames
+            );
+            crate::audio_probe!(
+                "audio-cabi: guest-write failed err={} offset={} chunk_bytes={} partial_frames={}\n",
+                err,
+                offset,
+                chunk.len(),
+                written_frames
+            );
             return Err(err);
         }
         if frames == 0 {
+            crate::log_warn!(
+                target: "audio";
+                "audio-cabi: guest-write zero-progress offset={} chunk_bytes={} partial_frames={}\n",
+                offset,
+                chunk.len(),
+                written_frames
+            );
             break;
         }
         written_frames = written_frames.saturating_add(frames as usize);
         offset = end;
     }
+    crate::log_trace!(
+        target: "audio";
+        "audio-cabi: guest-write done requested_frames={} written_frames={} bytes={}\n",
+        samples.len() / hda::PCM_CHANNELS,
+        written_frames,
+        bytes.len()
+    );
+    crate::audio_probe!(
+        "audio-cabi: guest-write done requested_frames={} written_frames={} bytes={}\n",
+        samples.len() / hda::PCM_CHANNELS,
+        written_frames,
+        bytes.len()
+    );
     Ok(written_frames)
 }
 
 fn guest_audio_stop() {
+    crate::log_info!(target: "audio"; "audio-cabi: guest-stop vmcall\n");
+    crate::audio_probe!("audio-cabi: guest-stop vmcall\n");
     let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_AUDIO_STOP, 0, 0);
 }
 
 fn guest_audio_pending_frames() -> usize {
     let (status, frames) =
         trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_AUDIO_PENDING_FRAMES, 0, 0);
+    crate::log_trace!(
+        target: "audio";
+        "audio-cabi: guest-pending status={} frames={}\n",
+        status,
+        frames
+    );
     if status == trueos_vm::vmcall::STATUS_OK {
         frames as usize
     } else {
@@ -155,14 +264,24 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
     out_handle: *mut u32,
 ) -> i32 {
     if out_handle.is_null() {
+        crate::log_warn!(target: "audio"; "audio-cabi: open failed err=EFAULT null-handle\n");
         return -EFAULT;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         if let Err(err) = ensure_supported_shape(format, channels, rate_hz) {
+            crate::log_warn!(
+                target: "audio";
+                "audio-cabi: guest-open unsupported format={} channels={} rate={} err={}\n",
+                format,
+                channels,
+                rate_hz,
+                err
+            );
             return -err;
         }
         let mut state = AUDIO_CABI_STATE.lock();
         if state.open {
+            crate::log_warn!(target: "audio"; "audio-cabi: guest-open busy\n");
             return -EBUSY;
         }
         guest_audio_stop();
@@ -171,14 +290,34 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
         unsafe {
             out_handle.write(TRUEOS_AUDIO_HANDLE);
         }
+        crate::log_info!(
+            target: "audio";
+            "audio-cabi: guest-open ok handle={} format=s16le/stereo/48k buffer_frames={}\n",
+            TRUEOS_AUDIO_HANDLE,
+            TRUEOS_AUDIO_BUFFER_FRAMES
+        );
+        crate::audio_probe!(
+            "audio-cabi: guest-open ok handle={} format=s16le/stereo/48k buffer_frames={}\n",
+            TRUEOS_AUDIO_HANDLE,
+            TRUEOS_AUDIO_BUFFER_FRAMES
+        );
         return 0;
     }
     if let Err(err) = ensure_supported(format, channels, rate_hz) {
+        crate::log_warn!(
+            target: "audio";
+            "audio-cabi: host-open unsupported format={} channels={} rate={} err={}\n",
+            format,
+            channels,
+            rate_hz,
+            err
+        );
         return -err;
     }
 
     let mut state = AUDIO_CABI_STATE.lock();
     if state.open {
+        crate::log_warn!(target: "audio"; "audio-cabi: host-open busy\n");
         return -EBUSY;
     }
     crate::aud::pcm_lane::request_stop();
@@ -189,6 +328,17 @@ pub unsafe extern "C" fn trueos_cabi_audio_open_playback(
     unsafe {
         out_handle.write(TRUEOS_AUDIO_HANDLE);
     }
+    crate::log_info!(
+        target: "audio";
+        "audio-cabi: host-open ok handle={} format=s16le/stereo/48k buffer_frames={}\n",
+        TRUEOS_AUDIO_HANDLE,
+        TRUEOS_AUDIO_BUFFER_FRAMES
+    );
+    crate::audio_probe!(
+        "audio-cabi: host-open ok handle={} format=s16le/stereo/48k buffer_frames={}\n",
+        TRUEOS_AUDIO_HANDLE,
+        TRUEOS_AUDIO_BUFFER_FRAMES
+    );
     0
 }
 
@@ -204,6 +354,7 @@ pub extern "C" fn trueos_cabi_audio_close(handle: u32) -> i32 {
     let mut state = AUDIO_CABI_STATE.lock();
     state.open = false;
     state.running = false;
+    crate::log_info!(target: "audio"; "audio-cabi: close handle={}\n", handle);
     0
 }
 
@@ -219,10 +370,14 @@ pub extern "C" fn trueos_cabi_audio_start(handle: u32) -> i32 {
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         state.running = true;
+        crate::log_info!(target: "audio"; "audio-cabi: guest-start handle={}\n", handle);
+        crate::audio_probe!("audio-cabi: guest-start handle={}\n", handle);
         return 0;
     }
     crate::aud::pcm_lane::set_paused(false);
     state.running = true;
+    crate::log_info!(target: "audio"; "audio-cabi: host-start handle={}\n", handle);
+    crate::audio_probe!("audio-cabi: host-start handle={}\n", handle);
     0
 }
 
@@ -239,9 +394,11 @@ pub extern "C" fn trueos_cabi_audio_drop(handle: u32) -> i32 {
     state.running = false;
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         guest_audio_stop();
+        crate::log_info!(target: "audio"; "audio-cabi: guest-drop handle={}\n", handle);
         return 0;
     }
     crate::aud::pcm_lane::request_stop();
+    crate::log_info!(target: "audio"; "audio-cabi: host-drop handle={}\n", handle);
     0
 }
 
@@ -255,9 +412,21 @@ pub extern "C" fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32 
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        crate::log_info!(
+            target: "audio";
+            "audio-cabi: guest-set-paused handle={} paused={} noop=host-owned\n",
+            handle,
+            paused
+        );
         return 0;
     }
     crate::aud::pcm_lane::set_paused(paused != 0);
+    crate::log_info!(
+        target: "audio";
+        "audio-cabi: host-set-paused handle={} paused={}\n",
+        handle,
+        paused
+    );
     0
 }
 
@@ -286,9 +455,23 @@ pub extern "C" fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32
     }
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        crate::log_info!(
+            target: "audio";
+            "audio-cabi: guest-set-volume handle={} percent={} noop=host-owned\n",
+            handle,
+            percent.min(u16::MAX as u32).min(100)
+        );
         return percent.min(u16::MAX as u32).min(100) as i32;
     }
-    crate::aud::pcm_lane::set_volume_percent(percent.min(u16::MAX as u32) as u16) as i32
+    let applied = crate::aud::pcm_lane::set_volume_percent(percent.min(u16::MAX as u32) as u16);
+    crate::log_info!(
+        target: "audio";
+        "audio-cabi: host-set-volume handle={} percent={} applied={}\n",
+        handle,
+        percent,
+        applied
+    );
+    applied as i32
 }
 
 #[unsafe(no_mangle)]

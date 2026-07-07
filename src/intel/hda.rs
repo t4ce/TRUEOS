@@ -1944,6 +1944,7 @@ pub extern "C" fn trueos_tinyaudio_hda_close_pcm_stream(handle: usize) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_tinyaudio_hda_reset_pcm_stream(handle: usize) -> i32 {
+    crate::audio_probe!("hda: tinyaudio reset_pcm_stream handle={}\n", handle);
     if handle != 1 {
         return -1;
     }

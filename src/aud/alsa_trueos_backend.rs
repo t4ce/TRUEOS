@@ -52,7 +52,7 @@ fn open_playback() -> alsa::trueos::BackendResult<usize> {
 
     state.open = true;
     state.running = false;
-    crate::log!("alsa-trueos: pcm open playback backend=trueos-pcm-lane\n");
+    crate::log_info!(target: "audio"; "alsa-trueos: pcm open playback backend=trueos-pcm-lane\n");
     Ok(ALSA_TRUEOS_HANDLE)
 }
 
@@ -64,6 +64,7 @@ fn close(handle: usize) {
     let mut state = ALSA_PCM_STATE.lock();
     state.open = false;
     state.running = false;
+    crate::log_info!(target: "audio"; "alsa-trueos: close handle={}\n", handle);
 }
 
 fn start(handle: usize) -> alsa::trueos::BackendResult<()> {
@@ -77,6 +78,7 @@ fn start(handle: usize) -> alsa::trueos::BackendResult<()> {
     }
 
     state.running = true;
+    crate::log_info!(target: "audio"; "alsa-trueos: start handle={}\n", handle);
     Ok(())
 }
 
@@ -91,6 +93,7 @@ fn drop_stream(handle: usize) -> alsa::trueos::BackendResult<()> {
     }
 
     state.running = false;
+    crate::log_info!(target: "audio"; "alsa-trueos: drop handle={}\n", handle);
     Ok(())
 }
 
@@ -133,7 +136,8 @@ fn write_i16_interleaved(
     crate::aud::pcm_lane::submit_i16_stereo_48k("alsa-trueos-pcm", alloc::vec::Vec::from(samples))
         .map_err(|_| EIO)?;
     ALSA_PCM_STATE.lock().running = true;
-    crate::log!(
+    crate::log_trace!(
+        target: "audio";
         "alsa-trueos: write_i16_interleaved samples={} frames={} route=trueos-pcm-lane\n",
         samples.len(),
         frames
