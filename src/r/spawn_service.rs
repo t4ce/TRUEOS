@@ -1568,7 +1568,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "unix-fd-probe",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
         &UNIX_FD_PROBE_STARTED,

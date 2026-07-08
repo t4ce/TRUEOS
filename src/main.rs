@@ -92,6 +92,7 @@ mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
 mod ui3;
+mod unix_abi_shim;
 mod unix_compat;
 mod unix_fd_probe;
 #[path = "usb3/mod.rs"]

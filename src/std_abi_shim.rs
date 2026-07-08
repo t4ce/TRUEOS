@@ -13,7 +13,7 @@ use spin::Mutex;
 
 use crate::r::static_map::FixedKeyMap;
 
-static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
+pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_CONDS: Mutex<FixedKeyMap<usize, PthreadCondState, PTHREAD_COND_CAPACITY>> =
@@ -26,7 +26,7 @@ static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<usize, usize, PTHREAD_TLS_VALUE_CAP
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
-static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
+pub(crate) static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static SOCKET_FDS: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
@@ -48,20 +48,20 @@ const PTHREAD_THREAD_CAPACITY: usize = 64;
 const OPEN_FILE_CAPACITY: usize = 64;
 const SOCKET_FD_CAPACITY: usize = 128;
 
-const TRUEOS_EAGAIN: c_int = 11;
+pub(crate) const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EADDRINUSE: c_int = 98;
 const TRUEOS_EBUSY: c_int = 16;
 const TRUEOS_ENOENT: c_int = 2;
-const TRUEOS_EINVAL: c_int = 22;
+pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
 const TRUEOS_ERANGE: c_int = 34;
 const TRUEOS_ENOSYS: c_int = 38;
 const TRUEOS_EIO: c_int = 5;
-const TRUEOS_EBADF: c_int = 9;
+pub(crate) const TRUEOS_EBADF: c_int = 9;
 const TRUEOS_EPERM: c_int = 1;
 const TRUEOS_ESRCH: c_int = 3;
 const TRUEOS_ECHILD: c_int = 10;
-const TRUEOS_ENOTTY: c_int = 25;
+pub(crate) const TRUEOS_ENOTTY: c_int = 25;
 const TRUEOS_EAI_SYSTEM: c_int = 11;
 const TRUEOS_EAI_FAMILY: c_int = 5;
 const TRUEOS_EAI_MEMORY: c_int = 6;
@@ -209,7 +209,14 @@ struct PthreadThreadState {
     detached: bool,
 }
 
-enum OpenFile {
+#[derive(Default)]
+pub(crate) struct BytePipe {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) read_open: bool,
+    pub(crate) write_open: bool,
+}
+
+pub(crate) enum OpenFile {
     Regular {
         path: Option<String>,
         bytes: Vec<u8>,
@@ -217,6 +224,16 @@ enum OpenFile {
         readable: bool,
         writable: bool,
         dirty: bool,
+    },
+    PipeRead {
+        pipe: Arc<Mutex<BytePipe>>,
+    },
+    PipeWrite {
+        pipe: Arc<Mutex<BytePipe>>,
+    },
+    UnixSocket {
+        rx: Arc<Mutex<BytePipe>>,
+        tx: Arc<Mutex<BytePipe>>,
     },
 }
 
@@ -252,18 +269,24 @@ impl OpenFile {
     fn len(&self) -> usize {
         match self {
             Self::Regular { bytes, .. } => bytes.len(),
+            Self::PipeRead { pipe } | Self::PipeWrite { pipe } => pipe.lock().bytes.len(),
+            Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
     }
 
     fn offset(&self) -> usize {
         match self {
             Self::Regular { offset, .. } => *offset,
+            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => 0,
         }
     }
 
     fn set_offset(&mut self, next: usize) {
         match self {
             Self::Regular { offset, .. } => *offset = next,
+            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => {
+                let _ = next;
+            }
         }
     }
 
@@ -282,6 +305,7 @@ impl OpenFile {
                 *dirty = true;
                 true
             }
+            Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => false,
         }
     }
 }
@@ -964,7 +988,7 @@ fn abi_read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     Some(unsafe { slice::from_raw_parts(host.cast::<u8>(), len) })
 }
 
-fn abi_write_bytes<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
+pub(crate) fn abi_write_bytes<'a>(ptr: *mut u8, len: usize) -> Option<&'a mut [u8]> {
     if len == 0 {
         return Some(&mut []);
     }
@@ -992,7 +1016,7 @@ fn abi_cstr_to_string(ptr: *const c_char, max_len: usize) -> Option<String> {
     None
 }
 
-fn copy_to_abi_out(ptr: *mut u8, bytes: &[u8]) -> bool {
+pub(crate) fn copy_to_abi_out(ptr: *mut u8, bytes: &[u8]) -> bool {
     if ptr.is_null() {
         return false;
     }
@@ -1212,7 +1236,7 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
     }
 }
 
-fn next_file_fd() -> c_int {
+pub(crate) fn next_file_fd() -> c_int {
     NEXT_FILE_FD.fetch_add(1, Ordering::AcqRel)
 }
 
@@ -2006,24 +2030,47 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        bytes,
-        offset,
-        writable,
-        dirty,
-        ..
-    } = file;
-    if !*writable {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
+    match file {
+        OpenFile::Regular {
+            bytes,
+            offset,
+            writable,
+            dirty,
+            ..
+        } => {
+            if !*writable {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            let end = offset.saturating_add(input.len());
+            if bytes.len() < end {
+                bytes.resize(end, 0);
+            }
+            bytes[*offset..end].copy_from_slice(input);
+            *offset = end;
+            *dirty = true;
+        }
+        OpenFile::PipeWrite { pipe } => {
+            let mut pipe = pipe.lock();
+            if !pipe.write_open || !pipe.read_open {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            pipe.bytes.extend_from_slice(input);
+        }
+        OpenFile::UnixSocket { tx, .. } => {
+            let mut tx = tx.lock();
+            if !tx.write_open || !tx.read_open {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            tx.bytes.extend_from_slice(input);
+        }
+        OpenFile::PipeRead { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        }
     }
-    let end = offset.saturating_add(input.len());
-    if bytes.len() < end {
-        bytes.resize(end, 0);
-    }
-    bytes[*offset..end].copy_from_slice(input);
-    *offset = end;
-    *dirty = true;
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     input.len() as isize
 }
@@ -2048,25 +2095,77 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        bytes,
-        offset,
-        readable,
-        ..
-    } = file;
-    if !*readable {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
-    }
-    let remaining = bytes.len().saturating_sub(*offset);
-    let n = core::cmp::min(count, remaining);
-    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[*offset..*offset + n]) {
-        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
-        return -1;
-    }
-    *offset = offset.saturating_add(n);
+    let copied = match file {
+        OpenFile::Regular {
+            bytes,
+            offset,
+            readable,
+            ..
+        } => {
+            if !*readable {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            let remaining = bytes.len().saturating_sub(*offset);
+            let n = core::cmp::min(count, remaining);
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[*offset..*offset + n]) {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            *offset = offset.saturating_add(n);
+            n
+        }
+        OpenFile::PipeRead { pipe } => {
+            let mut pipe = pipe.lock();
+            let n = core::cmp::min(count, pipe.bytes.len());
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &pipe.bytes[..n]) {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            pipe.bytes.drain(..n);
+            n
+        }
+        OpenFile::UnixSocket { rx, .. } => {
+            let mut rx = rx.lock();
+            let n = core::cmp::min(count, rx.bytes.len());
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &rx.bytes[..n]) {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            rx.bytes.drain(..n);
+            n
+        }
+        OpenFile::PipeWrite { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        }
+    };
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    n as isize
+    copied as isize
+}
+
+pub(crate) fn open_file_read_ready(file: &OpenFile) -> bool {
+    match file {
+        OpenFile::Regular { bytes, offset, .. } => *offset < bytes.len(),
+        OpenFile::PipeRead { pipe } => !pipe.lock().bytes.is_empty(),
+        OpenFile::PipeWrite { .. } => false,
+        OpenFile::UnixSocket { rx, .. } => !rx.lock().bytes.is_empty(),
+    }
+}
+
+pub(crate) fn open_file_write_ready(file: &OpenFile) -> bool {
+    match file {
+        OpenFile::Regular { writable, .. } => *writable,
+        OpenFile::PipeRead { .. } => false,
+        OpenFile::PipeWrite { pipe } => {
+            let pipe = pipe.lock();
+            pipe.read_open && pipe.write_open
+        }
+        OpenFile::UnixSocket { tx, .. } => {
+            let tx = tx.lock();
+            tx.read_open && tx.write_open
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2593,20 +2692,33 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        path,
-        bytes,
-        writable,
-        dirty,
-        ..
-    } = file;
-    if writable
-        && dirty
-        && let Some(path) = path
-    {
-        if let Err(errno) = write_file_to_cabi(path.as_str(), bytes.as_slice()) {
-            TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-            return -1;
+    match file {
+        OpenFile::Regular {
+            path,
+            bytes,
+            writable,
+            dirty,
+            ..
+        } => {
+            if writable
+                && dirty
+                && let Some(path) = path
+            {
+                if let Err(errno) = write_file_to_cabi(path.as_str(), bytes.as_slice()) {
+                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                    return -1;
+                }
+            }
+        }
+        OpenFile::PipeRead { pipe } => {
+            pipe.lock().read_open = false;
+        }
+        OpenFile::PipeWrite { pipe } => {
+            pipe.lock().write_open = false;
+        }
+        OpenFile::UnixSocket { rx, tx } => {
+            rx.lock().read_open = false;
+            tx.lock().write_open = false;
         }
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
@@ -2625,20 +2737,34 @@ pub async fn close_async(fd: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        path,
-        bytes,
-        writable,
-        dirty,
-        ..
-    } = file;
-    if writable
-        && dirty
-        && let Some(path) = path
-        && let Err(errno) = write_file_to_trueosfs_async(path.as_str(), bytes.as_slice()).await
-    {
-        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
-        return -1;
+    match file {
+        OpenFile::Regular {
+            path,
+            bytes,
+            writable,
+            dirty,
+            ..
+        } => {
+            if writable
+                && dirty
+                && let Some(path) = path
+                && let Err(errno) =
+                    write_file_to_trueosfs_async(path.as_str(), bytes.as_slice()).await
+            {
+                TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                return -1;
+            }
+        }
+        OpenFile::PipeRead { pipe } => {
+            pipe.lock().read_open = false;
+        }
+        OpenFile::PipeWrite { pipe } => {
+            pipe.lock().write_open = false;
+        }
+        OpenFile::UnixSocket { rx, tx } => {
+            rx.lock().read_open = false;
+            tx.lock().write_open = false;
+        }
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
@@ -2790,22 +2916,29 @@ pub unsafe extern "C" fn pread64(fd: c_int, buf: *mut c_void, count: usize, offs
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        bytes, readable, ..
-    } = file;
-    if !*readable {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
+    match file {
+        OpenFile::Regular {
+            bytes, readable, ..
+        } => {
+            if !*readable {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            let offset = offset as usize;
+            let remaining = bytes.len().saturating_sub(offset);
+            let n = core::cmp::min(count, remaining);
+            if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[offset..offset + n]) {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            n as isize
+        }
+        OpenFile::PipeRead { .. } | OpenFile::PipeWrite { .. } | OpenFile::UnixSocket { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            -1
+        }
     }
-    let offset = offset as usize;
-    let remaining = bytes.len().saturating_sub(offset);
-    let n = core::cmp::min(count, remaining);
-    if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &bytes[offset..offset + n]) {
-        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
-        return -1;
-    }
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    n as isize
 }
 
 #[unsafe(no_mangle)]
@@ -2837,25 +2970,32 @@ pub unsafe extern "C" fn pwrite64(
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let OpenFile::Regular {
-        bytes,
-        writable,
-        dirty,
-        ..
-    } = file;
-    if !*writable {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
+    match file {
+        OpenFile::Regular {
+            bytes,
+            writable,
+            dirty,
+            ..
+        } => {
+            if !*writable {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+            let offset = offset as usize;
+            let end = offset.saturating_add(input.len());
+            if bytes.len() < end {
+                bytes.resize(end, 0);
+            }
+            bytes[offset..end].copy_from_slice(input);
+            *dirty = true;
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            input.len() as isize
+        }
+        OpenFile::PipeRead { .. } | OpenFile::PipeWrite { .. } | OpenFile::UnixSocket { .. } => {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            -1
+        }
     }
-    let offset = offset as usize;
-    let end = offset.saturating_add(input.len());
-    if bytes.len() < end {
-        bytes.resize(end, 0);
-    }
-    bytes[offset..end].copy_from_slice(input);
-    *dirty = true;
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    input.len() as isize
 }
 
 #[unsafe(no_mangle)]
@@ -3272,30 +3412,6 @@ pub unsafe extern "C" fn sysconf(name: c_int) -> isize {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sched_yield() -> c_int {
     0
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tcgetattr(fd: c_int, _termios_p: *mut c_void) -> c_int {
-    if !(0..=2).contains(&fd) {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-    } else {
-        TRUEOS_ERRNO.store(TRUEOS_ENOTTY, Ordering::Relaxed);
-    }
-    -1
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn tcsetattr(
-    fd: c_int,
-    _optional_actions: c_int,
-    _termios_p: *const c_void,
-) -> c_int {
-    if !(0..=2).contains(&fd) {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-    } else {
-        TRUEOS_ERRNO.store(TRUEOS_ENOTTY, Ordering::Relaxed);
-    }
-    -1
 }
 
 #[unsafe(no_mangle)]

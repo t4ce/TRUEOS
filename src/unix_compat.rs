@@ -49,6 +49,8 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "getpid"
             | "getsockname"
             | "gettimeofday"
+            | "ioctl"
+            | "isatty"
             | "listen"
             | "localtime_r"
             | "log"
@@ -65,6 +67,8 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "open"
             | "open64"
             | "opendir"
+            | "pipe"
+            | "poll"
             | "posix_memalign"
             | "pread"
             | "pread64"
@@ -119,6 +123,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "setuid"
             | "signal"
             | "socket"
+            | "socketpair"
             | "stat"
             | "stat64"
             | "strchr"
@@ -184,6 +189,8 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "getpid" => Some(crate::std_abi_shim::getpid as *const () as usize),
         "getsockname" => Some(crate::std_abi_shim::getsockname as *const () as usize),
         "gettimeofday" => Some(crate::std_abi_shim::gettimeofday as *const () as usize),
+        "ioctl" => Some(crate::unix_abi_shim::ioctl as *const () as usize),
+        "isatty" => Some(crate::unix_abi_shim::isatty as *const () as usize),
         "listen" => Some(crate::std_abi_shim::listen as *const () as usize),
         "localtime_r" => Some(crate::std_abi_shim::localtime_r as *const () as usize),
         "log" => Some(crate::std_abi_shim::log as *const () as usize),
@@ -200,6 +207,8 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "open" => Some(crate::std_abi_shim::open as *const () as usize),
         "open64" => Some(crate::std_abi_shim::open64 as *const () as usize),
         "opendir" => Some(crate::std_abi_shim::opendir as *const () as usize),
+        "pipe" => Some(crate::unix_abi_shim::pipe as *const () as usize),
+        "poll" => Some(crate::unix_abi_shim::poll as *const () as usize),
         "posix_memalign" => Some(crate::std_abi_shim::posix_memalign as *const () as usize),
         "pread" => Some(crate::std_abi_shim::pread as *const () as usize),
         "pread64" => Some(crate::std_abi_shim::pread64 as *const () as usize),
@@ -288,6 +297,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "setuid" => Some(crate::std_abi_shim::setuid as *const () as usize),
         "signal" => Some(crate::std_abi_shim::signal as *const () as usize),
         "socket" => Some(crate::std_abi_shim::socket as *const () as usize),
+        "socketpair" => Some(crate::unix_abi_shim::socketpair as *const () as usize),
         "stat" => Some(crate::std_abi_shim::stat as *const () as usize),
         "stat64" => Some(crate::std_abi_shim::stat64 as *const () as usize),
         "strchr" => Some(crate::std_abi_shim::strchr as *const () as usize),
@@ -298,8 +308,8 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "strrchr" => Some(crate::std_abi_shim::strrchr as *const () as usize),
         "strspn" => Some(crate::std_abi_shim::strspn as *const () as usize),
         "sysconf" => Some(crate::std_abi_shim::sysconf as *const () as usize),
-        "tcgetattr" => Some(crate::std_abi_shim::tcgetattr as *const () as usize),
-        "tcsetattr" => Some(crate::std_abi_shim::tcsetattr as *const () as usize),
+        "tcgetattr" => Some(crate::unix_abi_shim::tcgetattr as *const () as usize),
+        "tcsetattr" => Some(crate::unix_abi_shim::tcsetattr as *const () as usize),
         "time" => Some(crate::std_abi_shim::time as *const () as usize),
         "unlink" => Some(crate::std_abi_shim::unlink as *const () as usize),
         "utimes" => Some(crate::std_abi_shim::utimes as *const () as usize),
