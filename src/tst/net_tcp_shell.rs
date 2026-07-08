@@ -8,12 +8,14 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell2::backends::net_tcp::{
-    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, net_shell_write_bytes,
+    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, net_shell_direct_reset_terminal,
+    net_shell_write_bytes,
 };
 
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
 const INITIAL_REPAINT_WAIT_TICKS: u32 = 8;
 const RESIZE_QUERY_TICKS: u32 = 100;
+const TX_CHUNK_BYTES: usize = 8 * 1024;
 
 fn parse_terminal_size_report(data: &[u8]) -> Option<(usize, usize, usize, usize)> {
     let start = data.windows(2).position(|w| w == b"\x1b[")?;
@@ -143,7 +145,6 @@ pub async fn net_shell_task() {
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;
         let mut pending: Option<Vec<u8>> = None;
-        let mut pending_handle: Option<NetHandle> = None;
         let mut pending_ticks: u32 = 0;
         let mut pending_len: usize = 0;
         let mut tx_log_budget: u32 = 16;
@@ -178,6 +179,7 @@ pub async fn net_shell_task() {
                             }
                         }
                         if schedule_initial_repaint && direct_mode {
+                            net_shell_direct_reset_terminal();
                             net_shell_write_bytes(TERMINAL_SIZE_QUERY);
                             initial_repaint_handle = None;
                             initial_repaint_ticks = 0;
@@ -193,7 +195,6 @@ pub async fn net_shell_task() {
                             resize_query_ticks = 0;
                         }
                         pending = None;
-                        pending_handle = Some(handle);
                         pending_ticks = 0;
                         pending_len = 0;
                         logged_first_rx = false;
@@ -309,29 +310,10 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpSent { handle, len } => {
-                        if pending_handle != Some(handle) {
-                            continue;
-                        }
-
                         if tx_log_budget > 0 {
                             tx_log_budget -= 1;
-                            crate::log!(
-                                "net-shell: tx accepted handle={} len={} (pending_len={})\n",
-                                handle.0,
-                                len,
-                                pending_len
-                            );
+                            crate::log!("net-shell: tx flushed handle={} len={}\n", handle.0, len);
                         }
-
-                        // Drop the bytes we now know were accepted by smoltcp.
-                        // NOTE: smoltcp may accept only a prefix of the buffer; keep the rest queued.
-                        let mut st = NET_SHELL_STATE.lock();
-                        for _ in 0..len {
-                            let _ = st.tx.pop_front();
-                        }
-                        pending = None;
-                        pending_ticks = 0;
-                        pending_len = 0;
                     }
                     NetEvent::Closed { handle } => {
                         let mut st = NET_SHELL_STATE.lock();
@@ -339,7 +321,6 @@ pub async fn net_shell_task() {
                             st.handle = None;
                             st.rx.clear();
                             pending = None;
-                            pending_handle = None;
                             pending_ticks = 0;
                             pending_len = 0;
                             if initial_repaint_handle == Some(handle) {
@@ -371,8 +352,8 @@ pub async fn net_shell_task() {
                 }
             }
 
-            // Flush buffered TX to the active TCP connection.
-            // Use an explicit ack event (`TcpSent`) so we only pop on success.
+            // Flush buffered TX to the active TCP connection. Once the command is
+            // queued successfully, the adapter owns those bytes.
             if pending.is_none() {
                 let (handle, chunk) = {
                     let st = NET_SHELL_STATE.lock();
@@ -382,8 +363,8 @@ pub async fn net_shell_task() {
                             if st.tx.is_empty() {
                                 (Some(handle), Vec::new())
                             } else {
-                                let mut v = Vec::with_capacity(512);
-                                for &b in st.tx.iter().take(512) {
+                                let mut v = Vec::with_capacity(TX_CHUNK_BYTES);
+                                for &b in st.tx.iter().take(TX_CHUNK_BYTES) {
                                     v.push(b);
                                 }
                                 (Some(handle), v)
@@ -395,7 +376,6 @@ pub async fn net_shell_task() {
                 if let Some(handle) = handle
                     && !chunk.is_empty()
                 {
-                    pending_handle = Some(handle);
                     pending = Some(chunk.clone());
                     pending_ticks = 0;
                     pending_len = chunk.len();
@@ -412,7 +392,7 @@ pub async fn net_shell_task() {
                     if cmds
                         .push(NetCommand::SendTcp {
                             handle,
-                            data: chunk,
+                            data: chunk.clone(),
                         })
                         .is_err()
                     {
@@ -421,6 +401,14 @@ pub async fn net_shell_task() {
                         pending_ticks = 0;
                         pending_len = 0;
                         crate::log!("net-shell: tx queue full (dropping pending)\n");
+                    } else {
+                        let mut st = NET_SHELL_STATE.lock();
+                        for _ in 0..chunk.len() {
+                            let _ = st.tx.pop_front();
+                        }
+                        pending = None;
+                        pending_ticks = 0;
+                        pending_len = 0;
                     }
                 }
             }

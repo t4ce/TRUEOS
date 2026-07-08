@@ -15,6 +15,7 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_VM: AtomicU8 = AtomicU8::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+const NET_SHELL_DIRECT_TERMINAL_RESET: &[u8] = b"\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
 
 pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
@@ -43,14 +44,23 @@ pub(crate) fn net_shell_readable_len() -> usize {
 }
 
 pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
-    const MAX_TX: usize = 32 * 1024;
+    const MAX_TX: usize = 2 * 1024 * 1024;
     let mut st = NET_SHELL_STATE.lock();
+    let mut dropped = 0usize;
     for &b in bytes {
         if st.tx.len() >= MAX_TX {
             let _ = st.tx.pop_front();
+            dropped = dropped.saturating_add(1);
         }
         st.tx.push_back(b);
     }
+    if dropped != 0 {
+        crate::log!("net-shell: tx buffer dropped {} bytes at cap={}\n", dropped, MAX_TX);
+    }
+}
+
+pub(crate) fn net_shell_direct_reset_terminal() {
+    net_shell_write_bytes(NET_SHELL_DIRECT_TERMINAL_RESET);
 }
 
 pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
@@ -68,6 +78,8 @@ pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
     NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_VM.store(owner, Ordering::Release);
+    drop(st);
+    net_shell_direct_reset_terminal();
     true
 }
 

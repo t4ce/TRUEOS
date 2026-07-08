@@ -294,9 +294,12 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: usize, argp: *mut c_void) -> 
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
             }
+            let mut cols = 80u32;
+            let mut rows = 25u32;
+            let _ = crate::r::io::fs_cabi::trueos_cabi_konsole_size(&mut cols, &mut rows);
             let winsize = TrueosWinsize {
-                ws_row: 25,
-                ws_col: 80,
+                ws_row: rows.max(1).min(u16::MAX as u32) as u16,
+                ws_col: cols.max(1).min(u16::MAX as u32) as u16,
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             };
