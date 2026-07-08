@@ -311,6 +311,7 @@ pub(crate) struct BlueprintProcessContext {
     console_target: Option<MatrixTarget>,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
+    exit_reason: Option<AllocString>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1248,6 +1249,7 @@ pub fn stage_blueprint_launch(
         console_target,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
+        exit_reason: None,
     };
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
@@ -1481,6 +1483,57 @@ pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
         context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
     };
     blueprint_console_write_to_target(target.as_ref(), data)
+}
+
+pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    if let Some(target) = target.as_ref() {
+        let (cols, rows) = crate::shell2::konsole_viewport_size_for_target(target);
+        return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
+    }
+    (180, 24)
+}
+
+pub(crate) fn blueprint_console_konsole_begin_frame(
+    vm_id: u8,
+    cols: usize,
+    rows: usize,
+    terminal_handoff: bool,
+) -> (u32, u32) {
+    let target = {
+        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
+        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+    };
+    if let Some(target) = target.as_ref() {
+        let (cols, rows) =
+            crate::shell2::konsole_begin_frame_for_target(target, cols, rows, terminal_handoff);
+        return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
+    }
+    (cols.max(1).min(u32::MAX as usize) as u32, rows.max(1).min(u32::MAX as usize) as u32)
+}
+
+pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else {
+        return false;
+    };
+    let clipped = reason.trim();
+    if clipped.is_empty() {
+        return false;
+    }
+    let mut stored = AllocString::new();
+    for ch in clipped.chars().take(160) {
+        stored.push(ch);
+    }
+    context.exit_reason = Some(stored.clone());
+    hvlogf(format_args!("hv: vm{} lifecycle: blueprint exit reason={}", vm_id, stored));
+    true
 }
 
 fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
@@ -1951,6 +2004,12 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
             "hv: vm{} lifecycle: net cleanup mio={} socket_cabi={}",
             vm_id, mio_closed, cabi_closed
         ));
+    }
+    if let Some(reason) = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| slot.lock().as_ref()?.exit_reason.clone())
+    {
+        hvlogf(format_args!("hv: vm{} lifecycle: exit reason={}", vm_id, reason));
     }
     clear_blueprint_pending_launch(vm_id);
     let _ = take_blueprint_launch(vm_id);

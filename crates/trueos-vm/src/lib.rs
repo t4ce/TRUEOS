@@ -122,6 +122,7 @@ pub mod vmcall {
     pub const OP_BP_FS_LIST_TREE: u32 = 0x6F;
     pub const OP_BP_FS_LIST_DIR: u32 = 0x81;
     pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99;
+    pub const OP_BP_SHUTDOWN: u32 = 0xA2;
 
     pub const STATUS_OK: u32 = 0;
     pub const STATUS_BAD_ARG: u32 = 2;

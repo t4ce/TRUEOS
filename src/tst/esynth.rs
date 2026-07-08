@@ -29,10 +29,17 @@ const TONE_PRODUCER_VOLUME: f32 = 1.0;
 const BLUEPRINT_PCM_PRODUCER_VOLUME: f32 = 1.0;
 const OUTPUT_LIMITER_KNEE: f32 = 0.82;
 const OUTPUT_LIMITER_CEILING: f32 = 0.995;
+const BLUEPRINT_OVERLAY_LOG_SAMPLE_EVERY: u32 = 1_000;
 
 static CALLBACKS: AtomicU32 = AtomicU32::new(0);
 static SAMPLES_WRITTEN: AtomicU32 = AtomicU32::new(0);
+static BLUEPRINT_OVERLAY_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
 static LIVE_PCM_RING: Mutex<Option<LivePcmRing>> = Mutex::new(None);
+
+fn sampled_blueprint_overlay_log() -> bool {
+    BLUEPRINT_OVERLAY_LOG_SEQ.fetch_add(1, Ordering::Relaxed) % BLUEPRINT_OVERLAY_LOG_SAMPLE_EVERY
+        == 0
+}
 
 struct TinyaudioDemoMixer {
     piano: PianoSource,
@@ -298,19 +305,21 @@ impl PcmOverlaySource {
     fn take_pending(&mut self) {
         let next = crate::aud::pcm_lane::take_pending();
         if let Some(next) = next {
-            crate::log_info!(
-                target: "audio";
-                "tinyaudio-service: overlay start label={} samples={} frames={}\n",
-                next.label,
-                next.samples.len(),
-                next.samples.len() / CHANNELS
-            );
-            crate::audio_probe!(
-                "tinyaudio-service: overlay start label={} samples={} frames={}\n",
-                next.label,
-                next.samples.len(),
-                next.samples.len() / CHANNELS
-            );
+            if sampled_blueprint_overlay_log() {
+                crate::log_info!(
+                    target: "audio";
+                    "tinyaudio-service: overlay start label={} samples={} frames={}\n",
+                    next.label,
+                    next.samples.len(),
+                    next.samples.len() / CHANNELS
+                );
+                crate::audio_probe!(
+                    "tinyaudio-service: overlay start label={} samples={} frames={}\n",
+                    next.label,
+                    next.samples.len(),
+                    next.samples.len() / CHANNELS
+                );
+            }
             self.current = Some(next);
             self.cursor = 0;
         }
@@ -356,17 +365,19 @@ impl PcmOverlaySource {
             self.cursor += take;
             out_offset += take;
             if self.cursor >= current.samples.len() {
-                crate::log_info!(
-                    target: "audio";
-                    "tinyaudio-service: overlay done label={} samples={}\n",
-                    current.label,
-                    current.samples.len()
-                );
-                crate::audio_probe!(
-                    "tinyaudio-service: overlay done label={} samples={}\n",
-                    current.label,
-                    current.samples.len()
-                );
+                if sampled_blueprint_overlay_log() {
+                    crate::log_info!(
+                        target: "audio";
+                        "tinyaudio-service: overlay done label={} samples={}\n",
+                        current.label,
+                        current.samples.len()
+                    );
+                    crate::audio_probe!(
+                        "tinyaudio-service: overlay done label={} samples={}\n",
+                        current.label,
+                        current.samples.len()
+                    );
+                }
                 self.current = None;
                 self.cursor = 0;
             }

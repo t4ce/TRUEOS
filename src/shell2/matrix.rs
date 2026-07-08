@@ -254,6 +254,13 @@ pub(crate) fn active_slot_id(output_mask: u8) -> MatrixSlotId {
     active_slot_id_ref(&state().lock(), output_mask).clone()
 }
 
+pub(crate) fn active_slot_activity(output_mask: u8) -> MatrixSlotActivity {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    visible_activity(&guard.slots[idx])
+}
+
 pub(crate) fn switch_active_slot(output_mask: u8, requested: &str) -> MatrixSlotId {
     let next_id = normalize_slot_id(requested);
     let mut guard = state().lock();
@@ -357,15 +364,19 @@ pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &st
     preferred_id
 }
 
-pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
+pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
     let freed_id = normalize_slot_id(requested);
     let default_id = default_slot_id();
     let mut guard = state().lock();
     let mut changed = false;
+    let mut vm_ids = Vec::new();
 
     if freed_id == default_id {
         let idx = ensure_slot_index(&mut guard.slots, &default_id);
         let slot = &mut guard.slots[idx];
+        if let Some(vm_id) = slot.vm_id {
+            vm_ids.push(vm_id);
+        }
         if !slot.lines.is_empty()
             || slot.activity != MatrixSlotActivity::Idle
             || slot.running_count != 0
@@ -387,6 +398,9 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
             bump_slot_revision(&mut guard, idx);
         }
     } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
+        if let Some(vm_id) = guard.slots[idx].vm_id {
+            vm_ids.push(vm_id);
+        }
         let _ = guard.slots.remove(idx);
         if guard.uart_active == freed_id {
             guard.uart_active = default_id.clone();
@@ -411,7 +425,7 @@ pub(crate) fn free_slot(requested: &str) -> MatrixSlotId {
     if changed {
         bump_revision(&mut guard);
     }
-    freed_id
+    (freed_id, vm_ids)
 }
 
 pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {
@@ -431,15 +445,40 @@ pub(crate) fn active_terminal_snapshot(
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     let terminal = guard.slots[idx].terminal.as_mut()?;
     let before = terminal.snapshot();
-    if !before.terminal_handoff {
-        terminal.resize_preserving_contents(cols.max(1), rows.max(1));
-        let after = terminal.snapshot();
-        if before != after {
-            bump_slot_revision(&mut guard, idx);
-        }
-        return Some(after);
+    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    let after = terminal.snapshot();
+    if before != after {
+        bump_slot_revision(&mut guard, idx);
     }
-    Some(before)
+    Some(after)
+}
+
+pub(crate) fn resize_terminal_in_live_slot(
+    slot_id: &MatrixSlotId,
+    lifetime_generation: u64,
+    cols: usize,
+    rows: usize,
+    terminal_handoff: bool,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lifetime_generation {
+        return false;
+    }
+
+    let terminal = guard.slots[idx]
+        .terminal
+        .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
+    let before = terminal.snapshot();
+    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
+    terminal.set_terminal_handoff(terminal_handoff);
+    let after = terminal.snapshot();
+    if before != after {
+        bump_slot_revision(&mut guard, idx);
+    }
+    true
 }
 
 pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {

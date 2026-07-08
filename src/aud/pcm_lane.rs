@@ -5,11 +5,17 @@ use spin::Mutex;
 use crate::hda;
 
 const PCM_LANE_MAX_QUEUED_FRAMES: usize = hda::PCM_SAMPLE_RATE_HZ as usize;
+const PCM_LANE_LOG_SAMPLE_EVERY: u32 = 1_000;
 
 static PCM_LANE_REQUESTS: Mutex<VecDeque<PcmLaneRequest>> = Mutex::new(VecDeque::new());
 static PCM_LANE_PAUSED: AtomicBool = AtomicBool::new(false);
 static PCM_LANE_VOLUME_PERCENT: AtomicU16 = AtomicU16::new(100);
 static PCM_LANE_STOP_GENERATION: AtomicU32 = AtomicU32::new(0);
+static PCM_LANE_QUEUE_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
+
+fn sampled_queue_log() -> bool {
+    PCM_LANE_QUEUE_LOG_SEQ.fetch_add(1, Ordering::Relaxed) % PCM_LANE_LOG_SAMPLE_EVERY == 0
+}
 
 pub struct PcmLaneRequest {
     pub label: &'static str,
@@ -42,42 +48,46 @@ pub fn submit_i16_stereo_48k(
         .map(|request| request.samples.len() / hda::PCM_CHANNELS)
         .sum::<usize>();
     if queued_frames.saturating_add(frames) > PCM_LANE_MAX_QUEUED_FRAMES {
-        crate::log_warn!(
-            target: "audio";
-            "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
-            label,
-            sample_count,
-            frames,
-            queued_frames,
-            PCM_LANE_MAX_QUEUED_FRAMES
-        );
-        crate::audio_probe!(
-            "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
-            label,
-            sample_count,
-            frames,
-            queued_frames,
-            PCM_LANE_MAX_QUEUED_FRAMES
-        );
+        if sampled_queue_log() {
+            crate::log_warn!(
+                target: "audio";
+                "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
+                label,
+                sample_count,
+                frames,
+                queued_frames,
+                PCM_LANE_MAX_QUEUED_FRAMES
+            );
+            crate::audio_probe!(
+                "pcm-lane: queue-full label={} samples={} frames={} pending_frames={} cap_frames={}\n",
+                label,
+                sample_count,
+                frames,
+                queued_frames,
+                PCM_LANE_MAX_QUEUED_FRAMES
+            );
+        }
         return Err(PcmLaneError::QueueFull);
     }
 
     requests.push_back(PcmLaneRequest { label, samples });
-    crate::log_info!(
-        target: "audio";
-        "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
-        label,
-        sample_count,
-        frames,
-        queued_frames.saturating_add(frames)
-    );
-    crate::audio_probe!(
-        "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
-        label,
-        sample_count,
-        frames,
-        queued_frames.saturating_add(frames)
-    );
+    if sampled_queue_log() {
+        crate::log_info!(
+            target: "audio";
+            "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
+            label,
+            sample_count,
+            frames,
+            queued_frames.saturating_add(frames)
+        );
+        crate::audio_probe!(
+            "pcm-lane: queued label={} samples={} frames={} pending_frames={} format=s16le/stereo/48k\n",
+            label,
+            sample_count,
+            frames,
+            queued_frames.saturating_add(frames)
+        );
+    }
     Ok(frames)
 }
 

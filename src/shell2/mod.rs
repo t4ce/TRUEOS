@@ -3,7 +3,7 @@ use alloc::string::String as AllocString;
 use alloc::vec::Vec;
 use core::cell::Cell;
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
@@ -59,11 +59,15 @@ const STATUS_NORMAL_RGB: (u8, u8, u8) = (255, 255, 255);
 const BANNER_TITLE_TEXT: &str = "TRUE OS";
 const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
+const TERMINAL_SIZE_QUERY: &str = "\x1b[18t";
+const TERMINAL_SIZE_QUERY_IDLE_TICKS: u16 = 100;
 pub(crate) const UI3_ESCAPE_KEY_BYTE: u8 = 0x1d;
 pub(crate) const UI3_F1_KEY_BYTE: u8 = 0x1c;
 pub(crate) const UI3_UNMAPPED_KEY_BYTE: u8 = 0x1e;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
+static NET_TCP_TERMINAL_ROWS: AtomicUsize =
+    AtomicUsize::new(DEFAULT_TRANSCRIPT_VIEW_ROWS + SCROLL_TOP_ROW - 1);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineSource {
@@ -136,6 +140,70 @@ enum EscState {
     Ss3,
 }
 
+#[derive(Clone, Copy)]
+struct CsiInput {
+    params: [u16; 4],
+    index: usize,
+    has_digit: bool,
+}
+
+impl CsiInput {
+    const fn new() -> Self {
+        Self {
+            params: [0; 4],
+            index: 0,
+            has_digit: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn push_digit(&mut self, digit: u8) {
+        let idx = self.index.min(self.params.len().saturating_sub(1));
+        self.params[idx] = self.params[idx]
+            .saturating_mul(10)
+            .saturating_add(u16::from(digit));
+        self.has_digit = true;
+    }
+
+    fn push_separator(&mut self) {
+        if self.index + 1 < self.params.len() {
+            self.index += 1;
+        }
+        self.has_digit = false;
+    }
+
+    fn first(&self) -> u16 {
+        self.params[0]
+    }
+
+    fn terminal_size(&self) -> Option<(usize, usize)> {
+        if self.params[0] == 8 && self.params[1] > 0 && self.params[2] > 0 {
+            Some((usize::from(self.params[2]), usize::from(self.params[1])))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ChromeState {
+    line_width: usize,
+    active_slot: matrix::MatrixSlotId,
+    active_slot_activity: matrix::MatrixSlotActivity,
+    app_label: Option<AllocString>,
+    is_vmx: bool,
+    terminal_handoff: bool,
+    terminal_hotkey: bool,
+    mode: ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<AllocString>,
+}
+
 struct AlignedWriter<'a> {
     io: &'a dyn ShellIo2,
     line_width: Cell<usize>,
@@ -196,6 +264,9 @@ impl<'a> AlignedWriter<'a> {
             }
             LineSource::System => {
                 let width = ecma48::visible_width(s);
+                if width > self.line_width() {
+                    return;
+                }
                 let col = self.line_width().saturating_sub(width).saturating_add(1);
                 self.move_to(row, col);
                 self.io
@@ -366,13 +437,9 @@ impl<'a> AlignedWriter<'a> {
                 self.push_plain(&mut text, hotkey.as_str());
                 self.push_plain(&mut text, " keys->app ");
                 self.push_function_key_label(&mut text, "[ESC]");
-                self.push_plain(&mut text, " back ");
-                self.push_function_key_label(&mut text, "[F1]");
-                self.push_plain(&mut text, " host");
+                self.push_plain(&mut text, " back");
             } else {
-                self.push_function_key_label(&mut text, "[F1]");
-                self.push_plain(&mut text, " ");
-                self.push_function_key_label(&mut text, "[§]");
+                self.push_function_key_label(&mut text, "[ESC]");
             }
         } else {
             self.push_plain(&mut text, self.main_mode_text(mode).as_str());
@@ -540,7 +607,7 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn prompt(&self, output_mask: u8) {
-        if active_terminal_hotkey_mode(output_mask) {
+        if active_terminal_handoff_mode(output_mask) || active_terminal_hotkey_mode(output_mask) {
             return;
         }
         self.move_to(PROMPT_ROW, 1);
@@ -566,6 +633,9 @@ impl<'a> AlignedWriter<'a> {
 
     fn right_text(&self, row: usize, text: &str) {
         let width = ecma48::visible_width(text);
+        if width > self.line_width() {
+            return;
+        }
         let col = self.line_width().saturating_sub(width).saturating_add(1);
         self.move_to(row, col);
         self.io.raw_write_str(text);
@@ -642,6 +712,14 @@ pub(crate) fn set_line_width_for_backend(io: &'static dyn ShellBackend2, width: 
     set_line_width_for_output(output_target_for_backend(io), width);
 }
 
+pub(crate) fn apply_reported_terminal_size_for_backend(
+    io: &'static dyn ShellBackend2,
+    cols: usize,
+    rows: usize,
+) -> bool {
+    apply_reported_terminal_size(output_target_for_backend(io), cols, rows)
+}
+
 pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     minimum_line_width_for_output(output_target_for_backend(io))
 }
@@ -651,7 +729,7 @@ fn line_width_for_output(output_mask: u8) -> usize {
     if (output_mask & OUTPUT_UI3_MASK) != 0 {
         ui3_shell_line_width().max(min_width)
     } else {
-        matrix::active_line_width(output_mask).max(min_width)
+        matrix::active_line_width(output_mask).max(1)
     }
 }
 
@@ -659,6 +737,11 @@ fn transcript_view_rows_for_output(output_mask: u8) -> usize {
     let top_row = slot_content_top_row(output_mask);
     if (output_mask & OUTPUT_UI3_MASK) != 0 {
         ui3_shell_rows()
+            .saturating_sub(top_row.saturating_sub(1))
+            .max(1)
+    } else if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        NET_TCP_TERMINAL_ROWS
+            .load(Ordering::Relaxed)
             .saturating_sub(top_row.saturating_sub(1))
             .max(1)
     } else {
@@ -731,6 +814,30 @@ fn configure_output_view(out: &AlignedWriter<'_>, output_mask: u8) {
     out.set_transcript_view_rows(transcript_view_rows_for_output(output_mask));
 }
 
+fn current_chrome_state(
+    output_mask: u8,
+    mode: ShellMode2,
+    qjs_mode: QjsPromptMode,
+    apps_mode: AppsPromptMode,
+    surf_prefix: SurfPromptPrefix,
+    cmd_status_text: Option<&str>,
+) -> ChromeState {
+    ChromeState {
+        line_width: line_width_for_output(output_mask),
+        active_slot: matrix::active_slot_id(output_mask),
+        active_slot_activity: matrix::active_slot_activity(output_mask),
+        app_label: matrix::active_slot_app_label(output_mask),
+        is_vmx: active_matrix_slot_is_vmx(output_mask),
+        terminal_handoff: active_terminal_handoff_mode(output_mask),
+        terminal_hotkey: active_terminal_hotkey_mode(output_mask),
+        mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text: cmd_status_text.map(AllocString::from),
+    }
+}
+
 fn set_line_width_for_output(output_mask: u8, width: usize) {
     let width = width.max(minimum_line_width_for_output(output_mask));
     if (output_mask & OUTPUT_UI3_MASK) != 0 {
@@ -738,6 +845,25 @@ fn set_line_width_for_output(output_mask: u8, width: usize) {
     } else {
         matrix::set_active_line_width(output_mask, width.max(1));
     }
+}
+
+fn apply_reported_terminal_size(output_mask: u8, cols: usize, rows: usize) -> bool {
+    if (output_mask & OUTPUT_UI3_MASK) != 0 || cols == 0 {
+        return false;
+    }
+    let mut changed = false;
+    let cols = cols.max(minimum_line_width_for_output(output_mask));
+    if matrix::active_line_width(output_mask) != cols {
+        matrix::set_active_line_width(output_mask, cols);
+        changed = true;
+    }
+    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 && rows > 0 {
+        let rows = rows.max(1);
+        if NET_TCP_TERMINAL_ROWS.swap(rows, Ordering::Relaxed) != rows {
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn minimum_line_width_for_output(output_mask: u8) -> usize {
@@ -766,7 +892,7 @@ fn banner_left_visible_width(output_mask: u8) -> usize {
 
 fn banner_right_visible_width(output_mask: u8) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("VMX HOTKEY keys->app [ESC] back [F1] host");
+        return ecma48::visible_width("VMX HOTKEY keys->app [ESC] back");
     }
 
     active_slot_label_visible_width(output_mask)
@@ -1075,6 +1201,39 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
     bytes.len()
 }
 
+pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize, usize) {
+    let width = line_width_for_output(target.output_mask).max(1);
+    let rows = if (target.output_mask & OUTPUT_UI3_MASK) != 0
+        && active_matrix_slot_is_vmx(target.output_mask)
+    {
+        ui3_shell_rows()
+            .saturating_sub(VM_HOTKEY_TERMINAL_TOP_ROW.saturating_sub(1))
+            .max(1)
+    } else {
+        slot_content_rows_for_output(target.output_mask).max(1)
+    };
+    (width, rows)
+}
+
+pub(crate) fn konsole_begin_frame_for_target(
+    target: &MatrixTarget,
+    cols: usize,
+    rows: usize,
+    terminal_handoff: bool,
+) -> (usize, usize) {
+    let (viewport_cols, viewport_rows) = konsole_viewport_size_for_target(target);
+    let frame_cols = cols.max(1).min(viewport_cols.max(1));
+    let frame_rows = rows.max(1).min(viewport_rows.max(1));
+    let _ = matrix::resize_terminal_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        frame_cols,
+        frame_rows,
+        terminal_handoff,
+    );
+    (frame_cols, frame_rows)
+}
+
 pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
     if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         NET_TCP_SHELL_BACKEND.read_byte()
@@ -1156,11 +1315,44 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .is_some()
     {
         shell2_qjs::free_slot(submitted);
-        let _ = matrix::free_slot(submitted);
+        let (freed_id, vm_ids) = matrix::free_slot(submitted);
+        for vm_id in vm_ids {
+            match crate::hv::stop(vm_id) {
+                Ok(true) => matrix::record_line_in_default(
+                    LineSource::System,
+                    alloc::format!("matrix: freed slot §{}§; vm{} stop requested", freed_id, vm_id)
+                        .as_str(),
+                ),
+                Ok(false) => matrix::record_line_in_default(
+                    LineSource::System,
+                    alloc::format!(
+                        "matrix: freed slot §{}§; vm{} already stopped",
+                        freed_id,
+                        vm_id
+                    )
+                    .as_str(),
+                ),
+                Err(_) => matrix::record_line_in_default(
+                    LineSource::System,
+                    alloc::format!("matrix: freed slot §{}§; vm{} stop failed", freed_id, vm_id)
+                        .as_str(),
+                ),
+            }
+        }
     } else {
         let requested = submitted.strip_prefix('§').unwrap_or("");
         let _ = matrix::switch_active_slot(output_target_for_backend(io), requested);
     }
+}
+
+fn is_matrix_operator(submitted: &str) -> bool {
+    if submitted == "§" {
+        return true;
+    }
+    let Some(rest) = submitted.strip_prefix('§') else {
+        return false;
+    };
+    !rest.strip_suffix('§').unwrap_or(rest).trim().is_empty()
 }
 
 fn is_vmx_control_command(submitted: &str) -> bool {
@@ -1277,6 +1469,11 @@ fn apply_vmx_tui_command(
 ) -> VecDeque<TranscriptEntry> {
     let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
     let _ = matrix::set_active_terminal_handoff_mode(output_mask, true);
+    if let Some(vm_id) =
+        active_matrix_vm_input_id(output_mask).or_else(|| active_matrix_vm_id(output_mask))
+    {
+        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"tui\n");
+    }
     redraw_active_view(
         out,
         io,
@@ -1544,37 +1741,6 @@ fn apply_matrix_operator_and_refresh(
     transcript
 }
 
-fn switch_to_default_slot_and_refresh(
-    out: &AlignedWriter<'_>,
-    io: &'static dyn ShellBackend2,
-    output_mask: u8,
-    mode: &mut ShellMode2,
-    qjs_mode: QjsPromptMode,
-    apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
-    cmd_status_text: Option<&str>,
-    running_go2_phase: usize,
-    minute_text: &str,
-) -> VecDeque<TranscriptEntry> {
-    let _ = matrix::switch_active_slot(output_mask, "");
-    *mode = ShellMode2::Cmd;
-    configure_output_view(out, output_mask);
-    out.banner(output_mask, *mode, minute_text);
-    out.mode_status(
-        output_mask,
-        *mode,
-        qjs_mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
-    let transcript = current_transcript_for_task(io);
-    render_active_slot_content(out, output_mask, &transcript);
-    out.prompt(output_mask);
-    transcript
-}
-
 fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
     if line.push(ch).is_ok() {
         out.user_char(ch);
@@ -1709,9 +1875,21 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut last_matrix_revision = matrix::visible_revision(output_mask);
     let mut saw_cr = false;
     let mut esc = EscState::None;
-    let mut csi_param: u16 = 0;
+    let mut csi_input = CsiInput::new();
     let mut text_decode = ecma48::InputDecodeState::None;
     let mut live_history_cursor: Option<usize> = None;
+    let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
+    let mut last_chrome_state = current_chrome_state(
+        output_mask,
+        mode,
+        qjs_mode,
+        apps_mode,
+        surf_prefix,
+        cmd_status_text.as_deref(),
+    );
+    if (output_mask & (OUTPUT_UI3_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
+        out.io.raw_write_str(TERMINAL_SIZE_QUERY);
+    }
 
     loop {
         let matrix_revision = matrix::visible_revision(output_mask);
@@ -1719,20 +1897,31 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             last_matrix_revision = matrix_revision;
             configure_output_view(&out, output_mask);
             let next_transcript = current_transcript_for_task(io);
-            out.io.raw_write_str(ecma48::SAVE_CURSOR);
-            out.io.raw_write_str(ecma48::RESET);
-            let (_, header_time_text) = clock_bucket_and_text();
-            out.banner(output_mask, mode, header_time_text.as_str());
-            out.mode_status(
+            let chrome_state = current_chrome_state(
                 output_mask,
                 mode,
                 qjs_mode,
                 apps_mode,
                 surf_prefix,
                 cmd_status_text.as_deref(),
-                running_go2_phase,
             );
-            out.io.raw_write_str(ecma48::RESTORE_CURSOR);
+            if chrome_state != last_chrome_state {
+                out.io.raw_write_str(ecma48::SAVE_CURSOR);
+                out.io.raw_write_str(ecma48::RESET);
+                let (_, header_time_text) = clock_bucket_and_text();
+                out.banner(output_mask, mode, header_time_text.as_str());
+                out.mode_status(
+                    output_mask,
+                    mode,
+                    qjs_mode,
+                    apps_mode,
+                    surf_prefix,
+                    cmd_status_text.as_deref(),
+                    running_go2_phase,
+                );
+                out.io.raw_write_str(ecma48::RESTORE_CURSOR);
+                last_chrome_state = chrome_state;
+            }
             if active_terminal_snapshot_for_output(output_mask).is_some() {
                 render_active_slot_content(&out, output_mask, &next_transcript);
             } else if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
@@ -1771,49 +1960,28 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         running_go2_phase,
                         minute_text.as_str(),
                     );
+                    last_chrome_state = current_chrome_state(
+                        output_mask,
+                        mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                    );
+                    last_matrix_revision = matrix::visible_revision(output_mask);
                 } else if active_terminal_handoff_mode(output_mask)
                     && active_matrix_slot_is_vmx(output_mask)
                 {
+                    if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
+                        .or_else(|| active_matrix_vm_id(output_mask))
+                    {
+                        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"\x1b");
+                    }
                     line.clear();
-                    transcript = switch_to_default_slot_and_refresh(
+                    let _ = matrix::set_active_terminal_handoff_mode(output_mask, false);
+                    transcript = redraw_active_view(
                         &out,
                         io,
-                        output_mask,
-                        &mut mode,
-                        qjs_mode,
-                        apps_mode,
-                        surf_prefix,
-                        cmd_status_text.as_deref(),
-                        running_go2_phase,
-                        minute_text.as_str(),
-                    );
-                }
-                continue;
-            }
-            if b == UI3_F1_KEY_BYTE {
-                esc = EscState::None;
-                text_decode = ecma48::InputDecodeState::None;
-                live_history_cursor = None;
-                cmd_status_text = None;
-                if active_matrix_slot_is_vmx(output_mask) {
-                    line.clear();
-                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
-                    transcript = switch_to_default_slot_and_refresh(
-                        &out,
-                        io,
-                        output_mask,
-                        &mut mode,
-                        qjs_mode,
-                        apps_mode,
-                        surf_prefix,
-                        cmd_status_text.as_deref(),
-                        running_go2_phase,
-                        minute_text.as_str(),
-                    );
-                } else {
-                    mode = ShellMode2::Surf;
-                    apply_mode_toggle(
-                        &out,
                         output_mask,
                         mode,
                         qjs_mode,
@@ -1821,16 +1989,85 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         surf_prefix,
                         cmd_status_text.as_deref(),
                         running_go2_phase,
-                        &line,
                         minute_text.as_str(),
                     );
+                    last_chrome_state = current_chrome_state(
+                        output_mask,
+                        mode,
+                        qjs_mode,
+                        apps_mode,
+                        surf_prefix,
+                        cmd_status_text.as_deref(),
+                    );
+                    last_matrix_revision = matrix::visible_revision(output_mask);
                 }
+                continue;
+            }
+            if b == UI3_F1_KEY_BYTE && !active_matrix_slot_is_vmx(output_mask) {
+                esc = EscState::None;
+                text_decode = ecma48::InputDecodeState::None;
+                live_history_cursor = None;
+                cmd_status_text = None;
+                mode = ShellMode2::Surf;
+                apply_mode_toggle(
+                    &out,
+                    output_mask,
+                    mode,
+                    qjs_mode,
+                    apps_mode,
+                    surf_prefix,
+                    cmd_status_text.as_deref(),
+                    running_go2_phase,
+                    &line,
+                    minute_text.as_str(),
+                );
                 continue;
             }
             if b == UI3_UNMAPPED_KEY_BYTE {
                 if active_terminal_hotkey_mode(output_mask) {
                     show_hotkey_notice(&out, output_mask, "unmapped key");
                 }
+                continue;
+            }
+            if b == 0x1b && active_terminal_direct_input_mode(output_mask) {
+                esc = EscState::None;
+                text_decode = ecma48::InputDecodeState::None;
+                live_history_cursor = None;
+                cmd_status_text = None;
+                line.clear();
+                if active_terminal_handoff_mode(output_mask) {
+                    if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
+                        .or_else(|| active_matrix_vm_id(output_mask))
+                    {
+                        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"\x1b");
+                    }
+                }
+                if active_terminal_hotkey_mode(output_mask) {
+                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
+                } else {
+                    let _ = matrix::set_active_terminal_handoff_mode(output_mask, false);
+                }
+                transcript = redraw_active_view(
+                    &out,
+                    io,
+                    output_mask,
+                    mode,
+                    qjs_mode,
+                    apps_mode,
+                    surf_prefix,
+                    cmd_status_text.as_deref(),
+                    running_go2_phase,
+                    minute_text.as_str(),
+                );
+                last_chrome_state = current_chrome_state(
+                    output_mask,
+                    mode,
+                    qjs_mode,
+                    apps_mode,
+                    surf_prefix,
+                    cmd_status_text.as_deref(),
+                );
+                last_matrix_revision = matrix::visible_revision(output_mask);
                 continue;
             }
             if active_terminal_direct_input_mode(output_mask) {
@@ -1860,7 +2097,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     match b {
                         b'[' => {
                             esc = EscState::Csi;
-                            csi_param = 0;
+                            csi_input.reset();
                         }
                         b'O' => {
                             esc = EscState::Ss3;
@@ -1891,43 +2128,58 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         }
                         b'0'..=b'9' => {
                             let digit = (b - b'0') as u16;
-                            csi_param = csi_param.saturating_mul(10).saturating_add(digit);
+                            csi_input.push_digit(digit as u8);
+                        }
+                        b';' => {
+                            csi_input.push_separator();
                         }
                         b'~' => {
-                            if let Some(function_index) = csi_param.checked_sub(10) {
-                                if active_matrix_slot_is_vmx(output_mask) {
-                                    if function_index == 1 {
-                                        line.clear();
-                                        transcript = switch_to_default_slot_and_refresh(
-                                            &out,
-                                            io,
-                                            output_mask,
-                                            &mut mode,
-                                            qjs_mode,
-                                            apps_mode,
-                                            surf_prefix,
-                                            cmd_status_text.as_deref(),
-                                            running_go2_phase,
-                                            minute_text.as_str(),
-                                        );
-                                    }
-                                } else if let Some(next_mode) =
-                                    mode_from_function_key(function_index)
-                                {
-                                    mode = next_mode;
-                                    apply_mode_toggle(
-                                        &out,
-                                        output_mask,
-                                        mode,
-                                        qjs_mode,
-                                        apps_mode,
-                                        surf_prefix,
-                                        cmd_status_text.as_deref(),
-                                        running_go2_phase,
-                                        &line,
-                                        minute_text.as_str(),
-                                    );
-                                }
+                            if let Some(function_index) = csi_input.first().checked_sub(10)
+                                && !active_matrix_slot_is_vmx(output_mask)
+                                && let Some(next_mode) = mode_from_function_key(function_index)
+                            {
+                                mode = next_mode;
+                                apply_mode_toggle(
+                                    &out,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    &line,
+                                    minute_text.as_str(),
+                                );
+                            }
+                            esc = EscState::None;
+                        }
+                        b't' => {
+                            if let Some((cols, rows)) = csi_input.terminal_size()
+                                && apply_reported_terminal_size(output_mask, cols, rows)
+                            {
+                                transcript = redraw_active_view(
+                                    &out,
+                                    io,
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                    running_go2_phase,
+                                    minute_text.as_str(),
+                                );
+                                render_prompt_line(&out, output_mask, &line);
+                                last_chrome_state = current_chrome_state(
+                                    output_mask,
+                                    mode,
+                                    qjs_mode,
+                                    apps_mode,
+                                    surf_prefix,
+                                    cmd_status_text.as_deref(),
+                                );
+                                last_matrix_revision = matrix::visible_revision(output_mask);
                             }
                             esc = EscState::None;
                         }
@@ -1938,23 +2190,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     continue;
                 }
                 EscState::Ss3 => {
-                    if active_matrix_slot_is_vmx(output_mask) {
-                        if b == b'P' {
-                            line.clear();
-                            transcript = switch_to_default_slot_and_refresh(
-                                &out,
-                                io,
-                                output_mask,
-                                &mut mode,
-                                qjs_mode,
-                                apps_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                                running_go2_phase,
-                                minute_text.as_str(),
-                            );
-                        }
-                    } else {
+                    if !active_matrix_slot_is_vmx(output_mask) {
                         let next_mode = match b {
                             b'P' => Some(ShellMode2::Surf),
                             b'Q' => Some(ShellMode2::Apps),
@@ -2076,7 +2312,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let has_broadcast_sessions = session_indexes
                         .iter()
                         .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
-                    if submitted == "§" && mode != ShellMode2::Qjs {
+                    if is_matrix_operator(submitted) && mode != ShellMode2::Qjs {
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,
@@ -2090,35 +2326,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             minute_text.as_str(),
                             submitted,
                         );
-                        line.clear();
-                        out.prompt(output_mask);
-                        run_plain_section_status(
-                            &out,
+                        last_chrome_state = current_chrome_state(
                             output_mask,
                             mode,
                             qjs_mode,
                             apps_mode,
                             surf_prefix,
                             cmd_status_text.as_deref(),
-                            running_go2_phase,
-                        )
-                        .await;
-                    } else if submitted_raw.starts_with('§')
-                        && !submitted.is_empty()
-                        && mode != ShellMode2::Qjs
-                    {
-                        transcript = apply_matrix_operator_and_refresh(
-                            &out,
-                            io,
-                            output_mask,
-                            &mut mode,
-                            qjs_mode,
-                            apps_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                            minute_text.as_str(),
-                            submitted,
                         );
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
                         if !submitted.is_empty() {
@@ -2276,7 +2490,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             CommandSessionInputResult::KeepRunning => {}
                         }
                     } else if !submitted.is_empty() || mode == ShellMode2::Apps {
-                        if submitted_raw.starts_with('§') && mode != ShellMode2::Qjs {
+                        if is_matrix_operator(submitted) && mode != ShellMode2::Qjs {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
                             configure_output_view(&out, output_mask);
@@ -2292,6 +2506,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             );
                             transcript = current_transcript_for_task(io);
                             render_active_slot_content(&out, output_mask, &transcript);
+                            last_chrome_state = current_chrome_state(
+                                output_mask,
+                                mode,
+                                qjs_mode,
+                                apps_mode,
+                                surf_prefix,
+                                cmd_status_text.as_deref(),
+                            );
                         } else {
                             if !submitted.is_empty() {
                                 record_user_line_for_active_slot(io, submitted);
@@ -2322,6 +2544,14 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     );
                                     transcript = current_transcript_for_task(io);
                                     render_active_slot_content(&out, output_mask, &transcript);
+                                    last_chrome_state = current_chrome_state(
+                                        output_mask,
+                                        mode,
+                                        qjs_mode,
+                                        apps_mode,
+                                        surf_prefix,
+                                        cmd_status_text.as_deref(),
+                                    );
                                 }
                                 HandleSubmitResult::StartSession(kind) => {
                                     let slot_id = matrix::active_slot_id(output_mask);
@@ -2364,29 +2594,20 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 _ => {
                     cmd_status_text = None;
                     if let Some(ch) = ecma48::decode_input_byte_lossy(&mut text_decode, b) {
-                        if ch == '§' && active_matrix_slot_is_vmx(output_mask) {
-                            text_decode = ecma48::InputDecodeState::None;
-                            live_history_cursor = None;
-                            line.clear();
-                            transcript = switch_to_default_slot_and_refresh(
-                                &out,
-                                io,
-                                output_mask,
-                                &mut mode,
-                                qjs_mode,
-                                apps_mode,
-                                surf_prefix,
-                                cmd_status_text.as_deref(),
-                                running_go2_phase,
-                                minute_text.as_str(),
-                            );
-                        } else {
-                            push_input_char(&out, &mut line, ch);
-                        }
+                        push_input_char(&out, &mut line, ch);
                     }
                 }
             }
         } else {
+            if (output_mask & (OUTPUT_UI3_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
+                if terminal_size_query_idle_ticks == 0 {
+                    out.io.raw_write_str(TERMINAL_SIZE_QUERY);
+                    terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
+                } else {
+                    terminal_size_query_idle_ticks =
+                        terminal_size_query_idle_ticks.saturating_sub(1);
+                }
+            }
             Timer::after(EmbassyDuration::from_millis(5)).await;
         }
     }

@@ -1482,7 +1482,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_codec_service,
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "font-tessel-boot-probe",
         0,
         &FONT_TESSEL_BOOT_PROBE_STARTED,

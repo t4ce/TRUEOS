@@ -7,7 +7,65 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
-use crate::shell2::backends::net_tcp::{NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT};
+use crate::shell2::backends::net_tcp::{
+    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, net_shell_write_bytes,
+};
+
+const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
+const INITIAL_REPAINT_WAIT_TICKS: u32 = 8;
+const RESIZE_QUERY_TICKS: u32 = 100;
+
+fn parse_terminal_size_report(data: &[u8]) -> Option<(usize, usize, usize, usize)> {
+    let start = data.windows(2).position(|w| w == b"\x1b[")?;
+    let mut params = [0usize; 3];
+    let mut idx = 0usize;
+    let mut saw_digit = false;
+
+    for (offset, &b) in data[start + 2..].iter().enumerate() {
+        match b {
+            b'0'..=b'9' => {
+                if idx >= params.len() {
+                    return None;
+                }
+                params[idx] = params[idx]
+                    .saturating_mul(10)
+                    .saturating_add(usize::from(b - b'0'));
+                saw_digit = true;
+            }
+            b';' => {
+                if !saw_digit || idx + 1 >= params.len() {
+                    return None;
+                }
+                idx += 1;
+                saw_digit = false;
+            }
+            b't' => {
+                if idx == 2 && saw_digit && params[0] == 8 && params[1] > 0 && params[2] > 0 {
+                    return Some((params[2], params[1], start, start + 2 + offset + 1));
+                }
+                return None;
+            }
+            _ => return None,
+        }
+    }
+
+    None
+}
+
+fn looks_like_incomplete_terminal_size_report(data: &[u8]) -> bool {
+    let Some(start) = data.windows(2).position(|w| w == b"\x1b[") else {
+        return false;
+    };
+    let Some(&first) = data.get(start + 2) else {
+        return true;
+    };
+    if first != b'8' {
+        return false;
+    }
+    data[start + 3..]
+        .iter()
+        .all(|&b| b.is_ascii_digit() || b == b';')
+}
 
 /// TCP-backed shell I/O bridge.
 ///
@@ -90,6 +148,11 @@ pub async fn net_shell_task() {
         let mut pending_len: usize = 0;
         let mut tx_log_budget: u32 = 16;
         let mut tcp_handle: Option<NetHandle> = None;
+        let mut initial_repaint_handle: Option<NetHandle> = None;
+        let mut initial_repaint_ticks: u32 = 0;
+        let mut initial_rx_probe: Vec<u8> = Vec::new();
+        let mut resize_query_ticks: u32 = 0;
+        let mut resize_rx_probe: Vec<u8> = Vec::new();
 
         loop {
             for ev in events.drain(32) {
@@ -101,7 +164,7 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
-                        let mut repaint_screen = false;
+                        let mut schedule_initial_repaint = false;
                         {
                             let mut st = NET_SHELL_STATE.lock();
                             let is_new_conn = st.handle != Some(handle);
@@ -109,13 +172,16 @@ pub async fn net_shell_task() {
                             if is_new_conn {
                                 st.rx.clear();
                                 st.tx.clear();
-                                repaint_screen = true;
+                                schedule_initial_repaint = true;
                             }
                         }
-                        if repaint_screen {
-                            crate::shell2::repaint_backend_screen(
-                                &crate::shell2::NET_TCP_SHELL_BACKEND,
-                            );
+                        if schedule_initial_repaint {
+                            net_shell_write_bytes(TERMINAL_SIZE_QUERY);
+                            initial_repaint_handle = Some(handle);
+                            initial_repaint_ticks = 0;
+                            initial_rx_probe.clear();
+                            resize_rx_probe.clear();
+                            resize_query_ticks = 0;
                         }
                         pending = None;
                         pending_handle = Some(handle);
@@ -129,6 +195,79 @@ pub async fn net_shell_task() {
                         // Only accept bytes from the active connection.
                         // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
                         // so treat the first inbound bytes as selecting the active handle.
+                        let mut rx_data = data;
+                        if initial_repaint_handle == Some(handle) {
+                            initial_rx_probe.extend_from_slice(&rx_data);
+                            if let Some((cols, rows, start, end)) =
+                                parse_terminal_size_report(&initial_rx_probe)
+                            {
+                                crate::shell2::apply_reported_terminal_size_for_backend(
+                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                    cols,
+                                    rows,
+                                );
+                                crate::shell2::repaint_backend_screen(
+                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                );
+                                initial_repaint_handle = None;
+                                initial_repaint_ticks = 0;
+                                let mut filtered = Vec::new();
+                                filtered.extend_from_slice(&initial_rx_probe[..start]);
+                                filtered.extend_from_slice(&initial_rx_probe[end..]);
+                                rx_data = filtered;
+                                initial_rx_probe.clear();
+                            } else if initial_rx_probe.len() <= 32 {
+                                continue;
+                            } else {
+                                rx_data = core::mem::take(&mut initial_rx_probe);
+                            }
+                        } else {
+                            if !resize_rx_probe.is_empty() {
+                                resize_rx_probe.extend_from_slice(&rx_data);
+                                if let Some((cols, rows, start, end)) =
+                                    parse_terminal_size_report(&resize_rx_probe)
+                                {
+                                    if crate::shell2::apply_reported_terminal_size_for_backend(
+                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                        cols,
+                                        rows,
+                                    ) {
+                                        crate::shell2::repaint_backend_screen(
+                                            &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                        );
+                                    }
+                                    let mut filtered = Vec::new();
+                                    filtered.extend_from_slice(&resize_rx_probe[..start]);
+                                    filtered.extend_from_slice(&resize_rx_probe[end..]);
+                                    rx_data = filtered;
+                                    resize_rx_probe.clear();
+                                } else if resize_rx_probe.len() <= 32
+                                    && looks_like_incomplete_terminal_size_report(&resize_rx_probe)
+                                {
+                                    continue;
+                                } else {
+                                    rx_data = core::mem::take(&mut resize_rx_probe);
+                                }
+                            } else if let Some((cols, rows, start, end)) =
+                                parse_terminal_size_report(&rx_data)
+                            {
+                                if crate::shell2::apply_reported_terminal_size_for_backend(
+                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                    cols,
+                                    rows,
+                                ) {
+                                    crate::shell2::repaint_backend_screen(
+                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
+                                    );
+                                }
+                                rx_data.drain(start..end);
+                            } else if rx_data.len() <= 32
+                                && looks_like_incomplete_terminal_size_report(&rx_data)
+                            {
+                                resize_rx_probe.extend_from_slice(&rx_data);
+                                continue;
+                            }
+                        }
                         {
                             let mut st = NET_SHELL_STATE.lock();
                             if st.handle.is_none() {
@@ -142,13 +281,13 @@ pub async fn net_shell_task() {
                                 logged_first_rx = true;
                                 crate::log!(
                                     "net-shell: first rx {} bytes (including {:?})\n",
-                                    data.len(),
-                                    data.first().copied()
+                                    rx_data.len(),
+                                    rx_data.first().copied()
                                 );
                             }
 
                             const MAX_RX: usize = 8 * 1024;
-                            for b in data {
+                            for b in rx_data {
                                 if st.rx.len() >= MAX_RX {
                                     let _ = st.rx.pop_front();
                                 }
@@ -190,6 +329,12 @@ pub async fn net_shell_task() {
                             pending_handle = None;
                             pending_ticks = 0;
                             pending_len = 0;
+                            if initial_repaint_handle == Some(handle) {
+                                initial_repaint_handle = None;
+                                initial_repaint_ticks = 0;
+                                initial_rx_probe.clear();
+                                resize_rx_probe.clear();
+                            }
                         }
 
                         if tcp_handle == Some(handle) {
@@ -276,6 +421,42 @@ pub async fn net_shell_task() {
                     pending = None;
                     pending_ticks = 0;
                     pending_len = 0;
+                }
+            }
+
+            if let Some(handle) = initial_repaint_handle {
+                initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
+                if initial_repaint_ticks >= INITIAL_REPAINT_WAIT_TICKS {
+                    crate::shell2::repaint_backend_screen(&crate::shell2::NET_TCP_SHELL_BACKEND);
+                    initial_repaint_handle = None;
+                    initial_repaint_ticks = 0;
+                    if !initial_rx_probe.is_empty() {
+                        let mut st = NET_SHELL_STATE.lock();
+                        const MAX_RX: usize = 8 * 1024;
+                        for b in initial_rx_probe.drain(..) {
+                            if st.rx.len() >= MAX_RX {
+                                let _ = st.rx.pop_front();
+                            }
+                            st.rx.push_back(b);
+                        }
+                    }
+                    let _ = handle;
+                }
+            }
+
+            if initial_repaint_handle.is_none() {
+                let active_handle = {
+                    let st = NET_SHELL_STATE.lock();
+                    st.handle
+                };
+                if active_handle.is_some() {
+                    resize_query_ticks = resize_query_ticks.wrapping_add(1);
+                    if resize_query_ticks >= RESIZE_QUERY_TICKS {
+                        resize_query_ticks = 0;
+                        net_shell_write_bytes(TERMINAL_SIZE_QUERY);
+                    }
+                } else {
+                    resize_query_ticks = 0;
                 }
             }
 

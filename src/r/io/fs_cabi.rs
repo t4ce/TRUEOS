@@ -1365,6 +1365,117 @@ pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_exit_reason(
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if data_ptr.is_null() || data_len == 0 {
+        return -1;
+    }
+    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len.min(512)) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, _) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_EXIT_REASON,
+            0,
+            0,
+            data,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            0
+        } else {
+            -1
+        };
+    }
+    let reason = core::str::from_utf8(data).unwrap_or("non-utf8-exit-reason");
+    crate::log!("blueprint-exit-reason: {}\n", reason);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_shutdown(
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let data = if data_ptr.is_null() || data_len == 0 {
+        b"blueprint shutdown requested".as_slice()
+    } else {
+        unsafe { core::slice::from_raw_parts(data_ptr, data_len.min(512)) }
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, _) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHUTDOWN,
+            0,
+            0,
+            data,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            0
+        } else {
+            -1
+        };
+    }
+    let reason = core::str::from_utf8(data).unwrap_or("non-utf8-shutdown-reason");
+    crate::log!("blueprint-shutdown: {}\n", reason);
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32 {
+    if out_cols.is_null() || out_rows.is_null() {
+        return -1;
+    }
+
+    let (cols, rows) = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, packed) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_SIZE, 0, 0);
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return -1;
+        }
+        ((packed >> 32) as u32, packed as u32)
+    } else if let Some(target) = super::env::console_target() {
+        let (cols, rows) = crate::shell2::konsole_viewport_size_for_target(&target);
+        (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32)
+    } else {
+        (180, 24)
+    };
+
+    unsafe {
+        *out_cols = cols.max(1);
+        *out_rows = rows.max(1);
+    }
+    0
+}
+
+fn konsole_begin_frame_size(cols: u32, rows: u32, terminal_handoff: bool) -> Option<(u32, u32)> {
+    let cols = cols.min(512).max(1);
+    let rows = rows.min(512).max(1);
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let flags = if terminal_handoff { 1u64 << 63 } else { 0 };
+        let (status, packed) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_SHELL_KONSOLE_BEGIN_FRAME,
+            u64::from(cols),
+            u64::from(rows) | flags,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return None;
+        }
+        return Some(((packed >> 32) as u32, packed as u32));
+    }
+    if let Some(target) = super::env::console_target() {
+        let (cols, rows) = crate::shell2::konsole_begin_frame_for_target(
+            &target,
+            cols as usize,
+            rows as usize,
+            terminal_handoff,
+        );
+        return Some((cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32));
+    }
+    Some((cols, rows))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_konsole_begin_frame(
     cols: u32,
     rows: u32,
@@ -1375,9 +1486,13 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     }
 
     let terminal_handoff = (reserved_top_rows & KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF) != 0;
+    let Some((frame_cols, frame_rows)) = konsole_begin_frame_size(cols, rows, terminal_handoff)
+    else {
+        return -1;
+    };
     let state = KonsoleFrameState {
-        cols: cols.min(512),
-        rows: rows.min(512),
+        cols: frame_cols,
+        rows: frame_rows,
         reserved_top_rows: if crate::hv::current_hull_guest_context_vm_id().is_some() {
             0
         } else {
@@ -1394,15 +1509,6 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     states.insert(key, state);
     if let Some(state) = states.get_mut(&key) {
         state.bytes.extend_from_slice(b"\x1b[0m\x1b[?25l");
-        if state.terminal_handoff {
-            state
-                .bytes
-                .extend_from_slice(b"\x1b]777;terminal_handoff=1\x07");
-        }
-        konsole_frame_push_fmt(
-            &mut state.bytes,
-            format_args!("\x1b]777;konsole_size={}x{}\x07", state.cols, state.rows),
-        );
     }
     0
 }

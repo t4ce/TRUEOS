@@ -399,21 +399,10 @@ impl TerminalState {
             return;
         };
         match raw {
-            "777;terminal_handoff=1" => {
-                let was_handoff = self.terminal_handoff;
-                self.terminal_handoff = true;
-                self.cursor_visible = false;
-                self.cursor_col = 0;
-                self.cursor_row = 0;
-                if !was_handoff {
-                    self.clear_all();
-                }
-            }
-            "777;terminal_handoff=0" => self.terminal_handoff = false,
+            "777;terminal_handoff=1" => self.set_terminal_handoff(true),
+            "777;terminal_handoff=0" => self.set_terminal_handoff(false),
             _ => {
-                if let Some((cols, rows)) = parse_konsole_size_osc(raw) {
-                    self.resize_preserving_contents(cols, rows);
-                } else if let Some((row, col, bytes)) = parse_konsole_row_osc(raw) {
+                if let Some((row, col, bytes)) = parse_konsole_row_osc(raw) {
                     self.feed_konsole_row(row, col, bytes.as_slice());
                 }
             }
@@ -464,6 +453,7 @@ impl TerminalState {
             self.cursor_visible = false;
             self.cursor_col = 0;
             self.cursor_row = 0;
+            self.clear_all();
         }
     }
 
@@ -667,14 +657,6 @@ impl TerminalState {
     }
 }
 
-fn parse_konsole_size_osc(raw: &str) -> Option<(usize, usize)> {
-    let value = raw.strip_prefix("777;konsole_size=")?;
-    let (cols, rows) = value.split_once('x')?;
-    let cols = cols.parse::<usize>().ok()?.clamp(1, 512);
-    let rows = rows.parse::<usize>().ok()?.clamp(1, 512);
-    Some((cols, rows))
-}
-
 fn parse_konsole_row_osc(raw: &str) -> Option<(usize, usize, Vec<u8>)> {
     let value = raw.strip_prefix("777;konsole_row=")?;
     let (coords, hex) = value.split_once(';')?;
@@ -821,19 +803,24 @@ pub(crate) fn ui3_shell_rows() -> usize {
 
 pub(crate) fn ui3_shell_set_line_width(width: usize) {
     let mut runtime = runtime().lock();
+    let width = width.max(1);
+    if runtime.screen.cols == width {
+        return;
+    }
     let rows = runtime.screen.rows.max(1);
-    runtime
-        .screen
-        .resize_preserving_contents(width.max(1), rows);
+    runtime.screen.resize_preserving_contents(width, rows);
     runtime.bump_dirty();
     UI3_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
 }
 
 pub(crate) fn ui3_shell_set_size(width: usize, rows: usize) {
     let mut runtime = runtime().lock();
-    runtime
-        .screen
-        .resize_preserving_contents(width.max(1), rows.max(1));
+    let width = width.max(1);
+    let rows = rows.max(1);
+    if runtime.screen.cols == width && runtime.screen.rows == rows {
+        return;
+    }
+    runtime.screen.resize_preserving_contents(width, rows);
     runtime.bump_dirty();
     UI3_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
 }
@@ -852,35 +839,56 @@ pub(crate) fn ui3_shell_blit_snapshot(
     let cols = (snapshot.cols as usize).min(runtime.screen.cols);
     let rows = (snapshot.rows as usize).min(runtime.screen.rows.saturating_sub(start_row));
     let screen_cols = runtime.screen.cols;
+    let mut changed = false;
     for row in 0..rows {
         let dst_row = start_row.saturating_add(row);
-        runtime
-            .screen
-            .clear_line_range(dst_row, 0, screen_cols.saturating_sub(1));
         let src_cols = snapshot.cols as usize;
-        for col in 0..cols {
-            let src_idx = row.saturating_mul(src_cols).saturating_add(col);
+        for col in 0..screen_cols {
             let dst_idx = runtime.screen.cell_index(dst_row, col);
-            if let (Some(src), Some(dst)) =
-                (snapshot.cells.get(src_idx), runtime.screen.cells.get_mut(dst_idx))
-            {
-                *dst = normalized_blit_cell(*src);
+            let next = if col < cols {
+                let src_idx = row.saturating_mul(src_cols).saturating_add(col);
+                snapshot
+                    .cells
+                    .get(src_idx)
+                    .copied()
+                    .map(normalized_blit_cell)
+                    .unwrap_or_else(TerminalState::blank_cell)
+            } else {
+                TerminalState::blank_cell()
+            };
+            if let Some(dst) = runtime.screen.cells.get_mut(dst_idx) {
+                if *dst != next {
+                    *dst = next;
+                    changed = true;
+                }
             }
         }
     }
 
     if allow_snapshot_cursor && snapshot.cursor_visible {
-        runtime.screen.cursor_row = start_row
+        let cursor_row = start_row
             .saturating_add(snapshot.cursor_row as usize)
             .min(runtime.screen.rows - 1);
-        runtime.screen.cursor_col = (snapshot.cursor_col as usize).min(runtime.screen.cols - 1);
-        runtime.screen.cursor_visible = true;
+        let cursor_col = (snapshot.cursor_col as usize).min(runtime.screen.cols - 1);
+        if runtime.screen.cursor_row != cursor_row
+            || runtime.screen.cursor_col != cursor_col
+            || !runtime.screen.cursor_visible
+        {
+            runtime.screen.cursor_row = cursor_row;
+            runtime.screen.cursor_col = cursor_col;
+            runtime.screen.cursor_visible = true;
+            changed = true;
+        }
     } else if !allow_snapshot_cursor {
-        runtime.screen.cursor_visible = false;
+        if runtime.screen.cursor_visible {
+            runtime.screen.cursor_visible = false;
+            changed = true;
+        }
     }
 
-    runtime.bump_dirty();
-    UI3_SHELL_RENDERED_SEQ.store(0, Ordering::Release);
+    if changed {
+        runtime.bump_dirty();
+    }
 }
 
 fn normalized_blit_cell(cell: Ui3ShellCell) -> Ui3ShellCell {
