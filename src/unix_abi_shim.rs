@@ -240,6 +240,12 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, _timeout: c_int) ->
                 revents |= TRUEOS_POLLOUT;
             }
         } else if (0..=2).contains(&pollfd.fd) {
+            if pollfd.fd == 0
+                && pollfd.events & TRUEOS_POLLIN != 0
+                && crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len() != 0
+            {
+                revents |= TRUEOS_POLLIN;
+            }
             if pollfd.events & TRUEOS_POLLOUT != 0 {
                 revents |= TRUEOS_POLLOUT;
             }
@@ -311,7 +317,12 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: usize, argp: *mut c_void) -> 
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
             }
-            let available = if (0..=2).contains(&fd) {
+            let available = if fd == 0 {
+                core::cmp::min(
+                    crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len(),
+                    i32::MAX as usize,
+                ) as i32
+            } else if (1..=2).contains(&fd) {
                 0
             } else {
                 let table = OPEN_FILES.lock();

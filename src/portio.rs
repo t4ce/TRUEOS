@@ -3,8 +3,6 @@
 // Known caller impact if this stays stubbed on ARM:
 // - src/log_os.rs and src/exceptions.rs use port 0xE9 style debug output.
 //   That is cheap to lose.
-// - src/shell2/backends/uart1_com1.rs is legacy COM1 serial. Also fine to
-//   lose on ARM.
 // - src/pci/vrng.rs and src/net/vio.rs are bigger: they use legacy virtio over
 //   PCI I/O ports. Losing those means losing those device paths on ARM until
 //   replaced.

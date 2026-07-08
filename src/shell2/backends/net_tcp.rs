@@ -14,6 +14,7 @@ pub(crate) static NET_TCP_SHELL_BACKEND: NetTcpShellBackend = NetTcpShellBackend
 static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_VM: AtomicU8 = AtomicU8::new(0);
+static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
@@ -32,6 +33,13 @@ pub(crate) fn net_shell_read_byte() -> Option<u8> {
         return None;
     }
     NET_SHELL_STATE.lock().rx.pop_front()
+}
+
+pub(crate) fn net_shell_readable_len() -> usize {
+    if net_shell_direct_active() {
+        return 0;
+    }
+    NET_SHELL_STATE.lock().rx.len()
 }
 
 pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
@@ -58,6 +66,7 @@ pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
     st.rx.clear();
     st.tx.clear();
     NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
+    NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_VM.store(owner, Ordering::Release);
     true
 }
@@ -72,6 +81,7 @@ pub(crate) fn release_net_shell_direct(vm_id: u8) {
         st.rx.clear();
         st.tx.clear();
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
+        NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
     }
 }
 
@@ -87,7 +97,32 @@ pub(crate) fn net_shell_direct_read_byte(vm_id: u8) -> Option<u8> {
     if !net_shell_direct_owned_by(vm_id) {
         return None;
     }
-    NET_SHELL_STATE.lock().rx.pop_front()
+    loop {
+        let byte = NET_SHELL_STATE.lock().rx.pop_front()?;
+        match byte {
+            b'\n' => {
+                if NET_SHELL_DIRECT_RX_LAST_WAS_CR.swap(false, Ordering::AcqRel) {
+                    continue;
+                }
+                return Some(b'\r');
+            }
+            b'\r' => {
+                NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(true, Ordering::Release);
+                return Some(byte);
+            }
+            _ => {
+                NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
+                return Some(byte);
+            }
+        }
+    }
+}
+
+pub(crate) fn net_shell_direct_readable_len(vm_id: u8) -> usize {
+    if !net_shell_direct_owned_by(vm_id) {
+        return 0;
+    }
+    NET_SHELL_STATE.lock().rx.len()
 }
 
 impl ShellIo2 for NetTcpShellBackend {

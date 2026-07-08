@@ -1326,9 +1326,6 @@ pub fn stage_blueprint_launch(
     if !console_route.is_net_shell_direct()
         && let Some(target) = console_target.as_ref()
     {
-        if console_surface.is_terminal() {
-            crate::shell2::prepare_matrix_target_terminal_handoff(target);
-        }
         crate::shell2::bind_matrix_target_vm_input(target, vm_id);
     }
     Ok(())
@@ -1665,7 +1662,6 @@ fn blueprint_console_write_raw_to_target(target: Option<&MatrixTarget>, data: &[
     if let Some(target) = target {
         return crate::shell2::raw_write_matrix_target_owned(&target, data);
     }
-    crate::shell2::uart1_com1::write_bytes(data);
     data.len()
 }
 
@@ -1880,7 +1876,20 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
             return context.console_input.pop_front();
         }
     }
-    crate::shell2::uart1_com1::read_byte()
+    None
+}
+
+pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
+    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
+        let guard = slot.lock();
+        if let Some(context) = guard.as_ref() {
+            if context.console_route.is_net_shell_direct() {
+                return crate::shell2::backends::net_tcp::net_shell_direct_readable_len(vm_id);
+            }
+            return context.console_input.len();
+        }
+    }
+    0
 }
 
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
@@ -1890,8 +1899,6 @@ pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
     };
     if let Some(target) = target {
         crate::shell2::print_matrix_target_line(&target, line);
-    } else {
-        crate::shell2::print_shell_line(&crate::shell2::UART1_COM1_BACKEND, line);
     }
 }
 

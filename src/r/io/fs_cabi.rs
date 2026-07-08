@@ -1293,7 +1293,6 @@ fn konsole_write_bytes(data: &[u8]) -> usize {
     if let Some(target) = super::env::console_target() {
         return crate::shell2::raw_write_matrix_target(&target, data);
     }
-    crate::shell2::uart1_com1::write_bytes(data);
     data.len()
 }
 
@@ -1322,19 +1321,6 @@ fn konsole_frame_push_row_packet(bytes: &mut Vec<u8>, row: u32, col: u32, data: 
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_uart1_shell_write(
-    data_ptr: *const u8,
-    data_len: usize,
-) -> usize {
-    if data_ptr.is_null() || data_len == 0 {
-        return 0;
-    }
-    let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
-    crate::shell2::uart1_com1::write_bytes(data);
-    data_len
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     data_ptr: *const u8,
     data_len: usize,
@@ -1350,9 +1336,8 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
         return crate::shell2::raw_write_matrix_target(&target, data);
     }
     if SHELL_ATTACHED_REJECTS.fetch_add(1, Ordering::Relaxed) == 0 {
-        crate::log!("fs-cabi: shell attached write falling back to uart1\n");
+        crate::log!("fs-cabi: shell attached write has no route\n");
     }
-    crate::shell2::uart1_com1::write_bytes(data);
     data_len
 }
 
@@ -1625,9 +1610,23 @@ pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
             .map(i32::from)
             .unwrap_or(-1);
     }
-    crate::shell2::uart1_com1::read_byte()
-        .map(i32::from)
-        .unwrap_or(-1)
+    -1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READABLE_LEN, 0, 0);
+        if status == trueos_vm::vmcall::STATUS_OK {
+            return data as usize;
+        }
+        return 0;
+    }
+    if let Some(target) = super::env::console_target() {
+        return crate::shell2::read_matrix_target_pending_len(&target);
+    }
+    0
 }
 
 #[unsafe(no_mangle)]

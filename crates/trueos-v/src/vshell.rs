@@ -179,14 +179,6 @@ pub fn style(text: &str) -> Style<'_> {
 }
 
 #[inline]
-pub fn uart1_shell_write(bytes: &[u8]) -> usize {
-    if bytes.is_empty() {
-        return 0;
-    }
-    unsafe { vcabi::trueos_cabi_uart1_shell_write(bytes.as_ptr(), bytes.len()) }
-}
-
-#[inline]
 pub fn shell2_print_line(bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;

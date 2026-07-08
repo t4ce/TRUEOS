@@ -16,14 +16,13 @@ pub use v::qjs_abi::{
     trueos_cabi_net_prewarm_url_start, trueos_cabi_poll_once, trueos_cabi_qjs_mouse_pop,
     trueos_cabi_shell_command_registry_json, trueos_cabi_shell1_submit_input,
     trueos_cabi_shell2_print_line, trueos_cabi_trueosfs_json_all,
-    trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_uart1_shell_write,
-    trueos_cabi_alloc, trueos_cabi_boot_timestamp_secs,
+    trueos_cabi_trueosfs_primary_html_tree, trueos_cabi_alloc, trueos_cabi_boot_timestamp_secs,
     trueos_cabi_browser_asset_ref_push, trueos_cabi_browser_asset_refs_begin,
     trueos_cabi_calloc, trueos_cabi_free, trueos_cabi_malloc_usable_size,
     trueos_cabi_realloc,
 };
 pub use v::vshell::{
-    shell_command_registry_json, shell1_submit_input, shell2_print_line, uart1_shell_write,
+    shell_command_registry_json, shell1_submit_input, shell2_print_line,
 };
 pub use v::vsys::{log_error, log_info, write_log_stream};
 

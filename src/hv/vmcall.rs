@@ -90,6 +90,7 @@ pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C; // payload bytes -> attached s
 pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D; // response is byte or u64::MAX
 pub const OP_BP_ENV_ALL: u32 = 0x6E; // response payload is newline-separated key=value text
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F; // payload path -> response payload tree text
+pub const OP_BP_SHELL_ATTACHED_READABLE_LEN: u32 = 0x70; // response is pending attached-shell input bytes
 pub const OP_BP_FS_LIST_DIR: u32 = 0x81; // arg0 offset, arg1 cap; payload path -> newline children
 pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99; // payload bytes -> shell2 raw surface, no log mirror
 pub const OP_BP_SHELL_KONSOLE_SIZE: u32 = 0x9F; // response data packs cols:rows for attached shell
@@ -1237,6 +1238,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(u64::from)
                 .unwrap_or(u64::MAX);
             write_response(vm_id, seq, STATUS_OK, byte, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_ATTACHED_READABLE_LEN => {
+            let len = crate::hv::blueprint_console_readable_len(vm_id);
+            write_response(vm_id, seq, STATUS_OK, len as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_FS_LIST_TREE => {

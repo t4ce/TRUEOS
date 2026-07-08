@@ -165,6 +165,8 @@ pub async fn net_shell_task() {
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
                         let mut schedule_initial_repaint = false;
+                        let direct_mode =
+                            crate::shell2::backends::net_tcp::net_shell_direct_active();
                         {
                             let mut st = NET_SHELL_STATE.lock();
                             let is_new_conn = st.handle != Some(handle);
@@ -175,9 +177,14 @@ pub async fn net_shell_task() {
                                 schedule_initial_repaint = true;
                             }
                         }
-                        if schedule_initial_repaint
-                            && !crate::shell2::backends::net_tcp::net_shell_direct_active()
-                        {
+                        if schedule_initial_repaint && direct_mode {
+                            net_shell_write_bytes(TERMINAL_SIZE_QUERY);
+                            initial_repaint_handle = None;
+                            initial_repaint_ticks = 0;
+                            initial_rx_probe.clear();
+                            resize_rx_probe.clear();
+                            resize_query_ticks = 0;
+                        } else if schedule_initial_repaint {
                             net_shell_write_bytes(TERMINAL_SIZE_QUERY);
                             initial_repaint_handle = Some(handle);
                             initial_repaint_ticks = 0;
@@ -198,9 +205,9 @@ pub async fn net_shell_task() {
                         // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
                         // so treat the first inbound bytes as selecting the active handle.
                         let mut rx_data = data;
-                        if initial_repaint_handle == Some(handle)
-                            && !crate::shell2::backends::net_tcp::net_shell_direct_active()
-                        {
+                        let direct_mode =
+                            crate::shell2::backends::net_tcp::net_shell_direct_active();
+                        if initial_repaint_handle == Some(handle) && !direct_mode {
                             initial_rx_probe.extend_from_slice(&rx_data);
                             if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&initial_rx_probe)
@@ -235,7 +242,8 @@ pub async fn net_shell_task() {
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
                                         cols,
                                         rows,
-                                    ) {
+                                    ) && !direct_mode
+                                    {
                                         crate::shell2::repaint_backend_screen(
                                             &crate::shell2::NET_TCP_SHELL_BACKEND,
                                         );
@@ -259,7 +267,8 @@ pub async fn net_shell_task() {
                                     &crate::shell2::NET_TCP_SHELL_BACKEND,
                                     cols,
                                     rows,
-                                ) {
+                                ) && !direct_mode
+                                {
                                     crate::shell2::repaint_backend_screen(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
                                     );
@@ -435,23 +444,26 @@ pub async fn net_shell_task() {
                     initial_rx_probe.clear();
                     resize_rx_probe.clear();
                     let _ = handle;
-                }
-                initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
-                if initial_repaint_ticks >= INITIAL_REPAINT_WAIT_TICKS {
-                    crate::shell2::repaint_backend_screen(&crate::shell2::NET_TCP_SHELL_BACKEND);
-                    initial_repaint_handle = None;
-                    initial_repaint_ticks = 0;
-                    if !initial_rx_probe.is_empty() {
-                        let mut st = NET_SHELL_STATE.lock();
-                        const MAX_RX: usize = 8 * 1024;
-                        for b in initial_rx_probe.drain(..) {
-                            if st.rx.len() >= MAX_RX {
-                                let _ = st.rx.pop_front();
+                } else {
+                    initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
+                    if initial_repaint_ticks >= INITIAL_REPAINT_WAIT_TICKS {
+                        crate::shell2::repaint_backend_screen(
+                            &crate::shell2::NET_TCP_SHELL_BACKEND,
+                        );
+                        initial_repaint_handle = None;
+                        initial_repaint_ticks = 0;
+                        if !initial_rx_probe.is_empty() {
+                            let mut st = NET_SHELL_STATE.lock();
+                            const MAX_RX: usize = 8 * 1024;
+                            for b in initial_rx_probe.drain(..) {
+                                if st.rx.len() >= MAX_RX {
+                                    let _ = st.rx.pop_front();
+                                }
+                                st.rx.push_back(b);
                             }
-                            st.rx.push_back(b);
                         }
+                        let _ = handle;
                     }
-                    let _ = handle;
                 }
             }
 
@@ -460,9 +472,7 @@ pub async fn net_shell_task() {
                     let st = NET_SHELL_STATE.lock();
                     st.handle
                 };
-                if active_handle.is_some()
-                    && !crate::shell2::backends::net_tcp::net_shell_direct_active()
-                {
+                if active_handle.is_some() {
                     resize_query_ticks = resize_query_ticks.wrapping_add(1);
                     if resize_query_ticks >= RESIZE_QUERY_TICKS {
                         resize_query_ticks = 0;

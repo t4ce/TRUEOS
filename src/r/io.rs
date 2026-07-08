@@ -431,7 +431,7 @@ pub mod env {
         let next_target = match ctx.console_target.as_ref() {
             Some(target) => crate::shell2::switch_matrix_target_slot(target, requested),
             None => crate::shell2::matrix_target_for_slot_name(
-                crate::shell2::OUTPUT_UART1_MASK,
+                crate::shell2::OUTPUT_NET_TCP_MASK,
                 requested,
             ),
         };

@@ -93,6 +93,7 @@ pub const OP_BP_SHELL_ATTACHED_WRITE: u32 = 0x6C;
 pub const OP_BP_SHELL_ATTACHED_READ_BYTE: u32 = 0x6D;
 pub const OP_BP_ENV_ALL: u32 = 0x6E;
 pub const OP_BP_FS_LIST_TREE: u32 = 0x6F;
+pub const OP_BP_SHELL_ATTACHED_READABLE_LEN: u32 = 0x70;
 pub const OP_BP_FS_LIST_DIR: u32 = 0x81;
 pub const OP_BP_SHELL_RAW_WRITE: u32 = 0x99;
 pub const OP_BP_SHELL_KONSOLE_SIZE: u32 = 0x9F;

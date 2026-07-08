@@ -352,18 +352,11 @@ impl OpenFile {
     }
 }
 
-fn uart_write(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    crate::shell2::uart1_com1::write_bytes(bytes);
-}
-
 fn write_platform_fd(fd: u32, bytes: &[u8]) {
     match fd {
         1 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Out, bytes),
         2 => crate::r::io::cabi::write_console_bytes(crate::r::io::cabi::ConsoleStream::Err, bytes),
-        _ => uart_write(bytes),
+        _ => {}
     }
 }
 
@@ -1373,7 +1366,7 @@ pub unsafe extern "C" fn trueos_internal_log_write(bytes: *const u8, len: usize)
     let Some(bytes) = abi_read_bytes(bytes, len) else {
         return;
     };
-    uart_write(bytes);
+    write_platform_fd(2, bytes);
 }
 
 #[unsafe(no_mangle)]
@@ -1387,10 +1380,11 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
     };
     let mut read = 0usize;
     while read < out.len() {
-        let Some(byte) = crate::shell2::uart1_com1::read_byte() else {
+        let byte = crate::r::io::fs_cabi::trueos_cabi_shell_attached_read_byte();
+        if byte < 0 {
             break;
-        };
-        out[read] = byte;
+        }
+        out[read] = byte as u8;
         read += 1;
     }
     read
@@ -1522,7 +1516,7 @@ pub unsafe extern "C" fn sys_log(msg_ptr: *const u8, len: usize) {
         return;
     }
     if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
-        uart_write(bytes);
+        write_platform_fd(2, bytes);
     }
 }
 
@@ -1598,9 +1592,9 @@ pub unsafe extern "C" fn trueos_cabi_ntp_kernel_date_day_month_year(
 pub unsafe extern "C" fn sys_panic(msg_ptr: *const u8, len: usize) -> ! {
     if !msg_ptr.is_null() && len != 0 {
         if let Some(bytes) = abi_read_bytes(msg_ptr, len) {
-            uart_write(b"std-trueos panic: ");
-            uart_write(bytes);
-            uart_write(b"\n");
+            write_platform_fd(2, b"std-trueos panic: ");
+            write_platform_fd(2, bytes);
+            write_platform_fd(2, b"\n");
         }
     }
     unsafe { sys_halt() }
@@ -1616,13 +1610,13 @@ pub unsafe extern "C" fn sys_halt() -> ! {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exit(code: c_int) -> ! {
     let _ = code;
-    uart_write(b"std-abi: exit\n");
+    write_platform_fd(2, b"std-abi: exit\n");
     unsafe { sys_halt() }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __stack_chk_fail() -> ! {
-    uart_write(b"std-abi: stack check failed\n");
+    write_platform_fd(2, b"std-abi: stack check failed\n");
     unsafe { sys_halt() }
 }
 
@@ -2124,7 +2118,13 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         return -1;
     }
     if fd == 0 {
-        return unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) as isize };
+        let n = unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) };
+        if n == 0 && STD_FD_FLAGS[0].load(Ordering::Relaxed) & TRUEOS_O_NONBLOCK != 0 {
+            TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+            return -1;
+        }
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return n as isize;
     }
 
     if fd < 0 {

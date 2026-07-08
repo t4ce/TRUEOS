@@ -7,7 +7,7 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use super::super::{
-    MatrixTarget, ShellBackend2, UART1_COM1_BACKEND, line_width_for_backend,
+    MatrixTarget, NET_TCP_SHELL_BACKEND, ShellBackend2, line_width_for_backend,
     matrix_target_for_backend, matrix_target_interrupted, print_shell_line,
     release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
     set_matrix_target_active, set_matrix_target_app_label,
@@ -783,7 +783,7 @@ fn start_blueprint_launch(
     match crate::hv::start_blueprint_app_vm(
         vm_id,
         spawner,
-        &UART1_COM1_BACKEND,
+        &NET_TCP_SHELL_BACKEND,
         request.archive.clone(),
         request.module_bytes.clone(),
         request.app_args.clone(),
