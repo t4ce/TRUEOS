@@ -88,7 +88,7 @@ pub(crate) fn poll_event(session_id: u32, out: &mut [u8]) -> Result<Option<usize
             ));
         }
         api::Event::Error { .. } => {
-            crate::hv::hvlogf(format_args!("hv: blueprint-net event error"));
+            crate::hv::hverrorf(format_args!("hv: blueprint-net event error"));
         }
         _ => {}
     }

@@ -28,6 +28,10 @@ static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THR
     Mutex::new(FixedKeyMap::new());
 pub(crate) static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
+static FD_FLAGS: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>> =
+    Mutex::new(FixedKeyMap::new());
+pub(crate) static STD_FD_FLAGS: [AtomicI32; 3] =
+    [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)];
 static SOCKET_FDS: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
@@ -46,6 +50,7 @@ const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
 const OPEN_FILE_CAPACITY: usize = 64;
+const FD_FLAG_CAPACITY: usize = 256;
 const SOCKET_FD_CAPACITY: usize = 128;
 
 pub(crate) const TRUEOS_EAGAIN: c_int = 11;
@@ -76,6 +81,12 @@ const TRUEOS_O_WRONLY: c_int = 1;
 const TRUEOS_O_RDWR: c_int = 2;
 const TRUEOS_O_CREAT: c_int = 0o100;
 const TRUEOS_O_TRUNC: c_int = 0o1000;
+const TRUEOS_O_NONBLOCK: c_int = 0o4000;
+const TRUEOS_F_GETFD: c_int = 1;
+const TRUEOS_F_SETFD: c_int = 2;
+const TRUEOS_F_GETFL: c_int = 3;
+const TRUEOS_F_SETFL: c_int = 4;
+const TRUEOS_FD_CLOEXEC: c_int = 1;
 const TRUEOS_SC_PAGESIZE: c_int = 30;
 const TRUEOS_SC_PAGE_SIZE: c_int = TRUEOS_SC_PAGESIZE;
 const TRUEOS_SC_NPROCESSORS_CONF: c_int = 83;
@@ -224,16 +235,20 @@ pub(crate) enum OpenFile {
         readable: bool,
         writable: bool,
         dirty: bool,
+        flags: c_int,
     },
     PipeRead {
         pipe: Arc<Mutex<BytePipe>>,
+        flags: c_int,
     },
     PipeWrite {
         pipe: Arc<Mutex<BytePipe>>,
+        flags: c_int,
     },
     UnixSocket {
         rx: Arc<Mutex<BytePipe>>,
         tx: Arc<Mutex<BytePipe>>,
+        flags: c_int,
     },
 }
 
@@ -269,7 +284,7 @@ impl OpenFile {
     fn len(&self) -> usize {
         match self {
             Self::Regular { bytes, .. } => bytes.len(),
-            Self::PipeRead { pipe } | Self::PipeWrite { pipe } => pipe.lock().bytes.len(),
+            Self::PipeRead { pipe, .. } | Self::PipeWrite { pipe, .. } => pipe.lock().bytes.len(),
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
     }
@@ -306,6 +321,33 @@ impl OpenFile {
                 true
             }
             Self::PipeRead { .. } | Self::PipeWrite { .. } | Self::UnixSocket { .. } => false,
+        }
+    }
+
+    pub(crate) fn flags(&self) -> c_int {
+        match self {
+            Self::Regular { flags, .. }
+            | Self::PipeRead { flags, .. }
+            | Self::PipeWrite { flags, .. }
+            | Self::UnixSocket { flags, .. } => *flags,
+        }
+    }
+
+    pub(crate) fn set_flags(&mut self, next: c_int) {
+        match self {
+            Self::Regular { flags, .. }
+            | Self::PipeRead { flags, .. }
+            | Self::PipeWrite { flags, .. }
+            | Self::UnixSocket { flags, .. } => *flags = next,
+        }
+    }
+
+    pub(crate) fn readable_len(&self) -> usize {
+        match self {
+            Self::Regular { bytes, offset, .. } => bytes.len().saturating_sub(*offset),
+            Self::PipeRead { pipe, .. } => pipe.lock().bytes.len(),
+            Self::PipeWrite { .. } => 0,
+            Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
     }
 }
@@ -980,7 +1022,7 @@ fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
         })
 }
 
-fn abi_read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+pub(crate) fn abi_read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if len == 0 {
         return Some(&[]);
     }
@@ -2050,7 +2092,7 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
             *offset = end;
             *dirty = true;
         }
-        OpenFile::PipeWrite { pipe } => {
+        OpenFile::PipeWrite { pipe, .. } => {
             let mut pipe = pipe.lock();
             if !pipe.write_open || !pipe.read_open {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
@@ -2115,9 +2157,13 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
             *offset = offset.saturating_add(n);
             n
         }
-        OpenFile::PipeRead { pipe } => {
+        OpenFile::PipeRead { pipe, flags } => {
             let mut pipe = pipe.lock();
             let n = core::cmp::min(count, pipe.bytes.len());
+            if n == 0 && *flags & TRUEOS_O_NONBLOCK != 0 && pipe.write_open {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
             if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &pipe.bytes[..n]) {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
@@ -2125,9 +2171,13 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
             pipe.bytes.drain(..n);
             n
         }
-        OpenFile::UnixSocket { rx, .. } => {
+        OpenFile::UnixSocket { rx, flags, .. } => {
             let mut rx = rx.lock();
             let n = core::cmp::min(count, rx.bytes.len());
+            if n == 0 && *flags & TRUEOS_O_NONBLOCK != 0 && rx.write_open {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
             if n != 0 && !copy_to_abi_out(buf.cast::<u8>(), &rx.bytes[..n]) {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
@@ -2147,7 +2197,7 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
 pub(crate) fn open_file_read_ready(file: &OpenFile) -> bool {
     match file {
         OpenFile::Regular { bytes, offset, .. } => *offset < bytes.len(),
-        OpenFile::PipeRead { pipe } => !pipe.lock().bytes.is_empty(),
+        OpenFile::PipeRead { pipe, .. } => !pipe.lock().bytes.is_empty(),
         OpenFile::PipeWrite { .. } => false,
         OpenFile::UnixSocket { rx, .. } => !rx.lock().bytes.is_empty(),
     }
@@ -2157,7 +2207,7 @@ pub(crate) fn open_file_write_ready(file: &OpenFile) -> bool {
     match file {
         OpenFile::Regular { writable, .. } => *writable,
         OpenFile::PipeRead { .. } => false,
-        OpenFile::PipeWrite { pipe } => {
+        OpenFile::PipeWrite { pipe, .. } => {
             let pipe = pipe.lock();
             pipe.read_open && pipe.write_open
         }
@@ -2645,6 +2695,7 @@ pub unsafe extern "C" fn open(path: *const c_char, flags: c_int, _mode: c_int) -
                 readable,
                 writable,
                 dirty,
+                flags,
             }
         }
         _ => {
@@ -2671,6 +2722,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     if (0..=2).contains(&fd) {
         return 0;
     }
+    let _ = FD_FLAGS.lock().remove(fd);
     if let Some(socket) = SOCKET_FDS.lock().remove(fd) {
         let rc = match socket {
             SocketFd::Cabi { backend } | SocketFd::PendingListener { backend, .. } => {
@@ -2710,13 +2762,13 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
                 }
             }
         }
-        OpenFile::PipeRead { pipe } => {
+        OpenFile::PipeRead { pipe, .. } => {
             pipe.lock().read_open = false;
         }
-        OpenFile::PipeWrite { pipe } => {
+        OpenFile::PipeWrite { pipe, .. } => {
             pipe.lock().write_open = false;
         }
-        OpenFile::UnixSocket { rx, tx } => {
+        OpenFile::UnixSocket { rx, tx, .. } => {
             rx.lock().read_open = false;
             tx.lock().write_open = false;
         }
@@ -2755,13 +2807,13 @@ pub async fn close_async(fd: c_int) -> c_int {
                 return -1;
             }
         }
-        OpenFile::PipeRead { pipe } => {
+        OpenFile::PipeRead { pipe, .. } => {
             pipe.lock().read_open = false;
         }
-        OpenFile::PipeWrite { pipe } => {
+        OpenFile::PipeWrite { pipe, .. } => {
             pipe.lock().write_open = false;
         }
-        OpenFile::UnixSocket { rx, tx } => {
+        OpenFile::UnixSocket { rx, tx, .. } => {
             rx.lock().read_open = false;
             tx.lock().write_open = false;
         }
@@ -2771,13 +2823,109 @@ pub async fn close_async(fd: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fcntl(fd: c_int, _cmd: c_int, _arg: c_int) -> c_int {
+pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) -> c_int {
     if fd < 0 {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
-    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-    0
+    if (0..=2).contains(&fd) {
+        let flags = &STD_FD_FLAGS[fd as usize];
+        return match cmd {
+            TRUEOS_F_GETFD => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            TRUEOS_F_SETFD => {
+                let _ = arg & TRUEOS_FD_CLOEXEC;
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            TRUEOS_F_GETFL => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                flags.load(Ordering::Relaxed)
+            }
+            TRUEOS_F_SETFL => {
+                flags.store(arg, Ordering::Relaxed);
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            _ => {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                -1
+            }
+        };
+    }
+
+    if SOCKET_FDS.lock().get(fd).is_some() {
+        return match cmd {
+            TRUEOS_F_GETFD => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                FD_FLAGS.lock().get(fd).copied().unwrap_or(0)
+            }
+            TRUEOS_F_SETFD => {
+                let mut fd_flags = FD_FLAGS.lock();
+                let next = arg & TRUEOS_FD_CLOEXEC;
+                if next == 0 {
+                    let _ = fd_flags.remove(fd);
+                } else if fd_flags.insert(fd, next).is_err() {
+                    TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                    return -1;
+                }
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            TRUEOS_F_GETFL => {
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            TRUEOS_F_SETFL => {
+                let _ = arg & TRUEOS_O_NONBLOCK;
+                TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                0
+            }
+            _ => {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                -1
+            }
+        };
+    }
+
+    let mut table = OPEN_FILES.lock();
+    let Some(file) = table.get_mut(fd) else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+        return -1;
+    };
+    match cmd {
+        TRUEOS_F_GETFD => {
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            FD_FLAGS.lock().get(fd).copied().unwrap_or(0)
+        }
+        TRUEOS_F_SETFD => {
+            let mut fd_flags = FD_FLAGS.lock();
+            let next = arg & TRUEOS_FD_CLOEXEC;
+            if next == 0 {
+                let _ = fd_flags.remove(fd);
+            } else if fd_flags.insert(fd, next).is_err() {
+                TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+                return -1;
+            }
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            0
+        }
+        TRUEOS_F_GETFL => {
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            file.flags()
+        }
+        TRUEOS_F_SETFL => {
+            file.set_flags(arg);
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            0
+        }
+        _ => {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            -1
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

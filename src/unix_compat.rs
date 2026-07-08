@@ -19,6 +19,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "access"
             | "bind"
             | "calloc"
+            | "cfmakeraw"
             | "clock_gettime"
             | "close"
             | "closedir"
@@ -159,6 +160,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "access" => Some(crate::std_abi_shim::access as *const () as usize),
         "bind" => Some(crate::std_abi_shim::bind as *const () as usize),
         "calloc" => Some(crate::std_abi_shim::calloc as *const () as usize),
+        "cfmakeraw" => Some(crate::unix_abi_shim::cfmakeraw as *const () as usize),
         "clock_gettime" => Some(trueos_qjs::trueos_shims::clock_gettime as *const () as usize),
         "close" => Some(crate::std_abi_shim::close as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),

@@ -304,6 +304,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     };
 
     let log = |line: &str| crate::hv::hvlogf(format_args!("{}", line));
+    let warn = |line: &str| crate::hv::hvwarnf(format_args!("{}", line));
 
     crate::hv::hvlogf(format_args!(
         "run: guest blueprint launch archive={}",
@@ -313,7 +314,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     let module = match crate::hv::blueprint::parse_blueprint(state.module_bytes.as_slice()) {
         Ok(module) => module,
         Err(err) => {
-            log(alloc::format!("run: guest blueprint parse failed: {}", err).as_str());
+            warn(alloc::format!("run: guest blueprint parse failed: {}", err).as_str());
             return false;
         }
     };
@@ -323,7 +324,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     if !unpacked.starts_with(b"\x7fELF")
         || !matches!(crate::hv::blueprint::elf_type_name(unpacked), Some("REL"))
     {
-        log("run: guest blueprint rejected non-REL payload");
+        warn("run: guest blueprint rejected non-REL payload");
         return false;
     }
 

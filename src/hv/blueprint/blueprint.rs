@@ -403,7 +403,7 @@ fn portal_logf(args: core::fmt::Arguments<'_>) {
 
 fn resolve_unresolved_import(name: &str) -> Option<usize> {
     if is_rustc_runtime_import(name) {
-        crate::hv::hvlogf(format_args!(
+        crate::hv::hvwarnf(format_args!(
             "portal: WARNING unresolved rust runtime import registered name={} class=rustc-runtime note=missed-nightly-symbol-hash action=joker-stub-installed",
             name
         ));
@@ -413,7 +413,7 @@ fn resolve_unresolved_import(name: &str) -> Option<usize> {
 }
 
 fn portal_alloc_error_handler(layout: Layout) -> ! {
-    crate::hv::hvlogf(format_args!(
+    crate::hv::hverrorf(format_args!(
         "portal: alloc error size={} align={}",
         layout.size(),
         layout.align()

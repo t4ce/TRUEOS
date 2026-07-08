@@ -6,9 +6,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String as HString;
 use spin::Once;
 
-use super::terminal::{TerminalState, Ui3ShellScreenSnapshot};
-use super::{LineSource, TranscriptEntry};
-
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
 pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
@@ -453,34 +450,6 @@ pub(crate) fn active_terminal_snapshot(
     Some(after)
 }
 
-pub(crate) fn resize_terminal_in_live_slot(
-    slot_id: &MatrixSlotId,
-    lifetime_generation: u64,
-    cols: usize,
-    rows: usize,
-    terminal_handoff: bool,
-) -> bool {
-    let mut guard = state().lock();
-    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
-        return false;
-    };
-    if guard.slots[idx].lifetime_generation != lifetime_generation {
-        return false;
-    }
-
-    let terminal = guard.slots[idx]
-        .terminal
-        .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
-    let before = terminal.snapshot();
-    terminal.resize_preserving_contents(cols.max(1), rows.max(1));
-    terminal.set_terminal_handoff(terminal_handoff);
-    let after = terminal.snapshot();
-    if before != after {
-        bump_slot_revision(&mut guard, idx);
-    }
-    true
-}
-
 pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
@@ -552,12 +521,6 @@ pub(crate) fn record_raw_in_live_slot(
         return false;
     }
 
-    let terminal = guard.slots[idx]
-        .terminal
-        .get_or_insert_with(|| TerminalState::new(cols.max(1), rows.max(1)));
-    if !terminal.snapshot().terminal_handoff {
-        terminal.resize_preserving_contents(cols.max(1), rows.max(1));
-    }
     let before = terminal.snapshot();
     terminal.feed_bytes(bytes);
     let after = terminal.snapshot();
@@ -604,39 +567,6 @@ pub(crate) fn record_line_for_output(
     push_line(&mut guard.slots[idx], source, text);
     bump_slot_revision(&mut guard, idx);
     slot_id
-}
-
-pub(crate) fn record_line_in_default(source: LineSource, text: &str) {
-    let mut guard = state().lock();
-    let default_id = default_slot_id();
-    let idx = ensure_slot_index(&mut guard.slots, &default_id);
-    push_line(&mut guard.slots[idx], source, text);
-    bump_slot_revision(&mut guard, idx);
-}
-
-pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, text: &str) {
-    let mut guard = state().lock();
-    let idx = ensure_slot_index(&mut guard.slots, slot_id);
-    push_line(&mut guard.slots[idx], source, text);
-    bump_slot_revision(&mut guard, idx);
-}
-
-pub(crate) fn record_line_in_live_slot(
-    slot_id: &MatrixSlotId,
-    lifetime_generation: u64,
-    source: LineSource,
-    text: &str,
-) -> bool {
-    let mut guard = state().lock();
-    let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
-        return false;
-    };
-    if guard.slots[idx].lifetime_generation != lifetime_generation {
-        return false;
-    }
-    push_line(&mut guard.slots[idx], source, text);
-    bump_slot_revision(&mut guard, idx);
-    true
 }
 
 pub(crate) fn record_user_input(text: &str) {

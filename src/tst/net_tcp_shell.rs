@@ -175,7 +175,9 @@ pub async fn net_shell_task() {
                                 schedule_initial_repaint = true;
                             }
                         }
-                        if schedule_initial_repaint {
+                        if schedule_initial_repaint
+                            && !crate::shell2::backends::net_tcp::net_shell_direct_active()
+                        {
                             net_shell_write_bytes(TERMINAL_SIZE_QUERY);
                             initial_repaint_handle = Some(handle);
                             initial_repaint_ticks = 0;
@@ -196,7 +198,9 @@ pub async fn net_shell_task() {
                         // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
                         // so treat the first inbound bytes as selecting the active handle.
                         let mut rx_data = data;
-                        if initial_repaint_handle == Some(handle) {
+                        if initial_repaint_handle == Some(handle)
+                            && !crate::shell2::backends::net_tcp::net_shell_direct_active()
+                        {
                             initial_rx_probe.extend_from_slice(&rx_data);
                             if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&initial_rx_probe)
@@ -425,6 +429,13 @@ pub async fn net_shell_task() {
             }
 
             if let Some(handle) = initial_repaint_handle {
+                if crate::shell2::backends::net_tcp::net_shell_direct_active() {
+                    initial_repaint_handle = None;
+                    initial_repaint_ticks = 0;
+                    initial_rx_probe.clear();
+                    resize_rx_probe.clear();
+                    let _ = handle;
+                }
                 initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
                 if initial_repaint_ticks >= INITIAL_REPAINT_WAIT_TICKS {
                     crate::shell2::repaint_backend_screen(&crate::shell2::NET_TCP_SHELL_BACKEND);
@@ -449,7 +460,9 @@ pub async fn net_shell_task() {
                     let st = NET_SHELL_STATE.lock();
                     st.handle
                 };
-                if active_handle.is_some() {
+                if active_handle.is_some()
+                    && !crate::shell2::backends::net_tcp::net_shell_direct_active()
+                {
                     resize_query_ticks = resize_query_ticks.wrapping_add(1);
                     if resize_query_ticks >= RESIZE_QUERY_TICKS {
                         resize_query_ticks = 0;

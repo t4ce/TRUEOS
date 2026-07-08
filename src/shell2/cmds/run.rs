@@ -13,6 +13,7 @@ use super::super::{
     set_matrix_target_active, set_matrix_target_app_label,
 };
 use super::tlb_helper::TlbTable;
+use crate::hv::BlueprintConsoleSurface;
 
 const TABLE_HEADERS: &[&str; 4] = &["id", "module", "source", "updated"];
 const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
@@ -80,6 +81,11 @@ struct AppVmLaunchRequest {
     app_args: Vec<String>,
     target: MatrixTarget,
     preflight_complete: bool,
+}
+
+#[derive(Copy, Clone)]
+struct BlueprintLaunchPlan {
+    console_surface: BlueprintConsoleSurface,
 }
 
 #[derive(Copy, Clone)]
@@ -311,7 +317,11 @@ fn enqueue_blueprint_request(
 }
 
 fn log_run_target_line(_target: &MatrixTarget, line: &str) {
-    crate::hv::hvlogf(format_args!("{}", line));
+    log_blueprint_line(line);
+}
+
+fn log_blueprint_line(line: &str) {
+    crate::log_os::blueprint_line(log::Level::Info, format_args!("{}\n", line));
 }
 
 fn dequeue_request() -> Option<AppVmLaunchRequest> {
@@ -321,7 +331,7 @@ fn dequeue_request() -> Option<AppVmLaunchRequest> {
 async fn execute_request(spawner: &Spawner, request: AppVmLaunchRequest) {
     let target = request.target.clone();
     let log = |line: &str| {
-        crate::hv::hvlogf(format_args!("{}", line));
+        log_blueprint_line(line);
     };
 
     log(alloc::format!("apps: worker start module={}", request.archive.as_str()).as_str());
@@ -354,23 +364,37 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
         log("apps: interrupted before preflight");
         return;
     }
-    if !request.preflight_complete
-        && let Err(err) = preflight_blueprint_launch(
+    let plan = if request.preflight_complete {
+        blueprint_launch_plan(request.archive.as_str(), request.module_bytes.as_slice())
+            .unwrap_or_else(|err| {
+                log(alloc::format!("apps: launch plan fallback: {}", err).as_str());
+                BlueprintLaunchPlan {
+                    console_surface: BlueprintConsoleSurface::Text,
+                }
+            })
+    } else {
+        match preflight_blueprint_launch(
             request.archive.as_str(),
             request.module_bytes.as_slice(),
             log,
         )
         .await
-    {
-        log(alloc::format!("apps: {}", err).as_str());
-        return;
-    }
+        {
+            Ok(plan) => plan,
+            Err(err) => {
+                log(alloc::format!("apps: {}", err).as_str());
+                return;
+            }
+        }
+    };
     if matrix_target_interrupted(&request.target) {
         log("apps: interrupted before vm start");
         return;
     }
 
-    crate::allocators::with_host_alloc_domain(|| start_blueprint_launch(spawner, request, log));
+    crate::allocators::with_host_alloc_domain(|| {
+        start_blueprint_launch(spawner, request, plan, log)
+    });
 }
 
 fn ceil_mib(bytes: usize) -> usize {
@@ -389,8 +413,48 @@ fn import_name_has(imports: &[crate::hv::blueprint::ElfImport<'_>], needle: &str
     imports.iter().any(|import| import.name.contains(needle))
 }
 
+fn import_name_is(imports: &[crate::hv::blueprint::ElfImport<'_>], name: &str) -> bool {
+    imports.iter().any(|import| import.name == name)
+}
+
 fn archive_has(archive: &str, needle: &str) -> bool {
     archive.contains(needle)
+}
+
+fn classify_blueprint_console_surface(
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintConsoleSurface {
+    let uses_konsole = imports
+        .iter()
+        .any(|import| import.name.starts_with("trueos_cabi_konsole_"));
+    let uses_raw_shell2 = import_name_is(imports, "trueos_cabi_shell2_raw_write");
+    let uses_unix_raw_tty = import_name_is(imports, "cfmakeraw")
+        || import_name_is(imports, "tcsetattr")
+        || (import_name_is(imports, "tcgetattr") && import_name_is(imports, "isatty"));
+
+    if uses_konsole || uses_raw_shell2 || uses_unix_raw_tty {
+        BlueprintConsoleSurface::Terminal
+    } else {
+        BlueprintConsoleSurface::Text
+    }
+}
+
+fn blueprint_launch_plan(
+    archive: &str,
+    module_bytes: &[u8],
+) -> Result<BlueprintLaunchPlan, String> {
+    let module = crate::hv::blueprint::parse_blueprint(module_bytes)?;
+    let unpacked = crate::hv::blueprint::unpack_blueprint(&module)?;
+    if !unpacked.starts_with(b"\x7fELF") {
+        return Ok(BlueprintLaunchPlan {
+            console_surface: BlueprintConsoleSurface::Text,
+        });
+    }
+    let imports = crate::hv::blueprint::elf_imports(unpacked.as_slice())
+        .map_err(|err| alloc::format!("ELF import scan failed: {}", err))?;
+    let console_surface = classify_blueprint_console_surface(imports.as_slice());
+    let _ = archive;
+    Ok(BlueprintLaunchPlan { console_surface })
 }
 
 fn classify_blueprint_memory(
@@ -566,7 +630,7 @@ async fn preflight_blueprint_launch(
     archive: &str,
     module_bytes: &[u8],
     log: &dyn Fn(&str),
-) -> Result<(), String> {
+) -> Result<BlueprintLaunchPlan, String> {
     let module = crate::hv::blueprint::parse_blueprint(module_bytes)?;
 
     let unpacked = crate::hv::blueprint::unpack_blueprint(&module)?;
@@ -624,6 +688,7 @@ async fn preflight_blueprint_launch(
 
     let mut required_readiness = crate::hv::blueprint::prebind_base_readiness();
     let mut imports_for_profile = Vec::new();
+    let mut console_surface = BlueprintConsoleSurface::Text;
     if unpacked.starts_with(b"\x7fELF") {
         match crate::hv::blueprint::elf_imports(unpacked.as_slice()) {
             Ok(imports) => {
@@ -649,6 +714,7 @@ async fn preflight_blueprint_launch(
                         log_blueprint_import(import, log);
                     }
                 }
+                console_surface = classify_blueprint_console_surface(imports.as_slice());
                 imports_for_profile = imports;
             }
             Err(err) => {
@@ -664,6 +730,7 @@ async fn preflight_blueprint_launch(
         unpacked.as_slice(),
         imports_for_profile.as_slice(),
     );
+    log(alloc::format!("apps: console surface {:?}", console_surface).as_str());
     log_blueprint_memory_profile(profile, log);
 
     if !unpacked.starts_with(b"\x7fELF")
@@ -699,10 +766,15 @@ async fn preflight_blueprint_launch(
         .as_str());
     }
 
-    Ok(())
+    Ok(BlueprintLaunchPlan { console_surface })
 }
 
-fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: &dyn Fn(&str)) {
+fn start_blueprint_launch(
+    spawner: &Spawner,
+    request: &AppVmLaunchRequest,
+    plan: BlueprintLaunchPlan,
+    log: &dyn Fn(&str),
+) {
     let Some(vm_id) = crate::hv::first_free_vm_id() else {
         log("apps: no free app-vm ids");
         return;
@@ -716,6 +788,7 @@ fn start_blueprint_launch(spawner: &Spawner, request: &AppVmLaunchRequest, log: 
         request.module_bytes.clone(),
         request.app_args.clone(),
         Some(request.target.clone()),
+        plan.console_surface,
     ) {
         Ok(()) => {
             crate::log!(
@@ -868,7 +941,9 @@ async fn preflight_archive_name_to_target_async(
     module_bytes: &[u8],
 ) -> Result<(), String> {
     let log = |line: &str| log_run_target_line(target, line);
-    preflight_blueprint_launch(archive_name, module_bytes, &log).await
+    preflight_blueprint_launch(archive_name, module_bytes, &log)
+        .await
+        .map(|_| ())
 }
 
 async fn submit_module_bytes_to_target_async(

@@ -184,6 +184,10 @@ pub fn write_console_bytes(stream: ConsoleStream, bytes: &[u8]) {
     }
 }
 
+pub fn write_raw_console_bytes(bytes: &[u8]) -> usize {
+    konsole_write_bytes(bytes)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize) {
     if bytes.is_null() || len == 0 {

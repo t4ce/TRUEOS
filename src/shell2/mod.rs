@@ -20,7 +20,6 @@ mod shell2_qjs_c4;
 mod shell2_qjs_c4_contract;
 mod shell2_surf;
 mod term_style;
-mod terminal;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
     CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND,
@@ -31,7 +30,6 @@ pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
 use shell2_qjs::QjsPromptMode;
 use shell2_surf::SurfPromptPrefix;
-pub(crate) use terminal::Ui3ShellScreenSnapshot;
 
 const MAX_LINE: usize = 192;
 const BANNER_ROW: usize = 1;
@@ -297,49 +295,6 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
-    fn render_terminal_snapshot(
-        &self,
-        top_row: usize,
-        snapshot: &Ui3ShellScreenSnapshot,
-        allow_snapshot_cursor: bool,
-    ) {
-        let cols = (snapshot.cols as usize).min(self.line_width().max(1));
-        let rows = (snapshot.rows as usize).min(self.transcript_view_rows.get().max(1));
-        for row in 0..rows {
-            self.move_to(top_row + row, 1);
-            self.clear_line();
-            let mut current_fg: Option<(u8, u8, u8)> = None;
-            let mut current_bg: Option<(u8, u8, u8)> = None;
-            let snapshot_cols = snapshot.cols as usize;
-            for col in 0..cols {
-                let idx = row.saturating_mul(snapshot_cols).saturating_add(col);
-                let Some(cell) = snapshot.cells.get(idx) else {
-                    break;
-                };
-                if current_fg != Some(cell.fg) || current_bg != Some(cell.bg) {
-                    current_fg = Some(cell.fg);
-                    current_bg = Some(cell.bg);
-                    self.io.raw_write_fmt(format_args!(
-                        "\x1b[38;2;{};{};{};48;2;{};{};{}m",
-                        cell.fg.0, cell.fg.1, cell.fg.2, cell.bg.0, cell.bg.1, cell.bg.2
-                    ));
-                }
-                self.io.raw_write_char(cell.ch);
-            }
-            self.io.raw_write_str(ecma48::RESET);
-        }
-
-        if allow_snapshot_cursor && snapshot.cursor_visible {
-            self.move_to(
-                top_row.saturating_add(snapshot.cursor_row as usize),
-                (snapshot.cursor_col as usize).saturating_add(1),
-            );
-            self.io.raw_write_str(ecma48::SHOW_CURSOR);
-        } else if allow_snapshot_cursor {
-            self.io.raw_write_str("\x1b[?25l");
-        }
-    }
-
     fn push_transcript_line(&self, entry: &TranscriptEntry) {
         self.io.raw_write_str(ecma48::SAVE_CURSOR);
         self.move_to(SCROLL_TOP_ROW, 1);
@@ -436,6 +391,9 @@ impl<'a> AlignedWriter<'a> {
                 self.push_plain(&mut text, " keys->app ");
                 self.push_function_key_label(&mut text, "[ESC]");
                 self.push_plain(&mut text, " back");
+            } else if active_terminal_handoff_mode(output_mask) {
+                self.push_function_key_label(&mut text, "[ESC]");
+                self.push_plain(&mut text, " shell");
             } else {
                 self.push_function_key_label(&mut text, "[ESC]");
             }
@@ -717,6 +675,13 @@ pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> 
     minimum_line_width_for_output(output_target_for_backend(io))
 }
 
+pub(crate) fn net_shell_terminal_size() -> (usize, usize) {
+    (
+        line_width_for_output(OUTPUT_NET_TCP_MASK),
+        NET_TCP_TERMINAL_ROWS.load(Ordering::Relaxed).max(1),
+    )
+}
+
 fn line_width_for_output(output_mask: u8) -> usize {
     matrix::active_line_width(output_mask)
         .max(minimum_line_width_for_output(output_mask))
@@ -749,14 +714,6 @@ fn slot_content_rows_for_output(output_mask: u8) -> usize {
     transcript_view_rows_for_output(output_mask)
 }
 
-fn active_terminal_snapshot_for_output(output_mask: u8) -> Option<Ui3ShellScreenSnapshot> {
-    matrix::active_terminal_snapshot(
-        output_mask,
-        line_width_for_output(output_mask),
-        slot_content_rows_for_output(output_mask),
-    )
-}
-
 fn active_terminal_handoff_mode(output_mask: u8) -> bool {
     matrix::active_terminal_handoff_mode(output_mask)
 }
@@ -770,10 +727,10 @@ fn render_active_slot_content(
     output_mask: u8,
     transcript: &VecDeque<TranscriptEntry>,
 ) -> bool {
-    if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
+    if active_terminal_direct_input_mode(output_mask)
+    {
         let top_row = slot_content_top_row(output_mask);
         let allow_snapshot_cursor = active_terminal_direct_input_mode(output_mask);
-        out.render_terminal_snapshot(top_row, &snapshot, allow_snapshot_cursor);
         true
     } else {
         out.render_transcript_at(slot_content_top_row(output_mask), transcript);
@@ -1105,24 +1062,6 @@ fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
     let _ = matrix::record_line_for_output(output_mask, source, text);
 }
 
-pub(crate) fn print_matrix_target_line(target: &MatrixTarget, text: &str) {
-    let _ = matrix::record_line_in_live_slot(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        LineSource::System,
-        text,
-    );
-}
-
-pub(crate) fn print_matrix_target_native_line(target: &MatrixTarget, text: &str) {
-    let _ = matrix::record_line_in_live_slot(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        LineSource::Native,
-        text,
-    );
-}
-
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
@@ -1159,29 +1098,28 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
     bytes.len()
 }
 
+pub(crate) fn raw_write_matrix_target_owned(target: &MatrixTarget, bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+
+    if matrix::record_raw_in_live_slot(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        line_width_for_output(target.output_mask),
+        slot_content_rows_for_output(target.output_mask),
+        bytes,
+    ) {
+        return bytes.len();
+    }
+
+    bytes.len()
+}
+
 pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize, usize) {
     let width = line_width_for_output(target.output_mask).max(1);
     let rows = slot_content_rows_for_output(target.output_mask).max(1);
     (width, rows)
-}
-
-pub(crate) fn konsole_begin_frame_for_target(
-    target: &MatrixTarget,
-    cols: usize,
-    rows: usize,
-    terminal_handoff: bool,
-) -> (usize, usize) {
-    let (viewport_cols, viewport_rows) = konsole_viewport_size_for_target(target);
-    let frame_cols = cols.max(1).min(viewport_cols.max(1));
-    let frame_rows = rows.max(1).min(viewport_rows.max(1));
-    let _ = matrix::resize_terminal_in_live_slot(
-        &target.slot_id,
-        target.slot_lifetime_generation,
-        frame_cols,
-        frame_rows,
-        terminal_handoff,
-    );
-    (frame_cols, frame_rows)
 }
 
 pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
@@ -1391,39 +1329,6 @@ fn apply_vmx_hotkey_command(
         VmxHotkeyCommand::Status => current,
     };
     let _ = matrix::set_active_terminal_hotkey_mode(output_mask, next);
-    redraw_active_view(
-        out,
-        io,
-        output_mask,
-        mode,
-        qjs_mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-        minute_text,
-    )
-}
-
-fn apply_vmx_tui_command(
-    out: &AlignedWriter<'_>,
-    io: &'static dyn ShellBackend2,
-    output_mask: u8,
-    mode: ShellMode2,
-    qjs_mode: QjsPromptMode,
-    apps_mode: AppsPromptMode,
-    surf_prefix: SurfPromptPrefix,
-    cmd_status_text: Option<&str>,
-    running_go2_phase: usize,
-    minute_text: &str,
-) -> VecDeque<TranscriptEntry> {
-    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
-    let _ = matrix::set_active_terminal_handoff_mode(output_mask, true);
-    if let Some(vm_id) =
-        active_matrix_vm_input_id(output_mask).or_else(|| active_matrix_vm_id(output_mask))
-    {
-        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"tui\n");
-    }
     redraw_active_view(
         out,
         io,
@@ -1698,7 +1603,7 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
 }
 
 fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
-    if active_terminal_handoff_mode(output_mask) {
+    if active_terminal_direct_input_mode(output_mask) {
         return;
     }
     out.prompt(output_mask);
@@ -1842,6 +1747,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     }
 
     loop {
+        if (output_mask & OUTPUT_NET_TCP_MASK) != 0
+            && crate::shell2::backends::net_tcp::net_shell_direct_active()
+        {
+            Timer::after(EmbassyDuration::from_millis(10)).await;
+            continue;
+        }
+
         let matrix_revision = matrix::visible_revision(output_mask);
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
@@ -1872,7 +1784,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 out.io.raw_write_str(ecma48::RESTORE_CURSOR);
                 last_chrome_state = chrome_state;
             }
-            if active_terminal_snapshot_for_output(output_mask).is_some() {
+            if active_terminal_direct_input_mode(output_mask)
+                && active_terminal_snapshot_for_output(output_mask).is_some()
+            {
                 render_active_slot_content(&out, output_mask, &next_transcript);
             } else if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
                 out.push_transcript_line(entry);
@@ -1920,13 +1834,8 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     );
                     last_matrix_revision = matrix::visible_revision(output_mask);
                 } else if active_terminal_handoff_mode(output_mask)
-                    && active_matrix_slot_is_vmx(output_mask)
+                    || active_terminal_surface_exists(output_mask)
                 {
-                    if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
-                        .or_else(|| active_matrix_vm_id(output_mask))
-                    {
-                        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"\x1b");
-                    }
                     line.clear();
                     let _ = matrix::set_active_terminal_handoff_mode(output_mask, false);
                     transcript = redraw_active_view(
@@ -1979,47 +1888,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 continue;
             }
-            if b == 0x1b && active_terminal_direct_input_mode(output_mask) {
-                esc = EscState::None;
-                text_decode = ecma48::InputDecodeState::None;
-                live_history_cursor = None;
-                cmd_status_text = None;
-                line.clear();
-                if active_terminal_handoff_mode(output_mask) {
-                    if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
-                        .or_else(|| active_matrix_vm_id(output_mask))
-                    {
-                        let _ = crate::hv::blueprint_console_submit_stdin(vm_id, b"\x1b");
-                    }
-                }
-                if active_terminal_hotkey_mode(output_mask) {
-                    let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
-                } else {
-                    let _ = matrix::set_active_terminal_handoff_mode(output_mask, false);
-                }
-                transcript = redraw_active_view(
-                    &out,
-                    io,
-                    output_mask,
-                    mode,
-                    qjs_mode,
-                    apps_mode,
-                    surf_prefix,
-                    cmd_status_text.as_deref(),
-                    running_go2_phase,
-                    minute_text.as_str(),
-                );
-                last_chrome_state = current_chrome_state(
-                    output_mask,
-                    mode,
-                    qjs_mode,
-                    apps_mode,
-                    surf_prefix,
-                    cmd_status_text.as_deref(),
-                );
-                last_matrix_revision = matrix::visible_revision(output_mask);
-                continue;
-            }
+           
             if active_terminal_direct_input_mode(output_mask) {
                 if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
                     .or_else(|| active_matrix_vm_id(output_mask))
@@ -2287,20 +2156,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_input_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if is_vmx_tui_command(submitted) {
-                                transcript = apply_vmx_tui_command(
-                                    &out,
-                                    io,
-                                    output_mask,
-                                    mode,
-                                    qjs_mode,
-                                    apps_mode,
-                                    surf_prefix,
-                                    cmd_status_text.as_deref(),
-                                    running_go2_phase,
-                                    minute_text.as_str(),
-                                );
-                            } else if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
                                 transcript = apply_vmx_hotkey_command(
                                     &out,
                                     io,
@@ -2331,20 +2187,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     } else if let Some(vm_id) = active_matrix_vm_id(output_mask) {
                         if !submitted.is_empty() {
                             record_user_line_for_active_slot(io, submitted);
-                            if is_vmx_tui_command(submitted) {
-                                transcript = apply_vmx_tui_command(
-                                    &out,
-                                    io,
-                                    output_mask,
-                                    mode,
-                                    qjs_mode,
-                                    apps_mode,
-                                    surf_prefix,
-                                    cmd_status_text.as_deref(),
-                                    running_go2_phase,
-                                    minute_text.as_str(),
-                                );
-                            } else if let Some(command) = parse_vmx_hotkey_command(submitted) {
+                            if let Some(command) = parse_vmx_hotkey_command(submitted) {
                                 transcript = apply_vmx_hotkey_command(
                                     &out,
                                     io,

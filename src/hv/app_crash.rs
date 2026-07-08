@@ -8,7 +8,7 @@ use crate::hv::vmx::{
     VMCS_VMEXIT_INTERRUPTION_INFO, vmread,
 };
 
-use super::{BlueprintLaunchState, hvlogf};
+use super::{BlueprintLaunchState, hverrorf, hvlogf, hvwarnf};
 
 #[derive(Copy, Clone)]
 pub enum CrashOutcome<'a> {
@@ -188,7 +188,7 @@ pub async fn write(vm_id: u8, pending: PendingCrashReport) {
     let path = pending.path;
     let report = pending.report;
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{} appcrash no trueosfs root path={} bytes={}",
             vm_id,
             path.as_str(),
@@ -204,13 +204,13 @@ pub async fn write(vm_id: u8, pending: PendingCrashReport) {
             path.as_str(),
             report.len()
         )),
-        Ok(false) => hvlogf(format_args!(
+        Ok(false) => hvwarnf(format_args!(
             "hv: vm{} appcrash write skipped path={} bytes={}",
             vm_id,
             path.as_str(),
             report.len()
         )),
-        Err(e) => hvlogf(format_args!(
+        Err(e) => hverrorf(format_args!(
             "hv: vm{} appcrash write failed path={} err={:?}",
             vm_id,
             path.as_str(),

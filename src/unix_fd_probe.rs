@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::_rdtsc;
 use core::ffi::{c_char, c_void};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
@@ -18,6 +20,11 @@ const F_GETLK: i32 = 5;
 const F_SETLK: i32 = 6;
 const AF_UNIX: i32 = 1;
 const SOCK_STREAM: i32 = 1;
+const SOCK_NONBLOCK: i32 = 0o4000;
+const SOCK_CLOEXEC: i32 = 0o2000000;
+const F_GETFD: i32 = 1;
+const F_SETFD: i32 = 2;
+const FD_CLOEXEC: i32 = 1;
 const F_GETFL: i32 = 3;
 const F_SETFL: i32 = 4;
 const O_NONBLOCK: i32 = 0o4000;
@@ -27,6 +34,9 @@ const TCSANOW: i32 = 0;
 const TCGETS: usize = 0x5401;
 const TIOCGWINSZ: usize = 0x5413;
 const FIONREAD: usize = 0x541b;
+const EAGAIN: i32 = 11;
+const EBADF: i32 = 9;
+const ENOTTY: i32 = 25;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -98,8 +108,59 @@ fn log_seek(stage: &str, got: isize, expected: isize) -> bool {
     }
 }
 
-fn log_api_stage(stage: &str) {
-    crate::log!("unix-api-probe: stage {}\n", stage);
+fn probe_cycles() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return unsafe { _rdtsc() };
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        embassy_time_driver::now()
+    }
+}
+
+fn probe_cycles_to_us(cycles: u64) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let hz = crate::time::tsc_hz().max(1);
+        return ((cycles as u128) * 1_000_000u128 / (hz as u128)).min(u64::MAX as u128) as u64;
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let hz = embassy_time_driver::TICK_HZ.max(1);
+        cycles.saturating_mul(1_000_000) / hz
+    }
+}
+
+fn log_api_stage(stage: &str) -> u64 {
+    let started_cycles = probe_cycles();
+    crate::log!("unix-api-probe: stage {} start_cycles={}\n", stage, started_cycles);
+    started_cycles
+}
+
+fn log_api_check(stage: &str, ok: bool, started_cycles: u64) -> bool {
+    let elapsed_cycles = probe_cycles().wrapping_sub(started_cycles);
+    let elapsed_us = probe_cycles_to_us(elapsed_cycles);
+    if ok {
+        crate::log!(
+            "unix-api-probe: success {} elapsed_cycles={} elapsed_us={} errno={}\n",
+            stage,
+            elapsed_cycles,
+            elapsed_us,
+            errno()
+        );
+    } else {
+        crate::log!(
+            "unix-api-probe: failed {} elapsed_cycles={} elapsed_us={} errno={}\n",
+            stage,
+            elapsed_cycles,
+            elapsed_us,
+            errno()
+        );
+    }
+    ok
 }
 
 fn log_api_rc_zero(stage: &str, rc: i32) -> bool {
@@ -152,13 +213,22 @@ fn unix_api_fds_valid(stage: &str, fds: [i32; 2]) -> bool {
 }
 
 fn run_unix_api_probe_once() -> bool {
+    let probe_started_cycles = probe_cycles();
     let mut ok = true;
 
-    log_api_stage("isatty.stdin");
-    ok &= log_api_rc_nonnegative("isatty.stdin", unsafe { crate::unix_abi_shim::isatty(0) });
+    let started = log_api_stage("isatty.stdin.true");
+    ok &= log_api_check(
+        "isatty.stdin.true",
+        unsafe { crate::unix_abi_shim::isatty(0) } == 1 && errno() == 0,
+        started,
+    );
 
-    log_api_stage("isatty.stdout");
-    ok &= log_api_rc_nonnegative("isatty.stdout", unsafe { crate::unix_abi_shim::isatty(1) });
+    let started = log_api_stage("isatty.invalid.ebadf");
+    ok &= log_api_check(
+        "isatty.invalid.ebadf",
+        unsafe { crate::unix_abi_shim::isatty(9999) } == 0 && errno() == EBADF,
+        started,
+    );
 
     let mut winsize = Winsize {
         ws_row: 0,
@@ -166,14 +236,16 @@ fn run_unix_api_probe_once() -> bool {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
-    log_api_stage("ioctl.TIOCGWINSZ.stdout");
-    let winsize_ok = log_api_rc_zero("ioctl.TIOCGWINSZ.stdout", unsafe {
+    let started = log_api_stage("ioctl.TIOCGWINSZ.stdout.nonzero");
+    let winsize_rc = unsafe {
         crate::unix_abi_shim::ioctl(1, TIOCGWINSZ, (&mut winsize as *mut Winsize).cast())
-    });
+    };
+    let winsize_ok = winsize_rc == 0 && winsize.ws_row != 0 && winsize.ws_col != 0;
+    ok &= log_api_check("ioctl.TIOCGWINSZ.stdout.nonzero", winsize_ok, started);
     ok &= winsize_ok;
     if winsize_ok {
         crate::log!(
-            "unix-api-probe: winsize rows={} cols={} xpixel={} ypixel={}\n",
+            "unix-api-probe: proof winsize rows={} cols={} xpixel={} ypixel={}\n",
             winsize.ws_row,
             winsize.ws_col,
             winsize.ws_xpixel,
@@ -181,54 +253,146 @@ fn run_unix_api_probe_once() -> bool {
         );
     }
 
-    let mut available = 0i32;
-    log_api_stage("ioctl.FIONREAD.stdin");
-    ok &= log_api_rc_zero("ioctl.FIONREAD.stdin", unsafe {
-        crate::unix_abi_shim::ioctl(0, FIONREAD, (&mut available as *mut i32).cast())
-    });
-
     let mut termios = [0u8; 64];
-    log_api_stage("tcgetattr.stdin");
-    let tcgetattr_ok = log_api_rc_zero("tcgetattr.stdin", unsafe {
-        crate::unix_abi_shim::tcgetattr(0, termios.as_mut_ptr().cast())
-    });
+    let started = log_api_stage("tcgetattr.stdin.snapshot");
+    let tcgetattr_ok =
+        unsafe { crate::unix_abi_shim::tcgetattr(0, termios.as_mut_ptr().cast()) } == 0;
+    ok &= log_api_check("tcgetattr.stdin.snapshot", tcgetattr_ok, started);
     ok &= tcgetattr_ok;
     if tcgetattr_ok {
-        log_api_stage("tcsetattr.stdin.restore");
-        ok &= log_api_rc_zero("tcsetattr.stdin.restore", unsafe {
-            crate::unix_abi_shim::tcsetattr(0, TCSANOW, termios.as_ptr().cast())
-        });
+        let original = termios;
+        let mut changed = original;
+        changed[0] ^= 0x5a;
+        changed[7] ^= 0xa5;
+
+        let started = log_api_stage("tcsetattr.stdin.roundtrip.write");
+        ok &= log_api_check(
+            "tcsetattr.stdin.roundtrip.write",
+            unsafe { crate::unix_abi_shim::tcsetattr(0, TCSANOW, changed.as_ptr().cast()) } == 0,
+            started,
+        );
+
+        let mut observed = [0u8; 64];
+        let started = log_api_stage("tcgetattr.stdin.roundtrip.readback");
+        let readback_ok =
+            unsafe { crate::unix_abi_shim::tcgetattr(0, observed.as_mut_ptr().cast()) } == 0
+                && observed == changed;
+        ok &= log_api_check("tcgetattr.stdin.roundtrip.readback", readback_ok, started);
+
+        let started = log_api_stage("tcsetattr.stdin.restore");
+        ok &= log_api_check(
+            "tcsetattr.stdin.restore",
+            unsafe { crate::unix_abi_shim::tcsetattr(0, TCSANOW, original.as_ptr().cast()) } == 0,
+            started,
+        );
     }
 
     let mut raw_termios = [0u8; 64];
-    log_api_stage("ioctl.TCGETS.stdin");
-    ok &= log_api_rc_zero("ioctl.TCGETS.stdin", unsafe {
-        crate::unix_abi_shim::ioctl(0, TCGETS, raw_termios.as_mut_ptr().cast())
-    });
+    let started = log_api_stage("ioctl.TCGETS.stdin.snapshot");
+    ok &= log_api_check(
+        "ioctl.TCGETS.stdin.snapshot",
+        unsafe { crate::unix_abi_shim::ioctl(0, TCGETS, raw_termios.as_mut_ptr().cast()) } == 0,
+        started,
+    );
 
     let mut pipe_fds = [-1, -1];
-    log_api_stage("pipe");
-    if log_api_rc_zero("pipe", unsafe { crate::unix_abi_shim::pipe(pipe_fds.as_mut_ptr()) })
-        && unix_api_fds_valid("pipe", pipe_fds)
-    {
-        log_api_stage("fcntl.pipe.read.F_GETFL");
+    let started = log_api_stage("pipe.create");
+    if log_api_check(
+        "pipe.create",
+        unsafe { crate::unix_abi_shim::pipe(pipe_fds.as_mut_ptr()) } == 0
+            && unix_api_fds_valid("pipe.create", pipe_fds),
+        started,
+    ) {
+        let started = log_api_stage("isatty.pipe.enotty");
+        ok &= log_api_check(
+            "isatty.pipe.enotty",
+            unsafe { crate::unix_abi_shim::isatty(pipe_fds[0]) } == 0 && errno() == ENOTTY,
+            started,
+        );
+
+        let mut available = -1i32;
+        let started = log_api_stage("ioctl.FIONREAD.pipe.empty");
+        ok &= log_api_check(
+            "ioctl.FIONREAD.pipe.empty",
+            unsafe {
+                crate::unix_abi_shim::ioctl(
+                    pipe_fds[0],
+                    FIONREAD,
+                    (&mut available as *mut i32).cast(),
+                )
+            } == 0
+                && available == 0,
+            started,
+        );
+
+        let mut pollfds = [crate::unix_abi_shim::PollFd {
+            fd: pipe_fds[0],
+            events: POLLIN,
+            revents: -1,
+        }];
+        let started = log_api_stage("poll.pipe.empty.not_ready");
+        ok &= log_api_check(
+            "poll.pipe.empty.not_ready",
+            unsafe { crate::unix_abi_shim::poll(pollfds.as_mut_ptr(), pollfds.len(), 0) } == 0
+                && pollfds[0].revents == 0,
+            started,
+        );
+
+        let started = log_api_stage("fcntl.pipe.read.F_GETFL");
         let read_flags = unsafe { crate::std_abi_shim::fcntl(pipe_fds[0], F_GETFL, 0) };
-        ok &= log_api_rc_nonnegative("fcntl.pipe.read.F_GETFL", read_flags);
+        ok &= log_api_check("fcntl.pipe.read.F_GETFL", read_flags >= 0, started);
         if read_flags >= 0 {
-            log_api_stage("fcntl.pipe.read.F_SETFL_NONBLOCK");
-            ok &= log_api_rc_zero("fcntl.pipe.read.F_SETFL_NONBLOCK", unsafe {
-                crate::std_abi_shim::fcntl(pipe_fds[0], F_SETFL, read_flags | O_NONBLOCK)
-            });
+            let started = log_api_stage("fcntl.pipe.read.F_SETFL_NONBLOCK");
+            ok &= log_api_check(
+                "fcntl.pipe.read.F_SETFL_NONBLOCK",
+                unsafe {
+                    crate::std_abi_shim::fcntl(pipe_fds[0], F_SETFL, read_flags | O_NONBLOCK)
+                } == 0,
+                started,
+            );
+
+            let started = log_api_stage("fcntl.pipe.read.F_GETFL_NONBLOCK");
+            let flags_after = unsafe { crate::std_abi_shim::fcntl(pipe_fds[0], F_GETFL, 0) };
+            ok &= log_api_check(
+                "fcntl.pipe.read.F_GETFL_NONBLOCK",
+                flags_after & O_NONBLOCK != 0,
+                started,
+            );
         }
 
+        let mut empty_buf = [0u8; 1];
+        let started = log_api_stage("read.pipe.empty.nonblock.eagain");
+        ok &= log_api_check(
+            "read.pipe.empty.nonblock.eagain",
+            unsafe { crate::std_abi_shim::read(pipe_fds[0], empty_buf.as_mut_ptr().cast(), 1) }
+                == -1
+                && errno() == EAGAIN,
+            started,
+        );
+
         let payload = b"pipe-ok";
-        log_api_stage("write.pipe");
-        ok &= log_api_io(
-            "write.pipe",
+        let started = log_api_stage("write.pipe.payload");
+        ok &= log_api_check(
+            "write.pipe.payload",
             unsafe {
                 crate::std_abi_shim::write(pipe_fds[1], payload.as_ptr().cast(), payload.len())
-            },
-            payload.len(),
+            } == payload.len() as isize,
+            started,
+        );
+
+        available = -1;
+        let started = log_api_stage("ioctl.FIONREAD.pipe.payload");
+        ok &= log_api_check(
+            "ioctl.FIONREAD.pipe.payload",
+            unsafe {
+                crate::unix_abi_shim::ioctl(
+                    pipe_fds[0],
+                    FIONREAD,
+                    (&mut available as *mut i32).cast(),
+                )
+            } == 0
+                && available == payload.len() as i32,
+            started,
         );
 
         let mut pollfds = [crate::unix_abi_shim::PollFd {
@@ -236,46 +400,96 @@ fn run_unix_api_probe_once() -> bool {
             events: POLLIN,
             revents: 0,
         }];
-        log_api_stage("poll.pipe.readable");
-        ok &= log_api_rc_nonnegative("poll.pipe.readable", unsafe {
-            crate::unix_abi_shim::poll(pollfds.as_mut_ptr(), pollfds.len(), 0)
-        });
-        crate::log!("unix-api-probe: poll.pipe revents={}\n", pollfds[0].revents);
-
-        let mut buf = [0u8; 16];
-        log_api_stage("read.pipe");
-        ok &= log_api_io(
-            "read.pipe",
-            unsafe {
-                crate::std_abi_shim::read(pipe_fds[0], buf.as_mut_ptr().cast(), payload.len())
-            },
-            payload.len(),
+        let started = log_api_stage("poll.pipe.readable");
+        ok &= log_api_check(
+            "poll.pipe.readable",
+            unsafe { crate::unix_abi_shim::poll(pollfds.as_mut_ptr(), pollfds.len(), 0) } == 1
+                && pollfds[0].revents & POLLIN != 0,
+            started,
         );
 
-        log_api_stage("close.pipe.read");
-        ok &=
-            log_api_rc_zero("close.pipe.read", unsafe { crate::std_abi_shim::close(pipe_fds[0]) });
-        log_api_stage("close.pipe.write");
-        ok &=
-            log_api_rc_zero("close.pipe.write", unsafe { crate::std_abi_shim::close(pipe_fds[1]) });
+        let mut buf = [0u8; 16];
+        let started = log_api_stage("read.pipe.payload.content");
+        ok &= log_api_check(
+            "read.pipe.payload.content",
+            unsafe {
+                crate::std_abi_shim::read(pipe_fds[0], buf.as_mut_ptr().cast(), payload.len())
+            } == payload.len() as isize
+                && &buf[..payload.len()] == payload,
+            started,
+        );
+
+        available = -1;
+        let started = log_api_stage("ioctl.FIONREAD.pipe.drained");
+        ok &= log_api_check(
+            "ioctl.FIONREAD.pipe.drained",
+            unsafe {
+                crate::unix_abi_shim::ioctl(
+                    pipe_fds[0],
+                    FIONREAD,
+                    (&mut available as *mut i32).cast(),
+                )
+            } == 0
+                && available == 0,
+            started,
+        );
+
+        let started = log_api_stage("close.pipe.write");
+        ok &= log_api_check(
+            "close.pipe.write",
+            unsafe { crate::std_abi_shim::close(pipe_fds[1]) } == 0,
+            started,
+        );
+        let started = log_api_stage("read.pipe.after_writer_close.eof");
+        ok &= log_api_check(
+            "read.pipe.after_writer_close.eof",
+            unsafe { crate::std_abi_shim::read(pipe_fds[0], empty_buf.as_mut_ptr().cast(), 1) }
+                == 0,
+            started,
+        );
+        let started = log_api_stage("close.pipe.read");
+        ok &= log_api_check(
+            "close.pipe.read",
+            unsafe { crate::std_abi_shim::close(pipe_fds[0]) } == 0,
+            started,
+        );
     } else {
         ok = false;
     }
 
     let mut socket_fds = [-1, -1];
-    log_api_stage("socketpair.AF_UNIX_STREAM");
-    if log_api_rc_zero("socketpair.AF_UNIX_STREAM", unsafe {
-        crate::unix_abi_shim::socketpair(AF_UNIX, SOCK_STREAM, 0, socket_fds.as_mut_ptr())
-    }) && unix_api_fds_valid("socketpair.AF_UNIX_STREAM", socket_fds)
-    {
+    let started = log_api_stage("socketpair.AF_UNIX_STREAM.create");
+    if log_api_check(
+        "socketpair.AF_UNIX_STREAM.create",
+        unsafe {
+            crate::unix_abi_shim::socketpair(AF_UNIX, SOCK_STREAM, 0, socket_fds.as_mut_ptr())
+        } == 0
+            && unix_api_fds_valid("socketpair.AF_UNIX_STREAM.create", socket_fds),
+        started,
+    ) {
         let payload = b"unix-stream-ok";
-        log_api_stage("write.socketpair.right");
-        ok &= log_api_io(
-            "write.socketpair.right",
+        let started = log_api_stage("write.socketpair.right.payload");
+        ok &= log_api_check(
+            "write.socketpair.right.payload",
             unsafe {
                 crate::std_abi_shim::write(socket_fds[1], payload.as_ptr().cast(), payload.len())
-            },
-            payload.len(),
+            } == payload.len() as isize,
+            started,
+        );
+
+        let mut available = -1i32;
+        let started = log_api_stage("ioctl.FIONREAD.socket.left.payload");
+        ok &= log_api_check(
+            "ioctl.FIONREAD.socket.left.payload",
+            unsafe {
+                crate::unix_abi_shim::ioctl(
+                    socket_fds[0],
+                    FIONREAD,
+                    (&mut available as *mut i32).cast(),
+                )
+            } == 0
+                && available == payload.len() as i32,
+            started,
         );
 
         let mut pollfds = [
@@ -290,38 +504,127 @@ fn run_unix_api_probe_once() -> bool {
                 revents: 0,
             },
         ];
-        log_api_stage("poll.socketpair");
-        ok &= log_api_rc_nonnegative("poll.socketpair", unsafe {
-            crate::unix_abi_shim::poll(pollfds.as_mut_ptr(), pollfds.len(), 0)
-        });
-        crate::log!(
-            "unix-api-probe: poll.socketpair left_revents={} right_revents={}\n",
-            pollfds[0].revents,
-            pollfds[1].revents
+        let started = log_api_stage("poll.socketpair.read_write_ready");
+        ok &= log_api_check(
+            "poll.socketpair.read_write_ready",
+            unsafe { crate::unix_abi_shim::poll(pollfds.as_mut_ptr(), pollfds.len(), 0) } == 2
+                && pollfds[0].revents & POLLIN != 0
+                && pollfds[1].revents & POLLOUT != 0,
+            started,
         );
 
         let mut buf = [0u8; 32];
-        log_api_stage("read.socketpair.left");
-        ok &= log_api_io(
-            "read.socketpair.left",
+        let started = log_api_stage("read.socketpair.left.payload.content");
+        ok &= log_api_check(
+            "read.socketpair.left.payload.content",
             unsafe {
                 crate::std_abi_shim::read(socket_fds[0], buf.as_mut_ptr().cast(), payload.len())
-            },
-            payload.len(),
+            } == payload.len() as isize
+                && &buf[..payload.len()] == payload,
+            started,
         );
 
-        log_api_stage("close.socket.left");
-        ok &= log_api_rc_zero("close.socket.left", unsafe {
-            crate::std_abi_shim::close(socket_fds[0])
-        });
-        log_api_stage("close.socket.right");
-        ok &= log_api_rc_zero("close.socket.right", unsafe {
-            crate::std_abi_shim::close(socket_fds[1])
-        });
+        let started = log_api_stage("close.socket.left");
+        ok &= log_api_check(
+            "close.socket.left",
+            unsafe { crate::std_abi_shim::close(socket_fds[0]) } == 0,
+            started,
+        );
+        let started = log_api_stage("write.socketpair.after_peer_close.ebadf");
+        ok &= log_api_check(
+            "write.socketpair.after_peer_close.ebadf",
+            unsafe {
+                crate::std_abi_shim::write(socket_fds[1], payload.as_ptr().cast(), payload.len())
+            } == -1
+                && errno() == EBADF,
+            started,
+        );
+        let started = log_api_stage("close.socket.right");
+        ok &= log_api_check(
+            "close.socket.right",
+            unsafe { crate::std_abi_shim::close(socket_fds[1]) } == 0,
+            started,
+        );
     } else {
         ok = false;
     }
 
+    let mut flagged_socket_fds = [-1, -1];
+    let started = log_api_stage("socketpair.AF_UNIX_STREAM.flags.create");
+    if log_api_check(
+        "socketpair.AF_UNIX_STREAM.flags.create",
+        unsafe {
+            crate::unix_abi_shim::socketpair(
+                AF_UNIX,
+                SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                0,
+                flagged_socket_fds.as_mut_ptr(),
+            )
+        } == 0
+            && unix_api_fds_valid("socketpair.AF_UNIX_STREAM.flags.create", flagged_socket_fds),
+        started,
+    ) {
+        let started = log_api_stage("fcntl.socket.flags.F_GETFL.nonblock");
+        let flags_after = unsafe { crate::std_abi_shim::fcntl(flagged_socket_fds[0], F_GETFL, 0) };
+        ok &= log_api_check(
+            "fcntl.socket.flags.F_GETFL.nonblock",
+            flags_after >= 0 && flags_after & O_NONBLOCK != 0,
+            started,
+        );
+
+        let started = log_api_stage("fcntl.socket.flags.F_SETFD_CLOEXEC");
+        ok &= log_api_check(
+            "fcntl.socket.flags.F_SETFD_CLOEXEC",
+            unsafe { crate::std_abi_shim::fcntl(flagged_socket_fds[0], F_SETFD, FD_CLOEXEC) } == 0,
+            started,
+        );
+
+        let started = log_api_stage("fcntl.socket.flags.F_GETFD_CLOEXEC");
+        let fd_flags = unsafe { crate::std_abi_shim::fcntl(flagged_socket_fds[0], F_GETFD, 0) };
+        ok &= log_api_check(
+            "fcntl.socket.flags.F_GETFD_CLOEXEC",
+            fd_flags >= 0 && fd_flags & FD_CLOEXEC != 0,
+            started,
+        );
+
+        let mut empty_buf = [0u8; 1];
+        let started = log_api_stage("read.socket.flags.empty.nonblock.eagain");
+        ok &= log_api_check(
+            "read.socket.flags.empty.nonblock.eagain",
+            unsafe {
+                crate::std_abi_shim::read(
+                    flagged_socket_fds[0],
+                    empty_buf.as_mut_ptr().cast(),
+                    empty_buf.len(),
+                )
+            } == -1
+                && errno() == EAGAIN,
+            started,
+        );
+
+        let started = log_api_stage("close.socket.flags.left");
+        ok &= log_api_check(
+            "close.socket.flags.left",
+            unsafe { crate::std_abi_shim::close(flagged_socket_fds[0]) } == 0,
+            started,
+        );
+        let started = log_api_stage("close.socket.flags.right");
+        ok &= log_api_check(
+            "close.socket.flags.right",
+            unsafe { crate::std_abi_shim::close(flagged_socket_fds[1]) } == 0,
+            started,
+        );
+    } else {
+        ok = false;
+    }
+
+    let probe_elapsed_cycles = probe_cycles().wrapping_sub(probe_started_cycles);
+    crate::log!(
+        "unix-api-probe: summary elapsed_cycles={} elapsed_us={} ok={}\n",
+        probe_elapsed_cycles,
+        probe_cycles_to_us(probe_elapsed_cycles),
+        ok
+    );
     ok
 }
 

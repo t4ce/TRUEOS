@@ -294,6 +294,7 @@ struct BlueprintPendingLaunchState {
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
     console_target: Option<MatrixTarget>,
+    console_surface: BlueprintConsoleSurface,
 }
 
 #[derive(Clone)]
@@ -304,11 +305,43 @@ pub struct BlueprintLaunchState {
     pub app_args: AllocVec<AllocString>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BlueprintConsoleSurface {
+    Text,
+    Terminal,
+}
+
+impl BlueprintConsoleSurface {
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Terminal)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintConsoleRoute {
+    Matrix,
+    NetShellDirect,
+}
+
+impl BlueprintConsoleRoute {
+    const fn is_net_shell_direct(self) -> bool {
+        matches!(self, Self::NetShellDirect)
+    }
+}
+
+fn blueprint_uses_net_shell_direct_path(archive: &str) -> bool {
+    let name = archive.rsplit('/').next().unwrap_or(archive);
+    let stem = name.strip_suffix(".bp").unwrap_or(name);
+    stem == "Player"
+}
+
 #[derive(Clone)]
 pub(crate) struct BlueprintProcessContext {
     args: AllocVec<AllocString>,
     vars: BTreeMap<AllocString, AllocString>,
     console_target: Option<MatrixTarget>,
+    console_surface: BlueprintConsoleSurface,
+    console_route: BlueprintConsoleRoute,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
     exit_reason: Option<AllocString>,
@@ -571,42 +604,46 @@ fn guest_exception_summary() -> Option<(u8, &'static str, u64, u64, u64)> {
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
+    hvlog_at(log::Level::Info, args);
+}
+
+pub fn hvwarnf(args: core::fmt::Arguments<'_>) {
+    hvlog_at(log::Level::Warn, args);
+}
+
+pub fn hverrorf(args: core::fmt::Arguments<'_>) {
+    hvlog_at(log::Level::Error, args);
+}
+
+fn hvlog_at(level: log::Level, args: core::fmt::Arguments<'_>) {
     let mut line: String<HV_LOG_LINE> = String::new();
     let _ = line.write_fmt(args);
     if line.is_empty() {
         return;
     }
 
-    let level = hvlog_console_level(line.as_str());
     if current_hull_guest_context_vm_id().is_some() {
-        if !hvlog_console_enabled(line.as_str(), level) {
+        if !hvlog_console_enabled(level) {
             return;
         }
-        let _ = trueos_vm::vmcall::net_tcp_write(line.as_bytes());
-        let _ = trueos_vm::vmcall::net_tcp_write(b"\n");
+        hvlog_guest_context_write(level, line.as_str());
         return;
     }
 
-    if hvlog_console_enabled(line.as_str(), level) {
-        crate::log_os::log_with_target_level("hv", level, format_args!("{}\n", line.as_str()));
+    if hvlog_console_enabled(level) {
+        crate::log_os::hypervisor_line(level, format_args!("{}\n", line.as_str()));
     }
 }
 
-fn hvlog_console_level(line: &str) -> log::Level {
-    if line.contains("failed")
-        || line.contains("error")
-        || line.contains("fault")
-        || line.contains("panic")
-        || line.contains("unsupported")
-        || line.contains("bad ")
-    {
-        log::Level::Warn
-    } else {
-        log::Level::Info
-    }
+fn hvlog_guest_context_write(level: log::Level, line: &str) {
+    let _ = trueos_vm::vmcall::net_tcp_write(b"[hv] [");
+    let _ = trueos_vm::vmcall::net_tcp_write(crate::log_os::purpose_for_level(level).as_bytes());
+    let _ = trueos_vm::vmcall::net_tcp_write(b"] ");
+    let _ = trueos_vm::vmcall::net_tcp_write(line.as_bytes());
+    let _ = trueos_vm::vmcall::net_tcp_write(b"\n");
 }
 
-fn hvlog_console_enabled(_line: &str, level: log::Level) -> bool {
+fn hvlog_console_enabled(level: log::Level) -> bool {
     crate::log_os::flags::HV_LOGS
         && crate::log_os::flags::area_log_enabled(crate::log_os::flags::LogArea::Hv, level)
 }
@@ -651,6 +688,7 @@ pub fn start_blueprint_app_vm(
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
     console_target: Option<MatrixTarget>,
+    console_surface: BlueprintConsoleSurface,
 ) -> Result<(), StartError> {
     start_with_mode(
         vm_id,
@@ -663,6 +701,7 @@ pub fn start_blueprint_app_vm(
             module_bytes,
             app_args,
             console_target,
+            console_surface,
         }),
     )
 }
@@ -704,7 +743,7 @@ fn start_with_mode(
         || !caps.feature_control_locked
         || !caps.feature_control_vmx_outside_smx
     {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: start failed: vendor={} msr={} vmx={} locked={} outside_smx={}",
             caps.vendor_intel,
             caps.has_msr,
@@ -763,7 +802,7 @@ fn start_with_mode(
         Err(error) => {
             clear_blueprint_pending_launch(vm_id);
             vm.starting.store(false, Ordering::Release);
-            hvlogf(format_args!(
+            hvwarnf(format_args!(
                 "hv: vm{} lane pick failed: role={} placement={} reason={}",
                 vm_id,
                 profile.role_name(),
@@ -780,7 +819,7 @@ fn start_with_mode(
     if !profile.requires_reserved_vm_lane() || !target.supports(profile) {
         clear_blueprint_pending_launch(vm_id);
         vm.starting.store(false, Ordering::Release);
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{} lane rejected: role={} placement={} slot={} requires reserved VM lane on AP2+",
             vm_id,
             profile.role_name(),
@@ -848,7 +887,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         nudge_vm_control(vm_id, "stop");
         Ok(true)
     } else {
-        hvlogf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
+        hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
     }
 }
@@ -861,7 +900,7 @@ pub fn request_preserve(vm_id: u8) -> Result<bool, StopError> {
     let running = vm.running.load(Ordering::Acquire);
     let starting = vm.starting.load(Ordering::Acquire);
     if !running && !starting {
-        hvlogf(format_args!("hv: vm{} lifecycle: preserve ignored (not running)", vm_id));
+        hvwarnf(format_args!("hv: vm{} lifecycle: preserve ignored (not running)", vm_id));
         return Ok(false);
     }
 
@@ -944,12 +983,12 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
                 snapshot_path(vm_id).as_str(),
                 saved
             )),
-            Err(e) => hvlogf(format_args!(
+            Err(e) => hvwarnf(format_args!(
                 "hv: vm{} reporting: preserve snapshot save failed ({:?})",
                 vm_id, e
             )),
         },
-        Err(e) => hvlogf(format_args!(
+        Err(e) => hvwarnf(format_args!(
             "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
             vm_id, e
         )),
@@ -1130,16 +1169,18 @@ fn estimate_blueprint_memory_profile(
 }
 
 fn log_blueprint_memory_profile_info(profile: BlueprintVmMemoryProfile) {
-    crate::log_info!(
-        target: "hv";
-        "apps: profile {} heap={}/{}/{}MiB stack={}/{}/{}MiB\n",
-        profile.class.label(),
-        profile.heap_lower_mib,
-        profile.heap_recommended_mib,
-        profile.heap_upper_mib,
-        profile.stack_lower_mib,
-        profile.stack_recommended_mib,
-        profile.stack_upper_mib
+    crate::log_os::blueprint_line(
+        log::Level::Info,
+        format_args!(
+            "apps: profile {} heap={}/{}/{}MiB stack={}/{}/{}MiB\n",
+            profile.class.label(),
+            profile.heap_lower_mib,
+            profile.heap_recommended_mib,
+            profile.heap_upper_mib,
+            profile.stack_lower_mib,
+            profile.stack_recommended_mib,
+            profile.stack_upper_mib
+        ),
     );
 }
 
@@ -1158,7 +1199,7 @@ fn clear_blueprint_pending_launch(vm_id: u8) {
 
 fn log_blueprint_launch_line(_target: Option<&MatrixTarget>, args: core::fmt::Arguments<'_>) {
     let line = alloc::format!("{}", args);
-    hvlogf(format_args!("{}", line.as_str()));
+    crate::log_os::blueprint_line(log::Level::Info, format_args!("{}\n", line.as_str()));
 }
 
 fn prepare_blueprint_launch_on_lane(
@@ -1188,6 +1229,8 @@ fn prepare_blueprint_launch_on_lane(
         unpacked_bytes.as_slice(),
         imports.as_slice(),
     );
+    let console_surface = pending.console_surface;
+    log(format_args!("apps: console surface {:?}", console_surface));
     log_blueprint_memory_profile_info(profile);
     drop(host_alloc_guard);
 
@@ -1211,6 +1254,7 @@ fn prepare_blueprint_launch_on_lane(
             app_args: pending.app_args,
         },
         pending.console_target,
+        console_surface,
     )
     .map_err(|err| alloc::format!("app-vm stage failed: {:?}", err))?;
 
@@ -1226,6 +1270,7 @@ pub fn stage_blueprint_launch(
     vm_id: u8,
     state: BlueprintLaunchState,
     console_target: Option<MatrixTarget>,
+    console_surface: BlueprintConsoleSurface,
 ) -> Result<(), StartError> {
     let Some(slot) = BLUEPRINT_LAUNCH_STATES.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
@@ -1237,6 +1282,21 @@ pub fn stage_blueprint_launch(
         state.archive.as_str(),
         state.module_bytes.as_slice(),
     );
+    let console_route = if blueprint_uses_net_shell_direct_path(state.archive.as_str()) {
+        BlueprintConsoleRoute::NetShellDirect
+    } else {
+        BlueprintConsoleRoute::Matrix
+    };
+    if console_route.is_net_shell_direct() {
+        if crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
+            hvlogf(format_args!("hv: vm{} console route: Player path2 direct net-shell", vm_id));
+        } else {
+            hvwarnf(format_args!(
+                "hv: vm{} console route: Player path2 direct net-shell claim failed",
+                vm_id
+            ));
+        }
+    }
     let process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
@@ -1247,6 +1307,8 @@ pub fn stage_blueprint_launch(
             Some(app_fs_root.as_str()),
         ),
         console_target,
+        console_surface,
+        console_route,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
         exit_reason: None,
@@ -1261,7 +1323,12 @@ pub fn stage_blueprint_launch(
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }
-    if let Some(target) = console_target.as_ref() {
+    if !console_route.is_net_shell_direct()
+        && let Some(target) = console_target.as_ref()
+    {
+        if console_surface.is_terminal() {
+            crate::shell2::prepare_matrix_target_terminal_handoff(target);
+        }
         crate::shell2::bind_matrix_target_vm_input(target, vm_id);
     }
     Ok(())
@@ -1468,28 +1535,76 @@ pub(crate) fn blueprint_process_file_tree_text(vm_id: u8, requested: &str) -> Op
 }
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
-    let target = {
+    let (target, surface, route) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context
+            .and_then(|slot| {
+                let guard = slot.lock();
+                let context = guard.as_ref()?;
+                Some((
+                    context.console_target.clone(),
+                    context.console_surface,
+                    context.console_route,
+                ))
+            })
+            .unwrap_or((None, BlueprintConsoleSurface::Text, BlueprintConsoleRoute::Matrix))
     };
-    let written = blueprint_console_write_to_target(target.as_ref(), data);
-    blueprint_console_mirror_global_log(vm_id, &data[..core::cmp::min(written, data.len())]);
-    written
+    if route.is_net_shell_direct() {
+        crate::shell2::backends::net_tcp::net_shell_write_bytes(data);
+        return data.len();
+    }
+    if surface.is_terminal() {
+        let written = blueprint_console_write_raw_to_target(target.as_ref(), data);
+        blueprint_console_text_lines(vm_id, None, &data[..core::cmp::min(written, data.len())]);
+        written
+    } else {
+        blueprint_console_text_lines(vm_id, target.as_ref(), data);
+        data.len()
+    }
 }
 
 pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
-    let target = {
+    let (target, surface, route) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context
+            .and_then(|slot| {
+                let guard = slot.lock();
+                let context = guard.as_ref()?;
+                Some((
+                    context.console_target.clone(),
+                    context.console_surface,
+                    context.console_route,
+                ))
+            })
+            .unwrap_or((None, BlueprintConsoleSurface::Text, BlueprintConsoleRoute::Matrix))
     };
-    blueprint_console_write_to_target(target.as_ref(), data)
+    if route.is_net_shell_direct() {
+        crate::shell2::backends::net_tcp::net_shell_write_bytes(data);
+        return data.len();
+    }
+    if surface.is_terminal() {
+        blueprint_console_write_raw_to_target(target.as_ref(), data)
+    } else {
+        blueprint_console_text_lines(vm_id, target.as_ref(), data);
+        data.len()
+    }
 }
 
 pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
-    let target = {
+    let (target, route) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context
+            .and_then(|slot| {
+                let guard = slot.lock();
+                let context = guard.as_ref()?;
+                Some((context.console_target.clone(), context.console_route))
+            })
+            .unwrap_or((None, BlueprintConsoleRoute::Matrix))
     };
+    if route.is_net_shell_direct() {
+        let (cols, rows) = crate::shell2::net_shell_terminal_size();
+        return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
+    }
     if let Some(target) = target.as_ref() {
         let (cols, rows) = crate::shell2::konsole_viewport_size_for_target(target);
         return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
@@ -1503,10 +1618,20 @@ pub(crate) fn blueprint_console_konsole_begin_frame(
     rows: usize,
     terminal_handoff: bool,
 ) -> (u32, u32) {
-    let target = {
+    let (target, route) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context
+            .and_then(|slot| {
+                let guard = slot.lock();
+                let context = guard.as_ref()?;
+                Some((context.console_target.clone(), context.console_route))
+            })
+            .unwrap_or((None, BlueprintConsoleRoute::Matrix))
     };
+    if route.is_net_shell_direct() {
+        let (cols, rows) = crate::shell2::net_shell_terminal_size();
+        return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
+    }
     if let Some(target) = target.as_ref() {
         let (cols, rows) =
             crate::shell2::konsole_begin_frame_for_target(target, cols, rows, terminal_handoff);
@@ -1536,15 +1661,15 @@ pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool
     true
 }
 
-fn blueprint_console_write_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
+fn blueprint_console_write_raw_to_target(target: Option<&MatrixTarget>, data: &[u8]) -> usize {
     if let Some(target) = target {
-        return crate::shell2::raw_write_matrix_target(&target, data);
+        return crate::shell2::raw_write_matrix_target_owned(&target, data);
     }
     crate::shell2::uart1_com1::write_bytes(data);
     data.len()
 }
 
-fn blueprint_console_mirror_global_log(vm_id: u8, data: &[u8]) {
+fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: &[u8]) {
     if data.is_empty() {
         return;
     }
@@ -1585,6 +1710,9 @@ fn blueprint_console_mirror_global_log(vm_id: u8, data: &[u8]) {
             Some("blueprint"),
             format_args!("vm{}: {}\n", vm_id, line.as_str()),
         );
+        if let Some(target) = target {
+            crate::shell2::print_matrix_target_line(target, line.as_str());
+        }
     }
 }
 
@@ -1712,7 +1840,7 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     for &byte in data {
         match byte {
             b'\r' | b'\n' => {
-                let _ = blueprint_console_write_to_target(target.as_ref(), b"\r\n");
+                let _ = blueprint_console_write_raw_to_target(target.as_ref(), b"\r\n");
                 let line_bytes = core::mem::take(&mut context.control_shell_line);
                 drop(guard);
                 let line = core::str::from_utf8(line_bytes.as_slice()).unwrap_or("");
@@ -1721,13 +1849,13 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
             }
             0x08 | 0x7f => {
                 if context.control_shell_line.pop().is_some() {
-                    let _ = blueprint_console_write_to_target(target.as_ref(), b"\x08 \x08");
+                    let _ = blueprint_console_write_raw_to_target(target.as_ref(), b"\x08 \x08");
                 }
             }
             byte if byte.is_ascii_graphic() || byte == b' ' => {
                 if context.control_shell_line.len() < 512 {
                     context.control_shell_line.push(byte);
-                    let _ = blueprint_console_write_to_target(target.as_ref(), &[byte]);
+                    let _ = blueprint_console_write_raw_to_target(target.as_ref(), &[byte]);
                 }
             }
             _ => {
@@ -1745,6 +1873,10 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let mut guard = slot.lock();
         if let Some(context) = guard.as_mut() {
+            if context.console_route.is_net_shell_direct() {
+                drop(guard);
+                return crate::shell2::backends::net_tcp::net_shell_direct_read_byte(vm_id);
+            }
             return context.console_input.pop_front();
         }
     }
@@ -1777,10 +1909,13 @@ fn clear_blueprint_process_context(vm_id: u8) {
     }
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let previous = slot.lock().take();
-        if let Some(context) = previous
-            && let Some(target) = context.console_target.as_ref()
-        {
-            crate::shell2::unbind_matrix_target_vm(target, vm_id);
+        if let Some(context) = previous {
+            if context.console_route.is_net_shell_direct() {
+                crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+            }
+            if let Some(target) = context.console_target.as_ref() {
+                crate::shell2::unbind_matrix_target_vm(target, vm_id);
+            }
         }
     }
 }
@@ -1871,7 +2006,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
                         guest_launch_rip()
                     ));
                 } else {
-                    hvlogf(format_args!(
+                    hvwarnf(format_args!(
                         "hv: vm{} reporting: full guest bytes present but ELF entry parse failed; vmx_guest_entry=0x{:016X}",
                         vm_id,
                         guest_launch_rip()
@@ -1891,7 +2026,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     if let Some(pending) = pending_blueprint
         && let Err(err) = prepare_blueprint_launch_on_lane(vm_id, pending)
     {
-        hvlogf(format_args!("hv: vm{} lifecycle: blueprint prep failed ({})", vm_id, err));
+        hvwarnf(format_args!("hv: vm{} lifecycle: blueprint prep failed ({})", vm_id, err));
         clear_current_vm_id();
         vm.running.store(false, Ordering::Release);
         vm.starting.store(false, Ordering::Release);
@@ -1905,7 +2040,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     hvlogf(format_args!("hv: vm{} reporting: vlayer policy=integrity-first", vm_id));
     if boot_mode == VmBootMode::Hull {
         if let Err(err) = memory::ensure_guest_hull_rw_template_ready() {
-            hvlogf(format_args!(
+            hvwarnf(format_args!(
                 "hv: vm{} reporting: hull rw template prepare failed ({})",
                 vm_id, err
             ));
@@ -1976,7 +2111,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
                     crate::hv::app_crash::CrashOutcome::LaunchError(e),
                 ));
             }
-            hvlogf(format_args!(
+            hverrorf(format_args!(
                 "hv: vm{}-{} reporting: vmlaunch/ept failed ({})",
                 vm_id, lineage_record.level, e
             ));
@@ -2132,7 +2267,7 @@ async fn vmx_launch_once_with_ept(
         }
 
         if lr.launch_failed != 0 {
-            hvlogf(format_args!(
+            hverrorf(format_args!(
                 "hv: vm{} reporting: vmlaunch/vmresume failed instr_err={} rip=0x{:016X}",
                 current_vm_id_for_log(),
                 lr.instr_err,
@@ -2141,7 +2276,7 @@ async fn vmx_launch_once_with_ept(
             break;
         }
         if lr.entered == 0 {
-            hvlogf(format_args!(
+            hvwarnf(format_args!(
                 "hv: vm{} reporting: vmlaunch/vmresume: guest not entered",
                 current_vm_id_for_log()
             ));
@@ -2154,7 +2289,7 @@ async fn vmx_launch_once_with_ept(
         if reason == 0x0 {
             let guest_exception = guest_exception_summary();
             if let Some((vector, vector_name, kind, info, err)) = guest_exception {
-                hvlogf(format_args!(
+                hverrorf(format_args!(
                     "hv: vm{} fault-exc v={} {} type={}({}) err=0x{:X} info=0x{:08X}",
                     current_vm_id_for_log(),
                     vector,
@@ -2248,7 +2383,7 @@ async fn vmx_launch_once_with_ept(
             if lr.guest_rip >= memcpy_addr && lr.guest_rip < memcpy_addr.saturating_add(128) {
                 let (vector, vector_name, _, _, err) =
                     guest_exception.unwrap_or((0xFF, "unknown", 0, 0, intr_err));
-                hvlogf(format_args!(
+                hverrorf(format_args!(
                     "hv: vm{} memcpy-fault v={} {} err=0x{:X} rip=0x{:016X} dst=0x{:016X} src=0x{:016X} len={} lin=0x{:016X}",
                     current_vm_id_for_log(),
                     vector,
@@ -2513,7 +2648,7 @@ fn handle_guest_rdmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
     let mut regs = crate::hv::vmx::guest_registers();
     let msr = regs.rcx as u32;
     let Some(value) = guest_rdmsr_value(vm_id, msr) else {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{} reporting: rdmsr unsupported msr=0x{:08X} rip=0x{:016X} risk={}",
             current_vm_id_for_log(),
             msr,
@@ -2540,7 +2675,7 @@ fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
     let msr = regs.rcx as u32;
     let value = (regs.rax & 0xFFFF_FFFF) | ((regs.rdx & 0xFFFF_FFFF) << 32);
     if !write_guest_msr_value(vm_id, msr, value) {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{} reporting: wrmsr unsupported msr=0x{:08X} value=0x{:016X} rip=0x{:016X} risk={}",
             current_vm_id_for_log(),
             msr,
@@ -2612,7 +2747,7 @@ fn setup_vmcs_for_launch(
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit ACTIVATE_SECONDARY not available",
             current_vm_id_for_log(),
             lineage_record.level
@@ -2620,14 +2755,14 @@ fn setup_vmcs_for_launch(
         return Err("secondary controls unsupported");
     }
     if (proc & PROC_BASED_PAUSE_EXITING) == 0 {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit PAUSE_EXITING not available",
             current_vm_id_for_log(),
             lineage_record.level
         ));
     }
     if (proc2 & PROC2_BASED_ENABLE_EPT) == 0 {
-        hvlogf(format_args!(
+        hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_EPT not available",
             current_vm_id_for_log(),
             lineage_record.level

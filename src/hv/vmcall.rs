@@ -9,8 +9,8 @@
 //! Host reads, executes, writes response, then vmresumes.
 //! The vmcall is synchronous from the guest's point of view.
 
-use crate::hv::hvlogf;
 use crate::hv::memory::kernel_va_to_pa;
+use crate::hv::{hvlogf, hvwarnf};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -408,7 +408,7 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
 
 fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
     let Some((op, seq, arg0, arg1, req_len)) = read_request(vm_id) else {
-        hvlogf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
+        hvwarnf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
     let dispatch_start_ns = crate::chronos::monotonic_nanos();

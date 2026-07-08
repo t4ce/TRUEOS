@@ -1,6 +1,6 @@
 use alloc::collections::VecDeque;
 use core::fmt::Write;
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::net::adapter::NetHandle;
 use crate::shell2::{ShellBackend2, ShellIo2};
@@ -13,6 +13,7 @@ pub(crate) static NET_TCP_SHELL_BACKEND: NetTcpShellBackend = NetTcpShellBackend
 
 static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
+static NET_SHELL_DIRECT_VM: AtomicU8 = AtomicU8::new(0);
 
 pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
@@ -27,6 +28,9 @@ pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new
 });
 
 pub(crate) fn net_shell_read_byte() -> Option<u8> {
+    if net_shell_direct_active() {
+        return None;
+    }
     NET_SHELL_STATE.lock().rx.pop_front()
 }
 
@@ -39,6 +43,51 @@ pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
         }
         st.tx.push_back(b);
     }
+}
+
+pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
+    let owner = vm_id.saturating_add(1);
+    let previous = NET_SHELL_DIRECT_VM
+        .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)
+        .unwrap_or_else(|current| current);
+    if previous != 0 && previous != owner {
+        return false;
+    }
+
+    let mut st = NET_SHELL_STATE.lock();
+    st.rx.clear();
+    st.tx.clear();
+    NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
+    NET_SHELL_DIRECT_VM.store(owner, Ordering::Release);
+    true
+}
+
+pub(crate) fn release_net_shell_direct(vm_id: u8) {
+    let owner = vm_id.saturating_add(1);
+    if NET_SHELL_DIRECT_VM
+        .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let mut st = NET_SHELL_STATE.lock();
+        st.rx.clear();
+        st.tx.clear();
+        NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
+    }
+}
+
+pub(crate) fn net_shell_direct_active() -> bool {
+    NET_SHELL_DIRECT_VM.load(Ordering::Acquire) != 0
+}
+
+pub(crate) fn net_shell_direct_owned_by(vm_id: u8) -> bool {
+    NET_SHELL_DIRECT_VM.load(Ordering::Acquire) == vm_id.saturating_add(1)
+}
+
+pub(crate) fn net_shell_direct_read_byte(vm_id: u8) -> Option<u8> {
+    if !net_shell_direct_owned_by(vm_id) {
+        return None;
+    }
+    NET_SHELL_STATE.lock().rx.pop_front()
 }
 
 impl ShellIo2 for NetTcpShellBackend {

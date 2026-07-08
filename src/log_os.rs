@@ -248,6 +248,14 @@ pub(crate) fn purpose_for_level(level: log::Level) -> &'static str {
     log_os_core::purpose_for_level(level)
 }
 
+pub(crate) fn hypervisor_line(level: log::Level, args: fmt::Arguments<'_>) {
+    log_with_area_level(flags::LogArea::Hv, level, args);
+}
+
+pub(crate) fn blueprint_line(level: log::Level, args: fmt::Arguments<'_>) {
+    log_with_area_level(flags::LogArea::Blueprint, level, args);
+}
+
 fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 

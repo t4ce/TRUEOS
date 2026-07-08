@@ -216,7 +216,7 @@ pub fn target_log_area(target: &str) -> LogArea {
         }
         "hda" => LogArea::Hda,
         "audio" => LogArea::Apps,
-        "hv" => LogArea::Hv,
+        "hv" | "hyperv" | "hypervisor" => LogArea::Hv,
         "apps" => LogArea::Apps,
         "blueprint" | "bp" => LogArea::Blueprint,
         "executor-cache" => LogArea::ExecutorCache,
@@ -260,8 +260,11 @@ pub fn module_path_log_area(path: &str) -> LogArea {
     if path_prefix(path, "intel") || path_prefix(path, "gfx") || path_prefix(path, "ui3") {
         return LogArea::Gfx;
     }
-    if path_prefix(path, "hv") {
+    if path_prefix(path, "hv") || path_prefix(path, "hyperv") || path_prefix(path, "hypervisor") {
         return LogArea::Hv;
+    }
+    if path_prefix(path, "blueprint") || path_prefix(path, "bp") {
+        return LogArea::Blueprint;
     }
     if path_prefix(path, "executor_cache") {
         return LogArea::ExecutorCache;
@@ -269,7 +272,10 @@ pub fn module_path_log_area(path: &str) -> LogArea {
     if path_prefix(path, "r::spawn_service") || path_prefix(path, "stackkeeper") {
         return LogArea::Service;
     }
-    if path_prefix(path, "shell2::cmds::run") || path_prefix(path, "gb_demo") {
+    if path_prefix(path, "shell2::cmds::run")
+        || path_prefix(path, "gb_demo")
+        || path_prefix(path, "unix_fd_probe")
+    {
         return LogArea::Apps;
     }
 
@@ -281,6 +287,26 @@ fn path_prefix(path: &str, prefix: &str) -> bool {
         || path.strip_prefix(prefix).is_some_and(|rest| {
             rest.starts_with("::") || rest.starts_with('/') || rest.starts_with('-')
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LogArea, module_path_log_area, target_log_area};
+
+    #[test]
+    fn routes_hypervisor_aliases_to_hv_area() {
+        assert_eq!(target_log_area("hv"), LogArea::Hv);
+        assert_eq!(target_log_area("hyperv"), LogArea::Hv);
+        assert_eq!(target_log_area("hypervisor"), LogArea::Hv);
+        assert_eq!(module_path_log_area("TRUEOS::hyperv::vmx"), LogArea::Hv);
+    }
+
+    #[test]
+    fn routes_blueprint_aliases_to_blueprint_area() {
+        assert_eq!(target_log_area("blueprint"), LogArea::Blueprint);
+        assert_eq!(target_log_area("bp"), LogArea::Blueprint);
+        assert_eq!(module_path_log_area("TRUEOS::blueprint::launcher"), LogArea::Blueprint);
+    }
 }
 
 pub fn level_enabled(policy: LogLevelPolicy, level: Level) -> bool {
