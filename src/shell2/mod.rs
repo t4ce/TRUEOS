@@ -20,20 +20,18 @@ mod shell2_qjs_c4;
 mod shell2_qjs_c4_contract;
 mod shell2_surf;
 mod term_style;
+mod terminal;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
-    CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND, UI3_SHELL_BACKEND,
-    Ui3ShellCell, Ui3ShellScreenSnapshot, container_shell_drain_output,
-    container_shell_read_output_byte, container_shell_submit_input, crlf,
-    queue_ui3_keyboard_event as queue_ui3_shell_keyboard_event, uart1_com1,
-    ui3_shell_attach_window, ui3_shell_blit_snapshot, ui3_shell_last_rendered_seq,
-    ui3_shell_line_width, ui3_shell_mark_rendered, ui3_shell_rows, ui3_shell_set_line_width,
-    ui3_shell_set_size, ui3_shell_snapshot,
+    CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, UART1_COM1_BACKEND,
+    container_shell_drain_output, container_shell_read_output_byte, container_shell_submit_input,
+    crlf, uart1_com1,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2};
 use shell2_apps::AppsPromptMode;
 use shell2_qjs::QjsPromptMode;
 use shell2_surf::SurfPromptPrefix;
+pub(crate) use terminal::Ui3ShellScreenSnapshot;
 
 const MAX_LINE: usize = 192;
 const BANNER_ROW: usize = 1;
@@ -692,11 +690,6 @@ fn register_output(io: &'static dyn ShellIo2) {
         REGISTERED_OUTPUTS.fetch_or(OUTPUT_NET_TCP_MASK, Ordering::Relaxed);
         return;
     }
-    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
-    if same_backend_io(io, ui3_io) {
-        REGISTERED_OUTPUTS.fetch_or(OUTPUT_UI3_MASK, Ordering::Relaxed);
-        return;
-    }
 
     let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
     if same_backend_io(io, container_io) {
@@ -725,21 +718,14 @@ pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> 
 }
 
 fn line_width_for_output(output_mask: u8) -> usize {
-    let min_width = minimum_line_width_for_output(output_mask);
-    if (output_mask & OUTPUT_UI3_MASK) != 0 {
-        ui3_shell_line_width().max(min_width)
-    } else {
-        matrix::active_line_width(output_mask).max(1)
-    }
+    matrix::active_line_width(output_mask)
+        .max(minimum_line_width_for_output(output_mask))
+        .max(1)
 }
 
 fn transcript_view_rows_for_output(output_mask: u8) -> usize {
     let top_row = slot_content_top_row(output_mask);
-    if (output_mask & OUTPUT_UI3_MASK) != 0 {
-        ui3_shell_rows()
-            .saturating_sub(top_row.saturating_sub(1))
-            .max(1)
-    } else if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         NET_TCP_TERMINAL_ROWS
             .load(Ordering::Relaxed)
             .saturating_sub(top_row.saturating_sub(1))
@@ -786,22 +772,8 @@ fn render_active_slot_content(
 ) -> bool {
     if let Some(snapshot) = active_terminal_snapshot_for_output(output_mask) {
         let top_row = slot_content_top_row(output_mask);
-        if (output_mask & OUTPUT_UI3_MASK) != 0 && snapshot.terminal_handoff {
-            let width = (snapshot.cols as usize).max(minimum_line_width_for_output(output_mask));
-            let rows = top_row
-                .saturating_sub(1)
-                .saturating_add(snapshot.rows as usize)
-                .max(1);
-            ui3_shell_set_size(width, rows);
-            out.set_line_width(width);
-            out.set_transcript_view_rows(rows.saturating_sub(top_row.saturating_sub(1)).max(1));
-        }
         let allow_snapshot_cursor = active_terminal_direct_input_mode(output_mask);
-        if (output_mask & OUTPUT_UI3_MASK) != 0 {
-            ui3_shell_blit_snapshot(top_row, &snapshot, allow_snapshot_cursor);
-        } else {
-            out.render_terminal_snapshot(top_row, &snapshot, allow_snapshot_cursor);
-        }
+        out.render_terminal_snapshot(top_row, &snapshot, allow_snapshot_cursor);
         true
     } else {
         out.render_transcript_at(slot_content_top_row(output_mask), transcript);
@@ -840,15 +812,11 @@ fn current_chrome_state(
 
 fn set_line_width_for_output(output_mask: u8, width: usize) {
     let width = width.max(minimum_line_width_for_output(output_mask));
-    if (output_mask & OUTPUT_UI3_MASK) != 0 {
-        ui3_shell_set_line_width(width.max(1));
-    } else {
-        matrix::set_active_line_width(output_mask, width.max(1));
-    }
+    matrix::set_active_line_width(output_mask, width.max(1));
 }
 
 fn apply_reported_terminal_size(output_mask: u8, cols: usize, rows: usize) -> bool {
-    if (output_mask & OUTPUT_UI3_MASK) != 0 || cols == 0 {
+    if cols == 0 {
         return false;
     }
     let mut changed = false;
@@ -938,11 +906,6 @@ pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> u8 {
     let net_io: &'static dyn ShellIo2 = &NET_TCP_SHELL_BACKEND;
     if same_backend_task(io, net_io) {
         return OUTPUT_NET_TCP_MASK;
-    }
-
-    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
-    if same_backend_task(io, ui3_io) {
-        return OUTPUT_UI3_MASK;
     }
 
     let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
@@ -1125,11 +1088,6 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
         return OUTPUT_NET_TCP_MASK;
     }
 
-    let ui3_io: &'static dyn ShellIo2 = &UI3_SHELL_BACKEND;
-    if same_backend_io(io, ui3_io) {
-        return OUTPUT_UI3_MASK;
-    }
-
     let container_io: &'static dyn ShellIo2 = &CONTAINER_SHELL_BACKEND;
     if same_backend_io(io, container_io) {
         return OUTPUT_CONTAINER_MASK;
@@ -1182,10 +1140,10 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
 
     let io: &'static dyn ShellIo2 = if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         &NET_TCP_SHELL_BACKEND
-    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
-        &UI3_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         &CONTAINER_SHELL_BACKEND
+    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+        return 0;
     } else {
         &UART1_COM1_BACKEND
     };
@@ -1203,15 +1161,7 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
 
 pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize, usize) {
     let width = line_width_for_output(target.output_mask).max(1);
-    let rows = if (target.output_mask & OUTPUT_UI3_MASK) != 0
-        && active_matrix_slot_is_vmx(target.output_mask)
-    {
-        ui3_shell_rows()
-            .saturating_sub(VM_HOTKEY_TERMINAL_TOP_ROW.saturating_sub(1))
-            .max(1)
-    } else {
-        slot_content_rows_for_output(target.output_mask).max(1)
-    };
+    let rows = slot_content_rows_for_output(target.output_mask).max(1);
     (width, rows)
 }
 
@@ -1237,10 +1187,10 @@ pub(crate) fn konsole_begin_frame_for_target(
 pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
     if (target.output_mask & OUTPUT_NET_TCP_MASK) != 0 {
         NET_TCP_SHELL_BACKEND.read_byte()
-    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
-        UI3_SHELL_BACKEND.read_byte()
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         CONTAINER_SHELL_BACKEND.read_byte()
+    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+        None
     } else {
         UART1_COM1_BACKEND.read_byte()
     }

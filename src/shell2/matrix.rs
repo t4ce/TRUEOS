@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String as HString;
 use spin::Once;
 
-use super::backends::{Ui3ShellScreenSnapshot, ui3::TerminalState};
+use super::terminal::{TerminalState, Ui3ShellScreenSnapshot};
 use super::{LineSource, TranscriptEntry};
 
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
