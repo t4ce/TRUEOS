@@ -82,8 +82,7 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565"
 pub(crate) const SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE: &str =
     include_str!("kernels/skybox_sample_rgb565.cl");
 pub(crate) const CHART_SINE_RGBA8_KERNEL_NAME: &str = "chart_sine_rgba8";
-pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/chart_sine_rgba8.cl");
+pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/chart_sine_rgba8.cl");
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -340,9 +339,8 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] = [
     0x8A, 0xB4, 0xBC, 0xDC, 0xCF, 0xC8, 0xBB, 0xD5, 0xF1, 0x05, 0x2F, 0x1B, 0xF7, 0x75, 0x76, 0x38,
 ];
 pub(crate) const CHART_SINE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x79, 0xeb, 0x20, 0xbc, 0x33, 0x7e, 0x17, 0x2a, 0x8c, 0xcd, 0xdc, 0xdc, 0x66, 0x54, 0xee,
-    0xa9, 0x92, 0xe8, 0x9f, 0xb5, 0xfb, 0x67, 0xb2, 0xf3, 0x2c, 0xaa, 0xd1, 0xc1, 0xaf, 0xa1,
-    0xc0, 0xe4,
+    0x79, 0xeb, 0x20, 0xbc, 0x33, 0x7e, 0x17, 0x2a, 0x8c, 0xcd, 0xdc, 0xdc, 0x66, 0x54, 0xee, 0xa9,
+    0x92, 0xe8, 0x9f, 0xb5, 0xfb, 0x67, 0xb2, 0xf3, 0x2c, 0xaa, 0xd1, 0xc1, 0xaf, 0xa1, 0xc0, 0xe4,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -2842,11 +2840,7 @@ pub(crate) fn upload_chart_sine_rgba8_kernel() -> Option<UploadedKernelArtifact>
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        CHART_SINE_RGBA8_ADLS_ARTIFACT,
-        CHART_SINE_RGBA8_ADLS_GPU,
-    )?;
+    let upload = upload_artifact(dev, CHART_SINE_RGBA8_ADLS_ARTIFACT, CHART_SINE_RGBA8_ADLS_GPU)?;
     *CHART_SINE_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -8790,10 +8784,10 @@ fn submit_chart_sine_rgba8(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
-    let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_chart_sine_rgba8_batch(state, upload, params, dst.bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok =
+        dst_ppgtt_ok && direct_rcs_encode_chart_sine_rgba8_batch(state, upload, params, dst.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
@@ -12573,6 +12567,142 @@ fn direct_rcs_encode_skybox_sample_rgb565_batch(
     true
 }
 
+fn direct_rcs_encode_chart_sine_rgba8_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: ChartSineRgba8Params,
+    dst_bytes: usize,
+) -> bool {
+    if params.rect_width == 0 || params.rect_height == 0 {
+        return false;
+    }
+    if CHART_SINE_PAYLOAD_OFFSET_BYTES + CHART_SINE_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_interface_descriptor_at(
+        state,
+        CHART_SINE_IDD_OFFSET_BYTES,
+        CHART_SINE_BINDING_TABLE_OFFSET_BYTES,
+        CHART_SINE_RGBA8_TEXT_OFFSET_BYTES,
+        1,
+        4,
+    ) {
+        return false;
+    }
+    let binding_end = CHART_SINE_BINDING_TABLE_OFFSET_BYTES + core::mem::size_of::<u32>();
+    if binding_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    unsafe {
+        let binding = state.batch_virt.add(CHART_SINE_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(binding, CHART_SINE_DST_SURFACE_STATE_OFFSET_BYTES as u32);
+    }
+    if !direct_rcs_write_buffer_surface_state(
+        state,
+        CHART_SINE_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.dst_gpu,
+        dst_bytes,
+    ) || !direct_rcs_write_chart_sine_rgba8_payload_at(
+        state,
+        CHART_SINE_PAYLOAD_OFFSET_BYTES,
+        params,
+    ) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+    let group_x = params.rect_width.div_ceil(16).max(1);
+    let group_y = params.rect_height.max(1);
+    let last_group_pixels = ((params.rect_width - 1) % 16) + 1;
+    let right_mask = if last_group_pixels >= 16 {
+        GPGPU_WALKER_SIMD16_MASK
+    } else {
+        (1u32 << last_group_pixels) - 1
+    };
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, CHART_SINE_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, CHART_SINE_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CHART_SINE_PRE_MARKER_SLOT,
+        CHART_SINE_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        &mut cursor,
+        CHART_SINE_PAYLOAD_OFFSET_BYTES,
+        CHART_SINE_INDIRECT_BYTES,
+        group_x,
+        group_y,
+        right_mask,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        CHART_SINE_POST_MARKER_SLOT,
+        CHART_SINE_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_write_copy_rect_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_copy_rect_interface_descriptor_at(
         state,
@@ -12905,6 +13035,79 @@ fn direct_rcs_write_skybox_sample_rgb565_payload_at(
         core::ptr::write_volatile(dwords.add(36), params.tan_half_fov_y.to_bits());
 
         let local_ids = payload.add(SKYBOX_SAMPLE_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_chart_sine_rgba8_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: ChartSineRgba8Params,
+) -> bool {
+    if payload_offset + CHART_SINE_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let Some(known) = super::opencl::registry::known_aot_kernel(CHART_SINE_RGBA8_KERNEL_NAME)
+    else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: chart-sine-rgba8 payload rejected reason=missing-opencl-contract\n"
+        );
+        return false;
+    };
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, CHART_SINE_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
+
+        let cross_thread = core::slice::from_raw_parts_mut(payload, CHART_SINE_CROSS_THREAD_BYTES);
+        let values = (|| {
+            let mut writer = super::opencl::KernelValueWriter::new(known.contract, cross_thread)?;
+            writer.set_u32(1, params.dst_pitch_bytes)?;
+            writer.set_u32(2, params.dst_width)?;
+            writer.set_u32(3, params.dst_height)?;
+            writer.set_u32(4, params.rect_x)?;
+            writer.set_u32(5, params.rect_y)?;
+            writer.set_u32(6, params.rect_width)?;
+            writer.set_u32(7, params.rect_height)?;
+            writer.set_f32(8, params.phase)?;
+            writer.set_f32(9, params.cycles)?;
+            writer.set_f32(10, params.amplitude)?;
+            writer.set_f32(11, params.line_width_px)?;
+            writer.set_u32(12, params.background_rgba)?;
+            writer.set_u32(13, params.minor_grid_rgba)?;
+            writer.set_u32(14, params.major_grid_rgba)?;
+            writer.set_u32(15, params.axis_rgba)?;
+            writer.set_u32(16, params.line_rgba)?;
+            writer.set_u32(17, params.glow_rgba)?;
+            writer.set_u32(18, params.flags)?;
+            writer.finish()?;
+            Ok::<(), super::opencl::KernelValueError>(())
+        })();
+        if let Err(err) = values {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: chart-sine-rgba8 payload rejected reason=value-contract error={:?}\n",
+                err
+            );
+            return false;
+        }
+
+        let local_ids = payload.add(CHART_SINE_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);

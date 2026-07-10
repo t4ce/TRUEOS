@@ -50,6 +50,7 @@ pub(crate) enum KnownKernelRole {
     Mandel,
     Canvas3d,
     FluidX3d,
+    Chart,
 }
 
 const ADLS: &str = "adls";
@@ -71,6 +72,8 @@ const CANVAS3D_CLIP_BOX_CROSS_THREAD_BYTES: u32 = 128;
 const CANVAS3D_PLANE_SAMPLE_CROSS_THREAD_BYTES: u32 = 224;
 const CANVAS3D_PLANE_FILL_CROSS_THREAD_BYTES: u32 = 256;
 const CANVAS3D_PLANE_PATCH_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
+const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
+const CHART_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
 const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
@@ -200,6 +203,12 @@ macro_rules! rw_buf {
 macro_rules! u32_arg {
     ($index:expr, $name:expr, $payload:expr) => {
         KernelCallArg::value($index, $name, "uint", 4, 4, $payload)
+    };
+}
+
+macro_rules! f32_arg {
+    ($index:expr, $name:expr, $payload:expr) => {
+        KernelCallArg::value($index, $name, "float", 4, 4, $payload)
     };
 }
 
@@ -644,6 +653,82 @@ const CANVAS3D_PLANE_PATCH_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelC
     consumers: UI3_CANVAS_CONSUMERS,
 };
 
+const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "skybox_rgb565", "__global const ushort*", 0, 12),
+    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
+    u32_arg!(2, "sky_pitch_bytes", 16),
+    u32_arg!(3, "sky_width", 17),
+    u32_arg!(4, "sky_height", 18),
+    u32_arg!(5, "dst_pitch_bytes", 19),
+    u32_arg!(6, "dst_width", 20),
+    u32_arg!(7, "dst_height", 21),
+    u32_arg!(8, "rect_x", 22),
+    u32_arg!(9, "rect_y", 23),
+    u32_arg!(10, "rect_width", 24),
+    u32_arg!(11, "rect_height", 25),
+    f32_arg!(12, "right_x", 26),
+    f32_arg!(13, "right_y", 27),
+    f32_arg!(14, "right_z", 28),
+    f32_arg!(15, "up_x", 29),
+    f32_arg!(16, "up_y", 30),
+    f32_arg!(17, "up_z", 31),
+    f32_arg!(18, "forward_x", 32),
+    f32_arg!(19, "forward_y", 33),
+    f32_arg!(20, "forward_z", 34),
+    f32_arg!(21, "aspect_tan_half_fov_y", 35),
+    f32_arg!(22, "tan_half_fov_y", 36),
+];
+const SKYBOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
+    source_path: "src/intel/kernels/skybox_sample_rgb565.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: SKYBOX_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 2,
+    args: SKYBOX_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["ui3::ui3_frame skybox", "blueprint:skybox"],
+};
+
+const CHART_ARGS: &[KernelCallArg<'_>] = &[
+    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
+    u32_arg!(1, "dst_pitch_bytes", 14),
+    u32_arg!(2, "dst_width", 15),
+    u32_arg!(3, "dst_height", 16),
+    u32_arg!(4, "rect_x", 17),
+    u32_arg!(5, "rect_y", 18),
+    u32_arg!(6, "rect_width", 19),
+    u32_arg!(7, "rect_height", 20),
+    f32_arg!(8, "phase", 21),
+    f32_arg!(9, "cycles", 22),
+    f32_arg!(10, "amplitude", 23),
+    f32_arg!(11, "line_width_px", 24),
+    u32_arg!(12, "background_rgba", 25),
+    u32_arg!(13, "minor_grid_rgba", 26),
+    u32_arg!(14, "major_grid_rgba", 27),
+    u32_arg!(15, "axis_rgba", 28),
+    u32_arg!(16, "line_rgba", 29),
+    u32_arg!(17, "glow_rgba", 30),
+    u32_arg!(18, "flags", 31),
+];
+const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::CHART_SINE_RGBA8_KERNEL_NAME,
+    source_path: "src/intel/kernels/chart_sine_rgba8.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: CHART_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 1,
+    args: CHART_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["shell2:gpgpu chart artifact|static|wave"],
+};
+
 pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
     KnownAotKernel {
         name: gpgpu::COPY_RECT_RGBA8_KERNEL_NAME,
@@ -780,6 +865,22 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel,
         status: gpgpu::canvas3d_plane_patch_worklist_rgba8_upload_status,
         role: KnownKernelRole::Canvas3d,
+    },
+    KnownAotKernel {
+        name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
+        artifact: &gpgpu::SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
+        contract: &SKYBOX_CONTRACT,
+        upload: gpgpu::upload_skybox_sample_rgb565_kernel,
+        status: gpgpu::skybox_sample_rgb565_upload_status,
+        role: KnownKernelRole::FluidX3d,
+    },
+    KnownAotKernel {
+        name: gpgpu::CHART_SINE_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::CHART_SINE_RGBA8_ADLS_ARTIFACT,
+        contract: &CHART_CONTRACT,
+        upload: gpgpu::upload_chart_sine_rgba8_kernel,
+        status: gpgpu::chart_sine_rgba8_upload_status,
+        role: KnownKernelRole::Chart,
     },
 ];
 

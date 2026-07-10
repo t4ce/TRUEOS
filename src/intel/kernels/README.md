@@ -30,6 +30,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
 - `sprite_quad_worklist_rgba8.cl`: arbitrary UI3 SpriteQuad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
+- `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; used by the three-stage `gpgpu chart` hardware probe
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
 - `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
@@ -123,6 +124,14 @@ scale. Its SHA-256 is:
 
 ```text
 79c7d4170540650417489a882e52c52b1a47f85182790dfc1c3a22ad64a6248d
+```
+
+`artifacts/adls/chart_sine_rgba8.bin` is the allowlisted analytical chart build.
+Runtime filesystem overrides for this kernel are accepted only when their SHA-256
+matches this embedded value:
+
+```text
+79eb20bc337e172a8ccddcdc6654eea992e89fb5fb67b2f32caad1c1afa1c0e4
 ```
 
 Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:

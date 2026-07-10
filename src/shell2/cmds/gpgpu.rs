@@ -7,10 +7,12 @@ use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
-    GpgpuPoint, MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
-    reload_all_known_kernel_artifacts, reload_known_kernel_artifact,
-    shell_mandel64_worklist_scanout, shell_twemoji_atlas_worklist_present_scanout,
-    shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
+    CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
+    CHART_SINE_RGBA8_ADLS_ARTIFACT, GpgpuPoint, MANDEL64_WORKLIST_DEFAULT_ITERATIONS,
+    MANDEL64_WORKLIST_MAX_ITERATIONS, reload_all_known_kernel_artifacts,
+    reload_known_kernel_artifact, shell_chart_sine_scanout, shell_mandel64_worklist_scanout,
+    shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
+    shell_twemoji_atlas_worklist_scanout_present, upload_chart_sine_rgba8_kernel,
 };
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
@@ -21,6 +23,13 @@ const CANVAS2D_SPRITE_DEFAULT_PRESENT_EVERY: u32 = 1;
 const CANVAS2D_SPRITE_MAX_COUNT: u32 = 256;
 const CANVAS2D_SPRITE_MAX_PRESENT_EVERY: u32 = 1024;
 const CANVAS2D_SPRITES64_COUNT: u32 = 16;
+const CHART_WAVE_DEFAULT_DURATION_MS: u64 = 10_000;
+const CHART_WAVE_DEFAULT_HZ: u32 = 60;
+const CHART_WAVE_DEFAULT_PRESENT_EVERY: u32 = 1;
+const CHART_WAVE_MAX_DURATION_MS: u64 = 120_000;
+const CHART_WAVE_MAX_HZ: u32 = 240;
+const CHART_ALL_FLAGS: u32 =
+    CHART_SINE_FLAG_GRID | CHART_SINE_FLAG_AXES | CHART_SINE_FLAG_GLOW | CHART_SINE_FLAG_BORDER;
 
 static CANVAS2D_SPRITE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -35,6 +44,9 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu canvas3d ico");
     print_shell_line(io, "gpgpu canvas3d para");
     print_shell_line(io, "gpgpu artificial-pixel");
+    print_shell_line(io, "gpgpu chart artifact");
+    print_shell_line(io, "gpgpu chart static [phase]");
+    print_shell_line(io, "gpgpu chart wave [duration_ms] [hz] [present_every]");
     print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
     print_shell_line(io, "gpgpu smoke");
 }
@@ -92,6 +104,25 @@ fn elapsed_ms_since(start_tick: u64) -> u64 {
         return 0;
     }
     now_ticks().saturating_sub(start_tick).saturating_mul(1000) / hz
+}
+
+fn elapsed_us_since(start_tick: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        return 0;
+    }
+    now_ticks()
+        .saturating_sub(start_tick)
+        .saturating_mul(1_000_000)
+        / hz
+}
+
+fn ticks_for_hz(hz: u32) -> u64 {
+    let clock_hz = embassy_time_driver::TICK_HZ;
+    if clock_hz == 0 {
+        return 1;
+    }
+    clock_hz.div_ceil(u64::from(hz.max(1))).max(1)
 }
 
 fn wait_until_tick(deadline: u64) {
@@ -352,6 +383,285 @@ fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitesp
     result.ok
 }
 
+fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(probe) = args.next() else {
+        usage(io);
+        return;
+    };
+    if probe.eq_ignore_ascii_case("artifact") {
+        if expect_no_more(io, args) {
+            run_chart_artifact(io);
+        }
+    } else if probe.eq_ignore_ascii_case("static") {
+        run_chart_static(io, args);
+    } else if probe.eq_ignore_ascii_case("wave") {
+        run_chart_wave(io, args);
+    } else {
+        usage(io);
+    }
+}
+
+fn run_chart_artifact(io: &'static dyn ShellBackend2) {
+    let artifact = CHART_SINE_RGBA8_ADLS_ARTIFACT;
+    let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
+    let Some(known) = crate::intel::opencl::registry::known_aot_kernel(artifact.name) else {
+        print_shell_line(
+            io,
+            "gpgpu chart artifact: ok=0 stage=registry reason=missing-known-aot-contract",
+        );
+        crate::log_error!(
+            target: "gpgpu";
+            "gpgpu chart artifact failed stage=registry kernel={}\n",
+            artifact.name
+        );
+        return;
+    };
+    let Some(upload) = upload_chart_sine_rgba8_kernel() else {
+        print_shell_line(io, "gpgpu chart artifact: ok=0 stage=upload reason=unavailable");
+        return;
+    };
+    let hash_ok = upload.bin_sha256 == artifact.bin_sha256;
+    let contract_ok = known.contract.name == artifact.name
+        && known.contract.target == artifact.target
+        && known.contract.cross_thread_bytes == 128
+        && known.contract.per_thread_bytes == 96
+        && known.contract.binding_count == 1;
+    let ok =
+        registry_report.passed() && upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
+    let message = alloc::format!(
+        "gpgpu chart artifact: ok={} stage=artifact kernel={} role={:?} target={} producer={:?} source={} source_path={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} mapped=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_ok={} registry_kernels={} registry_issues={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
+        ok as u8,
+        artifact.name,
+        known.role,
+        artifact.target,
+        known.contract.producer,
+        upload.source,
+        known.contract.source_path,
+        artifact.bin.len(),
+        artifact.spv.len(),
+        upload.gpu,
+        upload.mapped_bytes,
+        upload.verified as u8,
+        hash_ok as u8,
+        contract_ok as u8,
+        registry_report.passed() as u8,
+        registry_report.registry_kernels,
+        registry_report.issues,
+        known.contract.args.len(),
+        known.contract.binding_count,
+        known.contract.cross_thread_bytes,
+        known.contract.per_thread_bytes,
+        digest_hex(&upload.bin_sha256),
+    );
+    print_shell_line(io, message.as_str());
+    if ok {
+        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
+    } else {
+        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
+    }
+}
+
+fn run_chart_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let phase = match args.next() {
+        Some(raw) => match raw.parse::<f32>() {
+            Ok(value) if value.is_finite() => value,
+            _ => {
+                usage(io);
+                return;
+            }
+        },
+        None => 0.0,
+    };
+    if !expect_no_more(io, args) {
+        return;
+    }
+    let flags = CHART_SINE_FLAG_GRID | CHART_SINE_FLAG_AXES | CHART_SINE_FLAG_BORDER;
+    let Some(result) = shell_chart_sine_scanout(phase, flags, true) else {
+        print_shell_line(io, "gpgpu chart static: ok=0 stage=dispatch reason=no-result");
+        return;
+    };
+    let message = alloc::format!(
+        "gpgpu chart static: ok={} stage=single-dispatch submitted={} presented={} size={}x{} pixels={} phase={:.4} flags=0x{:X} submit_us={} present_us={} total_us={} marker=0x{:08X}",
+        result.ok as u8,
+        result.submitted as u8,
+        result.presented as u8,
+        result.width,
+        result.height,
+        result.pixels,
+        result.phase,
+        flags,
+        result.submit_us,
+        result.present_us,
+        result.total_us,
+        result.marker,
+    );
+    print_shell_line(io, message.as_str());
+    if result.ok {
+        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
+    } else {
+        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
+    }
+}
+
+fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let duration_ms = match args.next() {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(value) => value.clamp(100, CHART_WAVE_MAX_DURATION_MS),
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => CHART_WAVE_DEFAULT_DURATION_MS,
+    };
+    let hz = match args.next() {
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(value) => value.clamp(1, CHART_WAVE_MAX_HZ),
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => CHART_WAVE_DEFAULT_HZ,
+    };
+    let present_every = match args.next() {
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(value) => value.clamp(1, 1024),
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => CHART_WAVE_DEFAULT_PRESENT_EVERY,
+    };
+    if !expect_no_more(io, args) {
+        return;
+    }
+
+    let start_tick = now_ticks();
+    let deadline_tick = start_tick.saturating_add(ticks_from_ms(duration_ms));
+    let cadence_ticks = ticks_for_hz(hz);
+    let mut next_tick = start_tick;
+    let mut frames = 0u64;
+    let mut submitted = 0u64;
+    let mut presented = 0u64;
+    let mut failures = 0u64;
+    let mut missed_deadlines = 0u64;
+    let mut sum_submit_us = 0u64;
+    let mut sum_present_us = 0u64;
+    let mut max_submit_us = 0u64;
+    let mut max_present_us = 0u64;
+    let mut max_total_us = 0u64;
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let mut pending_present = false;
+    let mut last_phase = 0.0f32;
+    crate::log_info!(
+        target: "gpgpu";
+        "gpgpu chart wave begin duration_ms={} target_hz={} present_every={} flags=0x{:X}\n",
+        duration_ms,
+        hz,
+        present_every,
+        CHART_ALL_FLAGS
+    );
+
+    while now_ticks() < deadline_tick {
+        wait_until_tick(next_tick);
+        let now = now_ticks();
+        if now >= deadline_tick {
+            break;
+        }
+        let mut missed_this_frame = 0u64;
+        if now > next_tick.saturating_add(cadence_ticks) {
+            missed_this_frame = now.saturating_sub(next_tick) / cadence_ticks;
+            missed_deadlines = missed_deadlines.saturating_add(missed_this_frame);
+        }
+        let elapsed_us = elapsed_us_since(start_tick);
+        last_phase = elapsed_us as f32 * (6.2831855f32 * 0.35f32 / 1_000_000.0f32);
+        let should_present = frames % u64::from(present_every) == 0;
+        let Some(result) = shell_chart_sine_scanout(last_phase, CHART_ALL_FLAGS, should_present)
+        else {
+            failures = failures.saturating_add(1);
+            break;
+        };
+        frames = frames.saturating_add(1);
+        submitted = submitted.saturating_add(result.submitted as u64);
+        presented = presented.saturating_add(result.presented as u64);
+        failures = failures.saturating_add((!result.ok) as u64);
+        pending_present = result.submitted && !result.presented;
+        width = result.width;
+        height = result.height;
+        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
+        sum_present_us = sum_present_us.saturating_add(result.present_us);
+        max_submit_us = max_submit_us.max(result.submit_us);
+        max_present_us = max_present_us.max(result.present_us);
+        max_total_us = max_total_us.max(result.total_us);
+        if !result.ok {
+            break;
+        }
+        next_tick = next_tick
+            .saturating_add(cadence_ticks.saturating_mul(missed_this_frame.saturating_add(1)));
+    }
+
+    let mut final_present = false;
+    if pending_present
+        && let Some(result) = shell_chart_sine_scanout(last_phase, CHART_ALL_FLAGS, true)
+    {
+        final_present = result.presented;
+        presented = presented.saturating_add(result.presented as u64);
+        failures = failures.saturating_add((!result.ok) as u64);
+        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
+        sum_present_us = sum_present_us.saturating_add(result.present_us);
+        max_submit_us = max_submit_us.max(result.submit_us);
+        max_present_us = max_present_us.max(result.present_us);
+        max_total_us = max_total_us.max(result.total_us);
+    }
+
+    let elapsed_us = elapsed_us_since(start_tick).max(1);
+    let fps_milli = frames.saturating_mul(1_000_000_000) / elapsed_us;
+    let avg_submit_us = if frames == 0 {
+        0
+    } else {
+        sum_submit_us / frames
+    };
+    let avg_present_us = if frames == 0 {
+        0
+    } else {
+        sum_present_us / frames
+    };
+    let ok = frames != 0 && failures == 0 && submitted == frames;
+    let message = alloc::format!(
+        "gpgpu chart wave: ok={} stage=cadence frames={} submitted={} presented={} failures={} duration_ms={} elapsed_us={} target_hz={} fps={}.{:03} missed_deadlines={} present_every={} final_present={} size={}x{} avg_submit_us={} max_submit_us={} avg_present_us={} max_present_us={} max_total_us={} phase={:.4}",
+        ok as u8,
+        frames,
+        submitted,
+        presented,
+        failures,
+        duration_ms,
+        elapsed_us,
+        hz,
+        fps_milli / 1000,
+        fps_milli % 1000,
+        missed_deadlines,
+        present_every,
+        final_present as u8,
+        width,
+        height,
+        avg_submit_us,
+        max_submit_us,
+        avg_present_us,
+        max_present_us,
+        max_total_us,
+        last_phase,
+    );
+    print_shell_line(io, message.as_str());
+    if ok {
+        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
+    } else {
+        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
+    }
+}
+
 fn run_canvas3d(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -502,6 +812,8 @@ pub(crate) fn try_parse(
         return run_canvas3d(spawner, io, args);
     } else if cmd.eq_ignore_ascii_case("artificial-pixel") {
         run_artificial_pixel(io, args);
+    } else if cmd.eq_ignore_ascii_case("chart") {
+        run_chart(io, args);
     } else if cmd.eq_ignore_ascii_case("artifacts") {
         run_artifacts(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {

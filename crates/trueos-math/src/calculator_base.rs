@@ -1638,12 +1638,10 @@ calculator_function_specs!(
 );
 
 impl CalculatorOperation {
-    pub const fn from_raw(raw: u32) -> Option<Self> {
-        if raw > CalculatorOperation::GeometricSequenceSum as u32 {
-            return None;
-        }
-        // SAFETY: the enum is contiguous from zero through the checked last value.
-        Some(unsafe { core::mem::transmute::<u16, Self>(raw as u16) })
+    pub fn from_raw(raw: u32) -> Option<Self> {
+        CALCULATOR_FUNCTIONS
+            .get(raw as usize)
+            .map(|spec| spec.operation)
     }
 
     #[inline]
