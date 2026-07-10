@@ -78,6 +78,24 @@ fn published_app_name_parts(value: &str) -> Option<(&str, &str)> {
         .then_some((value, "-"))
 }
 
+fn published_link_parts<'a>(link_text: &'a str, href: &'a str) -> Option<(&'a str, &'a str)> {
+    let text_parts = published_app_name_parts(link_text);
+    let href_name = href
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(href)
+        .rsplit('/')
+        .next()
+        .unwrap_or(href);
+    let href_parts = published_app_name_parts(href_name);
+    match (text_parts, href_parts) {
+        (Some(parts), _) if parts.1 != "-" => Some(parts),
+        (_, Some(parts)) if parts.1 != "-" => Some(parts),
+        (Some(parts), _) => Some(parts),
+        (None, parts) => parts,
+    }
+}
+
 fn clean_archive_name(value: &str) -> Option<&str> {
     let name = value.rsplit('/').next()?.rsplit('\\').next()?;
     if name.is_empty()
@@ -122,7 +140,8 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             continue;
         };
         let published_name = link[tag_end + 1..tag_end + 1 + text_end].trim();
-        let Some((published_archive_name, sha256)) = published_app_name_parts(published_name) else {
+        let Some((published_archive_name, sha256)) = published_link_parts(published_name, href)
+        else {
             rest = &rest[li_end..];
             continue;
         };
@@ -152,7 +171,10 @@ async fn online_apps() -> Result<Vec<OnlineApp>, String> {
 
 fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineApp], prefix: &str) {
     if apps.is_empty() {
-        print_matrix_target_line(target, alloc::format!("{}: online list is empty", prefix).as_str());
+        print_matrix_target_line(
+            target,
+            alloc::format!("{}: online list is empty", prefix).as_str(),
+        );
         return;
     }
     let id_width = apps
@@ -245,8 +267,7 @@ fn online_app_sha256_matches(app: &OnlineApp, bytes: &[u8]) -> bool {
 
 async fn wait_for_online_ready() -> bool {
     crate::r::readiness::wait_for_timeout(
-        crate::r::readiness::NET_V4_CONFIGURED
-            | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
         EmbassyDuration::from_millis(ONLINE_FETCH_TIMEOUT_MS as u64),
     )
     .await
@@ -257,7 +278,21 @@ fn write_blueprint(app: &OnlineApp, bytes: &[u8]) -> Result<String, String> {
     crate::r::io::kfs::create_dir_all(dir.as_str())
         .map_err(|err| alloc::format!("create {} failed: {:?}", dir, err))?;
     let path = alloc::format!("{}/{}", dir.trim_end_matches('/'), app.archive_name);
-    let handle = crate::r::io::kfs::write_file_begin(path.as_str(), bytes.len() as u64)
+    write_file(path.as_str(), bytes)?;
+
+    let hash_path = alloc::format!("{}.sha256", path);
+    if app.sha256 == "-" {
+        let _ = crate::r::io::kfs::remove(hash_path.as_str());
+    } else if let Err(err) = write_file(hash_path.as_str(), app.sha256.as_bytes()) {
+        let _ = crate::r::io::kfs::remove(path.as_str());
+        return Err(alloc::format!("hash metadata failed: {}", err));
+    }
+
+    Ok(alloc::format!("/{}", path))
+}
+
+fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    let handle = crate::r::io::kfs::write_file_begin(path, bytes.len() as u64)
         .map_err(|err| alloc::format!("write begin failed: {:?}", err))?;
     if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, bytes) {
         let _ = crate::r::io::kfs::write_file_abort(handle);
@@ -265,7 +300,7 @@ fn write_blueprint(app: &OnlineApp, bytes: &[u8]) -> Result<String, String> {
     }
     crate::r::io::kfs::write_file_finish(handle)
         .map_err(|err| alloc::format!("write finish failed: {:?}", err))?;
-    Ok(alloc::format!("/{}", path))
+    Ok(())
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -366,9 +401,9 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
                 log("dl: SHA-256 mismatch");
             } else {
                 match write_blueprint(app, bytes.as_slice()) {
-                    Ok(path) => log(
-                        alloc::format!("dl: saved {} bytes -> {}", bytes.len(), path).as_str(),
-                    ),
+                    Ok(path) => {
+                        log(alloc::format!("dl: saved {} bytes -> {}", bytes.len(), path).as_str())
+                    }
                     Err(err) => log(alloc::format!("dl: save failed: {}", err).as_str()),
                 }
             }
@@ -378,11 +413,7 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
     set_matrix_target_active(&target, false);
 }
 
-pub(crate) fn submit_online(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    submitted: &str,
-) {
+pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);
@@ -396,11 +427,7 @@ pub(crate) fn submit_online(
     }
 }
 
-pub(crate) fn submit_download(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    submitted: &str,
-) {
+pub(crate) fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
     set_matrix_target_active(&target, true);

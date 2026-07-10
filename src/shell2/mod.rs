@@ -105,7 +105,6 @@ enum ShellMode2 {
     Apps,
     Qjs,
     Cmd,
-    Dl,
 }
 
 impl ShellMode2 {
@@ -115,7 +114,6 @@ impl ShellMode2 {
             Self::Apps => "F2",
             Self::Qjs => "F3",
             Self::Cmd => "F4",
-            Self::Dl => "F5",
         }
     }
 
@@ -125,7 +123,6 @@ impl ShellMode2 {
             Self::Apps => "apps",
             Self::Qjs => "qjs",
             Self::Cmd => "cmd",
-            Self::Dl => "dl",
         }
     }
 }
@@ -362,8 +359,6 @@ impl<'a> AlignedWriter<'a> {
             self.qjs_status(qjs_mode);
         } else if mode == ShellMode2::Cmd {
             self.cmd_status(cmd_status_text);
-        } else if mode == ShellMode2::Dl {
-            self.dl_status();
         }
         self.io.raw_write_str(ecma48::RESET);
     }
@@ -377,8 +372,6 @@ impl<'a> AlignedWriter<'a> {
         self.push_mode_choice(&mut text, ShellMode2::Qjs, mode == ShellMode2::Qjs);
         self.push_plain(&mut text, " - ");
         self.push_mode_choice(&mut text, ShellMode2::Cmd, mode == ShellMode2::Cmd);
-        self.push_plain(&mut text, " - ");
-        self.push_mode_choice(&mut text, ShellMode2::Dl, mode == ShellMode2::Dl);
         text
     }
 
@@ -452,6 +445,7 @@ impl<'a> AlignedWriter<'a> {
         for (idx, mode) in [
             AppsPromptMode::Start,
             AppsPromptMode::Online,
+            AppsPromptMode::Dl,
             AppsPromptMode::Peer,
             AppsPromptMode::Pause,
             AppsPromptMode::Unpause,
@@ -479,10 +473,6 @@ impl<'a> AlignedWriter<'a> {
         if !status_text.is_empty() {
             self.right_text(STATUS_ROW, status_text.as_str());
         }
-    }
-
-    fn dl_status(&self) {
-        self.right_text(STATUS_ROW, "empty: list - id|name: save to /apps/<app>/<app>.bp");
     }
 
     fn vmx_status(&self) {
@@ -827,7 +817,6 @@ fn main_mode_visible_width(output_mask: u8) -> usize {
         ShellMode2::Apps,
         ShellMode2::Qjs,
         ShellMode2::Cmd,
-        ShellMode2::Dl,
     ];
     let mut width = 0usize;
     for (idx, mode) in modes.iter().copied().enumerate() {
@@ -1469,10 +1458,6 @@ fn handle_submit(
             shell2_apps::submit(spawner, io, apps_mode, submitted);
             HandleSubmitResult::None
         }
-        ShellMode2::Dl => {
-            shell2_dl::submit_download(spawner, io, submitted);
-            HandleSubmitResult::None
-        }
     }
 }
 
@@ -1538,7 +1523,6 @@ fn mode_from_function_key(index: u16) -> Option<ShellMode2> {
         2 => Some(ShellMode2::Apps),
         3 => Some(ShellMode2::Qjs),
         4 => Some(ShellMode2::Cmd),
-        5 => Some(ShellMode2::Dl),
         _ => None,
     }
 }
@@ -2088,7 +2072,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 out.prompt(output_mask);
                             }
                         }
-                        ShellMode2::Dl => {}
                     }
                 }
                 b'\r' | b'\n' => {
@@ -2276,9 +2259,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             }
                             CommandSessionInputResult::KeepRunning => {}
                         }
-                    } else if !submitted.is_empty()
-                        || matches!(mode, ShellMode2::Apps | ShellMode2::Dl)
-                    {
+                    } else if !submitted.is_empty() || mode == ShellMode2::Apps {
                         if is_matrix_operator(submitted) && mode != ShellMode2::Qjs {
                             handle_matrix_operator(io, submitted);
                             mode = ShellMode2::Cmd;
