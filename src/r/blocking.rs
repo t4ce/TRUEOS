@@ -107,10 +107,42 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
         policy_tag
     );
     if let Some(vm_id) = vm_id {
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Blueprint,
+            log::Level::Info,
+            Some("multi-rt-alloc"),
+            format_args!(
+                "guest service job begin id={} vm={} purpose={} alloc_domain=hv-guest\n",
+                id, vm_id, purpose
+            ),
+        );
         crate::r::kernel_task_domain::with(
             crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier,
             Some(vm_id),
-            || run_blocking_job_call(call),
+            || {
+                if crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+                    run_blocking_job_call(call)
+                })
+                .is_none()
+                {
+                    crate::log_error!(
+                        target: "service";
+                        "blocking-job: guest allocation domain unavailable id={} vm={} purpose={}\n",
+                        id,
+                        vm_id,
+                        purpose
+                    );
+                }
+            },
+        );
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Blueprint,
+            log::Level::Info,
+            Some("multi-rt-alloc"),
+            format_args!(
+                "guest service job done id={} vm={} purpose={}\n",
+                id, vm_id, purpose
+            ),
         );
     } else {
         crate::r::kernel_task_domain::with(

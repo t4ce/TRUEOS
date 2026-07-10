@@ -1,8 +1,12 @@
 use alloc::{string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use embassy_executor::{SpawnError, SpawnToken, Spawner};
 use embassy_time::{Duration as EmbassyDuration, Timer};
+use spin::Mutex;
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.
@@ -10,6 +14,9 @@ use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 150;
 const SPAWN_SERVICE_IDLE_MS: u64 = 250;
+const SYSTEM_SERVICE_SNAPSHOT_PERIOD_MS: u64 = 1_000;
+
+static SYSTEM_SERVICE_SNAPSHOT: Mutex<String> = Mutex::new(String::new());
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -1728,9 +1735,83 @@ pub fn task_index_by_name(name: &str) -> Option<usize> {
     TASKS.iter().position(|spec| spec.name == name)
 }
 
+fn task_kind(name: &str) -> &'static str {
+    if name.contains("pool") || name.contains("lanes") || name.ends_with("-tasks") {
+        "pool"
+    } else {
+        "service"
+    }
+}
+
+fn readiness_names(mask: u32) -> String {
+    if mask == 0 {
+        return String::from("-");
+    }
+
+    let mut names = String::new();
+    crate::r::readiness::for_each_flag(mask, |_flag, name| {
+        if !names.is_empty() {
+            names.push('|');
+        }
+        names.push_str(name);
+    });
+    if names.is_empty() {
+        let _ = write!(names, "0x{mask:08X}");
+    }
+    names
+}
+
+fn format_system_service_snapshot() -> String {
+    let ready = crate::r::readiness::mask();
+    let mut out = String::new();
+    let _ = writeln!(out, "trueos system services snapshot v1");
+    let _ = writeln!(out, "generated_at_ms={}", boot_probe_ms());
+    let _ = writeln!(out, "readiness_mask=0x{ready:08X}");
+    let _ = writeln!(out, "service_count={}", TASKS.len());
+    let _ = writeln!(
+        out,
+        "service\tname\tenabled\tgate_open\tstarted\trequired_mask\tmissing_mask\tkind\trequires"
+    );
+
+    for spec in TASKS.iter() {
+        let enabled = !spec.disabled.load(Ordering::Acquire);
+        let gate_open = (spec.gate)();
+        let started = spec.started.load(Ordering::Acquire);
+        let missing = spec.required & !ready;
+        let _ = writeln!(
+            out,
+            "service\t{}\t{}\t{}\t{}\t0x{:08X}\t0x{:08X}\t{}\t{}",
+            spec.name,
+            enabled as u8,
+            gate_open as u8,
+            started as u8,
+            spec.required,
+            missing,
+            task_kind(spec.name),
+            readiness_names(spec.required),
+        );
+    }
+    out
+}
+
+fn update_system_service_snapshot() {
+    *SYSTEM_SERVICE_SNAPSHOT.lock() = format_system_service_snapshot();
+}
+
+/// Latest one-second snapshot of the central task registry for v-layer consumers.
+pub fn latest_system_service_snapshot_text() -> String {
+    let snapshot = SYSTEM_SERVICE_SNAPSHOT.lock();
+    if snapshot.is_empty() {
+        drop(snapshot);
+        return format_system_service_snapshot();
+    }
+    snapshot.clone()
+}
+
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
+        let mut next_snapshot_ms = 0u64;
         loop {
             let ready = crate::r::readiness::mask();
             let mut pending = 0usize;
@@ -1796,6 +1877,11 @@ pub async fn spawn_service_task(spawner: Spawner) {
                         );
                     }
                 }
+            }
+            let now_ms = boot_probe_ms();
+            if now_ms >= next_snapshot_ms {
+                update_system_service_snapshot();
+                next_snapshot_ms = now_ms.saturating_add(SYSTEM_SERVICE_SNAPSHOT_PERIOD_MS);
             }
             let sleep_ms = if started_any {
                 SPAWN_SERVICE_AFTER_START_MS

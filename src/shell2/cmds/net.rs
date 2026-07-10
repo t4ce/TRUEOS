@@ -83,6 +83,66 @@ fn ipv6_text(index: usize) -> alloc::string::String {
     alloc::string::String::from("::")
 }
 
+fn print_r8125_details(io: &'static dyn ShellBackend2, specific_index: Option<usize>) {
+    for snapshot in crate::net::r8125::snapshots() {
+        let Some(index) =
+            crate::net::find_device_by_bdf(snapshot.bus, snapshot.slot, snapshot.function)
+        else {
+            continue;
+        };
+        if let Some(target) = specific_index
+            && index != target
+        {
+            continue;
+        }
+
+        line(
+            io,
+            alloc::format!(
+                "rtl8125 dev={} bdf={:02x}:{:02x}.{} family={} xid={:03x} pci-rev={:02x} subsys={:04x}:{:04x} fw-hint={} initial-tcr=0x{:08x}",
+                index,
+                snapshot.bus,
+                snapshot.slot,
+                snapshot.function,
+                snapshot.family,
+                snapshot.xid,
+                snapshot.revision,
+                snapshot.subsystem_vendor,
+                snapshot.subsystem_device,
+                snapshot.firmware_hint,
+                snapshot.initial_tcr
+            )
+            .as_str(),
+        );
+        line(
+            io,
+            alloc::format!(
+                "  filter rcr=0x{:08x} own={} broadcast={} multicast={} promiscuous={} mar=0x{:016x}",
+                snapshot.rcr,
+                snapshot.accepts_own_mac() as u8,
+                snapshot.accepts_broadcast() as u8,
+                snapshot.accepts_multicast() as u8,
+                snapshot.promiscuous() as u8,
+                snapshot.multicast_hash
+            )
+            .as_str(),
+        );
+        line(
+            io,
+            alloc::format!(
+                "  control cplus=0x{:04x} mcu=0x{:02x}->0x{:02x} oob={} cfg3=0x{:02x} cfg5=0x{:02x}",
+                snapshot.cplus,
+                snapshot.mcu_before,
+                snapshot.mcu_after,
+                ((snapshot.mcu_after & (1 << 7)) != 0) as u8,
+                snapshot.config3,
+                snapshot.config5
+            )
+            .as_str(),
+        );
+    }
+}
+
 fn cmd_net_icmp(
     io: &'static dyn ShellBackend2,
     target_str: &str,
@@ -378,6 +438,7 @@ fn cmd_net_nic(io: &'static dyn ShellBackend2, selector: Option<&str>, extra: Op
     }
 
     table.emit_footer(|text| line(io, text));
+    print_r8125_details(io, specific_index);
 }
 
 fn cmd_net_hostname(io: &'static dyn ShellBackend2, name: Option<&str>, extra: Option<&str>) {

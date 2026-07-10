@@ -1406,6 +1406,10 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_vlayer_thermal_snapshot_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_thermal_snapshot_read as *const () as usize)
         }
+        "trueos_vlayer_system_services_snapshot_read" => Some(
+            crate::r::net::vlayer::trueos_vlayer_system_services_snapshot_read as *const ()
+                as usize,
+        ),
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }

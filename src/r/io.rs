@@ -479,11 +479,13 @@ pub mod env {
     }
 }
 
+pub mod calculator_cabi;
 pub mod fs_cabi;
 pub mod input_cabi;
 pub mod ui3_cabi;
 
 pub mod cabi {
+    pub use super::calculator_cabi::*;
     pub use super::fs_cabi::*;
     pub use super::input_cabi::*;
     pub use super::ui3_cabi::*;

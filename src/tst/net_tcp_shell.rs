@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
@@ -117,7 +117,7 @@ pub async fn net_shell_task() {
         match ip {
             Some([a, b, c, d]) => {
                 crate::log!(
-                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{} mode={}\n",
+                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{} mode={} ms={}\n",
                     dev_idx,
                     name,
                     owner,
@@ -125,11 +125,18 @@ pub async fn net_shell_task() {
                     b,
                     c,
                     d,
-                    ip_mode
+                    ip_mode,
+                    Instant::now().as_millis()
                 )
             }
             None => {
-                crate::log!("net-shell: routing dev={} {} owner={} ip=none\n", dev_idx, name, owner)
+                crate::log!(
+                    "net-shell: routing dev={} {} owner={} ip=none ms={}\n",
+                    dev_idx,
+                    name,
+                    owner,
+                    Instant::now().as_millis()
+                )
             }
         }
 
@@ -140,10 +147,16 @@ pub async fn net_shell_task() {
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: NET_SHELL_TCP_PORT,
         });
-        crate::log!("net-shell: listening on tcp {} owner={}\n", NET_SHELL_TCP_PORT, owner);
+        crate::log!(
+            "net-shell: listening on tcp {} owner={} ms={}\n",
+            NET_SHELL_TCP_PORT,
+            owner,
+            Instant::now().as_millis()
+        );
 
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;
+        let mut logged_first_wire_rx: bool = false;
         let mut pending: Option<Vec<u8>> = None;
         let mut pending_ticks: u32 = 0;
         let mut pending_len: usize = 0;
@@ -161,7 +174,11 @@ pub async fn net_shell_task() {
                     NetEvent::Opened { handle, kind } => {
                         if kind == SocketKind::Tcp {
                             tcp_handle = Some(handle);
-                            crate::log!("net-shell: opened tcp handle={}\n", handle.0);
+                            crate::log!(
+                                "net-shell: opened tcp handle={} ms={}\n",
+                                handle.0,
+                                Instant::now().as_millis()
+                            );
                         }
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
@@ -198,13 +215,28 @@ pub async fn net_shell_task() {
                         pending_ticks = 0;
                         pending_len = 0;
                         logged_first_rx = false;
+                        logged_first_wire_rx = false;
                         tx_log_budget = 16;
-                        crate::log!("net-shell: tcp established handle={}\n", handle.0);
+                        crate::log!(
+                            "net-shell: tcp established handle={} ms={}\n",
+                            handle.0,
+                            Instant::now().as_millis()
+                        );
                     }
                     NetEvent::TcpData { handle, data } => {
                         // Only accept bytes from the active connection.
                         // NOTE: Data can arrive before we process `TcpEstablished` (event ordering),
                         // so treat the first inbound bytes as selecting the active handle.
+                        if !logged_first_wire_rx {
+                            logged_first_wire_rx = true;
+                            crate::log!(
+                                "net-shell: first wire rx handle={} bytes={} first={:?} ms={}\n",
+                                handle.0,
+                                data.len(),
+                                data.first().copied(),
+                                Instant::now().as_millis()
+                            );
+                        }
                         let mut rx_data = data;
                         let direct_mode =
                             crate::shell2::backends::net_tcp::net_shell_direct_active();
@@ -294,9 +326,10 @@ pub async fn net_shell_task() {
                             if !logged_first_rx {
                                 logged_first_rx = true;
                                 crate::log!(
-                                    "net-shell: first rx {} bytes (including {:?})\n",
+                                    "net-shell: first rx {} bytes (including {:?}) ms={}\n",
                                     rx_data.len(),
-                                    rx_data.first().copied()
+                                    rx_data.first().copied(),
+                                    Instant::now().as_millis()
                                 );
                             }
 
@@ -312,7 +345,12 @@ pub async fn net_shell_task() {
                     NetEvent::TcpSent { handle, len } => {
                         if tx_log_budget > 0 {
                             tx_log_budget -= 1;
-                            crate::log!("net-shell: tx flushed handle={} len={}\n", handle.0, len);
+                            crate::log!(
+                                "net-shell: tx flushed handle={} len={} ms={}\n",
+                                handle.0,
+                                len,
+                                Instant::now().as_millis()
+                            );
                         }
                     }
                     NetEvent::Closed { handle } => {

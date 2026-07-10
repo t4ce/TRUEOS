@@ -78,6 +78,8 @@ struct PciDeviceRow {
     addr: String,
     vid: String,
     pid: String,
+    revision: String,
+    chip: String,
 }
 
 struct AmlTableRecord {
@@ -949,11 +951,24 @@ fn pci_device_rows(db: Option<&[u8]>) -> Vec<PciDeviceRow> {
                 String::new()
             };
 
+            let chip = if let Some(snapshot) =
+                crate::net::r8125::snapshot_for_bdf(dev.bus, dev.slot, dev.function)
+            {
+                alloc::format!("{}:{:03X}", snapshot.family, snapshot.xid)
+            } else {
+                String::from("-")
+            };
+
             rows.push(PciDeviceRow {
                 name,
                 addr,
                 vid,
                 pid,
+                revision: alloc::format!(
+                    "{:02X}",
+                    crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x08)
+                ),
+                chip,
             });
         }
     });
@@ -1021,8 +1036,8 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
     };
 
     let shell_width = line_width_for_backend(io);
-    let fixed_width = 10 + 6 + 6;
-    let separator_width = 2 * 3;
+    let fixed_width = 10 + 6 + 6 + 4 + 18;
+    let separator_width = 2 * 5;
     let min_name_width = 16usize.max("Name".chars().count());
     let name_width = shell_width
         .saturating_sub(fixed_width + separator_width)
@@ -1045,11 +1060,30 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
             header: "PID",
             width: 6,
         },
+        Column {
+            header: "Rev",
+            width: 4,
+        },
+        Column {
+            header: "Chip/XID",
+            width: 18,
+        },
     ];
     emit_table_header(io, &cols);
 
     for row in pci_device_rows(db.as_deref()) {
-        emit_table_row(io, &cols, &[&row.name, &row.addr, &row.vid, &row.pid]);
+        emit_table_row(
+            io,
+            &cols,
+            &[
+                &row.name,
+                &row.addr,
+                &row.vid,
+                &row.pid,
+                &row.revision,
+                &row.chip,
+            ],
+        );
     }
 }
 

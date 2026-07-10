@@ -28,6 +28,12 @@ unsafe extern "C" {
     pub fn sys_rand(recv_buf: *mut u32, words: usize);
     pub fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
     pub fn trueos_cabi_heap_stats(out: *mut TrueosCabiHeapStats) -> i32;
+    pub fn trueos_cabi_calculator_evaluate(
+        operation: u32,
+        arguments: *const f64,
+        argument_count: usize,
+        out_value: *mut f64,
+    ) -> i32;
 
     pub fn trueos_cabi_fs_read_file(
         path_ptr: *const u8,

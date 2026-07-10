@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::cmp::min;
 use core::ptr::{NonNull, read_volatile, write_volatile};
 use core::sync::atomic::{Ordering, compiler_fence, fence};
+use spin::Mutex;
 
 use crate::net::core::VendorAdapter;
 use crate::net::device::LinkState;
@@ -22,6 +23,7 @@ const RX_BAD_FLAGS_LOG_EVERY: u64 = 1024;
 const TX_STALL_KICK_THRESHOLD: u64 = 10_000;
 const TX_STALL_RESET_THRESHOLD: u64 = 50_000;
 const POLL_STATE_LOG_EVERY: u64 = 10_000;
+const RX_DESC_UNAVAILABLE_WARN_EVERY: u64 = 65_536;
 const TX_SUBMIT_DEBUG_FIRST: u64 = 4;
 // Logging knobs: keep bring-up diagnostics available, but don't drown the
 // console during normal operation.
@@ -42,6 +44,8 @@ const TX_WEDGE_QUARANTINE_RESETS: u64 = 3;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
+const REG_MAR0: u16 = 0x08; // Multicast hash bits 0..31
+const REG_MAR4: u16 = 0x0C; // Multicast hash bits 32..63
 const REG_TNPDS: u16 = 0x20; // Tx desc start addr (low)
 const REG_TNPDS_HI: u16 = 0x24;
 const REG_THPDS: u16 = 0x28;
@@ -60,6 +64,8 @@ const REG_CPLUS_CMD: u16 = 0xE0;
 const REG_RX_MAX_SIZE: u16 = 0xDA;
 const REG_PHYSTAT: u16 = 0x6C;
 const REG_CFG9346: u16 = 0x50;
+const REG_CONFIG3: u16 = 0x54;
+const REG_CONFIG5: u16 = 0x56;
 
 // RTL8125 init needs access to the "MCU" byte used for OOB (out-of-band) mode.
 // See Linux r8169_main.c: MCU = 0xD3.
@@ -78,14 +84,56 @@ const CMD_RX_EN: u8 = 1 << 3;
 const CMD_TX_EN: u8 = 1 << 2;
 const CMD_RST: u8 = 1 << 4;
 
+// RTL8125 interrupt-status bit 4 is named RxDescUnavail by Realtek's vendor
+// driver (the generic Linux r8169 enum calls the same bit RxOverflow).
+const ISR_RX_DESC_UNAVAILABLE: u32 = 1 << 4;
+
 const CPLUS_RX_CHKSUM: u16 = 1 << 1;
 const CPLUS_ENABLE: u16 = 1 << 0;
 
+// Receive configuration. RTL8125 uses the fetch field at bits 30:27 instead
+// of the legacy FIFO threshold used by older RTL8168-family controllers.
+const RCR_RX_FETCH_DFLT_8125: u32 = 8 << 27;
+const RCR_RX_FETCH_MASK: u32 = 0x0f << 27;
+const RCR_COMPAT_FIFO_MASK: u32 = 7 << 13;
+const RCR_VLAN_DETAG_MASK: u32 = (1 << 23) | (1 << 22);
+const RCR_RX_PAUSE_SLOT_ON: u32 = 1 << 11; // RTL8125B and later
+const RCR_RX_DMA_BURST: u32 = 7 << 8;
+const RCR_RX_DMA_BURST_MASK: u32 = 7 << 8;
+const RCR_ACCEPT_ERROR_MASK: u32 = (1 << 5) | (1 << 4);
+const RCR_ACCEPT_BROADCAST: u32 = 1 << 3;
+const RCR_ACCEPT_MULTICAST: u32 = 1 << 2;
+const RCR_ACCEPT_MY_PHYS: u32 = 1 << 1;
+const RCR_ACCEPT_ALL_PHYS: u32 = 1 << 0;
+const RCR_ACCEPT_NORMAL: u32 = RCR_ACCEPT_BROADCAST | RCR_ACCEPT_MULTICAST | RCR_ACCEPT_MY_PHYS;
+// The original TRUEOS bring-up profile delivered low-latency RX on the tested
+// RTL8125B. Retain its high fields while keeping AcceptAllPhys cleared. The
+// upstream family fetch profile remains available for a future complete
+// RTL8125 MAC/firmware initialization sequence.
+const RCR_COMPAT_BASELINE: u32 = 0x0000_e700;
+const USE_FAMILY_RCR_PROFILE: bool = false;
+// Some RTL8125 revisions preserve hardware-owned/reserved RCR bits (the tested
+// RTL8125B rev 05 reports bit 17 set). Validate only fields the driver owns.
+const RCR_DRIVER_OWNED_MASK: u32 = RCR_RX_FETCH_MASK
+    | RCR_COMPAT_FIFO_MASK
+    | RCR_VLAN_DETAG_MASK
+    | RCR_RX_PAUSE_SLOT_ON
+    | RCR_RX_DMA_BURST_MASK
+    | RCR_ACCEPT_ERROR_MASK
+    | RCR_ACCEPT_BROADCAST
+    | RCR_ACCEPT_MULTICAST
+    | RCR_ACCEPT_MY_PHYS
+    | RCR_ACCEPT_ALL_PHYS;
+
+// Multicast groups used unconditionally during network bring-up. Keep the
+// hardware mask narrow: opening every MAR bucket lets unrelated/high-rate UDP
+// multicast consume the polled RX path before smoltcp can reject it.
+const MCAST_MDNS: [u8; 6] = [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb];
+const MCAST_IPV6_ALL_NODES: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0x01];
+const MCAST_DHCPV6_SERVERS: [u8; 6] = [0x33, 0x33, 0x00, 0x01, 0x00, 0x02];
+
 // Bring-up toggles.
-// `RX_ERR_SUM` is often raised for checksum-offload reporting; dropping all such
-// frames can prevent DHCP from ever seeing offers/acks.
 const ENABLE_RX_CHKSUM_OFFLOAD: bool = false;
-const ACCEPT_RX_ERR_SUM_FRAMES: bool = true;
 const STRIP_RX_CRC: bool = false;
 
 // Descriptor bits
@@ -93,10 +141,119 @@ const DESC_OWN: u32 = 1 << 31;
 const DESC_EOR: u32 = 1 << 30;
 const RX_FS: u32 = 1 << 29;
 const RX_LS: u32 = 1 << 28;
-const RX_ERR_SUM: u32 = 1 << 27;
+const RX_RWT: u32 = 1 << 22;
+const RX_ERR_SUM: u32 = 1 << 21;
+const RX_RUNT: u32 = 1 << 20;
+const RX_CRC: u32 = 1 << 19;
 
 const TX_FS: u32 = 1 << 29;
 const TX_LS: u32 = 1 << 28;
+
+static SNAPSHOTS: Mutex<Vec<R8125Snapshot>> = Mutex::new(Vec::new());
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum R8125Family {
+    A,
+    B,
+    D,
+    K,
+    Bp,
+    Cp,
+    Rtl9151A,
+    Unknown,
+}
+
+impl R8125Family {
+    const fn from_xid(xid: u16) -> Self {
+        match xid {
+            0x609 => Self::A,
+            0x641 => Self::B,
+            0x688 | 0x689 => Self::D,
+            0x68a => Self::K,
+            0x681 => Self::Bp,
+            0x708 => Self::Cp,
+            0x68b => Self::Rtl9151A,
+            _ => Self::Unknown,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::A => "RTL8125A",
+            Self::B => "RTL8125B",
+            Self::D => "RTL8125D",
+            Self::K => "RTL8125K",
+            Self::Bp => "RTL8125BP",
+            Self::Cp => "RTL8125CP",
+            Self::Rtl9151A => "RTL9151A",
+            Self::Unknown => "RTL8125-unknown",
+        }
+    }
+
+    const fn firmware_hint(self) -> &'static str {
+        match self {
+            Self::A => "rtl8125a-3",
+            Self::B => "rtl8125b-2",
+            Self::D => "rtl8125d-1/2",
+            Self::K => "rtl8125k-1",
+            Self::Bp => "rtl8125bp-2",
+            Self::Cp => "rtl8125cp-1",
+            Self::Rtl9151A => "rtl9151a-1",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    const fn rcr_baseline(self) -> u32 {
+        if USE_FAMILY_RCR_PROFILE {
+            let mut value = RCR_RX_FETCH_DFLT_8125 | RCR_RX_DMA_BURST;
+            if !matches!(self, Self::A | Self::Unknown) {
+                value |= RCR_RX_PAUSE_SLOT_ON;
+            }
+            value
+        } else {
+            RCR_COMPAT_BASELINE
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct R8125Snapshot {
+    pub(crate) bus: u8,
+    pub(crate) slot: u8,
+    pub(crate) function: u8,
+    pub(crate) revision: u8,
+    pub(crate) subsystem_vendor: u16,
+    pub(crate) subsystem_device: u16,
+    pub(crate) xid: u16,
+    pub(crate) family: &'static str,
+    pub(crate) firmware_hint: &'static str,
+    pub(crate) initial_tcr: u32,
+    pub(crate) rcr: u32,
+    pub(crate) multicast_hash: u64,
+    pub(crate) cplus: u16,
+    pub(crate) mcu_before: u8,
+    pub(crate) mcu_after: u8,
+    pub(crate) config3: u8,
+    pub(crate) config5: u8,
+}
+
+impl R8125Snapshot {
+    pub(crate) const fn promiscuous(self) -> bool {
+        (self.rcr & RCR_ACCEPT_ALL_PHYS) != 0
+    }
+
+    pub(crate) const fn accepts_own_mac(self) -> bool {
+        (self.rcr & RCR_ACCEPT_MY_PHYS) != 0
+    }
+
+    pub(crate) const fn accepts_multicast(self) -> bool {
+        (self.rcr & RCR_ACCEPT_MULTICAST) != 0
+    }
+
+    pub(crate) const fn accepts_broadcast(self) -> bool {
+        (self.rcr & RCR_ACCEPT_BROADCAST) != 0
+    }
+}
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -157,6 +314,7 @@ pub struct R8125Adapter {
     mmio: Mmio,
     pci: pci::PciDevice,
     mac: [u8; 6],
+    snapshot: R8125Snapshot,
     ring: Option<*mut NetRing>,
 
     _rx_desc_mem: DmaRegion,
@@ -182,6 +340,9 @@ pub struct R8125Adapter {
     dbg_rx_ring_full: u64,
     dbg_rx_bad_flags: u64,
     dbg_rx_errsum: u64,
+    dbg_rx_rwt: u64,
+    dbg_rx_runt: u64,
+    dbg_rx_crc: u64,
     dbg_rx_len_bad: u64,
     dbg_last_phystat: u8,
     dbg_logged_first_tx: bool,
@@ -189,6 +350,7 @@ pub struct R8125Adapter {
     dbg_poll_ticks: u64,
     dbg_state_dumps: u64,
     dbg_isr_nonzero: u64,
+    dbg_isr_rx_desc_unavailable: u64,
     dbg_last_cmd: u8,
     dbg_last_imr: u32,
     dbg_last_tnpds_lo: u32,
@@ -204,6 +366,67 @@ pub struct R8125Adapter {
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    #[inline]
+    const fn xid_from_tcr(tcr: u32) -> u16 {
+        ((tcr >> 20) & 0x0fcf) as u16
+    }
+
+    /// Linux-compatible Ethernet multicast CRC used by r8169/RTL8125 MAR.
+    fn multicast_crc(mac: [u8; 6]) -> u32 {
+        let mut crc = u32::MAX;
+        for mut octet in mac {
+            for _ in 0..8 {
+                let carry = ((crc >> 31) ^ u32::from(octet & 1)) & 1;
+                crc <<= 1;
+                octet >>= 1;
+                if carry != 0 {
+                    crc ^= 0x04c1_1db7;
+                }
+            }
+        }
+        crc
+    }
+
+    fn multicast_hash(mac: [u8; 6]) -> u64 {
+        let bit = Self::multicast_crc(mac) >> 26;
+        let logical = 1u64 << bit;
+        // RTL8125 uses the post-RTL8169-v6 MAR word/byte ordering used by
+        // Linux r8169: swap the 32-bit halves, then byte-swap each word.
+        let mar0 = ((logical >> 32) as u32).swap_bytes();
+        let mar4 = (logical as u32).swap_bytes();
+        ((mar4 as u64) << 32) | u64::from(mar0)
+    }
+
+    fn bringup_multicast_hash(mac: [u8; 6]) -> u64 {
+        // The solicited-node address for our EUI-64 link-local address retains
+        // the low 24 bits of the NIC MAC.
+        let solicited_node = [0x33, 0x33, 0xff, mac[3], mac[4], mac[5]];
+        Self::multicast_hash(MCAST_MDNS)
+            | Self::multicast_hash(MCAST_IPV6_ALL_NODES)
+            | Self::multicast_hash(MCAST_DHCPV6_SERVERS)
+            | Self::multicast_hash(solicited_node)
+    }
+
+    /// Publish an RX descriptor to the NIC with ownership last.
+    ///
+    /// The device must never observe `DESC_OWN` before the buffer address and
+    /// secondary options are visible. This is the DMA equivalent of Linux's
+    /// `dma_wmb()` followed by `WRITE_ONCE(desc->opts1, DescOwn | ...)`.
+    unsafe fn publish_rx_descriptor(desc: *mut RxDesc, phys: u64, eor: u32) {
+        unsafe {
+            write_volatile(core::ptr::addr_of_mut!((*desc).addr), phys);
+            write_volatile(core::ptr::addr_of_mut!((*desc).opts2), 0);
+        }
+        compiler_fence(Ordering::Release);
+        fence(Ordering::Release);
+        unsafe {
+            write_volatile(
+                core::ptr::addr_of_mut!((*desc).opts1),
+                DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3fff),
+            );
+        }
+    }
+
     #[inline]
     fn phy_link_up(phystat: u8) -> bool {
         // Keep consistent with r8168 bring-up logging (bit0 = link up).
@@ -260,6 +483,49 @@ impl R8125Adapter {
         out
     }
 
+    fn refresh_snapshot(&mut self) {
+        let (rcr, mar0, mar4, cplus, mcu, config3, config5) = unsafe {
+            (
+                self.mmio.read_u32(REG_RCR),
+                self.mmio.read_u32(REG_MAR0),
+                self.mmio.read_u32(REG_MAR4),
+                self.mmio.read_u16(REG_CPLUS_CMD),
+                self.mmio.read_u8(REG_MCU),
+                self.mmio.read_u8(REG_CONFIG3),
+                self.mmio.read_u8(REG_CONFIG5),
+            )
+        };
+        let multicast_hash = ((mar4 as u64) << 32) | mar0 as u64;
+        let security_changed = rcr != self.snapshot.rcr
+            || multicast_hash != self.snapshot.multicast_hash
+            || mcu != self.snapshot.mcu_after;
+
+        if security_changed {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: filter state changed bdf={:02x}:{:02x}.{} rcr=0x{:08x}->0x{:08x} promisc={} mar=0x{:016x}->0x{:016x} mcu=0x{:02x}->0x{:02x}\n",
+                self.snapshot.bus,
+                self.snapshot.slot,
+                self.snapshot.function,
+                self.snapshot.rcr,
+                rcr,
+                ((rcr & RCR_ACCEPT_ALL_PHYS) != 0) as u8,
+                self.snapshot.multicast_hash,
+                multicast_hash,
+                self.snapshot.mcu_after,
+                mcu
+            );
+        }
+
+        self.snapshot.rcr = rcr;
+        self.snapshot.multicast_hash = multicast_hash;
+        self.snapshot.cplus = cplus;
+        self.snapshot.mcu_after = mcu;
+        self.snapshot.config3 = config3;
+        self.snapshot.config5 = config5;
+        publish_snapshot(self.snapshot);
+    }
+
     fn ring_tx_doorbell(&mut self, reason: &str) {
         unsafe {
             // RTL8125 uses a different doorbell than RTL8168: a 16-bit TxPoll_8125
@@ -269,20 +535,22 @@ impl R8125Adapter {
                     .write_u16(REG_TXPOLL_90, EXP_R8125_TXPOLL_90_VALUE);
             }
 
-            let poll90_rb = if EXP_R8125_TXPOLL_90_ENABLE {
-                self.mmio.read_u16(REG_TXPOLL_90)
-            } else {
-                0
-            };
-            let cmd_rb = self.mmio.read_u8(REG_CMD);
-            let isr_rb = self.mmio.read_u32(REG_INTR_STATUS_8125);
-            let imr_rb = self.mmio.read_u32(REG_INTR_MASK_8125);
-
             self.dbg_doorbells = self.dbg_doorbells.saturating_add(1);
             if crate::log_os::flags::R8125_VERBOSE_LOGS
                 && (self.dbg_doorbells <= TX_DOORBELL_DEBUG_FIRST
                     || (self.dbg_doorbells & 0x3FF) == 0)
             {
+                // Readbacks are useful while diagnosing a wedge, but PCIe MMIO
+                // reads on every normal TX submission materially tax this
+                // polling driver. Keep them entirely out of the quiet path.
+                let poll90_rb = if EXP_R8125_TXPOLL_90_ENABLE {
+                    self.mmio.read_u16(REG_TXPOLL_90)
+                } else {
+                    0
+                };
+                let cmd_rb = self.mmio.read_u8(REG_CMD);
+                let isr_rb = self.mmio.read_u32(REG_INTR_STATUS_8125);
+                let imr_rb = self.mmio.read_u32(REG_INTR_MASK_8125);
                 crate::log!(
                     "net/r8125: tx doorbell count={} reason={} poll90_rb=0x{:04x} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x}\n",
                     self.dbg_doorbells,
@@ -365,7 +633,7 @@ impl R8125Adapter {
         let rx_opts1 = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!(rx_desc.opts1)) };
 
         crate::log!(
-            "net/r8125: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} tx_desc_phys=0x{:016x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_tail_opts1=0x{:08x} rx_idx={} rx_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} tx_checks={} kicks={} resets={} rx_ok={} rx_drop={} rx_bad={} rx_errsum={} rx_len_bad={}\n",
+            "net/r8125: state reason={} dumps={} poll={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x} cplus=0x{:04x} rxmax=0x{:04x} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x} tx_desc_phys=0x{:016x} tx_head={} tx_tail={} tx_head_opts1=0x{:08x} tx_tail_opts1=0x{:08x} rx_idx={} rx_opts1=0x{:08x} tx_sub={} tx_rec={} tx_full={} tx_checks={} kicks={} resets={} rx_ok={} rx_drop={} rx_bad={} rx_errsum={} rx_rwt={} rx_runt={} rx_crc={} rx_len_bad={}\n",
             reason,
             self.dbg_state_dumps,
             self.dbg_poll_ticks,
@@ -398,11 +666,15 @@ impl R8125Adapter {
             self.dbg_rx_ring_full,
             self.dbg_rx_bad_flags,
             self.dbg_rx_errsum,
+            self.dbg_rx_rwt,
+            self.dbg_rx_runt,
+            self.dbg_rx_crc,
             self.dbg_rx_len_bad
         );
     }
 
     pub fn init_all() -> alloc::vec::Vec<Self> {
+        SNAPSHOTS.lock().clear();
         let mut out = alloc::vec::Vec::new();
         let devs = find_r8125_devices();
         for dev in devs {
@@ -456,6 +728,25 @@ impl R8125Adapter {
             }
         };
         let mmio = Mmio { base: mapped };
+        let revision = pci::config_read_u8(dev.bus, dev.slot, dev.function, 0x08);
+        let subsystem_vendor = pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2c);
+        let subsystem_device = pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x2e);
+        // TxConfig carries the Realtek MAC XID. Capture it before reset or any
+        // driver write so 10ec:8125 can be resolved to its actual MAC family.
+        let initial_tcr = unsafe { mmio.read_u32(REG_TCR) };
+        let xid = Self::xid_from_tcr(initial_tcr);
+        let family = R8125Family::from_xid(xid);
+        if family == R8125Family::Unknown {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: unknown MAC XID bdf={:02x}:{:02x}.{} xid={:03x} initial_tcr=0x{:08x}; using RTL8125A-compatible RCR baseline\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                xid,
+                initial_tcr
+            );
+        }
 
         if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
@@ -540,14 +831,7 @@ impl R8125Adapter {
             let buf = DmaRegion::alloc(RX_BUF_SIZE, 16).ok_or(())?;
             let eor = if i + 1 == RX_DESC_COUNT { DESC_EOR } else { 0 };
             unsafe {
-                write_volatile(
-                    rx_desc.add(i),
-                    RxDesc {
-                        opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                        opts2: 0,
-                        addr: buf.phys(),
-                    },
-                );
+                Self::publish_rx_descriptor(rx_desc.add(i), buf.phys(), eor);
             }
             rx_bufs.push(buf);
         }
@@ -577,6 +861,21 @@ impl R8125Adapter {
         }
 
         // Program descriptor bases + enable C+ mode.
+        let mcu_before: u8;
+        let mcu_after: u8;
+        let rcr_programmed = family.rcr_baseline() | RCR_ACCEPT_NORMAL;
+        let multicast_hash_programmed = Self::bringup_multicast_hash(mac);
+        if !USE_FAMILY_RCR_PROFILE {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: using proven compatibility RCR profile bdf={:02x}:{:02x}.{} family={} rcr=0x{:08x}; family fetch profile deferred until full MAC/firmware init\n",
+                dev.bus,
+                dev.slot,
+                dev.function,
+                family.name(),
+                rcr_programmed
+            );
+        }
         unsafe {
             // Stop engines while programming baseline datapath registers.
             mmio.write_u8(REG_CMD, 0);
@@ -586,6 +885,7 @@ impl R8125Adapter {
             // Ensure the device is not stuck in OOB mode. When NOW_IS_OOB is
             // set, TX/RX DMA may not behave as expected.
             let mcu0 = mmio.read_u8(REG_MCU);
+            mcu_before = mcu0;
             mmio.write_u8(REG_MCU, mcu0 & !MCU_NOW_IS_OOB);
             let mut saw_ll = false;
             for _ in 0..200_000 {
@@ -596,6 +896,7 @@ impl R8125Adapter {
                 }
             }
             let mcu1 = mmio.read_u8(REG_MCU);
+            mcu_after = mcu1;
             if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: mcu oob mcu0=0x{:02x} mcu1=0x{:02x} llrdy={}\n",
@@ -628,9 +929,13 @@ impl R8125Adapter {
             mmio.write_u32(REG_THPDS, tx_desc_phys as u32);
             mmio.write_u32(REG_THPDS_HI, (tx_desc_phys >> 32) as u32);
 
-            // Basic RX/TX config (promiscuous off; accept broadcast/multicast).
-            // Values here are intentionally conservative for bring-up.
-            mmio.write_u32(REG_RCR, 0x0000E70F);
+            // Deterministic, narrow bring-up filter. Future dynamic multicast
+            // users must add a membership callback before opening their bucket.
+            mmio.write_u32(REG_MAR4, (multicast_hash_programmed >> 32) as u32);
+            mmio.write_u32(REG_MAR0, multicast_hash_programmed as u32);
+
+            // RTL8125-specific receive baseline with promiscuous mode off.
+            mmio.write_u32(REG_RCR, rcr_programmed);
             let tcr = EXP_R8125_TCR_OVERRIDE.unwrap_or(0x03000700);
             mmio.write_u32(REG_TCR, tcr);
 
@@ -643,8 +948,16 @@ impl R8125Adapter {
         }
 
         // Confirm key registers took effect (helps diagnose write-protect / wrong offsets).
-        let (rcr_rb, tcr_rb, cplus_rb) = unsafe {
-            (mmio.read_u32(REG_RCR), mmio.read_u32(REG_TCR), mmio.read_u16(REG_CPLUS_CMD))
+        let (rcr_rb, tcr_rb, cplus_rb, mar0_rb, mar4_rb, config3, config5) = unsafe {
+            (
+                mmio.read_u32(REG_RCR),
+                mmio.read_u32(REG_TCR),
+                mmio.read_u16(REG_CPLUS_CMD),
+                mmio.read_u32(REG_MAR0),
+                mmio.read_u32(REG_MAR4),
+                mmio.read_u8(REG_CONFIG3),
+                mmio.read_u8(REG_CONFIG5),
+            )
         };
         if crate::log_os::flags::R8125_VERBOSE_LOGS {
             crate::log!(
@@ -688,10 +1001,73 @@ impl R8125Adapter {
             crate::log!("net/r8125: phystat=0x{:02x} (raw)\n", phy);
         }
 
+        let multicast_hash = ((mar4_rb as u64) << 32) | mar0_rb as u64;
+        let snapshot = R8125Snapshot {
+            bus: dev.bus,
+            slot: dev.slot,
+            function: dev.function,
+            revision,
+            subsystem_vendor,
+            subsystem_device,
+            xid,
+            family: family.name(),
+            firmware_hint: family.firmware_hint(),
+            initial_tcr,
+            rcr: rcr_rb,
+            multicast_hash,
+            cplus: cplus_rb,
+            mcu_before,
+            mcu_after,
+            config3,
+            config5,
+        };
+        if ((rcr_rb ^ rcr_programmed) & RCR_DRIVER_OWNED_MASK) != 0
+            || multicast_hash != multicast_hash_programmed
+        {
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: filter readback mismatch bdf={:02x}:{:02x}.{} rcr_want=0x{:08x} rcr_got=0x{:08x} mar_want=0x{:016x} mar_got=0x{:016x}\n",
+                snapshot.bus,
+                snapshot.slot,
+                snapshot.function,
+                rcr_programmed,
+                rcr_rb,
+                multicast_hash_programmed,
+                multicast_hash
+            );
+        }
+        publish_snapshot(snapshot);
+        crate::log_info!(
+            target: "net";
+            "net/r8125: hw bdf={:02x}:{:02x}.{} rev={:02x} subsys={:04x}:{:04x} xid={:03x} family={} fw_hint={} initial_tcr=0x{:08x} rcr=0x{:08x} accept_own={} accept_bcast={} accept_mcast={} promisc={} mar=0x{:016x} cplus=0x{:04x} mcu=0x{:02x}->0x{:02x} cfg3=0x{:02x} cfg5=0x{:02x}\n",
+            snapshot.bus,
+            snapshot.slot,
+            snapshot.function,
+            snapshot.revision,
+            snapshot.subsystem_vendor,
+            snapshot.subsystem_device,
+            snapshot.xid,
+            snapshot.family,
+            snapshot.firmware_hint,
+            snapshot.initial_tcr,
+            snapshot.rcr,
+            snapshot.accepts_own_mac() as u8,
+            snapshot.accepts_broadcast() as u8,
+            snapshot.accepts_multicast() as u8,
+            snapshot.promiscuous() as u8,
+            snapshot.multicast_hash,
+            snapshot.cplus,
+            snapshot.mcu_before,
+            snapshot.mcu_after,
+            snapshot.config3,
+            snapshot.config5
+        );
+
         Ok(Self {
             mmio,
             pci: dev,
             mac,
+            snapshot,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
             rx_desc,
@@ -714,6 +1090,9 @@ impl R8125Adapter {
             dbg_rx_ring_full: 0,
             dbg_rx_bad_flags: 0,
             dbg_rx_errsum: 0,
+            dbg_rx_rwt: 0,
+            dbg_rx_runt: 0,
+            dbg_rx_crc: 0,
             dbg_rx_len_bad: 0,
             dbg_last_phystat: phy,
             dbg_logged_first_tx: false,
@@ -721,6 +1100,7 @@ impl R8125Adapter {
             dbg_poll_ticks: 0,
             dbg_state_dumps: 0,
             dbg_isr_nonzero: 0,
+            dbg_isr_rx_desc_unavailable: 0,
             dbg_last_cmd: CMD_RX_EN | CMD_TX_EN,
             dbg_last_imr: 0,
             dbg_last_tnpds_lo: tx_desc_phys as u32,
@@ -925,33 +1305,37 @@ impl R8125Adapter {
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
 
+        if self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY) {
+            self.refresh_snapshot();
+        }
+
         if crate::log_os::flags::R8125_VERBOSE_LOGS
             && self.dbg_poll_ticks.is_multiple_of(POLL_STATE_LOG_EVERY)
         {
             self.log_hw_state("periodic");
         }
 
-        let cmd_now = unsafe { self.mmio.read_u8(REG_CMD) };
-        let imr_now = unsafe { self.mmio.read_u32(REG_INTR_MASK_8125) };
-        let tnp_lo_now = unsafe { self.mmio.read_u32(REG_TNPDS) };
-        let tnp_hi_now = unsafe { self.mmio.read_u32(REG_TNPDS_HI) };
+        if crate::log_os::flags::R8125_VERBOSE_LOGS {
+            let cmd_now = unsafe { self.mmio.read_u8(REG_CMD) };
+            let imr_now = unsafe { self.mmio.read_u32(REG_INTR_MASK_8125) };
+            let tnp_lo_now = unsafe { self.mmio.read_u32(REG_TNPDS) };
+            let tnp_hi_now = unsafe { self.mmio.read_u32(REG_TNPDS_HI) };
 
-        if cmd_now != self.dbg_last_cmd
-            || imr_now != self.dbg_last_imr
-            || tnp_lo_now != self.dbg_last_tnpds_lo
-            || tnp_hi_now != self.dbg_last_tnpds_hi
-        {
-            let old_cmd = self.dbg_last_cmd;
-            let old_imr = self.dbg_last_imr;
-            let old_tnp_lo = self.dbg_last_tnpds_lo;
-            let old_tnp_hi = self.dbg_last_tnpds_hi;
+            if cmd_now != self.dbg_last_cmd
+                || imr_now != self.dbg_last_imr
+                || tnp_lo_now != self.dbg_last_tnpds_lo
+                || tnp_hi_now != self.dbg_last_tnpds_hi
+            {
+                let old_cmd = self.dbg_last_cmd;
+                let old_imr = self.dbg_last_imr;
+                let old_tnp_lo = self.dbg_last_tnpds_lo;
+                let old_tnp_hi = self.dbg_last_tnpds_hi;
 
-            self.dbg_last_cmd = cmd_now;
-            self.dbg_last_imr = imr_now;
-            self.dbg_last_tnpds_lo = tnp_lo_now;
-            self.dbg_last_tnpds_hi = tnp_hi_now;
+                self.dbg_last_cmd = cmd_now;
+                self.dbg_last_imr = imr_now;
+                self.dbg_last_tnpds_lo = tnp_lo_now;
+                self.dbg_last_tnpds_hi = tnp_hi_now;
 
-            if crate::log_os::flags::R8125_VERBOSE_LOGS {
                 crate::log!(
                     "net/r8125: reg change cmd 0x{:02x}->0x{:02x} imr 0x{:08x}->0x{:08x} tnpds 0x{:08x}{:08x}->0x{:08x}{:08x}\n",
                     old_cmd,
@@ -965,13 +1349,12 @@ impl R8125Adapter {
                 );
                 self.log_hw_state("reg-change");
             }
-        }
 
-        // Track PHY/link changes without spamming: only log on change.
-        let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
-        if phy != self.dbg_last_phystat {
-            self.dbg_last_phystat = phy;
-            if crate::log_os::flags::R8125_VERBOSE_LOGS {
+            // PHY polling here is diagnostic only; link_state() performs its
+            // own required read. Avoid duplicating it on every RX poll.
+            let phy = unsafe { self.mmio.read_u8(REG_PHYSTAT) };
+            if phy != self.dbg_last_phystat {
+                self.dbg_last_phystat = phy;
                 crate::log!(
                     "net/r8125: phystat=0x{:02x} (changed) link_bit0={}\n",
                     phy,
@@ -984,6 +1367,28 @@ impl R8125Adapter {
         let isr = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
         if isr != 0 {
             self.dbg_isr_nonzero = self.dbg_isr_nonzero.saturating_add(1);
+            if (isr & ISR_RX_DESC_UNAVAILABLE) != 0 {
+                self.dbg_isr_rx_desc_unavailable =
+                    self.dbg_isr_rx_desc_unavailable.saturating_add(1);
+                if (self.dbg_isr_rx_desc_unavailable <= 64
+                    && self.dbg_isr_rx_desc_unavailable.is_power_of_two())
+                    || self.dbg_isr_rx_desc_unavailable == 4_096
+                    || self
+                        .dbg_isr_rx_desc_unavailable
+                        .is_multiple_of(RX_DESC_UNAVAILABLE_WARN_EVERY)
+                {
+                    crate::log_warn!(
+                        target: "net";
+                        "net/r8125: rx descriptor unavailable/overflow count={} poll={} rx_ok={} rx_idx={} ring_full={} isr=0x{:08x}\n",
+                        self.dbg_isr_rx_desc_unavailable,
+                        self.dbg_poll_ticks,
+                        self.dbg_rx_ok,
+                        self.rx_idx,
+                        self.dbg_rx_ring_full,
+                        isr
+                    );
+                }
+            }
             // ISR can be chatty (e.g. link-related or RX OK); keep a small sample
             // and then only very occasionally.
             if crate::log_os::flags::R8125_VERBOSE_LOGS
@@ -1020,6 +1425,9 @@ impl R8125Adapter {
             if (opts1 & DESC_OWN) != 0 {
                 break;
             }
+            // Once ownership clears, order subsequent reads of the DMA buffer
+            // after the device's descriptor completion write.
+            fence(Ordering::Acquire);
 
             let had_errsum = (opts1 & RX_ERR_SUM) != 0;
 
@@ -1041,22 +1449,44 @@ impl R8125Adapter {
 
             if had_errsum {
                 self.dbg_rx_errsum = self.dbg_rx_errsum.saturating_add(1);
-                if !ACCEPT_RX_ERR_SUM_FRAMES {
-                    let eor = opts1 & DESC_EOR;
-                    unsafe {
-                        write_volatile(
-                            self.rx_desc.add(idx),
-                            RxDesc {
-                                opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                                opts2: 0,
-                                addr: self.rx_bufs[idx].phys(),
-                            },
-                        );
-                    }
-                    self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
-                    processed += 1;
-                    continue;
+                if (opts1 & RX_RWT) != 0 {
+                    self.dbg_rx_rwt = self.dbg_rx_rwt.saturating_add(1);
                 }
+                if (opts1 & RX_RUNT) != 0 {
+                    self.dbg_rx_runt = self.dbg_rx_runt.saturating_add(1);
+                }
+                if (opts1 & RX_CRC) != 0 {
+                    self.dbg_rx_crc = self.dbg_rx_crc.saturating_add(1);
+                }
+                if self.dbg_rx_errsum == 1
+                    || self.dbg_rx_errsum.is_multiple_of(RX_BAD_FLAGS_LOG_EVERY)
+                {
+                    crate::log_warn!(
+                        target: "net";
+                        "net/r8125: rx hardware error count={} opts1=0x{:08x} rwt={} runt={} crc={} (dropping)\n",
+                        self.dbg_rx_errsum,
+                        opts1,
+                        ((opts1 & RX_RWT) != 0) as u8,
+                        ((opts1 & RX_RUNT) != 0) as u8,
+                        ((opts1 & RX_CRC) != 0) as u8
+                    );
+                }
+
+                let eor = if idx + 1 == RX_DESC_COUNT {
+                    DESC_EOR
+                } else {
+                    0
+                };
+                unsafe {
+                    Self::publish_rx_descriptor(
+                        self.rx_desc.add(idx),
+                        self.rx_bufs[idx].phys(),
+                        eor,
+                    );
+                }
+                self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
+                processed += 1;
+                continue;
             }
 
             if raw_len == 0 || raw_len > RX_BUF_SIZE {
@@ -1069,15 +1499,16 @@ impl R8125Adapter {
                         opts1
                     );
                 }
-                let eor = opts1 & DESC_EOR;
+                let eor = if idx + 1 == RX_DESC_COUNT {
+                    DESC_EOR
+                } else {
+                    0
+                };
                 unsafe {
-                    write_volatile(
+                    Self::publish_rx_descriptor(
                         self.rx_desc.add(idx),
-                        RxDesc {
-                            opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                            opts2: 0,
-                            addr: self.rx_bufs[idx].phys(),
-                        },
+                        self.rx_bufs[idx].phys(),
+                        eor,
                     );
                 }
                 self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
@@ -1116,16 +1547,13 @@ impl R8125Adapter {
             }
 
             // Re-arm descriptor
-            let eor = opts1 & DESC_EOR;
+            let eor = if idx + 1 == RX_DESC_COUNT {
+                DESC_EOR
+            } else {
+                0
+            };
             unsafe {
-                write_volatile(
-                    self.rx_desc.add(idx),
-                    RxDesc {
-                        opts1: DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
-                        opts2: 0,
-                        addr: self.rx_bufs[idx].phys(),
-                    },
-                );
+                Self::publish_rx_descriptor(self.rx_desc.add(idx), self.rx_bufs[idx].phys(), eor);
             }
 
             self.rx_idx = (self.rx_idx + 1) % RX_DESC_COUNT;
@@ -1366,6 +1794,30 @@ impl VendorAdapter for R8125Adapter {
     fn bind_ring(&mut self, ring: *mut NetRing) {
         self.ring = Some(ring);
     }
+}
+
+fn publish_snapshot(snapshot: R8125Snapshot) {
+    let mut snapshots = SNAPSHOTS.lock();
+    if let Some(existing) = snapshots.iter_mut().find(|existing| {
+        (existing.bus, existing.slot, existing.function)
+            == (snapshot.bus, snapshot.slot, snapshot.function)
+    }) {
+        *existing = snapshot;
+    } else {
+        snapshots.push(snapshot);
+    }
+}
+
+pub(crate) fn snapshot_for_bdf(bus: u8, slot: u8, function: u8) -> Option<R8125Snapshot> {
+    SNAPSHOTS
+        .lock()
+        .iter()
+        .copied()
+        .find(|snapshot| (snapshot.bus, snapshot.slot, snapshot.function) == (bus, slot, function))
+}
+
+pub(crate) fn snapshots() -> Vec<R8125Snapshot> {
+    SNAPSHOTS.lock().clone()
 }
 
 fn find_r8125_devices() -> alloc::vec::Vec<pci::PciDevice> {

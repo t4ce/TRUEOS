@@ -31,6 +31,7 @@ pub mod vled {
 pub mod alsa_compat;
 pub mod borrow;
 pub mod bp_abi;
+pub mod calculator_base;
 pub mod env;
 pub mod ffi;
 pub mod qjs_abi;

@@ -1631,8 +1631,9 @@ impl NetService {
 
         // mDNS/DNS-SD uses IPv4 multicast.
         let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(224, 0, 0, 251)));
-        // ESP32 Wi-Fi RTP microphone stream.
-        let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(239, 255, 77, 77)));
+        // Do not unconditionally join the ESP32 RTP microphone group here.
+        // Its continuous stream has no UDP consumer in this stack today; a
+        // future consumer should join it together with programming the NIC MAR.
         // Ensure the stack accepts multicast IPv6 control traffic.
         // Router Advertisements are commonly sent to ff02::1 (all-nodes).
         let _ = iface.join_multicast_group(IpAddress::Ipv6(Ipv6Address::new(

@@ -932,7 +932,9 @@ fn active_abi_guest_vm_id() -> Option<u8> {
 }
 
 fn active_abi_alloc_guest_vm_id() -> Option<u8> {
-    crate::hv::current_hull_guest_context_vm_id().or_else(crate::hv::current_vm_id_by_lapic_low)
+    crate::hv::current_hull_guest_context_vm_id()
+        .or_else(crate::r::kernel_task_domain::guest_owned_alloc_vm_id)
+        .or_else(crate::hv::current_vm_id_by_lapic_low)
 }
 
 fn active_guest_stack_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {

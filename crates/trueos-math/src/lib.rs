@@ -19,6 +19,9 @@ pub use complex::Complex;
 pub mod matrix;
 pub use matrix::{Matrix, Vector};
 
+/// Calculator-oriented facade over the crate's scalar and linear-algebra APIs.
+pub mod calculator_base;
+
 #[inline]
 pub fn sin_f32(x: f32) -> f32 {
     libm::sinf(x)

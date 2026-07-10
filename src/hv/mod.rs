@@ -533,6 +533,7 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         domain.domain,
         crate::r::kernel_task_domain::KernelTaskDomain::VmBroker
             | crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier
+            | crate::r::kernel_task_domain::KernelTaskDomain::VmGuestOwnedAlloc
     ) && let Some(vm_id) = domain.vm_id
     {
         return Some(vm_id);
@@ -1546,6 +1547,33 @@ pub(crate) fn blueprint_process_file_tree_text(vm_id: u8, requested: &str) -> Op
     ))
 }
 
+fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
+    const CROSSTERM_HEADER: &str = "[crossterm-resize-probe:INFO] ";
+    const REBELS_NEW_GAME_HEADER: &str = "[rebels-new-game-probe:INFO] ";
+    const REBELS_MULTI_RT_HEADER: &str = "[rebels-multi-rt-probe:INFO] ";
+
+    let Ok(text) = core::str::from_utf8(data) else {
+        return false;
+    };
+    let (purpose, message) = if let Some(message) = text.strip_prefix(CROSSTERM_HEADER) {
+        ("crossterm-resize-probe", message)
+    } else if let Some(message) = text.strip_prefix(REBELS_NEW_GAME_HEADER) {
+        ("rebels-new-game-probe", message)
+    } else if let Some(message) = text.strip_prefix(REBELS_MULTI_RT_HEADER) {
+        ("rebels-multi-rt-probe", message)
+    } else {
+        return false;
+    };
+    let message = message.trim_end_matches(&['\r', '\n'][..]);
+    crate::log_os::log_with_area_purpose(
+        crate::log_os::flags::LogArea::Blueprint,
+        log::Level::Info,
+        Some(purpose),
+        format_args!("vm{}: {}\n", vm_id, message),
+    );
+    true
+}
+
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     let (target, surface, route) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
@@ -1561,6 +1589,9 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
             })
             .unwrap_or((None, BlueprintConsoleSurface::Text, BlueprintConsoleRoute::Matrix))
     };
+    if blueprint_console_hunt_log(vm_id, data) {
+        return data.len();
+    }
     if route.is_net_shell_direct() {
         crate::shell2::backends::net_tcp::net_shell_write_bytes(data);
         return data.len();

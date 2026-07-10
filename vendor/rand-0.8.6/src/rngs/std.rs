@@ -10,6 +10,8 @@
 
 use crate::{CryptoRng, Error, RngCore, SeedableRng};
 
+pub(crate) use rand_chacha::ChaCha12Core as Core;
+
 use rand_chacha::ChaCha12Rng as Rng;
 
 

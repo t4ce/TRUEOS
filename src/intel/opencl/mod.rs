@@ -20,6 +20,7 @@ pub(crate) mod queue;
 pub(crate) mod registry;
 pub(crate) mod types;
 pub(crate) mod validation;
+pub(crate) mod value;
 
 pub(crate) use api::{
     KnownKernelInfo, SourceBuildSmoke, trueos_cl_build_program_from_source,
@@ -55,6 +56,9 @@ pub(crate) use types::{
 pub(crate) use validation::{
     KnownAotValidationIssue, KnownAotValidationIssueKind, KnownAotValidationReport,
     validate_known_aot_registry, validate_known_aot_status,
+};
+pub(crate) use value::{
+    KernelValueError, KernelValueType, KernelValueWriter, MAX_TRACKED_VALUE_ARG_INDEX,
 };
 
 pub(crate) const TRUEOS_OPENCL_PLATFORM_NAME: &str = "TRUEOS Intel OpenCL AOT Runtime";

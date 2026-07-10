@@ -477,7 +477,7 @@ pub mod logtotcp {
 
     #[embassy_executor::task]
     pub async fn logtotcp_task() {
-        use embassy_time::{Duration as EmbassyDuration, Timer};
+        use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 
         use crate::net::adapter::{
             NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
@@ -496,7 +496,11 @@ pub mod logtotcp {
         let _ = cmds.push(NetCommand::OpenTcpListen {
             port: ports::LOGTOTCP_TCP_PORT,
         });
-        crate::log!("logtotcp: listening on tcp {}\n", ports::LOGTOTCP_TCP_PORT);
+        crate::log!(
+            "logtotcp: listening on tcp {} ms={}\n",
+            ports::LOGTOTCP_TCP_PORT,
+            Instant::now().as_millis()
+        );
 
         let mut tcp_handle: Option<NetHandle> = None;
         let mut conn_handle: Option<NetHandle> = None;
@@ -511,7 +515,11 @@ pub mod logtotcp {
                     NetEvent::TcpEstablished { handle, .. } => {
                         conn_handle = Some(handle);
                         pending = false;
-                        crate::log!("logtotcp: client connected handle={}\n", handle.0);
+                        crate::log!(
+                            "logtotcp: client connected handle={} ms={}\n",
+                            handle.0,
+                            Instant::now().as_millis()
+                        );
                     }
                     NetEvent::TcpSent { handle, .. } if conn_handle == Some(handle) => {
                         pending = false;
@@ -520,7 +528,11 @@ pub mod logtotcp {
                         if conn_handle == Some(handle) {
                             conn_handle = None;
                             pending = false;
-                            crate::log!("logtotcp: client disconnected handle={}\n", handle.0);
+                            crate::log!(
+                                "logtotcp: client disconnected handle={} ms={}\n",
+                                handle.0,
+                                Instant::now().as_millis()
+                            );
                         }
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;

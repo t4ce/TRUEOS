@@ -55,6 +55,7 @@ pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN: u32 = 0x95; // arg0=id, arg1=w/h
 pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK: u32 = 0x96; // arg0=id, arg1=offset, payload=rgb565 -> rc
 pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH: u32 = 0x97; // arg0=id -> rc
 pub const OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565: u32 = 0x98; // arg0=frame,arg1=id,payload=params -> rc
+pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -806,6 +807,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1,
                 crate::r::net::vlayer::thermal_snapshot_len_host,
                 crate::r::net::vlayer::thermal_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::system_services_snapshot_len_host,
+                crate::r::net::vlayer::system_services_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }
