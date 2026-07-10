@@ -474,22 +474,11 @@ async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
 }
 
 fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
-    let target = matrix_target_for_backend(io);
-    let width = line_width_for_backend(io);
-    set_matrix_target_active(&target, true);
-    match online_app_task(target.clone(), width, args) {
-        Ok(token) => {
-            spawner.spawn(token);
-        }
-        Err(_) => {
-            set_matrix_target_active(&target, false);
-            line(io, "apps: online task unavailable");
-        }
-    }
+    super::shell2_dl::submit_online(spawner, io, args.join(" ").as_str());
 }
 
 pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
-    online_app(spawner, io, submitted.split_whitespace().map(String::from).collect());
+    super::shell2_dl::submit_online(spawner, io, submitted);
 }
 
 const PEER_HEADERS: &[&str; 5] = &["id", "peer", "node", "port", "vms"];

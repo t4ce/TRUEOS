@@ -124,7 +124,7 @@ struct BlueprintVmMemoryProfile {
 
 #[derive(Clone)]
 enum ArchiveSource {
-    TrueosfsRoot,
+    Trueosfs { path: String },
     EmbeddedModule { cmdline: String },
 }
 
@@ -145,27 +145,54 @@ fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
     Some(archive)
 }
 
-fn root_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
+fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return Ok(Vec::new());
     };
 
-    let listing = crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::list_dir_async(disk, "").await
+    let (root_listing, apps_listing) = crate::wait::spawn_and_wait_local(async move {
+        let root = crate::r::fs::trueosfs::list_dir_async(disk, "").await?;
+        let apps = crate::r::fs::trueosfs::list_dir_async(disk, "apps").await?;
+        Ok::<_, crate::disc::block::Error>((root, apps))
     })
-    .map_err(|_| "root listing failed")?
-    .ok_or("root is not TRUEOSFS")?;
+    .map_err(|_| "root listing failed")?;
+    let root_listing = root_listing.ok_or("root is not TRUEOSFS")?;
 
-    let mut out = listing
+    let mut out = root_listing
         .lines()
         .map(str::trim)
         .filter(|name| is_runnable_root_artifact(name))
         .map(|name| ArchiveEntry {
             archive: String::from(name),
-            source: ArchiveSource::TrueosfsRoot,
+            source: ArchiveSource::Trueosfs {
+                path: String::from(name),
+            },
             updated: root_archive_updated(disk, name),
         })
         .collect::<Vec<_>>();
+
+    for app_dir in apps_listing.unwrap_or_default().lines().map(str::trim) {
+        if app_dir.is_empty() || app_dir == "common" || app_dir == ".keep" {
+            continue;
+        }
+        let dir = alloc::format!("apps/{}", app_dir);
+        let listing = crate::wait::spawn_and_wait_local(async move {
+            crate::r::fs::trueosfs::list_dir_async(disk, dir.as_str()).await
+        })
+        .map_err(|_| "app directory listing failed")?
+        .unwrap_or_default();
+        for name in listing.lines().map(str::trim).filter(|name| is_runnable_root_artifact(name)) {
+            let path = alloc::format!("apps/{}/{}", app_dir, name);
+            if out.iter().any(|entry| entry.archive == name) {
+                continue;
+            }
+            out.push(ArchiveEntry {
+                archive: String::from(name),
+                source: ArchiveSource::Trueosfs { path },
+                updated: None,
+            });
+        }
+    }
     out.sort_by(|a, b| a.archive.cmp(&b.archive));
     Ok(out)
 }
@@ -244,7 +271,7 @@ fn embedded_module_bytes_by_archive_name(
 }
 
 fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
-    let mut out = root_archives()?;
+    let mut out = trueosfs_archives()?;
     for entry in embedded_archives() {
         if !out.iter().any(|existing| existing.archive == entry.archive) {
             out.push(entry);
@@ -256,7 +283,8 @@ fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
 
 fn source_label(source: &ArchiveSource) -> &'static str {
     match source {
-        ArchiveSource::TrueosfsRoot => "TRUEOSFS root",
+        ArchiveSource::Trueosfs { path } if path.starts_with("apps/") => "TRUEOSFS app",
+        ArchiveSource::Trueosfs { .. } => "TRUEOSFS root",
         ArchiveSource::EmbeddedModule { .. } => "boot embedded",
     }
 }
@@ -1079,8 +1107,21 @@ fn submit_archive_entry(
     app_args: Vec<String>,
 ) {
     match &entry.source {
-        ArchiveSource::TrueosfsRoot => {
-            submit_run(io, entry.archive.clone(), app_args);
+        ArchiveSource::Trueosfs { path } => {
+            let module_bytes = match crate::r::io::kfs::read_file(path.as_str()) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    print_shell_line(io, "apps: failed to read selected module from TRUEOSFS");
+                    return;
+                }
+            };
+            let target = matrix_target_for_backend(io);
+            let _ = enqueue_blueprint_bytes(
+                target,
+                entry.archive.clone(),
+                module_bytes,
+                app_args,
+            );
         }
         ArchiveSource::EmbeddedModule { cmdline } => {
             let target = matrix_target_for_backend(io);
