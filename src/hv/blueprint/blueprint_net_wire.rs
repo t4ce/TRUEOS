@@ -10,6 +10,8 @@ const TAG_SEND_TCP: u8 = 7;
 const TAG_CLOSE: u8 = 8;
 const TAG_ICMP_ECHO: u8 = 9;
 const TAG_ICMP_ECHO_V6: u8 = 10;
+const TAG_OPEN_TUN: u8 = 11;
+const TAG_SEND_IP_PACKET: u8 = 12;
 
 const TAG_OPENED: u8 = 1;
 const TAG_CLOSED: u8 = 2;
@@ -21,9 +23,11 @@ const TAG_TCP_DATA: u8 = 7;
 const TAG_TCP_SENT: u8 = 8;
 const TAG_ICMP_REPLY: u8 = 9;
 const TAG_ICMP_REPLY_V6: u8 = 10;
+const TAG_IP_PACKET: u8 = 11;
 
 const KIND_UDP: u8 = 1;
 const KIND_TCP: u8 = 2;
+const KIND_TUN: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WireError {
@@ -142,6 +146,7 @@ fn kind_to_wire(kind: api::SocketKind) -> u8 {
     match kind {
         api::SocketKind::Udp => KIND_UDP,
         api::SocketKind::Tcp => KIND_TCP,
+        api::SocketKind::Tun => KIND_TUN,
     }
 }
 
@@ -149,6 +154,7 @@ fn kind_from_wire(kind: u8) -> Result<api::SocketKind, WireError> {
     match kind {
         KIND_UDP => Ok(api::SocketKind::Udp),
         KIND_TCP => Ok(api::SocketKind::Tcp),
+        KIND_TUN => Ok(api::SocketKind::Tun),
         _ => Err(WireError::InvalidKind),
     }
 }
@@ -156,6 +162,20 @@ fn kind_from_wire(kind: u8) -> Result<api::SocketKind, WireError> {
 pub(crate) fn encode_command(command: api::Command, out: &mut [u8]) -> Result<usize, WireError> {
     let mut w = Writer::new(out);
     match command {
+        api::Command::OpenTun {
+            ipv4,
+            ipv4_prefix_len,
+            ipv6,
+            ipv6_prefix_len,
+            mtu,
+        } => {
+            w.byte(TAG_OPEN_TUN)?;
+            w.bytes(&ipv4)?;
+            w.byte(ipv4_prefix_len)?;
+            w.bytes(&ipv6)?;
+            w.byte(ipv6_prefix_len)?;
+            w.u16(mtu)?;
+        }
         api::Command::OpenUdp { port } => {
             w.byte(TAG_OPEN_UDP)?;
             w.u16(port)?;
@@ -201,6 +221,11 @@ pub(crate) fn encode_command(command: api::Command, out: &mut [u8]) -> Result<us
             w.u32(handle.0)?;
             w.byte_buf(&data)?;
         }
+        api::Command::SendIpPacket { handle, packet } => {
+            w.byte(TAG_SEND_IP_PACKET)?;
+            w.u32(handle.0)?;
+            w.byte_buf(&packet)?;
+        }
         api::Command::Close { handle } => {
             w.byte(TAG_CLOSE)?;
             w.u32(handle.0)?;
@@ -224,6 +249,13 @@ pub(crate) fn encode_command(command: api::Command, out: &mut [u8]) -> Result<us
 pub(crate) fn decode_command(input: &[u8]) -> Result<api::Command, WireError> {
     let mut r = Reader::new(input);
     Ok(match r.byte()? {
+        TAG_OPEN_TUN => api::Command::OpenTun {
+            ipv4: r.array()?,
+            ipv4_prefix_len: r.byte()?,
+            ipv6: r.array()?,
+            ipv6_prefix_len: r.byte()?,
+            mtu: r.u16()?,
+        },
         TAG_OPEN_UDP => api::Command::OpenUdp { port: r.u16()? },
         TAG_OPEN_TCP_LISTEN => api::Command::OpenTcpListen { port: r.u16()? },
         TAG_OPEN_TCP_CONNECT => api::Command::OpenTcpConnect {
@@ -257,6 +289,10 @@ pub(crate) fn decode_command(input: &[u8]) -> Result<api::Command, WireError> {
         TAG_SEND_TCP => api::Command::SendTcp {
             handle: api::NetHandle(r.u32()?),
             data: r.byte_buf()?,
+        },
+        TAG_SEND_IP_PACKET => api::Command::SendIpPacket {
+            handle: api::NetHandle(r.u32()?),
+            packet: r.byte_buf()?,
         },
         TAG_CLOSE => api::Command::Close {
             handle: api::NetHandle(r.u32()?),
@@ -337,6 +373,11 @@ pub(crate) fn encode_event(event: api::Event, out: &mut [u8]) -> Result<usize, W
             w.byte(TAG_TCP_SENT)?;
             w.u32(handle.0)?;
             w.u16(len)?;
+        }
+        api::Event::IpPacket { handle, packet } => {
+            w.byte(TAG_IP_PACKET)?;
+            w.u32(handle.0)?;
+            w.byte_buf(&packet)?;
         }
         api::Event::IcmpReply {
             from,
@@ -425,6 +466,10 @@ pub(crate) fn decode_event(input: &[u8]) -> Result<api::Event, WireError> {
         TAG_TCP_SENT => api::Event::TcpSent {
             handle: api::NetHandle(r.u32()?),
             len: r.u16()?,
+        },
+        TAG_IP_PACKET => api::Event::IpPacket {
+            handle: api::NetHandle(r.u32()?),
+            packet: r.byte_buf()?,
         },
         TAG_ICMP_REPLY => api::Event::IcmpReply {
             from: r.array()?,

@@ -200,6 +200,7 @@ impl HttpServer {
             }
             api::Event::UdpPacket { .. }
             | api::Event::UdpPacketV6 { .. }
+            | api::Event::IpPacket { .. }
             | api::Event::IcmpReply { .. }
             | api::Event::IcmpReplyV6 { .. } => HttpServerEvent::None,
         }

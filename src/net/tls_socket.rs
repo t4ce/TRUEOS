@@ -515,6 +515,7 @@ fn tls_socket_tick_once() {
                     let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
                 }
                 vnet::Event::TcpSent { .. } => {}
+                vnet::Event::IpPacket { .. } => {}
                 vnet::Event::UdpPacket { .. } => {}
                 vnet::Event::UdpPacketV6 { .. } => {}
                 vnet::Event::IcmpReply { .. } => {}

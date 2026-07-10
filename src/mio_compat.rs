@@ -1133,6 +1133,7 @@ impl MioCompat {
             api::Event::Error { msg } => {
                 self.handle_unattributed_error(msg);
             }
+            api::Event::IpPacket { .. } => {}
             api::Event::IcmpReply { .. } => {}
             api::Event::IcmpReplyV6 { .. } => {}
         }

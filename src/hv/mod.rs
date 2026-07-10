@@ -329,10 +329,8 @@ impl BlueprintConsoleRoute {
     }
 }
 
-fn blueprint_uses_net_shell_direct_path(archive: &str) -> bool {
-    let name = archive.rsplit('/').next().unwrap_or(archive);
-    let stem = name.strip_suffix(".bp").unwrap_or(name);
-    stem == "Player"
+fn blueprint_uses_net_shell_direct_path(console_surface: BlueprintConsoleSurface) -> bool {
+    console_surface.is_terminal()
 }
 
 #[derive(Clone)]
@@ -1282,17 +1280,17 @@ pub fn stage_blueprint_launch(
         state.archive.as_str(),
         state.module_bytes.as_slice(),
     );
-    let console_route = if blueprint_uses_net_shell_direct_path(state.archive.as_str()) {
+    let console_route = if blueprint_uses_net_shell_direct_path(console_surface) {
         BlueprintConsoleRoute::NetShellDirect
     } else {
         BlueprintConsoleRoute::Matrix
     };
     if console_route.is_net_shell_direct() {
         if crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
-            hvlogf(format_args!("hv: vm{} console route: Player path2 direct net-shell", vm_id));
+            hvlogf(format_args!("hv: vm{} console route: terminal direct net-shell", vm_id));
         } else {
             hvwarnf(format_args!(
-                "hv: vm{} console route: Player path2 direct net-shell claim failed",
+                "hv: vm{} console route: terminal direct net-shell claim failed",
                 vm_id
             ));
         }

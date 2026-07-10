@@ -409,6 +409,7 @@ pub async fn ws_time_task() {
                         }
                     }
                     api::Event::TcpSent { .. } => {}
+                    api::Event::IpPacket { .. } => {}
                     api::Event::UdpPacket { .. } => {}
                     api::Event::UdpPacketV6 { .. } => {}
                     api::Event::IcmpReply { .. } => {}

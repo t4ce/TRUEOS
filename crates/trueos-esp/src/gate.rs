@@ -101,6 +101,7 @@ impl GateDiscovery {
             | api::Event::TcpEstablished { .. }
             | api::Event::TcpData { .. }
             | api::Event::TcpSent { .. }
+            | api::Event::IpPacket { .. }
             | api::Event::IcmpReply { .. }
             | api::Event::IcmpReplyV6 { .. }
             | api::Event::Error { .. }

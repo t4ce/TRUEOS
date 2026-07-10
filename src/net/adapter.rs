@@ -509,6 +509,13 @@ pub struct NetEndpointV6 {
 
 #[derive(Clone, Debug)]
 pub enum NetCommand {
+    OpenTun {
+        ipv4: [u8; 4],
+        ipv4_prefix_len: u8,
+        ipv6: [u8; 16],
+        ipv6_prefix_len: u8,
+        mtu: u16,
+    },
     OpenUdp {
         port: u16,
     },
@@ -534,6 +541,10 @@ pub enum NetCommand {
     SendTcp {
         handle: NetHandle,
         data: Vec<u8>,
+    },
+    SendIpPacket {
+        handle: NetHandle,
+        packet: Vec<u8>,
     },
     IcmpEcho {
         target: [u8; 4],
@@ -585,6 +596,10 @@ pub enum NetEvent {
         handle: NetHandle,
         len: usize,
     },
+    IpPacket {
+        handle: NetHandle,
+        packet: Vec<u8>,
+    },
     IcmpReply {
         from: [u8; 4],
         seq: u16,
@@ -603,6 +618,7 @@ pub enum NetEvent {
 pub enum SocketKind {
     Udp,
     Tcp,
+    Tun,
 }
 
 pub struct NetQueue<T> {
@@ -696,6 +712,7 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
             | NetEvent::Closed { .. }
             | NetEvent::UdpPacket { .. }
             | NetEvent::UdpPacketV6 { .. }
+            | NetEvent::IpPacket { .. }
     );
 
     let guard = APP_QUEUES.lock();
@@ -1458,6 +1475,16 @@ struct SocketRecord {
     last_tcp_state: Option<tcp::State>,
 }
 
+struct TunRecord {
+    owner: &'static str,
+    handle: NetHandle,
+    ipv4: [u8; 4],
+    ipv4_prefix_len: u8,
+    ipv6: [u8; 16],
+    ipv6_prefix_len: u8,
+    mtu: u16,
+}
+
 fn log_tcp_connect_record_state(prefix: &str, rec: &SocketRecord, state: tcp::State) {
     if let Some(remote) = rec.tcp_remote_v4 {
         let local_port = rec.tcp_local_port.unwrap_or(0);
@@ -1512,6 +1539,7 @@ struct NetService {
     rx_buffer: VecDeque<Vec<u8>>,
     tx_buffer: VecDeque<Vec<u8>>,
     records: Vec<SocketRecord>,
+    tun_records: Vec<TunRecord>,
     next_handle: AtomicU32,
     icmp: SocketHandle,
 
@@ -1698,6 +1726,7 @@ impl NetService {
             rx_buffer,
             tx_buffer,
             records: Vec::new(),
+            tun_records: Vec::new(),
             next_handle: AtomicU32::new(1),
             icmp,
 
@@ -2169,6 +2198,15 @@ impl NetService {
         }
     }
 
+    fn remove_tun_record(&mut self, handle: NetHandle) -> bool {
+        if let Some(idx) = self.tun_records.iter().position(|rec| rec.handle == handle) {
+            self.tun_records.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
     fn link_up(&self) -> bool {
         crate::net::link_state_at(self.device_index)
             .map(|state| state.up)
@@ -2181,6 +2219,38 @@ impl NetService {
         } else {
             Err("link down")
         }
+    }
+
+    fn open_tun(
+        &mut self,
+        owner: &'static str,
+        ipv4: [u8; 4],
+        ipv4_prefix_len: u8,
+        ipv6: [u8; 16],
+        ipv6_prefix_len: u8,
+        mtu: u16,
+    ) -> Result<NetHandle, &'static str> {
+        if self.records.len() + self.tun_records.len() >= MAX_SOCKETS {
+            return Err("no sockets available");
+        }
+        if mtu == 0 || mtu as usize > v::vnet::MAX_MSG {
+            return Err("bad tun mtu");
+        }
+        if ipv4_prefix_len > 32 || ipv6_prefix_len > 128 {
+            return Err("bad tun prefix");
+        }
+
+        let handle = self.alloc_handle();
+        self.tun_records.push(TunRecord {
+            owner,
+            handle,
+            ipv4,
+            ipv4_prefix_len,
+            ipv6,
+            ipv6_prefix_len,
+            mtu,
+        });
+        Ok(handle)
     }
 
     fn open_udp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
@@ -3539,6 +3609,37 @@ impl NetService {
 
     fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {
         match cmd {
+            NetCommand::OpenTun {
+                ipv4,
+                ipv4_prefix_len,
+                ipv6,
+                ipv6_prefix_len,
+                mtu,
+            } => match self.open_tun(owner, ipv4, ipv4_prefix_len, ipv6, ipv6_prefix_len, mtu) {
+                Ok(handle) => {
+                    crate::log_info!(target: "net";
+                        "net: open-tun owner={} handle={} ipv4={}.{}.{}.{}/{} mtu={}\n",
+                        owner,
+                        handle.0,
+                        ipv4[0],
+                        ipv4[1],
+                        ipv4[2],
+                        ipv4[3],
+                        ipv4_prefix_len,
+                        mtu
+                    );
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Opened {
+                            handle,
+                            kind: SocketKind::Tun,
+                        },
+                    );
+                }
+                Err(msg) => {
+                    let _ = push_event(owner, NetEvent::Error { msg });
+                }
+            },
             NetCommand::OpenUdp { port } => match self.open_udp(owner, port) {
                 Ok(handle) => {
                     let _ = push_event(
@@ -3745,6 +3846,53 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Closed { handle });
                 }
             }
+            NetCommand::SendIpPacket { handle, packet } => {
+                let Some(rec) = self.tun_records.iter().find(|rec| rec.handle == handle) else {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Error {
+                            msg: "bad tun handle",
+                        },
+                    );
+                    return;
+                };
+                if rec.owner != owner {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Error {
+                            msg: "bad tun owner",
+                        },
+                    );
+                    return;
+                }
+                if packet.is_empty() || packet.len() > rec.mtu as usize {
+                    let _ = push_event(
+                        owner,
+                        NetEvent::Error {
+                            msg: "bad tun packet size",
+                        },
+                    );
+                    return;
+                }
+                match packet[0] >> 4 {
+                    4 | 6 => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Error {
+                                msg: "tun ip injection not implemented",
+                            },
+                        );
+                    }
+                    _ => {
+                        let _ = push_event(
+                            owner,
+                            NetEvent::Error {
+                                msg: "bad ip version",
+                            },
+                        );
+                    }
+                }
+            }
             NetCommand::IcmpEcho { target, seq, data } => {
                 self.send_icmp_echo(owner, target, seq, data);
             }
@@ -3752,7 +3900,9 @@ impl NetService {
                 self.send_icmp_echo_v6(owner, target, seq, data);
             }
             NetCommand::Close { handle } => {
-                if !self.close_loopback_tcp(handle) {
+                if self.remove_tun_record(handle) {
+                    let _ = push_event(owner, NetEvent::Closed { handle });
+                } else if !self.close_loopback_tcp(handle) {
                     self.remove_record(handle);
                     let _ = push_event(owner, NetEvent::Closed { handle });
                 }
@@ -3990,6 +4140,7 @@ impl NetService {
                     false
                 }
                 SocketKind::Tcp => self.poll_tcp(idx),
+                SocketKind::Tun => false,
             };
             if !removed {
                 idx += 1;

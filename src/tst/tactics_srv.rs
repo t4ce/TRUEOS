@@ -1450,6 +1450,7 @@ fn drain_endpoint(endpoint: &mut TacticsEndpoint, server: &mut TacticsServer) {
                 }
             }
             api::Event::TcpSent { .. }
+            | api::Event::IpPacket { .. }
             | api::Event::UdpPacket { .. }
             | api::Event::UdpPacketV6 { .. }
             | api::Event::IcmpReply { .. }

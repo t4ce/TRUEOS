@@ -269,6 +269,19 @@ fn to_kernel_endpoint_v6(ep: api::EndpointV6) -> NetEndpointV6 {
 
 fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
     Ok(match cmd {
+        api::Command::OpenTun {
+            ipv4,
+            ipv4_prefix_len,
+            ipv6,
+            ipv6_prefix_len,
+            mtu,
+        } => NetCommand::OpenTun {
+            ipv4,
+            ipv4_prefix_len,
+            ipv6,
+            ipv6_prefix_len,
+            mtu,
+        },
         api::Command::OpenUdp { port } => NetCommand::OpenUdp { port },
         api::Command::OpenTcpListen { port } => NetCommand::OpenTcpListen { port },
         api::Command::OpenTcpConnect { remote } => NetCommand::OpenTcpConnect {
@@ -299,6 +312,10 @@ fn to_kernel_cmd(cmd: api::Command) -> Result<NetCommand, ()> {
             handle: NetHandle(handle.0),
             data: Vec::from(data.as_slice()),
         },
+        api::Command::SendIpPacket { handle, packet } => NetCommand::SendIpPacket {
+            handle: NetHandle(handle.0),
+            packet: Vec::from(packet.as_slice()),
+        },
         api::Command::Close { handle } => NetCommand::Close {
             handle: NetHandle(handle.0),
         },
@@ -319,6 +336,7 @@ fn from_kernel_kind(kind: SocketKind) -> api::SocketKind {
     match kind {
         SocketKind::Udp => api::SocketKind::Udp,
         SocketKind::Tcp => api::SocketKind::Tcp,
+        SocketKind::Tun => api::SocketKind::Tun,
     }
 }
 
@@ -370,6 +388,10 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
         NetEvent::TcpSent { handle, len } => api::Event::TcpSent {
             handle: api::NetHandle(handle.0),
             len: len.min(u16::MAX as usize) as u16,
+        },
+        NetEvent::IpPacket { handle, packet } => api::Event::IpPacket {
+            handle: api::NetHandle(handle.0),
+            packet: api::ByteBuf::from_slice_trunc(&packet[..]),
         },
         NetEvent::IcmpReply {
             from,

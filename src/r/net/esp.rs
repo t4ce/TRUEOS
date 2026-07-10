@@ -380,6 +380,7 @@ pub async fn esp_piano_udp_task() {
                     | v::vnet::Event::TcpEstablished { .. }
                     | v::vnet::Event::TcpData { .. }
                     | v::vnet::Event::TcpSent { .. }
+                    | v::vnet::Event::IpPacket { .. }
                     | v::vnet::Event::IcmpReply { .. }
                     | v::vnet::Event::IcmpReplyV6 { .. }
                     | v::vnet::Event::Opened { .. }

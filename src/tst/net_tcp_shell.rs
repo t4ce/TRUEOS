@@ -347,6 +347,7 @@ pub async fn net_shell_task() {
                     }
                     NetEvent::UdpPacket { .. } => {}
                     NetEvent::UdpPacketV6 { .. } => {}
+                    NetEvent::IpPacket { .. } => {}
                     NetEvent::IcmpReply { .. } => {}
                     NetEvent::IcmpReplyV6 { .. } => {}
                 }

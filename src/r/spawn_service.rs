@@ -1721,7 +1721,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_trueosfs_ready_hook,
     ),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
-    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
+    TaskSpec::enabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
 pub fn task_index_by_name(name: &str) -> Option<usize> {

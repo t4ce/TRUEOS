@@ -497,4 +497,7 @@ pub mod cabi {
         trueos_cabi_net_fetch_result, trueos_cabi_net_fetch_start, trueos_cabi_net_fetch_wait,
         trueos_cabi_net_prewarm_url_start,
     };
+    pub use crate::r::net::socket_cabi::{
+        trueos_cabi_tun_close, trueos_cabi_tun_open, trueos_cabi_tun_recv, trueos_cabi_tun_send,
+    };
 }

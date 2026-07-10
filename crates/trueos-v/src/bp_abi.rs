@@ -216,6 +216,16 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_socket_tcp_shutdown(socket_id: u32, how: u32) -> i32;
     pub fn trueos_cabi_socket_tcp_take_error(socket_id: u32) -> i32;
+    pub fn trueos_cabi_tun_open(
+        ipv4_be: u32,
+        ipv4_prefix_len: u32,
+        ipv6_ptr: *const u8,
+        ipv6_prefix_len: u32,
+        mtu: u32,
+    ) -> i32;
+    pub fn trueos_cabi_tun_close(tun_id: u32) -> i32;
+    pub fn trueos_cabi_tun_send(tun_id: u32, data_ptr: *const u8, data_len: usize) -> isize;
+    pub fn trueos_cabi_tun_recv(tun_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_socket_tcp_peer_v4(
         socket_id: u32,
         out_addr_be: *mut u32,

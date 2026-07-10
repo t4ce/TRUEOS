@@ -38,6 +38,7 @@ impl EndpointV6 {
 pub enum SocketKind {
     Udp,
     Tcp,
+    Tun,
 }
 
 /// Fixed-size byte buffer used by vnet commands/events.
@@ -121,6 +122,13 @@ pub const MAX_MSG: usize = 32 * 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    OpenTun {
+        ipv4: [u8; 4],
+        ipv4_prefix_len: u8,
+        ipv6: [u8; 16],
+        ipv6_prefix_len: u8,
+        mtu: u16,
+    },
     OpenUdp {
         port: u16,
     },
@@ -146,6 +154,10 @@ pub enum Command {
     SendTcp {
         handle: NetHandle,
         data: ByteBuf<MAX_MSG>,
+    },
+    SendIpPacket {
+        handle: NetHandle,
+        packet: ByteBuf<MAX_MSG>,
     },
     Close {
         handle: NetHandle,
@@ -196,6 +208,10 @@ pub enum Event {
     TcpSent {
         handle: NetHandle,
         len: u16,
+    },
+    IpPacket {
+        handle: NetHandle,
+        packet: ByteBuf<MAX_MSG>,
     },
     IcmpReply {
         from: [u8; 4],

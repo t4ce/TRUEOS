@@ -709,6 +709,9 @@ unsafe fn guest_fs_read_file(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize
     if out_cap < len {
         return FS_ERR_NO_SPACE as isize;
     }
+    let Some(out) = crate::std_abi_shim::abi_write_bytes(out_ptr, len) else {
+        return FS_ERR_BAD_PARAM as isize;
+    };
 
     let mut offset = 0usize;
     while offset < len {
@@ -731,9 +734,7 @@ unsafe fn guest_fs_read_file(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize
         if got == 0 || got > want {
             return FS_ERR_IO as isize;
         }
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr.add(offset), got);
-        }
+        out[offset..offset + got].copy_from_slice(&bytes[..got]);
         offset += got;
     }
     len as isize
@@ -862,6 +863,9 @@ unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize)
     if out_cap < len {
         return FS_ERR_NO_SPACE as isize;
     }
+    let Some(out) = crate::std_abi_shim::abi_write_bytes(out_ptr, len) else {
+        return FS_ERR_BAD_PARAM as isize;
+    };
 
     let mut offset = 0usize;
     while offset < len {
@@ -885,9 +889,7 @@ unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize)
         if got == 0 {
             break;
         }
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr.add(offset), got);
-        }
+        out[offset..offset + got].copy_from_slice(&bytes[..got]);
         offset = offset.saturating_add(got);
     }
 

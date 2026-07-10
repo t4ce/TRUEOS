@@ -1131,7 +1131,7 @@ unsafe fn log_js_args(
             if idx > 0 {
                 log_str(" ");
             }
-            let Some(text) = qjs::jsbind::JsStringRef::new(ctx, *arg) else {
+            let Some(text) = describe_console_arg(ctx, *arg) else {
                 log_str("<toString failed>");
                 continue;
             };
@@ -1139,6 +1139,47 @@ unsafe fn log_js_args(
         }
     }
     log_str("\n");
+}
+
+unsafe fn describe_console_arg<'a>(
+    ctx: *mut qjs::JSContext,
+    value: qjs::JSValueConst,
+) -> Option<qjs::jsbind::JsStringRef<'a>> {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return qjs::jsbind::JsStringRef::new(ctx, value);
+    }
+
+    let describe = qjs::JS_GetPropertyStr(
+        ctx,
+        global,
+        b"__trueosConsoleDescribe\0".as_ptr() as *const c_char,
+    );
+    qjs::js_free_value(ctx, global);
+    if describe.is_exception() || describe.tag == qjs::JS_TAG_UNDEFINED || describe.tag == qjs::JS_TAG_NULL {
+        qjs::js_free_value(ctx, describe);
+        return qjs::jsbind::JsStringRef::new(ctx, value);
+    }
+
+    let arg = qjs::js_dup_value(ctx, value);
+    let described = qjs::JS_Call(
+        ctx,
+        describe,
+        qjs::JSValue::undefined(),
+        1,
+        &arg as *const qjs::JSValueConst,
+    );
+    qjs::js_free_value(ctx, arg);
+    qjs::js_free_value(ctx, describe);
+    if described.is_exception() {
+        let exc = qjs::JS_GetException(ctx);
+        qjs::js_free_value(ctx, exc);
+        return qjs::jsbind::JsStringRef::new(ctx, value);
+    }
+
+    let out = qjs::jsbind::JsStringRef::new(ctx, described);
+    qjs::js_free_value(ctx, described);
+    out
 }
 
 fn strip_truesurfer_synthetic_markers(bytes: &[u8]) -> String {
@@ -1338,6 +1379,76 @@ unsafe fn ensure_global_console(ctx: *mut qjs::JSContext) {
         qjs::js_free_value(ctx, global);
         return;
     }
+
+    let shim_src = br#"
+(function (G) {
+    if (!G) return;
+
+    function formatBytes(bytes, maxItems) {
+        const parts = [];
+        const limit = Math.min(bytes.length >>> 0, maxItems >>> 0);
+        for (let i = 0; i < limit; i += 1) {
+            parts.push(String(bytes[i]));
+        }
+        if ((bytes.length >>> 0) > limit) {
+            parts.push('...');
+        }
+        return parts.join(', ');
+    }
+
+    G.__trueosConsoleDescribe = function (value) {
+        if (value === undefined) return 'undefined';
+        if (value === null) return 'null';
+
+        const kind = typeof value;
+        if (kind === 'string' || kind === 'number' || kind === 'boolean' || kind === 'bigint') {
+            return String(value);
+        }
+        if (kind === 'function') {
+            return String(value);
+        }
+
+        if (value instanceof ArrayBuffer) {
+            const bytes = new Uint8Array(value);
+            return 'ArrayBuffer(' + bytes.byteLength + ') [' + formatBytes(bytes, 32) + ']';
+        }
+
+        if (typeof ArrayBuffer !== 'undefined' && typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(value)) {
+            const ctorName = value && value.constructor && value.constructor.name ? String(value.constructor.name) : 'TypedArray';
+            const count = typeof value.length === 'number' ? value.length : (typeof value.byteLength === 'number' ? value.byteLength : 0);
+            let bytes;
+            if (value instanceof Uint8Array) {
+                bytes = value;
+            } else {
+                bytes = new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength || 0);
+            }
+            return ctorName + '(' + count + ') [' + formatBytes(bytes, 32) + ']';
+        }
+
+        try {
+            const json = JSON.stringify(value, null, 2);
+            if (typeof json === 'string') return json;
+        } catch (_err) {}
+
+        try {
+            return String(value);
+        } catch (_err) {}
+
+        return Object.prototype.toString.call(value);
+    };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+"#;
+
+    let shim = qjs::js_eval_bytes(
+        ctx,
+        shim_src,
+        b"<node-console-describe>\0".as_ptr() as *const c_char,
+        qjs::JS_EVAL_TYPE_GLOBAL,
+    );
+    if shim.is_exception() {
+        qjs::qjs_diag::dump_last_exception(ctx, "node console describe");
+    }
+    qjs::js_free_value(ctx, shim);
 
     macro_rules! set_console_fn {
         ($name:literal, $func:expr, $argc:expr) => {{

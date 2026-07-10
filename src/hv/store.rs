@@ -597,6 +597,7 @@ pub async fn vm_store_replication_task() {
                 }
                 NetEvent::UdpPacket { .. }
                 | NetEvent::UdpPacketV6 { .. }
+                | NetEvent::IpPacket { .. }
                 | NetEvent::IcmpReply { .. }
                 | NetEvent::IcmpReplyV6 { .. } => {}
             }

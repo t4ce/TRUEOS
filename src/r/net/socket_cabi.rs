@@ -37,6 +37,8 @@ const MSG_PEEK: i32 = 2;
 
 static SOCKET_SEQ: Mutex<u32> = Mutex::new(1);
 static SOCKETS: Mutex<BTreeMap<u32, SocketState>> = Mutex::new(BTreeMap::new());
+static TUN_SEQ: Mutex<u32> = Mutex::new(1);
+static TUNS: Mutex<BTreeMap<u32, TunState>> = Mutex::new(BTreeMap::new());
 
 #[derive(Clone, Copy)]
 enum RemoteAddr {
@@ -59,6 +61,16 @@ struct SocketState {
     closed: bool,
     last_error: i32,
     recv_buf: VecDeque<u8>,
+}
+
+struct TunState {
+    owner_vm: Option<u8>,
+    vnet: VNetBridge,
+    handle: Option<api::NetHandle>,
+    opened: bool,
+    closed: bool,
+    last_error: i32,
+    recv_packets: VecDeque<Vec<u8>>,
 }
 
 impl SocketState {
@@ -103,6 +115,13 @@ fn next_socket_id() -> u32 {
     next
 }
 
+fn next_tun_id() -> u32 {
+    let mut seq = TUN_SEQ.lock();
+    let next = *seq;
+    *seq = seq.saturating_add(1).max(1);
+    next
+}
+
 fn with_socket_mut<T>(
     socket_id: u32,
     f: impl FnOnce(&mut SocketState) -> Result<T, i32>,
@@ -116,6 +135,18 @@ fn with_socket_mut<T>(
         return Err(-EBADF);
     }
     f(socket)
+}
+
+fn with_tun_mut<T>(tun_id: u32, f: impl FnOnce(&mut TunState) -> Result<T, i32>) -> Result<T, i32> {
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let mut tuns = TUNS.lock();
+    let Some(tun) = tuns.get_mut(&tun_id) else {
+        return Err(-EBADF);
+    };
+    if tun.owner_vm != owner_vm {
+        return Err(-EBADF);
+    }
+    f(tun)
 }
 
 fn pump_socket(socket: &mut SocketState) {
@@ -155,6 +186,31 @@ fn pump_socket(socket: &mut SocketState) {
             api::Event::Error { msg } => {
                 socket.last_error = map_net_error(msg);
                 socket.connect_submitted = false;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn pump_tun(tun: &mut TunState) {
+    while let Some(event) = tun.vnet.pop_event() {
+        match event {
+            api::Event::Opened { handle, kind } if kind == api::SocketKind::Tun => {
+                tun.handle = Some(handle);
+                tun.opened = true;
+                tun.closed = false;
+                tun.last_error = 0;
+            }
+            api::Event::IpPacket { handle, packet } if tun.handle == Some(handle) => {
+                tun.recv_packets.push_back(packet.as_slice().to_vec());
+            }
+            api::Event::Closed { handle } if tun.handle == Some(handle) => {
+                tun.handle = None;
+                tun.opened = false;
+                tun.closed = true;
+            }
+            api::Event::Error { msg } => {
+                tun.last_error = map_net_error(msg);
             }
             _ => {}
         }
@@ -655,6 +711,200 @@ pub(crate) fn socket_tcp_peer_v6_host(socket_id: u32) -> Result<([u8; 16], u16),
         Some(RemoteAddr::V4(_, _)) => Err(-EAFNOSUPPORT),
         None => Err(-ENOTCONN),
     })
+}
+
+pub(crate) fn tun_open_host(
+    ipv4_be: u32,
+    ipv4_prefix_len: u32,
+    ipv6: [u8; 16],
+    ipv6_prefix_len: u32,
+    mtu: u32,
+) -> i32 {
+    if ipv4_prefix_len > 32 || ipv6_prefix_len > 128 || mtu == 0 || mtu > api::MAX_MSG as u32 {
+        return -EINVAL;
+    }
+    if crate::net::device_count() == 0 {
+        return -ENETUNREACH;
+    }
+
+    let Some(vnet) = VNetBridge::open_primary() else {
+        return -ENETUNREACH;
+    };
+    let ipv4 = ipv4_be.to_be_bytes();
+    if vnet
+        .submit(api::Command::OpenTun {
+            ipv4,
+            ipv4_prefix_len: ipv4_prefix_len as u8,
+            ipv6,
+            ipv6_prefix_len: ipv6_prefix_len as u8,
+            mtu: mtu as u16,
+        })
+        .is_err()
+    {
+        return -EAGAIN;
+    }
+
+    let tun_id = next_tun_id();
+    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    TUNS.lock().insert(
+        tun_id,
+        TunState {
+            owner_vm,
+            vnet,
+            handle: None,
+            opened: false,
+            closed: false,
+            last_error: 0,
+            recv_packets: VecDeque::new(),
+        },
+    );
+
+    let mut result = Ok(());
+    let ready = wait_until(Some(1_000), || {
+        match with_tun_mut(tun_id, |tun| {
+            pump_tun(tun);
+            if tun.opened {
+                return Ok(Some(Ok(())));
+            }
+            if tun.last_error != 0 {
+                return Ok(Some(Err(-tun.last_error)));
+            }
+            if tun.closed {
+                return Ok(Some(Err(-ENOTCONN)));
+            }
+            Ok(None)
+        }) {
+            Ok(Some(state)) => {
+                result = state;
+                true
+            }
+            Ok(None) => false,
+            Err(err) => {
+                result = Err(err);
+                true
+            }
+        }
+    });
+
+    if ready && result.is_ok() {
+        tun_id as i32
+    } else {
+        TUNS.lock().remove(&tun_id);
+        result.err().unwrap_or(-ETIMEDOUT)
+    }
+}
+
+pub(crate) fn tun_close_host(tun_id: u32) -> i32 {
+    match with_tun_mut(tun_id, |tun| {
+        if let Some(handle) = tun.handle.take() {
+            let _ = tun.vnet.submit(api::Command::Close { handle });
+        }
+        tun.closed = true;
+        Ok(())
+    }) {
+        Ok(()) => {
+            TUNS.lock().remove(&tun_id);
+            0
+        }
+        Err(err) => err,
+    }
+}
+
+pub(crate) fn tun_send_host(tun_id: u32, data: &[u8]) -> Result<usize, i32> {
+    if data.is_empty() || data.len() > api::MAX_MSG {
+        return Err(-EMSGSIZE);
+    }
+
+    with_tun_mut(tun_id, |tun| {
+        pump_tun(tun);
+        if tun.last_error != 0 {
+            return Err(-tun.last_error);
+        }
+        let Some(handle) = tun.handle else {
+            return Err(-EAGAIN);
+        };
+        tun.vnet
+            .submit(api::Command::SendIpPacket {
+                handle,
+                packet: api::ByteBuf::from_slice_trunc(data),
+            })
+            .map_err(|_| -ENOBUFS)?;
+        Ok(data.len())
+    })
+}
+
+pub(crate) fn tun_recv_host(tun_id: u32, out: &mut [u8]) -> Result<Option<usize>, i32> {
+    if out.is_empty() {
+        return Err(-EINVAL);
+    }
+
+    with_tun_mut(tun_id, |tun| {
+        pump_tun(tun);
+        if let Some(packet) = tun.recv_packets.pop_front() {
+            if packet.len() > out.len() {
+                return Err(-EMSGSIZE);
+            }
+            out[..packet.len()].copy_from_slice(&packet);
+            return Ok(Some(packet.len()));
+        }
+        if tun.last_error != 0 {
+            return Err(-tun.last_error);
+        }
+        if tun.closed {
+            return Err(-ENOTCONN);
+        }
+        Ok(None)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_tun_open(
+    ipv4_be: u32,
+    ipv4_prefix_len: u32,
+    ipv6_ptr: *const u8,
+    ipv6_prefix_len: u32,
+    mtu: u32,
+) -> i32 {
+    if ipv6_ptr.is_null() {
+        return -EINVAL;
+    }
+
+    let mut ipv6 = [0u8; 16];
+    // SAFETY: the caller provides a 16-byte IPv6 buffer.
+    unsafe { ipv6.copy_from_slice(slice::from_raw_parts(ipv6_ptr, 16)) };
+    tun_open_host(ipv4_be, ipv4_prefix_len, ipv6, ipv6_prefix_len, mtu)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_tun_close(tun_id: u32) -> i32 {
+    tun_close_host(tun_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_tun_send(tun_id: u32, data_ptr: *const u8, data_len: usize) -> isize {
+    if data_ptr.is_null() {
+        return -EINVAL as isize;
+    }
+    // SAFETY: the caller provides a data buffer of `data_len` bytes.
+    let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
+    match tun_send_host(tun_id, data) {
+        Ok(len) => len as isize,
+        Err(err) => err as isize,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_tun_recv(tun_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize {
+    if out_ptr.is_null() {
+        return -EINVAL as isize;
+    }
+    // SAFETY: the caller provides a writable buffer of `out_cap` bytes.
+    let out = unsafe { slice::from_raw_parts_mut(out_ptr, out_cap) };
+    match tun_recv_host(tun_id, out) {
+        Ok(Some(len)) => len as isize,
+        Ok(None) => -EAGAIN as isize,
+        Err(err) => err as isize,
+    }
 }
 
 #[unsafe(no_mangle)]
