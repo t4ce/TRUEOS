@@ -208,6 +208,17 @@ pub fn has_claimed_device() -> bool {
     CLAIMED_DEVICE.lock().is_some()
 }
 
+/// Keep emulator policy aligned with the existing Intel display hardware split.
+/// A VM with the real display device passed through intentionally follows the
+/// hardware path, because it needs the same display/GPGPU handling.
+pub(crate) fn is_emulator_environment() -> bool {
+    !crate::pci::with_devices(|devices| {
+        devices
+            .iter()
+            .any(|device| device.vendor == INTEL_VENDOR_ID && device.class == PCI_CLASS_DISPLAY)
+    })
+}
+
 pub(crate) fn claimed_device() -> Option<Dev> {
     *CLAIMED_DEVICE.lock()
 }

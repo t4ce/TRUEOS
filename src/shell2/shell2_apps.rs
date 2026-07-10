@@ -3,12 +3,14 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 
 use embassy_executor::Spawner;
+use sha2::{Digest, Sha256};
 
 use super::cmds::run;
 use super::cmds::tlb_helper::TlbTable;
 use super::{
     MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
-    print_matrix_target_line, print_shell_line, set_matrix_target_active,
+    print_matrix_target_system_line as print_matrix_target_line, print_shell_line,
+    set_matrix_target_active,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -204,14 +206,19 @@ fn print_available(io: &'static dyn ShellBackend2) {
 #[derive(Clone)]
 struct OnlineApp {
     name: String,
+    archive_name: String,
+    sha256: String,
     url: String,
+    display_url: String,
 }
 
 const ONLINE_APPS_URL: &str = "https://trueos.eu/apps";
 const ONLINE_LIST_MAX_BYTES: usize = 1024 * 1024;
 const ONLINE_APP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
-const ONLINE_HEADERS: &[&str; 3] = &["id", "module", "url"];
+const ONLINE_APP_HASH_SEPARATOR: &str = "§§";
+const SHA256_HEX_LEN: usize = 64;
+const ONLINE_HEADERS: &[&str; 4] = &["id", "app", "url", "sha256"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
     crate::r::net::https::get_bytes_shared(url.as_str(), ONLINE_FETCH_TIMEOUT_MS, max_bytes).await
@@ -243,6 +250,28 @@ fn parse_attr_value<'a>(text: &'a str, attr: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+fn published_app_name_parts(value: &str) -> Option<(&str, &str)> {
+    if let Some((archive_name, sha256)) = value.rsplit_once(ONLINE_APP_HASH_SEPARATOR) {
+        if archive_name.to_ascii_lowercase().ends_with(".bp")
+            && sha256.len() == SHA256_HEX_LEN
+            && sha256.as_bytes().iter().all(u8::is_ascii_hexdigit)
+        {
+            return Some((archive_name, sha256));
+        }
+        return None;
+    }
+
+    value
+        .to_ascii_lowercase()
+        .ends_with(".bp")
+        .then_some((value, "-"))
+}
+
+fn display_url_for_archive(url: &str, archive_name: &str) -> String {
+    let directory_end = url.rfind('/').map_or(0, |index| index + 1);
+    alloc::format!("{}{}", &url[..directory_end], archive_name)
+}
+
 fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
     let mut out = Vec::new();
     let mut rest = html;
@@ -268,13 +297,19 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             rest = &rest[li_end..];
             continue;
         };
-        let name = link[tag_end + 1..tag_end + 1 + text_end].trim();
-        if href.ends_with(".bp") && !name.is_empty() {
-            out.push(OnlineApp {
-                name: name.to_string(),
-                url: absolutize_online_url(href),
-            });
-        }
+        let published_name = link[tag_end + 1..tag_end + 1 + text_end].trim();
+        let Some((archive_name, sha256)) = published_app_name_parts(published_name) else {
+            rest = &rest[li_end..];
+            continue;
+        };
+        let url = absolutize_online_url(href);
+        out.push(OnlineApp {
+            name: trim_bp_suffix(archive_name).to_string(),
+            archive_name: archive_name.to_string(),
+            sha256: sha256.to_string(),
+            display_url: display_url_for_archive(url.as_str(), archive_name),
+            url,
+        });
         rest = &rest[li_end..];
     }
     out
@@ -292,14 +327,96 @@ fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineA
         print_matrix_target_line(target, "apps: online list is empty");
         return;
     }
-    let table = TlbTable::with_width(ONLINE_HEADERS, width.saturating_sub(2));
+    let id_width = apps
+        .len()
+        .saturating_sub(1)
+        .to_string()
+        .len()
+        .max(ONLINE_HEADERS[0].len());
+    let app_width = apps
+        .iter()
+        .map(|app| app.name.chars().count())
+        .max()
+        .unwrap_or(ONLINE_HEADERS[1].len())
+        .max(ONLINE_HEADERS[1].len());
+    let sha_width = apps
+        .iter()
+        .map(|app| app.sha256.len())
+        .max()
+        .unwrap_or(ONLINE_HEADERS[3].len())
+        .max(ONLINE_HEADERS[3].len());
+    let table = TlbTable::with_width(ONLINE_HEADERS, width.saturating_sub(2))
+        .with_max_col_widths(&[id_width, app_width, 0, sha_width]);
     table.emit_header(|text| print_matrix_target_line(target, text));
     for (idx, app) in apps.iter().enumerate() {
         let id = alloc::format!("{}", idx);
-        let row = [id.as_str(), app.name.as_str(), app.url.as_str()];
+        let row = [
+            id.as_str(),
+            app.name.as_str(),
+            app.display_url.as_str(),
+            app.sha256.as_str(),
+        ];
         table.emit_row(&row, |text| print_matrix_target_line(target, text));
     }
     table.emit_footer(|text| print_matrix_target_line(target, text));
+}
+
+fn trim_bp_suffix(value: &str) -> &str {
+    let suffix_at = value.len().saturating_sub(3);
+    if value.is_char_boundary(suffix_at)
+        && value
+            .get(suffix_at..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".bp"))
+    {
+        &value[..suffix_at]
+    } else {
+        value
+    }
+}
+
+fn online_app_match_key(value: &str) -> &str {
+    let value = value.trim();
+    let end = value
+        .char_indices()
+        .find_map(|(idx, ch)| matches!(ch, '?' | '#').then_some(idx))
+        .unwrap_or(value.len());
+    let value = &value[..end];
+    let value = value.rsplit('/').next().unwrap_or(value);
+    let value = value
+        .rsplit_once(ONLINE_APP_HASH_SEPARATOR)
+        .map(|(archive_name, _)| archive_name)
+        .unwrap_or(value);
+    trim_bp_suffix(value)
+}
+
+fn resolve_online_app<'a>(apps: &'a [OnlineApp], selector: &str) -> Option<&'a OnlineApp> {
+    if let Ok(id) = selector.parse::<usize>() {
+        return apps.get(id);
+    }
+
+    let requested = online_app_match_key(selector);
+    apps.iter().find(|app| {
+        online_app_match_key(app.name.as_str()).eq_ignore_ascii_case(requested)
+            || online_app_match_key(app.archive_name.as_str()).eq_ignore_ascii_case(requested)
+            || online_app_match_key(app.url.as_str()).eq_ignore_ascii_case(requested)
+    })
+}
+
+fn online_app_archive_name(app: &OnlineApp) -> String {
+    app.archive_name.clone()
+}
+
+fn online_app_sha256_matches(app: &OnlineApp, bytes: &[u8]) -> bool {
+    if app.sha256 == "-" {
+        return true;
+    }
+
+    let digest = Sha256::digest(bytes);
+    let mut actual = String::with_capacity(SHA256_HEX_LEN);
+    for byte in digest {
+        let _ = write!(actual, "{byte:02x}");
+    }
+    actual.eq_ignore_ascii_case(app.sha256.as_str())
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -320,12 +437,7 @@ async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
         return;
     }
 
-    let id_text = args.remove(0);
-    let Ok(id) = id_text.parse::<usize>() else {
-        log("apps: online expects an app id");
-        set_matrix_target_active(&target, false);
-        return;
-    };
+    let selector = args.remove(0);
     let app_args = args;
     let apps = match online_apps().await {
         Ok(apps) => apps,
@@ -335,8 +447,8 @@ async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
             return;
         }
     };
-    let Some(app) = apps.get(id) else {
-        log("apps: unknown online app id");
+    let Some(app) = resolve_online_app(apps.as_slice(), selector.as_str()) else {
+        log(alloc::format!("apps: no app with that id or name `{}`", selector.as_str()).as_str());
         print_online_apps_target(&target, width, apps.as_slice());
         set_matrix_target_active(&target, false);
         return;
@@ -344,9 +456,14 @@ async fn online_app_task(target: MatrixTarget, width: usize, mut args: Vec<Strin
     log(alloc::format!("apps: fetching {} from {}", app.name.as_str(), app.url.as_str()).as_str());
     match fetch_url_bytes(app.url.clone(), ONLINE_APP_MAX_BYTES).await {
         Ok(module_bytes) => {
+            if !online_app_sha256_matches(app, module_bytes.as_slice()) {
+                log("apps: online app SHA-256 mismatch");
+                set_matrix_target_active(&target, false);
+                return;
+            }
             let _ = run::enqueue_blueprint_bytes(
                 target.clone(),
-                app.name.clone(),
+                online_app_archive_name(app),
                 module_bytes,
                 app_args,
             );
@@ -369,6 +486,10 @@ fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<Strin
             line(io, "apps: online task unavailable");
         }
     }
+}
+
+pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
+    online_app(spawner, io, submitted.split_whitespace().map(String::from).collect());
 }
 
 const PEER_HEADERS: &[&str; 5] = &["id", "peer", "node", "port", "vms"];

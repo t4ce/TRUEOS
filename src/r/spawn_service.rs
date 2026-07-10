@@ -1563,7 +1563,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TRUEOSFS_RW_PROBE_STARTED,
         spawn_trueosfs_rw_probe,
     ),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "unix-fd-probe",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
         &UNIX_FD_PROBE_STARTED,
@@ -1721,7 +1721,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_trueosfs_ready_hook,
     ),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
-    TaskSpec::enabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
+    TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),
 ];
 
 pub fn task_index_by_name(name: &str) -> Option<usize> {

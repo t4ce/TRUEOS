@@ -35,10 +35,12 @@
 
 //! Hickory DNS Protocol library
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", not(any(target_os = "trueos", target_os = "zkvm"))))]
 extern crate std;
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
-extern crate self as std;
+#[cfg(all(feature = "std", any(target_os = "trueos", target_os = "zkvm")))]
+extern crate std;
+#[cfg(all(feature = "std", any(target_os = "trueos", target_os = "zkvm")))]
+extern crate std as host_std;
 
 #[macro_use]
 extern crate alloc;
@@ -192,7 +194,6 @@ pub mod rustls;
 pub mod serialize;
 #[cfg(feature = "std")]
 pub mod tcp;
-#[cfg(all(feature = "std", any(test, feature = "testing")))]
 #[cfg(feature = "std")]
 pub mod udp;
 pub mod xfer;
@@ -249,4 +250,6 @@ mod no_std_rand {
     pub fn seed(seed: u64) {
         critical_section::with(|cs| *RNG.borrow_ref_mut(cs) = Some(StdRng::seed_from_u64(seed)));
     }
+
+    static RNG: Mutex<RefCell<Option<StdRng>>> = Mutex::new(RefCell::new(None));
 }

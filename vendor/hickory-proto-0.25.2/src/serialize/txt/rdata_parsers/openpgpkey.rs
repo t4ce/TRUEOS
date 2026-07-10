@@ -23,12 +23,29 @@ use crate::serialize::txt::errors::{ParseErrorKind, ParseResult};
 ///    of [RFC4648].
 /// ```
 pub(crate) fn parse<'i, I: Iterator<Item = &'i str>>(mut tokens: I) -> ParseResult<OPENPGPKEY> {
-    let encoded_public_key = tokens.next().ok_or(ParseErrorKind::Message(
-        "OPENPGPKEY public key field is missing",
-    ))?;
+    let encoded_public_key = tokens
+        .next()
+        .ok_or(ParseErrorKind::Message("OPENPGPKEY public key field is missing"))?;
     let public_key = data_encoding::BASE64.decode(encoded_public_key.as_bytes())?;
     Some(OPENPGPKEY::new(public_key))
         .filter(|_| tokens.next().is_none())
         .ok_or_else(|| ParseErrorKind::Message("too many fields for OPENPGPKEY").into())
 }
 
+#[test]
+fn test_parsing() {
+    assert!(parse(core::iter::empty()).is_err());
+    assert!(parse(vec!["äöüäööüä"].into_iter()).is_err());
+    assert!(parse(vec!["ZmFpbGVk", "äöüäöüö"].into_iter()).is_err());
+
+    assert!(
+        parse(vec!["dHJ1c3RfZG5zIGlzIGF3ZXNvbWU="].into_iter())
+            .map(|rd| rd == OPENPGPKEY::new(b"trust_dns is awesome".to_vec()))
+            .unwrap_or(false)
+    );
+    assert!(
+        parse(vec!["c2VsZi1wcmFpc2Ugc3Rpbmtz"].into_iter())
+            .map(|rd| rd == OPENPGPKEY::new(b"self-praise stinks".to_vec()))
+            .unwrap_or(false)
+    );
+}

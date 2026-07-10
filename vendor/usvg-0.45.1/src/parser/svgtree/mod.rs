@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{boxed::Box, string::String, vec::Vec};
-use alloc::collections::BTreeMap as HashMap;
+use hashbrown::HashMap;
 use core::num::NonZeroU32;
 use core::str::FromStr;
 

@@ -64,13 +64,19 @@ QEMU_HOST_TCP_PORT_100 ?= 10100
 QEMU_HOST_TCP_PORT_80 ?= 8080
 QEMU_HOST_TCP_PORT_54321 ?= 15432
 QEMU_HOST_TCP_PORT_32123 ?= 32123
+QEMU_HOST_TCP_PORT_NET_SHELL ?= 14245
 QEMU_HOST_UDP_PORT_32343 ?= 32343
-QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_MEMORY="$(QEMU_MEMORY)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)" QEMU_HOST_TCP_PORT_32123="$(QEMU_HOST_TCP_PORT_32123)" QEMU_HOST_UDP_PORT_32343="$(QEMU_HOST_UDP_PORT_32343)"
+QEMU_RUN_ENV = ISO_PATH="$(ISO_PATH)" QEMU_BIN="$(QEMU_BIN)" QEMU_MEMORY="$(QEMU_MEMORY)" QEMU_UEFI_FIRMWARE="$(QEMU_UEFI_FIRMWARE)" QEMU_NVME_IMG="$(NVME_IMG)" QEMU_BRIDGE="$(QEMU_BRIDGE)" QEMU_BRIDGE_HELPER="$(QEMU_BRIDGE_HELPER)" QEMU_HDA_AUDIODEV="$(QEMU_HDA_AUDIODEV)" QEMU_HOST_TCP_PORT_3="$(QEMU_HOST_TCP_PORT_3)" QEMU_HOST_TCP_PORT_4="$(QEMU_HOST_TCP_PORT_4)" QEMU_HOST_TCP_PORT_100="$(QEMU_HOST_TCP_PORT_100)" QEMU_HOST_TCP_PORT_80="$(QEMU_HOST_TCP_PORT_80)" QEMU_HOST_TCP_PORT_54321="$(QEMU_HOST_TCP_PORT_54321)" QEMU_HOST_TCP_PORT_32123="$(QEMU_HOST_TCP_PORT_32123)" QEMU_HOST_TCP_PORT_NET_SHELL="$(QEMU_HOST_TCP_PORT_NET_SHELL)" QEMU_HOST_UDP_PORT_32343="$(QEMU_HOST_UDP_PORT_32343)"
 BAREMETAL_LOG_DRAIN := tools/baremetal-log-drain.sh
 BAREMETAL_LOG_HOST ?= 192.168.178.94
 BAREMETAL_LOG_PORT ?= 1
 BAREMETAL_LOG_DELAY ?= 15
 BAREMETAL_LOG_DIR ?= bld/baremetal-logs
+EMULATOR_LOG_CAPTURE := tools/emulator-log-capture.sh
+EMULATOR_LOG_DIR ?= bld/emulator-logs
+EMULATOR_LOG_SLOTS ?= 3
+NET_SHELL_CONSOLE_HOST ?= 192.168.178.94
+NET_SHELL_CONSOLE_PORT ?= 4245
 NET_SHELL_CONSOLE_PID := $(ISO_DIR)/net-shell-console.pid
 
 CARGO_BUILD_FLAGS ?=
@@ -186,7 +192,7 @@ net-shell-console:
 		fi; \
 		rm -f "$(NET_SHELL_CONSOLE_PID)"; \
 	fi
-	@konsole --title TRUEOS-net-shell -e sh -c 'trap "stty sane 2>/dev/null || true" EXIT; trap "stty sane 2>/dev/null || true; exit 0" INT TERM; stty -echo -icanon cols 200 rows 60; while ! nc 192.168.178.94 4245 2>/dev/null; do sleep 1; done' & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
+	@konsole --title TRUEOS-net-shell -e sh -c 'trap "stty sane 2>/dev/null || true" EXIT; trap "stty sane 2>/dev/null || true; exit 0" INT TERM; stty -echo -icanon cols 200 rows 60; while :; do nc "$(NET_SHELL_CONSOLE_HOST)" "$(NET_SHELL_CONSOLE_PORT)" 2>/dev/null || true; sleep 1; done' & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
 
 FORCE:
 
@@ -250,7 +256,7 @@ iso: artifacts images limine
 		echo "iso: skipping baremetal log drain (START_BAREMETAL_LOG=$(START_BAREMETAL_LOG))"; \
 	fi
 	@if [ "$(START_NET_SHELL_CONSOLE)" = "1" ]; then \
-		$(MAKE) --no-print-directory net-shell-console; \
+		$(MAKE) --no-print-directory net-shell-console NET_SHELL_CONSOLE_HOST="$(NET_SHELL_CONSOLE_HOST)" NET_SHELL_CONSOLE_PORT="$(NET_SHELL_CONSOLE_PORT)"; \
 	else \
 		echo "iso: skipping net shell console (START_NET_SHELL_CONSOLE=$(START_NET_SHELL_CONSOLE))"; \
 	fi
@@ -366,6 +372,16 @@ dbg: iso
 		echo "GDB stub ready on 127.0.0.1:1234"; \
 		wait $$qemu_pid
 
+run: START_BAREMETAL_LOG=0
+run: NET_SHELL_CONSOLE_HOST=127.0.0.1
+run: NET_SHELL_CONSOLE_PORT=$(QEMU_HOST_TCP_PORT_NET_SHELL)
 run: iso
 	@killall -9 qemu-system-x86_64 || true
-	@($(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & $(SERIAL_CONSOLE_CMD))
+	@$(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & qemu_pid=$$!; \
+		trap 'kill "$$qemu_pid" 2>/dev/null || true; exit 130' INT TERM; \
+		if ! TRUEOS_EMULATOR_LOG_DIR="$(EMULATOR_LOG_DIR)" TRUEOS_EMULATOR_LOG_SLOTS="$(EMULATOR_LOG_SLOTS)" "$(EMULATOR_LOG_CAPTURE)" "$$qemu_pid"; then \
+			kill "$$qemu_pid" 2>/dev/null || true; \
+			wait "$$qemu_pid" 2>/dev/null || true; \
+			exit 1; \
+		fi; \
+		wait "$$qemu_pid"

@@ -8,18 +8,23 @@
 //! Error types for the crate
 
 #![deny(missing_docs)]
-
 #![allow(missing_docs)]
+#[cfg(feature = "std")]
+use crate::io;
+use ::core::fmt;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use ::core::fmt;
-#[cfg(feature = "std")]
-use crate::io;
-use std::{sync};
+#[cfg(all(
+    feature = "std",
+    not(any(target_os = "trueos", target_os = "zkvm"))
+))]
+use std::sync;
+#[cfg(all(feature = "std", any(target_os = "trueos", target_os = "zkvm")))]
+use crate::host_std::sync;
 
 #[cfg(feature = "backtrace")]
 pub use backtrace::Backtrace as ExtBacktrace;
@@ -724,8 +729,10 @@ impl<T> From<sync::PoisonError<T>> for ProtoError {
 impl From<ProtoError> for io::Error {
     fn from(e: ProtoError) -> Self {
         match e.kind() {
-            ProtoErrorKind::Timeout => Self::new(io::ErrorKind::TimedOut, e),
-            _ => Self::new(io::ErrorKind::Other, e),
+            ProtoErrorKind::Timeout => {
+                Self::new(io::ErrorKind::TimedOut, "hickory protocol timeout")
+            }
+            _ => Self::new(io::ErrorKind::Other, "hickory protocol error"),
         }
     }
 }

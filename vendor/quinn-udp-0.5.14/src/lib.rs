@@ -28,7 +28,7 @@
 #![warn(clippy::use_self)]
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 use std::os::unix::io::AsFd;
 #[cfg(windows)]
 use std::os::windows::io::AsSocket;
@@ -38,11 +38,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(any(unix, windows))]
+#[cfg(any(
+    all(unix, not(any(target_os = "trueos", target_os = "zkvm"))),
+    windows
+))]
 mod cmsg;
 
-#[cfg(unix)]
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 #[path = "unix.rs"]
+mod imp;
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+#[path = "trueos.rs"]
 mod imp;
 
 #[cfg(windows)]
@@ -148,7 +155,7 @@ pub struct Transmit<'a> {
 
 /// Log at most 1 IO error per minute
 #[cfg(not(wasm_browser))]
-const IO_ERROR_LOG_INTERVAL: Duration = hostlib::time::Duration::from_secs(60);
+const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Logs a warning message when sendmsg fails
 ///
@@ -185,16 +192,29 @@ fn log_sendmsg_error(_: &Mutex<Instant>, _: impl ::core::fmt::Debug, _: &Transmi
 /// On Unix, constructible via `From<T: AsFd>`. On Windows, constructible via `From<T:
 /// AsSocket>`.
 // Wrapper around socket2 to avoid making it a public dependency and incurring stability risk
-#[cfg(not(wasm_browser))]
+#[cfg(all(
+    not(wasm_browser),
+    not(any(target_os = "trueos", target_os = "zkvm"))
+))]
 pub struct UdpSockRef<'a>(socket2::SockRef<'a>);
 
-#[cfg(unix)]
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+pub struct UdpSockRef<'a>(core::marker::PhantomData<&'a ()>);
+
+#[cfg(all(unix, not(any(target_os = "trueos", target_os = "zkvm"))))]
 impl<'s, S> From<&'s S> for UdpSockRef<'s>
 where
     S: AsFd,
 {
     fn from(socket: &'s S) -> Self {
         Self(socket.into())
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl<'s, S> From<&'s S> for UdpSockRef<'s> {
+    fn from(_: &'s S) -> Self {
+        Self(core::marker::PhantomData)
     }
 }
 

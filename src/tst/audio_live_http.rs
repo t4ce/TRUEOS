@@ -351,6 +351,12 @@ fn sender_rate_from_target(target: &str) -> u32 {
         .unwrap_or(SAMPLE_RATE as u32)
 }
 
+fn query_flag(target: &str, key: &str) -> bool {
+    query_value(target, key)
+        .map(|value| matches!(value, "1" | "true" | "on" | "yes"))
+        .unwrap_or(false)
+}
+
 fn http_header_value<'a>(req: &'a str, key: &str) -> Option<&'a str> {
     let mut lines = req.split('\n');
     let _ = lines.next()?;
@@ -434,27 +440,37 @@ fn live_audio_page() -> Vec<u8> {
 <style>
 body{font-family:system-ui,sans-serif;margin:2rem;max-width:42rem;color:#181818}
 .controls{display:flex;gap:.65rem;flex-wrap:wrap}button{font:inherit;padding:.55rem .85rem}
-audio{width:100%;margin-top:1rem}output{display:block;margin-top:.65rem;color:#555}
-#slots{font-weight:650;color:#181818}.hint{font-size:.9rem;color:#666;line-height:1.4}
+audio{display:none}.state{display:flex;align-items:center;gap:.55rem;margin-top:1rem;color:#555}
+#indicator{width:.7rem;height:.7rem;border-radius:50%;background:#aaa;flex:none}
+#indicator[data-state="loading"]{background:#d99a00;animation:pulse .8s ease-in-out infinite alternate}
+#indicator[data-state="playing"]{background:#159447;box-shadow:0 0 0 .2rem #15944722}
+#indicator[data-state="error"]{background:#c43b3b}@keyframes pulse{to{opacity:.3}}
+output{display:block}#slots{margin-top:.65rem;font-weight:650;color:#181818}
+.hint{font-size:.9rem;color:#666;line-height:1.4}
 </style></head><body><h1>TRUEOS Live Audio</h1>
-<div class="controls"><button id="start" type="button">Start listening</button><button id="mic" type="button">Unmute microphone</button></div>
-<audio id="audio" controls preload="none"></audio>
-<output id="status">idle</output><output id="slots">0/3 voice slots used</output>
-<p class="hint" id="micHint">Microphone audio is mixed for the other listeners; your own sender ID is left out of your stream.</p>
+<div class="controls"><button id="start" type="button">Start listening</button><button id="mic" type="button">Unmute microphone</button><button id="monitor" type="button" aria-pressed="false">Hear myself: off</button></div>
+<audio id="audio" preload="none"></audio>
+<div class="state"><span id="indicator" data-state="idle" aria-hidden="true"></span><output id="status">idle</output></div>
+<output id="slots">0/3 voice slots used</output>
+<p class="hint" id="micHint">Your microphone is sent to the room when unmuted. Your own return normally excludes it; Hear myself enables server loopback.</p>
 <script>
-const audio=document.getElementById('audio'),statusEl=document.getElementById('status'),slotsEl=document.getElementById('slots'),micButton=document.getElementById('mic'),hint=document.getElementById('micHint');
+const audio=document.getElementById('audio'),statusEl=document.getElementById('status'),indicator=document.getElementById('indicator'),slotsEl=document.getElementById('slots'),startButton=document.getElementById('start'),micButton=document.getElementById('mic'),monitorButton=document.getElementById('monitor'),hint=document.getElementById('micHint');
 const id=(()=>{const a=new Uint32Array(1);if(self.crypto&&crypto.getRandomValues)crypto.getRandomValues(a);else a[0]=(Math.random()*0xffffffff)>>>0;return (a[0]||1).toString(16)})();
-let ws=null,micStream=null,ctx=null,source=null,processor=null,muteGain=null,closing=false;
-function setStatus(x){statusEl.textContent=x}
-function startListening(){if(!audio.src)audio.src='/audio/live.wav?id='+id+'&t='+Date.now();return audio.play().then(()=>setStatus('listening')).catch(e=>setStatus(e&&e.name?e.name:'playback blocked'))}
-document.getElementById('start').onclick=startListening;
-audio.onplaying=()=>setStatus(ws?'listening + microphone live':'listening');audio.onwaiting=()=>setStatus('buffering');audio.onerror=()=>setStatus('playback error');
+let ws=null,micStream=null,ctx=null,source=null,processor=null,muteGain=null,wantsPlayback=false,selfMonitor=false,playbackState='idle';
+function micLive(){return !!ws&&ws.readyState===WebSocket.OPEN}
+function renderStatus(note){indicator.dataset.state=playbackState;statusEl.textContent=note||(playbackState+(micLive()?' + microphone live':''))}
+function playbackUrl(){return '/audio/live.wav?id='+id+'&self='+(selfMonitor?'1':'0')+'&t='+Date.now()}
+async function startListening(restart=false){wantsPlayback=true;startButton.textContent='Stop listening';if(restart||!audio.src){audio.pause();audio.removeAttribute('src');audio.load();audio.src=playbackUrl()}playbackState='loading';renderStatus();try{await audio.play()}catch(e){wantsPlayback=false;startButton.textContent='Start listening';playbackState='error';renderStatus(e&&e.name?e.name:'playback blocked')}}
+function stopListening(){wantsPlayback=false;audio.pause();audio.removeAttribute('src');audio.load();startButton.textContent='Start listening';playbackState='idle';renderStatus()}
+startButton.onclick=()=>wantsPlayback?stopListening():startListening();
+monitorButton.onclick=()=>{selfMonitor=!selfMonitor;monitorButton.textContent='Hear myself: '+(selfMonitor?'on':'off');monitorButton.setAttribute('aria-pressed',String(selfMonitor));hint.textContent=selfMonitor?'Self-monitor is on: the server includes your microphone in this return stream.':'Your microphone is sent to the room when unmuted. Your own return normally excludes it; Hear myself enables server loopback.';if(wantsPlayback)startListening(true)};
+audio.onplaying=()=>{playbackState='playing';renderStatus()};audio.onwaiting=()=>{playbackState='loading';renderStatus()};audio.onerror=()=>{playbackState='error';renderStatus('playback error')};
 async function updateSlots(){try{const r=await fetch('/audio/status?t='+Date.now(),{cache:'no-store'});if(!r.ok)return;const v=await r.json();slotsEl.textContent=v.used+'/'+v.total+' voice slots used'}catch(_e){}}
 setInterval(updateSlots,1500);updateSlots();
-function stopMic(message,closeSocket=true){closing=true;if(processor){processor.disconnect();processor.onaudioprocess=null}if(source)source.disconnect();if(muteGain)muteGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(ctx)ctx.close();if(closeSocket&&ws)ws.close();ws=null;micStream=null;ctx=null;source=null;processor=null;muteGain=null;micButton.textContent='Unmute microphone';closing=false;if(message)setStatus(message);updateSlots()}
+function stopMic(message,closeSocket=true){const socket=ws;ws=null;if(processor){processor.disconnect();processor.onaudioprocess=null}if(source)source.disconnect();if(muteGain)muteGain.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(ctx)ctx.close();if(closeSocket&&socket){socket.onclose=null;socket.close()}micStream=null;ctx=null;source=null;processor=null;muteGain=null;micButton.textContent='Unmute microphone';renderStatus(message||'');updateSlots()}
 async function unmute(){
- if(ws){stopMic(audio.paused?'microphone muted':'listening');return}
- if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){hint.textContent='Microphone capture needs HTTPS (or localhost) in current browsers.';setStatus('microphone unavailable on this HTTP origin');return}
+ if(ws){stopMic('microphone muted');return}
+ if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){hint.textContent='Microphone capture needs HTTPS (or localhost) in current browsers.';renderStatus('microphone unavailable on this HTTP origin');return}
  micButton.disabled=true;
  try{
   micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
@@ -463,14 +479,14 @@ async function unmute(){
   ws.onopen=()=>{
    source=ctx.createMediaStreamSource(micStream);processor=ctx.createScriptProcessor(1024,1,1);muteGain=ctx.createGain();muteGain.gain.value=0;
    processor.onaudioprocess=e=>{if(!ws||ws.readyState!==WebSocket.OPEN||ws.bufferedAmount>65536)return;const input=e.inputBuffer.getChannelData(0),pcm=new Int16Array(input.length);for(let i=0;i<input.length;i++){const x=Math.max(-1,Math.min(1,input[i]));pcm[i]=x<0?x*32768:x*32767}ws.send(pcm.buffer)};
-   source.connect(processor);processor.connect(muteGain);muteGain.connect(ctx.destination);micButton.textContent='Mute microphone';setStatus(audio.paused?'microphone live':'listening + microphone live');startListening();updateSlots();
+   source.connect(processor);processor.connect(muteGain);muteGain.connect(ctx.destination);micButton.textContent='Mute microphone';if(!wantsPlayback)startListening();else renderStatus();updateSlots();
   };
-  ws.onerror=()=>setStatus('voice slot unavailable');
-  ws.onclose=()=>{if(!closing)stopMic(audio.paused?'microphone disconnected':'listening',false)};
+  ws.onerror=()=>renderStatus('voice slot unavailable');
+  ws.onclose=()=>stopMic('microphone disconnected',false);
  }catch(e){stopMic(e&&e.name?e.name:'microphone failed')}
  finally{micButton.disabled=false}
 }
-micButton.onclick=unmute;window.addEventListener('beforeunload',()=>stopMic('',true));
+micButton.onclick=unmute;window.addEventListener('beforeunload',()=>{stopMic('',true);audio.pause()});
 </script></body></html>"#,
     )
 }
@@ -646,7 +662,14 @@ fn handle_request(
             session.cursor =
                 crate::tst::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(0);
             session.voice_cursors = mixer.start_cursors();
-            session.exclude_sender_id = target.and_then(sender_id_from_target);
+            let self_monitor = target
+                .map(|target| query_flag(target, "self"))
+                .unwrap_or(false);
+            session.exclude_sender_id = if self_monitor {
+                None
+            } else {
+                target.and_then(sender_id_from_target)
+            };
             let head = wav_stream_head();
             if !send_tcp_bytes(vnet, session.handle, head.as_slice()) {
                 close_session(vnet, session.handle);
@@ -659,9 +682,10 @@ fn handle_request(
             session.stream_chunks = 0;
             session.stream_samples = 0;
             crate::log!(
-                "tinyaudio-live-http: stream opened handle={} exclude={:?}\n",
+                "tinyaudio-live-http: stream opened handle={} exclude={:?} self_monitor={}\n",
                 session.handle.0,
-                session.exclude_sender_id
+                session.exclude_sender_id,
+                self_monitor
             );
             false
         }

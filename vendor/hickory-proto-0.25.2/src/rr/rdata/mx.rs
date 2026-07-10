@@ -96,10 +96,7 @@ impl BinEncodable for MX {
 
 impl<'r> BinDecodable<'r> for MX {
     fn read(decoder: &mut BinDecoder<'r>) -> ProtoResult<Self> {
-        Ok(Self::new(
-            decoder.read_u16()?.unverified(/*any u16 is valid*/),
-            Name::read(decoder)?,
-        ))
+        Ok(Self::new(decoder.read_u16()?.unverified(/*any u16 is valid*/), Name::read(decoder)?))
     }
 }
 
@@ -164,11 +161,36 @@ impl RecordData for MX {
 ///   anything in FOO.COM, but that it won't match a plain FOO.COM.
 impl fmt::Display for MX {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{pref} {ex}",
-            pref = &self.preference,
-            ex = self.exchange
-        )
+        write!(f, "{pref} {ex}", pref = &self.preference, ex = self.exchange)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use alloc::vec::Vec;
+    #[cfg(feature = "std")]
+    use std::println;
+
+    use super::*;
+
+    #[test]
+    fn test() {
+        use core::str::FromStr;
+
+        let rdata = MX::new(16, Name::from_str("mail.example.com.").unwrap());
+
+        let mut bytes = Vec::new();
+        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
+        assert!(rdata.emit(&mut encoder).is_ok());
+        let bytes = encoder.into_bytes();
+
+        #[cfg(feature = "std")]
+        println!("bytes: {bytes:?}");
+
+        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
+        let read_rdata = MX::read(&mut decoder).expect("Decoding error");
+        assert_eq!(rdata, read_rdata);
     }
 }

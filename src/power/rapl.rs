@@ -256,7 +256,7 @@ pub fn refresh_snapshot_once() -> RaplSnapshot {
 /// queried RAPL MSRs and that the exception path is safe if it does not.
 pub unsafe fn probe_local() -> Option<RaplProbe> {
     init();
-    if !supported_cpuid_only() {
+    if crate::intel::is_emulator_environment() || !supported_cpuid_only() {
         return None;
     }
 
@@ -311,6 +311,14 @@ pub unsafe fn log_local_probe() -> bool {
 
 #[embassy_executor::task]
 pub async fn raple_service() {
+    if crate::intel::is_emulator_environment() {
+        crate::log_warn!(
+            target: "boot";
+            "rapl: service skipped reason=emulator-msrs-not-guaranteed\n"
+        );
+        return;
+    }
+
     crate::log_info!(
         target: "boot";
         "rapl: service online sample_ms={} persist_ms={} path={}\n",

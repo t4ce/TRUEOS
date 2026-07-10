@@ -7,12 +7,12 @@
 
 //! DNS over TLS I/O stream implementation for Rustls
 
+use crate::io;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
-use crate::io;
 use std::net::SocketAddr;
 
 use rustls::ClientConfig;
@@ -232,9 +232,5 @@ where
         }
     };
 
-    Ok(TcpStream::from_stream_with_receiver(
-        AsyncIoTokioAsStd(s),
-        name_server,
-        outbound_messages,
-    ))
+    Ok(TcpStream::from_stream_with_receiver(AsyncIoTokioAsStd(s), name_server, outbound_messages))
 }

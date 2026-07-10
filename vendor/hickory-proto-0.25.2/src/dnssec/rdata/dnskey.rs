@@ -7,8 +7,8 @@
 
 //! public key record data for signing zone records
 
-use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
 use ::core::fmt;
+use alloc::{borrow::ToOwned, sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -402,10 +402,7 @@ impl<'r> RecordDataDecodable<'r> for DNSKEY {
         let public_key =
             decoder.read_vec(key_len)?.unverified(/*the byte array will fail in usage if invalid*/);
 
-        Ok(Self::with_flags(
-            flags,
-            PublicKeyBuf::new(public_key, algorithm),
-        ))
+        Ok(Self::with_flags(flags, PublicKeyBuf::new(public_key, algorithm)))
     }
 }
 
@@ -493,5 +490,97 @@ impl fmt::Display for DNSKEY {
             alg = u8::from(self.public_key.algorithm()),
             key = data_encoding::BASE64.encode(self.public_key.public_bytes())
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    #[cfg(feature = "std")]
+    use std::println;
+
+    use rustls_pki_types::PrivateKeyDer;
+
+    use super::*;
+    use crate::dnssec::{SigningKey, crypto::EcdsaSigningKey};
+
+    #[test]
+    fn test() {
+        let algorithm = Algorithm::ECDSAP256SHA256;
+        let pkcs8 = EcdsaSigningKey::generate_pkcs8(algorithm).unwrap();
+        let signing_key =
+            EcdsaSigningKey::from_key_der(&PrivateKeyDer::from(pkcs8), algorithm).unwrap();
+
+        let rdata = DNSKEY::new(
+            true,
+            true,
+            false,
+            PublicKeyBuf::new(
+                signing_key
+                    .to_public_key()
+                    .unwrap()
+                    .public_bytes()
+                    .to_owned(),
+                algorithm,
+            ),
+        );
+
+        let mut bytes = Vec::new();
+        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
+        assert!(rdata.emit(&mut encoder).is_ok());
+        let bytes = encoder.into_bytes();
+
+        #[cfg(feature = "std")]
+        println!("bytes: {bytes:?}");
+
+        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
+        let read_rdata = DNSKEY::read_data(&mut decoder, Restrict::new(bytes.len() as u16));
+        let read_rdata = read_rdata.expect("error decoding");
+
+        assert_eq!(rdata, read_rdata);
+        assert!(
+            rdata
+                .to_digest(&Name::parse("www.example.com.", None).unwrap(), DigestType::SHA256)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_reserved_flags() {
+        let rdata =
+            DNSKEY::with_flags(u16::MAX, PublicKeyBuf::new(vec![0u8], Algorithm::RSASHA256));
+
+        let mut bytes = Vec::new();
+        let mut encoder = BinEncoder::new(&mut bytes);
+        rdata.emit(&mut encoder).expect("error encoding");
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder = BinDecoder::new(bytes);
+        let read_rdata = DNSKEY::read_data(&mut decoder, Restrict::new(bytes.len() as u16))
+            .expect("error decoding");
+
+        assert_eq!(rdata, read_rdata);
+    }
+
+    #[test]
+    fn test_calculate_key_tag_checksum() {
+        let test_text = "The quick brown fox jumps over the lazy dog";
+        let test_vectors = vec![
+            (vec![], 0),
+            (vec![0, 0, 0, 0], 0),
+            (vec![0xff, 0xff, 0xff, 0xff], 0xffff),
+            (vec![1, 0, 0, 0], 0x0100),
+            (vec![0, 1, 0, 0], 0x0001),
+            (vec![0, 0, 1, 0], 0x0100),
+            (test_text.as_bytes().to_vec(), 0x8d5b),
+        ];
+
+        for (input_data, exp_result) in test_vectors {
+            let result = DNSKEY::calculate_key_tag_internal(&input_data);
+            assert_eq!(result, exp_result);
+        }
     }
 }

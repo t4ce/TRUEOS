@@ -5,16 +5,16 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::io;
+use ::core::fmt::{self, Display};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
-use ::core::fmt::{self, Display};
 use core::future::Future;
 use core::ops::DerefMut;
 use core::pin::Pin;
 use core::str::FromStr;
 use core::task::{Context, Poll};
-use crate::io;
 use std::net::SocketAddr;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -52,11 +52,7 @@ pub struct HttpsClientStream {
 
 impl Display for HttpsClientStream {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            formatter,
-            "HTTPS({},{})",
-            self.name_server, self.name_server_name
-        )
+        write!(formatter, "HTTPS({},{})", self.name_server, self.name_server_name)
     }
 }
 
@@ -282,9 +278,9 @@ impl Stream for HttpsClientStream {
         match self.h2.poll_ready(cx) {
             Poll::Ready(Ok(())) => Poll::Ready(Some(Ok(()))),
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(ProtoError::from(format!(
-                "h2 stream errored: {e}",
-            ))))),
+            Poll::Ready(Err(e)) => {
+                Poll::Ready(Some(Err(ProtoError::from(format!("h2 stream errored: {e}",)))))
+            }
         }
     }
 }
@@ -573,3 +569,229 @@ impl Future for HttpsClientResponse {
     }
 }
 
+#[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+    use std::net::SocketAddr;
+
+    use rustls::KeyLogFile;
+    use test_support::subscribe;
+
+    use crate::op::{Edns, Message, Query};
+    use crate::rr::{Name, RecordType};
+    use crate::runtime::TokioRuntimeProvider;
+    use crate::rustls::client_config;
+    use crate::xfer::{DnsRequestOptions, FirstAnswer};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_https_google() {
+        subscribe();
+
+        let google = SocketAddr::from(([8, 8, 8, 8], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut client_config = client_config_h2();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let provider = TokioRuntimeProvider::new();
+        let https_builder =
+            HttpsClientStreamBuilder::with_client_config(Arc::new(client_config), provider);
+        let connect =
+            https_builder.build(google, "dns.google".to_string(), "/dns-query".to_string());
+
+        let mut https = connect.await.expect("https connect failed");
+
+        let response = https
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = https
+            .send_message(request.clone())
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_https_google_with_pure_ip_address_server() {
+        subscribe();
+
+        let google = SocketAddr::from(([8, 8, 8, 8], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut client_config = client_config_h2();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let provider = TokioRuntimeProvider::new();
+        let https_builder =
+            HttpsClientStreamBuilder::with_client_config(Arc::new(client_config), provider);
+        let connect =
+            https_builder.build(google, google.ip().to_string(), "/dns-query".to_string());
+
+        let mut https = connect.await.expect("https connect failed");
+
+        let response = https
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = https
+            .send_message(request.clone())
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "cloudflare has been unreliable as a public test service"]
+    async fn test_https_cloudflare() {
+        subscribe();
+
+        let cloudflare = SocketAddr::from(([1, 1, 1, 1], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let client_config = client_config_h2();
+        let provider = TokioRuntimeProvider::new();
+        let https_builder =
+            HttpsClientStreamBuilder::with_client_config(Arc::new(client_config), provider);
+        let connect = https_builder.build(
+            cloudflare,
+            "cloudflare-dns.com".to_string(),
+            "/dns-query".to_string(),
+        );
+
+        let mut https = connect.await.expect("https connect failed");
+
+        let response = https
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = https
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    fn client_config_h2() -> ClientConfig {
+        let mut config = client_config();
+        config.alpn_protocols = vec![ALPN_H2.to_vec()];
+        config
+    }
+}

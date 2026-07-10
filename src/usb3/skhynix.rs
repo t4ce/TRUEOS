@@ -19,7 +19,8 @@ const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
 const SKHYNIX_PREPOST_WRITE_DATA_OUT: bool = true;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 512 * 1024;
-const SKHYNIX_UAS_LOG_TRANSFER_BYTES: usize = 512 * 1024;
+const UAS_TRACE_STARTUP_OPS: u64 = 4;
+const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
 
 struct SkhynixUasRuntime {
     device: super::crabusb::Device,
@@ -35,6 +36,11 @@ struct SkhynixUasBlockDevice {
     info: MassProbeInfo,
     next_tag: u16,
     poisoned: bool,
+    read_ops: u64,
+    read_bytes: u64,
+    write_ops: u64,
+    write_bytes: u64,
+    flush_ops: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +76,7 @@ struct UasTarget {
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
     if let Some(config) = pooled.device.configurations().first() {
-        crate::log!(
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
             config.raw.len(),
             config.raw.as_slice()
@@ -86,7 +92,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
 
     let Some(target) = pick_skhynix_uas_target(pooled.vendor_id, pooled.product_id, &candidates)
     else {
-        crate::log!(
+        crate::log_warn!(target: "usb";
             "crabusb: skhynix-green {:04x}:{:04x} proof=uas-target status=missing\n",
             pooled.vendor_id,
             pooled.product_id
@@ -117,7 +123,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         .set_configuration(target.configuration_value)
         .await
     {
-        crate::log!(
+        crate::log_warn!(target: "usb";
             "crabusb: skhynix-green {:04x}:{:04x} proof=set-config cfg={} status=failed err={:?}\n",
             pooled.vendor_id,
             pooled.product_id,
@@ -138,7 +144,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         .claim_interface(target.interface_number, target.alternate_setting)
         .await
     {
-        crate::log!(
+        crate::log_warn!(target: "usb";
             "crabusb: skhynix-green {:04x}:{:04x} proof=claim if#{} alt={} status=failed err={:?}\n",
             pooled.vendor_id,
             pooled.product_id,
@@ -159,7 +165,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let command_out = match pooled.device.endpoint(target.command_out) {
         Ok(endpoint) => endpoint,
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints cmd_out=false err={:?}\n",
                 pooled.vendor_id,
                 pooled.product_id,
@@ -171,7 +177,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let status_in = match pooled.device.endpoint(target.status_in) {
         Ok(endpoint) => endpoint,
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints status_in=false err={:?}\n",
                 pooled.vendor_id,
                 pooled.product_id,
@@ -183,7 +189,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let data_in = match pooled.device.endpoint(target.data_in) {
         Ok(endpoint) => endpoint,
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints data_in=false err={:?}\n",
                 pooled.vendor_id,
                 pooled.product_id,
@@ -195,7 +201,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     let data_out = match pooled.device.endpoint(target.data_out) {
         Ok(endpoint) => endpoint,
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints data_out=false err={:?}\n",
                 pooled.vendor_id,
                 pooled.product_id,
@@ -226,7 +232,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
             info
         }
         Err(err) => {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green {:04x}:{:04x} proof=scsi-probe status=failed err={:?}\n",
                 pooled.vendor_id,
                 pooled.product_id,
@@ -261,6 +267,11 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         info: probe_info,
         next_tag: UAS_STREAM_ID_FIRST,
         poisoned: false,
+        read_ops: 0,
+        read_bytes: 0,
+        write_ops: 0,
+        write_bytes: 0,
+        flush_ops: 0,
     };
     let handle = crate::disc::block::register_device_with_worker(descriptor, block_device);
     crate::log!(
@@ -373,7 +384,7 @@ fn pick_skhynix_uas_target(
     for uas in candidates {
         for ep in uas.bulk_out.iter().chain(uas.bulk_in.iter()) {
             if let Some(pipe) = ep.pipe_usage {
-                crate::log!(
+                crate::log_trace!(target: "usb";
                     "crabusb: skhynix-green proof=uas-pipe ep=0x{:02x} pipe={}\n",
                     ep.address,
                     pipe
@@ -458,13 +469,14 @@ async fn uas_send_command(
     cmd: &'static str,
     cdb: &[u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<(), MassProbeError> {
     let iu = make_uas_command_iu(tag, cdb);
     let id = command_out
         .submit(super::crabusb::usb_if::endpoint::TransferRequest::bulk_out(&iu))
         .map_err(|_| MassProbeError::Transport("uas-command-submit"))?;
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-command-submit cmd={} tag=0x{:04x} request={}\n",
             cmd,
             tag,
@@ -483,7 +495,7 @@ async fn uas_send_command(
         Err(err) => {
             let _ = command_out.cancel(id);
             if cmd == "read10" || cmd == "write10" {
-                crate::log!(
+                crate::log_warn!(target: "usb";
                     "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} request={} status=failed err={:?}\n",
                     cmd,
                     tag,
@@ -494,8 +506,8 @@ async fn uas_send_command(
             return Err(err);
         }
     };
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-command cmd={} tag=0x{:04x} sent={}\n",
             cmd,
             tag,
@@ -513,6 +525,7 @@ async fn uas_drain_status_grace(
     cmd: &'static str,
     tag: u16,
     timeout_label: &'static str,
+    trace_details: bool,
 ) -> Result<(), MassProbeError> {
     let mut status = [0u8; 96];
     let got = with_timeout_or_none(
@@ -526,9 +539,9 @@ async fn uas_drain_status_grace(
     if got < 4 {
         return Err(MassProbeError::ShortData);
     }
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "write10" || cmd == "sync-cache10" {
+    if trace_details {
         let status = &status[..got.min(status.len())];
-        crate::log!(
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-status-drain cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
             cmd,
             tag,
@@ -570,10 +583,20 @@ async fn uas_command_in(
     cdb: &[u8],
     data: &mut [u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<usize, MassProbeError> {
     if !UAS_XHCI_STREAMS_ENABLED {
-        return uas_command_in_no_streams(command_out, status_in, data_in, cmd, cdb, data, tag)
-            .await;
+        return uas_command_in_no_streams(
+            command_out,
+            status_in,
+            data_in,
+            cmd,
+            cdb,
+            data,
+            tag,
+            trace_details,
+        )
+        .await;
     }
 
     let mut ready_iu = [0u8; 16];
@@ -594,10 +617,8 @@ async fn uas_command_in(
         let data_id = data_in
             .submit(uas_bulk_in_request(data, tag))
             .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
-        if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
-            || (cmd == "read10" && data.len() >= SKHYNIX_UAS_LOG_TRANSFER_BYTES)
-        {
-            crate::log!(
+        if trace_details {
+            crate::log_trace!(target: "usb";
                 "crabusb: skhynix-green proof=uas-read phase=prepost cmd={} tag=0x{:04x} status_req={} data_req={} bytes={}\n",
                 cmd,
                 tag,
@@ -607,7 +628,7 @@ async fn uas_command_in(
             );
         }
 
-        if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+        if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
             let _ = status_in.cancel(ready_id);
             let _ = data_in.cancel(data_id);
             return Err(err);
@@ -695,7 +716,7 @@ async fn uas_command_in(
                 }
             }
             FirstInCompletion::Timeout => {
-                crate::log!(
+                crate::log_warn!(target: "usb";
                     "crabusb: skhynix-green proof=uas-read phase=timeout cmd={} tag=0x{:04x} status_req={} data_req={}\n",
                     cmd,
                     tag,
@@ -712,7 +733,8 @@ async fn uas_command_in(
     match outcome {
         InOutcome::Done(got) => Ok(got),
         InOutcome::DrainStatus(got) => {
-            uas_drain_status_grace(status_in, cmd, tag, "uas-read-status-timeout").await?;
+            uas_drain_status_grace(status_in, cmd, tag, "uas-read-status-timeout", trace_details)
+                .await?;
             Ok(got)
         }
     }
@@ -726,16 +748,15 @@ async fn uas_command_in_no_streams(
     cdb: &[u8],
     data: &mut [u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<usize, MassProbeError> {
     let mut ready_iu = [0u8; 96];
     let status_id = status_in
         .submit(uas_bulk_in_request(&mut ready_iu, tag))
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
 
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
-        || (cmd == "read10" && data.len() >= SKHYNIX_UAS_LOG_TRANSFER_BYTES)
-    {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-read phase=ready-submit cmd={} tag=0x{:04x} status_req={} bytes={}\n",
             cmd,
             tag,
@@ -744,7 +765,7 @@ async fn uas_command_in_no_streams(
         );
     }
 
-    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
         let _ = status_in.cancel(status_id);
         return Err(err);
     }
@@ -770,10 +791,8 @@ async fn uas_command_in_no_streams(
     let data_id = data_in
         .submit(uas_bulk_in_request(data, tag))
         .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
-        || (cmd == "read10" && data.len() >= SKHYNIX_UAS_LOG_TRANSFER_BYTES)
-    {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-read phase=ready-data-submit cmd={} tag=0x{:04x} data_req={} bytes={}\n",
             cmd,
             tag,
@@ -783,7 +802,7 @@ async fn uas_command_in_no_streams(
     }
 
     let got = endpoint_wait_submitted(data_in, data_id, "uas-data-timeout", "uas-data-in").await?;
-    uas_drain_status_grace(status_in, cmd, tag, "uas-read-status-timeout").await?;
+    uas_drain_status_grace(status_in, cmd, tag, "uas-read-status-timeout", trace_details).await?;
     Ok(got)
 }
 
@@ -795,18 +814,28 @@ async fn uas_command_out(
     cdb: &[u8],
     data: &[u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<usize, MassProbeError> {
     if SKHYNIX_PREPOST_WRITE_DATA_OUT {
-        return uas_command_out_streams(command_out, status_in, data_out, cmd, cdb, data, tag)
-            .await;
+        return uas_command_out_streams(
+            command_out,
+            status_in,
+            data_out,
+            cmd,
+            cdb,
+            data,
+            tag,
+            trace_details,
+        )
+        .await;
     }
 
     let mut status_iu = [0u8; 96];
     let status_id = status_in
         .submit(uas_bulk_in_request(&mut status_iu, tag))
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=pre-submit-status cmd={} tag=0x{:04x} status_req={} bytes={}\n",
             cmd,
             tag,
@@ -815,12 +844,12 @@ async fn uas_command_out(
         );
     }
 
-    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
         let _ = status_in.cancel(status_id);
         return Err(err);
     }
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=command-sent cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -844,8 +873,8 @@ async fn uas_command_out(
     let ready = &status_iu[..ready_got.min(status_iu.len())];
     let ready_id = ready[0];
     let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=status-ready cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
             cmd,
             tag,
@@ -865,8 +894,8 @@ async fn uas_command_out(
     let data_id = data_out
         .submit(uas_bulk_out_request(data, tag))
         .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=write-ready-data-submit cmd={} tag=0x{:04x} data_req={} bytes={}\n",
             cmd,
             tag,
@@ -878,10 +907,10 @@ async fn uas_command_out(
     let sent =
         endpoint_wait_submitted(data_out, data_id, "uas-data-timeout", "uas-data-out").await?;
 
-    uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout").await?;
+    uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout", trace_details).await?;
 
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=data-sent cmd={} tag=0x{:04x} bytes={}\n",
             cmd,
             tag,
@@ -892,8 +921,8 @@ async fn uas_command_out(
         return Err(MassProbeError::ShortData);
     }
 
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=status-ok cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -910,6 +939,7 @@ async fn uas_command_out_streams(
     cdb: &[u8],
     data: &[u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<usize, MassProbeError> {
     let mut status_iu = [0u8; 96];
     let status_id = status_in
@@ -919,8 +949,8 @@ async fn uas_command_out_streams(
         .submit(uas_bulk_out_request(data, tag))
         .map_err(|_| MassProbeError::Transport("uas-data-submit"))?;
 
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=prepost-streams cmd={} tag=0x{:04x} status_req={} data_req={} bytes={}\n",
             cmd,
             tag,
@@ -930,13 +960,13 @@ async fn uas_command_out_streams(
         );
     }
 
-    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
         let _ = status_in.cancel(status_id);
         let _ = data_out.cancel(data_id);
         return Err(err);
     }
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=command-sent cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -948,8 +978,8 @@ async fn uas_command_out_streams(
     if sent != data.len() {
         return Err(MassProbeError::ShortData);
     }
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=data-sent cmd={} tag=0x{:04x} bytes={}\n",
             cmd,
             tag,
@@ -967,8 +997,8 @@ async fn uas_command_out_streams(
     let ready = &status_iu[..ready_got.min(status_iu.len())];
     let ready_id = ready[0];
     let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=status-stream cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
             cmd,
             tag,
@@ -979,17 +1009,18 @@ async fn uas_command_out_streams(
     }
 
     if ready_id == UAS_IU_WRITE_READY && ready_tag == tag {
-        if cmd == "write10" {
-            crate::log!(
+        if trace_details {
+            crate::log_trace!(target: "usb";
                 "crabusb: skhynix-green proof=uas-write phase=write-ready-drain-status cmd={} tag=0x{:04x}\n",
                 cmd,
                 tag
             );
         }
-        uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout").await?;
+        uas_drain_status_grace(status_in, cmd, tag, "uas-write-status-timeout", trace_details)
+            .await?;
     } else {
-        if cmd == "write10" {
-            crate::log!(
+        if trace_details {
+            crate::log_trace!(target: "usb";
                 "crabusb: skhynix-green proof=uas-write phase=final-status-direct cmd={} tag=0x{:04x}\n",
                 cmd,
                 tag
@@ -998,8 +1029,8 @@ async fn uas_command_out_streams(
         validate_uas_status(cmd, ready, tag)?;
     }
 
-    if cmd == "write10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-write phase=status-ok cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -1014,13 +1045,14 @@ async fn uas_command_no_data(
     cmd: &'static str,
     cdb: &[u8],
     tag: u16,
+    trace_details: bool,
 ) -> Result<(), MassProbeError> {
     let mut status_iu = [0u8; 96];
     let status_id = status_in
         .submit(uas_bulk_in_request(&mut status_iu, tag))
         .map_err(|_| MassProbeError::Transport("uas-status-submit"))?;
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-nodata phase=status-submit cmd={} tag=0x{:04x} status_req={}\n",
             cmd,
             tag,
@@ -1028,12 +1060,12 @@ async fn uas_command_no_data(
         );
     }
 
-    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag).await {
+    if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
         let _ = status_in.cancel(status_id);
         return Err(err);
     }
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-nodata phase=command-sent cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -1046,8 +1078,8 @@ async fn uas_command_no_data(
         return Err(MassProbeError::ShortData);
     }
     let status = &status_iu[..got.min(status_iu.len())];
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-nodata phase=status-stream cmd={} tag=0x{:04x} iu=0x{:02x} iu_tag=0x{:04x} raw_len={}\n",
             cmd,
             tag,
@@ -1057,8 +1089,8 @@ async fn uas_command_no_data(
         );
     }
     validate_uas_status(cmd, status, tag)?;
-    if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS || cmd == "sync-cache10" {
-        crate::log!(
+    if trace_details {
+        crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=uas-nodata phase=status-ok cmd={} tag=0x{:04x}\n",
             cmd,
             tag
@@ -1074,9 +1106,17 @@ async fn probe_mass_uas_skhynix(
 ) -> Result<MassProbeInfo, MassProbeError> {
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = cdb_inquiry(inquiry.len() as u16);
-    let inquiry_read =
-        uas_command_in(command_out, status_in, data_in, "inquiry", &inquiry_cdb, &mut inquiry, 1)
-            .await?;
+    let inquiry_read = uas_command_in(
+        command_out,
+        status_in,
+        data_in,
+        "inquiry",
+        &inquiry_cdb,
+        &mut inquiry,
+        1,
+        crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS,
+    )
+    .await?;
     if inquiry_read < 32 {
         return Err(MassProbeError::ShortData);
     }
@@ -1096,6 +1136,7 @@ async fn probe_mass_uas_skhynix(
         &capacity_cdb,
         &mut read_capacity,
         2,
+        crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS,
     )
     .await?;
     if capacity_read < read_capacity.len() {
@@ -1126,6 +1167,29 @@ async fn probe_mass_uas_skhynix(
 }
 
 impl SkhynixUasBlockDevice {
+    fn trace_operation(op: u64) -> bool {
+        crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
+            || op <= UAS_TRACE_STARTUP_OPS
+            || op.is_multiple_of(UAS_TRACE_SAMPLE_EVERY)
+    }
+
+    fn health_checkpoint(op: u64) -> bool {
+        op == 1 || op.is_multiple_of(UAS_TRACE_SAMPLE_EVERY)
+    }
+
+    fn log_io_health(&self, last: &'static str, tag: u16) {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=io-health read_ops={} read_bytes={} write_ops={} write_bytes={} flush_ops={} last={} tag=0x{:04x}\n",
+            self.read_ops,
+            self.read_bytes,
+            self.write_ops,
+            self.write_bytes,
+            self.flush_ops,
+            last,
+            tag
+        );
+    }
+
     fn ensure_not_poisoned(&self) -> crate::disc::block::Result<()> {
         if self.poisoned {
             return Err(crate::disc::block::Error::NotReady);
@@ -1138,7 +1202,7 @@ impl SkhynixUasBlockDevice {
             return;
         }
         self.poisoned = true;
-        crate::log!(
+        crate::log_warn!(target: "usb";
             "crabusb: skhynix-green proof=runtime-poisoned op={} err={:?} action=block-device-not-ready\n",
             op,
             err
@@ -1204,13 +1268,15 @@ impl SkhynixUasBlockDevice {
         }
         self.ensure_not_poisoned()?;
 
-        let trace_transfer = crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
-            && bytes >= SKHYNIX_UAS_LOG_TRANSFER_BYTES;
+        self.read_ops = self.read_ops.saturating_add(1);
+        let op = self.read_ops;
+        let trace_transfer = Self::trace_operation(op);
         let cdb = cdb_read_10(lba as u32, blocks as u16);
         let tag = self.alloc_tag();
         if trace_transfer {
             crate::log_trace!(target: "usb";
-                "crabusb: skhynix-green proof=block-read cmd=read10 lba={} blocks={} bytes={} tag=0x{:04x} status=start\n",
+                "crabusb: skhynix-green proof=block-read cmd=read10 op={} lba={} blocks={} bytes={} tag=0x{:04x} status=start\n",
+                op,
                 lba,
                 blocks,
                 bytes,
@@ -1225,12 +1291,13 @@ impl SkhynixUasBlockDevice {
             &cdb,
             dst,
             tag,
+            trace_transfer,
         )
         .await
         {
             Ok(got) => got,
             Err(err) => {
-                crate::log!(
+                crate::log_warn!(target: "usb";
                     "crabusb: skhynix-green proof=block-read cmd=read10 lba={} blocks={} bytes={} tag=0x{:04x} status=failed err={:?}\n",
                     lba,
                     blocks,
@@ -1243,7 +1310,7 @@ impl SkhynixUasBlockDevice {
             }
         };
         if got != bytes {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green proof=block-read cmd=read10 lba={} blocks={} bytes={} tag=0x{:04x} status=short got={} expected={}\n",
                 lba,
                 blocks,
@@ -1256,12 +1323,17 @@ impl SkhynixUasBlockDevice {
         }
         if trace_transfer {
             crate::log_trace!(target: "usb";
-                "crabusb: skhynix-green proof=block-read cmd=read10 lba={} blocks={} bytes={} tag=0x{:04x} status=ok\n",
+                "crabusb: skhynix-green proof=block-read cmd=read10 op={} lba={} blocks={} bytes={} tag=0x{:04x} status=ok\n",
+                op,
                 lba,
                 blocks,
                 bytes,
                 tag
             );
+        }
+        self.read_bytes = self.read_bytes.saturating_add(bytes as u64);
+        if Self::health_checkpoint(op) {
+            self.log_io_health("read10", tag);
         }
         Ok(())
     }
@@ -1291,13 +1363,19 @@ impl SkhynixUasBlockDevice {
 
         let cdb = cdb_write_10(lba as u32, blocks as u16);
         let tag = self.alloc_tag();
-        crate::log!(
-            "crabusb: skhynix-green proof=block-write cmd=write10 lba={} blocks={} bytes={} tag=0x{:04x} status=start\n",
-            lba,
-            blocks,
-            bytes,
-            tag
-        );
+        self.write_ops = self.write_ops.saturating_add(1);
+        let op = self.write_ops;
+        let trace_transfer = Self::trace_operation(op);
+        if trace_transfer {
+            crate::log_trace!(target: "usb";
+                "crabusb: skhynix-green proof=block-write cmd=write10 op={} lba={} blocks={} bytes={} tag=0x{:04x} status=start\n",
+                op,
+                lba,
+                blocks,
+                bytes,
+                tag
+            );
+        }
         let sent = match uas_command_out(
             &mut self.runtime.command_out,
             &mut self.runtime.status_in,
@@ -1306,12 +1384,13 @@ impl SkhynixUasBlockDevice {
             &cdb,
             buf,
             tag,
+            trace_transfer,
         )
         .await
         {
             Ok(sent) => sent,
             Err(err) => {
-                crate::log!(
+                crate::log_warn!(target: "usb";
                     "crabusb: skhynix-green proof=block-write cmd=write10 lba={} blocks={} tag=0x{:04x} status=failed err={:?}\n",
                     lba,
                     blocks,
@@ -1323,7 +1402,7 @@ impl SkhynixUasBlockDevice {
             }
         };
         if sent != bytes {
-            crate::log!(
+            crate::log_warn!(target: "usb";
                 "crabusb: skhynix-green proof=block-write cmd=write10 lba={} blocks={} tag=0x{:04x} status=short sent={} expected={}\n",
                 lba,
                 blocks,
@@ -1333,13 +1412,20 @@ impl SkhynixUasBlockDevice {
             );
             return Err(crate::disc::block::Error::Corrupted);
         }
-        crate::log!(
-            "crabusb: skhynix-green proof=block-write cmd=write10 lba={} blocks={} bytes={} tag=0x{:04x} status=ok\n",
-            lba,
-            blocks,
-            bytes,
-            tag
-        );
+        if trace_transfer {
+            crate::log_trace!(target: "usb";
+                "crabusb: skhynix-green proof=block-write cmd=write10 op={} lba={} blocks={} bytes={} tag=0x{:04x} status=ok\n",
+                op,
+                lba,
+                blocks,
+                bytes,
+                tag
+            );
+        }
+        self.write_bytes = self.write_bytes.saturating_add(bytes as u64);
+        if Self::health_checkpoint(op) {
+            self.log_io_health("write10", tag);
+        }
         Ok(())
     }
 
@@ -1363,13 +1449,15 @@ impl SkhynixUasBlockDevice {
             return self.write_blocks_one_inner(lba, buf).await;
         }
 
-        crate::log!(
-            "crabusb: skhynix-green proof=block-write-split lba={} blocks={} bytes={} chunk_bytes={}\n",
-            lba,
-            total_blocks,
-            buf.len(),
-            max_write_bytes
-        );
+        if Self::trace_operation(self.write_ops.saturating_add(1)) {
+            crate::log_trace!(target: "usb";
+                "crabusb: skhynix-green proof=block-write-split lba={} blocks={} bytes={} chunk_bytes={}\n",
+                lba,
+                total_blocks,
+                buf.len(),
+                max_write_bytes
+            );
+        }
 
         let mut cur_lba = lba;
         let mut off = 0usize;
@@ -1387,29 +1475,42 @@ impl SkhynixUasBlockDevice {
     async fn flush_inner(&mut self) -> crate::disc::block::Result<()> {
         self.ensure_not_poisoned()?;
         let tag = self.alloc_tag();
+        self.flush_ops = self.flush_ops.saturating_add(1);
+        let op = self.flush_ops;
+        let trace_transfer = Self::trace_operation(op);
         let cdb = cdb_synchronize_cache_10(0, 0);
-        crate::log!(
-            "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=start\n",
-            tag
-        );
+        if trace_transfer {
+            crate::log_trace!(target: "usb";
+                "crabusb: skhynix-green proof=sync-cache10 op={} flush=true tag=0x{:04x} status=start\n",
+                op,
+                tag
+            );
+        }
         match uas_command_no_data(
             &mut self.runtime.command_out,
             &mut self.runtime.status_in,
             "sync-cache10",
             &cdb,
             tag,
+            trace_transfer,
         )
         .await
         {
             Ok(()) => {
-                crate::log!(
-                    "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=ok\n",
-                    tag
-                );
+                if trace_transfer {
+                    crate::log_trace!(target: "usb";
+                        "crabusb: skhynix-green proof=sync-cache10 op={} flush=true tag=0x{:04x} status=ok\n",
+                        op,
+                        tag
+                    );
+                }
+                if Self::health_checkpoint(op) {
+                    self.log_io_health("sync-cache10", tag);
+                }
                 Ok(())
             }
             Err(err) => {
-                crate::log!(
+                crate::log_warn!(target: "usb";
                     "crabusb: skhynix-green proof=sync-cache10 flush=true tag=0x{:04x} status=failed err={:?}\n",
                     tag,
                     err
@@ -1534,7 +1635,7 @@ fn validate_uas_status(
     let tag = parse_uas_tag(iu).unwrap_or(0);
     let status = iu[6];
     if iu_id != UAS_IU_STATUS || tag != expected_tag || status != UAS_STATUS_GOOD {
-        crate::log!(
+        crate::log_warn!(target: "usb";
             "crabusb: skhynix-green proof=uas-status cmd={} expected_tag=0x{:04x} iu=0x{:02x} tag=0x{:04x} status=0x{:02x} raw_len={} result=bad\n",
             cmd,
             expected_tag,

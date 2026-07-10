@@ -422,6 +422,16 @@ pub(crate) fn active_lines(output_mask: u8) -> VecDeque<TranscriptEntry> {
     guard.slots[idx].lines.clone()
 }
 
+pub(crate) fn clear_active_lines(output_mask: u8) {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    if !guard.slots[idx].lines.is_empty() {
+        guard.slots[idx].lines.clear();
+        bump_slot_revision(&mut guard, idx);
+    }
+}
+
 pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();

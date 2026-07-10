@@ -18,6 +18,8 @@ pub use self::encoder::BinEncoder;
 pub use self::encoder::EncodeMode;
 pub use self::restrict::{Restrict, RestrictedMath, Verified};
 
+#[cfg(test)]
+pub(crate) mod bin_tests;
 
 use crate::error::*;
 

@@ -7,8 +7,8 @@
 
 //! CDNSKEY type and related implementations
 
-use alloc::vec::Vec;
 use ::core::fmt;
+use alloc::vec::Vec;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -207,5 +207,63 @@ impl fmt::Display for CDNSKEY {
             alg = self.algorithm.map(u8::from).unwrap_or(0),
             key = data_encoding::BASE64.encode(&self.public_key)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use alloc::vec::Vec;
+    use std::println;
+
+    use crate::{
+        dnssec::Algorithm,
+        rr::RecordDataDecodable,
+        serialize::binary::{BinDecoder, BinEncodable, BinEncoder, Restrict},
+    };
+
+    use super::CDNSKEY;
+
+    #[test]
+    fn test() {
+        let rdata = CDNSKEY::new(
+            true,
+            true,
+            false,
+            Some(Algorithm::ECDSAP256SHA256),
+            vec![1u8, 2u8, 3u8, 4u8],
+        );
+
+        let mut bytes = Vec::new();
+        let mut encoder = BinEncoder::new(&mut bytes);
+        rdata.emit(&mut encoder).expect("error encoding");
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder = BinDecoder::new(bytes);
+        let read_rdata = CDNSKEY::read_data(&mut decoder, Restrict::new(bytes.len() as u16))
+            .expect("error decoding");
+
+        assert_eq!(rdata, read_rdata);
+    }
+
+    #[test]
+    fn test_delete() {
+        let rdata = CDNSKEY::with_flags(0, None, vec![0u8]);
+
+        let mut bytes = Vec::new();
+        let mut encoder = BinEncoder::new(&mut bytes);
+        rdata.emit(&mut encoder).expect("error encoding");
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder = BinDecoder::new(bytes);
+        let read_rdata = CDNSKEY::read_data(&mut decoder, Restrict::new(bytes.len() as u16))
+            .expect("error decoding");
+
+        assert_eq!(rdata, read_rdata);
     }
 }

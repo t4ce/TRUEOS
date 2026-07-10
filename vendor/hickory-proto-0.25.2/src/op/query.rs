@@ -26,8 +26,6 @@ use crate::rr::dns_class::DNSClass;
 use crate::rr::domain::Name;
 use crate::rr::record_type::RecordType;
 use crate::serialize::binary::*;
-
-#[cfg(feature = "mdns")]
 /// From [RFC 6762](https://tools.ietf.org/html/rfc6762#section-5.4)
 /// ```text
 // To avoid large floods of potentially unnecessary responses in these
@@ -253,6 +251,3 @@ impl Display for Query {
         }
     }
 }
-
-
-#[cfg(feature = "mdns")]

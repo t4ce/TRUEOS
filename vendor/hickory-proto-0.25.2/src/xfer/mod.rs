@@ -189,11 +189,7 @@ impl DnsHandle for BufDnsRequestStreamHandle {
 
     fn send<R: Into<DnsRequest>>(&self, request: R) -> Self::Response {
         let request: DnsRequest = request.into();
-        debug!(
-            "enqueueing message:{}:{:?}",
-            request.op_code(),
-            request.queries()
-        );
+        debug!("enqueueing message:{}:{:?}", request.op_code(), request.queries());
 
         let (request, oneshot) = OneshotDnsRequest::oneshot(request);
         let mut sender = self.sender.clone();
@@ -231,10 +227,7 @@ impl OneshotDnsRequest {
     }
 
     fn into_parts(self) -> (DnsRequest, OneshotDnsResponse) {
-        (
-            self.dns_request,
-            OneshotDnsResponse(self.sender_for_response),
-        )
+        (self.dns_request, OneshotDnsResponse(self.sender_for_response))
     }
 }
 

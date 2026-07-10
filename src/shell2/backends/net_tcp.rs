@@ -89,11 +89,14 @@ pub(crate) fn release_net_shell_direct(vm_id: u8) {
         .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        let mut st = NET_SHELL_STATE.lock();
-        st.rx.clear();
-        st.tx.clear();
+        {
+            let mut st = NET_SHELL_STATE.lock();
+            st.rx.clear();
+            st.tx.clear();
+        }
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
         NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
+        crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
     }
 }
 

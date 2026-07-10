@@ -856,6 +856,10 @@ pub(crate) fn matrix_target_for_backend(io: &'static dyn ShellBackend2) -> Matri
     }
 }
 
+pub(crate) fn matrix_target_routes_to(target: &MatrixTarget, output_mask: u8) -> bool {
+    (target.output_mask & output_mask) != 0
+}
+
 pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> MatrixTarget {
     let slot_id = matrix::slot_id_from_name(requested);
     let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
@@ -1031,6 +1035,10 @@ pub(crate) fn print_matrix_target_line(target: &MatrixTarget, line: &str) {
     matrix::record_line_in_slot(&target.slot_id, LineSource::Native, line);
 }
 
+pub(crate) fn print_matrix_target_system_line(target: &MatrixTarget, line: &str) {
+    matrix::record_line_in_slot(&target.slot_id, LineSource::System, line);
+}
+
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
     if bytes.is_empty() {
         return 0;
@@ -1160,6 +1168,10 @@ fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &
 }
 
 fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
+    // The paired prefix belongs to clear/online Apps and must never free the default slot.
+    if submitted.starts_with("§§") {
+        return;
+    }
     matrix::record_line_in_default(LineSource::User, submitted);
     if submitted
         .strip_prefix('§')
@@ -1198,6 +1210,9 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
 }
 
 fn is_matrix_operator(submitted: &str) -> bool {
+    if submitted.starts_with("§§") {
+        return false;
+    }
     if submitted == "§" {
         return true;
     }
@@ -1205,6 +1220,20 @@ fn is_matrix_operator(submitted: &str) -> bool {
         return false;
     };
     !rest.strip_suffix('§').unwrap_or(rest).trim().is_empty()
+}
+
+enum DoubleSectionOperator<'a> {
+    Clear,
+    Online(&'a str),
+}
+
+fn parse_double_section_operator(submitted: &str) -> Option<DoubleSectionOperator<'_>> {
+    let requested = submitted.strip_prefix("§§")?.trim();
+    if requested.is_empty() {
+        Some(DoubleSectionOperator::Clear)
+    } else {
+        Some(DoubleSectionOperator::Online(requested))
+    }
 }
 
 fn is_vmx_control_command(submitted: &str) -> bool {
@@ -2065,7 +2094,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let has_broadcast_sessions = session_indexes
                         .iter()
                         .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
-                    if is_matrix_operator(submitted) && mode != ShellMode2::Qjs {
+                    if let Some(operator) = parse_double_section_operator(submitted) {
+                        match operator {
+                            DoubleSectionOperator::Clear => {
+                                matrix::clear_active_lines(output_mask);
+                            }
+                            DoubleSectionOperator::Online(requested) => {
+                                record_user_line_for_active_slot(io, submitted);
+                                shell2_apps::submit_online(&spawner, io, requested);
+                            }
+                        }
+                        transcript = current_transcript_for_task(io);
+                        render_active_slot_content(&out, output_mask, &transcript);
+                    } else if is_matrix_operator(submitted) && mode != ShellMode2::Qjs {
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,

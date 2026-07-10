@@ -1413,6 +1413,19 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_shutdown(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_blueprint_return_to_cli() -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, _) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_RETURN_TO_CLI, 0, 0);
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            0
+        } else {
+            -1
+        };
+    }
+    -1
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32 {
     if out_cols.is_null() || out_rows.is_null() {
         return -1;

@@ -5,10 +5,10 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use ::core::fmt::{self, Display};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
-use ::core::fmt::{self, Display};
 use core::future::{Future, poll_fn};
 use core::pin::Pin;
 use core::str::FromStr;
@@ -36,9 +36,7 @@ use super::ALPN_H3;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 fn hickory_instant_now() -> hostlib::time::Instant {
-    let duration = core::time::Duration::from_nanos(unsafe {
-        trueos_platform_monotonic_nanos()
-    });
+    let duration = core::time::Duration::from_nanos(unsafe { trueos_platform_monotonic_nanos() });
     // TRUEOS currently uses Rust's unsupported std-time layout shim; Hyper uses
     // the same representation bridge for target-local Instant construction.
     unsafe { core::mem::transmute::<core::time::Duration, hostlib::time::Instant>(duration) }
@@ -69,11 +67,7 @@ pub struct H3ClientStream {
 
 impl Display for H3ClientStream {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            formatter,
-            "H3({},{})",
-            self.name_server, self.name_server_name
-        )
+        write!(formatter, "H3({},{})", self.name_server, self.name_server_name)
     }
 }
 
@@ -303,9 +297,7 @@ impl Stream for H3ClientStream {
 
         // just checking if the connection is ok
         if self.shutdown_tx.is_closed() {
-            return Poll::Ready(Some(Err(ProtoError::from(
-                "h3 connection is already shutdown",
-            ))));
+            return Poll::Ready(Some(Err(ProtoError::from("h3 connection is already shutdown"))));
         }
 
         Poll::Ready(Some(Ok(())))
@@ -394,12 +386,8 @@ impl H3ClientStreamBuilder {
 
         let socket = connect.await?;
         let socket = socket.into_std()?;
-        let endpoint = Endpoint::new(
-            EndpointConfig::default(),
-            None,
-            socket,
-            Arc::new(quinn::TokioRuntime),
-        )?;
+        let endpoint =
+            Endpoint::new(EndpointConfig::default(), None, socket, Arc::new(quinn::TokioRuntime))?;
         self.connect_inner(endpoint, name_server, dns_name, query_path)
             .await
     }
@@ -491,3 +479,255 @@ impl Future for H3ClientResponse {
     test,
     any(feature = "rustls-platform-verifier", feature = "webpki-roots")
 ))]
+mod tests {
+    use alloc::string::ToString;
+    use core::str::FromStr;
+    use std::net::SocketAddr;
+    use std::println;
+
+    use rustls::KeyLogFile;
+    use test_support::subscribe;
+    use tokio::runtime::Runtime;
+    use tokio::task::JoinSet;
+
+    use crate::op::{Edns, Message, Query};
+    use crate::rr::{Name, RecordType};
+    use crate::xfer::{DnsRequestOptions, FirstAnswer};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_h3_google() {
+        subscribe();
+
+        let google = SocketAddr::from(([8, 8, 8, 8], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut client_config = client_config();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let mut h3_builder = H3ClientStream::builder();
+        h3_builder.crypto_config(client_config);
+        let connect = h3_builder.build(google, "dns.google".to_string(), "/dns-query".to_string());
+
+        let mut h3 = connect.await.expect("h3 connect failed");
+
+        let response = h3
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = h3
+            .send_message(request.clone())
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_h3_google_with_pure_ip_address_server() {
+        subscribe();
+
+        let google = SocketAddr::from(([8, 8, 8, 8], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut client_config = client_config();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let mut h3_builder = H3ClientStream::builder();
+        h3_builder.crypto_config(client_config);
+        let connect = h3_builder.build(google, google.ip().to_string(), "/dns-query".to_string());
+
+        let mut h3 = connect.await.expect("h3 connect failed");
+
+        let response = h3
+            .send_message(request)
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        request.set_recursion_desired(true);
+        let mut edns = Edns::new();
+        edns.set_version(0);
+        edns.set_max_payload(1232);
+        *request.extensions_mut() = Some(edns);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = h3
+            .send_message(request.clone())
+            .first_answer()
+            .await
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    /// Currently fails, see <https://github.com/hyperium/h3/issues/206>.
+    #[test]
+    #[ignore = "cloudflare has been unreliable as a public test service"]
+    fn test_h3_cloudflare() {
+        subscribe();
+
+        let cloudflare = SocketAddr::from(([1, 1, 1, 1], 443));
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::A);
+        request.add_query(query);
+
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut client_config = client_config();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let mut h3_builder = H3ClientStream::builder();
+        h3_builder.crypto_config(client_config);
+        let connect = h3_builder.build(
+            cloudflare,
+            "cloudflare-dns.com".to_string(),
+            "/dns-query".to_string(),
+        );
+
+        // tokio runtime stuff...
+        let runtime = Runtime::new().expect("could not start runtime");
+        let mut h3 = runtime.block_on(connect).expect("h3 connect failed");
+
+        let response = runtime
+            .block_on(h3.send_message(request).first_answer())
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_a().is_some())
+        );
+
+        //
+        // assert that the connection works for a second query
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let response = runtime
+            .block_on(h3.send_message(request).first_answer())
+            .expect("send_message failed");
+
+        assert!(
+            response
+                .answers()
+                .iter()
+                .any(|record| record.data().as_aaaa().is_some())
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::print_stdout)]
+    async fn test_h3_client_stream_clonable() {
+        subscribe();
+
+        // use google
+        let google = SocketAddr::from(([8, 8, 8, 8], 443));
+
+        let mut client_config = client_config();
+        client_config.key_log = Arc::new(KeyLogFile::new());
+
+        let mut h3_builder = H3ClientStream::builder();
+        h3_builder.crypto_config(client_config);
+        let connect = h3_builder.build(google, "dns.google".to_string(), "/dns-query".to_string());
+
+        let h3 = connect.await.expect("h3 connect failed");
+
+        // prepare request
+        let mut request = Message::new();
+        let query = Query::query(Name::from_str("www.example.com.").unwrap(), RecordType::AAAA);
+        request.add_query(query);
+        let request = DnsRequest::new(request, DnsRequestOptions::default());
+
+        let mut join_set = JoinSet::new();
+
+        for i in 0..50 {
+            let mut h3 = h3.clone();
+            let request = request.clone();
+
+            join_set.spawn(async move {
+                let start = hickory_instant_now();
+                h3.send_message(request)
+                    .first_answer()
+                    .await
+                    .expect("send_message failed");
+                println!("request[{i}] completed: {:?}", start.elapsed());
+            });
+        }
+
+        let total = join_set.len();
+        let mut idx = 0usize;
+        while join_set.join_next().await.is_some() {
+            println!("join_set completed {idx}/{total}");
+            idx += 1;
+        }
+    }
+}

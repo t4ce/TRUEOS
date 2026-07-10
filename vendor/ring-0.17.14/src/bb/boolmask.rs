@@ -20,6 +20,10 @@ use core::ops;
 pub struct BoolMask(Word);
 
 impl BoolMask {
+    #[cfg(test)]
+    pub(super) const TRUE: Self = Self(Word::MAX);
+    #[cfg(test)]
+    pub(super) const FALSE: Self = Self(0);
 
     /// Returns true if `self` is `BoolMask::TRUE`; otherwise, returns false
     /// (`self` is `BoolMask::FALSE`).

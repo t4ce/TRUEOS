@@ -91,6 +91,8 @@ mod tst_ws_time;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
+#[cfg(target_arch = "x86_64")]
+mod uart1_com1;
 mod ui3;
 mod unix_abi_shim;
 mod unix_compat;
@@ -219,6 +221,7 @@ pub extern "C" fn kmain() -> ! {
     microcode::init_from_limine_bsp();
     dma::init_from_limine();
     pci::enumerate_impl();
+    log_os::set_emulator_uart_logging(intel::is_emulator_environment());
     intel::init_once();
     if intel::has_claimed_device() {
         let _ = hda::boot_probe_once();

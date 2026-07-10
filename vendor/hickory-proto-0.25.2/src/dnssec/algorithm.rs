@@ -9,8 +9,8 @@
 //   this issue in rustc would help narrow the statement: https://github.com/rust-lang/rust/issues/62398
 #![allow(deprecated, clippy::use_self)]
 
-use alloc::fmt;
 use ::core::fmt::{Display, Formatter};
+use alloc::fmt;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -246,5 +246,61 @@ impl From<Algorithm> for u8 {
 impl Display for Algorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_into() {
+        for algorithm in &[
+            Algorithm::RSAMD5,
+            Algorithm::DSA,
+            Algorithm::RSASHA1,
+            Algorithm::RSASHA256,
+            Algorithm::RSASHA1NSEC3SHA1,
+            Algorithm::RSASHA512,
+            Algorithm::ECDSAP256SHA256,
+            Algorithm::ECDSAP384SHA384,
+            Algorithm::ED25519,
+        ] {
+            assert_eq!(*algorithm, Algorithm::from_u8(Into::<u8>::into(*algorithm)))
+        }
+    }
+
+    #[test]
+    fn test_order() {
+        let mut algorithms = [
+            Algorithm::RSAMD5,
+            Algorithm::DSA,
+            Algorithm::RSASHA1,
+            Algorithm::RSASHA256,
+            Algorithm::RSASHA1NSEC3SHA1,
+            Algorithm::RSASHA512,
+            Algorithm::ECDSAP256SHA256,
+            Algorithm::ECDSAP384SHA384,
+            Algorithm::ED25519,
+        ];
+
+        algorithms.sort();
+
+        for (got, expect) in algorithms.iter().zip(
+            [
+                Algorithm::RSAMD5,
+                Algorithm::DSA,
+                Algorithm::RSASHA1,
+                Algorithm::RSASHA1NSEC3SHA1,
+                Algorithm::RSASHA256,
+                Algorithm::RSASHA512,
+                Algorithm::ECDSAP256SHA256,
+                Algorithm::ECDSAP384SHA384,
+                Algorithm::ED25519,
+            ]
+            .iter(),
+        ) {
+            assert_eq!(got, expect);
+        }
     }
 }

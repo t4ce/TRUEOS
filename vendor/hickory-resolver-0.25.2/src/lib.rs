@@ -197,6 +197,8 @@
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+extern crate std as host_std;
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
@@ -292,7 +294,7 @@ pub mod task {
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod time {
     pub use core::time::*;
-    pub use moka::time::Instant;
+    pub use crate::host_std::time::Instant;
 }
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod vec {
@@ -332,6 +334,8 @@ pub use resolver::LookupFuture;
 pub use resolver::TokioResolver;
 pub use resolver::{Resolver, ResolverBuilder};
 pub mod system_conf;
+#[cfg(test)]
+mod tests;
 #[cfg(feature = "__tls")]
 mod tls;
 

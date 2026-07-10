@@ -180,6 +180,7 @@ tls-ring = [
 ]
 tokio = [
     "dep:tokio",
+    "std",
     "tokio/net",
     "tokio/rt",
     "tokio/time",

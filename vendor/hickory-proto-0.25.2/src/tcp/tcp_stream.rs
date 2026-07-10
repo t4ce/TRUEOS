@@ -7,12 +7,12 @@
 
 //! This module contains all the TCP structures for demuxing TCP into streams of DNS packets.
 
+use crate::io;
 use alloc::vec::Vec;
 use core::mem;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
-use crate::io;
 use std::net::SocketAddr;
 
 use futures_io::{AsyncRead, AsyncWrite};
@@ -23,6 +23,35 @@ use tracing::debug;
 use crate::BufDnsStreamHandle;
 use crate::runtime::Time;
 use crate::xfer::{SerialMessage, StreamReceiver};
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+fn futures_to_platform_error(error: futures_io::Error) -> io::Error {
+    let kind = match error.kind() {
+        std::io::ErrorKind::NotFound => io::ErrorKind::NotFound,
+        std::io::ErrorKind::PermissionDenied => io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ConnectionRefused => io::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::ConnectionReset => io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::ConnectionAborted => io::ErrorKind::ConnectionAborted,
+        std::io::ErrorKind::NotConnected => io::ErrorKind::NotConnected,
+        std::io::ErrorKind::AddrInUse => io::ErrorKind::AddrInUse,
+        std::io::ErrorKind::AddrNotAvailable => io::ErrorKind::AddrNotAvailable,
+        std::io::ErrorKind::BrokenPipe => io::ErrorKind::BrokenPipe,
+        std::io::ErrorKind::AlreadyExists => io::ErrorKind::AlreadyExists,
+        std::io::ErrorKind::WouldBlock => io::ErrorKind::WouldBlock,
+        std::io::ErrorKind::InvalidInput => io::ErrorKind::InvalidInput,
+        std::io::ErrorKind::InvalidData => io::ErrorKind::InvalidData,
+        std::io::ErrorKind::TimedOut => io::ErrorKind::TimedOut,
+        std::io::ErrorKind::WriteZero => io::ErrorKind::WriteZero,
+        std::io::ErrorKind::Interrupted => io::ErrorKind::Interrupted,
+        _ => io::ErrorKind::Other,
+    };
+    io::Error::new(kind, "hickory futures I/O error")
+}
+
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+fn futures_to_platform_error(error: futures_io::Error) -> io::Error {
+    error
+}
 
 /// Trait for TCP connection
 pub trait DnsTcpStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + Sized + 'static {
@@ -88,18 +117,8 @@ impl<S: DnsTcpStream> TcpStream<S> {
 
     fn pollable_split(
         &mut self,
-    ) -> (
-        &mut S,
-        &mut StreamReceiver,
-        &mut Option<WriteTcpState>,
-        &mut ReadTcpState,
-    ) {
-        (
-            &mut self.socket,
-            &mut self.outbound_messages,
-            &mut self.send_state,
-            &mut self.read_state,
-        )
+    ) -> (&mut S, &mut StreamReceiver, &mut Option<WriteTcpState>, &mut ReadTcpState) {
+        (&mut self.socket, &mut self.outbound_messages, &mut self.send_state, &mut self.read_state)
     }
 
     /// Initializes a TcpStream.
@@ -146,10 +165,7 @@ impl<S: DnsTcpStream> TcpStream<S> {
         future: F,
         name_server: SocketAddr,
         timeout: Duration,
-    ) -> (
-        impl Future<Output = Result<Self, io::Error>> + Send,
-        BufDnsStreamHandle,
-    ) {
+    ) -> (impl Future<Output = Result<Self, io::Error>> + Send, BufDnsStreamHandle) {
         let (message_sender, outbound_messages) = BufDnsStreamHandle::new(name_server);
         let stream_fut = Self::connect_with_future(future, name_server, timeout, outbound_messages);
 
@@ -203,15 +219,18 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
                 // sending...
                 match send_state {
                     Some(WriteTcpState::LenBytes { pos, length, .. }) => {
-                        let wrote = ready!(socket.as_mut().poll_write(cx, &length[*pos..]))?;
+                        let wrote = ready!(socket.as_mut().poll_write(cx, &length[*pos..]))
+                            .map_err(futures_to_platform_error)?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Bytes { pos, bytes }) => {
-                        let wrote = ready!(socket.as_mut().poll_write(cx, &bytes[*pos..]))?;
+                        let wrote = ready!(socket.as_mut().poll_write(cx, &bytes[*pos..]))
+                            .map_err(futures_to_platform_error)?;
                         *pos += wrote;
                     }
                     Some(WriteTcpState::Flushing) => {
-                        ready!(socket.as_mut().poll_flush(cx))?;
+                        ready!(socket.as_mut().poll_flush(cx))
+                            .map_err(futures_to_platform_error)?;
                     }
                     _ => (),
                 }
@@ -258,7 +277,7 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
                         if peer != dst {
                             return Poll::Ready(Some(Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                format!("mismatched peer: {peer} and dst: {dst}"),
+                                "mismatched TCP DNS peer",
                             ))));
                         }
 
@@ -294,7 +313,8 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
             let new_state: Option<ReadTcpState> = match read_state {
                 ReadTcpState::LenBytes { pos, bytes } => {
                     // debug!("reading length {}", bytes.len());
-                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
+                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))
+                        .map_err(futures_to_platform_error)?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read, stream closed?");
@@ -327,7 +347,8 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
                     }
                 }
                 ReadTcpState::Bytes { pos, bytes } => {
-                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
+                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))
+                        .map_err(futures_to_platform_error)?;
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read for message, stream closed?");
@@ -381,3 +402,29 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
     }
 }
 
+#[cfg(test)]
+#[cfg(feature = "tokio")]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use test_support::subscribe;
+
+    use crate::runtime::TokioRuntimeProvider;
+    use crate::tests::tcp_stream_test;
+
+    #[tokio::test]
+    async fn test_tcp_stream_ipv4() {
+        subscribe();
+        tcp_stream_test(IpAddr::V4(Ipv4Addr::LOCALHOST), TokioRuntimeProvider::new()).await;
+    }
+
+    #[tokio::test]
+    async fn test_tcp_stream_ipv6() {
+        subscribe();
+        tcp_stream_test(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            TokioRuntimeProvider::new(),
+        )
+        .await;
+    }
+}

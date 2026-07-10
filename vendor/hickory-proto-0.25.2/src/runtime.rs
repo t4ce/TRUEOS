@@ -1,5 +1,7 @@
 //! Abstractions to deal with different async runtimes.
 
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+use crate::io;
 use alloc::boxed::Box;
 #[cfg(feature = "__quic")]
 use alloc::sync::Arc;
@@ -7,7 +9,8 @@ use core::future::Future;
 use core::marker::Send;
 use core::pin::Pin;
 use core::time::Duration;
-use crate::io;
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+use std::io;
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
@@ -32,12 +35,99 @@ pub fn spawn_bg<F: Future<Output = R> + Send + 'static, R: Send + 'static>(
 #[cfg(feature = "tokio")]
 #[doc(hidden)]
 pub mod iocompat {
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    use crate::io;
     use core::pin::Pin;
     use core::task::{Context, Poll};
-    use crate::io;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    use std::io;
 
     use futures_io::{AsyncRead, AsyncWrite};
     use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    fn platform_error_kind(kind: io::ErrorKind) -> crate::host_std::io::ErrorKind {
+        use crate::host_std::io::ErrorKind as Host;
+
+        match kind {
+            io::ErrorKind::NotFound => Host::NotFound,
+            io::ErrorKind::PermissionDenied => Host::PermissionDenied,
+            io::ErrorKind::ConnectionRefused => Host::ConnectionRefused,
+            io::ErrorKind::ConnectionReset => Host::ConnectionReset,
+            io::ErrorKind::ConnectionAborted => Host::ConnectionAborted,
+            io::ErrorKind::NotConnected => Host::NotConnected,
+            io::ErrorKind::AddrInUse => Host::AddrInUse,
+            io::ErrorKind::AddrNotAvailable => Host::AddrNotAvailable,
+            io::ErrorKind::BrokenPipe => Host::BrokenPipe,
+            io::ErrorKind::AlreadyExists => Host::AlreadyExists,
+            io::ErrorKind::WouldBlock => Host::WouldBlock,
+            io::ErrorKind::InvalidInput => Host::InvalidInput,
+            io::ErrorKind::InvalidData => Host::InvalidData,
+            io::ErrorKind::TimedOut => Host::TimedOut,
+            io::ErrorKind::WriteZero => Host::WriteZero,
+            io::ErrorKind::Interrupted => Host::Interrupted,
+            _ => Host::Other,
+        }
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    fn host_error_kind(kind: crate::host_std::io::ErrorKind) -> io::ErrorKind {
+        use crate::host_std::io::ErrorKind as Host;
+
+        match kind {
+            Host::NotFound => io::ErrorKind::NotFound,
+            Host::PermissionDenied => io::ErrorKind::PermissionDenied,
+            Host::ConnectionRefused => io::ErrorKind::ConnectionRefused,
+            Host::ConnectionReset => io::ErrorKind::ConnectionReset,
+            Host::ConnectionAborted => io::ErrorKind::ConnectionAborted,
+            Host::NotConnected => io::ErrorKind::NotConnected,
+            Host::AddrInUse => io::ErrorKind::AddrInUse,
+            Host::AddrNotAvailable => io::ErrorKind::AddrNotAvailable,
+            Host::BrokenPipe => io::ErrorKind::BrokenPipe,
+            Host::AlreadyExists => io::ErrorKind::AlreadyExists,
+            Host::WouldBlock => io::ErrorKind::WouldBlock,
+            Host::InvalidInput => io::ErrorKind::InvalidInput,
+            Host::InvalidData => io::ErrorKind::InvalidData,
+            Host::TimedOut => io::ErrorKind::TimedOut,
+            Host::WriteZero => io::ErrorKind::WriteZero,
+            Host::Interrupted => io::ErrorKind::Interrupted,
+            _ => io::ErrorKind::Other,
+        }
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    fn platform_to_host<T>(poll: Poll<io::Result<T>>) -> Poll<crate::host_std::io::Result<T>> {
+        match poll {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(value)) => Poll::Ready(Ok(value)),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(crate::host_std::io::Error::new(
+                platform_error_kind(error.kind()),
+                "hickory TRUEOS I/O error",
+            ))),
+        }
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    fn platform_to_host<T>(poll: Poll<io::Result<T>>) -> Poll<futures_io::Result<T>> {
+        poll
+    }
+
+    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+    fn host_to_platform<T>(poll: Poll<crate::host_std::io::Result<T>>) -> Poll<io::Result<T>> {
+        match poll {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(value)) => Poll::Ready(Ok(value)),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(io::Error::new(
+                host_error_kind(error.kind()),
+                "hickory futures I/O error",
+            ))),
+        }
+    }
+
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+    fn host_to_platform<T>(poll: Poll<futures_io::Result<T>>) -> Poll<io::Result<T>> {
+        poll
+    }
 
     /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `crate::io::{AsyncRead, AsyncWrite}`
     pub struct AsyncIoTokioAsStd<T: TokioAsyncRead + TokioAsyncWrite>(pub T);
@@ -48,11 +138,11 @@ pub mod iocompat {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
+        ) -> Poll<futures_io::Result<usize>> {
             let mut buf = ReadBuf::new(buf);
             let polled = Pin::new(&mut self.0).poll_read(cx, &mut buf);
 
-            polled.map_ok(|_| buf.filled().len())
+            platform_to_host(polled.map_ok(|_| buf.filled().len()))
         }
     }
 
@@ -61,14 +151,20 @@ pub mod iocompat {
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
             buf: &[u8],
-        ) -> Poll<io::Result<usize>> {
-            Pin::new(&mut self.0).poll_write(cx, buf)
+        ) -> Poll<futures_io::Result<usize>> {
+            platform_to_host(Pin::new(&mut self.0).poll_write(cx, buf))
         }
-        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.0).poll_flush(cx)
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<futures_io::Result<()>> {
+            platform_to_host(Pin::new(&mut self.0).poll_flush(cx))
         }
-        fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.0).poll_shutdown(cx)
+        fn poll_close(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<futures_io::Result<()>> {
+            platform_to_host(Pin::new(&mut self.0).poll_shutdown(cx))
         }
     }
 
@@ -82,9 +178,11 @@ pub mod iocompat {
             cx: &mut Context<'_>,
             buf: &mut ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
-            Pin::new(&mut self.get_mut().0)
-                .poll_read(cx, buf.initialized_mut())
-                .map_ok(|len| buf.advance(len))
+            host_to_platform(
+                Pin::new(&mut self.get_mut().0)
+                    .poll_read(cx, buf.initialized_mut())
+                    .map_ok(|len| buf.advance(len)),
+            )
         }
     }
 
@@ -94,18 +192,18 @@ pub mod iocompat {
             cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<Result<usize, io::Error>> {
-            Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+            host_to_platform(Pin::new(&mut self.get_mut().0).poll_write(cx, buf))
         }
 
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
-            Pin::new(&mut self.get_mut().0).poll_flush(cx)
+            host_to_platform(Pin::new(&mut self.get_mut().0).poll_flush(cx))
         }
 
         fn poll_shutdown(
             self: Pin<&mut Self>,
             cx: &mut Context<'_>,
         ) -> Poll<Result<(), io::Error>> {
-            Pin::new(&mut self.get_mut().0).poll_close(cx)
+            host_to_platform(Pin::new(&mut self.get_mut().0).poll_close(cx))
         }
     }
 }
@@ -177,7 +275,7 @@ mod tokio_runtime {
                 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
                 if bind_addr.is_some() {
                     return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
+                        io::ErrorKind::Other,
                         "binding TCP DNS sockets is unsupported on this target",
                     ));
                 }
@@ -211,10 +309,9 @@ mod tokio_runtime {
                         Ok(AsyncIoTokioAsStd(socket))
                     }
                     Ok(Err(e)) => Err(e),
-                    Err(_) => Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("connection to {server_addr:?} timed out after {wait_for:?}"),
-                    )),
+                    Err(_) => {
+                        Err(io::Error::new(io::ErrorKind::TimedOut, "DNS TCP connection timed out"))
+                    }
                 }
             })
         }
@@ -382,6 +479,8 @@ impl Time for TokioTime {
     ) -> Result<F::Output, crate::io::Error> {
         tokio::time::timeout(duration, future)
             .await
-            .map_err(move |_| crate::io::Error::new(crate::io::ErrorKind::TimedOut, "future timed out"))
+            .map_err(move |_| {
+                crate::io::Error::new(crate::io::ErrorKind::TimedOut, "future timed out")
+            })
     }
 }

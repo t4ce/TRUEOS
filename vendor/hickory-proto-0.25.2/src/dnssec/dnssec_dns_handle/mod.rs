@@ -150,9 +150,7 @@ where
         let query = if let Some(query) = request.queries().first().cloned() {
             query
         } else {
-            return Box::pin(stream::once(future::err(ProtoError::from(
-                "no query in request",
-            ))));
+            return Box::pin(stream::once(future::err(ProtoError::from("no query in request"))));
         };
 
         let handle = self.clone_with_context();
@@ -241,9 +239,7 @@ fn check_nsec(verified_message: DnsResponse, query: &Query) -> Result<DnsRespons
     {
         soa_name
     } else {
-        return Err(ProtoError::from(
-            "could not validate negative response missing SOA",
-        ));
+        return Err(ProtoError::from("could not validate negative response missing SOA"));
     };
 
     let nsec3s = verified_message
@@ -456,10 +452,7 @@ where
                     rrsig.set_ttl(ttl);
                 }
             } else {
-                warn!(
-                    "bad rrsig index {rrsig_idx} rrsigs.len = {}",
-                    current_rrsigs.len()
-                );
+                warn!("bad rrsig index {rrsig_idx} rrsigs.len = {}", current_rrsigs.len());
             }
         }
 
@@ -545,11 +538,7 @@ where
         panic!("All other RRSETs must use verify_default_rrset");
     }
 
-    debug!(
-        "dnskey validation {}, record_type: {:?}",
-        rrset.name(),
-        rrset.record_type()
-    );
+    debug!("dnskey validation {}, record_type: {:?}", rrset.name(), rrset.record_type());
 
     let mut dnskey_proofs =
         Vec::<(Proof, Option<u32>, Option<usize>)>::with_capacity(rrset.records().len());
@@ -586,10 +575,7 @@ where
             "all dnskeys use unsupported algorithms and there are no supported DS records in the parent zone"
         );
         // cannot validate; mark as insecure
-        return Err(ProofError::new(
-            Proof::Insecure,
-            ProofErrorKind::UnsupportedKeyAlgorithm,
-        ));
+        return Err(ProofError::new(Proof::Insecure, ProofErrorKind::UnsupportedKeyAlgorithm));
     }
 
     // verify all dnskeys individually against the DS records
@@ -681,10 +667,7 @@ where
 
     // Checks to see if the key is valid against the registered root certificates
     if handle.trust_anchor.contains(pub_key) {
-        debug!(
-            "validated dnskey with trust_anchor: {}, {dns_key}",
-            rr.name(),
-        );
+        debug!("validated dnskey with trust_anchor: {}, {dns_key}", rr.name(),);
 
         Proof::Secure
     } else {
@@ -709,10 +692,7 @@ fn verify_dnskey(
     let key_algorithm = key_rdata.algorithm();
 
     if !key_algorithm.is_supported() {
-        return Err(ProofError::new(
-            Proof::Insecure,
-            ProofErrorKind::UnsupportedKeyAlgorithm,
-        ));
+        return Err(ProofError::new(Proof::Insecure, ProofErrorKind::UnsupportedKeyAlgorithm));
     }
 
     // DS check if covered by DS keys
@@ -756,12 +736,7 @@ fn verify_dnskey(
             continue;
         }
 
-        debug!(
-            "validated dnskey ({}, {key_rdata}) with {} {}",
-            rr.name(),
-            r.name(),
-            r.data(),
-        );
+        debug!("validated dnskey ({}, {key_rdata}) with {} {}", rr.name(), r.name(), r.data(),);
 
         // If this key is valid, then it is secure
         return Ok(Proof::Secure);
@@ -823,10 +798,7 @@ where
             }
 
             if all_unknown.unwrap_or(false) {
-                return Err(ProofError::new(
-                    Proof::Insecure,
-                    ProofErrorKind::UnknownKeyAlgorithm,
-                ));
+                return Err(ProofError::new(Proof::Insecure, ProofErrorKind::UnknownKeyAlgorithm));
             } else if !supported_records.is_empty() {
                 return Ok(supported_records);
             } else {
@@ -859,10 +831,7 @@ where
         .as_nsec()
         .filter(|(_query, proof)| proof.is_insecure())
     {
-        debug!(
-            "marking {} as insecure based on insecure NSEC/NSEC3 proof",
-            query.name()
-        );
+        debug!("marking {} as insecure based on insecure NSEC/NSEC3 proof", query.name());
         return Err(ProofError::new(
             Proof::Insecure,
             ProofErrorKind::DsResponseNsec {
@@ -960,11 +929,7 @@ where
     }
 
     // the record set is going to be shared across a bunch of futures, Arc for that.
-    trace!(
-        "default validation {}, record_type: {:?}",
-        rrset.name(),
-        rrset.record_type()
-    );
+    trace!("default validation {}, record_type: {:?}", rrset.name(), rrset.record_type());
 
     // we can validate with any of the rrsigs...
     //  i.e. the first that validates is good enough
@@ -1132,10 +1097,7 @@ fn verify_rrset_with_dnskey(
     if !matches!(validity, RrsigValidity::ValidRrsig) {
         // TODO better error handling when the error payload is not immediately discarded by
         // the caller
-        return Err(ProofError::new(
-            Proof::Bogus,
-            ProofErrorKind::Msg(format!("{:?}", validity)),
-        ));
+        return Err(ProofError::new(Proof::Bogus, ProofErrorKind::Msg(format!("{:?}", validity))));
     }
 
     dnskey
@@ -1154,10 +1116,7 @@ fn verify_rrset_with_dnskey(
                 dnskey.name(),
                 dnskey.data()
             );
-            (
-                Proof::Secure,
-                Some(rrsig.data().authenticated_ttl(rrset.record(), current_time)),
-            )
+            (Proof::Secure, Some(rrsig.data().authenticated_ttl(rrset.record(), current_time)))
         })
         .map_err(|e| {
             debug!(
@@ -1353,29 +1312,14 @@ pub fn verify_nsec(query: &Query, soa_name: &Name, nsecs: &[(&Name, &NSEC)]) -> 
     // don't need to validate the same name again
     if wildcard == *query.name() {
         // this was validated by the nsec coverage over the query.name()
-        proof_log_yield(
-            Proof::Secure,
-            query.name(),
-            "nsec1",
-            "direct wildcard match",
-        )
+        proof_log_yield(Proof::Secure, query.name(), "nsec1", "direct wildcard match")
     } else {
         // this is the final check, return it's value
         //  if there is wildcard coverage, we're good.
         if verify_nsec_coverage(&wildcard) {
-            proof_log_yield(
-                Proof::Secure,
-                query.name(),
-                "nsec1",
-                "covering wildcard match",
-            )
+            proof_log_yield(Proof::Secure, query.name(), "nsec1", "covering wildcard match")
         } else {
-            proof_log_yield(
-                Proof::Bogus,
-                query.name(),
-                "nsec1",
-                "covering wildcard match",
-            )
+            proof_log_yield(Proof::Bogus, query.name(), "nsec1", "covering wildcard match")
         }
     }
 }

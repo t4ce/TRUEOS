@@ -8,8 +8,8 @@
 //! public key record data for signing zone records
 #![allow(clippy::use_self)]
 
-use alloc::{sync::Arc, vec::Vec};
 use ::core::fmt;
+use alloc::{sync::Arc, vec::Vec};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -408,9 +408,7 @@ impl<'r> RecordDataDecodable<'r> for KEY {
         let public_key: Vec<u8> =
             decoder.read_vec(key_len)?.unverified(/*the byte array will fail in usage if invalid*/);
 
-        Ok(Self::new(
-            key_trust, key_usage, signatory, protocol, algorithm, public_key,
-        ))
+        Ok(Self::new(key_trust, key_usage, signatory, protocol, algorithm, public_key))
     }
 }
 
@@ -885,5 +883,108 @@ impl From<Protocol> for u8 {
             Protocol::All => 255,
             Protocol::Other(field) => field,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use std::println;
+
+    use super::*;
+    use crate::dnssec::{SigningKey, crypto::EcdsaSigningKey};
+
+    #[test]
+    fn test() {
+        let algorithm = Algorithm::ECDSAP256SHA256;
+        let pkcs8 = EcdsaSigningKey::generate_pkcs8(algorithm).unwrap();
+        let signing_key = EcdsaSigningKey::from_pkcs8(&pkcs8, algorithm).unwrap();
+
+        let rdata = KEY::new(
+            KeyTrust::default(),
+            KeyUsage::default(),
+            UpdateScope::default(),
+            Protocol::default(),
+            algorithm,
+            signing_key.to_public_key().unwrap().public_bytes().to_vec(),
+        );
+
+        let mut bytes = Vec::new();
+        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
+        assert!(rdata.emit(&mut encoder).is_ok());
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
+        let restrict = Restrict::new(bytes.len() as u16);
+        let read_rdata = KEY::read_data(&mut decoder, restrict).expect("Decoding error");
+        assert_eq!(rdata, read_rdata);
+        // assert!(rdata
+        //             .to_digest(&Name::parse("www.example.com.", None).unwrap(),
+        //                        DigestType::SHA256)
+        //             .is_ok());
+    }
+
+    #[test]
+    fn test_key_usage() {
+        assert_eq!(KeyUsage::Host, KeyUsage::from(u16::from(KeyUsage::Host)));
+        assert_eq!(KeyUsage::Zone, KeyUsage::from(u16::from(KeyUsage::Zone)));
+        assert_eq!(KeyUsage::Entity, KeyUsage::from(u16::from(KeyUsage::Entity)));
+        assert_eq!(KeyUsage::Reserved, KeyUsage::from(u16::from(KeyUsage::Reserved)));
+    }
+
+    #[test]
+    fn test_update_scope() {
+        assert_eq!(UpdateScope::default(), UpdateScope::from(u16::from(UpdateScope::default())));
+
+        let update_scope = UpdateScope {
+            zone: true,
+            strong: true,
+            unique: true,
+            general: true,
+        };
+        assert_eq!(update_scope, UpdateScope::from(u16::from(update_scope)));
+
+        let update_scope = UpdateScope {
+            zone: true,
+            strong: false,
+            unique: true,
+            general: false,
+        };
+        assert_eq!(update_scope, UpdateScope::from(u16::from(update_scope)));
+
+        let update_scope = UpdateScope {
+            zone: false,
+            strong: true,
+            unique: false,
+            general: true,
+        };
+        assert_eq!(update_scope, UpdateScope::from(u16::from(update_scope)));
+
+        let update_scope = UpdateScope {
+            zone: false,
+            strong: true,
+            unique: true,
+            general: false,
+        };
+        assert_eq!(update_scope, UpdateScope::from(u16::from(update_scope)));
+
+        let update_scope = UpdateScope {
+            zone: true,
+            strong: false,
+            unique: false,
+            general: true,
+        };
+        assert_eq!(update_scope, UpdateScope::from(u16::from(update_scope)));
+    }
+
+    #[test]
+    fn test_key_trust() {
+        assert_eq!(KeyTrust::NotAuth, KeyTrust::from(u16::from(KeyTrust::NotAuth)));
+        assert_eq!(KeyTrust::NotPrivate, KeyTrust::from(u16::from(KeyTrust::NotPrivate)));
+        assert_eq!(KeyTrust::AuthOrPrivate, KeyTrust::from(u16::from(KeyTrust::AuthOrPrivate)));
+        assert_eq!(KeyTrust::DoNotTrust, KeyTrust::from(u16::from(KeyTrust::DoNotTrust)));
     }
 }

@@ -41,6 +41,7 @@ pub mod store {
 pub enum StartError {
     UnsupportedVmId,
     AlreadyRunning,
+    ConsoleBusy,
     VmxUnsupported,
     MissingGuestModule,
     GuestMemoryUnavailable,

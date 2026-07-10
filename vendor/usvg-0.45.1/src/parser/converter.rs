@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{boxed::Box, format, string::{String, ToString}, vec::Vec};
-use alloc::collections::{BTreeMap as HashMap, BTreeSet as HashSet};
+use hashbrown::{HashMap, HashSet};
 use core::hash::{Hash, Hasher};
 use core::str::FromStr;
 use alloc::sync::Arc;

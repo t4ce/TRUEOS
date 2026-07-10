@@ -5,6 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::io;
 use alloc::{boxed::Box, string::String, sync::Arc};
 use core::{
     fmt::{self, Display},
@@ -12,8 +13,7 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
-use crate::io;
-use std::{net::SocketAddr};
+use std::net::SocketAddr;
 
 use futures_util::{future::FutureExt, stream::Stream};
 use quinn::{
@@ -43,11 +43,7 @@ pub struct QuicClientStream {
 
 impl Display for QuicClientStream {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            formatter,
-            "QUIC({},{})",
-            self.name_server, self.name_server_name
-        )
+        write!(formatter, "QUIC({},{})", self.name_server, self.name_server_name)
     }
 }
 

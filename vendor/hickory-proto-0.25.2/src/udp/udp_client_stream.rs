@@ -5,17 +5,17 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use ::core::fmt::{self, Display};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use ::core::fmt::{self, Display};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
+use hostlib::time::{SystemTime, UNIX_EPOCH};
+use std as hostlib;
 use std::collections::HashSet;
 use std::net::SocketAddr;
-use std as hostlib;
-use hostlib::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::{future::Future, stream::Stream};
 use tracing::{debug, trace, warn};
@@ -351,11 +351,7 @@ async fn send_serial_message_inner<S: DnsUdpSocket + Send>(
         // Validate the message id in the response matches the value chosen for the query.
         if msg_id != response.id() {
             // on wrong id, attempted poison?
-            warn!(
-                "expected message id: {} got: {}, dropped",
-                msg_id,
-                response.id()
-            );
+            warn!("expected message id: {} got: {}, dropped", msg_id, response.id());
 
             continue;
         }
@@ -432,3 +428,25 @@ async fn send_serial_message_inner<S: DnsUdpSocket + Send>(
     }
 }
 
+#[cfg(test)]
+#[cfg(feature = "tokio")]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+    use crate::{runtime::TokioRuntimeProvider, tests::udp_client_stream_test};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use test_support::subscribe;
+
+    #[tokio::test]
+    async fn test_udp_client_stream_ipv4() {
+        subscribe();
+        let provider = TokioRuntimeProvider::new();
+        udp_client_stream_test(IpAddr::V4(Ipv4Addr::LOCALHOST), provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_udp_client_stream_ipv6() {
+        subscribe();
+        let provider = TokioRuntimeProvider::new();
+        udp_client_stream_test(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), provider).await;
+    }
+}

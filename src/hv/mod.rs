@@ -239,6 +239,7 @@ fn nudge_vm_control(vm_id: u8, reason: &'static str) {
 pub enum StartError {
     UnsupportedVmId,
     AlreadyRunning,
+    ConsoleBusy,
     VmxUnsupported,
     MissingGuestModule,
     GuestMemoryUnavailable,
@@ -329,8 +330,14 @@ impl BlueprintConsoleRoute {
     }
 }
 
-fn blueprint_uses_net_shell_direct_path(console_surface: BlueprintConsoleSurface) -> bool {
+fn blueprint_uses_net_shell_direct_path(
+    console_surface: BlueprintConsoleSurface,
+    console_target: Option<&MatrixTarget>,
+) -> bool {
     console_surface.is_terminal()
+        && console_target.is_some_and(|target| {
+            crate::shell2::matrix_target_routes_to(target, crate::shell2::OUTPUT_NET_TCP_MASK)
+        })
 }
 
 #[derive(Clone)]
@@ -1280,20 +1287,21 @@ pub fn stage_blueprint_launch(
         state.archive.as_str(),
         state.module_bytes.as_slice(),
     );
-    let console_route = if blueprint_uses_net_shell_direct_path(console_surface) {
-        BlueprintConsoleRoute::NetShellDirect
-    } else {
-        BlueprintConsoleRoute::Matrix
-    };
-    if console_route.is_net_shell_direct() {
-        if crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
-            hvlogf(format_args!("hv: vm{} console route: terminal direct net-shell", vm_id));
+    let console_route =
+        if blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref()) {
+            BlueprintConsoleRoute::NetShellDirect
         } else {
-            hvwarnf(format_args!(
-                "hv: vm{} console route: terminal direct net-shell claim failed",
-                vm_id
-            ));
-        }
+            BlueprintConsoleRoute::Matrix
+        };
+    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
+    else {
+        return Err(StartError::GuestMemoryUnavailable);
+    };
+    if console_route.is_net_shell_direct()
+        && !crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id)
+    {
+        hvwarnf(format_args!("hv: vm{} console route: terminal direct net-shell busy", vm_id));
+        return Err(StartError::ConsoleBusy);
     }
     let process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
@@ -1311,10 +1319,6 @@ pub fn stage_blueprint_launch(
         control_shell_line: AllocVec::new(),
         exit_reason: None,
     };
-    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
-    else {
-        return Err(StartError::GuestMemoryUnavailable);
-    };
     let console_target = process_context.console_target.clone();
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
@@ -1326,6 +1330,19 @@ pub fn stage_blueprint_launch(
     {
         crate::shell2::bind_matrix_target_vm_input(target, vm_id);
     }
+    crate::log_os::blueprint_line(
+        log::Level::Info,
+        format_args!(
+            "apps: vm{} console handoff cli->{} target={}\n",
+            vm_id,
+            if console_route.is_net_shell_direct() {
+                "terminal"
+            } else {
+                "matrix"
+            },
+            console_target.is_some() as u8
+        ),
+    );
     Ok(())
 }
 
@@ -1653,6 +1670,43 @@ pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool
     }
     context.exit_reason = Some(stored.clone());
     hvlogf(format_args!("hv: vm{} lifecycle: blueprint exit reason={}", vm_id, stored));
+    true
+}
+
+pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let (target, was_direct) = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return false;
+        };
+        let was_direct = context.console_route.is_net_shell_direct();
+        if !was_direct && context.console_surface == BlueprintConsoleSurface::Text {
+            return false;
+        }
+        context.console_surface = BlueprintConsoleSurface::Text;
+        context.console_route = BlueprintConsoleRoute::Matrix;
+        context.console_input.clear();
+        context.control_shell_line.clear();
+        (context.console_target.clone(), was_direct)
+    };
+
+    if let Some(target) = target.as_ref() {
+        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+    }
+    if was_direct {
+        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    }
+    crate::log_os::blueprint_line(
+        log::Level::Info,
+        format_args!(
+            "apps: vm{} console handoff terminal->cli target={}\n",
+            vm_id,
+            target.is_some() as u8
+        ),
+    );
     true
 }
 

@@ -8,9 +8,9 @@
 //! record type definitions
 #![allow(clippy::use_self)]
 
+use ::core::fmt::{self, Display, Formatter};
 use alloc::string::ToString;
 use core::cmp::Ordering;
-use ::core::fmt::{self, Display, Formatter};
 use core::str::FromStr;
 
 #[cfg(feature = "serde")]
@@ -317,9 +317,7 @@ impl BinDecodable<'_> for RecordType {
     fn read(decoder: &mut BinDecoder<'_>) -> ProtoResult<Self> {
         Ok(decoder
             .read_u16()
-            .map(
-                Restrict::unverified, /*RecordType is safe with any u16*/
-            )
+            .map(Restrict::unverified /*RecordType is safe with any u16*/)
             .map(Self::from)?)
     }
 }
@@ -453,5 +451,125 @@ impl Ord for RecordType {
 impl Display for RecordType {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         f.write_str(Into::<&str>::into(*self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    #[cfg(feature = "std")]
+    use std::println;
+
+    use super::*;
+
+    #[test]
+    fn test_order() {
+        let ordered = vec![
+            RecordType::A,
+            RecordType::NS,
+            RecordType::CNAME,
+            RecordType::SOA,
+            RecordType::NULL,
+            RecordType::PTR,
+            RecordType::HINFO,
+            RecordType::MX,
+            RecordType::TXT,
+            RecordType::AAAA,
+            RecordType::SRV,
+            RecordType::CERT,
+            RecordType::CSYNC,
+            RecordType::AXFR,
+            RecordType::ANY,
+        ];
+
+        let mut unordered = vec![
+            RecordType::ANY,
+            RecordType::NULL,
+            RecordType::AXFR,
+            RecordType::A,
+            RecordType::NS,
+            RecordType::SOA,
+            RecordType::SRV,
+            RecordType::PTR,
+            RecordType::MX,
+            RecordType::CNAME,
+            RecordType::CERT,
+            RecordType::TXT,
+            RecordType::AAAA,
+            RecordType::HINFO,
+            RecordType::CSYNC,
+        ];
+
+        unordered.sort();
+
+        #[cfg(feature = "std")]
+        for rtype in unordered.clone() {
+            println!("u16 for {:?}: {}", rtype, u16::from(rtype));
+        }
+
+        assert_eq!(ordered, unordered);
+    }
+
+    /// Check that all record type names parse into unique `RecordType` instances,
+    /// and can be converted back into the same name.
+    #[test]
+    fn test_record_type_parse() {
+        let record_names = &[
+            "A",
+            "AAAA",
+            "ANAME",
+            "CAA",
+            "CERT",
+            "CNAME",
+            "CSYNC",
+            "HINFO",
+            "NULL",
+            "MX",
+            "NAPTR",
+            "NS",
+            "OPENPGPKEY",
+            "PTR",
+            "SOA",
+            "SRV",
+            "SSHFP",
+            "TLSA",
+            "TXT",
+            "ANY",
+            "AXFR",
+        ];
+
+        #[cfg(feature = "__dnssec")]
+        let dnssec_record_names = &[
+            "CDNSKEY",
+            "CDS",
+            "DNSKEY",
+            "DS",
+            "KEY",
+            "NSEC",
+            "NSEC3",
+            "NSEC3PARAM",
+            "RRSIG",
+            "SIG",
+            "TSIG",
+        ];
+        #[cfg(not(feature = "__dnssec"))]
+        let dnssec_record_names = &[];
+
+        #[cfg(feature = "std")]
+        let mut rtypes = std::collections::HashSet::new();
+        #[cfg(not(feature = "std"))]
+        let mut rtypes = alloc::collections::BTreeSet::new();
+        for name in record_names.iter().chain(dnssec_record_names) {
+            let rtype: RecordType = name.parse().unwrap();
+            assert_eq!(rtype.to_string().to_ascii_uppercase().as_str(), *name);
+            assert!(rtypes.insert(rtype));
+        }
+    }
+
+    #[test]
+    fn check_record_type_parse_wont_panic_with_symbols() {
+        let dns_class = "a-b-c".to_ascii_uppercase().parse::<RecordType>();
+        assert!(matches!(&dns_class, Err(ProtoError { .. })));
     }
 }

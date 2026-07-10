@@ -131,7 +131,7 @@ mod tests {
     use assert_fs::prelude::*;
     use git2::build::CheckoutBuilder;
     use git2::{CherrypickOptions, Index, Oid, Repository, RepositoryInitOptions};
-    use alloc::collections::HashMap;
+    use v::collections::HashMap;
     use std::fs::remove_file;
     #[allow(unused)]
     use std::process::Command;

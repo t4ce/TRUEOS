@@ -450,6 +450,14 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     .unwrap_or_else(|| Err(alloc::format!("guest heap domain unavailable vm={}", vm_id)));
     crate::blueprint_net_broker::set_vmx_guest_net_backend(false);
 
+    // Rich terminal ownership is scoped to the application invocation.  Once
+    // it returns, hand the console back to the VM container CLI before the
+    // minishell emits any output or starts reading commands.
+    let (handoff_status, _) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_RETURN_TO_CLI, 0, 0);
+    if handoff_status != trueos_vm::vmcall::STATUS_OK {
+        warn("run: guest blueprint terminal->cli handoff failed");
+    }
+
     match invoke_result {
         Ok(()) => {
             log("run: guest blueprint returned");

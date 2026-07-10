@@ -446,11 +446,8 @@ impl Context {
             .rtype
             .ok_or_else(|| ParseError::from("record type not specified"))?;
 
-        let rdata = RData::parse(
-            rtype,
-            record_parts.iter().map(AsRef::as_ref),
-            self.origin.as_ref(),
-        )?;
+        let rdata =
+            RData::parse(rtype, record_parts.iter().map(AsRef::as_ref), self.origin.as_ref())?;
 
         // verify that we have everything we need for the record
         // TODO COW or RC would reduce mem usage, perhaps Name should have an intern()...
@@ -491,10 +488,9 @@ impl Context {
         record.set_dns_class(self.class);
 
         // add to the map
-        let entry = self.records.entry(RrKey::new(
-            LowerName::new(record.name()),
-            record.record_type(),
-        ));
+        let entry = self
+            .records
+            .entry(RrKey::new(LowerName::new(record.name()), record.record_type()));
         match (rtype, entry) {
             (RecordType::SOA, Entry::Occupied(_)) => {
                 return Err(ParseError::from("SOA is already specified"));
@@ -523,3 +519,32 @@ enum State {
 
 /// Max traversal depth for $INCLUDE files
 const MAX_INCLUDE_LEVEL: usize = 256;
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+
+    use super::*;
+
+    #[test]
+    #[allow(clippy::uninlined_format_args)]
+    fn test_zone_parse() {
+        let domain = Name::from_str("parameter.origin.org.").unwrap();
+
+        let zone_data = r#"$ORIGIN parsed.zone.origin.org.
+ faulty-record-type 60 IN A 1.2.3.4
+"#;
+
+        let result = Parser::new(zone_data, None, Some(domain)).parse();
+        assert!(
+            result.is_err()
+                & result
+                    .as_ref()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("FAULTY-RECORD-TYPE"),
+            "unexpected success: {:#?}",
+            result
+        );
+    }
+}

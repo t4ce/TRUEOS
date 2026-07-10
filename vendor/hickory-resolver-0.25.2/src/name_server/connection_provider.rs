@@ -217,10 +217,20 @@ impl<P: RuntimeProvider> ConnectionProvider for GenericConnector<P> {
         let dns_connect = match (config.protocol, self.runtime_provider.quic_binder()) {
             (Protocol::Udp, _) => {
                 let provider_handle = self.runtime_provider.clone();
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                let avoid_local_ports = alloc::sync::Arc::new(
+                    options
+                        .avoid_local_udp_ports
+                        .iter()
+                        .copied()
+                        .collect::<crate::host_std::collections::HashSet<_>>(),
+                );
+                #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+                let avoid_local_ports = options.avoid_local_udp_ports.clone();
                 let stream = UdpClientStream::builder(config.socket_addr, provider_handle)
                     .with_timeout(Some(options.timeout))
                     .with_os_port_selection(options.os_port_selection)
-                    .avoid_local_ports(options.avoid_local_udp_ports.clone())
+                    .avoid_local_ports(avoid_local_ports)
                     .with_bind_addr(config.bind_addr)
                     .build();
                 let exchange = DnsExchange::connect(stream);
@@ -320,8 +330,13 @@ impl<P: RuntimeProvider> ConnectionProvider for GenericConnector<P> {
                 ConnectionConnect::H3(exchange)
             }
             (protocol, _) => {
+                #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                let _ = protocol;
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
+                    #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+                    "unsupported DNS protocol",
+                    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
                     format!("unsupported protocol: {protocol:?}"),
                 ));
             }

@@ -5,13 +5,13 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::io;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::future::poll_fn;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::collections::HashSet;
-use crate::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use async_trait::async_trait;
@@ -115,10 +115,8 @@ impl<P: RuntimeProvider> UdpStream<P> {
         avoid_local_ports: Option<Arc<HashSet<u16>>>,
         os_port_selection: bool,
         provider: P,
-    ) -> (
-        Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>,
-        BufDnsStreamHandle,
-    ) {
+    ) -> (Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>, BufDnsStreamHandle)
+    {
         let (message_sender, outbound_messages) = BufDnsStreamHandle::new(remote_addr);
 
         // constructs a future for getting the next randomly bound port to a UdpSocket
@@ -202,10 +200,7 @@ impl<P: RuntimeProvider> Stream for UdpStream<P> {
             // TODO: shouldn't this return the error to send to the sender?
             if let Err(e) = ready!(socket.poll_send_to(cx, message.bytes(), addr)) {
                 // Drop the UDP packet and continue
-                warn!(
-                    "error sending message to {} on udp_socket, dropping response: {}",
-                    addr, e
-                );
+                warn!("error sending message to {} on udp_socket, dropping response: {}", addr, e);
             }
 
             // message sent, need to pop the message
@@ -329,9 +324,7 @@ impl<P: RuntimeProvider> Future for NextRandomUdpSocket<P> {
                     }
 
                     trace!(port = bind_addr.port(), "binding UDP socket");
-                    Some(Box::pin(
-                        this.provider.bind_udp(bind_addr, this.name_server),
-                    ))
+                    Some(Box::pin(this.provider.bind_udp(bind_addr, this.name_server)))
                 }
             }
         }
@@ -397,3 +390,36 @@ impl DnsUdpSocket for tokio::net::UdpSocket {
     }
 }
 
+#[cfg(test)]
+#[cfg(feature = "tokio")]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use test_support::subscribe;
+
+    use crate::{
+        runtime::TokioRuntimeProvider,
+        tests::{next_random_socket_test, udp_stream_test},
+    };
+
+    #[tokio::test]
+    async fn test_next_random_socket() {
+        subscribe();
+        let provider = TokioRuntimeProvider::new();
+        next_random_socket_test(provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_udp_stream_ipv4() {
+        subscribe();
+        let provider = TokioRuntimeProvider::new();
+        udp_stream_test(IpAddr::V4(Ipv4Addr::LOCALHOST), provider).await;
+    }
+
+    #[tokio::test]
+    async fn test_udp_stream_ipv6() {
+        subscribe();
+        let provider = TokioRuntimeProvider::new();
+        udp_stream_test(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), provider).await;
+    }
+}

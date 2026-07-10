@@ -8,6 +8,8 @@
 //! `DnsResponse` wraps a `Message` and any associated connection details
 
 #[cfg(feature = "std")]
+use crate::io;
+#[cfg(feature = "std")]
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::{
@@ -20,8 +22,6 @@ use core::{
     pin::Pin,
     task::{Context, Poll},
 };
-#[cfg(feature = "std")]
-use crate::io;
 
 #[cfg(feature = "std")]
 use futures_channel::mpsc;
@@ -289,14 +289,7 @@ impl DnsResponse {
         let has_non_cname = self.answers().iter().any(|r| !r.record_type().is_cname());
         let has_additionals = self.additional_count() > 0;
 
-        match (
-            response_code,
-            has_soa,
-            has_ns_records,
-            has_cname,
-            has_non_cname,
-            has_additionals,
-        ) {
+        match (response_code, has_soa, has_ns_records, has_cname, has_non_cname, has_additionals) {
             (ResponseCode::NXDomain, true, true, _, false, _) => Some(NegativeType::NameErrorType1),
             (ResponseCode::NXDomain, true, false, _, false, _) => {
                 Some(NegativeType::NameErrorType2)
@@ -666,5 +659,262 @@ impl NegativeType {
             self,
             Self::NameErrorType1 | Self::NameErrorType2 | Self::NoDataType1 | Self::NoDataType2
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::op::{Message, Query, ResponseCode};
+    use crate::rr::RData;
+    use crate::rr::rdata::{A, CNAME, NS, SOA};
+    use crate::rr::{Name, Record, RecordType};
+
+    use super::*;
+
+    fn xx() -> Name {
+        Name::from_ascii("XX.").unwrap()
+    }
+
+    fn ns1() -> Name {
+        Name::from_ascii("NS1.XX.").unwrap()
+    }
+
+    fn ns2() -> Name {
+        Name::from_ascii("NS1.XX.").unwrap()
+    }
+
+    fn hostmaster() -> Name {
+        Name::from_ascii("HOSTMASTER.NS1.XX.").unwrap()
+    }
+
+    fn tripple_xx() -> Name {
+        Name::from_ascii("TRIPPLE.XX.").unwrap()
+    }
+
+    fn example() -> Name {
+        Name::from_ascii("EXAMPLE.").unwrap()
+    }
+
+    fn an_example() -> Name {
+        Name::from_ascii("AN.EXAMPLE.").unwrap()
+    }
+
+    fn another_example() -> Name {
+        Name::from_ascii("ANOTHER.EXAMPLE.").unwrap()
+    }
+
+    fn an_cname_record() -> Record {
+        Record::from_rdata(an_example(), 88640, RData::CNAME(CNAME(tripple_xx())))
+    }
+
+    fn ns1_record() -> Record {
+        Record::from_rdata(xx(), 88640, RData::NS(NS(ns1())))
+    }
+
+    fn ns2_record() -> Record {
+        Record::from_rdata(xx(), 88640, RData::NS(NS(ns2())))
+    }
+
+    fn ns1_a() -> Record {
+        Record::from_rdata(xx(), 88640, RData::A(A::new(127, 0, 0, 2)))
+    }
+
+    fn ns2_a() -> Record {
+        Record::from_rdata(xx(), 88640, RData::A(A::new(127, 0, 0, 3)))
+    }
+
+    fn soa() -> Record {
+        Record::from_rdata(
+            example(),
+            88640,
+            RData::SOA(SOA::new(ns1(), hostmaster(), 1, 2, 3, 4, 5)),
+        )
+    }
+
+    fn an_query() -> Query {
+        Query::query(an_example(), RecordType::A)
+    }
+
+    fn another_query() -> Query {
+        Query::query(another_example(), RecordType::A)
+    }
+
+    #[test]
+    fn test_contains_answer() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NXDomain);
+        message.add_query(Query::query(Name::root(), RecordType::A));
+        message.add_answer(Record::from_rdata(Name::root(), 88640, RData::A(A::new(127, 0, 0, 2))));
+
+        let response = DnsResponse::from_message(message).unwrap();
+
+        assert!(response.contains_answer())
+    }
+
+    #[test]
+    fn test_nx_type1() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NXDomain);
+        message.add_query(an_query());
+        message.add_answer(an_cname_record());
+        message.add_name_server(soa());
+        message.add_name_server(ns1_record());
+        message.add_name_server(ns2_record());
+        message.add_additional(ns1_a());
+        message.add_additional(ns2_a());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NameErrorType1);
+    }
+
+    #[test]
+    fn test_nx_type2() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NXDomain);
+        message.add_query(an_query());
+        message.add_answer(an_cname_record());
+        message.add_name_server(soa());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NameErrorType2);
+    }
+
+    #[test]
+    fn test_nx_type3() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NXDomain);
+        message.add_query(an_query());
+        message.add_answer(an_cname_record());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NameErrorType3);
+    }
+
+    #[test]
+    fn test_nx_type4() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NXDomain);
+        message.add_query(an_query());
+        message.add_answer(an_cname_record());
+        message.add_name_server(ns1_record());
+        message.add_name_server(ns2_record());
+        message.add_additional(ns1_a());
+        message.add_additional(ns2_a());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NameErrorType4);
+    }
+
+    #[test]
+    fn test_no_data_type1() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(another_query());
+        message.add_name_server(soa());
+        message.add_name_server(ns1_record());
+        message.add_name_server(ns2_record());
+        message.add_additional(ns1_a());
+        message.add_additional(ns2_a());
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(!response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NoDataType1);
+    }
+
+    #[test]
+    fn test_no_data_type2() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(another_query());
+        message.add_name_server(soa());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(!response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NoDataType2);
+    }
+
+    #[test]
+    fn test_no_data_type3() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(another_query());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(!response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::NoDataType3);
+    }
+
+    #[test]
+    fn referral() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(an_query());
+        message.add_answer(an_cname_record());
+        message.add_name_server(ns1_record());
+        message.add_name_server(ns2_record());
+        message.add_additional(ns1_a());
+        message.add_additional(ns2_a());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::Referral);
+
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(another_query());
+        message.add_name_server(ns1_record());
+        message.add_name_server(ns2_record());
+        message.add_additional(ns1_a());
+        message.add_additional(ns2_a());
+
+        let response = DnsResponse::from_message(message).unwrap();
+        let ty = response.negative_type();
+
+        assert!(!response.contains_answer());
+        assert_eq!(ty.unwrap(), NegativeType::Referral);
+    }
+
+    #[test]
+    fn contains_soa() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(Query::query(an_example(), RecordType::SOA));
+        message.add_name_server(soa());
+
+        let response = DnsResponse::from_message(message).unwrap();
+
+        assert!(response.contains_answer());
+    }
+
+    #[test]
+    fn contains_any() {
+        let mut message = Message::default();
+        message.set_response_code(ResponseCode::NoError);
+        message.add_query(Query::query(xx(), RecordType::ANY));
+        message.add_name_server(ns1_record());
+        message.add_additional(ns1_a());
+
+        let response = DnsResponse::from_message(message).unwrap();
+
+        assert!(response.contains_answer());
     }
 }

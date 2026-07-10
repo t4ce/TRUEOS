@@ -4,7 +4,7 @@
 //! A collection of SVG filters.
 
 use alloc::{boxed::Box, format, string::{String, ToString}, vec, vec::Vec};
-use alloc::collections::BTreeSet as HashSet;
+use hashbrown::HashSet;
 use core::str::FromStr;
 use alloc::sync::Arc;
 use kurbo::common::FloatFuncs;

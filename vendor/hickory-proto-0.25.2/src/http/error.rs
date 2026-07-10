@@ -5,9 +5,9 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::io;
 use alloc::{fmt, string::String};
 use core::num::ParseIntError;
-use crate::io;
 
 use crate::error::ProtoError;
 use http::header::ToStrError;

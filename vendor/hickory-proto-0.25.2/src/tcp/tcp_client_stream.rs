@@ -5,8 +5,8 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use alloc::boxed::Box;
 use ::core::fmt::{self, Display};
+use alloc::boxed::Box;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -108,3 +108,28 @@ where
     type Time = TokioTime;
 }
 
+#[cfg(test)]
+#[cfg(feature = "tokio")]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use test_support::subscribe;
+
+    use crate::runtime::TokioRuntimeProvider;
+    use crate::tests::tcp_client_stream_test;
+    #[tokio::test]
+    async fn test_tcp_stream_ipv4() {
+        subscribe();
+        tcp_client_stream_test(IpAddr::V4(Ipv4Addr::LOCALHOST), TokioRuntimeProvider::new()).await;
+    }
+
+    #[tokio::test]
+    async fn test_tcp_stream_ipv6() {
+        subscribe();
+        tcp_client_stream_test(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            TokioRuntimeProvider::new(),
+        )
+        .await;
+    }
+}

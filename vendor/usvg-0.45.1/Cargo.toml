@@ -82,6 +82,11 @@ default-features = false
 [dependencies.imagesize]
 version = "0.13"
 
+[dependencies.hashbrown]
+version = "0.17"
+features = ["default-hasher"]
+default-features = false
+
 [dependencies.kurbo]
 version = "0.11"
 default-features = false

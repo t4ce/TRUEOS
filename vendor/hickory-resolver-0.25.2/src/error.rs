@@ -188,7 +188,22 @@ impl From<ProtoError> for ResolveError {
 
 impl From<ResolveError> for io::Error {
     fn from(e: ResolveError) -> Self {
+        #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+        {
+            let _ = e;
+            return Self::new(io::ErrorKind::Other, "hickory resolver error");
+        }
+
+        #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
         Self::new(io::ErrorKind::Other, e)
+    }
+}
+
+#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
+impl From<ResolveError> for crate::host_std::io::Error {
+    fn from(e: ResolveError) -> Self {
+        let _ = e;
+        Self::other("hickory resolver error")
     }
 }
 

@@ -189,6 +189,25 @@ fn log_fault_frame(label: &str, stack_frame: &InterruptStackFrame) {
     );
 }
 
+fn debugcon_fault_frame(stack_frame: &InterruptStackFrame) {
+    dprintln!(
+        "RIP={:#x} CS={:#x}",
+        stack_frame.instruction_pointer.as_u64(),
+        stack_frame.code_segment.0
+    );
+    dprintln!(
+        "RSP={:#x} SS={:#x}",
+        stack_frame.stack_pointer.as_u64(),
+        stack_frame.stack_segment.0
+    );
+    dprintln!("RFLAGS={:#x}", stack_frame.cpu_flags.bits());
+    dprintln!(
+        "CPU: lapic={} cpu={}",
+        crate::percpu::this_cpu().lapic_id(),
+        crate::percpu::this_cpu().cpu_index()
+    );
+}
+
 fn log_fault_alloc_trace() {
     let trace = crate::allocators::last_alloc_trace();
     if trace.seq == 0 {
@@ -386,7 +405,10 @@ extern "x86-interrupt" fn general_protection_fault_handler(
 
     dprintln!("\n=== #GP General Protection Fault ===");
     dprintln!("error_code={:#x}", error_code);
-    log_fault_frame("#GP General Protection Fault", &stack_frame);
+    // Keep the first-pass report on debugcon only. The higher-level Blueprint
+    // console path used by `log_fault_frame` can itself fault while the kernel
+    // is already handling #GP, hiding the original RIP behind the nested halt.
+    debugcon_fault_frame(&stack_frame);
 
     halt_loop();
 }

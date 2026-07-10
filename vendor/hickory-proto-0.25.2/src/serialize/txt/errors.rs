@@ -1,5 +1,5 @@
-use alloc::{fmt, string::String};
 use crate::io;
+use alloc::{fmt, string::String};
 
 #[cfg(feature = "backtrace")]
 use crate::trace;
@@ -46,7 +46,10 @@ pub enum ParseErrorKind {
 
     // foreign
     /// An address parse error
-    #[cfg(all(not(feature = "std"), not(any(target_os = "trueos", target_os = "zkvm"))))]
+    #[cfg(all(
+        not(feature = "std"),
+        not(any(target_os = "trueos", target_os = "zkvm"))
+    ))]
     #[error("network address parse error: {0}")]
     AddrParse(#[from] core::net::AddrParseError),
 
@@ -169,7 +172,10 @@ impl From<String> for ParseError {
     }
 }
 
-#[cfg(all(not(feature = "std"), not(any(target_os = "trueos", target_os = "zkvm"))))]
+#[cfg(all(
+    not(feature = "std"),
+    not(any(target_os = "trueos", target_os = "zkvm"))
+))]
 impl From<core::net::AddrParseError> for ParseError {
     fn from(e: core::net::AddrParseError) -> Self {
         ParseErrorKind::from(e).into()

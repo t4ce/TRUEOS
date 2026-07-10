@@ -90,7 +90,7 @@ impl NameServerState {
     pub(crate) fn establish(&self, remote_edns: Option<Edns>) {
         if remote_edns.is_some() {
             // best effort locking, we'll assume a different user of this connection is storing the same thing...
-            if let Some(mut current_edns) = self.remote_edns.try_lock() {
+            if let Ok(mut current_edns) = self.remote_edns.try_lock() {
                 *current_edns = Arc::new(remote_edns)
             }
         }
@@ -142,5 +142,31 @@ impl PartialOrd for NameServerState {
 impl PartialEq for NameServerState {
     fn eq(&self, other: &Self) -> bool {
         self.load() == other.load()
+    }
+}
+
+impl Eq for NameServerState {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::name_server::NameServerState;
+
+    #[test]
+    fn test_state_cmp() {
+        let init = NameServerState::init(None);
+
+        let established = NameServerState::init(None);
+        established.establish(None);
+
+        let failed = NameServerState::init(None);
+        failed.fail(Instant::now());
+
+        assert_eq!(init.cmp(&init), Ordering::Equal);
+        assert_eq!(init.cmp(&established), Ordering::Less);
+        assert_eq!(init.cmp(&failed), Ordering::Greater);
+        assert_eq!(established.cmp(&established), Ordering::Equal);
+        assert_eq!(established.cmp(&failed), Ordering::Greater);
+        assert_eq!(failed.cmp(&failed), Ordering::Equal);
     }
 }

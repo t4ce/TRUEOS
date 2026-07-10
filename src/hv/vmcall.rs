@@ -97,6 +97,7 @@ pub const OP_BP_SHELL_KONSOLE_SIZE: u32 = 0x9F; // response data packs cols:rows
 pub const OP_BP_EXIT_REASON: u32 = 0xA0; // payload utf8-ish reason string for lifecycle logs
 pub const OP_BP_SHELL_KONSOLE_BEGIN_FRAME: u32 = 0xA1; // arg cols/rows+flags -> resize shell terminal
 pub const OP_BP_SHUTDOWN: u32 = 0xA2; // payload utf8-ish reason, stop current blueprint VM
+pub const OP_BP_RETURN_TO_CLI: u32 = 0xA3; // release rich terminal and attach the VM container CLI
 pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A; // payload i16 stereo 48k bytes -> frames/rc
 pub const OP_BP_AUDIO_STOP: u32 = 0x9B; // stop host overlay lane
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C; // response is host overlay pending frames
@@ -1102,6 +1103,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             crate::hv::blueprint_console_set_exit_reason(vm_id, reason);
             write_response(vm_id, seq, STATUS_OK, data.len() as u64, 0);
             DispatchOutcome::Stop
+        }
+        OP_BP_RETURN_TO_CLI => {
+            let changed = crate::hv::blueprint_console_return_to_cli(vm_id);
+            write_response(vm_id, seq, STATUS_OK, changed as u64, 0);
+            DispatchOutcome::Resume
         }
         OP_BP_AUDIO_WRITE_I16_STEREO_48K => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);

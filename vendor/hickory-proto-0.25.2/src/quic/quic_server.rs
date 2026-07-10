@@ -5,9 +5,9 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use alloc::sync::Arc;
 use crate::io;
-use std::{net::SocketAddr};
+use alloc::sync::Arc;
+use std::net::SocketAddr;
 
 use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{Connection, Endpoint, ServerConfig};

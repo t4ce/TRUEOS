@@ -7,12 +7,12 @@
 
 //! DNS over TLS client implementation for Rustls
 
+use crate::io;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
-use crate::io;
 use std::net::SocketAddr;
 
 use futures_util::TryFutureExt;

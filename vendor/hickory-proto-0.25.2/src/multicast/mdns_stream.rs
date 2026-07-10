@@ -5,12 +5,12 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::io;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use crate::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use futures_util::stream::{Stream, StreamExt};
@@ -32,10 +32,7 @@ pub static MDNS_IPV4: Lazy<SocketAddr> =
     Lazy::new(|| SocketAddr::new(Ipv4Addr::new(224, 0, 0, 251).into(), MDNS_PORT));
 /// link-local mDNS ipv6 address, see [ipv6-multicast-addresses](https://www.iana.org/assignments/ipv6-multicast-addresses/ipv6-multicast-addresses.xhtml)
 pub static MDNS_IPV6: Lazy<SocketAddr> = Lazy::new(|| {
-    SocketAddr::new(
-        Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0x00FB).into(),
-        MDNS_PORT,
-    )
+    SocketAddr::new(Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0x00FB).into(), MDNS_PORT)
 });
 
 /// A UDP stream of DNS binary packets
@@ -58,10 +55,8 @@ impl MdnsStream {
         mdns_query_type: MdnsQueryType,
         packet_ttl: Option<u32>,
         ipv4_if: Option<Ipv4Addr>,
-    ) -> (
-        Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>,
-        BufDnsStreamHandle,
-    ) {
+    ) -> (Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>, BufDnsStreamHandle)
+    {
         Self::new(*MDNS_IPV4, mdns_query_type, packet_ttl, ipv4_if, None)
     }
 
@@ -70,10 +65,8 @@ impl MdnsStream {
         mdns_query_type: MdnsQueryType,
         packet_ttl: Option<u32>,
         ipv6_if: Option<u32>,
-    ) -> (
-        Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>,
-        BufDnsStreamHandle,
-    ) {
+    ) -> (Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>, BufDnsStreamHandle)
+    {
         Self::new(*MDNS_IPV6, mdns_query_type, packet_ttl, None, ipv6_if)
     }
 
@@ -109,10 +102,8 @@ impl MdnsStream {
         packet_ttl: Option<u32>,
         ipv4_if: Option<Ipv4Addr>,
         ipv6_if: Option<u32>,
-    ) -> (
-        Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>,
-        BufDnsStreamHandle,
-    ) {
+    ) -> (Box<dyn Future<Output = Result<Self, io::Error>> + Send + Unpin>, BufDnsStreamHandle)
+    {
         let (message_sender, outbound_messages) = BufDnsStreamHandle::new(multicast_addr);
         let multicast_socket = match Self::join_multicast(&multicast_addr, mdns_query_type) {
             Ok(socket) => socket,
@@ -301,10 +292,7 @@ impl Stream for MdnsStream {
                     let mut buf = [0u8; 2_048];
                     let (len, src) = socket.recv_from(&mut buf).await?;
 
-                    Ok(SerialMessage::new(
-                        buf.iter().take(len).cloned().collect(),
-                        src,
-                    ))
+                    Ok(SerialMessage::new(buf.iter().take(len).cloned().collect(), src))
                 };
 
                 self.rcving_mcast = Some(Box::pin(receive_future.boxed()));
@@ -416,11 +404,210 @@ impl Future for NextRandomUdpSocket {
     }
 }
 
-    // FIXME: reenable after breakage in async/await
-    #[ignore]
+#[cfg(test)]
+pub(crate) mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use alloc::string::ToString;
+    use std::println;
+
+    use futures_util::future::Either;
+    use test_support::subscribe;
+    use tokio::runtime;
+
+    use super::*;
+    use crate::xfer::dns_handle::DnsStreamHandle;
+
+    // TODO: is there a better way?
+    const BASE_TEST_PORT: u16 = 5379;
+
+    /// 250 appears to be unused/unregistered
+    static TEST_MDNS_IPV4: Lazy<IpAddr> = Lazy::new(|| Ipv4Addr::new(224, 0, 0, 250).into());
+    /// FA appears to be unused/unregistered
+    static TEST_MDNS_IPV6: Lazy<IpAddr> =
+        Lazy::new(|| Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0x00FA).into());
+
+    // one_shot tests are basically clones from the udp tests
+    #[tokio::test]
+    async fn test_next_random_socket() {
+        subscribe();
+
+        let (stream, _) = MdnsStream::new(
+            SocketAddr::new(*TEST_MDNS_IPV4, BASE_TEST_PORT),
+            MdnsQueryType::OneShot,
+            Some(1),
+            None,
+            None,
+        );
+        let result = stream.await;
+
+        if let Err(error) = result {
+            println!("Random address error: {error:#?}");
+            panic!("failed to get next random address");
+        }
+    }
 
     // FIXME: reenable after breakage in async/await
     #[ignore]
+    #[test]
+    fn test_one_shot_mdns_ipv4() {
+        subscribe();
+        one_shot_mdns_test(SocketAddr::new(*TEST_MDNS_IPV4, BASE_TEST_PORT + 1));
+    }
+
+    #[test]
+    #[ignore]
+    fn test_one_shot_mdns_ipv6() {
+        subscribe();
+        one_shot_mdns_test(SocketAddr::new(*TEST_MDNS_IPV6, BASE_TEST_PORT + 2));
+    }
+
+    //   as there are probably unexpected responses coming on the standard addresses
+    fn one_shot_mdns_test(mdns_addr: SocketAddr) {
+        use core::time::Duration;
+
+        let client_done = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+
+        let test_bytes: &'static [u8; 8] = b"DEADBEEF";
+        let send_recv_times = 10;
+        let client_done_clone = client_done.clone();
+
+        // an in and out server
+        let server_handle = std::thread::Builder::new()
+            .name("test_one_shot_mdns:server".to_string())
+            .spawn(move || {
+                let server_loop = runtime::Runtime::new().unwrap();
+                let mut timeout = future::lazy(|_| tokio::time::sleep(Duration::from_millis(100)))
+                    .flatten()
+                    .boxed();
+
+                // TTLs are 0 so that multicast test packets never leave the test host...
+                // FIXME: this is hardcoded to index 5 for ipv6, which isn't going to be correct in most cases...
+                let (server_stream_future, mut server_sender) =
+                    MdnsStream::new(mdns_addr, MdnsQueryType::OneShotJoin, Some(1), None, Some(5));
+
+                // For one-shot responses we are competing with a system mDNS responder, we will respond from a different port...
+                let mut server_stream = server_loop
+                    .block_on(server_stream_future)
+                    .expect("could not create mDNS listener")
+                    .into_future();
+
+                for _ in 0..=send_recv_times {
+                    if client_done_clone.load(core::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    // wait for some bytes...
+                    match server_loop.block_on(
+                        future::lazy(|_| future::select(server_stream, timeout)).flatten(),
+                    ) {
+                        Either::Left((buffer_and_addr_stream_tmp, timeout_tmp)) => {
+                            let (buffer_and_addr, stream_tmp): (
+                                Option<Result<SerialMessage, io::Error>>,
+                                MdnsStream,
+                            ) = buffer_and_addr_stream_tmp;
+
+                            server_stream = stream_tmp.into_future();
+                            timeout = timeout_tmp;
+                            let (buffer, addr) = buffer_and_addr
+                                .expect("no msg received")
+                                .expect("error receiving msg")
+                                .into_parts();
+
+                            assert_eq!(&buffer, test_bytes);
+                            //println!("server got data! {}", addr);
+
+                            // bounce them right back...
+                            server_sender
+                                .send(SerialMessage::new(test_bytes.to_vec(), addr))
+                                .expect("could not send to client");
+                        }
+                        Either::Right(((), buffer_and_addr_stream_tmp)) => {
+                            server_stream = buffer_and_addr_stream_tmp;
+                            timeout =
+                                future::lazy(|_| tokio::time::sleep(Duration::from_millis(100)))
+                                    .flatten()
+                                    .boxed();
+                        }
+                    }
+
+                    // let the server turn for a bit... send the message
+                    server_loop.block_on(tokio::time::sleep(Duration::from_millis(100)));
+                }
+            })
+            .unwrap();
+
+        // setup the client, which is going to run on the testing thread...
+        let io_loop = runtime::Runtime::new().unwrap();
+
+        // FIXME: this is hardcoded to index 5 for ipv6, which isn't going to be correct in most cases...
+        let (stream, mut sender) =
+            MdnsStream::new(mdns_addr, MdnsQueryType::OneShot, Some(1), None, Some(5));
+        let mut stream = io_loop.block_on(stream).ok().unwrap().into_future();
+        let mut timeout = future::lazy(|_| tokio::time::sleep(Duration::from_millis(100)))
+            .flatten()
+            .boxed();
+        let mut successes = 0;
+
+        for _ in 0..send_recv_times {
+            // test once
+            sender
+                .send(SerialMessage::new(test_bytes.to_vec(), mdns_addr))
+                .unwrap();
+
+            println!("client sending data!");
+
+            // TODO: this lazy isn't needed is it?
+            match io_loop.block_on(future::lazy(|_| future::select(stream, timeout)).flatten()) {
+                Either::Left((buffer_and_addr_stream_tmp, timeout_tmp)) => {
+                    let (buffer_and_addr, stream_tmp) = buffer_and_addr_stream_tmp;
+                    stream = stream_tmp.into_future();
+                    timeout = timeout_tmp;
+
+                    let (buffer, _addr) = buffer_and_addr
+                        .expect("no msg received")
+                        .expect("error receiving msg")
+                        .into_parts();
+                    println!("client got data!");
+
+                    assert_eq!(&buffer, test_bytes);
+                    successes += 1;
+                }
+                Either::Right(((), buffer_and_addr_stream_tmp)) => {
+                    stream = buffer_and_addr_stream_tmp;
+                    timeout = future::lazy(|_| tokio::time::sleep(Duration::from_millis(100)))
+                        .flatten()
+                        .boxed();
+                }
+            }
+        }
+
+        client_done.store(true, core::sync::atomic::Ordering::Relaxed);
+        println!("successes: {successes}");
+        assert!(successes >= 1);
+        server_handle.join().expect("server thread failed");
+    }
+
+    // FIXME: reenable after breakage in async/await
+    #[ignore]
+    #[test]
+    fn test_passive_mdns() {
+        subscribe();
+        passive_mdns_test(
+            MdnsQueryType::Passive,
+            SocketAddr::new(*TEST_MDNS_IPV4, BASE_TEST_PORT + 3),
+        )
+    }
+
+    // FIXME: reenable after breakage in async/await
+    #[ignore]
+    #[test]
+    fn test_oneshot_join_mdns() {
+        subscribe();
+        passive_mdns_test(
+            MdnsQueryType::OneShotJoin,
+            SocketAddr::new(*TEST_MDNS_IPV4, BASE_TEST_PORT + 4),
+        )
+    }
 
     //   as there are probably unexpected responses coming on the standard addresses
     fn passive_mdns_test(mdns_query_type: MdnsQueryType, mdns_addr: SocketAddr) {

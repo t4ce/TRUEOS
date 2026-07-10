@@ -1,4 +1,6 @@
 use core::fmt;
+#[cfg(target_arch = "x86_64")]
+use core::sync::atomic::{AtomicBool, Ordering};
 
 extern crate alloc;
 
@@ -12,21 +14,21 @@ pub(crate) mod flags {
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+        LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
 
     pub(crate) const NET_LOG_RX_TAP: bool = false;
     pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -86,6 +88,10 @@ pub(crate) mod flags {
 }
 
 static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+#[cfg(target_arch = "x86_64")]
+static UART_LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+#[cfg(target_arch = "x86_64")]
+static EMULATOR_UART_LOGGING: AtomicBool = AtomicBool::new(false);
 
 struct TcpLogSink;
 
@@ -112,7 +118,44 @@ impl log_os_core::GlobalLogSink for TcpLogSink {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+struct EmulatorUartLogSink;
+
+#[cfg(target_arch = "x86_64")]
+impl log_os_core::GlobalLogSink for EmulatorUartLogSink {
+    fn spec(&self) -> log_os_core::GlobalLogSinkSpec {
+        log_os_core::GlobalLogSinkSpec::new(
+            log_os_core::LogAreaSet::ALL,
+            log_os_core::LogLevelPolicy::up(log::LevelFilter::Trace),
+        )
+    }
+
+    fn level_policy(&self, area: flags::LogArea) -> log_os_core::LogLevelPolicy {
+        flags::area_log_policy(area)
+    }
+
+    fn accepts(&self, area: flags::LogArea, level: log::Level) -> bool {
+        EMULATOR_UART_LOGGING.load(Ordering::Acquire) && flags::area_log_enabled(area, level)
+    }
+
+    fn write_accepted(
+        &self,
+        area: flags::LogArea,
+        _level: log::Level,
+        purpose: Option<&str>,
+        args: fmt::Arguments<'_>,
+    ) {
+        write_uart_with_tags(area, purpose, args);
+    }
+}
+
 static TCP_LOG_SINK: TcpLogSink = TcpLogSink;
+#[cfg(target_arch = "x86_64")]
+static EMULATOR_UART_LOG_SINK: EmulatorUartLogSink = EmulatorUartLogSink;
+#[cfg(target_arch = "x86_64")]
+static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 2] =
+    [&TCP_LOG_SINK, &EMULATOR_UART_LOG_SINK];
+#[cfg(not(target_arch = "x86_64"))]
 static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 1] = [&TCP_LOG_SINK];
 static TRUEOS_LOG_ROUTER: log_os_core::GlobalLogRouter =
     log_os_core::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
@@ -287,6 +330,27 @@ fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Argum
     };
     let _ = fmt::write(&mut writer, args);
 }
+
+#[cfg(target_arch = "x86_64")]
+fn write_uart_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
+    let _guard = UART_LOG_WRITE_LOCK.lock();
+    crate::uart1_com1::write_fmt(format_args!("[{}] ", log_os_core::area_tag(area)));
+    if let Some(purpose) = purpose {
+        crate::uart1_com1::write_fmt(format_args!("[{}] ", purpose));
+    }
+    crate::uart1_com1::write_fmt(args);
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn set_emulator_uart_logging(enabled: bool) {
+    if enabled {
+        crate::uart1_com1::init();
+    }
+    EMULATOR_UART_LOGGING.store(enabled, Ordering::Release);
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+pub(crate) fn set_emulator_uart_logging(_enabled: bool) {}
 
 pub fn log_with_area_level(area: flags::LogArea, level: log::Level, args: fmt::Arguments<'_>) {
     log_os_core::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);

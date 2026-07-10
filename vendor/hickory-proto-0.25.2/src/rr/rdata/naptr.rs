@@ -7,8 +7,8 @@
 
 //! Dynamic Delegation Discovery System
 
-use alloc::{boxed::Box, string::String};
 use ::core::fmt;
+use alloc::{boxed::Box, string::String};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -292,5 +292,67 @@ impl fmt::Display for NAPTR {
             regexp = &String::from_utf8_lossy(&self.regexp),
             replace = self.replacement
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use alloc::vec::Vec;
+    #[cfg(feature = "std")]
+    use std::println;
+
+    use super::*;
+    #[test]
+    fn test() {
+        use core::str::FromStr;
+
+        let rdata = NAPTR::new(
+            8,
+            16,
+            b"aa11AA".to_vec().into_boxed_slice(),
+            b"services".to_vec().into_boxed_slice(),
+            b"regexpr".to_vec().into_boxed_slice(),
+            Name::from_str("naptr.example.com.").unwrap(),
+        );
+
+        let mut bytes = Vec::new();
+        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
+        assert!(rdata.emit(&mut encoder).is_ok());
+        let bytes = encoder.into_bytes();
+
+        #[cfg(feature = "std")]
+        println!("bytes: {bytes:?}");
+
+        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
+        let read_rdata = NAPTR::read(&mut decoder).expect("Decoding error");
+        assert_eq!(rdata, read_rdata);
+    }
+
+    #[test]
+    fn test_bad_data() {
+        use core::str::FromStr;
+
+        let rdata = NAPTR::new(
+            8,
+            16,
+            b"aa11AA-".to_vec().into_boxed_slice(),
+            b"services".to_vec().into_boxed_slice(),
+            b"regexpr".to_vec().into_boxed_slice(),
+            Name::from_str("naptr.example.com").unwrap(),
+        );
+
+        let mut bytes = Vec::new();
+        let mut encoder: BinEncoder<'_> = BinEncoder::new(&mut bytes);
+        assert!(rdata.emit(&mut encoder).is_ok());
+        let bytes = encoder.into_bytes();
+
+        #[cfg(feature = "std")]
+        println!("bytes: {bytes:?}");
+
+        let mut decoder: BinDecoder<'_> = BinDecoder::new(bytes);
+        let read_rdata = NAPTR::read(&mut decoder);
+        assert!(read_rdata.is_err(), "should have failed decoding with bad flag data");
     }
 }

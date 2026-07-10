@@ -193,10 +193,7 @@ where
                     return Poll::Ready(Ok(()));
                 }
                 Poll::Ready(Some(Err(err))) => {
-                    debug!(
-                        error = err.as_dyn(),
-                        "io_stream hit an error, shutting down"
-                    );
+                    debug!(error = err.as_dyn(), "io_stream hit an error, shutting down");
 
                     return Poll::Ready(Err(err));
                 }

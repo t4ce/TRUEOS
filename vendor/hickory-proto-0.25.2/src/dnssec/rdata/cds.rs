@@ -7,8 +7,8 @@
 
 //! CDS type and related implementations
 
-use alloc::vec::Vec;
 use ::core::fmt;
+use alloc::vec::Vec;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -171,5 +171,56 @@ impl fmt::Display for CDS {
             ty = u8::from(self.digest_type),
             digest = data_encoding::HEXUPPER_PERMISSIVE.encode(&self.digest)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::dbg_macro, clippy::print_stdout)]
+
+    use alloc::vec::Vec;
+    use std::println;
+
+    use crate::{
+        dnssec::{Algorithm, DigestType},
+        rr::RecordDataDecodable,
+        serialize::binary::{BinDecoder, BinEncodable, BinEncoder, Restrict},
+    };
+
+    use super::CDS;
+
+    #[test]
+    fn test() {
+        let rdata =
+            CDS::new(0xF00F, Some(Algorithm::RSASHA256), DigestType::SHA256, vec![5, 6, 7, 8]);
+
+        let mut bytes = Vec::new();
+        let mut encoder = BinEncoder::new(&mut bytes);
+        rdata.emit(&mut encoder).expect("error encoding");
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder = BinDecoder::new(bytes);
+        let read_rdata = CDS::read_data(&mut decoder, Restrict::new(bytes.len() as u16))
+            .expect("error decoding");
+        assert_eq!(rdata, read_rdata);
+    }
+
+    #[test]
+    fn test_delete() {
+        let rdata = CDS::new(0, None, DigestType::Unknown(0), vec![0]);
+
+        let mut bytes = Vec::new();
+        let mut encoder = BinEncoder::new(&mut bytes);
+        rdata.emit(&mut encoder).expect("error encoding");
+        let bytes = encoder.into_bytes();
+
+        println!("bytes: {bytes:?}");
+
+        let mut decoder = BinDecoder::new(bytes);
+        let read_rdata = CDS::read_data(&mut decoder, Restrict::new(bytes.len() as u16))
+            .expect("error decoding");
+        assert_eq!(rdata, read_rdata);
     }
 }

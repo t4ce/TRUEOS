@@ -100,6 +100,7 @@ pub const OP_BP_SHELL_KONSOLE_SIZE: u32 = 0x9F;
 pub const OP_BP_EXIT_REASON: u32 = 0xA0;
 pub const OP_BP_SHELL_KONSOLE_BEGIN_FRAME: u32 = 0xA1;
 pub const OP_BP_SHUTDOWN: u32 = 0xA2;
+pub const OP_BP_RETURN_TO_CLI: u32 = 0xA3;
 pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A;
 pub const OP_BP_AUDIO_STOP: u32 = 0x9B;
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C;

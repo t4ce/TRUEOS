@@ -326,12 +326,7 @@ fn validate_nxdomain_response(
             "nsec3",
             "no direct or wildcard proof, but parent name of query is SOA",
         ),
-        _ => proof_log_yield(
-            Proof::Bogus,
-            query_name,
-            "nsec3",
-            "no proof of non-existence",
-        ),
+        _ => proof_log_yield(Proof::Bogus, query_name, "nsec3", "no proof of non-existence"),
     }
 }
 
@@ -702,18 +697,16 @@ fn validate_nodata_response(
                 closest_encloser_wildcard,
             } = wildcard_based_encloser_proof(query_name, soa_name, nsec3s);
             match (closest_encloser, next_closer, closest_encloser_wildcard) {
-                (Some(_), Some(_), Some(_)) => (
-                    Proof::Secure,
-                    "servicing wildcard with closest encloser proof",
-                ),
+                (Some(_), Some(_), Some(_)) => {
+                    (Proof::Secure, "servicing wildcard with closest encloser proof")
+                }
                 (None, Some(_), Some(_)) if &query_name.base_name() == soa_name => (
                     Proof::Secure,
                     "servicing wildcard without closest encloser proof, but query parent name == SOA",
                 ),
-                (None, None, None) if query_name == soa_name => (
-                    Proof::Secure,
-                    "no servicing wildcard, but query name == SOA",
-                ),
+                (None, None, None) if query_name == soa_name => {
+                    (Proof::Secure, "no servicing wildcard, but query name == SOA")
+                }
                 _ => (Proof::Bogus, "no valid servicing wildcard proof"),
             }
         }

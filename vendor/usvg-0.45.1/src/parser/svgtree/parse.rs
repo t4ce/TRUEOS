@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{boxed::Box, string::{String, ToString}, vec::Vec};
-use alloc::collections::BTreeMap as HashMap;
+use hashbrown::HashMap;
 
 use roxmltree::Error;
 use simplecss::Declaration;
