@@ -483,6 +483,10 @@ unsafe extern "C" fn portal_unwind_raise_exception(
 }
 
 include!(concat!(env!("OUT_DIR"), "/generated_portal_imports.rs"));
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_ring_runtime_imports.rs"
+));
 
 pub(crate) fn entry_hint_section(entry: u64) -> u32 {
     (entry >> 32) as u32
@@ -1350,7 +1354,8 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => resolve_runtime_abi_import(name)
+        _ => resolve_ring_runtime_import(name)
+            .or_else(|| resolve_runtime_abi_import(name))
             .or_else(|| resolve_cabi_import(name))
             .or_else(|| crate::unix_compat::resolve_import(name)),
     }

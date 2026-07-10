@@ -78,21 +78,52 @@ fn published_app_name_parts(value: &str) -> Option<(&str, &str)> {
         .then_some((value, "-"))
 }
 
-fn published_link_parts<'a>(link_text: &'a str, href: &'a str) -> Option<(&'a str, &'a str)> {
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_nibble(bytes[index + 1]), hex_nibble(bytes[index + 2]))
+        {
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(decoded.as_slice()).into_owned()
+}
+
+fn published_link_parts(link_text: &str, href: &str) -> Option<(String, String)> {
     let text_parts = published_app_name_parts(link_text);
-    let href_name = href
+    let encoded_href_name = href
         .split(['?', '#'])
         .next()
         .unwrap_or(href)
         .rsplit('/')
         .next()
         .unwrap_or(href);
-    let href_parts = published_app_name_parts(href_name);
+    let href_name = percent_decode(encoded_href_name);
+    let href_parts = published_app_name_parts(href_name.as_str());
     match (text_parts, href_parts) {
-        (Some(parts), _) if parts.1 != "-" => Some(parts),
-        (_, Some(parts)) if parts.1 != "-" => Some(parts),
-        (Some(parts), _) => Some(parts),
-        (None, parts) => parts,
+        (Some(parts), _) if parts.1 != "-" => Some((parts.0.to_string(), parts.1.to_string())),
+        (_, Some(parts)) if parts.1 != "-" => Some((parts.0.to_string(), parts.1.to_string())),
+        (Some(parts), _) => Some((parts.0.to_string(), parts.1.to_string())),
+        (None, Some(parts)) => Some((parts.0.to_string(), parts.1.to_string())),
+        (None, None) => None,
     }
 }
 
@@ -145,7 +176,7 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             rest = &rest[li_end..];
             continue;
         };
-        let Some(archive_name) = clean_archive_name(published_archive_name) else {
+        let Some(archive_name) = clean_archive_name(published_archive_name.as_str()) else {
             rest = &rest[li_end..];
             continue;
         };
@@ -153,7 +184,7 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
         out.push(OnlineApp {
             name: trim_bp_suffix(archive_name).to_string(),
             archive_name: archive_name.to_string(),
-            sha256: sha256.to_string(),
+            sha256,
             display_url: display_url_for_archive(url.as_str(), archive_name),
             url,
         });

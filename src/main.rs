@@ -177,6 +177,10 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();
     }
+    // Blueprint modules may import Ring's prefixed native implementation
+    // symbols directly. Keep the Rust crate linked; build.rs retains and
+    // publishes the native routines through the runtime import resolver.
+    core::hint::black_box(&ring::digest::SHA256);
     log_os::init_log_facade();
     crate::log_info!(
         target: "boot";

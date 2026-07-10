@@ -47,6 +47,7 @@ alsa = { version = "0.11.0", default-features = false }
 trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
+ring = { version = "=0.17.14", default-features = false }
 webpki-roots = { version = "1.0.7", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 lzma-rust2 = { version = "0.16.2", default-features = false, features = ["encoder"] }
@@ -135,6 +136,7 @@ embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
 aarch64-cpu = { path = "vendor/aarch64-cpu-10.0.0" }
 lazy_static = { path = "vendor/lazy_static-1.5.0" }
 rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
+ring = { path = "vendor/ring-0.17.14" }
 mio = { path = "vendor/mio-1.2.0" }
 socket2 = { path = "vendor/socket2-0.6.3" }
 getrandom = { path = "vendor/getrandom-0.2.17" }

@@ -6,7 +6,71 @@ use std::{
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH");
+
+    generate_ring_runtime_imports(
+        Path::new(&manifest_dir),
+        target_os.as_str(),
+        target_arch.as_str(),
+    )
+    .expect("generate Ring runtime imports");
+
     generate_portal_imports(Path::new(&manifest_dir)).expect("generate portal imports");
+}
+
+fn generate_ring_runtime_imports(
+    manifest_dir: &Path,
+    target_os: &str,
+    target_arch: &str,
+) -> Result<(), String> {
+    let symbols_path = manifest_dir
+        .join("vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt");
+    println!("cargo:rerun-if-changed={}", symbols_path.display());
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
+    let generated_path = Path::new(&out_dir).join("generated_ring_runtime_imports.rs");
+    if !matches!(target_os, "trueos" | "zkvm") || target_arch != "x86_64" {
+        return fs::write(
+            &generated_path,
+            "fn resolve_ring_runtime_import(_name: &str) -> Option<usize> { None }\n",
+        )
+        .map_err(|err| format!("failed to write {}: {err}", generated_path.display()));
+    }
+
+    let contents = fs::read_to_string(&symbols_path)
+        .map_err(|err| format!("failed to read {}: {err}", symbols_path.display()))?;
+    let symbols = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+
+    let mut generated = String::from("unsafe extern \"C\" {\n");
+    for (index, symbol) in symbols.iter().enumerate() {
+        if !(symbol.starts_with("ring_core_0_17_14__")
+            && symbol
+                .bytes()
+                .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric()))
+        {
+            return Err(format!("invalid Ring runtime export: {symbol}"));
+        }
+        generated.push_str(&format!(
+            "    #[link_name = \"{symbol}\"]\n    static RING_RUNTIME_EXPORT_{index}: u8;\n"
+        ));
+        // Keep a link-time root as well as the resolver's address reference.
+        println!("cargo:rustc-link-arg=--undefined={symbol}");
+    }
+    generated.push_str("}\n\nfn resolve_ring_runtime_import(name: &str) -> Option<usize> {\n    match name {\n");
+    for (index, symbol) in symbols.iter().enumerate() {
+        generated.push_str(&format!(
+            "        \"{symbol}\" => Some(core::ptr::addr_of!(RING_RUNTIME_EXPORT_{index}) as usize),\n"
+        ));
+    }
+    generated.push_str("        _ => None,\n    }\n}\n");
+
+    fs::write(&generated_path, generated)
+        .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
 }
 
 fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
