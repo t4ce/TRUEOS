@@ -20,6 +20,13 @@ unsafe extern "C" {
     pub fn trueos_time_unix_nanos() -> u64;
     pub fn trueos_cabi_write(stream: u32, bytes: *const u8, len: usize);
     pub fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8);
+    pub fn trueos_cabi_log(
+        level: u32,
+        target_ptr: *const u8,
+        target_len: usize,
+        message_ptr: *const u8,
+        message_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_alloc(size: usize) -> *mut u8;
     pub fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
     pub fn trueos_cabi_free(ptr: *mut u8);

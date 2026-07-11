@@ -83,6 +83,9 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE: &str =
     include_str!("kernels/skybox_sample_rgb565.cl");
 pub(crate) const CHART_SINE_RGBA8_KERNEL_NAME: &str = "chart_sine_rgba8";
 pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/chart_sine_rgba8.cl");
+pub(crate) const PIXEL_PLASMA_RGBA8_KERNEL_NAME: &str = "pixel_plasma_rgba8";
+pub(crate) const PIXEL_PLASMA_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/pixel_plasma_rgba8.cl");
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -116,6 +119,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         }
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE),
         CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
+        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         _ => None,
     }
 }
@@ -162,6 +166,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         }
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some("src/intel/kernels/skybox_sample_rgb565.cl"),
         CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/kernels/chart_sine_rgba8.cl"),
+        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/kernels/pixel_plasma_rgba8.cl"),
         _ => None,
     }
 }
@@ -254,6 +259,10 @@ pub(crate) const CHART_SINE_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/chart_sine_rgba8.bin");
 pub(crate) const CHART_SINE_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/chart_sine_rgba8.spv");
+pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/pixel_plasma_rgba8.bin");
+pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/pixel_plasma_rgba8.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -342,6 +351,10 @@ pub(crate) const CHART_SINE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x79, 0xeb, 0x20, 0xbc, 0x33, 0x7e, 0x17, 0x2a, 0x8c, 0xcd, 0xdc, 0xdc, 0x66, 0x54, 0xee, 0xa9,
     0x92, 0xe8, 0x9f, 0xb5, 0xfb, 0x67, 0xb2, 0xf3, 0x2c, 0xaa, 0xd1, 0xc1, 0xaf, 0xa1, 0xc0, 0xe4,
 ];
+pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
+    0x42, 0xfb, 0x1d, 0xd0, 0x56, 0x8b, 0xb2, 0x44, 0xc4, 0x4f, 0x87, 0xd1, 0x46, 0xe0, 0x36, 0xa7,
+    0x2d, 0xf6, 0x0c, 0xb8, 0x11, 0x71, 0x5c, 0x37, 0x0e, 0xc9, 0x59, 0xde, 0x6d, 0x3a, 0xf8, 0x93,
+];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const SPRITE64_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D24_0000;
@@ -363,6 +376,7 @@ const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_GPU: u64 = 0x0D34_0000;
 const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU: u64 = 0x0D35_0000;
 const SKYBOX_SAMPLE_RGB565_ADLS_GPU: u64 = 0x0D38_0000;
 const CHART_SINE_RGBA8_ADLS_GPU: u64 = 0x0D39_0000;
+const PIXEL_PLASMA_RGBA8_ADLS_GPU: u64 = 0x0D3A_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -383,6 +397,7 @@ const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SKYBOX_SAMPLE_RGB565_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CHART_SINE_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const PIXEL_PLASMA_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -736,6 +751,24 @@ pub(crate) const CHART_SINE_FLAG_GRID: u32 = 1 << 0;
 pub(crate) const CHART_SINE_FLAG_AXES: u32 = 1 << 1;
 pub(crate) const CHART_SINE_FLAG_GLOW: u32 = 1 << 2;
 pub(crate) const CHART_SINE_FLAG_BORDER: u32 = 1 << 3;
+const PIXEL_PLASMA_IDD_OFFSET_BYTES: usize = 0x4A00;
+const PIXEL_PLASMA_BINDING_TABLE_OFFSET_BYTES: usize = 0x4A40;
+const PIXEL_PLASMA_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x4A80;
+const PIXEL_PLASMA_PAYLOAD_OFFSET_BYTES: usize = 0x4C00;
+const PIXEL_PLASMA_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const PIXEL_PLASMA_CROSS_THREAD_BYTES: usize = 128;
+const PIXEL_PLASMA_PER_THREAD_BYTES: usize = 96;
+const PIXEL_PLASMA_INDIRECT_BYTES: usize =
+    PIXEL_PLASMA_CROSS_THREAD_BYTES + PIXEL_PLASMA_PER_THREAD_BYTES;
+const PIXEL_PLASMA_PRE_MARKER_SLOT: usize = 31;
+const PIXEL_PLASMA_POST_MARKER_SLOT: usize = 30;
+const PIXEL_PLASMA_PRE_MARKER: u32 = 0xC0DE_A801;
+const PIXEL_PLASMA_POST_MARKER: u32 = 0xC0DE_A802;
+pub(crate) const PIXEL_PLASMA_FLAG_VIGNETTE: u32 = 1 << 0;
+pub(crate) const PIXEL_PLASMA_FLAG_RINGS: u32 = 1 << 1;
+pub(crate) const PIXEL_PLASMA_FLAG_SCANLINE: u32 = 1 << 2;
+pub(crate) const PIXEL_PLASMA_FLAG_FIELD_PALETTE: u32 = 1 << 3;
+pub(crate) const PIXEL_PLASMA_FLAG_ALPHA: u32 = 1 << 4;
 const CANVAS3D_PLANE_FILL_TEST_WIDTH: u32 = 64;
 const CANVAS3D_PLANE_FILL_TEST_HEIGHT: u32 = 48;
 const CANVAS3D_PLANE_FILL_TEST_PITCH_BYTES: u32 =
@@ -893,6 +926,7 @@ static CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelAr
     Mutex::new(None);
 static SKYBOX_SAMPLE_RGB565_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
 static GPGPU_PRESENT_STAGING_SURFACE: Mutex<Option<GpgpuPresentStagingSurface>> = Mutex::new(None);
@@ -1373,6 +1407,62 @@ pub(crate) struct GpgpuShellChartResult {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) phase: f32,
+    pub(crate) pixels: usize,
+    pub(crate) submit_us: u64,
+    pub(crate) present_us: u64,
+    pub(crate) total_us: u64,
+    pub(crate) marker: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct PixelPlasmaRgba8Params {
+    pub(crate) dst_gpu: u64,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) rect_x: u32,
+    pub(crate) rect_y: u32,
+    pub(crate) rect_width: u32,
+    pub(crate) rect_height: u32,
+    pub(crate) time: f32,
+    pub(crate) spatial_scale: f32,
+    pub(crate) intensity: f32,
+    pub(crate) low_rgba: u32,
+    pub(crate) mid_rgba: u32,
+    pub(crate) high_rgba: u32,
+    pub(crate) flags: u32,
+}
+
+impl PixelPlasmaRgba8Params {
+    pub(crate) const fn demo_defaults(time: f32, flags: u32) -> Self {
+        Self {
+            dst_gpu: 0,
+            dst_pitch_bytes: 0,
+            dst_width: 0,
+            dst_height: 0,
+            rect_x: 0,
+            rect_y: 0,
+            rect_width: 0,
+            rect_height: 0,
+            time,
+            spatial_scale: 1.0,
+            intensity: 1.0,
+            low_rgba: 0xFF24_0A08,
+            mid_rgba: 0xFFE6_D214,
+            high_rgba: 0xFF2D_55FF,
+            flags,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuShellPixelResult {
+    pub(crate) ok: bool,
+    pub(crate) submitted: bool,
+    pub(crate) presented: bool,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) time: f32,
     pub(crate) pixels: usize,
     pub(crate) submit_us: u64,
     pub(crate) present_us: u64,
@@ -2347,6 +2437,14 @@ pub(crate) const CHART_SINE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKern
     bin_sha256: CHART_SINE_RGBA8_ADLS_BIN_SHA256,
 };
 
+pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: PIXEL_PLASMA_RGBA8_KERNEL_NAME,
+    target: "adls",
+    bin: PIXEL_PLASMA_RGBA8_ADLS_BIN,
+    spv: PIXEL_PLASMA_RGBA8_ADLS_SPV,
+    bin_sha256: PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256,
+};
+
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
@@ -2423,6 +2521,10 @@ pub(crate) fn skybox_sample_rgb565_upload_status() -> Option<UploadedKernelArtif
 
 pub(crate) fn chart_sine_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *CHART_SINE_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn pixel_plasma_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *PIXEL_PLASMA_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -2845,6 +2947,25 @@ pub(crate) fn upload_chart_sine_rgba8_kernel() -> Option<UploadedKernelArtifact>
     Some(upload)
 }
 
+pub(crate) fn upload_pixel_plasma_rgba8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *PIXEL_PLASMA_RGBA8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: pixel-plasma-rgba8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload =
+        upload_artifact(dev, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT, PIXEL_PLASMA_RGBA8_ADLS_GPU)?;
+    *PIXEL_PLASMA_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactReloadError {
     UnknownKernel,
@@ -2895,6 +3016,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
     CHART_SINE_RGBA8_KERNEL_NAME,
+    PIXEL_PLASMA_RGBA8_KERNEL_NAME,
 ];
 
 pub(crate) fn reload_known_kernel_artifact(
@@ -3042,6 +3164,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CHART_SINE_RGBA8_ADLS_ARTIFACT,
             gpu: CHART_SINE_RGBA8_ADLS_GPU,
             upload: &CHART_SINE_RGBA8_UPLOAD,
+        }),
+        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+            gpu: PIXEL_PLASMA_RGBA8_ADLS_GPU,
+            upload: &PIXEL_PLASMA_RGBA8_UPLOAD,
         }),
         _ => None,
     }
@@ -8822,6 +8949,140 @@ fn submit_chart_sine_rgba8(
     Some(observed)
 }
 
+pub(crate) fn shell_pixel_plasma_scanout(
+    time: f32,
+    flags: u32,
+    present: bool,
+) -> Option<GpgpuShellPixelResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    let target = super::display::ui3_frame_composition_gpgpu()?;
+    let dst = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let mut params = PixelPlasmaRgba8Params::demo_defaults(time, flags);
+    params.dst_gpu = dst.gpu;
+    params.dst_pitch_bytes = dst.pitch_bytes;
+    params.dst_width = dst.width;
+    params.dst_height = dst.height;
+    params.rect_width = dst.width;
+    params.rect_height = dst.height;
+
+    let submit_start_tick = direct_rcs_now_tick();
+    let marker = submit_pixel_plasma_rgba8(dst, params).unwrap_or(0);
+    let submit_us = direct_rcs_elapsed_us_since(submit_start_tick);
+    let submitted = marker == PIXEL_PLASMA_POST_MARKER;
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = if submitted && present {
+        super::display::commit_ui3_frame_composition_gpgpu(target, "gpgpu-pixel-plasma-frame")
+    } else {
+        false
+    };
+    let present_us = direct_rcs_elapsed_us_since(present_start_tick);
+    Some(GpgpuShellPixelResult {
+        ok: submitted && (!present || presented),
+        submitted,
+        presented,
+        width: dst.width,
+        height: dst.height,
+        time,
+        pixels: (dst.width as usize).saturating_mul(dst.height as usize),
+        submit_us,
+        present_us,
+        total_us: direct_rcs_elapsed_us_since(total_start_tick),
+        marker,
+    })
+}
+
+fn submit_pixel_plasma_rgba8(
+    dst: GpgpuRgba8Surface,
+    mut params: PixelPlasmaRgba8Params,
+) -> Option<u32> {
+    if !dst.is_valid()
+        || params.rect_width == 0
+        || params.rect_height == 0
+        || !params.time.is_finite()
+        || !params.spatial_scale.is_finite()
+        || !params.intensity.is_finite()
+    {
+        return None;
+    }
+    if params.rect_x >= dst.width || params.rect_y >= dst.height {
+        return None;
+    }
+    params.dst_gpu = dst.gpu;
+    params.dst_pitch_bytes = dst.pitch_bytes;
+    params.dst_width = dst.width;
+    params.dst_height = dst.height;
+    params.rect_width = params.rect_width.min(dst.width - params.rect_x);
+    params.rect_height = params.rect_height.min(dst.height - params.rect_y);
+    params.spatial_scale = params.spatial_scale.clamp(0.25, 8.0);
+    params.intensity = params.intensity.clamp(0.25, 2.0);
+
+    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: pixel-plasma-rgba8 submit rejected reason=direct-submit-busy\n"
+        );
+        return None;
+    };
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: pixel-plasma-rgba8 submit rejected reason=no-claimed-device\n"
+        );
+        return None;
+    };
+    let upload = upload_pixel_plasma_rgba8_kernel()?;
+    let state = direct_rcs_state_once(dev)?;
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_pixel_plasma_rgba8_batch(state, upload, params, dst.bytes);
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            PIXEL_PLASMA_POST_MARKER_SLOT,
+            PIXEL_PLASMA_POST_MARKER,
+            50,
+        )
+    } else {
+        0
+    };
+    if observed != PIXEL_PLASMA_POST_MARKER {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: pixel-plasma-rgba8 failed forcewake={} mapped={} ppgtt={} kernel={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} size={}x{} kernel_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            forcewake_ok as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ppgtt_ok as u8,
+            dst_ppgtt_ok as u8,
+            batch_ok as u8,
+            submitted as u8,
+            observed,
+            PIXEL_PLASMA_POST_MARKER,
+            params.rect_width,
+            params.rect_height,
+            upload.gpu,
+            dst.gpu
+        );
+        return None;
+    }
+    Some(observed)
+}
+
 fn submit_sprite64_worklist(
     atlas: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -9401,7 +9662,9 @@ fn upload_artifact_bytes(
         return None;
     }
     let actual_sha256 = sha256_digest(bin);
-    if artifact.name == CHART_SINE_RGBA8_KERNEL_NAME && actual_sha256 != artifact.bin_sha256 {
+    let requires_allowlisted_sha =
+        matches!(artifact.name, CHART_SINE_RGBA8_KERNEL_NAME | PIXEL_PLASMA_RGBA8_KERNEL_NAME);
+    if requires_allowlisted_sha && actual_sha256 != artifact.bin_sha256 {
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: {} upload rejected reason=sha256-not-allowlisted source={} path={} expected={} actual={}\n",
@@ -12703,6 +12966,144 @@ fn direct_rcs_encode_chart_sine_rgba8_batch(
     true
 }
 
+fn direct_rcs_encode_pixel_plasma_rgba8_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: PixelPlasmaRgba8Params,
+    dst_bytes: usize,
+) -> bool {
+    if params.rect_width == 0 || params.rect_height == 0 {
+        return false;
+    }
+    if PIXEL_PLASMA_PAYLOAD_OFFSET_BYTES + PIXEL_PLASMA_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_interface_descriptor_at(
+        state,
+        PIXEL_PLASMA_IDD_OFFSET_BYTES,
+        PIXEL_PLASMA_BINDING_TABLE_OFFSET_BYTES,
+        PIXEL_PLASMA_RGBA8_TEXT_OFFSET_BYTES,
+        1,
+        4,
+    ) {
+        return false;
+    }
+    let binding_end = PIXEL_PLASMA_BINDING_TABLE_OFFSET_BYTES + core::mem::size_of::<u32>();
+    if binding_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    unsafe {
+        let binding = state
+            .batch_virt
+            .add(PIXEL_PLASMA_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_volatile(binding, PIXEL_PLASMA_DST_SURFACE_STATE_OFFSET_BYTES as u32);
+    }
+    if !direct_rcs_write_buffer_surface_state(
+        state,
+        PIXEL_PLASMA_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.dst_gpu,
+        dst_bytes,
+    ) || !direct_rcs_write_pixel_plasma_rgba8_payload_at(
+        state,
+        PIXEL_PLASMA_PAYLOAD_OFFSET_BYTES,
+        params,
+    ) {
+        return false;
+    }
+
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+    let group_x = params.rect_width.div_ceil(16).max(1);
+    let group_y = params.rect_height.max(1);
+    let last_group_pixels = ((params.rect_width - 1) % 16) + 1;
+    let right_mask = if last_group_pixels >= 16 {
+        GPGPU_WALKER_SIMD16_MASK
+    } else {
+        (1u32 << last_group_pixels) - 1
+    };
+
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, PIXEL_PLASMA_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, PIXEL_PLASMA_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        PIXEL_PLASMA_PRE_MARKER_SLOT,
+        PIXEL_PLASMA_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        &mut cursor,
+        PIXEL_PLASMA_PAYLOAD_OFFSET_BYTES,
+        PIXEL_PLASMA_INDIRECT_BYTES,
+        group_x,
+        group_y,
+        right_mask,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        PIXEL_PLASMA_POST_MARKER_SLOT,
+        PIXEL_PLASMA_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+    if !ok {
+        return false;
+    }
+
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_write_copy_rect_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_copy_rect_interface_descriptor_at(
         state,
@@ -13108,6 +13509,76 @@ fn direct_rcs_write_chart_sine_rgba8_payload_at(
         }
 
         let local_ids = payload.add(CHART_SINE_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_pixel_plasma_rgba8_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: PixelPlasmaRgba8Params,
+) -> bool {
+    if payload_offset + PIXEL_PLASMA_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let Some(known) = super::opencl::registry::known_aot_kernel(PIXEL_PLASMA_RGBA8_KERNEL_NAME)
+    else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: pixel-plasma-rgba8 payload rejected reason=missing-opencl-contract\n"
+        );
+        return false;
+    };
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, PIXEL_PLASMA_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.dst_gpu >> 32) as u32);
+
+        let cross_thread =
+            core::slice::from_raw_parts_mut(payload, PIXEL_PLASMA_CROSS_THREAD_BYTES);
+        let values = (|| {
+            let mut writer = super::opencl::KernelValueWriter::new(known.contract, cross_thread)?;
+            writer.set_u32(1, params.dst_pitch_bytes)?;
+            writer.set_u32(2, params.dst_width)?;
+            writer.set_u32(3, params.dst_height)?;
+            writer.set_u32(4, params.rect_x)?;
+            writer.set_u32(5, params.rect_y)?;
+            writer.set_u32(6, params.rect_width)?;
+            writer.set_u32(7, params.rect_height)?;
+            writer.set_f32(8, params.time)?;
+            writer.set_f32(9, params.spatial_scale)?;
+            writer.set_f32(10, params.intensity)?;
+            writer.set_u32(11, params.low_rgba)?;
+            writer.set_u32(12, params.mid_rgba)?;
+            writer.set_u32(13, params.high_rgba)?;
+            writer.set_u32(14, params.flags)?;
+            writer.finish()?;
+            Ok::<(), super::opencl::KernelValueError>(())
+        })();
+        if let Err(err) = values {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: pixel-plasma-rgba8 payload rejected reason=value-contract error={:?}\n",
+                err
+            );
+            return false;
+        }
+
+        let local_ids = payload.add(PIXEL_PLASMA_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);

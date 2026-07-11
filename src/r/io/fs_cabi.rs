@@ -41,6 +41,9 @@ impl StreamTextBuffers {
 static CABI_TEXT_BUFFERS: spin::Mutex<BTreeMap<u32, StreamTextBuffers>> =
     spin::Mutex::new(BTreeMap::new());
 
+const CABI_LOG_TARGET_MAX: usize = 256;
+const CABI_LOG_MESSAGE_MAX: usize = 64 * 1024;
+
 fn current_cpu_key() -> u32 {
     super::runtime_context_key()
 }
@@ -201,6 +204,69 @@ pub unsafe extern "C" fn trueos_cabi_write(stream: u32, bytes: *const u8, len: u
     };
     let slice = unsafe { core::slice::from_raw_parts(bytes, len) };
     write_console_bytes(stream, slice);
+}
+
+/// Structured runtime log entry from a dynamically loaded blueprint.
+///
+/// This is intentionally separate from `trueos_cabi_write`: application log
+/// records belong in the global `log_os` router and must not be mixed into a
+/// rich terminal's byte stream. The numeric levels match `trueos::logl`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_log(
+    level: u32,
+    target_ptr: *const u8,
+    target_len: usize,
+    message_ptr: *const u8,
+    message_len: usize,
+) -> i32 {
+    let level = match level {
+        1 => log::Level::Error,
+        2 => log::Level::Warn,
+        3 => log::Level::Info,
+        4 => log::Level::Debug,
+        5 => log::Level::Trace,
+        _ => return -1,
+    };
+    if target_ptr.is_null()
+        || target_len == 0
+        || target_len > CABI_LOG_TARGET_MAX
+        || message_len > CABI_LOG_MESSAGE_MAX
+        || (message_ptr.is_null() && message_len != 0)
+    {
+        return -1;
+    }
+
+    let target_bytes = unsafe { core::slice::from_raw_parts(target_ptr, target_len) };
+    let message_bytes = if message_len == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(message_ptr, message_len) }
+    };
+    let Ok(target) = core::str::from_utf8(target_bytes) else {
+        return -1;
+    };
+    let Ok(message) = core::str::from_utf8(message_bytes) else {
+        return -1;
+    };
+    let message = message.trim_end_matches(&['\r', '\n'][..]);
+    let purpose = crate::log_os::purpose_for_level(level);
+
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Apps,
+            level,
+            Some(purpose),
+            format_args!("vm{} {}: {}\n", vm_id, target, message),
+        );
+    } else {
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Apps,
+            level,
+            Some(purpose),
+            format_args!("{}: {}\n", target, message),
+        );
+    }
+    0
 }
 
 #[unsafe(no_mangle)]

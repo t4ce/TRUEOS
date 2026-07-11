@@ -23,7 +23,10 @@ pub(crate) mod flags {
     pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    // Blueprint log facades remain Info by default and opt individual hunt
+    // targets into Debug/Trace before crossing the ABI. Accept those selected
+    // records here without opening the kernel network hot paths at Trace.
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =

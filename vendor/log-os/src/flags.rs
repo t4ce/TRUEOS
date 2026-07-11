@@ -209,7 +209,7 @@ pub fn target_log_area(target: &str) -> LogArea {
         "usb" | "crabusb" | "crab-usb" => LogArea::Usb,
         "fs" | "storage" | "trueosfs" | "nvme" => LogArea::Storage,
         "gfx" | "intel" | "display" | "ui3" => LogArea::Gfx,
-        "gpgpu" | "intel/gpgpu" | "adls" => LogArea::Gpgpu,
+        "gpgpu" | "intel/gpgpu" | "opencl" | "intel/opencl" | "adls" => LogArea::Gpgpu,
         "render" | "intel/render" | "scratch" => LogArea::Render,
         "media" | "intel/media" | "intel/media2" | "intel/hw_pic" | "intel/hw_pic-stage" => {
             LogArea::IntelMediaNgin
@@ -251,7 +251,7 @@ pub fn module_path_log_area(path: &str) -> LogArea {
     if path_prefix(path, "intel::media") {
         return LogArea::IntelMediaNgin;
     }
-    if path_prefix(path, "intel::gpgpu") {
+    if path_prefix(path, "intel::gpgpu") || path_prefix(path, "intel::opencl") {
         return LogArea::Gpgpu;
     }
     if path_prefix(path, "intel::render") {
@@ -306,6 +306,14 @@ mod tests {
         assert_eq!(target_log_area("blueprint"), LogArea::Blueprint);
         assert_eq!(target_log_area("bp"), LogArea::Blueprint);
         assert_eq!(module_path_log_area("TRUEOS::blueprint::launcher"), LogArea::Blueprint);
+    }
+
+    #[test]
+    fn routes_opencl_aliases_to_gpgpu_area() {
+        assert_eq!(target_log_area("opencl"), LogArea::Gpgpu);
+        assert_eq!(target_log_area("intel/opencl"), LogArea::Gpgpu);
+        assert_eq!(module_path_log_area("TRUEOS::intel::opencl"), LogArea::Gpgpu);
+        assert_eq!(module_path_log_area("TRUEOS::intel::opencl::registry"), LogArea::Gpgpu);
     }
 }
 

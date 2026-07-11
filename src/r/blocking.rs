@@ -139,10 +139,7 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
             crate::log_os::flags::LogArea::Blueprint,
             log::Level::Info,
             Some("multi-rt-alloc"),
-            format_args!(
-                "guest service job done id={} vm={} purpose={}\n",
-                id, vm_id, purpose
-            ),
+            format_args!("guest service job done id={} vm={} purpose={}\n", id, vm_id, purpose),
         );
     } else {
         crate::r::kernel_task_domain::with(
@@ -511,11 +508,18 @@ pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
             data as u64,
             vtable as u64,
         );
-        if status == crate::hv::vmcall::STATUS_OK {
+        let result = if status == crate::hv::vmcall::STATUS_OK {
             rc as i32
         } else {
             -6
+        };
+        if result != 0 {
+            // Ownership crosses to the service lane only after a successful
+            // enqueue. Reclaim a rejected raw guest closure in its original
+            // allocation realm.
+            unsafe { drop(Box::from_raw(raw)) };
         }
+        result
     } else if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         match enqueue_blocking_job(
             Some(vm_id),

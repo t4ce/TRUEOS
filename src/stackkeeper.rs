@@ -21,11 +21,14 @@ const WLS_BLUEPRINT_RUNTIME_BASE: usize = WLS_HOST_WORKER_BASE + TOKIO_LANE_COUN
 const WLS_BLUEPRINT_WORKER_BASE: usize =
     WLS_BLUEPRINT_RUNTIME_BASE + crate::allcaps::hv::VM_ID_LIMIT;
 const WLS_BLUEPRINT_THREAD_SLOTS_PER_VM: usize = 64;
+const WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM: usize = WLS_BLUEPRINT_THREAD_SLOTS_PER_VM / 2;
 const WLS_BLUEPRINT_THREAD_BASE: usize =
     WLS_BLUEPRINT_WORKER_BASE + crate::allcaps::hv::VM_ID_LIMIT * TOKIO_LANE_COUNT;
 const WLS_HOST_FALLBACK_BASE: usize =
     WLS_BLUEPRINT_THREAD_BASE + crate::allcaps::hv::VM_ID_LIMIT * WLS_BLUEPRINT_THREAD_SLOTS_PER_VM;
 const NO_BLUEPRINT_THREAD_ID: u32 = 0;
+pub(crate) const BLUEPRINT_THREAD_CARRIER_TAG: u32 = 1 << 31;
+const _: () = assert!(WLS_BLUEPRINT_THREAD_SLOTS_PER_VM % 2 == 0);
 
 #[repr(align(64))]
 #[allow(dead_code)]
@@ -157,9 +160,20 @@ fn wls_blueprint_worker_slot(vm_id: u8, worker_id: usize) -> u32 {
 
 #[inline]
 fn wls_blueprint_thread_slot(vm_id: u8, thread_id: u32) -> u32 {
-    let thread_index = thread_id
-        .saturating_sub(1)
-        .min((WLS_BLUEPRINT_THREAD_SLOTS_PER_VM - 1) as u32) as usize;
+    // Hull-created and carrier-created pthread handles come from physically
+    // separate counters. Partition their WLS slots as well, otherwise equal
+    // local sequence numbers alias the same thread-local state.
+    let carrier = (thread_id & BLUEPRINT_THREAD_CARRIER_TAG) != 0;
+    let sequence = thread_id & !BLUEPRINT_THREAD_CARRIER_TAG;
+    let realm_base = if carrier {
+        WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM
+    } else {
+        0
+    };
+    let thread_index = realm_base
+        + sequence
+            .saturating_sub(1)
+            .min((WLS_BLUEPRINT_THREAD_SLOTS_PER_REALM - 1) as u32) as usize;
     WLS_BLUEPRINT_THREAD_BASE
         .saturating_add((vm_id as usize).saturating_mul(WLS_BLUEPRINT_THREAD_SLOTS_PER_VM))
         .saturating_add(thread_index) as u32

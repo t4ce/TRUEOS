@@ -51,6 +51,7 @@ pub(crate) enum KnownKernelRole {
     Canvas3d,
     FluidX3d,
     Chart,
+    Pixel,
 }
 
 const ADLS: &str = "adls";
@@ -74,6 +75,7 @@ const CANVAS3D_PLANE_FILL_CROSS_THREAD_BYTES: u32 = 256;
 const CANVAS3D_PLANE_PATCH_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
 const CHART_CROSS_THREAD_BYTES: u32 = 128;
+const PIXEL_PLASMA_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
 const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
@@ -729,6 +731,38 @@ const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["shell2:gpgpu chart artifact|static|wave"],
 };
 
+const PIXEL_PLASMA_ARGS: &[KernelCallArg<'_>] = &[
+    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
+    u32_arg!(1, "dst_pitch_bytes", 14),
+    u32_arg!(2, "dst_width", 15),
+    u32_arg!(3, "dst_height", 16),
+    u32_arg!(4, "rect_x", 17),
+    u32_arg!(5, "rect_y", 18),
+    u32_arg!(6, "rect_width", 19),
+    u32_arg!(7, "rect_height", 20),
+    f32_arg!(8, "time", 21),
+    f32_arg!(9, "spatial_scale", 22),
+    f32_arg!(10, "intensity", 23),
+    u32_arg!(11, "low_rgba", 24),
+    u32_arg!(12, "mid_rgba", 25),
+    u32_arg!(13, "high_rgba", 26),
+    u32_arg!(14, "flags", 27),
+];
+const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::PIXEL_PLASMA_RGBA8_KERNEL_NAME,
+    source_path: "src/intel/kernels/pixel_plasma_rgba8.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: PIXEL_PLASMA_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 1,
+    args: PIXEL_PLASMA_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["shell2:gpgpu pixel artifact|static|plasma"],
+};
+
 pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
     KnownAotKernel {
         name: gpgpu::COPY_RECT_RGBA8_KERNEL_NAME,
@@ -881,6 +915,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_chart_sine_rgba8_kernel,
         status: gpgpu::chart_sine_rgba8_upload_status,
         role: KnownKernelRole::Chart,
+    },
+    KnownAotKernel {
+        name: gpgpu::PIXEL_PLASMA_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+        contract: &PIXEL_PLASMA_CONTRACT,
+        upload: gpgpu::upload_pixel_plasma_rgba8_kernel,
+        status: gpgpu::pixel_plasma_rgba8_upload_status,
+        role: KnownKernelRole::Pixel,
     },
 ];
 

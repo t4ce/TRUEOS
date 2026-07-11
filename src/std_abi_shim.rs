@@ -8,7 +8,7 @@ use core::alloc::Layout;
 use core::ffi::{c_char, c_double, c_int, c_long, c_void};
 use core::ptr;
 use core::slice;
-use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::r::static_map::FixedKeyMap;
@@ -16,13 +16,9 @@ use crate::r::static_map::FixedKeyMap;
 pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
-static PTHREAD_CONDS: Mutex<FixedKeyMap<usize, PthreadCondState, PTHREAD_COND_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-static PTHREAD_MUTEXES: Mutex<FixedKeyMap<usize, PthreadMutexState, PTHREAD_MUTEX_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
 static PTHREAD_KEYS: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
-static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<usize, usize, PTHREAD_TLS_VALUE_CAPACITY>> =
+static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
@@ -44,11 +40,14 @@ static NEXT_FILE_FD: AtomicI32 = AtomicI32::new(3);
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const PTHREAD_CREATE_TRACE_LIMIT: usize = 16;
 const C_ALLOCATION_CAPACITY: usize = 65536;
-const PTHREAD_MUTEX_CAPACITY: usize = 256;
-const PTHREAD_COND_CAPACITY: usize = 256;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
 const PTHREAD_THREAD_CAPACITY: usize = 64;
+// Guest Hull BSS and host-carrier BSS intentionally have independent thread
+// counters. Tag carrier-issued opaque pthread handles inside the u32 range so
+// equal local sequence numbers can never become the same mutex owner.
+const PTHREAD_THREAD_CARRIER_TAG: usize = crate::stackkeeper::BLUEPRINT_THREAD_CARRIER_TAG as usize;
+const PTHREAD_THREAD_SEQUENCE_MASK: usize = PTHREAD_THREAD_CARRIER_TAG - 1;
 const OPEN_FILE_CAPACITY: usize = 64;
 const FD_FLAG_CAPACITY: usize = 256;
 const SOCKET_FD_CAPACITY: usize = 128;
@@ -203,21 +202,36 @@ struct AllocationRecord {
     align: usize,
 }
 
-#[derive(Clone, Copy)]
-struct PthreadCondState {
-    generation: u64,
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct PthreadTlsSlot {
+    owner: usize,
+    key: usize,
 }
 
-#[derive(Clone, Copy)]
-struct PthreadMutexState {
-    locked: bool,
-    owner: usize,
-    depth: usize,
+// The Blueprint target uses the x86_64 Linux pthread ABI: pthread_mutex_t is
+// 40 bytes and pthread_cond_t is 48 bytes, both 8-byte aligned. Keep the
+// synchronization state in those ABI objects instead of in a Hull-global
+// address registry. Blueprint code and its host service-lane carriers already
+// share the object's guest-heap backing, while Hull .bss is intentionally
+// private to each realm. Inline state therefore gives both realms one source
+// of truth and has no fixed registry capacity to exhaust.
+#[repr(C)]
+struct PthreadMutexStorage {
+    owner: AtomicUsize,
 }
+
+#[repr(C)]
+struct PthreadCondStorage {
+    generation: AtomicU64,
+}
+
+const PTHREAD_MUTEX_ABI_BYTES: usize = 40;
+const PTHREAD_COND_ABI_BYTES: usize = 48;
+const _: () = assert!(core::mem::size_of::<PthreadMutexStorage>() <= PTHREAD_MUTEX_ABI_BYTES);
+const _: () = assert!(core::mem::size_of::<PthreadCondStorage>() <= PTHREAD_COND_ABI_BYTES);
 
 struct PthreadThreadState {
     completion: Arc<crate::wait::CompletionCell<usize>>,
-    detached: bool,
 }
 
 #[derive(Default)]
@@ -520,8 +534,8 @@ fn pthread_current_id() -> usize {
 
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         if let Some(thread_id) = crate::stackkeeper::current_blueprint_thread_id() {
-            return 0x4_0000usize
-                .saturating_add((vm_id as usize).saturating_mul(PTHREAD_THREAD_CAPACITY))
+            return 0x4_0000_0000usize
+                .saturating_add((vm_id as usize) << 32)
                 .saturating_add(thread_id as usize);
         }
         let worker_id = crate::stackkeeper::current_tokio_worker_id().unwrap_or(0);
@@ -538,8 +552,11 @@ fn pthread_current_id() -> usize {
     crate::percpu::current_slot().saturating_add(1)
 }
 
-fn pthread_tls_slot(key: usize) -> usize {
-    (pthread_current_id() << 32) ^ key
+fn pthread_tls_slot(key: usize) -> PthreadTlsSlot {
+    PthreadTlsSlot {
+        owner: pthread_current_id(),
+        key,
+    }
 }
 
 fn pthread_sync_probe_log() {
@@ -547,19 +564,29 @@ fn pthread_sync_probe_log() {
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        crate::log!("std-abi: pthread mutex/cond shim using TRUEOS vthread/spin ownership\n");
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Blueprint,
+            log::Level::Info,
+            Some("pthread-realm"),
+            format_args!("mutex/cond shim using inline cross-realm object state\n"),
+        );
     }
 }
 
 fn pthread_sync_trace(op: &str, key: usize) {
     let seq = PTHREAD_SYNC_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
     if seq < PTHREAD_SYNC_TRACE_LIMIT {
-        crate::log!(
-            "std-abi: pthread trace seq={} op={} key=0x{:x} owner={}\n",
-            seq,
-            op,
-            key,
-            pthread_current_id()
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Blueprint,
+            log::Level::Info,
+            Some("pthread-realm"),
+            format_args!(
+                "sync seq={} op={} key=0x{:x} owner={}\n",
+                seq,
+                op,
+                key,
+                pthread_current_id()
+            ),
         );
     }
 }
@@ -567,33 +594,54 @@ fn pthread_sync_trace(op: &str, key: usize) {
 fn pthread_create_trace(thread_id: usize, rc: c_int) {
     let seq = PTHREAD_CREATE_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
     if seq < PTHREAD_CREATE_TRACE_LIMIT {
-        crate::log!(
-            "std-abi: pthread_create seq={} thread={} rc={} owner={}\n",
-            seq,
-            thread_id,
-            rc,
-            pthread_current_id()
+        let origin = if (thread_id & PTHREAD_THREAD_CARRIER_TAG) != 0 {
+            "carrier"
+        } else {
+            "hull"
+        };
+        crate::log_os::log_with_area_purpose(
+            crate::log_os::flags::LogArea::Blueprint,
+            log::Level::Info,
+            Some("pthread-realm"),
+            format_args!(
+                "create seq={} thread={} origin={} local_seq={} rc={} owner={}\n",
+                seq,
+                thread_id,
+                origin,
+                thread_id & PTHREAD_THREAD_SEQUENCE_MASK,
+                rc,
+                pthread_current_id()
+            ),
         );
+    }
+}
+
+fn pthread_next_thread_id() -> usize {
+    let sequence =
+        PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel) & PTHREAD_THREAD_SEQUENCE_MASK;
+    let sequence = sequence.max(1);
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        sequence
+    } else {
+        sequence | PTHREAD_THREAD_CARRIER_TAG
     }
 }
 
 fn pthread_mutex_unlock_key(key: usize) -> c_int {
     pthread_sync_trace("mutex.unlock", key);
     let owner = pthread_current_id();
-    let mut table = PTHREAD_MUTEXES.lock();
-    let Some(state) = table.get_mut(key) else {
-        return 0;
+    let Some(state) = pthread_mutex_storage(key) else {
+        return TRUEOS_EINVAL;
     };
-    if state.locked && state.owner != owner {
+    let state = unsafe { state.as_ref() };
+    let held_by = state.owner.load(Ordering::Acquire);
+    if held_by == 0 {
+        return 0;
+    }
+    if held_by != owner {
         return TRUEOS_EINVAL;
     }
-    if state.depth > 1 {
-        state.depth = state.depth.saturating_sub(1);
-        return 0;
-    }
-    state.locked = false;
-    state.owner = 0;
-    state.depth = 0;
+    state.owner.store(0, Ordering::Release);
     0
 }
 
@@ -601,26 +649,19 @@ fn pthread_mutex_lock_key(key: usize) -> c_int {
     pthread_sync_probe_log();
     pthread_sync_trace("mutex.lock", key);
     let owner = pthread_current_id();
+    let Some(state) = pthread_mutex_storage(key) else {
+        return TRUEOS_EINVAL;
+    };
+    let state = unsafe { state.as_ref() };
     loop {
+        let held_by = state.owner.load(Ordering::Acquire);
+        if held_by == 0
+            && state
+                .owner
+                .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
         {
-            let mut table = PTHREAD_MUTEXES.lock();
-            let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
-                locked: false,
-                owner: 0,
-                depth: 0,
-            }) else {
-                return TRUEOS_EAGAIN;
-            };
-            if state.locked && state.owner == owner {
-                state.depth = state.depth.saturating_add(1).max(1);
-                return 0;
-            }
-            if !state.locked {
-                state.locked = true;
-                state.owner = owner;
-                state.depth = 1;
-                return 0;
-            }
+            return 0;
         }
         core::hint::spin_loop();
     }
@@ -630,53 +671,51 @@ fn pthread_mutex_trylock_key(key: usize) -> c_int {
     pthread_sync_probe_log();
     pthread_sync_trace("mutex.trylock", key);
     let owner = pthread_current_id();
-    let mut table = PTHREAD_MUTEXES.lock();
-    let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
-        locked: false,
-        owner: 0,
-        depth: 0,
-    }) else {
-        return TRUEOS_EAGAIN;
+    let Some(state) = pthread_mutex_storage(key) else {
+        return TRUEOS_EINVAL;
     };
-    if state.locked && state.owner == owner {
-        state.depth = state.depth.saturating_add(1).max(1);
-        return 0;
-    }
-    if state.locked {
+    let state = unsafe { state.as_ref() };
+    let held_by = state.owner.load(Ordering::Acquire);
+    if held_by != 0 {
         return TRUEOS_EBUSY;
     }
-    state.locked = true;
-    state.owner = owner;
-    state.depth = 1;
-    0
+    match state
+        .owner
+        .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
+    {
+        Ok(_) => 0,
+        Err(_) => TRUEOS_EBUSY,
+    }
 }
 
-fn pthread_cond_generation(key: usize) -> u64 {
-    let mut table = PTHREAD_CONDS.lock();
-    table
-        .get_or_insert_with(key, || PthreadCondState { generation: 0 })
-        .map(|state| state.generation)
-        .unwrap_or(0)
+fn pthread_mutex_storage(key: usize) -> Option<ptr::NonNull<PthreadMutexStorage>> {
+    let host =
+        pthread_object_host_ptr(key as *mut u8, core::mem::size_of::<PthreadMutexStorage>())?;
+    if !(host as usize).is_multiple_of(core::mem::align_of::<PthreadMutexStorage>()) {
+        return None;
+    }
+    ptr::NonNull::new(host.cast::<PthreadMutexStorage>())
+}
+
+fn pthread_cond_storage(key: usize) -> Option<ptr::NonNull<PthreadCondStorage>> {
+    let host = pthread_object_host_ptr(key as *mut u8, core::mem::size_of::<PthreadCondStorage>())?;
+    if !(host as usize).is_multiple_of(core::mem::align_of::<PthreadCondStorage>()) {
+        return None;
+    }
+    ptr::NonNull::new(host.cast::<PthreadCondStorage>())
+}
+
+fn pthread_cond_generation(state: &PthreadCondStorage) -> u64 {
+    state.generation.load(Ordering::Acquire)
 }
 
 fn pthread_cond_notify_key(key: usize) -> c_int {
-    let mut table = PTHREAD_CONDS.lock();
-    let Some(state) = table.get_or_insert_with(key, || PthreadCondState { generation: 0 }) else {
-        return TRUEOS_EAGAIN;
+    let Some(state) = pthread_cond_storage(key) else {
+        return TRUEOS_EINVAL;
     };
-    state.generation = state.generation.wrapping_add(1);
+    let state = unsafe { state.as_ref() };
+    state.generation.fetch_add(1, Ordering::Release);
     0
-}
-
-fn pthread_thread_finish(thread_id: usize) {
-    let mut table = PTHREAD_THREADS.lock();
-    let remove = table
-        .get(thread_id)
-        .map(|state| state.detached)
-        .unwrap_or(false);
-    if remove {
-        let _ = table.remove(thread_id);
-    }
 }
 
 fn c_allocation_layout(size: usize, align: usize) -> Option<Layout> {
@@ -959,12 +998,9 @@ fn active_guest_stack_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Op
 
 fn active_guest_heap_host_ptr_for_vm(vm_id: u8, ptr: *mut u8, len: usize) -> Option<*mut u8> {
     let guest_va = ptr as usize;
-    let stats = crate::allocators::hv_guest_heap_stats(vm_id);
-    if !stats.initialized || stats.heap_end <= stats.heap_start {
-        return None;
-    }
+    let (heap_start, heap_end) = crate::allocators::hv_guest_heap_bounds(vm_id)?;
     let end = guest_va.checked_add(len)?;
-    if guest_va >= stats.heap_start && end <= stats.heap_end {
+    if guest_va >= heap_start && end <= heap_end {
         Some(ptr)
     } else {
         None
@@ -1014,6 +1050,53 @@ fn abi_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
             } else {
                 Some(ptr)
             }
+        })
+}
+
+// Synchronization objects must never use abi_host_ptr's cross-VM recovery
+// fallback. A mutex address is meaningful only in the currently executing
+// realm: Hull stack pointers translate through that VM's stack backing,
+// guest-heap pointers are already shared HHDM addresses, and other high
+// addresses belong to the current Hull/host mapping. Guessing another VM for
+// a lock would merge two unrelated objects.
+fn pthread_object_host_ptr(ptr: *mut u8, len: usize) -> Option<*mut u8> {
+    if ptr.is_null() {
+        return None;
+    }
+    if len == 0 {
+        return Some(ptr);
+    }
+    let Some(vm_id) = active_abi_guest_vm_id() else {
+        return (!looks_like_low_guest_ptr(ptr)).then_some(ptr);
+    };
+    active_guest_stack_host_ptr_for_vm(vm_id, ptr, len)
+        .or_else(|| active_guest_heap_host_ptr_for_vm(vm_id, ptr, len))
+        .or_else(|| {
+            (crate::hv::current_hull_guest_context_vm_id() != Some(vm_id))
+                .then(|| {
+                    crate::hv::memory::guest_hull_rw_host_ptr_for_vm(
+                        vm_id,
+                        ptr as usize as u64,
+                        len,
+                    )
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            if looks_like_low_guest_ptr(ptr) {
+                return None;
+            }
+            if crate::hv::current_hull_guest_context_vm_id() != Some(vm_id) {
+                let address = ptr as usize as u64;
+                let end = address.checked_add(len as u64)?;
+                let (image_start, image_end) = crate::hv::guest::hull_image_bounds();
+                if address < image_end && end > image_start {
+                    // A carrier must never fall through from a failed VM Hull
+                    // translation to the host mapping at the same high VA.
+                    return None;
+                }
+            }
+            Some(ptr)
         })
 }
 
@@ -3688,19 +3771,14 @@ pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("mutex.init", key);
-    let mut table = PTHREAD_MUTEXES.lock();
-    let Some(state) = table.get_or_insert_with(key, || PthreadMutexState {
-        locked: false,
-        owner: 0,
-        depth: 0,
-    }) else {
-        return TRUEOS_EAGAIN;
+    let Some(state) = pthread_mutex_storage(key) else {
+        return TRUEOS_EINVAL;
     };
-    *state = PthreadMutexState {
-        locked: false,
-        owner: 0,
-        depth: 0,
-    };
+    unsafe {
+        state.as_ptr().write(PthreadMutexStorage {
+            owner: AtomicUsize::new(0),
+        });
+    }
     0
 }
 
@@ -3708,7 +3786,11 @@ pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_
 pub unsafe extern "C" fn pthread_mutex_destroy(mutex: *mut c_void) -> c_int {
     if let Some(key) = pthread_key(mutex) {
         pthread_sync_trace("mutex.destroy", key);
-        let _ = PTHREAD_MUTEXES.lock().remove(key);
+        let Some(state) = pthread_mutex_storage(key) else {
+            return TRUEOS_EINVAL;
+        };
+        let state = unsafe { state.as_ref() };
+        state.owner.store(0, Ordering::Release);
     }
     0
 }
@@ -3743,11 +3825,14 @@ pub unsafe extern "C" fn pthread_cond_init(cond: *mut c_void, _attr: *const c_vo
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("cond.init", key);
-    let mut table = PTHREAD_CONDS.lock();
-    let Some(state) = table.get_or_insert_with(key, || PthreadCondState { generation: 0 }) else {
-        return TRUEOS_EAGAIN;
+    let Some(state) = pthread_cond_storage(key) else {
+        return TRUEOS_EINVAL;
     };
-    *state = PthreadCondState { generation: 0 };
+    unsafe {
+        state.as_ptr().write(PthreadCondStorage {
+            generation: AtomicU64::new(0),
+        });
+    }
     0
 }
 
@@ -3770,7 +3855,11 @@ pub unsafe extern "C" fn pthread_condattr_destroy(_attr: *mut c_void) -> c_int {
 pub unsafe extern "C" fn pthread_cond_destroy(cond: *mut c_void) -> c_int {
     if let Some(key) = pthread_key(cond) {
         pthread_sync_trace("cond.destroy", key);
-        let _ = PTHREAD_CONDS.lock().remove(key);
+        let Some(state) = pthread_cond_storage(key) else {
+            return TRUEOS_EINVAL;
+        };
+        let state = unsafe { state.as_ref() };
+        state.generation.store(0, Ordering::Release);
     }
     0
 }
@@ -3787,13 +3876,17 @@ pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void
     pthread_sync_trace("cond.wait", cond_key);
     pthread_sync_trace("cond.wait.mutex", mutex_key);
 
-    let generation = pthread_cond_generation(cond_key);
+    let Some(cond_state) = pthread_cond_storage(cond_key) else {
+        return TRUEOS_EINVAL;
+    };
+    let cond_state = unsafe { cond_state.as_ref() };
+    let generation = pthread_cond_generation(cond_state);
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
     if unlock_rc != 0 {
         return unlock_rc;
     }
 
-    while pthread_cond_generation(cond_key) == generation {
+    while pthread_cond_generation(cond_state) == generation {
         core::hint::spin_loop();
     }
 
@@ -3816,14 +3909,18 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     pthread_sync_trace("cond.timedwait", cond_key);
     pthread_sync_trace("cond.timedwait.mutex", mutex_key);
 
-    let generation = pthread_cond_generation(cond_key);
+    let Some(cond_state) = pthread_cond_storage(cond_key) else {
+        return TRUEOS_EINVAL;
+    };
+    let cond_state = unsafe { cond_state.as_ref() };
+    let generation = pthread_cond_generation(cond_state);
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
     if unlock_rc != 0 {
         return unlock_rc;
     }
 
     for _ in 0..4096 {
-        if pthread_cond_generation(cond_key) != generation {
+        if pthread_cond_generation(cond_state) != generation {
             return pthread_mutex_lock_key(mutex_key);
         }
         core::hint::spin_loop();
@@ -3887,11 +3984,10 @@ pub unsafe extern "C" fn pthread_create(
         return TRUEOS_EINVAL;
     }
 
-    let thread_id = PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel);
+    let thread_id = pthread_next_thread_id();
     let completion = Arc::new(crate::wait::CompletionCell::new());
     let state = PthreadThreadState {
         completion: completion.clone(),
-        detached: false,
     };
 
     if PTHREAD_THREADS.lock().insert(thread_id, state).is_err() {
@@ -3914,7 +4010,6 @@ pub unsafe extern "C" fn pthread_create(
             (unsafe { start(arg as *mut c_void) }) as usize
         });
         let _ = completion.complete(result);
-        pthread_thread_finish(thread_id);
     });
 
     let rc = crate::r::blocking::trueos_service_lane_submit_job(job);
@@ -3934,9 +4029,6 @@ pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -
         let Some(state) = table.get(thread) else {
             return TRUEOS_ESRCH;
         };
-        if state.detached {
-            return TRUEOS_EINVAL;
-        }
         state.completion.clone()
     };
 
@@ -3957,13 +4049,12 @@ pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_detach(thread: usize) -> c_int {
     let mut table = PTHREAD_THREADS.lock();
-    let Some(state) = table.get_mut(thread) else {
+    let Some(_state) = table.remove(thread) else {
         return TRUEOS_ESRCH;
     };
-    if state.completion.try_take().is_some() {
-        let _ = table.remove(thread);
-    } else {
-        state.detached = true;
-    }
+    // The scheduled closure owns a clone of the completion cell, so dropping
+    // the registry entry here is true detach: execution continues without a
+    // join resource. This also avoids asking the host carrier to remove an
+    // entry from the guest-private Hull table when the thread later exits.
     0
 }

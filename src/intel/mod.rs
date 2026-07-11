@@ -125,7 +125,8 @@ pub fn init_once() {
         let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
         let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
         let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
-        crate::log!(
+        crate::log_info!(
+            target: "intel/opencl";
             "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=known-source-igc-aot-artifact-path-active\n",
             opencl_smoke.source_compile_cap as u8,
             opencl_smoke
@@ -144,7 +145,8 @@ pub fn init_once() {
             let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
             let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
             let _ = self::gpgpu::submit_sprite_quad_worklist_rgba8_probe_once();
-            crate::log!(
+            crate::log_info!(
+                target: "gpgpu";
                 "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
                 self::gpgpu::fill_rect_worklist_probe_ran() as u8,
                 self::gpgpu::fill_rect_worklist_probe_ok() as u8,
@@ -162,10 +164,14 @@ pub fn init_once() {
             let _ = self::gpgpu::submit_canvas3d_plane_patch_fill_cut_rgba8_once();
             let _ = self::gpgpu::submit_canvas3d_plane_patch_worklist_rgba8_once();
         } else {
-            crate::log!("intel/gpgpu: artifact boot smoketests skipped allcaps=0\n");
+            crate::log_info!(
+                target: "gpgpu";
+                "intel/gpgpu: artifact boot smoketests skipped allcaps=0\n"
+            );
         }
     } else {
-        crate::log!(
+        crate::log_info!(
+            target: "gpgpu";
             "intel/gpgpu: upload and boot probes skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
             dev.device_id,
             display_device_name(dev.device_id)

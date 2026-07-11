@@ -47,7 +47,7 @@ static ALLOC_TRACE_PAYLOAD: AtomicUsize = AtomicUsize::new(0);
 static ALLOC_TRACE_ALIGNED_USED: AtomicUsize = AtomicUsize::new(0);
 static HOST_HEAP_VIRT_START: AtomicUsize = AtomicUsize::new(0);
 static HOST_HEAP_VIRT_END: AtomicUsize = AtomicUsize::new(0);
-static HV_GUEST_HOST_DEALLOC_LOGGED: AtomicU32 = AtomicU32::new(0);
+static ALLOC_DOMAIN_MISMATCH_LOGGED: AtomicU32 = AtomicU32::new(0);
 static HV_GUEST_ALLOC_FREE_BUCKET_BY_VM: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { AtomicU32::new(HV_GUEST_ALLOC_BUCKET_INIT) }; crate::allcaps::hv::VM_ID_LIMIT];
 
@@ -187,6 +187,23 @@ fn publish_host_heap_range(start: usize, len: usize) {
     HOST_HEAP_VIRT_END.store(start.saturating_add(len), Ordering::Release);
 }
 
+fn publish_hv_guest_heap_range(vm_id: u8, start: usize, len: usize) {
+    let Some(page) = hv_guest_allocator_page(vm_id) else {
+        return;
+    };
+    page.heap_virt_start.store(start, Ordering::Release);
+    page.heap_virt_end
+        .store(start.saturating_add(len), Ordering::Release);
+}
+
+/// Stable lock-free bounds for allocator-independent ABI hot paths.
+pub fn hv_guest_heap_bounds(vm_id: u8) -> Option<(usize, usize)> {
+    let page = hv_guest_allocator_page(vm_id)?;
+    let start = page.heap_virt_start.load(Ordering::Acquire);
+    let end = page.heap_virt_end.load(Ordering::Acquire);
+    (start != 0 && end > start).then_some((start, end))
+}
+
 #[inline]
 pub fn host_heap_contains_addr(addr: usize) -> bool {
     let start = HOST_HEAP_VIRT_START.load(Ordering::Acquire);
@@ -194,24 +211,59 @@ pub fn host_heap_contains_addr(addr: usize) -> bool {
     start != 0 && end > start && addr >= start && addr < end
 }
 
-#[inline]
-fn reject_hv_guest_host_heap_dealloc(ptr: *mut u8) -> bool {
-    if crate::hv::current_hull_guest_context_vm_id().is_none() {
-        return false;
+fn alloc_domain_for_address(addr: usize) -> Option<(AllocDomain, usize)> {
+    let host_start = HOST_HEAP_VIRT_START.load(Ordering::Acquire);
+    if host_heap_contains_addr(addr) {
+        return Some((AllocDomain::Host, host_start));
     }
-    if !host_heap_contains_addr(ptr as usize) {
-        return false;
+    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let vm_id = vm_id as u8;
+        let Some((start, end)) = hv_guest_heap_bounds(vm_id) else {
+            continue;
+        };
+        if addr >= start && addr < end {
+            return Some((AllocDomain::HvGuest(vm_id), start));
+        }
     }
-    if HV_GUEST_HOST_DEALLOC_LOGGED
+    None
+}
+
+fn log_alloc_domain_mismatch(ptr: *mut u8, address_domain: Option<AllocDomain>, tag: Option<u8>) {
+    if ALLOC_DOMAIN_MISMATCH_LOGGED
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        crate::log!(
-            "hv-guest-alloc: ignored host-heap dealloc ptr=0x{:X} risk=HVSR-0002\n",
-            ptr as usize
+        crate::log_error!(
+            target: "hv";
+            "allocator: rejected dealloc ptr=0x{:X} address_domain={:?} tag={:?} risk=realm-domain-mismatch\n",
+            ptr as usize,
+            address_domain,
+            tag
         );
     }
-    true
+}
+
+unsafe fn validated_dealloc_domain(ptr: *mut u8) -> Option<AllocDomain> {
+    let address_domain = alloc_domain_for_address(ptr as usize);
+    let Some((address_domain, heap_start)) = address_domain else {
+        log_alloc_domain_mismatch(ptr, None, None);
+        return None;
+    };
+    let Some(tag_addr) = (ptr as usize).checked_sub(size_of::<AllocTag>()) else {
+        log_alloc_domain_mismatch(ptr, Some(address_domain), None);
+        return None;
+    };
+    if tag_addr < heap_start {
+        log_alloc_domain_mismatch(ptr, Some(address_domain), None);
+        return None;
+    }
+    let tag = unsafe { core::ptr::read_unaligned(tag_addr as *const AllocTag) };
+    let tag_domain = alloc_domain_from_tag(&tag);
+    if tag_domain != Some(address_domain) {
+        log_alloc_domain_mismatch(ptr, Some(address_domain), Some(tag.domain));
+        return None;
+    }
+    Some(address_domain)
 }
 
 #[inline]
@@ -513,18 +565,45 @@ impl FreeList {
 struct Allocator;
 
 static ALLOCATOR: Mutex<FreeList> = Mutex::new(FreeList::new());
-static HV_GUEST_ALLOCATORS: [Mutex<FreeList>; crate::allcaps::hv::VM_ID_LIMIT] =
-    [const { Mutex::new(FreeList::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
-static HV_GUEST_HEAP_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) fn hv_guest_allocator_state_spans() -> [(u64, usize); 2] {
-    [
-        ((&HV_GUEST_ALLOCATORS as *const _) as u64, core::mem::size_of_val(&HV_GUEST_ALLOCATORS)),
-        (
-            (&HV_GUEST_HEAP_READY_MASK as *const _) as u64,
-            core::mem::size_of_val(&HV_GUEST_HEAP_READY_MASK),
-        ),
-    ]
+// The Hull page tables share this state with host service carriers at 4 KiB
+// granularity. Give it a complete, dedicated page-sized ELF object so the
+// shared mapping can never expose unrelated host BSS placed next to it by the
+// compiler or linker.
+#[repr(C, align(4096))]
+struct HvGuestAllocatorSharedPage {
+    allocator: Mutex<FreeList>,
+    ready: AtomicU64,
+    heap_virt_start: AtomicUsize,
+    heap_virt_end: AtomicUsize,
+}
+
+impl HvGuestAllocatorSharedPage {
+    const fn new() -> Self {
+        Self {
+            allocator: Mutex::new(FreeList::new()),
+            ready: AtomicU64::new(0),
+            heap_virt_start: AtomicUsize::new(0),
+            heap_virt_end: AtomicUsize::new(0),
+        }
+    }
+}
+
+static HV_GUEST_ALLOCATOR_SHARED_PAGES: [HvGuestAllocatorSharedPage;
+    crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { HvGuestAllocatorSharedPage::new() }; crate::allcaps::hv::VM_ID_LIMIT];
+
+const _: () = assert!(core::mem::size_of::<HvGuestAllocatorSharedPage>() == 4096);
+const _: () = assert!(core::mem::align_of::<HvGuestAllocatorSharedPage>() == 4096);
+
+#[inline]
+fn hv_guest_allocator_page(vm_id: u8) -> Option<&'static HvGuestAllocatorSharedPage> {
+    HV_GUEST_ALLOCATOR_SHARED_PAGES.get(vm_id as usize)
+}
+
+pub(crate) fn hv_guest_allocator_state_span(vm_id: u8) -> Option<(u64, usize)> {
+    let page = hv_guest_allocator_page(vm_id)?;
+    Some(((page as *const _) as u64, core::mem::size_of_val(page)))
 }
 
 const HOST_ALLOC_TAG: u8 = u8::MAX;
@@ -534,11 +613,13 @@ static HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU: [AtomicU32; 64] =
     [const { AtomicU32::new(0) }; 64];
 static HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU: [AtomicU32; 64] = [const { AtomicU32::new(0) }; 64];
 
-fn alloc_domain_from_tag(tag: &AllocTag) -> AllocDomain {
-    if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
-        AllocDomain::HvGuest(tag.domain)
+fn alloc_domain_from_tag(tag: &AllocTag) -> Option<AllocDomain> {
+    if tag.domain == HOST_ALLOC_TAG {
+        Some(AllocDomain::Host)
+    } else if (tag.domain as usize) < crate::allcaps::hv::VM_ID_LIMIT {
+        Some(AllocDomain::HvGuest(tag.domain))
     } else {
-        AllocDomain::Host
+        None
     }
 }
 
@@ -665,9 +746,11 @@ pub fn enter_host_alloc_domain_current_cpu() -> HostAllocDomainGuard {
 fn allocator_for_domain(domain: AllocDomain) -> &'static Mutex<FreeList> {
     match domain {
         AllocDomain::Host => &ALLOCATOR,
-        AllocDomain::HvGuest(vm_id) => HV_GUEST_ALLOCATORS
-            .get(vm_id as usize)
-            .unwrap_or(&HV_GUEST_ALLOCATORS[0]),
+        AllocDomain::HvGuest(vm_id) => {
+            &hv_guest_allocator_page(vm_id)
+                .unwrap_or(&HV_GUEST_ALLOCATOR_SHARED_PAGES[0])
+                .allocator
+        }
     }
 }
 
@@ -703,12 +786,12 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
     if (vm_id as usize) >= crate::allcaps::hv::VM_ID_LIMIT {
         return false;
     }
-    let ready_bit = 1u64 << vm_id;
-    if (HV_GUEST_HEAP_READY_MASK.load(Ordering::Acquire) & ready_bit) != 0 {
+    let page = &HV_GUEST_ALLOCATOR_SHARED_PAGES[vm_id as usize];
+    if page.ready.load(Ordering::Acquire) != 0 && hv_guest_heap_bounds(vm_id).is_some() {
         return true;
     }
 
-    let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
+    let mut guard = page.allocator.lock();
     if guard.initialized || guard.heap_len != 0 {
         if guard.heap_source != HeapSourceKind::Arena {
             crate::log!(
@@ -719,7 +802,8 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
             );
             return false;
         }
-        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+        publish_hv_guest_heap_range(vm_id, guard.heap_virt_start, guard.heap_len);
+        page.ready.store(1, Ordering::Release);
         return true;
     }
 
@@ -728,7 +812,8 @@ pub fn ensure_hv_guest_heap_ready(vm_id: u8) -> bool {
             continue;
         };
         guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-        HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+        publish_hv_guest_heap_range(vm_id, arena.virt_start, arena.length);
+        page.ready.store(1, Ordering::Release);
         crate::log!(
             "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB\n",
             vm_id,
@@ -762,10 +847,12 @@ pub fn prepare_hv_guest_heap_for_vm(
     let requested_size = round_hv_guest_heap_request(requested_size);
     let minimum_acceptable_size =
         round_hv_guest_heap_request(minimum_acceptable_size).min(requested_size);
-    let ready_bit = 1u64 << vm_id;
-    let mut guard = HV_GUEST_ALLOCATORS[vm_id as usize].lock();
+    let page = &HV_GUEST_ALLOCATOR_SHARED_PAGES[vm_id as usize];
+    let mut guard = page.allocator.lock();
     if guard.initialized {
         if guard.heap_source == HeapSourceKind::Arena {
+            publish_hv_guest_heap_range(vm_id, guard.heap_virt_start, guard.heap_len);
+            page.ready.store(1, Ordering::Release);
             return guard.heap_len >= minimum_acceptable_size;
         }
         crate::log!(
@@ -779,7 +866,8 @@ pub fn prepare_hv_guest_heap_for_vm(
     }
     if guard.heap_len != 0 {
         if guard.heap_source == HeapSourceKind::Arena && guard.heap_len >= minimum_acceptable_size {
-            HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+            publish_hv_guest_heap_range(vm_id, guard.heap_virt_start, guard.heap_len);
+            page.ready.store(1, Ordering::Release);
             return true;
         }
         crate::log!(
@@ -819,7 +907,8 @@ pub fn prepare_hv_guest_heap_for_vm(
         return false;
     };
     guard.install_heap(arena.virt_start, arena.phys_start as usize, arena.length);
-    HV_GUEST_HEAP_READY_MASK.fetch_or(ready_bit, Ordering::AcqRel);
+    publish_hv_guest_heap_range(vm_id, arena.virt_start, arena.length);
+    page.ready.store(1, Ordering::Release);
     crate::log!(
         "heap: hv guest vm{} arena virt=0x{:X} phys=0x{:X} size={} MiB requested={} MiB\n",
         vm_id,
@@ -862,14 +951,10 @@ unsafe impl GlobalAlloc for Allocator {
         if ptr.is_null() {
             return;
         }
-        if reject_hv_guest_host_heap_dealloc(ptr) {
+        let Some(domain) = (unsafe { validated_dealloc_domain(ptr) }) else {
             return;
-        }
-        let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
-        let tag = *tag_ptr;
-        allocator_for_domain(alloc_domain_from_tag(&tag))
-            .lock()
-            .dealloc(ptr)
+        };
+        unsafe { allocator_for_domain(domain).lock().dealloc(ptr) }
     }
 }
 
@@ -997,14 +1082,10 @@ pub unsafe fn dealloc_raw(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    if reject_hv_guest_host_heap_dealloc(ptr) {
+    let Some(domain) = (unsafe { validated_dealloc_domain(ptr) }) else {
         return;
-    }
-    let tag_ptr = ptr.sub(size_of::<AllocTag>()) as *mut AllocTag;
-    let tag = *tag_ptr;
-    allocator_for_domain(alloc_domain_from_tag(&tag))
-        .lock()
-        .dealloc(ptr)
+    };
+    unsafe { allocator_for_domain(domain).lock().dealloc(ptr) }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1104,7 +1185,7 @@ fn heap_stats_from_guard(guard: &mut FreeList) -> HeapStats {
 }
 
 pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
-    let Some(allocator) = HV_GUEST_ALLOCATORS.get(vm_id as usize) else {
+    let Some(allocator) = hv_guest_allocator_page(vm_id).map(|page| &page.allocator) else {
         return HeapStats {
             heap_start: 0,
             heap_end: 0,
@@ -1123,7 +1204,7 @@ pub fn hv_guest_heap_stats(vm_id: u8) -> HeapStats {
 }
 
 pub fn hv_guest_heap_stats_if_configured(vm_id: u8) -> Option<HeapStats> {
-    let allocator = HV_GUEST_ALLOCATORS.get(vm_id as usize)?;
+    let allocator = &hv_guest_allocator_page(vm_id)?.allocator;
     let mut guard = allocator.lock();
     if !guard.initialized && guard.heap_len == 0 {
         return None;
@@ -1145,8 +1226,8 @@ pub fn hv_guest_heap_stats_total() -> HeapStats {
         source: HeapSourceKind::Unconfigured,
     };
 
-    for allocator in HV_GUEST_ALLOCATORS.iter() {
-        let mut guard = allocator.lock();
+    for page in HV_GUEST_ALLOCATOR_SHARED_PAGES.iter() {
+        let mut guard = page.allocator.lock();
         if !guard.initialized && guard.heap_len == 0 {
             continue;
         }

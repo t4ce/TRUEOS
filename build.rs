@@ -24,8 +24,7 @@ fn generate_ring_runtime_imports(
     target_os: &str,
     target_arch: &str,
 ) -> Result<(), String> {
-    let symbols_path = manifest_dir
-        .join("vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt");
+    let symbols_path = manifest_dir.join("vendor/ring-0.17.14/runtime-loader-symbols-x86_64.txt");
     println!("cargo:rerun-if-changed={}", symbols_path.display());
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
@@ -61,7 +60,9 @@ fn generate_ring_runtime_imports(
         // Keep a link-time root as well as the resolver's address reference.
         println!("cargo:rustc-link-arg=--undefined={symbol}");
     }
-    generated.push_str("}\n\nfn resolve_ring_runtime_import(name: &str) -> Option<usize> {\n    match name {\n");
+    generated.push_str(
+        "}\n\nfn resolve_ring_runtime_import(name: &str) -> Option<usize> {\n    match name {\n",
+    );
     for (index, symbol) in symbols.iter().enumerate() {
         generated.push_str(&format!(
             "        \"{symbol}\" => Some(core::ptr::addr_of!(RING_RUNTIME_EXPORT_{index}) as usize),\n"

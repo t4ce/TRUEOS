@@ -1553,6 +1553,41 @@ pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
     })
 }
 
+/// Acquires the full-screen UI3 FRAME composition buffer without clearing it.
+/// The GPGPU producer owns every pixel and the display engine consumes the
+/// native premultiplied ARGB result directly on the UI overlay plane.
+pub(super) fn ui3_frame_composition_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let dev = crate::intel::claimed_device()?;
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| {
+            PRIMARY_SURFACE
+                .lock()
+                .as_ref()
+                .map(|primary| (primary.width, primary.height))
+        })
+        .unwrap_or((0, 0));
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let surface = ensure_overlay_surface(dev, width, height)?;
+    Some(DisplayRgba8GpgpuSurface {
+        width: surface.width,
+        height: surface.height,
+        pitch_bytes: surface.pitch_bytes,
+        phys: surface.phys,
+        virt: surface.virt,
+        gpu: surface.gpu,
+        byte_len: surface.byte_len,
+    })
+}
+
+pub(super) fn commit_ui3_frame_composition_gpgpu(
+    target: DisplayRgba8GpgpuSurface,
+    reason: &str,
+) -> bool {
+    commit_ui3_canvas_overlay_gpgpu(target, reason)
+}
+
 pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayRgba8GpgpuSurface> {
     let dev = crate::intel::claimed_device()?;
     let (width, height) = active_scanout_dimensions()

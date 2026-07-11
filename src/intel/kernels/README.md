@@ -31,6 +31,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `sprite_quad_worklist_rgba8.cl`: arbitrary UI3 SpriteQuad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; used by the three-stage `gpgpu chart` hardware probe
+- `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; used by `gpgpu pixel artifact|static|plasma`
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
 - `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
@@ -132,6 +133,18 @@ matches this embedded value:
 
 ```text
 79eb20bc337e172a8ccddcdc6654eea992e89fb5fb67b2f32caad1c1afa1c0e4
+```
+
+`artifacts/adls/pixel_plasma_rgba8.bin` is the allowlisted procedural pixel
+build. Its analytical field is intentionally buffer-free for bring-up; a later
+FluidX3D field consumer can replace that scalar source while retaining the
+palette, scanout, contract, and cadence path. It writes native premultiplied
+ARGB8888 into the double-buffered UI3 `FRAME` composition surface, which the
+display overlay plane consumes without a CPU format conversion. Runtime
+overrides must match:
+
+```text
+42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
 ```
 
 Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:

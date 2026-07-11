@@ -60,6 +60,19 @@ pub fn write_stream(stream: u32, bytes: &[u8]) {
 }
 
 #[inline]
+pub fn log_record(level: u32, target: &str, message: &str) -> i32 {
+    unsafe {
+        vcabi::trueos_cabi_log(
+            level,
+            target.as_ptr(),
+            target.len(),
+            message.as_ptr(),
+            message.len(),
+        )
+    }
+}
+
+#[inline]
 pub fn write_console_log_stream(stream: ConsoleStream, s: &str) {
     write_console_stream(stream, s.as_bytes());
 }

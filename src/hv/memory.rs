@@ -248,6 +248,46 @@ fn active_guest_hull_rw_backing_for_vm(vm_id: u8) -> Option<GuestHullRwBacking> 
     Some(backing)
 }
 
+/// Translate a virtual address in a VM's private Hull data/BSS span to the
+/// host mapping of the same physical bytes.
+///
+/// Service-lane carriers run with the host CR3, so directly dereferencing a
+/// high Hull VA there would select host BSS instead of the VM-private copy.
+pub(crate) fn guest_hull_rw_host_ptr_for_vm(
+    vm_id: u8,
+    guest_va: u64,
+    len: usize,
+) -> Option<*mut u8> {
+    let backing = active_guest_hull_rw_backing_for_vm(vm_id)?;
+    let arena = backing.arena?;
+    let start = guest_va.checked_sub(backing.guest_start)? as usize;
+    let end = start.checked_add(len)?;
+    if end > backing.active_bytes {
+        return None;
+    }
+
+    let first_page = page_align_down(guest_va);
+    let last_va = guest_va.saturating_add(len.saturating_sub(1) as u64);
+    let last_page = page_align_down(last_va);
+    let kernel_backed = guest_hull_rw_page_uses_kernel_backing(vm_id, first_page);
+    let mut page = first_page;
+    loop {
+        if guest_hull_rw_page_uses_kernel_backing(vm_id, page) != kernel_backed {
+            return None;
+        }
+        if page == last_page {
+            break;
+        }
+        page = page.checked_add(PAGE_SIZE_4K as u64)?;
+    }
+
+    if kernel_backed {
+        Some(guest_va as usize as *mut u8)
+    } else {
+        Some(unsafe { (arena.virt_start as *mut u8).add(start) })
+    }
+}
+
 fn guest_pml4_page() -> Option<*const [u64; 512]> {
     guest_tables_ptr_opt().map(|tables| unsafe { core::ptr::addr_of!((*tables).pml4.0) })
 }
@@ -750,11 +790,12 @@ fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: 
         crate::hv::current_vm_lapic_low_tag_addr(),
         vm_id.saturating_add(1),
     );
-    hvlogf(format_args!(
-        "hv: vm{} reporting: hull rw shared hv-guest-allocator-state spans={}",
-        vm_id,
-        crate::allocators::hv_guest_allocator_state_spans().len()
-    ));
+    if let Some((guest_addr, len)) = crate::allocators::hv_guest_allocator_state_span(vm_id) {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw shared hv-guest-allocator-page guest=0x{:016X} bytes={}",
+            vm_id, guest_addr, len
+        ));
+    }
     if crate::hv::blueprint_launch_active(vm_id) {
         let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
         patch_guest_hull_rw_bytes(arena_virt, guest_start, bytes, guest_addr, len);
@@ -816,21 +857,17 @@ fn patch_guest_hull_rw_bytes(
     }
 }
 
-fn guest_hull_rw_page_uses_kernel_backing(page_va: u64) -> bool {
+fn guest_hull_rw_page_uses_kernel_backing(vm_id: u8, page_va: u64) -> bool {
     let page_start = page_align_down(page_va);
     let page_end = page_start.saturating_add(PAGE_SIZE_4K as u64);
-    for (span_start, span_len) in crate::allocators::hv_guest_allocator_state_spans() {
-        if span_len == 0 {
-            continue;
-        }
-        let span_end = span_start.saturating_add(span_len as u64);
-        let shared_start = page_align_down(span_start);
-        let shared_end = page_align_up_4k(span_end);
-        if page_start < shared_end && page_end > shared_start {
-            return true;
-        }
-    }
-    false
+    let Some((span_start, span_len)) = crate::allocators::hv_guest_allocator_state_span(vm_id)
+    else {
+        return false;
+    };
+    let span_end = span_start.saturating_add(span_len as u64);
+    let shared_start = page_align_down(span_start);
+    let shared_end = page_align_up_4k(span_end);
+    page_start < shared_end && page_end > shared_start
 }
 
 pub fn ensure_guest_hull_rw_template_ready() -> Result<(), &'static str> {
@@ -1237,7 +1274,7 @@ pub fn build_guest_cr3_for_vm_with_mode(
                     "hull",
                     &mut pt_slot,
                 )?;
-                map_guest_hull_private_rw_span(guest_high_pd, &mut pt_slot)?;
+                map_guest_hull_private_rw_span(vm_id, guest_high_pd, &mut pt_slot)?;
                 let actual_len = end.saturating_sub(start);
                 (start, actual_len)
             }
@@ -1963,10 +2000,11 @@ fn map_guest_image_span(
 }
 
 fn map_guest_hull_private_rw_span(
+    vm_id: u8,
     pd: *mut [u64; 512],
     pt_slot: &mut usize,
 ) -> Result<(), &'static str> {
-    let Some(backing) = active_guest_hull_rw_backing() else {
+    let Some(backing) = active_guest_hull_rw_backing_for_vm(vm_id) else {
         return Ok(());
     };
     let Some(arena) = backing.arena else {
@@ -1997,7 +2035,7 @@ fn map_guest_hull_private_rw_span(
         for page in 0..512u64 {
             let page_va = va.saturating_add(page * PAGE_SIZE_4K as u64);
             let entry = if page_va >= rw_start && page_va < rw_end {
-                let phys = if guest_hull_rw_page_uses_kernel_backing(page_va) {
+                let phys = if guest_hull_rw_page_uses_kernel_backing(vm_id, page_va) {
                     host_va_to_pa(page_va).ok_or("guest hull rw shared pa")?
                 } else {
                     let offset = page_va.saturating_sub(rw_start);
