@@ -1,0 +1,2115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sync Node Flow Simulator v6</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1117;
+      --panel: #171b24;
+      --panel2: #1f2531;
+      --text: #edf2ff;
+      --muted: #a8b3c7;
+      --line: #323b4e;
+      --accent: #8fb8ff;
+      --mutex: #b99cff;
+      --sem: #ffd166;
+      --thread: #8bd3ff;
+      --cond: #7ee7c8;
+      --barrier: #f59ee0;
+      --sched: #f0a96a;
+      --good: #83d99a;
+      --warn: #ffd166;
+      --bad: #ff7b7b;
+      --node: #202839;
+      --node-border: #4b5875;
+      --shadow: rgba(0,0,0,.28);
+      --token: #e9eefc;
+      --token-text: #121722;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fc;
+        --panel: #ffffff;
+        --panel2: #eef2f8;
+        --text: #172033;
+        --muted: #63718a;
+        --line: #d6ddea;
+        --accent: #2867d8;
+        --mutex: #7b5ed8;
+        --sem: #b88700;
+        --thread: #0f83b8;
+        --cond: #008a68;
+        --barrier: #bd4aa3;
+        --sched: #c46b13;
+        --node: #ffffff;
+        --node-border: #aebbd2;
+        --shadow: rgba(20,38,72,.12);
+        --token: #172033;
+        --token-text: #ffffff;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+    header {
+      height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 0 1px 8px var(--shadow);
+      position: relative;
+      z-index: 4;
+    }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; white-space: nowrap; }
+    header .hint { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #app {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 278px minmax(360px, 1fr) 336px;
+      min-width: 0;
+      transition: grid-template-columns .18s ease;
+    }
+    #app.hide-left { grid-template-columns: 0 minmax(360px, 1fr) 336px; }
+    #app.hide-right { grid-template-columns: 278px minmax(360px, 1fr) 0; }
+    #app.hide-left.hide-right { grid-template-columns: 0 minmax(360px, 1fr) 0; }
+    aside {
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      overflow: auto;
+      padding: 12px;
+      min-width: 0;
+      transition: padding .18s ease, border-color .18s ease;
+    }
+    aside.right { border-right: 0; border-left: 1px solid var(--line); }
+    #app.hide-left aside.left, #app.hide-right aside.right { padding: 0; border-color: transparent; overflow: hidden; }
+    #app.hide-left aside.left > *, #app.hide-right aside.right > * { display: none; }
+    section {
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px;
+      margin-bottom: 12px;
+      box-shadow: 0 6px 18px var(--shadow);
+    }
+    h2, h3 { margin: 0 0 8px; font-size: 13px; }
+    p, li, small { color: var(--muted); line-height: 1.35; }
+    small { display: block; font-size: 11px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    button, select, input, textarea {
+      font: inherit;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 7px 9px;
+      outline: none;
+    }
+    button { cursor: pointer; user-select: none; transition: transform .05s ease, border-color .15s ease, background .15s ease; }
+    button:hover { border-color: var(--accent); }
+    button:active { transform: translateY(1px); }
+    button.primary { background: color-mix(in srgb, var(--accent) 25%, var(--panel)); border-color: var(--accent); }
+    button.danger { color: var(--bad); }
+    button.active { border-color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .btn-grid button { text-align: left; font-size: 12px; }
+    .palette button { position: relative; overflow: hidden; }
+    .palette button::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 5px; background: var(--accent); opacity: .95; }
+    .palette button[data-add="lock"]::before, .palette button[data-add="unlock"]::before { background: var(--mutex); }
+    .palette button[data-add="sem_wait"]::before, .palette button[data-add="sem_post"]::before { background: var(--sem); }
+    .palette button[data-add="spawn"]::before, .palette button[data-add="join"]::before { background: var(--thread); }
+    .palette button[data-add="cond_wait"]::before, .palette button[data-add="cond_signal"]::before, .palette button[data-add="cond_broadcast"]::before { background: var(--cond); }
+    .palette button[data-add="barrier"]::before { background: var(--barrier); }
+    .palette button[data-add="yield"]::before, .palette button[data-add="park"]::before { background: var(--sched); }
+    .palette button[data-add="work"]::before { background: var(--good); }
+    .palette button[data-add="end"]::before { background: var(--bad); }
+    .wide { width: 100%; }
+    .control-stack { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    label { color: var(--muted); font-size: 11px; display: block; margin-bottom: 4px; }
+    input, textarea, select { width: 100%; font-size: 12px; }
+    textarea { min-height: 86px; resize: vertical; }
+    main { position: relative; overflow: hidden; }
+    #toolbar {
+      position: absolute;
+      z-index: 3;
+      top: 12px;
+      left: 12px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: color-mix(in srgb, var(--panel) 93%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 8px;
+      box-shadow: 0 6px 20px var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+    #canvasWrap {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background-image:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 32px 32px;
+      background-position: -1px -1px;
+    }
+    #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+    #nodesLayer { position: absolute; inset: 0; z-index: 2; }
+    .node {
+      position: absolute;
+      width: 144px;
+      min-height: 66px;
+      border: 1px solid var(--node-border);
+      border-radius: 14px;
+      background: var(--node);
+      color: var(--text);
+      box-shadow: 0 10px 24px var(--shadow);
+      cursor: grab;
+      user-select: none;
+      overflow: hidden;
+    }
+    .node:active { cursor: grabbing; }
+    .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent), 0 10px 24px var(--shadow); }
+    .node.wire-source { border-color: var(--warn); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 45%, transparent); }
+    .node .top { display: flex; align-items: center; gap: 7px; padding: 8px 9px 5px; }
+    .pill { width: 9px; height: 9px; border-radius: 99px; background: var(--accent); flex: 0 0 auto; }
+    .node.start .pill { background: var(--good); }
+    .node.end .pill { background: var(--bad); }
+    .node.mutex .pill { background: var(--mutex); }
+    .node.sem .pill { background: var(--sem); }
+    .node.work .pill { background: var(--good); }
+    .node.spawn .pill, .node.join .pill { background: var(--thread); }
+    .node.cond .pill { background: var(--cond); }
+    .node.barrier .pill { background: var(--barrier); }
+    .node.sched .pill { background: var(--sched); }
+    .node .title { font-size: 12px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .node .sub { color: var(--muted); font-size: 10.5px; padding: 0 9px 8px; min-height: 15px; }
+    .tokens { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 8px 8px; min-height: 22px; }
+    .token { border-radius: 999px; padding: 2px 6px; background: var(--token); color: var(--token-text); font-size: 10px; font-weight: 800; letter-spacing: .2px; }
+    .token.blocked { background: var(--warn); color: #2b2100; }
+    .token.done { background: var(--good); color: #06210d; }
+    .token.error { background: var(--bad); color: #260000; }
+    .mini-list { display: grid; gap: 6px; }
+    .token-row, .state-row, .ap-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      font-size: 12px;
+    }
+    .ap-row { grid-template-columns: 34px 1fr; }
+    .token-row.selected { border-color: var(--accent); }
+    .token-name { font-weight: 800; }
+    .token-place, .state-detail { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status { font-size: 10px; border-radius: 999px; padding: 2px 6px; background: var(--panel2); border: 1px solid var(--line); white-space: nowrap; }
+    .status.ready { color: var(--good); }
+    .status.blocked { color: var(--warn); }
+    .status.done { color: var(--muted); }
+    .status.error { color: var(--bad); }
+    #log { max-height: 260px; overflow: auto; display: flex; flex-direction: column-reverse; gap: 6px; font-size: 12px; }
+    .log-item { padding: 7px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--muted); line-height: 1.3; }
+    .log-item strong { color: var(--text); }
+    .log-item.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
+    .log-item.bad { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); color: var(--bad); }
+    .log-item.good { border-color: color-mix(in srgb, var(--good) 45%, var(--line)); color: var(--good); }
+    .concept { display: grid; gap: 7px; }
+    .concept code { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 1px 5px; color: var(--text); }
+    .legend { display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+    .legend span { display: flex; gap: 7px; align-items: center; }
+    .legend b { color: var(--text); }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; flex: 0 0 auto; }
+    .dot.m { background: var(--mutex); } .dot.s { background: var(--sem); } .dot.c { background: var(--good); } .dot.t { background: var(--thread); } .dot.v { background: var(--cond); } .dot.b { background: var(--barrier); } .dot.y { background: var(--sched); }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .muted { color: var(--muted); }
+    .kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 0 5px; background: var(--panel); color: var(--text); font-size: 11px; }
+    .thin { font-size: 11px; padding: 5px 7px; }
+
+    .node-progress { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 8px 8px; min-height: 16px; }
+    .progress-chip { font-size: 10px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; background: var(--panel2); color: var(--warn); font-weight: 800; }
+    .deadlock-badge {
+      position: absolute;
+      z-index: 5;
+      top: 58px;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 1px solid color-mix(in srgb, var(--bad) 65%, var(--line));
+      background: color-mix(in srgb, var(--bad) 18%, var(--panel));
+      color: var(--bad);
+      border-radius: 999px;
+      padding: 7px 12px;
+      box-shadow: 0 8px 22px var(--shadow);
+      font-size: 12px;
+      font-weight: 850;
+      max-width: min(620px, 82%);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .panel-toggle {
+      position: absolute;
+      z-index: 4;
+      top: 12px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: color-mix(in srgb, var(--panel) 93%, transparent);
+      box-shadow: 0 6px 20px var(--shadow);
+      backdrop-filter: blur(8px);
+      font-size: 12px;
+    }
+    .panel-toggle.left { left: 12px; }
+    .panel-toggle.right { right: 12px; }
+    #toolbar { left: 50%; transform: translateX(-50%); }
+
+  </style>
+</head>
+<body>
+  <div id="app">
+    <aside class="left">
+      <section>
+        <h3>Examples</h3>
+        <div class="btn-grid">
+          <button data-example="race">Race: no mutex</button>
+          <button data-example="rr">RR: 1 AP, 3 threads</button>
+          <button data-example="mutex">Mutex protects inc</button>
+          <button data-example="semSeats">Semaphore seats</button>
+          <button data-example="semSignal">Semaphore signal</button>
+          <button data-example="barrier">Barrier B</button>
+          <button data-example="spawnJoin">Spawn + join</button>
+          <button data-example="yieldPark">Yield / park</button>
+          <button data-example="atomicInc">Atomic inc</button>
+          <button data-example="condSignal">Condvar signal</button>
+          <button data-example="condBroadcast">CV broadcast</button>
+          <button data-example="condLost">CV lost signal</button>
+          <button data-example="selfDeadlock">Self-deadlock</button>
+          <button data-example="badUnlock">Bad unlock</button>
+        </div>
+        <small style="margin-top:8px">Try <b>Race</b>, then <b>RR</b>: with 1 AP and 3 threads, round-robin still makes every token progress.</small>
+      </section>
+
+      <section>
+        <h3>AP / CPU slots</h3>
+        <div class="split">
+          <div>
+            <label for="apCount">AP count</label>
+            <input id="apCount" type="number" min="1" max="8" step="1" value="2" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="applyAPBtn" class="primary wide">Apply</button>
+          </div>
+        </div>
+        <div id="apList" class="mini-list" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="makeStartsBtn" class="wide">Make one Start per AP slot</button>
+        </div>
+        <div style="margin-top:8px">
+          <label for="lensSelect">Interpretation lens</label>
+          <select id="lensSelect">
+            <option value="threads">Plain threads</option>
+            <option value="tokio">Tokio workers/tasks</option>
+            <option value="rayon">Rayon workers/jobs</option>
+          </select>
+        </div>
+        <small style="margin-top:8px">APs are CPU slots. Start nodes spawn tokens; the round-robin scheduler dispatches up to AP count tokens per SMP tick. The lens only changes how you read the same graph.</small>
+      </section>
+
+      <section>
+        <h3>Add node</h3>
+        <div class="btn-grid palette">
+          <button data-add="start">Start</button>
+          <button data-add="work">Work</button>
+          <button data-add="lock">Lock M</button>
+          <button data-add="unlock">Unlock M</button>
+          <button data-add="sem_wait">Wait S</button>
+          <button data-add="sem_post">Post S</button>
+          <button data-add="yield">Yield</button>
+          <button data-add="park">Park N</button>
+          <button data-add="spawn">Spawn T</button>
+          <button data-add="join">Join T</button>
+          <button data-add="cond_wait">Wait C/M</button>
+          <button data-add="cond_signal">Signal C</button>
+          <button data-add="cond_broadcast">Broadcast C</button>
+          <button data-add="barrier">Barrier B</button>
+          <button data-add="end">End</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="wireBtn" class="wide">Wire mode: off</button>
+          <button id="deleteBtn" class="danger wide">Delete selected</button>
+        </div>
+        <small style="margin-top:8px">Drag nodes. In wire mode, click source → target. Press <span class="kbd">Tab</span> to toggle move/wire. Most sources have one outgoing edge; Spawn has a normal parent edge plus a dashed child edge. Shift-click the target while wiring from Spawn to set the child edge. Any node, including End, may have many incoming edges.</small>
+      </section>
+
+      <section>
+        <h3>Simulation</h3>
+        <div style="margin-bottom:8px">
+          <label for="selectedTokenSelect">Selected thread for debug step</label>
+          <select id="selectedTokenSelect"></select>
+        </div>
+        <div class="control-stack">
+          <button id="resetBtn" class="primary">Reset</button>
+          <button id="stepNextBtn">SMP tick</button>
+          <button id="stepSelectedBtn">Step selected thread</button>
+          <button id="runBtn">Run SMP</button>
+        </div>
+        <div class="split" style="margin-top:8px">
+          <div>
+            <label for="semInit">Default S permits</label>
+            <input id="semInit" type="number" min="0" max="99" step="1" value="1" />
+          </div>
+          <div>
+            <label for="runSpeed">Run delay ms</label>
+            <input id="runSpeed" type="number" min="120" max="2000" step="50" value="650" />
+          </div>
+        </div>
+        <small style="margin-top:8px"><b>SMP tick</b> round-robin dispatches up to AP-count ready tokens. <b>Step selected</b> is a debugger micro-step for one token only. <b>Default S permits</b>: 0 = event/signal, 1 = binary semaphore, N = N seats/resources.</small>
+      </section>
+
+      <section>
+        <h3>Threads</h3>
+        <div id="tokens" class="mini-list"></div>
+      </section>
+
+      <section>
+        <h3>Selected node</h3>
+        <div id="selectedPanel" class="concept"></div>
+      </section>
+    </aside>
+
+    <main>
+      <button id="toggleLeftPanel" class="panel-toggle left">Hide left</button>
+      <button id="toggleRightPanel" class="panel-toggle right">Hide right</button>
+      <div id="deadlockBadge" class="deadlock-badge" hidden>Deadlock</div>
+      <div id="toolbar">
+        <span class="muted">Tool:</span>
+        <button id="moveTool" class="active">Move</button>
+        <button id="wireTool">Wire</button>
+        <span id="wireHint" class="muted">click source → target</span>
+      </div>
+      <div id="canvasWrap">
+        <svg id="edges" aria-hidden="true"></svg>
+        <div id="nodesLayer"></div>
+      </div>
+    </main>
+
+    <aside class="right">
+      <section>
+        <h3>Shared state</h3>
+        <div id="state" class="mini-list"></div>
+      </section>
+
+      <section>
+        <div class="row" style="justify-content:space-between; margin-bottom:8px">
+          <h3 style="margin:0">Event log</h3>
+          <button id="clearLogBtn">Clear</button>
+        </div>
+        <div id="log"></div>
+      </section>
+
+      <section>
+        <h3>Tiny model</h3>
+        <div class="concept">
+          <div id="lensHelp"></div>
+          <small><b>Mutex</b>: one owner or free. If busy, lockers queue. Only the owner may unlock.</small>
+          <small><b>Semaphore</b>: integer permits. <code>wait</code> consumes one or blocks. <code>post</code> wakes one waiter or adds a permit. No owner.</small>
+          <small><b>Spawn / Join</b>: Spawn creates a child thread on its dashed child edge; the parent follows the normal edge. Join waits for a child handle from the same parent.</small>
+          <small><b>Condition variable</b>: <code>Wait C/M</code> requires owning mutex M, atomically unlocks M and sleeps on C. Signal wakes one waiter; Broadcast wakes all. Woken waiters must re-lock M before continuing.</small>
+          <small><b>Barrier</b>: N tokens must arrive at the same barrier generation before all are released together.</small>
+          <small><b>Yield</b>: cooperative scheduling point. The token advances, but visually marks a place where a Tokio task would give the worker back to the runtime.</small>
+          <small><b>Park N</b>: token becomes not-ready until a future scheduler tick. Read it as sleep/timer/awaited event; it does not consume an AP slot while parked.</small>
+          <small><b>SMP tick</b>: a round-robin scheduler chooses up to AP-count ready tokens from a start-of-tick snapshot. Lock/semaphore conflicts are resolved in dispatch order.</small>
+          <small><b>Work node</b>: can take N scheduled micro-steps per thread. Scenario <code>increment counter</code> is non-atomic: first step reads, final step writes. Each token shows per-node progress like 1/3.</small>
+        </div>
+      </section>
+
+      <section>
+        <h3>Things to try</h3>
+        <div class="legend">
+          <span><i class="dot c"></i><b>Race:</b> press SMP tick until both APs read counter=0 in the same tick, then both write.</span>
+          <span><i class="dot m"></i><b>Mutex:</b> AP1 blocks while AP0 owns M.</span>
+          <span><i class="dot s"></i><b>Semaphore:</b> set default S permits to 1, 2, or 0 and reset.</span>
+          <span><i class="dot t"></i><b>Spawn/join:</b> normal edge is the parent; dashed edge is the child path.</span>
+          <span><i class="dot v"></i><b>Condvar:</b> try Signal before Wait to see that condition variables do not store permits.</span>
+          <span><i class="dot b"></i><b>Barrier:</b> lower AP count to see arrivals spread over scheduler ticks.</span>
+          <span><i class="dot y"></i><b>Yield/Park:</b> use Yield to mark cooperative handoff; use Park N to make a token sleep without occupying an AP slot.</span>
+          <span><i class="dot"></i><b>Work duration:</b> select a Work node and change Steps to 3 or 5.</span>
+        </div>
+      </section>
+
+      <section>
+        <h3>Graph JSON</h3>
+        <div class="control-stack">
+          <button id="exportBtn">Export</button>
+          <button id="importBtn">Import</button>
+        </div>
+        <textarea id="jsonBox" placeholder="Exported graph appears here"></textarea>
+      </section>
+    </aside>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  const WORK_SCENARIOS = {
+    plain: { label: 'Plain work', sub: 'ordinary work' },
+    inc: { label: 'Increment counter', sub: 'read first, write last' },
+    atomicInc: { label: 'Atomic increment', sub: 'single indivisible counter++' },
+    readCounter: { label: 'Read counter to local', sub: 'local = counter' },
+    writeLocalPlusOne: { label: 'Write local + 1', sub: 'counter = local + 1' },
+    setCounter: { label: 'Set counter', sub: 'counter = value' }
+  };
+
+  const TYPE = {
+    start: { title: 'Start', cls: 'start', sub: n => `spawns ${n.ap === '*' ? 'one thread per AP slot' : 'thread ' + (n.ap || n.threadName || n.thread || 'T?')}` },
+    work: { title: 'Work', cls: 'work', sub: n => `${workScenario(n).label}, ${workSteps(n)} step${workSteps(n) === 1 ? '' : 's'}` },
+    lock: { title: 'Lock M', cls: 'mutex', sub: n => `mutex ${n.obj || 'M'}` },
+    unlock: { title: 'Unlock M', cls: 'mutex', sub: n => `mutex ${n.obj || 'M'}` },
+    sem_wait: { title: 'Wait S', cls: 'sem', sub: n => `semaphore ${n.obj || 'S'}: consume permit` },
+    sem_post: { title: 'Post S', cls: 'sem', sub: n => `semaphore ${n.obj || 'S'}: release/signal` },
+    yield: { title: 'Yield', cls: 'sched', sub: () => 'cooperative handoff point' },
+    park: { title: 'Park N', cls: 'sched', sub: n => `park ${parkTicks(n)} scheduler tick${parkTicks(n) === 1 ? '' : 's'}` },
+    spawn: { title: 'Spawn T', cls: 'spawn', sub: n => `spawn ${n.spawnName || 'T'} on dashed child edge` },
+    join: { title: 'Join T', cls: 'join', sub: n => `wait for child ${n.joinName || 'T'}` },
+    cond_wait: { title: 'Wait C/M', cls: 'cond', sub: n => `cond ${n.obj || 'C'} with mutex ${n.mutex || 'M'}` },
+    cond_signal: { title: 'Signal C', cls: 'cond', sub: n => `wake one waiter on cond ${n.obj || 'C'}` },
+    cond_broadcast: { title: 'Broadcast C', cls: 'cond', sub: n => `wake all waiters on cond ${n.obj || 'C'}` },
+    barrier: { title: 'Barrier B', cls: 'barrier', sub: n => `barrier ${n.obj || 'B'}: ${barrierParties(n)} parties` },
+    end: { title: 'End', cls: 'end', sub: () => 'finish token; many incoming ok' }
+  };
+
+  const els = {
+    edges: $('#edges'),
+    nodesLayer: $('#nodesLayer'),
+    canvasWrap: $('#canvasWrap'),
+    tokens: $('#tokens'),
+    state: $('#state'),
+    log: $('#log'),
+    selectedPanel: $('#selectedPanel'),
+    semInit: $('#semInit'),
+    runSpeed: $('#runSpeed'),
+    wireBtn: $('#wireBtn'),
+    wireTool: $('#wireTool'),
+    moveTool: $('#moveTool'),
+    wireHint: $('#wireHint'),
+    jsonBox: $('#jsonBox'),
+    apCount: $('#apCount'),
+    apList: $('#apList'),
+    lensSelect: $('#lensSelect'),
+    lensHelp: $('#lensHelp'),
+    selectedTokenSelect: $('#selectedTokenSelect')
+  };
+
+  let graph = emptyGraph();
+  let sim = emptySim();
+  let selectedNodeId = null;
+  let selectedTokenId = null;
+  let wireMode = false;
+  let wireSourceId = null;
+  let drag = null;
+  let idSeq = 1;
+  let runTimer = null;
+  let rr = 0;
+
+  function emptyGraph() {
+    return {
+      apCount: 2,
+      apNames: ['AP0', 'AP1'],
+      semInit: 1,
+      semDefaults: { S: 1 },
+      lens: 'threads',
+      nodes: [],
+      edges: []
+    };
+  }
+
+  function emptySim() {
+    return {
+      tick: 0,
+      micro: 0,
+      lastTickRan: [],
+      lastDispatch: [],
+      counter: 0,
+      mutexes: {},
+      semaphores: {},
+      condvars: {},
+      barriers: {},
+      children: {},
+      tokens: [],
+      log: [],
+      deadlock: false,
+      deadlockReason: '',
+      _stallLogged: false
+    };
+  }
+
+  function uid(prefix = 'n') { return `${prefix}${idSeq++}`; }
+  function byId(id) { return graph.nodes.find(n => n.id === id); }
+  function edgeKind(e) { return e?.kind === 'spawn' ? 'spawn' : 'normal'; }
+  function edgeFrom(id, kind = 'normal') { return graph.edges.find(e => e.from === id && edgeKind(e) === kind); }
+  function childEdgeFrom(id) { return edgeFrom(id, 'spawn'); }
+  function nextId(id) { const e = edgeFrom(id, 'normal'); return e ? e.to : null; }
+  function childNextId(id) { const e = childEdgeFrom(id); return e ? e.to : null; }
+  function outgoingIds(id) { return graph.edges.filter(e => e.from === id).map(e => e.to).filter(Boolean); }
+  function tokenById(id) { return sim.tokens.find(t => t.id === id); }
+  function nodeLabel(n) { return n ? (n.label || TYPE[n.type]?.title || n.type) : 'missing'; }
+  function queueText(q) { return q.length ? q.join(' → ') : 'empty'; }
+  function htmlEscape(s) {
+    return String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  }
+  function sanitizeName(raw, fallback) {
+    const s = String(raw ?? '').trim();
+    return s || fallback;
+  }
+  function makeUnique(names) {
+    const seen = new Map();
+    return names.map((name, i) => {
+      let base = sanitizeName(name, `AP${i}`);
+      let candidate = base;
+      let n = seen.get(base) || 0;
+      while (seen.has(candidate)) {
+        n += 1;
+        candidate = `${base}_${n}`;
+      }
+      seen.set(base, n);
+      seen.set(candidate, 0);
+      return candidate;
+    });
+  }
+
+  function migrateGraph(g) {
+    const rawApCount = Number(g.apCount);
+    const hasApCount = Number.isFinite(rawApCount) && rawApCount > 0;
+    const next = {
+      apCount: hasApCount ? clamp(rawApCount, 1, 8) : 0,
+      apNames: Array.isArray(g.apNames) ? g.apNames.slice(0, 8) : [],
+      semInit: Number.isFinite(Number(g.semInit)) ? Number(g.semInit) : 1,
+      semDefaults: g.semDefaults && typeof g.semDefaults === 'object' ? {...g.semDefaults} : {},
+      lens: ['threads','tokio','rayon'].includes(g.lens) ? g.lens : 'threads',
+      nodes: Array.isArray(g.nodes) ? g.nodes.map(n => ({...n})) : [],
+      edges: Array.isArray(g.edges) ? g.edges.map(e => ({...e, kind: e.kind === 'spawn' ? 'spawn' : 'normal'})) : []
+    };
+
+    for (const n of next.nodes) {
+      if (n.type === 'inc') {
+        n.type = 'work';
+        n.workKind = 'inc';
+        n.steps = Math.max(2, Number(n.steps || 2));
+        n.label = n.label || 'Inc counter';
+      }
+      if (n.type === 'start' && !n.ap) n.ap = n.threadName || n.thread || undefined;
+      if (n.type === 'work') {
+        n.workKind = n.workKind || 'plain';
+        n.steps = Number.isFinite(Number(n.steps)) ? Number(n.steps) : (n.workKind === 'inc' ? 2 : 1);
+      }
+      if (n.type === 'park') n.ticks = parkTicks(n);
+      if (n.type === 'spawn') n.spawnName = sanitizeName(n.spawnName, 'T');
+      if (n.type === 'join') n.joinName = sanitizeName(n.joinName, 'T');
+      if (['cond_wait','cond_signal','cond_broadcast'].includes(n.type)) n.obj = sanitizeName(n.obj, 'C');
+      if (n.type === 'cond_wait') n.mutex = sanitizeName(n.mutex, 'M');
+      if (n.type === 'barrier') {
+        n.obj = sanitizeName(n.obj, 'B');
+        n.parties = clamp(Math.floor(Number(n.parties || next.apCount || 2)), 1, 64);
+      }
+    }
+
+    if (!next.apNames.length) {
+      next.apNames = ['AP0', 'AP1'];
+    }
+    if (!next.apCount) next.apCount = clamp(next.apNames.length || 2, 1, 8);
+    next.apCount = clamp(next.apCount, 1, 8);
+    while (next.apNames.length < next.apCount) next.apNames.push(`AP${next.apNames.length}`);
+    next.apNames = makeUnique(next.apNames.slice(0, next.apCount));
+    if (!Object.prototype.hasOwnProperty.call(next.semDefaults, 'S')) next.semDefaults.S = next.semInit;
+    return next;
+  }
+
+  function getRoster() {
+    graph = migrateGraph(graph);
+    return graph.apNames.slice(0, graph.apCount);
+  }
+
+  function workScenario(n) {
+    return WORK_SCENARIOS[n.workKind || 'plain'] || WORK_SCENARIOS.plain;
+  }
+  function workSteps(n) {
+    let steps = clamp(Math.floor(Number(n.steps || 1)), 1, 30);
+    if ((n.workKind || 'plain') === 'inc') steps = Math.max(2, steps);
+    return steps;
+  }
+  function semDefault(obj) {
+    if (!graph.semDefaults) graph.semDefaults = {};
+    if (Object.prototype.hasOwnProperty.call(graph.semDefaults, obj)) return Math.max(0, Number(graph.semDefaults[obj]) || 0);
+    return Math.max(0, Number(graph.semInit || 0));
+  }
+
+  function barrierParties(n) {
+    return clamp(Math.floor(Number(n?.parties || graph.apCount || 2)), 1, 64);
+  }
+  function parkTicks(n) {
+    return clamp(Math.floor(Number(n?.ticks || 2)), 1, 99);
+  }
+  function lensInfo() {
+    const lens = ['threads','tokio','rayon'].includes(graph.lens) ? graph.lens : 'threads';
+    if (lens === 'tokio') return { name: 'Tokio lens', slots: 'worker threads', tokens: 'tasks/futures', spawn: 'task spawn', join: 'JoinHandle await', yield: 'yield/.await point' };
+    if (lens === 'rayon') return { name: 'Rayon lens', slots: 'worker threads', tokens: 'jobs', spawn: 'fork/spawn job', join: 'join/scope wait', yield: 'scheduler yield point' };
+    return { name: 'Plain thread lens', slots: 'AP/CPU slots', tokens: 'thread tokens', spawn: 'thread spawn', join: 'thread join', yield: 'cooperative yield marker' };
+  }
+  function barrierKey(n) { return n?.id || String(n); }
+  function usedBarrierNodes() {
+    return graph.nodes.filter(n => n.type === 'barrier');
+  }
+  function uniqueTokenId(base) {
+    const clean = sanitizeName(base, 'T').replace(/\s+/g, '_');
+    const exists = name => sim.tokens.some(t => t.id === name);
+    if (!exists(clean)) return clean;
+    let i = 2;
+    while (exists(`${clean}_${i}`)) i += 1;
+    return `${clean}_${i}`;
+  }
+  function registerChild(parentId, alias, childId) {
+    if (!sim.children[parentId]) sim.children[parentId] = {};
+    const key = sanitizeName(alias, 'T');
+    if (!sim.children[parentId][key]) sim.children[parentId][key] = [];
+    sim.children[parentId][key].push(childId);
+  }
+  function childIdsFor(parentId, alias) {
+    const byAlias = sim.children[parentId] || {};
+    if (alias === '*') return Object.values(byAlias).flat();
+    return (byAlias[alias] || []).slice();
+  }
+  function isTerminalToken(t) { return !t || t.status === 'done' || t.status === 'error'; }
+  function childLabel(childIds) { return childIds.length ? childIds.join(', ') : 'none'; }
+  function usedMutexNames() {
+    const set = new Set(['M']);
+    for (const n of graph.nodes) {
+      if (['lock', 'unlock'].includes(n.type)) set.add(n.obj || 'M');
+      if (n.type === 'cond_wait') set.add(n.mutex || 'M');
+    }
+    return Array.from(set).sort();
+  }
+  function usedSemaphoreNames() {
+    const set = new Set(['S']);
+    for (const n of graph.nodes) if (['sem_wait', 'sem_post'].includes(n.type)) set.add(n.obj || 'S');
+    return Array.from(set).sort();
+  }
+  function usedCondNames() {
+    const set = new Set(['C']);
+    for (const n of graph.nodes) if (['cond_wait','cond_signal','cond_broadcast'].includes(n.type)) set.add(n.obj || 'C');
+    return Array.from(set).sort();
+  }
+
+  function addLog(message, kind = '') {
+    sim.log.push({ tick: sim.tick, message, kind });
+    if (sim.log.length > 160) sim.log.shift();
+    renderLog();
+  }
+  function renderLog() {
+    els.log.innerHTML = sim.log.map(item =>
+      `<div class="log-item ${item.kind}"><strong>#${item.tick}</strong> ${item.message}</div>`
+    ).join('');
+  }
+
+  function ensureObjects() {
+    for (const name of usedMutexNames()) {
+      if (!sim.mutexes[name]) sim.mutexes[name] = { owner: null, queue: [] };
+    }
+    for (const name of usedSemaphoreNames()) {
+      if (!sim.semaphores[name]) sim.semaphores[name] = { count: semDefault(name), queue: [] };
+    }
+    for (const name of usedCondNames()) {
+      if (!sim.condvars[name]) sim.condvars[name] = { waiters: [] };
+    }
+    for (const n of usedBarrierNodes()) {
+      const key = barrierKey(n);
+      if (!sim.barriers[key]) sim.barriers[key] = { obj: n.obj || 'B', nodeId: n.id, parties: barrierParties(n), generation: 0, queue: [] };
+      sim.barriers[key].obj = n.obj || 'B';
+      sim.barriers[key].parties = barrierParties(n);
+      sim.barriers[key].nodeId = n.id;
+    }
+  }
+
+  function resetSim(quiet = false) {
+    stopRun();
+    graph = migrateGraph(graph);
+    graph.semInit = Math.max(0, Number(els.semInit.value || graph.semInit || 0));
+    if (!graph.semDefaults) graph.semDefaults = {};
+    if (!Object.prototype.hasOwnProperty.call(graph.semDefaults, 'S')) graph.semDefaults.S = graph.semInit;
+
+    const oldLog = quiet ? sim.log.slice() : [];
+    sim = emptySim();
+    sim.log = oldLog;
+    ensureObjects();
+
+    const roster = getRoster();
+    const starts = graph.nodes.filter(n => n.type === 'start').sort((a,b) => a.y - b.y || a.x - b.x);
+    const spawned = new Set();
+    let autoThread = 0;
+    const uniqueThreadName = raw => {
+      const base = sanitizeName(raw, `T${autoThread++}`);
+      if (!spawned.has(base)) return base;
+      let i = 2;
+      while (spawned.has(`${base}_${i}`)) i += 1;
+      return `${base}_${i}`;
+    };
+    const spawn = (rawName, nodeId) => {
+      const id = uniqueThreadName(rawName);
+      sim.tokens.push({
+        id,
+        nodeId,
+        startNodeId: nodeId,
+        status: 'ready',
+        waiting: null,
+        phase: null,
+        local: null,
+        parentId: null,
+        spawnAlias: null
+      });
+      spawned.add(id);
+    };
+
+    starts.forEach((start, i) => {
+      const configured = start.ap || start.threadName || start.thread || `T${i}`;
+      if (configured === '*') {
+        for (const ap of roster) spawn(ap, start.id);
+      } else {
+        spawn(configured, start.id);
+      }
+    });
+
+    if (!sim.tokens.some(t => t.id === selectedTokenId)) selectedTokenId = sim.tokens[0]?.id || null;
+    rr = 0;
+    detectStall(false, { silent: true });
+    if (!quiet) {
+      const lens = lensInfo();
+      addLog(`Reset: ${sim.tokens.length} ${htmlEscape(lens.tokens)} token${sim.tokens.length === 1 ? '' : 's'} on ${graph.apCount} ${htmlEscape(lens.slots)} slot${graph.apCount === 1 ? '' : 's'}, counter=0.`, 'good');
+      if (!starts.length) addLog('No Start nodes exist, so no thread tokens were spawned.', 'warn');
+    }
+    renderAll();
+  }
+
+  function moveTokenToNext(t, fromId = t.nodeId) {
+    const to = nextId(fromId);
+    if (!to) {
+      t.status = 'done';
+      t.nodeId = fromId;
+      t.phase = null;
+      addLog(`${htmlEscape(t.id)} has no outgoing edge after <strong>${htmlEscape(nodeLabel(byId(fromId)))}</strong>; marked done.`, 'warn');
+      return false;
+    }
+    t.nodeId = to;
+    t.phase = null;
+    return true;
+  }
+
+  function blockToken(t, waiting) {
+    t.status = 'blocked';
+    t.waiting = waiting;
+    t.phase = null;
+  }
+
+  function unblockPastWaiter(waiterId, fromNodeId) {
+    const w = tokenById(waiterId);
+    if (!w) return;
+    w.status = 'ready';
+    w.waiting = null;
+    w.phase = null;
+    const to = nextId(fromNodeId);
+    if (to) w.nodeId = to;
+  }
+
+  function wakeJoiners() {
+    for (const t of sim.tokens) {
+      if (t.status !== 'blocked' || t.waiting?.kind !== 'join') continue;
+      const pending = (t.waiting.childIds || []).filter(cid => !isTerminalToken(tokenById(cid)));
+      if (pending.length) continue;
+      const fromNodeId = t.waiting.nodeId;
+      const joined = t.waiting.childIds || [];
+      t.status = 'ready';
+      t.waiting = null;
+      t.phase = null;
+      const to = nextId(fromNodeId);
+      if (to) t.nodeId = to;
+      else moveTokenToNext(t, fromNodeId);
+      addLog(`${htmlEscape(t.id)} join completes; child thread${joined.length === 1 ? '' : 's'} ${htmlEscape(childLabel(joined))} terminated.`, 'good');
+    }
+  }
+
+  function stepWork(t, n) {
+    const scenarioKey = n.workKind || 'plain';
+    const steps = workSteps(n);
+    if (!t.phase || t.phase.nodeId !== n.id || t.phase.kind !== 'work') {
+      t.phase = { kind: 'work', nodeId: n.id, scenario: scenarioKey, steps, done: 0, read: null };
+    }
+    const p = t.phase;
+    p.done += 1;
+    const label = htmlEscape(nodeLabel(n));
+    const progress = `${p.done}/${p.steps}`;
+    const value = Number(n.value || 0);
+
+    if (scenarioKey === 'plain') {
+      addLog(`${htmlEscape(t.id)} works at <strong>${label}</strong> (${progress}).`);
+      if (p.done >= p.steps) moveTokenToNext(t, n.id);
+      return;
+    }
+
+    if (scenarioKey === 'inc') {
+      if (p.done === 1) {
+        p.read = sim.counter;
+        t.local = sim.counter;
+        addLog(`${htmlEscape(t.id)} begins <strong>${label}</strong>: reads counter=<strong>${sim.counter}</strong> (${progress}).`, 'warn');
+      } else if (p.done < p.steps) {
+        addLog(`${htmlEscape(t.id)} computes from local=${htmlEscape(t.local)} at <strong>${label}</strong> (${progress}).`);
+      } else {
+        const before = sim.counter;
+        sim.counter = p.read + 1;
+        addLog(`${htmlEscape(t.id)} finishes <strong>${label}</strong>: writes ${p.read}+1 → counter=<strong>${sim.counter}</strong>${before !== p.read ? ' <em>(overwrote another update)</em>' : ''}.`, before !== p.read ? 'bad' : 'good');
+        t.local = null;
+        moveTokenToNext(t, n.id);
+      }
+      return;
+    }
+
+    if (scenarioKey === 'atomicInc') {
+      addLog(`${htmlEscape(t.id)} prepares atomic increment at <strong>${label}</strong> (${progress}).`);
+      if (p.done >= p.steps) {
+        const before = sim.counter;
+        sim.counter = before + 1;
+        addLog(`${htmlEscape(t.id)} performs one indivisible counter++: ${before} → <strong>${sim.counter}</strong>.`, 'good');
+        moveTokenToNext(t, n.id);
+      }
+      return;
+    }
+
+    if (scenarioKey === 'readCounter') {
+      addLog(`${htmlEscape(t.id)} reads at <strong>${label}</strong> (${progress}).`);
+      if (p.done >= p.steps) {
+        t.local = sim.counter;
+        addLog(`${htmlEscape(t.id)} stores local=<strong>${sim.counter}</strong>.`, 'good');
+        moveTokenToNext(t, n.id);
+      }
+      return;
+    }
+
+    if (scenarioKey === 'writeLocalPlusOne') {
+      addLog(`${htmlEscape(t.id)} prepares write at <strong>${label}</strong> (${progress}).`);
+      if (p.done >= p.steps) {
+        if (typeof t.local !== 'number') {
+          t.status = 'error';
+          addLog(`${htmlEscape(t.id)} cannot write local+1 because it has no numeric local value.`, 'bad');
+          return;
+        }
+        const before = sim.counter;
+        sim.counter = t.local + 1;
+        addLog(`${htmlEscape(t.id)} writes local+1 (${t.local}+1) → counter=<strong>${sim.counter}</strong>${before !== t.local ? ' <em>(possible lost update)</em>' : ''}.`, before !== t.local ? 'bad' : 'good');
+        t.local = null;
+        moveTokenToNext(t, n.id);
+      }
+      return;
+    }
+
+    if (scenarioKey === 'setCounter') {
+      addLog(`${htmlEscape(t.id)} prepares set counter at <strong>${label}</strong> (${progress}).`);
+      if (p.done >= p.steps) {
+        sim.counter = value;
+        addLog(`${htmlEscape(t.id)} sets counter=<strong>${value}</strong>.`, 'good');
+        moveTokenToNext(t, n.id);
+      }
+      return;
+    }
+
+    addLog(`${htmlEscape(t.id)} does unknown work scenario; treating as plain work.`, 'warn');
+    if (p.done >= p.steps) moveTokenToNext(t, n.id);
+  }
+
+  function releaseMutexFor(obj, ownerId) {
+    const m = sim.mutexes[obj] || (sim.mutexes[obj] = { owner: null, queue: [] });
+    if (m.owner !== ownerId) return { ok: false, owner: m.owner || null, woken: null, queue: m.queue.slice() };
+    if (m.queue.length) {
+      const wId = m.queue.shift();
+      const w = tokenById(wId);
+      const waitInfo = w?.waiting ? { ...w.waiting } : null;
+      const waitNodeId = w?.waiting?.nodeId;
+      m.owner = wId;
+      if (waitNodeId) unblockPastWaiter(wId, waitNodeId);
+      return { ok: true, owner: m.owner, woken: wId, waitInfo, queue: m.queue.slice() };
+    }
+    m.owner = null;
+    return { ok: true, owner: null, woken: null, waitInfo: null, queue: m.queue.slice() };
+  }
+
+  function wakeCondWaiter(waiterId, condObj, byIdForLog) {
+    const w = tokenById(waiterId);
+    if (!w) return false;
+    const waitInfo = w.waiting || {};
+    const mutexObj = waitInfo.mutex || 'M';
+    const waitNodeId = waitInfo.nodeId;
+    const m = sim.mutexes[mutexObj] || (sim.mutexes[mutexObj] = { owner: null, queue: [] });
+    if (!m.owner) {
+      m.owner = waiterId;
+      w.status = 'ready';
+      w.waiting = null;
+      w.phase = null;
+      const to = nextId(waitNodeId);
+      if (to) w.nodeId = to;
+      addLog(`${htmlEscape(byIdForLog)} wakes ${htmlEscape(waiterId)} on cond <strong>${htmlEscape(condObj)}</strong>; ${htmlEscape(waiterId)} immediately re-locks mutex <strong>${htmlEscape(mutexObj)}</strong> and continues.`, 'good');
+    } else {
+      if (!m.queue.includes(waiterId)) m.queue.push(waiterId);
+      blockToken(w, { kind: 'cond-relock', obj: condObj, mutex: mutexObj, nodeId: waitNodeId });
+      addLog(`${htmlEscape(byIdForLog)} wakes ${htmlEscape(waiterId)} on cond <strong>${htmlEscape(condObj)}</strong>; it must re-lock mutex <strong>${htmlEscape(mutexObj)}</strong>, currently owned by ${htmlEscape(m.owner)}.`, 'warn');
+    }
+    return true;
+  }
+
+  function stepToken(id, options = {}) {
+    ensureObjects();
+    const t = tokenById(id);
+    if (!t) { addLog(`No thread named ${htmlEscape(id)} is currently spawned.`, 'warn'); return false; }
+    if (t.status === 'done') { addLog(`${htmlEscape(id)} is already done.`, 'warn'); return false; }
+    if (t.status === 'error') { addLog(`${htmlEscape(id)} is stopped on an error. Reset to continue.`, 'bad'); return false; }
+    if (t.status === 'blocked') { addLog(`${htmlEscape(id)} is blocked on ${htmlEscape(describeWaiting(t.waiting))}.`, 'warn'); return false; }
+
+    const n = byId(t.nodeId);
+    if (!n) { t.status = 'error'; addLog(`${htmlEscape(id)} points at a missing node.`, 'bad'); renderAll(); return false; }
+
+    if (options.countTick !== false) {
+      sim.tick += 1;
+      sim.lastTickRan = [id];
+    }
+    sim.micro += 1;
+
+    switch (n.type) {
+      case 'start': {
+        addLog(`${htmlEscape(id)} starts and follows the outgoing edge.`);
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'work': {
+        stepWork(t, n);
+        break;
+      }
+      case 'yield': {
+        addLog(`${htmlEscape(id)} reaches Yield: it gives up the current scheduling slice and follows the outgoing edge.`, 'good');
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'park': {
+        const ticks = parkTicks(n);
+        const wakeTick = sim.tick + ticks;
+        blockToken(t, { kind: 'timer', nodeId: n.id, wakeTick, ticks });
+        addLog(`${htmlEscape(id)} parks for ${ticks} scheduler tick${ticks === 1 ? '' : 's'}; earliest wake tick is ${wakeTick}.`, 'warn');
+        break;
+      }
+      case 'lock': {
+        const obj = n.obj || 'M';
+        const m = sim.mutexes[obj] || (sim.mutexes[obj] = { owner: null, queue: [] });
+        if (!m.owner) {
+          m.owner = id;
+          addLog(`${htmlEscape(id)} locks mutex <strong>${htmlEscape(obj)}</strong>. Owner is now ${htmlEscape(id)}.`, 'good');
+          moveTokenToNext(t, n.id);
+        } else if (m.owner === id) {
+          blockToken(t, { kind: 'mutex-self', obj, nodeId: n.id });
+          addLog(`${htmlEscape(id)} tries to lock <strong>${htmlEscape(obj)}</strong> again while already owning it: non-recursive self-deadlock.`, 'bad');
+        } else {
+          if (!m.queue.includes(id)) m.queue.push(id);
+          blockToken(t, { kind: 'mutex', obj, nodeId: n.id });
+          addLog(`${htmlEscape(id)} blocks at Lock ${htmlEscape(obj)}; owner is ${htmlEscape(m.owner)}. Queue: ${htmlEscape(queueText(m.queue))}.`, 'warn');
+        }
+        break;
+      }
+      case 'unlock': {
+        const obj = n.obj || 'M';
+        const m = sim.mutexes[obj] || (sim.mutexes[obj] = { owner: null, queue: [] });
+        const released = releaseMutexFor(obj, id);
+        if (!released.ok) {
+          t.status = 'error';
+          addLog(`${htmlEscape(id)} tried to unlock mutex <strong>${htmlEscape(obj)}</strong>, but owner is ${htmlEscape(released.owner || 'nobody')}. Mutex unlock must be done by the owner.`, 'bad');
+        } else {
+          if (released.woken) {
+            if (released.waitInfo?.kind === 'cond-relock') {
+              addLog(`${htmlEscape(id)} unlocks <strong>${htmlEscape(obj)}</strong>; ${htmlEscape(released.woken)} re-acquires it after CondWait ${htmlEscape(released.waitInfo.obj || 'C')}. Queue: ${htmlEscape(queueText(m.queue))}.`, 'good');
+            } else {
+              addLog(`${htmlEscape(id)} unlocks <strong>${htmlEscape(obj)}</strong>; ${htmlEscape(released.woken)} wakes and immediately owns it. Queue: ${htmlEscape(queueText(m.queue))}.`, 'good');
+            }
+          } else {
+            addLog(`${htmlEscape(id)} unlocks <strong>${htmlEscape(obj)}</strong>; mutex is now free.`, 'good');
+          }
+          moveTokenToNext(t, n.id);
+        }
+        break;
+      }
+      case 'sem_wait': {
+        const obj = n.obj || 'S';
+        const s = sim.semaphores[obj] || (sim.semaphores[obj] = { count: semDefault(obj), queue: [] });
+        if (s.count > 0) {
+          s.count -= 1;
+          addLog(`${htmlEscape(id)} waits on semaphore <strong>${htmlEscape(obj)}</strong> and consumes a permit. Count=${s.count}.`, 'good');
+          moveTokenToNext(t, n.id);
+        } else {
+          if (!s.queue.includes(id)) s.queue.push(id);
+          blockToken(t, { kind: 'sem', obj, nodeId: n.id });
+          addLog(`${htmlEscape(id)} blocks at Wait ${htmlEscape(obj)}; count is 0. Queue: ${htmlEscape(queueText(s.queue))}.`, 'warn');
+        }
+        break;
+      }
+      case 'sem_post': {
+        const obj = n.obj || 'S';
+        const s = sim.semaphores[obj] || (sim.semaphores[obj] = { count: semDefault(obj), queue: [] });
+        if (s.queue.length) {
+          const wId = s.queue.shift();
+          const w = tokenById(wId);
+          const waitNodeId = w?.waiting?.nodeId;
+          if (waitNodeId) unblockPastWaiter(wId, waitNodeId);
+          addLog(`${htmlEscape(id)} posts semaphore <strong>${htmlEscape(obj)}</strong>; ${htmlEscape(wId)} wakes. Count stays ${s.count} because the permit goes straight to the waiter.`, 'good');
+        } else {
+          s.count += 1;
+          addLog(`${htmlEscape(id)} posts semaphore <strong>${htmlEscape(obj)}</strong>; no waiter, so count becomes ${s.count}.`, 'good');
+        }
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'spawn': {
+        const alias = sanitizeName(n.spawnName, 'T');
+        const childTo = childNextId(n.id);
+        if (!childTo) {
+          t.status = 'error';
+          addLog(`${htmlEscape(id)} cannot Spawn ${htmlEscape(alias)} because this Spawn node has no dashed child edge. In wire mode: click Spawn, then Shift-click the child entry node.`, 'bad');
+          break;
+        }
+        const childId = uniqueTokenId(alias);
+        sim.tokens.push({
+          id: childId,
+          nodeId: childTo,
+          startNodeId: childTo,
+          status: 'ready',
+          waiting: null,
+          phase: null,
+          local: null,
+          parentId: id,
+          spawnAlias: alias
+        });
+        registerChild(id, alias, childId);
+        addLog(`${htmlEscape(id)} spawns child thread <strong>${htmlEscape(childId)}</strong> at <strong>${htmlEscape(nodeLabel(byId(childTo)))}</strong>. Parent follows the normal edge.`, 'good');
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'join': {
+        const alias = sanitizeName(n.joinName, 'T');
+        const childIds = childIdsFor(id, alias);
+        if (!childIds.length) {
+          t.status = 'error';
+          addLog(`${htmlEscape(id)} reached Join ${htmlEscape(alias)}, but it has no child handle named ${htmlEscape(alias)}. Put a matching Spawn ${htmlEscape(alias)} earlier on this parent thread, or use * to join all children.`, 'bad');
+          break;
+        }
+        const pending = childIds.filter(cid => !isTerminalToken(tokenById(cid)));
+        if (!pending.length) {
+          addLog(`${htmlEscape(id)} joins child thread${childIds.length === 1 ? '' : 's'} ${htmlEscape(childLabel(childIds))}; already terminated.`, 'good');
+          moveTokenToNext(t, n.id);
+        } else {
+          blockToken(t, { kind: 'join', alias, childIds, nodeId: n.id });
+          addLog(`${htmlEscape(id)} blocks at Join ${htmlEscape(alias)}; waiting for ${htmlEscape(childLabel(pending))}.`, 'warn');
+        }
+        break;
+      }
+      case 'cond_wait': {
+        const obj = n.obj || 'C';
+        const mutexObj = n.mutex || 'M';
+        const cv = sim.condvars[obj] || (sim.condvars[obj] = { waiters: [] });
+        const m = sim.mutexes[mutexObj] || (sim.mutexes[mutexObj] = { owner: null, queue: [] });
+        if (m.owner !== id) {
+          t.status = 'error';
+          addLog(`${htmlEscape(id)} tried CondWait <strong>${htmlEscape(obj)}</strong>/<strong>${htmlEscape(mutexObj)}</strong> without owning mutex ${htmlEscape(mutexObj)}. A condition wait must be called while holding the mutex.`, 'bad');
+          break;
+        }
+        if (!cv.waiters.includes(id)) cv.waiters.push(id);
+        blockToken(t, { kind: 'cond', obj, mutex: mutexObj, nodeId: n.id });
+        const released = releaseMutexFor(mutexObj, id);
+        if (released.woken) {
+          addLog(`${htmlEscape(id)} enters CondWait <strong>${htmlEscape(obj)}</strong>/<strong>${htmlEscape(mutexObj)}</strong>: enqueued on C, atomically releases M, and ${htmlEscape(released.woken)} now owns M.`, 'warn');
+        } else {
+          addLog(`${htmlEscape(id)} enters CondWait <strong>${htmlEscape(obj)}</strong>/<strong>${htmlEscape(mutexObj)}</strong>: enqueued on C and atomically releases M.`, 'warn');
+        }
+        break;
+      }
+      case 'cond_signal': {
+        const obj = n.obj || 'C';
+        const cv = sim.condvars[obj] || (sim.condvars[obj] = { waiters: [] });
+        if (!cv.waiters.length) {
+          addLog(`${htmlEscape(id)} signals cond <strong>${htmlEscape(obj)}</strong>, but there are no waiters. Condition variables do not store permits, so the signal is lost.`, 'warn');
+        } else {
+          const wId = cv.waiters.shift();
+          wakeCondWaiter(wId, obj, id);
+        }
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'cond_broadcast': {
+        const obj = n.obj || 'C';
+        const cv = sim.condvars[obj] || (sim.condvars[obj] = { waiters: [] });
+        if (!cv.waiters.length) {
+          addLog(`${htmlEscape(id)} broadcasts cond <strong>${htmlEscape(obj)}</strong>, but there are no waiters. Nothing is remembered for later waiters.`, 'warn');
+        } else {
+          const waiters = cv.waiters.splice(0, cv.waiters.length);
+          addLog(`${htmlEscape(id)} broadcasts cond <strong>${htmlEscape(obj)}</strong>; waking ${waiters.length} waiter${waiters.length === 1 ? '' : 's'}.`, 'good');
+          for (const wId of waiters) wakeCondWaiter(wId, obj, id);
+        }
+        moveTokenToNext(t, n.id);
+        break;
+      }
+      case 'barrier': {
+        const obj = n.obj || 'B';
+        const key = barrierKey(n);
+        const b = sim.barriers[key] || (sim.barriers[key] = { obj, nodeId: n.id, parties: barrierParties(n), generation: 0, queue: [] });
+        b.obj = obj;
+        b.parties = barrierParties(n);
+        if (!b.queue.includes(id)) b.queue.push(id);
+        if (b.queue.length >= b.parties) {
+          const released = b.queue.splice(0, b.queue.length);
+          b.generation += 1;
+          addLog(`${htmlEscape(id)} completes Barrier <strong>${htmlEscape(obj)}</strong>: ${released.length}/${b.parties} arrived, generation ${b.generation}. Releasing ${htmlEscape(childLabel(released))}.`, 'good');
+          for (const rid of released) {
+            const rt = tokenById(rid);
+            if (!rt) continue;
+            rt.status = 'ready';
+            rt.waiting = null;
+            rt.phase = null;
+            moveTokenToNext(rt, n.id);
+          }
+        } else {
+          blockToken(t, { kind: 'barrier', obj, key, nodeId: n.id, parties: b.parties });
+          addLog(`${htmlEscape(id)} arrives at Barrier <strong>${htmlEscape(obj)}</strong> (${b.queue.length}/${b.parties}) and blocks.`, 'warn');
+        }
+        break;
+      }
+      case 'end': {
+        t.status = 'done';
+        t.phase = null;
+        addLog(`${htmlEscape(id)} reaches End.`, 'good');
+        break;
+      }
+      default: {
+        addLog(`${htmlEscape(id)} hit unknown node type ${htmlEscape(n.type)}.`, 'bad');
+        t.status = 'error';
+      }
+    }
+
+    wakeJoiners();
+    if (options.render !== false) {
+      detectStall();
+      renderAll();
+    }
+    return true;
+  }
+
+  function describeWaiting(w) {
+    if (!w) return 'nothing';
+    if (w.kind === 'mutex') return `mutex ${w.obj}`;
+    if (w.kind === 'mutex-self') return `mutex ${w.obj} (self-deadlock)`;
+    if (w.kind === 'sem') return `semaphore ${w.obj}`;
+    if (w.kind === 'cond') return `cond ${w.obj} with mutex ${w.mutex}`;
+    if (w.kind === 'cond-relock') return `cond ${w.obj}, re-lock mutex ${w.mutex}`;
+    if (w.kind === 'join') return `join ${w.alias} (${childLabel(w.childIds || [])})`; 
+    if (w.kind === 'barrier') return `barrier ${w.obj} (${w.parties || '?'} parties)`;
+    if (w.kind === 'timer') return `park/timer until tick ${w.wakeTick}`;
+    return w.kind;
+  }
+
+  function wakeTimers() {
+    let woke = 0;
+    for (const t of sim.tokens) {
+      if (t.status !== 'blocked' || t.waiting?.kind !== 'timer') continue;
+      if (sim.tick < Number(t.waiting.wakeTick || 0)) continue;
+      const fromNodeId = t.waiting.nodeId;
+      t.status = 'ready';
+      t.waiting = null;
+      t.phase = null;
+      moveTokenToNext(t, fromNodeId);
+      addLog(`${htmlEscape(t.id)} wakes from Park at scheduler tick ${sim.tick}.`, 'good');
+      woke += 1;
+    }
+    return woke;
+  }
+
+  function hasFutureTimer() {
+    return sim.tokens.some(t => t.status === 'blocked' && t.waiting?.kind === 'timer');
+  }
+
+  function tokenFutureNodeId(t) {
+    if (t.status === 'blocked' && t.waiting?.kind === 'timer') return nextId(t.waiting.nodeId) || t.nodeId;
+    return t.nodeId;
+  }
+
+  function pickRoundRobinReady(limit) {
+    const tokens = sim.tokens;
+    if (!tokens.length) return [];
+    const count = Math.max(1, Math.min(limit, tokens.length));
+    const picks = [];
+    let idx = rr % tokens.length;
+    let visited = 0;
+    while (visited < tokens.length && picks.length < count) {
+      const t = tokens[idx];
+      if (t && t.status === 'ready') picks.push({ id: t.id, index: idx });
+      idx = (idx + 1) % tokens.length;
+      visited += 1;
+    }
+    if (picks.length) rr = (picks[picks.length - 1].index + 1) % tokens.length;
+    return picks.map(p => p.id);
+  }
+
+  function stepNext() {
+    ensureObjects();
+    const apLimit = clamp(Math.floor(Number(graph.apCount || 1)), 1, 8);
+    sim.tick += 1;
+    wakeTimers();
+
+    const selected = pickRoundRobinReady(apLimit);
+    if (!selected.length) {
+      sim.lastTickRan = [];
+      sim.lastDispatch = [];
+      if (hasFutureTimer()) {
+        addLog('SMP tick: no ready tokens; waiting for a parked token to wake.', 'warn');
+        detectStall(false);
+        renderAll();
+        return true;
+      }
+      detectStall(true);
+      renderAll();
+      return false;
+    }
+
+    const roster = getRoster();
+    const dispatch = selected.map((tokenId, i) => ({ ap: roster[i] || `AP${i}`, token: tokenId }));
+    sim.lastTickRan = selected.slice();
+    sim.lastDispatch = dispatch;
+    addLog(`SMP tick: round-robin dispatch ${dispatch.map(d => `<strong>${htmlEscape(d.ap)}</strong>→${htmlEscape(d.token)}`).join(', ')}.`);
+
+    let progressed = false;
+    for (const tokenId of selected) {
+      const t = tokenById(tokenId);
+      // Start-of-tick snapshot: tokens woken during this tick do not also run until a later tick.
+      if (!t || t.status !== 'ready') continue;
+      selectedTokenId = t.id;
+      progressed = stepToken(t.id, { countTick: false, render: false }) || progressed;
+    }
+
+    detectStall();
+    renderAll();
+    return progressed;
+  }
+
+  function stepSelected() {
+    const val = els.selectedTokenSelect.value || selectedTokenId;
+    if (!val) { addLog('No selected thread to step.', 'warn'); return false; }
+    selectedTokenId = val;
+    addLog(`Debug step: only thread <strong>${htmlEscape(val)}</strong> executes. Use SMP tick for round-robin AP dispatch.`);
+    return stepToken(val);
+  }
+
+  function canReachNode(startNodeId, predicate) {
+    const seen = new Set();
+    const q = [startNodeId].filter(Boolean);
+    while (q.length) {
+      const id = q.shift();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const n = byId(id);
+      if (!n) continue;
+      if (predicate(n)) return true;
+      for (const to of outgoingIds(id)) if (!seen.has(to)) q.push(to);
+    }
+    return false;
+  }
+
+  function analyzeDeadlock() {
+    ensureObjects();
+    const active = sim.tokens.filter(t => t.status !== 'done' && t.status !== 'error');
+    const ready = active.filter(t => t.status === 'ready');
+    const blocked = active.filter(t => t.status === 'blocked');
+    const futureRunnable = active.filter(t => t.status === 'ready' || (t.status === 'blocked' && t.waiting?.kind === 'timer'));
+    const self = blocked.find(t => t.waiting?.kind === 'mutex-self');
+    if (self) return `${self.id} is waiting for a non-recursive mutex it already owns (${self.waiting.obj}).`;
+
+    for (const [obj, s] of Object.entries(sim.semaphores)) {
+      if (!s.queue.length || s.count > 0) continue;
+      const potentialPoster = futureRunnable.some(t => canReachNode(tokenFutureNodeId(t), n => n.type === 'sem_post' && (n.obj || 'S') === obj));
+      if (!potentialPoster) {
+        return `semaphore ${obj} has waiter(s), count is 0, and no runnable thread can still reach Post ${obj}.`;
+      }
+    }
+
+    for (const [obj, cv] of Object.entries(sim.condvars)) {
+      if (!cv.waiters.length) continue;
+      const potentialSignaler = futureRunnable.some(t => canReachNode(tokenFutureNodeId(t), n => ['cond_signal','cond_broadcast'].includes(n.type) && (n.obj || 'C') === obj));
+      if (!potentialSignaler) {
+        return `cond ${obj} has waiter(s), and no runnable thread can still reach Signal/Broadcast ${obj}.`;
+      }
+    }
+
+    for (const [key, b] of Object.entries(sim.barriers)) {
+      if (!b.queue.length || b.queue.length >= b.parties) continue;
+      const potentialArrival = futureRunnable.some(t => canReachNode(tokenFutureNodeId(t), n => n.id === b.nodeId));
+      if (!potentialArrival) {
+        return `barrier ${b.obj} has ${b.queue.length}/${b.parties} arrivals, and no runnable thread can still reach that barrier.`;
+      }
+    }
+
+    for (const [obj, m] of Object.entries(sim.mutexes)) {
+      if (!m.queue.length) continue;
+      const owner = m.owner ? tokenById(m.owner) : null;
+      if (!owner || owner.status === 'done' || owner.status === 'error') {
+        return `mutex ${obj} has waiter(s), but its owner is ${m.owner || 'nobody'} and cannot unlock it.`;
+      }
+    }
+
+    if (blocked.length && !ready.length) {
+      if (blocked.some(t => t.waiting?.kind === 'timer')) return '';
+      return `all remaining tokens are blocked; no token can run a future unlock/post/barrier arrival/join completion.`;
+    }
+    return '';
+  }
+
+  function renderDeadlockBadge() {
+    const badge = $('#deadlockBadge');
+    if (!badge) return;
+    badge.hidden = !sim.deadlock;
+    badge.textContent = sim.deadlock ? `Deadlock: ${sim.deadlockReason}` : 'Deadlock';
+    badge.title = sim.deadlockReason || '';
+  }
+
+  function detectStall(force = false, opts = {}) {
+    const reason = analyzeDeadlock();
+    const active = sim.tokens.some(t => t.status !== 'done' && t.status !== 'error');
+    sim.deadlock = Boolean(reason);
+    sim.deadlockReason = reason;
+    if (reason) {
+      if (!opts.silent && (force || !sim._stallLogged)) {
+        addLog(`<strong>Deadlock</strong>: ${htmlEscape(reason)}`, 'bad');
+        sim._stallLogged = true;
+      }
+      stopRun();
+      return true;
+    }
+    if (!active && force && !opts.silent) {
+      addLog(`All threads are done or stopped.`, 'good');
+      stopRun();
+    }
+    sim._stallLogged = false;
+    return false;
+  }
+
+  function stopRun() {
+    if (runTimer) clearInterval(runTimer);
+    runTimer = null;
+    $('#runBtn').textContent = 'Run SMP';
+  }
+
+  function toggleRun() {
+    if (runTimer) { stopRun(); return; }
+    $('#runBtn').textContent = 'Pause';
+    runTimer = setInterval(() => {
+      const progressed = stepNext();
+      if (!progressed) stopRun();
+    }, Math.max(120, Number(els.runSpeed.value || 650)));
+  }
+
+  function setWireMode(on) {
+    wireMode = on;
+    wireSourceId = null;
+    els.wireBtn.textContent = `Wire mode: ${on ? 'on' : 'off'}`;
+    els.wireBtn.classList.toggle('active', on);
+    els.wireTool.classList.toggle('active', on);
+    els.moveTool.classList.toggle('active', !on);
+    els.wireHint.style.opacity = on ? '1' : '.45';
+    renderNodes();
+  }
+
+  function updatePanelToggles() {
+    const app = $('#app');
+    const leftHidden = app.classList.contains('hide-left');
+    const rightHidden = app.classList.contains('hide-right');
+    $('#toggleLeftPanel').textContent = leftHidden ? 'Show left' : 'Hide left';
+    $('#toggleRightPanel').textContent = rightHidden ? 'Show right' : 'Hide right';
+  }
+
+  function togglePanel(side) {
+    const app = $('#app');
+    app.classList.toggle(side === 'left' ? 'hide-left' : 'hide-right');
+    updatePanelToggles();
+    setTimeout(renderEdges, 190);
+  }
+
+  function addNode(type) {
+    const defaults = TYPE[type] || TYPE.work;
+    const starts = graph.nodes.filter(n => n.type === 'start');
+    const nextThread = `T${starts.length}`;
+    const n = {
+      id: uid('n'),
+      type,
+      x: 80 + ((graph.nodes.length * 32) % 420),
+      y: 88 + ((graph.nodes.length * 42) % 320),
+      label: defaults.title,
+      obj: type.includes('sem') ? 'S' : type.includes('lock') ? 'M' : type.startsWith('cond_') ? 'C' : type === 'barrier' ? 'B' : undefined,
+      mutex: type === 'cond_wait' ? 'M' : undefined,
+      ap: type === 'start' ? nextThread : undefined,
+      workKind: type === 'work' ? 'plain' : undefined,
+      steps: type === 'work' ? 1 : undefined,
+      value: type === 'work' ? 1 : undefined,
+      note: type === 'work' ? '' : undefined,
+      spawnName: type === 'spawn' ? 'T' : undefined,
+      joinName: type === 'join' ? 'T' : undefined,
+      parties: type === 'barrier' ? Math.max(2, graph.apCount || 2) : undefined,
+      ticks: type === 'park' ? 2 : undefined
+    };
+    graph.nodes.push(n);
+    selectedNodeId = n.id;
+    renderAll();
+  }
+
+  function deleteSelected() {
+    if (!selectedNodeId) return;
+    graph.nodes = graph.nodes.filter(n => n.id !== selectedNodeId);
+    graph.edges = graph.edges.filter(e => e.from !== selectedNodeId && e.to !== selectedNodeId);
+    selectedNodeId = null;
+    resetSim(true);
+    addLog('Deleted selected node and reset simulation.', 'warn');
+    renderAll();
+  }
+
+  function replaceEdge(from, to, kind = 'normal') {
+    graph.edges = graph.edges.filter(e => !(e.from === from && edgeKind(e) === kind));
+    if (to) graph.edges.push({ from, to, kind });
+  }
+
+  function connect(from, to, opts = {}) {
+    if (from === to) { addLog('Self-edge ignored.', 'warn'); return; }
+    const source = byId(from), target = byId(to);
+    const kind = source?.type === 'spawn' && opts.child ? 'spawn' : 'normal';
+    if (source?.type === 'spawn') {
+      replaceEdge(from, to, kind);
+      addLog(`Connected ${htmlEscape(nodeLabel(source))} ${kind === 'spawn' ? 'dashed child edge' : 'parent edge'} → ${htmlEscape(nodeLabel(target))}${target?.type === 'end' ? ' (End accepts many incoming arrows).' : ''}`, 'good');
+    } else {
+      graph.edges = graph.edges.filter(e => e.from !== from);
+      graph.edges.push({ from, to, kind: 'normal' });
+      addLog(`Connected ${htmlEscape(nodeLabel(source))} → ${htmlEscape(nodeLabel(target))}${target?.type === 'end' ? ' (End accepts many incoming arrows).' : ''}`, 'good');
+    }
+    renderAll();
+  }
+
+  function renderAll() {
+    renderEdges();
+    renderNodes();
+    renderAPControls();
+    renderTokens();
+    renderState();
+    renderSelectedPanel();
+    renderLensHelp();
+    renderDeadlockBadge();
+  }
+
+  function renderEdges() {
+    const svg = els.edges;
+    svg.innerHTML = `
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path>
+        </marker>
+        <marker id="arrowSpawn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--thread)"></path>
+        </marker>
+      </defs>`;
+    const incomingIndex = new Map();
+    for (const e of graph.edges) {
+      const key = e.to;
+      const idx = incomingIndex.get(key) || 0;
+      incomingIndex.set(key, idx + 1);
+      const a = byId(e.from), b = byId(e.to);
+      if (!a || !b) continue;
+      const yOffset = Math.max(-22, Math.min(22, (idx - 1) * 10));
+      const isChild = edgeKind(e) === 'spawn';
+      const x1 = a.x + 144, y1 = a.y + (isChild ? 48 : 33);
+      const x2 = b.x, y2 = b.y + 33 + yOffset;
+      const dx = Math.max(42, Math.abs(x2 - x1) * .5);
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', isChild ? 'var(--thread)' : 'var(--accent)');
+      path.setAttribute('stroke-width', isChild ? '2.4' : '2');
+      if (isChild) path.setAttribute('stroke-dasharray', '7 5');
+      path.setAttribute('marker-end', isChild ? 'url(#arrowSpawn)' : 'url(#arrow)');
+      path.setAttribute('opacity', isChild ? '.95' : '.88');
+      svg.appendChild(path);
+    }
+  }
+
+  function workProgressChip(t, n) {
+    if (n.type !== 'work') return '';
+    const steps = workSteps(n);
+    let done = 0;
+    if (t.phase?.kind === 'work' && t.phase.nodeId === n.id) done = clamp(Number(t.phase.done || 0), 0, steps);
+    return `<span class="progress-chip">${htmlEscape(t.id)} ${done}/${steps}</span>`;
+  }
+
+  function renderNodes() {
+    els.nodesLayer.innerHTML = '';
+    for (const n of graph.nodes) {
+      const meta = TYPE[n.type] || TYPE.work;
+      const el = document.createElement('div');
+      el.className = `node ${meta.cls || ''} ${selectedNodeId === n.id ? 'selected' : ''} ${wireSourceId === n.id ? 'wire-source' : ''}`;
+      el.style.left = `${n.x}px`;
+      el.style.top = `${n.y}px`;
+      el.dataset.id = n.id;
+      const tokensHere = sim.tokens.filter(t => t.nodeId === n.id);
+      const progress = tokensHere.map(t => workProgressChip(t, n)).filter(Boolean).join('');
+      el.innerHTML = `
+        <div class="top"><span class="pill"></span><div class="title">${htmlEscape(n.label || meta.title)}</div></div>
+        <div class="sub">${htmlEscape(meta.sub(n))}</div>
+        <div class="tokens">${tokensHere.map(t => `<span class="token ${t.status}">${htmlEscape(t.id)}${t.phase ? '*' : ''}</span>`).join('')}</div>
+        ${progress ? `<div class="node-progress">${progress}</div>` : ''}
+      `;
+      el.addEventListener('pointerdown', ev => onNodePointerDown(ev, n.id));
+      els.nodesLayer.appendChild(el);
+    }
+  }
+
+  function phaseText(t) {
+    if (!t.phase) return '';
+    if (t.phase.kind === 'work') return ` · work ${t.phase.done}/${t.phase.steps}`;
+    return ` · ${t.phase.kind}`;
+  }
+
+  function renderTokens() {
+    if (!sim.tokens.length) {
+      els.tokens.innerHTML = '<small>No thread tokens spawned. Add a Start node, or set one Start to “*”, then Reset.</small>';
+      els.selectedTokenSelect.innerHTML = '<option value="">No thread tokens</option>';
+      els.selectedTokenSelect.disabled = true;
+      return;
+    }
+    els.selectedTokenSelect.disabled = false;
+    if (!sim.tokens.some(t => t.id === selectedTokenId)) selectedTokenId = sim.tokens[0].id;
+    els.selectedTokenSelect.innerHTML = sim.tokens.map(t => `<option value="${htmlEscape(t.id)}">${htmlEscape(t.id)} — ${htmlEscape(t.status)}</option>`).join('');
+    els.selectedTokenSelect.value = selectedTokenId;
+
+    els.tokens.innerHTML = sim.tokens.map(t => {
+      const n = byId(t.nodeId);
+      const detail = t.status === 'blocked' ? describeWaiting(t.waiting) : nodeLabel(n);
+      const local = typeof t.local === 'number' ? ` · local=${t.local}` : '';
+      return `<div class="token-row ${selectedTokenId === t.id ? 'selected' : ''}" data-token="${htmlEscape(t.id)}">
+        <div class="token-name">${htmlEscape(t.id)}</div>
+        <div class="token-place">${htmlEscape(detail)}${htmlEscape(phaseText(t))}${htmlEscape(local)}</div>
+        <div class="status ${t.status}">${htmlEscape(t.status)}</div>
+      </div>`;
+    }).join('');
+    $$('.token-row', els.tokens).forEach(row => row.addEventListener('click', () => {
+      selectedTokenId = row.dataset.token;
+      renderTokens();
+    }));
+  }
+
+  function renderAPControls() {
+    const roster = getRoster();
+    els.apCount.value = graph.apCount;
+    if (els.lensSelect) els.lensSelect.value = ['threads','tokio','rayon'].includes(graph.lens) ? graph.lens : 'threads';
+    els.apList.innerHTML = roster.map((name, i) => `
+      <div class="ap-row">
+        <div class="muted">#${i}</div>
+        <input class="apNameInput" data-index="${i}" data-old="${htmlEscape(name)}" value="${htmlEscape(name)}" />
+      </div>
+    `).join('');
+  }
+
+  function renderState() {
+    ensureObjects();
+    const rows = [];
+    const lens = lensInfo();
+    rows.push(`<div class="state-row"><div>${htmlEscape(lens.name)}</div><div class="state-detail">slots = ${htmlEscape(lens.slots)} · tokens = ${htmlEscape(lens.tokens)}</div><div class="status">lens</div></div>`);
+    rows.push(`<div class="state-row"><div>Counter</div><div class="state-detail">shared value used by work scenarios</div><div class="status ready">${sim.counter}</div></div>`);
+    for (const [name, m] of Object.entries(sim.mutexes).sort(([a],[b]) => a.localeCompare(b))) {
+      rows.push(`<div class="state-row"><div>Mutex ${htmlEscape(name)}</div><div class="state-detail">owner: ${htmlEscape(m.owner || 'free')} · queue: ${htmlEscape(queueText(m.queue))}</div><div class="status ${m.owner ? 'blocked' : 'ready'}">${m.owner ? 'locked' : 'free'}</div></div>`);
+    }
+    for (const [name, s] of Object.entries(sim.semaphores).sort(([a],[b]) => a.localeCompare(b))) {
+      rows.push(`<div class="state-row"><div>Sem ${htmlEscape(name)}</div><div class="state-detail">permits: ${s.count} · queue: ${htmlEscape(queueText(s.queue))}</div><div class="status ${s.queue.length ? 'blocked' : 'ready'}">${s.count}</div></div>`);
+    }
+    for (const [name, cv] of Object.entries(sim.condvars).sort(([a],[b]) => a.localeCompare(b))) {
+      rows.push(`<div class="state-row"><div>Cond ${htmlEscape(name)}</div><div class="state-detail">waiters: ${htmlEscape(queueText(cv.waiters))}</div><div class="status ${cv.waiters.length ? 'blocked' : 'ready'}">${cv.waiters.length}</div></div>`);
+    }
+    for (const [, b] of Object.entries(sim.barriers).sort(([,a],[,b]) => String(a.obj).localeCompare(String(b.obj)))) {
+      rows.push(`<div class="state-row"><div>Barrier ${htmlEscape(b.obj)}</div><div class="state-detail">arrived: ${b.queue.length}/${b.parties} · generation: ${b.generation} · queue: ${htmlEscape(queueText(b.queue))}</div><div class="status ${b.queue.length ? 'blocked' : 'ready'}">${b.queue.length}/${b.parties}</div></div>`);
+    }
+    const timerRows = sim.tokens.filter(t => t.status === 'blocked' && t.waiting?.kind === 'timer').map(t => `${t.id}→tick ${t.waiting.wakeTick}`);
+    if (timerRows.length) rows.push(`<div class="state-row"><div>Parked</div><div class="state-detail">${htmlEscape(timerRows.join(' · '))}</div><div class="status blocked">${timerRows.length}</div></div>`);
+    const childRows = Object.entries(sim.children).flatMap(([parent, byAlias]) => Object.entries(byAlias).map(([alias, ids]) => `${parent}:${alias}→${ids.join(',')}`));
+    if (childRows.length) rows.push(`<div class="state-row"><div>Children</div><div class="state-detail">${htmlEscape(childRows.join(' · '))}</div><div class="status">${childRows.length}</div></div>`);
+    rows.push(`<div class="state-row"><div>AP slots</div><div class="state-detail">${htmlEscape(getRoster().join(', '))}</div><div class="status">${graph.apCount}</div></div>`);
+    rows.push(`<div class="state-row"><div>SMP tick</div><div class="state-detail">global scheduler ticks</div><div class="status">${sim.tick}</div></div>`);
+    rows.push(`<div class="state-row"><div>Last dispatch</div><div class="state-detail">${htmlEscape((sim.lastDispatch || []).map(d => `${d.ap}→${d.token}`).join(', ') || 'none')}</div><div class="status">${sim.lastDispatch?.length || 0}</div></div>`);
+    rows.push(`<div class="state-row"><div>Micro-steps</div><div class="state-detail">total individual thread micro-steps executed</div><div class="status">${sim.micro || 0}</div></div>`);
+    if (sim.deadlock) rows.push(`<div class="state-row"><div>Deadlock</div><div class="state-detail">${htmlEscape(sim.deadlockReason)}</div><div class="status error">yes</div></div>`);
+    els.state.innerHTML = rows.join('');
+  }
+
+  function renderLensHelp() {
+    if (!els.lensHelp) return;
+    const lens = lensInfo();
+    els.lensHelp.innerHTML = `<small><b>${htmlEscape(lens.name)}</b>: read AP slots as ${htmlEscape(lens.slots)} and tokens as ${htmlEscape(lens.tokens)}. Spawn ≈ ${htmlEscape(lens.spawn)}, Join ≈ ${htmlEscape(lens.join)}, Yield ≈ ${htmlEscape(lens.yield)}. The graph semantics stay intentionally small and deterministic.</small>`;
+  }
+
+  function option(value, label, selectedValue) {
+    return `<option value="${htmlEscape(value)}" ${value === selectedValue ? 'selected' : ''}>${htmlEscape(label)}</option>`;
+  }
+
+  function renderSelectedPanel() {
+    const n = byId(selectedNodeId);
+    if (!n) {
+      els.selectedPanel.innerHTML = '<small>Click a node to edit it. Use wire mode to connect nodes.</small>';
+      return;
+    }
+    const isStart = n.type === 'start';
+    const isWork = n.type === 'work';
+    const isSpawn = n.type === 'spawn';
+    const isJoin = n.type === 'join';
+    const isBarrier = n.type === 'barrier';
+    const isPark = n.type === 'park';
+    const isCond = ['cond_wait','cond_signal','cond_broadcast'].includes(n.type);
+    const isCondWait = n.type === 'cond_wait';
+    const hasObj = ['lock','unlock','sem_wait','sem_post','barrier','cond_wait','cond_signal','cond_broadcast'].includes(n.type);
+    const isSem = ['sem_wait','sem_post'].includes(n.type);
+    const startValue = n.ap || n.threadName || n.thread || 'T0';
+    const workOptions = Object.entries(WORK_SCENARIOS).map(([key, val]) => option(key, val.label, n.workKind || 'plain')).join('');
+    const semName = n.obj || 'S';
+    const semInitValue = semDefault(semName);
+    const childTarget = childNextId(n.id) || '';
+    const childOptions = graph.nodes
+      .filter(x => x.id !== n.id)
+      .map(x => option(x.id, `${nodeLabel(x)} (${x.id})`, childTarget))
+      .join('');
+    const parentTarget = nextId(n.id);
+    const edgeNote = isSpawn ? ` · parent edge: ${parentTarget ? nodeLabel(byId(parentTarget)) : 'none'} · child edge: ${childTarget ? nodeLabel(byId(childTarget)) : 'none'}` : '';
+    els.selectedPanel.innerHTML = `
+      <div><label>Label</label><input id="selLabel" value="${htmlEscape(n.label || '')}" /></div>
+      ${isStart ? `<div><label>Spawn thread name</label><input id="selAP" value="${htmlEscape(startValue)}" /><small>Use <code>*</code> to spawn one thread per AP slot. Otherwise each Start spawns one thread with this name.</small></div>` : ''}
+      ${hasObj ? `<div><label>${isBarrier ? 'Barrier name' : isCond ? 'Condvar name' : 'Object name'}</label><input id="selObj" value="${htmlEscape(n.obj || (n.type.includes('sem') ? 'S' : isCond ? 'C' : isBarrier ? 'B' : 'M'))}" /></div>` : ''}
+      ${isCondWait ? `<div><label>Associated mutex</label><input id="selMutex" value="${htmlEscape(n.mutex || 'M')}" /><small>Wait C/M requires the thread to already own this mutex. Waiting atomically releases it, then re-locks it before continuing.</small></div>` : ''}
+      ${isSem ? `<div><label>Initial permits for this semaphore</label><input id="selSemInit" type="number" min="0" max="99" step="1" value="${htmlEscape(semInitValue)}" /></div>` : ''}
+      ${isBarrier ? `<div><label>Parties required</label><input id="selParties" type="number" min="1" max="64" step="1" value="${htmlEscape(barrierParties(n))}" /><small>When this many tokens arrive at the same Barrier generation, all waiters release together.</small></div>` : ''}
+      ${isPark ? `<div><label>Park ticks</label><input id="selParkTicks" type="number" min="1" max="99" step="1" value="${htmlEscape(parkTicks(n))}" /><small>Parked tokens are not ready and do not consume an AP slot. On wake they continue after this node.</small></div>` : ''}
+      ${isSpawn ? `<div><label>Spawned thread name</label><input id="selSpawnName" value="${htmlEscape(n.spawnName || 'T')}" /></div>
+        <div><label>Child edge target</label><select id="selChildTarget"><option value="">No child edge</option>${childOptions}</select></div>
+        <small>Normal wire from Spawn sets the parent continuation. Hold <span class="kbd">Shift</span> while clicking the target in wire mode to set the dashed child path.</small>` : ''}
+      ${isJoin ? `<div><label>Join child name</label><input id="selJoinName" value="${htmlEscape(n.joinName || 'T')}" /><small>Use <code>*</code> to join all children spawned by this parent thread.</small></div>` : ''}
+      ${isWork ? `<div><label>Work scenario</label><select id="selWorkKind">${workOptions}</select></div>
+        <div class="split"><div><label>Steps</label><input id="selSteps" type="number" min="1" max="30" step="1" value="${htmlEscape(workSteps(n))}" /></div>
+        <div><label>Value</label><input id="selValue" type="number" step="1" value="${htmlEscape(Number(n.value || 0))}" /></div></div>
+        <div><label>Note</label><input id="selNote" value="${htmlEscape(n.note || '')}" /></div>
+        <small>For non-atomic increment, step 1 reads and the final step writes. Atomic increment changes the counter in one indivisible final action. Extra steps are compute/delay.</small>` : ''}
+      <button id="applyNodeBtn" class="primary">Apply changes</button>
+      <small>Node id: ${htmlEscape(n.id)} · type: ${htmlEscape(n.type)}${n.type === 'end' ? ' · multiple incoming arrows allowed' : ''}${htmlEscape(edgeNote)}</small>
+    `;
+    $('#applyNodeBtn').addEventListener('click', () => {
+      n.label = $('#selLabel')?.value || n.label;
+      if (isStart) n.ap = sanitizeName($('#selAP')?.value, 'T0');
+      if (hasObj) {
+        const oldObj = n.obj || (n.type.includes('sem') ? 'S' : isCond ? 'C' : isBarrier ? 'B' : 'M');
+        n.obj = sanitizeName($('#selObj')?.value, oldObj);
+        if (isSem) {
+          graph.semDefaults = graph.semDefaults || {};
+          graph.semDefaults[n.obj] = Math.max(0, Number($('#selSemInit')?.value || 0));
+        }
+      }
+      if (isCondWait) n.mutex = sanitizeName($('#selMutex')?.value, 'M');
+      if (isBarrier) n.parties = clamp(Math.floor(Number($('#selParties')?.value || graph.apCount || 2)), 1, 64);
+      if (isPark) n.ticks = clamp(Math.floor(Number($('#selParkTicks')?.value || 2)), 1, 99);
+      if (isSpawn) {
+        n.spawnName = sanitizeName($('#selSpawnName')?.value, 'T');
+        replaceEdge(n.id, $('#selChildTarget')?.value || null, 'spawn');
+      }
+      if (isJoin) n.joinName = sanitizeName($('#selJoinName')?.value, 'T');
+      if (isWork) {
+        n.workKind = $('#selWorkKind')?.value || 'plain';
+        n.steps = clamp(Math.floor(Number($('#selSteps')?.value || 1)), 1, 30);
+        if (n.workKind === 'inc') n.steps = Math.max(2, n.steps);
+        n.value = Number($('#selValue')?.value || 0);
+        n.note = $('#selNote')?.value || '';
+        if (!$('#selLabel')?.value) n.label = WORK_SCENARIOS[n.workKind]?.label || 'Work';
+      }
+      resetSim(true);
+      addLog('Applied node edits and reset simulation.', 'good');
+      renderAll();
+    });
+  }
+
+  function onNodePointerDown(ev, id) {
+    ev.preventDefault();
+    selectedNodeId = id;
+    selectedTokenId = selectedTokenId || sim.tokens[0]?.id || null;
+
+    if (wireMode) {
+      if (!wireSourceId) {
+        wireSourceId = id;
+        renderNodes();
+      } else {
+        connect(wireSourceId, id, { child: ev.shiftKey });
+        wireSourceId = null;
+        renderNodes();
+      }
+      return;
+    }
+
+    const n = byId(id);
+    const rect = els.canvasWrap.getBoundingClientRect();
+    drag = { id, dx: ev.clientX - rect.left - n.x, dy: ev.clientY - rect.top - n.y };
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    renderAll();
+  }
+
+  window.addEventListener('pointermove', ev => {
+    if (!drag) return;
+    const n = byId(drag.id);
+    if (!n) return;
+    const rect = els.canvasWrap.getBoundingClientRect();
+    n.x = Math.max(6, Math.min(rect.width - 160, ev.clientX - rect.left - drag.dx));
+    n.y = Math.max(58, Math.min(rect.height - 80, ev.clientY - rect.top - drag.dy));
+    renderEdges();
+    const el = $(`.node[data-id="${CSS.escape(n.id)}"]`);
+    if (el) { el.style.left = `${n.x}px`; el.style.top = `${n.y}px`; }
+  });
+  window.addEventListener('pointerup', () => { drag = null; });
+
+  function applyAPRosterFromInputs() {
+    const oldRoster = getRoster();
+    const count = clamp(Math.floor(Number(els.apCount.value || graph.apCount || 1)), 1, 8);
+    const raw = [];
+    for (let i = 0; i < count; i++) {
+      raw.push($(`.apNameInput[data-index="${i}"]`)?.value || oldRoster[i] || `AP${i}`);
+    }
+    const names = makeUnique(raw);
+    graph.apCount = count;
+    graph.apNames = names;
+    resetSim(true);
+    addLog(`Applied AP slots: ${htmlEscape(names.join(', '))}.`, 'good');
+    renderAll();
+  }
+
+  function makeStartsForAPs() {
+    const roster = getRoster();
+    const starts = graph.nodes.filter(n => n.type === 'start');
+    if (starts.some(n => n.ap === '*')) {
+      addLog('A Start node already uses *, so it spawns one thread per AP slot.', 'good');
+      return;
+    }
+    const byAP = new Set(starts.map(n => n.ap).filter(ap => ap && ap !== '*'));
+    const template = starts[0] || null;
+    const templateNext = template ? nextId(template.id) : null;
+    let added = 0;
+    roster.forEach((ap, i) => {
+      if (byAP.has(ap)) return;
+      const n = {
+        id: uid('n'),
+        type: 'start',
+        x: template ? template.x : 60,
+        y: template ? template.y + (i + 1) * 105 : 80 + i * 105,
+        label: 'Start',
+        ap
+      };
+      graph.nodes.push(n);
+      if (templateNext) graph.edges.push({ from: n.id, to: templateNext });
+      added += 1;
+    });
+    if (added) {
+      addLog(`Added ${added} Start node${added === 1 ? '' : 's'} for AP slots${templateNext ? ' and copied the first Start edge' : ''}.`, 'good');
+    } else {
+      addLog('Start nodes already cover the AP slots.', 'good');
+    }
+    resetSim(true);
+    renderAll();
+  }
+
+  function setGraph(next, exampleName = '') {
+    stopRun();
+    graph = migrateGraph(next);
+    idSeq = 1 + Math.max(0, ...graph.nodes.map(n => Number(String(n.id).replace(/^\D+/, '')) || 0));
+    selectedNodeId = graph.nodes[0]?.id || null;
+    selectedTokenId = null;
+    els.semInit.value = graph.semInit ?? 1;
+    sim = emptySim();
+    resetSim(true);
+    sim.log = [];
+    addLog(exampleName ? `Loaded example: <strong>${htmlEscape(exampleName)}</strong>.` : 'Loaded graph.', 'good');
+    renderAll();
+  }
+
+  function node(id, type, x, y, extras = {}) {
+    const meta = TYPE[type] || TYPE.work;
+    return { id, type, x, y, label: meta.title, ...extras };
+  }
+  function edge(from, to, kind = 'normal') { return kind === 'normal' ? { from, to, kind: 'normal' } : { from, to, kind }; }
+
+  const examples = {
+    race() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',70,90,{ap:'T0'}), node('n2','work',260,90,{label:'counter++',workKind:'inc',steps:3,value:1}), node('n3','end',500,150),
+          node('n4','start',70,210,{ap:'T1'}), node('n5','work',260,210,{label:'counter++',workKind:'inc',steps:3,value:1})
+        ],
+        edges: [edge('n1','n2'), edge('n2','n3'), edge('n4','n5'), edge('n5','n3')]
+      };
+    },
+    rr() {
+      return {
+        apCount: 1,
+        apNames: ['AP0'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',55,70,{ap:'T0'}), node('n2','work',250,70,{label:'counter++',workKind:'inc',steps:3,value:1}), node('n3','end',510,190),
+          node('n4','start',55,190,{ap:'T1'}), node('n5','work',250,190,{label:'counter++',workKind:'inc',steps:3,value:1}),
+          node('n6','start',55,310,{ap:'T2'}), node('n7','work',250,310,{label:'counter++',workKind:'inc',steps:3,value:1})
+        ],
+        edges: [edge('n1','n2'), edge('n2','n3'), edge('n4','n5'), edge('n5','n3'), edge('n6','n7'), edge('n7','n3')]
+      };
+    },
+    mutex() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',44,85,{ap:'T0'}), node('n2','lock',190,85,{obj:'M'}), node('n3','work',340,85,{label:'counter++',workKind:'inc',steps:3}), node('n4','unlock',520,85,{obj:'M'}), node('n5','end',690,150),
+          node('n6','start',44,215,{ap:'T1'}), node('n7','lock',190,215,{obj:'M'}), node('n8','work',340,215,{label:'counter++',workKind:'inc',steps:3}), node('n9','unlock',520,215,{obj:'M'})
+        ],
+        edges: [edge('n1','n2'), edge('n2','n3'), edge('n3','n4'), edge('n4','n5'), edge('n6','n7'), edge('n7','n8'), edge('n8','n9'), edge('n9','n5')]
+      };
+    },
+    semSeats() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 2,
+        semDefaults: { S: 2 },
+        nodes: [
+          node('n1','start',42,70,{ap:'T0'}), node('n2','sem_wait',185,70,{obj:'S'}), node('n3','work',340,70,{label:'Use seat',workKind:'plain',steps:3,note:'inside limited room'}), node('n4','sem_post',520,70,{obj:'S'}), node('n5','end',690,190),
+          node('n6','start',42,190,{ap:'T1'}), node('n7','sem_wait',185,190,{obj:'S'}), node('n8','work',340,190,{label:'Use seat',workKind:'plain',steps:3,note:'inside limited room'}), node('n9','sem_post',520,190,{obj:'S'}),
+          node('n10','start',42,310,{ap:'T2'}), node('n11','sem_wait',185,310,{obj:'S'}), node('n12','work',340,310,{label:'Use seat',workKind:'plain',steps:3,note:'inside limited room'}), node('n13','sem_post',520,310,{obj:'S'})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5'),edge('n6','n7'),edge('n7','n8'),edge('n8','n9'),edge('n9','n5'),edge('n10','n11'),edge('n11','n12'),edge('n12','n13'),edge('n13','n5')]
+      };
+    },
+    semSignal() {
+      return {
+        apCount: 1,
+        apNames: ['AP0'],
+        semInit: 0,
+        semDefaults: { S: 0 },
+        nodes: [
+          node('n1','start',60,95,{ap:'waiter'}), node('n2','sem_wait',230,95,{obj:'S', label:'Wait for signal'}), node('n3','work',420,95,{label:'Continue',workKind:'plain',steps:1,note:'runs only after post'}), node('n4','end',620,165),
+          node('n5','start',60,235,{ap:'signaler'}), node('n6','work',230,235,{label:'Prepare',workKind:'plain',steps:2,note:'ordinary work'}), node('n7','sem_post',420,235,{obj:'S', label:'Post signal'})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n5','n6'),edge('n6','n7'),edge('n7','n4')]
+      };
+    },
+    barrier() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',55,70,{ap:'T0'}), node('n2','work',230,70,{label:'Phase A',workKind:'plain',steps:2}), node('n3','barrier',430,150,{obj:'B',parties:3,label:'Barrier B'}), node('n4','work',620,150,{label:'Phase B',workKind:'plain',steps:1}), node('n5','end',800,150),
+          node('n6','start',55,190,{ap:'T1'}), node('n7','work',230,190,{label:'Phase A',workKind:'plain',steps:4}),
+          node('n8','start',55,310,{ap:'T2'}), node('n9','work',230,310,{label:'Phase A',workKind:'plain',steps:1})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5'),edge('n6','n7'),edge('n7','n3'),edge('n8','n9'),edge('n9','n3')]
+      };
+    },
+    spawnJoin() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',60,160,{ap:'main'}), node('n2','spawn',230,160,{label:'Spawn worker',spawnName:'worker'}), node('n3','work',430,90,{label:'Parent work',workKind:'plain',steps:3}), node('n4','join',620,160,{label:'Join worker',joinName:'worker'}), node('n5','end',810,160),
+          node('n6','work',430,250,{label:'Worker work',workKind:'plain',steps:4}), node('n7','end',620,250,{label:'Worker done'})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n2','n6','spawn'),edge('n3','n4'),edge('n4','n5'),edge('n6','n7')]
+      };
+    },
+    yieldPark() {
+      return {
+        apCount: 1,
+        apNames: ['W0'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        lens: 'tokio',
+        nodes: [
+          node('n1','start',60,85,{ap:'taskA'}), node('n2','work',230,85,{label:'CPU slice',workKind:'plain',steps:1}), node('n3','yield',410,85,{label:'Yield'}), node('n4','work',590,85,{label:'After yield',workKind:'plain',steps:1}), node('n5','end',780,175),
+          node('n6','start',60,245,{ap:'taskB'}), node('n7','park',230,245,{label:'Park 3',ticks:3}), node('n8','work',410,245,{label:'After wake',workKind:'plain',steps:1})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5'),edge('n6','n7'),edge('n7','n8'),edge('n8','n5')]
+      };
+    },
+    atomicInc() {
+      return {
+        apCount: 2,
+        apNames: ['W0', 'W1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        lens: 'rayon',
+        nodes: [
+          node('n1','start',70,90,{ap:'jobA'}), node('n2','work',260,90,{label:'atomic counter++',workKind:'atomicInc',steps:1,value:1}), node('n3','end',520,150),
+          node('n4','start',70,210,{ap:'jobB'}), node('n5','work',260,210,{label:'atomic counter++',workKind:'atomicInc',steps:1,value:1})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n4','n5'),edge('n5','n3')]
+      };
+    },
+    condSignal() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',45,90,{ap:'waiter'}), node('n2','lock',205,90,{obj:'M'}), node('n3','work',365,90,{label:'Check predicate',workKind:'plain',steps:1,note:'predicate false'}), node('n4','cond_wait',555,90,{obj:'C',mutex:'M',label:'Wait C/M'}), node('n5','work',745,90,{label:'After signal',workKind:'plain',steps:1}), node('n6','unlock',925,90,{obj:'M'}), node('n7','end',1090,170),
+          node('n8','start',45,250,{ap:'signaler'}), node('n9','work',205,250,{label:'Prepare data',workKind:'plain',steps:2}), node('n10','lock',365,250,{obj:'M'}), node('n11','work',525,250,{label:'predicate=true',workKind:'setCounter',steps:1,value:1}), node('n12','cond_signal',715,250,{obj:'C',label:'Signal C'}), node('n13','unlock',890,250,{obj:'M'})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5'),edge('n5','n6'),edge('n6','n7'),edge('n8','n9'),edge('n9','n10'),edge('n10','n11'),edge('n11','n12'),edge('n12','n13'),edge('n13','n7')]
+      };
+    },
+    condBroadcast() {
+      return {
+        apCount: 2,
+        apNames: ['AP0', 'AP1'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',45,70,{ap:'W0'}), node('n2','lock',205,70,{obj:'M'}), node('n3','cond_wait',365,70,{obj:'C',mutex:'M',label:'Wait C/M'}), node('n4','work',555,70,{label:'Woken work',workKind:'plain',steps:1}), node('n5','unlock',735,70,{obj:'M'}), node('n6','end',940,210),
+          node('n7','start',45,190,{ap:'W1'}), node('n8','lock',205,190,{obj:'M'}), node('n9','cond_wait',365,190,{obj:'C',mutex:'M',label:'Wait C/M'}), node('n10','work',555,190,{label:'Woken work',workKind:'plain',steps:1}), node('n11','unlock',735,190,{obj:'M'}),
+          node('n12','start',45,310,{ap:'W2'}), node('n13','lock',205,310,{obj:'M'}), node('n14','cond_wait',365,310,{obj:'C',mutex:'M',label:'Wait C/M'}), node('n15','work',555,310,{label:'Woken work',workKind:'plain',steps:1}), node('n16','unlock',735,310,{obj:'M'}),
+          node('n17','start',45,455,{ap:'broadcaster'}), node('n18','work',205,455,{label:'Delay until waiters sleep',workKind:'plain',steps:8}), node('n19','lock',405,455,{obj:'M'}), node('n20','work',575,455,{label:'predicate=true',workKind:'setCounter',steps:1,value:1}), node('n21','cond_broadcast',775,455,{obj:'C',label:'Broadcast C'}), node('n22','unlock',965,455,{obj:'M'})
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5'),edge('n5','n6'),edge('n7','n8'),edge('n8','n9'),edge('n9','n10'),edge('n10','n11'),edge('n11','n6'),edge('n12','n13'),edge('n13','n14'),edge('n14','n15'),edge('n15','n16'),edge('n16','n6'),edge('n17','n18'),edge('n18','n19'),edge('n19','n20'),edge('n20','n21'),edge('n21','n22'),edge('n22','n6')]
+      };
+    },
+    condLost() {
+      return {
+        apCount: 1,
+        apNames: ['AP0'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',70,110,{ap:'signaler'}), node('n2','cond_signal',255,110,{obj:'C',label:'Signal C too early'}), node('n3','end',495,110),
+          node('n4','start',70,260,{ap:'waiter'}), node('n5','work',255,260,{label:'Arrive later',workKind:'plain',steps:2}), node('n6','lock',435,260,{obj:'M'}), node('n7','cond_wait',620,260,{obj:'C',mutex:'M',label:'Wait C/M'}), node('n8','end',820,260)
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n4','n5'),edge('n5','n6'),edge('n6','n7'),edge('n7','n8')]
+      };
+    },
+    selfDeadlock() {
+      return {
+        apCount: 1,
+        apNames: ['AP0'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',70,140,{ap:'T0'}), node('n2','lock',230,140,{obj:'M'}), node('n3','lock',400,140,{obj:'M', label:'Lock M again'}), node('n4','unlock',580,140,{obj:'M'}), node('n5','end',750,140)
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3'),edge('n3','n4'),edge('n4','n5')]
+      };
+    },
+    badUnlock() {
+      return {
+        apCount: 1,
+        apNames: ['AP0'],
+        semInit: 1,
+        semDefaults: { S: 1 },
+        nodes: [
+          node('n1','start',75,130,{ap:'T0'}), node('n2','unlock',250,130,{obj:'M', label:'Unlock M without owning'}), node('n3','end',485,130)
+        ],
+        edges: [edge('n1','n2'),edge('n2','n3')]
+      };
+    }
+  };
+
+  $$('[data-example]').forEach(btn => btn.addEventListener('click', () => setGraph(examples[btn.dataset.example](), btn.textContent.trim())));
+  $$('[data-add]').forEach(btn => btn.addEventListener('click', () => addNode(btn.dataset.add)));
+  $('#resetBtn').addEventListener('click', () => resetSim(false));
+  $('#stepNextBtn').addEventListener('click', () => stepNext());
+  $('#stepSelectedBtn').addEventListener('click', () => stepSelected());
+  $('#runBtn').addEventListener('click', toggleRun);
+  $('#deleteBtn').addEventListener('click', deleteSelected);
+  $('#wireBtn').addEventListener('click', () => setWireMode(!wireMode));
+  $('#wireTool').addEventListener('click', () => setWireMode(true));
+  $('#moveTool').addEventListener('click', () => setWireMode(false));
+  $('#toggleLeftPanel').addEventListener('click', () => togglePanel('left'));
+  $('#toggleRightPanel').addEventListener('click', () => togglePanel('right'));
+  $('#clearLogBtn').addEventListener('click', () => { sim.log = []; renderLog(); });
+  $('#applyAPBtn').addEventListener('click', applyAPRosterFromInputs);
+  $('#makeStartsBtn').addEventListener('click', makeStartsForAPs);
+  els.selectedTokenSelect.addEventListener('change', () => { selectedTokenId = els.selectedTokenSelect.value; renderTokens(); });
+  els.lensSelect.addEventListener('change', () => { graph.lens = els.lensSelect.value; renderAll(); });
+  els.apCount.addEventListener('change', () => {
+    const count = clamp(Math.floor(Number(els.apCount.value || 1)), 1, 8);
+    els.apCount.value = count;
+    const old = getRoster();
+    graph.apCount = count;
+    while (graph.apNames.length < count) graph.apNames.push(`AP${graph.apNames.length}`);
+    graph.apNames = makeUnique(graph.apNames.slice(0, count));
+    renderAPControls();
+  });
+  els.semInit.addEventListener('change', () => {
+    graph.semInit = Math.max(0, Number(els.semInit.value || 0));
+    graph.semDefaults = graph.semDefaults || {};
+    graph.semDefaults.S = graph.semInit;
+    resetSim(false);
+  });
+  $('#exportBtn').addEventListener('click', () => {
+    els.jsonBox.value = JSON.stringify(graph, null, 2);
+  });
+  $('#importBtn').addEventListener('click', () => {
+    try {
+      const parsed = JSON.parse(els.jsonBox.value);
+      if (!parsed || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) throw new Error('Missing nodes/edges arrays');
+      setGraph(parsed, 'imported JSON');
+    } catch (err) {
+      addLog(`Import failed: ${htmlEscape(err.message)}`, 'bad');
+    }
+  });
+  window.addEventListener('keydown', ev => {
+    const editing = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName);
+    if (ev.key === 'Escape') setWireMode(false);
+    if (ev.key === 'Tab' && !editing) { ev.preventDefault(); setWireMode(!wireMode); }
+    if (ev.key === ' ' && !editing) { ev.preventDefault(); stepNext(); }
+    if (ev.key === 'Delete' || ev.key === 'Backspace') {
+      if (!editing) deleteSelected();
+    }
+  });
+  window.addEventListener('resize', renderEdges);
+  updatePanelToggles();
+
+  setGraph(examples.race(), 'Race: no mutex');
+})();
+</script>
+</body>
+</html>

@@ -901,7 +901,13 @@ pub unsafe extern "C" fn trueos_cabi_heap_stats(out: *mut TrueosCabiHeapStats) -
     if out.is_null() {
         return -1;
     }
-    let stats = crate::allocators::heap_stats();
+    // Portal calls execute in the host, but allocations made for a blueprint are
+    // charged to its VM-owned allocator. Report that same live domain here so a
+    // guest can make bounded allocation decisions without knowing a static VM
+    // RAM size. Non-VM callers continue to receive host allocator statistics.
+    let stats = active_abi_alloc_guest_vm_id()
+        .and_then(crate::allocators::hv_guest_heap_stats_if_configured)
+        .unwrap_or_else(crate::allocators::heap_stats);
     let source = match stats.source {
         crate::allocators::HeapSourceKind::Unconfigured => 0,
         crate::allocators::HeapSourceKind::Arena => 1,
