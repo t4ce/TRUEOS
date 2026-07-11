@@ -59,7 +59,7 @@ impl HttpPerf {
 }
 
 const MIB: usize = 1024 * 1024;
-const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 256;
+const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 1024;
 const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 500 * MIB;
 const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 1024 * 1024;
 const HTTP_TRUEOSFS_SEND_YIELD_COMMANDS: usize = 16;

@@ -2,17 +2,18 @@
 
 extern crate alloc;
 
+#[path = "copy/blt.rs"]
 mod blt;
 mod display;
 pub(crate) mod format;
+#[path = "gpgpu/gpgpu.rs"]
 pub(crate) mod gpgpu;
+#[path = "sound/hda.rs"]
 pub mod hda;
 mod hw_cursor;
 pub(crate) mod media;
 pub(crate) mod opencl;
 pub(crate) mod ppgtt;
-pub(crate) mod render;
-pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod types;
@@ -24,7 +25,6 @@ pub(crate) use self::media::xelp_media2_ngin;
 pub(crate) use self::media::xelp_media2_ngin_hw_pic;
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
@@ -54,7 +54,6 @@ const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
-const RENDER_BOOT_PROBE_DELAY_MS: u64 = 15_000;
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
@@ -191,19 +190,6 @@ pub fn init_once() {
     }
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
-        if RENDER_BOOT_PROBE_DELAY_MS == 0 {
-            self::render::submit_primary_triangle_once();
-        } else {
-            crate::log_info!(
-                target: "render";
-                "scheduled boot probe delay_ms={}\n",
-                RENDER_BOOT_PROBE_DELAY_MS
-            );
-            crate::wait::spawn_local_detached(async move {
-                Timer::after(EmbassyDuration::from_millis(RENDER_BOOT_PROBE_DELAY_MS)).await;
-                self::render::submit_primary_triangle_once();
-            });
-        }
     } else {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }

@@ -40,8 +40,11 @@ pub async fn html_tree_async(
         name: String,
     }
 
-    const CAP: usize = 1024;
-    let cap_limit = core::cmp::min(max_entries.saturating_add(1), CAP);
+    const CAP: usize = super::trueosfs::TRUEOSFS_LIST_SOFT_CAP + 2;
+    let effective_entries = core::cmp::min(max_entries, super::trueosfs::TRUEOSFS_LIST_SOFT_CAP);
+    let cap_limit = core::cmp::min(effective_entries.saturating_add(2), CAP);
+    let entry_limit = cap_limit.saturating_sub(1);
+    let mut truncated = paths.len() > effective_entries;
 
     let mut tree: Tree<FsEntry, CAP> = Tree::new();
     let Some(root) = tree.add_root(FsEntry {
@@ -70,7 +73,8 @@ pub async fn html_tree_async(
         if dir_nodes.contains_key(&first_path) {
             continue;
         }
-        if tree.len() >= cap_limit {
+        if tree.len() >= entry_limit {
+            truncated = true;
             break;
         }
         let Some(node) = tree.add_child(
@@ -80,13 +84,15 @@ pub async fn html_tree_async(
                 name: String::from(first),
             },
         ) else {
+            truncated = true;
             break;
         };
         dir_nodes.insert(first_path, node);
     }
 
     for file in root_files.iter() {
-        if tree.len() >= cap_limit {
+        if tree.len() >= entry_limit {
+            truncated = true;
             break;
         }
         if tree
@@ -99,70 +105,86 @@ pub async fn html_tree_async(
             )
             .is_none()
         {
+            truncated = true;
             break;
         }
     }
 
-    'files: for path in paths.iter() {
-        if path
-            .split('/')
-            .filter(|seg| !seg.is_empty())
-            .take(2)
-            .count()
-            <= 1
-        {
-            continue;
-        }
+    let max_depth = paths
+        .iter()
+        .map(|path| path.split('/').filter(|seg| !seg.is_empty()).count())
+        .max()
+        .unwrap_or(1);
 
-        let mut parent_node = root;
-        let mut dir_path: Vec<u8> = Vec::new();
-        let mut parts = path.split('/').filter(|seg| !seg.is_empty()).peekable();
-        while let Some(seg) = parts.next() {
-            let is_last = parts.peek().is_none();
-            if is_last {
-                if tree.len() >= cap_limit {
-                    break 'files;
-                }
-                if tree
-                    .add_child(
-                        parent_node,
-                        FsEntry {
-                            kind: FsKind::File,
-                            name: String::from(seg),
-                        },
-                    )
-                    .is_none()
+    // Populate one depth across the whole filesystem at a time. This prevents
+    // one large, alphabetically early subtree from consuming the complete cap
+    // before sibling directories receive their immediate children.
+    'levels: for depth in 2..=max_depth {
+        for path in paths.iter() {
+            let parts: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
+            if parts.len() < depth {
+                continue;
+            }
+
+            let parent_path = parts[..depth - 1].join("/").into_bytes();
+            let Some(parent_node) = dir_nodes.get(&parent_path).copied() else {
+                continue;
+            };
+            let entry_name = parts[depth - 1];
+
+            if parts.len() == depth {
+                if tree.len() >= entry_limit
+                    || tree
+                        .add_child(
+                            parent_node,
+                            FsEntry {
+                                kind: FsKind::File,
+                                name: String::from(entry_name),
+                            },
+                        )
+                        .is_none()
                 {
-                    break 'files;
+                    truncated = true;
+                    break 'levels;
                 }
                 continue;
             }
 
-            if !dir_path.is_empty() {
-                dir_path.push(b'/');
-            }
-            dir_path.extend_from_slice(seg.as_bytes());
-
-            if let Some(existing) = dir_nodes.get(&dir_path).copied() {
-                parent_node = existing;
+            let dir_path = parts[..depth].join("/").into_bytes();
+            if dir_nodes.contains_key(&dir_path) {
                 continue;
             }
-
-            if tree.len() >= cap_limit {
-                break 'files;
+            if tree.len() >= entry_limit {
+                truncated = true;
+                break 'levels;
             }
             let Some(node) = tree.add_child(
                 parent_node,
                 FsEntry {
                     kind: FsKind::Dir,
-                    name: String::from(seg),
+                    name: String::from(entry_name),
                 },
             ) else {
-                break 'files;
+                truncated = true;
+                break 'levels;
             };
-            dir_nodes.insert(dir_path.clone(), node);
-            parent_node = node;
+            dir_nodes.insert(dir_path, node);
         }
+    }
+
+    if truncated {
+        crate::log_warn!(target: "filesystem";
+            "trueosfs: file listing soft cap reached operation=http_tree cap={} requested={}\n",
+            super::trueosfs::TRUEOSFS_LIST_SOFT_CAP,
+            max_entries
+        );
+        let _ = tree.add_child(
+            root,
+            FsEntry {
+                kind: FsKind::File,
+                name: String::from("..."),
+            },
+        );
     }
 
     Ok(Some(tree.html_tree_string(root, |entry, out| match entry.kind {

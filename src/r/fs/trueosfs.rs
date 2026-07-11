@@ -22,6 +22,7 @@ type TrueosFsIndex = BTreeMap<Vec<u8>, IndexRef>;
 
 const FILE_RECORD_CACHE_CAP: usize = 64;
 const TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS: u64 = 4096;
+pub const TRUEOSFS_LIST_SOFT_CAP: usize = 1024;
 
 struct BuiltIndex {
     tree: Box<TrueosFsIndex>,
@@ -1739,14 +1740,41 @@ pub async fn list_dir_async(
     }
 
     const MAX_LISTING_BYTES: usize = 64 * 1024;
+    let mut selected = Vec::new();
+    let mut truncated = children.len() > TRUEOSFS_LIST_SOFT_CAP;
+    for entry in children {
+        if selected.len() >= TRUEOSFS_LIST_SOFT_CAP {
+            truncated = true;
+            break;
+        }
+        selected.push(entry);
+    }
+    if truncated && selected.last().is_none_or(|entry| entry != "...") {
+        selected.pop();
+        selected.push(String::from("..."));
+    }
+
     let mut out = String::new();
-    for entry in children.iter() {
+    for entry in selected.iter() {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(entry);
-        if out.len() > MAX_LISTING_BYTES {
+        if out.len().saturating_add(entry.len()) > MAX_LISTING_BYTES {
+            truncated = true;
             break;
+        }
+        out.push_str(entry.as_str());
+    }
+    if truncated {
+        crate::log_warn!(target: "filesystem";
+            "trueosfs: file listing soft cap reached operation=list_dir cap={}\n",
+            TRUEOSFS_LIST_SOFT_CAP
+        );
+        if !out.lines().any(|line| line == "...") {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("...");
         }
     }
 
@@ -2024,9 +2052,9 @@ pub async fn json_all_async(
     ensure_index_async(disk, &placement).await?;
     let disk_id = disk.id();
     let effective_limit = if max_entries == 0 {
-        4096usize
+        TRUEOSFS_LIST_SOFT_CAP
     } else {
-        max_entries
+        core::cmp::min(max_entries, TRUEOSFS_LIST_SOFT_CAP)
     };
 
     #[derive(Clone)]
@@ -2040,6 +2068,7 @@ pub async fn json_all_async(
 
     let mut by_depth: BTreeMap<usize, Vec<JsonEntry>> = BTreeMap::new();
     let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
+    let mut truncated = false;
 
     {
         let roots = ROOTS.lock();
@@ -2091,15 +2120,21 @@ pub async fn json_all_async(
                 });
 
                 let count = by_depth.values().map(|items| items.len()).sum::<usize>();
-                if count >= effective_limit {
+                if count > effective_limit {
+                    truncated = true;
                     break 'scan;
                 }
             }
         }
     }
 
-    let total = by_depth.values().map(|items| items.len()).sum::<usize>();
-    let truncated = total >= effective_limit;
+    if truncated {
+        crate::log_warn!(target: "filesystem";
+            "trueosfs: file listing soft cap reached operation=json_all cap={} requested={}\n",
+            TRUEOSFS_LIST_SOFT_CAP,
+            max_entries
+        );
+    }
     let mut written = 0usize;
     let mut out = String::new();
     out.push_str("{\"version\":1,\"root\":\"/\",\"max_entries\":");
@@ -2109,9 +2144,14 @@ pub async fn json_all_async(
     out.push_str(",\"entries\":[");
 
     let mut first = true;
+    let visible_limit = if truncated {
+        effective_limit.saturating_sub(1)
+    } else {
+        effective_limit
+    };
     'write: for entries in by_depth.values() {
         for entry in entries.iter() {
-            if written >= effective_limit {
+            if written >= visible_limit {
                 break 'write;
             }
             if !first {
@@ -2132,6 +2172,13 @@ pub async fn json_all_async(
             out.push('}');
             written += 1;
         }
+    }
+
+    if truncated {
+        if !first {
+            out.push(',');
+        }
+        out.push_str("{\"path\":\"...\",\"name\":\"...\",\"kind\":\"more\",\"depth\":0,\"id\":0}");
     }
 
     out.push_str("]}");

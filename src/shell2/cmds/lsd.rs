@@ -125,6 +125,9 @@ fn run_lsd_table(io: &'static dyn ShellBackend2, args: Vec<String>) -> trueos_io
         .with_max_col_widths(&[8, 10, 7, 7, 8, 10, 5, 0]);
 
     for (idx, listing) in listings.iter().enumerate() {
+        if listing.rows.is_empty() {
+            continue;
+        }
         if multiple {
             if idx > 0 {
                 print_shell_line(io, "");

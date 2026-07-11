@@ -42,7 +42,7 @@ mod hv;
 #[path = "hv_disabled.rs"]
 mod hv;
 mod intel;
-#[path = "intel/intel_hda_audio_demo.rs"]
+#[path = "intel/sound/intel_hda_audio_demo.rs"]
 mod intel_hda_audio_demo;
 mod iso9660;
 mod limine;

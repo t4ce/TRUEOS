@@ -6,7 +6,7 @@ repo_root="$(cd "${script_dir}/../.." && pwd)"
 
 device="${DEVICE:-0x4680}"
 target="${TARGET:-adls}"
-kernel_dir="${repo_root}/src/intel/kernels"
+kernel_dir="${repo_root}/src/intel/gpgpu/kernels"
 artifact_dir="${kernel_dir}/artifacts/${target}"
 build_root="${BUILD_ROOT:-${repo_root}/bld/intel-tools/bake/${target}}"
 local_tool_root="${IGC_ROOT:-${repo_root}/bld/intel-tools/root}"

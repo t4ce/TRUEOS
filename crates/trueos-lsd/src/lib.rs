@@ -12,7 +12,7 @@ use trueos_io::{self as io, ErrorKind};
 use v::vfs as api;
 use v::vio::kfs;
 
-const MAX_ENTRIES: usize = 4096;
+const MAX_ENTRIES: usize = 1024;
 const DEFAULT_GRID_WIDTH: usize = 96;
 const MIN_CELL_WIDTH: usize = 18;
 
@@ -181,9 +181,13 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
+    let truncated = snapshot.truncated;
     let mut children = BTreeMap::<String, Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
+        if raw.path == "..." {
+            continue;
+        }
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
             continue;
         }
@@ -229,22 +233,30 @@ fn immediate_entries(prefix: &str) -> io::Result<Vec<Entry>> {
             });
     }
 
-    Ok(children
+    let mut entries: Vec<Entry> = children
         .into_values()
         .map(|mut entry| {
             entry.len = entry_size(entry.path.as_str());
             entry
         })
-        .collect())
+        .collect();
+    if truncated {
+        entries.push(more_entry(prefix));
+    }
+    Ok(entries)
 }
 
 fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     let snapshot = kfs::tree(MAX_ENTRIES).map_err(|rc| {
         io::Error::new(trueos_io::status_kind(rc), "TRUEOSFS index unavailable for lsd")
     })?;
+    let truncated = snapshot.truncated;
     let mut entries = BTreeMap::<String, Entry>::new();
 
     for raw in snapshot.entries.into_iter() {
+        if raw.path == "..." {
+            continue;
+        }
         if !is_under_prefix(raw.path.as_str(), prefix) || raw.path == prefix {
             continue;
         }
@@ -285,13 +297,17 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
         }
     }
 
-    Ok(entries
+    let mut entries: Vec<Entry> = entries
         .into_values()
         .map(|mut entry| {
             entry.len = entry_size(entry.path.as_str());
             entry
         })
-        .collect())
+        .collect();
+    if truncated {
+        entries.push(more_entry(prefix));
+    }
+    Ok(entries)
 }
 
 fn colorize(text: &str, kind: kfs::FsEntryKind, options: Options) -> String {
@@ -625,6 +641,18 @@ fn self_entry(path: &str, kind: kfs::FsEntryKind, len: Option<u64>) -> Entry {
     }
 }
 
+fn more_entry(prefix: &str) -> Entry {
+    let path = join_path(prefix, "...");
+    Entry {
+        id: 0,
+        depth: path_depth(path.as_str()),
+        path,
+        name: String::from("..."),
+        kind: kfs::FsEntryKind::Other,
+        len: None,
+    }
+}
+
 fn list_one<W>(path: &str, options: Options, write_line: &mut W) -> io::Result<()>
 where
     W: FnMut(&str),
@@ -661,7 +689,6 @@ where
 
     if entries.is_empty() {
         if normalized.is_empty() {
-            write_line(".: empty");
             return Ok(());
         }
 

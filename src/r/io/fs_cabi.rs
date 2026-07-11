@@ -508,7 +508,17 @@ pub(crate) fn fs_write_begin_host(path: &str, total_len: u64) -> i64 {
         return FS_ERR_TOO_LARGE as i64;
     }
     match super::kfs::write_file_begin(path.as_str(), total_len) {
-        Ok(h) => h as i64,
+        Ok(h) => {
+            if path.starts_with("apps/") {
+                crate::log!(
+                    "fs-cabi: write_begin ok resolved={} len={} handle={}\n",
+                    path.as_str(),
+                    total_len,
+                    h
+                );
+            }
+            h as i64
+        }
         Err(e) => {
             let rc = fs_error_to_code(e);
             log_fs_cabi_path_fail(
@@ -594,7 +604,12 @@ pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
         return FS_ERR_TOO_LARGE;
     }
     match super::kfs::create_dir_all(path.as_str()) {
-        Ok(()) => 0,
+        Ok(()) => {
+            if path.starts_with("apps/") {
+                crate::log!("fs-cabi: create_dir_all ok resolved={}\n", path.as_str());
+            }
+            0
+        }
         Err(e) => {
             let rc = fs_error_to_code(e);
             log_fs_cabi_path_fail("create_dir_all", raw, Some(path.as_str()), "", rc);
@@ -962,6 +977,16 @@ unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize)
     offset as isize
 }
 
+fn guest_resolved_fs_path(path: &str, allow_empty: bool) -> Result<String, i32> {
+    let Some(path) = super::env::resolve_fs_path(path, allow_empty) else {
+        return Err(FS_ERR_BAD_PATH);
+    };
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    Ok(path)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_fs_read_file(
     path_ptr: *const u8,
@@ -980,7 +1005,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_read_file(
         return FS_ERR_BAD_UTF8 as isize;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_fs_read_file(path_bytes, out_ptr, out_cap) };
+        let path = match guest_resolved_fs_path(path, false) {
+            Ok(path) => path,
+            Err(rc) => return rc as isize,
+        };
+        return unsafe { guest_fs_read_file(path.as_bytes(), out_ptr, out_cap) };
     }
 
     if out_ptr.is_null() || out_cap == 0 {
@@ -1017,7 +1046,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
         return FS_ERR_BAD_UTF8;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_fs_write_begin(path_bytes, total_len, out_handle);
+        let path = match guest_resolved_fs_path(path, false) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_write_begin(path.as_bytes(), total_len, out_handle);
     }
     let rc = fs_write_begin_host(path, total_len);
     if rc <= 0 {
@@ -1045,7 +1078,14 @@ pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
         return FS_ERR_BAD_UTF8;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_CREATE_DIR_ALL, path_bytes);
+        let path = match guest_resolved_fs_path(path, true) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_simple_path_op(
+            trueos_vm::vmcall::OP_BP_FS_CREATE_DIR_ALL,
+            path.as_bytes(),
+        );
     }
     fs_create_dir_all_host(path)
 }
@@ -1111,7 +1151,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: us
         return FS_ERR_BAD_UTF8;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_EXISTS, path_bytes);
+        let path = match guest_resolved_fs_path(path, false) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_EXISTS, path.as_bytes());
     }
     fs_exists_host(path)
 }
@@ -1134,7 +1178,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
         return FS_ERR_BAD_UTF8;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_fs_stat(path_bytes, out_kind, out_len);
+        let path = match guest_resolved_fs_path(path, true) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_stat(path.as_bytes(), out_kind, out_len);
     }
     unsafe { fs_stat_host(path, &mut *out_kind, &mut *out_len) }
 }
@@ -1157,7 +1205,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
         return FS_ERR_BAD_UTF8 as isize;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_fs_list_dir(path_bytes, out_ptr, out_cap) };
+        let path = match guest_resolved_fs_path(path, true) {
+            Ok(path) => path,
+            Err(rc) => return rc as isize,
+        };
+        return unsafe { guest_fs_list_dir(path.as_bytes(), out_ptr, out_cap) };
     }
     fs_list_dir_host(path, out_ptr, out_cap)
 }
@@ -1175,7 +1227,11 @@ pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: us
         return FS_ERR_BAD_UTF8;
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_REMOVE, path_bytes);
+        let path = match guest_resolved_fs_path(path, false) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_simple_path_op(trueos_vm::vmcall::OP_BP_FS_REMOVE, path.as_bytes());
     }
     fs_remove_host(path)
 }
