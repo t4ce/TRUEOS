@@ -1674,6 +1674,40 @@ pub(crate) fn build_process_env(
     let hostname = crate::net::adapter::get_hostname();
     vars.insert(String::from("HOSTNAME"), hostname.clone());
     vars.insert(String::from("TRUEOS_HOSTNAME"), hostname);
+    // Make the guest's configured network identity available to blueprints.
+    // Binding a listener to 0.0.0.0 is still the correct server behavior, but
+    // applications need a stable way to advertise the address users can open
+    // from the host.  Keep the primary address convenient and expose indexed
+    // addresses for blueprints that have more than one NIC.
+    let primary_device = crate::net::primary_device_index();
+    vars.insert(
+        String::from("TRUEOS_NET_PRIMARY_DEVICE"),
+        alloc::format!("{primary_device}"),
+    );
+    vars.insert(
+        String::from("TRUEOS_NET_DEVICE_COUNT"),
+        alloc::format!("{}", crate::net::device_count()),
+    );
+    if let Some(ip) = crate::net::adapter::ipv4_at(primary_device) {
+        vars.insert(
+            String::from("TRUEOS_NET_IPV4"),
+            alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
+        );
+    }
+    if let Some(router) = crate::net::adapter::primary_ipv4_router_snapshot() {
+        vars.insert(
+            String::from("TRUEOS_NET_IPV4_GATEWAY"),
+            alloc::format!("{}.{}.{}.{}", router[0], router[1], router[2], router[3]),
+        );
+    }
+    for index in 0..crate::net::device_count() {
+        if let Some(ip) = crate::net::adapter::ipv4_at(index) {
+            vars.insert(
+                alloc::format!("TRUEOS_NET_IPV4_{index}"),
+                alloc::format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
+            );
+        }
+    }
     vars.insert(String::from("XDG_CONFIG_HOME"), String::from("/config"));
     vars.insert(String::from("XDG_CACHE_HOME"), String::from("/cache"));
     vars.insert(String::from("BAT_CONFIG_DIR"), String::from("/config/bat"));
