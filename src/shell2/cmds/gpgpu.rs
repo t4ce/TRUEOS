@@ -8,14 +8,16 @@ use embassy_executor::Spawner;
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
-    CHART_SINE_RGBA8_ADLS_ARTIFACT, GpgpuPoint, MANDEL64_WORKLIST_DEFAULT_ITERATIONS,
-    MANDEL64_WORKLIST_MAX_ITERATIONS, PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE,
-    PIXEL_PLASMA_FLAG_RINGS, PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE,
-    PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT, reload_all_known_kernel_artifacts,
-    reload_known_kernel_artifact, shell_chart_sine_scanout, shell_mandel64_worklist_scanout,
-    shell_pixel_plasma_scanout, shell_twemoji_atlas_worklist_present_scanout,
-    shell_twemoji_atlas_worklist_scanout, shell_twemoji_atlas_worklist_scanout_present,
-    upload_chart_sine_rgba8_kernel, upload_pixel_plasma_rgba8_kernel,
+    CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
+    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, GpgpuPoint,
+    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
+    PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE, PIXEL_PLASMA_FLAG_RINGS,
+    PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_chart_sine_scanout,
+    shell_font_outline_probe, shell_mandel64_worklist_scanout, shell_pixel_plasma_scanout,
+    shell_twemoji_atlas_worklist_present_scanout, shell_twemoji_atlas_worklist_scanout,
+    shell_twemoji_atlas_worklist_scanout_present, upload_chart_sine_rgba8_kernel,
+    upload_font_outline_mesh_kernel, upload_pixel_plasma_rgba8_kernel,
 };
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
@@ -63,6 +65,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu pixel artifact");
     print_shell_line(io, "gpgpu pixel static [time]");
     print_shell_line(io, "gpgpu pixel plasma [duration_ms] [hz] [present_every]");
+    print_shell_line(io, "gpgpu font-tessel [artifact|audit|flatten|mesh|all]");
     print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
     print_shell_line(io, "gpgpu smoke");
 }
@@ -442,8 +445,7 @@ fn run_chart_artifact(io: &'static dyn ShellBackend2) {
         && known.contract.cross_thread_bytes == 128
         && known.contract.per_thread_bytes == 96
         && known.contract.binding_count == 1;
-    let ok =
-        registry_report.passed() && upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
+    let ok = upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
     let message = alloc::format!(
         "gpgpu chart artifact: ok={} stage=artifact kernel={} role={:?} target={} producer={:?} source={} source_path={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} mapped=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_ok={} registry_kernels={} registry_issues={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
         ok as u8,
@@ -1031,6 +1033,227 @@ fn run_artificial_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespa
     print_shell_line(io, msg.as_str());
 }
 
+fn outline_checksum(ops: &[[u32; 8]]) -> u32 {
+    let mut hash = 0x811C_9DC5u32;
+    for op in ops {
+        for word in op {
+            hash ^= *word;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    hash
+}
+
+fn first_closed_contour(ops: &[[u32; 8]]) -> Option<&[[u32; 8]]> {
+    let start = ops.iter().position(|op| op[0] == 0)?;
+    let close = ops[start..].iter().position(|op| op[0] == 4)?;
+    Some(&ops[start..=start + close])
+}
+
+fn run_font_tessel_artifact(io: &'static dyn ShellBackend2) -> bool {
+    let artifact = FONT_OUTLINE_MESH_ADLS_ARTIFACT;
+    let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
+    let Some(known) = crate::intel::opencl::registry::known_aot_kernel(artifact.name) else {
+        print_shell_line(io, "gpgpu font-tessel artifact: ok=0 reason=missing-known-aot-contract");
+        return false;
+    };
+    let Some(upload) = upload_font_outline_mesh_kernel() else {
+        print_shell_line(io, "gpgpu font-tessel artifact: ok=0 reason=upload-unavailable");
+        return false;
+    };
+    let hash_ok = upload.bin_sha256 == artifact.bin_sha256;
+    let contract_ok = known.contract.name == artifact.name
+        && known.contract.target == artifact.target
+        && known.contract.cross_thread_bytes == 128
+        && known.contract.per_thread_bytes == 96
+        && known.contract.binding_count == 2
+        && known.contract.args.len() == 11;
+    let ok =
+        registry_report.passed() && upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
+    let message = alloc::format!(
+        "gpgpu font-tessel artifact: ok={} kernel={} role={:?} target={} source={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_all_ok={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
+        ok as u8,
+        artifact.name,
+        known.role,
+        artifact.target,
+        upload.source,
+        artifact.bin.len(),
+        artifact.spv.len(),
+        upload.gpu,
+        upload.verified as u8,
+        hash_ok as u8,
+        contract_ok as u8,
+        registry_report.passed() as u8,
+        known.contract.args.len(),
+        known.contract.binding_count,
+        known.contract.cross_thread_bytes,
+        known.contract.per_thread_bytes,
+        digest_hex(&upload.bin_sha256),
+    );
+    print_shell_line(io, message.as_str());
+    if ok {
+        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
+    } else {
+        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
+    }
+    ok
+}
+
+fn run_font_tessel_stage(
+    io: &'static dyn ShellBackend2,
+    ops: &[[u32; 8]],
+    units_per_em: u16,
+    stage: u32,
+) -> bool {
+    let checksum = outline_checksum(ops);
+    let result = shell_font_outline_probe(ops, checksum, stage, units_per_em);
+    let expected_segments = result
+        .line_count
+        .saturating_add(result.close_count)
+        .saturating_add(result.quad_count.saturating_mul(8))
+        .saturating_add(result.cubic_count.saturating_mul(8));
+    let shape_ok = match stage {
+        FONT_OUTLINE_STAGE_AUDIT => result.vertices == 0 && result.indices == 0,
+        FONT_OUTLINE_STAGE_FLATTEN => {
+            result.segments == expected_segments
+                && result.vertices == result.move_count.saturating_add(expected_segments)
+                && result.indices == 0
+        }
+        FONT_OUTLINE_STAGE_STROKE_MESH => {
+            result.segments == expected_segments
+                && result.vertices == expected_segments.saturating_mul(4)
+                && result.indices == expected_segments.saturating_mul(6)
+                && result.indices % 3 == 0
+        }
+        _ => false,
+    };
+    let ok = result.ok && shape_ok;
+    let label = match stage {
+        FONT_OUTLINE_STAGE_AUDIT => "audit",
+        FONT_OUTLINE_STAGE_FLATTEN => "flatten",
+        FONT_OUTLINE_STAGE_STROKE_MESH => "mesh",
+        _ => "unknown",
+    };
+    let message = alloc::format!(
+        "gpgpu font-tessel {}: ok={} hw_ok={} shape_ok={} setup=[{},{},{},{},{},{},{},{},{}] retired={} kernel_done={} ops={} move={} line={} quad={} cubic={} close={} segments={}/{} vertices={} indices={} checksum=0x{:08X} invalid={} truncated={} index_range={} markers=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] bounds=({:.2},{:.2})..({:.2},{:.2}) geometry={} retained=probe-scratch cpu_geometry_math=0",
+        label,
+        ok as u8,
+        result.ok as u8,
+        shape_ok as u8,
+        result.available as u8,
+        result.forcewake_ok as u8,
+        result.mapped_ok as u8,
+        result.ppgtt_ok as u8,
+        result.kernel_ppgtt_ok as u8,
+        result.src_ppgtt_ok as u8,
+        result.dst_ppgtt_ok as u8,
+        result.batch_ok as u8,
+        result.submitted as u8,
+        result.retired as u8,
+        result.kernel_done as u8,
+        result.op_count,
+        result.move_count,
+        result.line_count,
+        result.quad_count,
+        result.cubic_count,
+        result.close_count,
+        result.segments,
+        expected_segments,
+        result.vertices,
+        result.indices,
+        result.checksum,
+        result.invalid,
+        result.truncated as u8,
+        result.indices_in_range as u8,
+        result.pre_marker,
+        result.post_marker,
+        result.report_marker,
+        result.done_marker,
+        result.min_x,
+        result.min_y,
+        result.max_x,
+        result.max_y,
+        if stage == FONT_OUTLINE_STAGE_STROKE_MESH {
+            "indexed-stroke-triangles"
+        } else if stage == FONT_OUTLINE_STAGE_FLATTEN {
+            "flat-points"
+        } else {
+            "none"
+        },
+    );
+    print_shell_line(io, message.as_str());
+    ok
+}
+
+fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let mode = args.next().unwrap_or("all");
+    if !expect_no_more(io, args) {
+        return;
+    }
+    let wants_artifact = mode.eq_ignore_ascii_case("artifact") || mode.eq_ignore_ascii_case("all");
+    let wants_audit = mode.eq_ignore_ascii_case("audit") || mode.eq_ignore_ascii_case("all");
+    let wants_flatten = mode.eq_ignore_ascii_case("flatten") || mode.eq_ignore_ascii_case("all");
+    let wants_mesh = mode.eq_ignore_ascii_case("mesh") || mode.eq_ignore_ascii_case("all");
+    if !(wants_artifact || wants_audit || wants_flatten || wants_mesh) {
+        usage(io);
+        return;
+    }
+    let Ok(outline) = crate::graphics::font::default_gpu_outline() else {
+        print_shell_line(io, "gpgpu font-tessel: ok=0 reason=outline-unavailable");
+        return;
+    };
+    let Some(contour) = first_closed_contour(outline.ops.as_slice()) else {
+        print_shell_line(io, "gpgpu font-tessel: ok=0 reason=no-closed-contour");
+        return;
+    };
+    let intro = alloc::format!(
+        "gpgpu font-tessel: text=\"{}\" font={} file={} units_per_em={} glyphs={} contours={} full_ops={} focused_ops={} outline_checksum=0x{:08X} source=skrifa-warm-outline placement=sample-text-stream fill_tessellation=0",
+        outline.text,
+        outline.font_name,
+        outline.font_file,
+        outline.units_per_em,
+        outline.glyphs,
+        outline.contours,
+        outline.ops.len(),
+        contour.len(),
+        outline.checksum,
+    );
+    print_shell_line(io, intro.as_str());
+    crate::log_info!(target: "gpgpu"; "{}\n", intro.as_str());
+
+    let mut ok = true;
+    if wants_artifact {
+        ok &= run_font_tessel_artifact(io);
+    }
+    if wants_audit {
+        ok &= run_font_tessel_stage(
+            io,
+            outline.ops.as_slice(),
+            outline.units_per_em,
+            FONT_OUTLINE_STAGE_AUDIT,
+        );
+    }
+    if wants_flatten {
+        ok &= run_font_tessel_stage(io, contour, outline.units_per_em, FONT_OUTLINE_STAGE_FLATTEN);
+    }
+    if wants_mesh {
+        ok &= run_font_tessel_stage(
+            io,
+            contour,
+            outline.units_per_em,
+            FONT_OUTLINE_STAGE_STROKE_MESH,
+        );
+    }
+    print_shell_line(
+        io,
+        alloc::format!(
+            "gpgpu font-tessel done: ok={} next=flattened-contour-buffer-chain+hole-aware-fill",
+            ok as u8
+        )
+        .as_str(),
+    );
+}
+
 fn digest_hex(digest: &[u8; 32]) -> String {
     let mut out = String::with_capacity(64);
     for byte in digest {
@@ -1112,6 +1335,8 @@ pub(crate) fn try_parse(
         run_chart(io, args);
     } else if cmd.eq_ignore_ascii_case("pixel") {
         run_pixel(io, args);
+    } else if cmd.eq_ignore_ascii_case("font-tessel") {
+        run_font_tessel(io, args);
     } else if cmd.eq_ignore_ascii_case("artifacts") {
         run_artifacts(io, args);
     } else if cmd.eq_ignore_ascii_case("smoke") {

@@ -45,35 +45,44 @@ pub(crate) fn submit_font_mesh_once(
     let scale = 1.8 / width.max(height);
     let center_x = (min_x + max_x) * 0.5;
     let center_y = (min_y + max_y) * 0.5;
-    let mut draw_vertices = Vec::with_capacity(indices.len());
+    let mut draw_vertices = Vec::with_capacity(vertices.len());
+    for source in vertices {
+        draw_vertices.push([
+            (source[0] - center_x) * scale,
+            (center_y - source[1]) * scale,
+            0.5,
+        ]);
+    }
+    let mut draw_indices = Vec::with_capacity(indices.len());
     for triangle in indices.chunks_exact(3) {
-        let mut expanded = [[0.0f32; 3]; 3];
-        for (dst, source_index) in expanded.iter_mut().zip(triangle.iter()) {
-            let Some(source) = vertices.get(*source_index as usize) else {
-                PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
-                return Err("font-index-range");
-            };
-            *dst = [
-                (source[0] - center_x) * scale,
-                (center_y - source[1]) * scale,
-                0.5,
-            ];
-        }
-        let area2 = (expanded[1][0] - expanded[0][0])
-            * (expanded[2][1] - expanded[0][1])
-            - (expanded[1][1] - expanded[0][1]) * (expanded[2][0] - expanded[0][0]);
+        let Some(v0) = draw_vertices.get(triangle[0] as usize) else {
+            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+            return Err("font-index-range");
+        };
+        let Some(v1) = draw_vertices.get(triangle[1] as usize) else {
+            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+            return Err("font-index-range");
+        };
+        let Some(v2) = draw_vertices.get(triangle[2] as usize) else {
+            PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+            return Err("font-index-range");
+        };
+        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1])
+            - (v1[1] - v0[1]) * (v2[0] - v0[0]);
         if area2 < 0.0 {
-            expanded.swap(1, 2);
+            draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
+        } else {
+            draw_indices.extend_from_slice(triangle);
         }
-        draw_vertices.extend_from_slice(&expanded);
     }
 
     let result = submit_render_custom_triangle_probe_locked(
         &draw_vertices,
+        Some(&draw_indices),
         "font-tessel-once",
         "font-tessel-3d-once",
         "font-tessel-full-mesh",
-        "lyon-font-indexed-mesh/deindexed-once",
+        "lyon-font-indexed-mesh/gpu-index-fetch",
         TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
@@ -2160,6 +2169,7 @@ pub(crate) fn submit_render_font_clip_field_isolate_probe<const N: usize>(
         };
     let result = submit_render_custom_triangle_probe_locked(
         &ndc_vertices,
+        None,
         variant,
         submit_name,
         geometry_label,
@@ -2235,6 +2245,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_probe<const N: usize>(
     };
     let result = submit_render_custom_triangle_probe_locked(
         launch_vertices,
+        None,
         variant,
         submit_name,
         geometry_label,
@@ -2357,6 +2368,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
         );
         match submit_render_custom_triangle_probe_locked(
             launch_vertices,
+            None,
             case.variant,
             case.submit_name,
             case.geometry_label,
@@ -2505,6 +2517,7 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
         );
         match submit_render_custom_triangle_probe_locked(
             &clip_vertices,
+            None,
             case.variant,
             case.submit_name,
             case.geometry_label,
@@ -2567,6 +2580,7 @@ pub(crate) fn submit_render_font_clip_counter_sweep_probe()
 
     let result = submit_render_custom_triangle_probe_locked(
         &vertices,
+        None,
         "font-clip-counter-sweep-known-vs-big-inbounds-scratch",
         "font-tessel-clip-counter-sweep-known-vs-big-inbounds-scratch",
         "font-tessel-clip-counter-sweep-known-vs-big-inbounds",
@@ -2595,6 +2609,7 @@ pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
 
     let result = submit_render_custom_triangle_probe_locked(
         &vertices,
+        None,
         "font-clip-counter-vf-vue-big-inbounds-scratch",
         "font-tessel-clip-counter-vf-vue-big-inbounds-scratch",
         "font-tessel-clip-counter-vf-vue-big-inbounds",
@@ -2643,6 +2658,7 @@ pub(crate) fn submit_render_artificial_fragment_sentinel()
 
 fn submit_render_custom_triangle_probe_locked(
     vertices: &[[f32; 3]],
+    indices: Option<&[u32]>,
     variant: &'static str,
     submit_name: &'static str,
     geometry_label: &'static str,
@@ -2735,6 +2751,7 @@ fn submit_render_custom_triangle_probe_locked(
         target_size,
         blend_mode,
         vertices,
+        indices,
         geometry_label,
         submit_name,
         front_end_contract,
@@ -5714,6 +5731,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     rect_h: usize,
     blend_mode: TriangleBlendProbeMode,
     vertices: &[[f32; 3]],
+    indices: Option<&[u32]>,
     geometry_label: &'static str,
     submit_name: &'static str,
     front_end_contract: TriangleFrontEndContract,
@@ -5722,7 +5740,22 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> bool {
-    let draw = if batch_mode.vf_synthesized_vue() {
+    let draw = if let Some(indices) = indices {
+        if batch_mode.vf_synthesized_vue() {
+            None
+        } else {
+            prepare_triangle_draw_resources_for_indexed_vertex_slice(
+                warm,
+                dst_gpu_addr,
+                pitch,
+                rect_w,
+                rect_h,
+                geometry_label,
+                vertices,
+                indices,
+            )
+        }
+    } else if batch_mode.vf_synthesized_vue() {
         prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
             warm,
             dst_gpu_addr,
@@ -5812,22 +5845,32 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     } else {
         "font-lyon-clip-field-screen-space"
     };
+    let first_triangle_indices = indices
+        .map(|indices| [indices[0] as usize, indices[1] as usize, indices[2] as usize])
+        .unwrap_or([0, 1, 2]);
+    let first_triangle = [
+        vertices[first_triangle_indices[0]],
+        vertices[first_triangle_indices[1]],
+        vertices[first_triangle_indices[2]],
+    ];
     intel_render_focus_log!(
-        "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist vertices={} triangles={} sf_viewport_transform={} first_vertices=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
+        "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist indexed={} unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} first_triangle=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
         submit_name,
         geometry_label,
+        draw.index_buffer.is_some() as u8,
         vertices.len(),
-        vertices.len() / 3,
+        draw.vertex_count,
+        draw.vertex_count / 3,
         sf_viewport_transform as u8,
-        vertices[0][0],
-        vertices[0][1],
-        vertices[0][2],
-        vertices[1][0],
-        vertices[1][1],
-        vertices[1][2],
-        vertices[2][0],
-        vertices[2][1],
-        vertices[2][2],
+        first_triangle[0][0],
+        first_triangle[0][1],
+        first_triangle[0][2],
+        first_triangle[1][0],
+        first_triangle[1][1],
+        first_triangle[1][2],
+        first_triangle[2][0],
+        first_triangle[2][1],
+        first_triangle[2][2],
         draw.target_w,
         draw.target_h,
         coverage_contract,
@@ -5865,7 +5908,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
-        "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
+        "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} indexed={} unique_vertices={} draw_vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
         submit_name,
         draw.rt_gpu_addr,
         draw.vertex_gpu_addr,
@@ -5878,6 +5921,8 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         draw.target_w,
         draw.target_h,
         draw.rt_pitch,
+        draw.index_buffer.is_some() as u8,
+        vertices.len(),
         draw.vertex_count,
         draw.vertex_stride,
         shader_layout.vs.code_size_bytes,

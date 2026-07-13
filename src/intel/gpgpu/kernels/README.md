@@ -32,6 +32,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; used by the three-stage `gpgpu chart` hardware probe
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; used by `gpgpu pixel artifact|static|plasma`
+- `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
 - `canvas3d_project_rgba8.cl`: Q16 vec3 projection into packed XY/RGBA point records with source/output ranges and dynamic canvas dimensions
 - `canvas3d_transform_q16.cl`: range/subset Q16 vec3 fused scale, quaternion rotation, and translation from source int4 vertices to destination int4 vertices
 - `canvas3d_clip_box_q16.cl`: idempotent Q16 vec3 source-to-sink box clip for presentation-safe geometry before projection
@@ -145,6 +146,29 @@ overrides must match:
 
 ```text
 42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
+```
+
+`artifacts/adls/font_outline_mesh.bin` is the allowlisted first font-geometry
+compute build. Its input records are eight dwords: opcode, up to six IEEE-754
+font-unit coordinates, and a reserved zero. The shell command exposes three
+incremental hardware proofs:
+
+- `audit`: validates opcodes, contour sequencing, finite coordinates, reserved
+  fields, and the CPU/GPU FNV-1a checksum over the full `hello world` stream
+- `flatten`: expands one closed contour's quadratic and cubic curves into
+  fixed-subdivision points entirely in compute
+- `mesh`: emits four vertices and six indices per flattened segment and checks
+  every generated index before reporting success
+
+The mesh stage is intentionally contour-stroke geometry. It proves the
+GPU-resident indexed-buffer shape but does not claim hole-aware glyph fill yet;
+that is the next artifact iteration before chaining the buffers into the 3D
+raster pipeline. During bring-up the CPU reads only the fixed report and index
+range to produce proof logs; the generated geometry itself is not converted or
+used for CPU tessellation. Runtime overrides must match:
+
+```text
+d01e80a1550d5874ef4d4d6a721ef5b45bd18e8e39ab864028d53ac6c1c850fb
 ```
 
 Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:

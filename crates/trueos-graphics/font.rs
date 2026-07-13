@@ -24,6 +24,7 @@ use spin::Mutex;
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
 const FONT_TESSEL_SAMPLE_TEXT: &str = "hello world";
 const FONT_TESSEL_SAMPLE_PX: f32 = 48.0;
+pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // The restored render probes retain their one/two/all clip-field dispatch
 // labels. Keep the original full-field vertex count at the graphics boundary.
 pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
@@ -124,6 +125,90 @@ pub(crate) struct FontTesselMesh {
     pub(crate) summary: FontTesselSummary,
     pub(crate) vertices: Vec<[f32; 2]>,
     pub(crate) indices: Vec<u32>,
+}
+
+/// GPU-facing, size-independent outline stream for the font compute probes.
+///
+/// Each record is eight little-endian dwords. Word zero is the operation kind
+/// (`move`, `line`, `quad`, `cubic`, `close` = 0..=4); the remaining words are
+/// IEEE-754 coordinates followed by a reserved zero. Coordinates stay in font
+/// units. Scale, baseline/Y orientation, curve flattening, and mesh generation
+/// are deliberately left to the compute artifact.
+pub(crate) struct FontGpuOutline {
+    pub(crate) text: &'static str,
+    pub(crate) font_name: &'static str,
+    pub(crate) font_file: &'static str,
+    pub(crate) units_per_em: u16,
+    pub(crate) glyphs: usize,
+    pub(crate) contours: usize,
+    pub(crate) checksum: u32,
+    pub(crate) ops: Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
+}
+
+pub(crate) fn default_gpu_outline() -> Result<FontGpuOutline, &'static str> {
+    gpu_outline_for_text("font", FONT_TESSEL_SAMPLE_TEXT)
+}
+
+fn gpu_outline_for_text(
+    name: &'static str,
+    text: &'static str,
+) -> Result<FontGpuOutline, &'static str> {
+    warm_embedded_fonts_once().map_err(|_| "font-warm-failed")?;
+    let registry = FONT_REGISTRY.lock();
+    let font_record = registry.font_by_name(name).ok_or("font-not-registered")?;
+    let FontWarmEndState::Outline(outline) = font_record
+        .outline_endstate()
+        .ok_or("outline-cache-missing")?;
+    let font = FontRef::new(font_record.bytes).map_err(|_| "font-parse-failed")?;
+    let charmap = font.charmap();
+    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let fallback_advance = font_record.units_per_em as f32 * 0.35;
+    let space_advance = charmap
+        .map(' ')
+        .and_then(|glyph_id| metrics.advance_width(glyph_id))
+        .unwrap_or(fallback_advance);
+    let mut ops = Vec::new();
+    let mut pen_x = 0.0f32;
+    let mut glyphs = 0usize;
+    let mut contours = 0usize;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            pen_x += space_advance;
+            continue;
+        }
+        let Some(glyph_id) = charmap.map(ch) else {
+            pen_x += fallback_advance;
+            continue;
+        };
+        glyphs = glyphs.saturating_add(1);
+        contours = contours.saturating_add(outline.append_glyph_gpu_ops(glyph_id, pen_x, &mut ops));
+        pen_x += metrics.advance_width(glyph_id).unwrap_or(fallback_advance);
+    }
+    if ops.is_empty() {
+        return Err("outline-empty");
+    }
+    let checksum = outline_words_checksum(ops.as_slice());
+    Ok(FontGpuOutline {
+        text,
+        font_name: font_record.name,
+        font_file: font_record.file_name,
+        units_per_em: font_record.units_per_em,
+        glyphs,
+        contours,
+        checksum,
+        ops,
+    })
+}
+
+fn outline_words_checksum(ops: &[[u32; FONT_GPU_OUTLINE_OP_WORDS]]) -> u32 {
+    let mut hash = 0x811C_9DC5u32;
+    for op in ops {
+        for word in op {
+            hash ^= *word;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    hash
 }
 
 impl FontTesselMesh {
@@ -232,11 +317,7 @@ pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
     tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_SAMPLE_PX)
 }
 
-fn tessellate_text_mesh(
-    name: &'static str,
-    text: &'static str,
-    px_size: f32,
-) -> FontTesselMesh {
+fn tessellate_text_mesh(name: &'static str, text: &'static str, px_size: f32) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
     if warm_embedded_fonts_once().is_err() {
         return FontTesselMesh::failed("font-warm-failed", name, "", text, px_size, total_start);
@@ -244,14 +325,7 @@ fn tessellate_text_mesh(
 
     let registry = FONT_REGISTRY.lock();
     let Some(font_record) = registry.font_by_name(name) else {
-        return FontTesselMesh::failed(
-            "font-not-registered",
-            name,
-            "",
-            text,
-            px_size,
-            total_start,
-        );
+        return FontTesselMesh::failed("font-not-registered", name, "", text, px_size, total_start);
     };
     let Some(FontWarmEndState::Outline(outline)) = font_record.outline_endstate() else {
         return FontTesselMesh::failed(
@@ -745,6 +819,37 @@ impl FontOutlineCache {
         appended
     }
 
+    fn append_glyph_gpu_ops(
+        &self,
+        glyph_id: GlyphId,
+        pen_x: f32,
+        output: &mut Vec<[u32; FONT_GPU_OUTLINE_OP_WORDS]>,
+    ) -> usize {
+        let glyph_index = glyph_id.to_u32();
+        let Some(range) = self
+            .ranges
+            .iter()
+            .find(|range| u32::from(range.glyph_index) == glyph_index)
+        else {
+            return 0;
+        };
+        let start = range.op_start as usize;
+        let end = start
+            .saturating_add(range.op_len as usize)
+            .min(self.ops.len());
+        if start >= end {
+            return 0;
+        }
+        let mut contours = 0usize;
+        for op in &self.ops[start..end] {
+            if matches!(op, WarmOutlineOp::MoveTo(..)) {
+                contours = contours.saturating_add(1);
+            }
+            output.push(op.gpu_words(pen_x));
+        }
+        contours
+    }
+
     fn summary(
         &self,
         font: &RegisteredFont,
@@ -851,6 +956,28 @@ enum WarmOutlineOp {
 }
 
 impl WarmOutlineOp {
+    fn gpu_words(self, pen_x: f32) -> [u32; FONT_GPU_OUTLINE_OP_WORDS] {
+        let f = |value: f32| value.to_bits();
+        match self {
+            WarmOutlineOp::MoveTo(x, y) => [0, f(x + pen_x), f(y), 0, 0, 0, 0, 0],
+            WarmOutlineOp::LineTo(x, y) => [1, f(x + pen_x), f(y), 0, 0, 0, 0, 0],
+            WarmOutlineOp::QuadTo(cx, cy, x, y) => {
+                [2, f(cx + pen_x), f(cy), f(x + pen_x), f(y), 0, 0, 0]
+            }
+            WarmOutlineOp::CurveTo(cx0, cy0, cx1, cy1, x, y) => [
+                3,
+                f(cx0 + pen_x),
+                f(cy0),
+                f(cx1 + pen_x),
+                f(cy1),
+                f(x + pen_x),
+                f(y),
+                0,
+            ],
+            WarmOutlineOp::Close => [4, 0, 0, 0, 0, 0, 0, 0],
+        }
+    }
+
     fn append_to_builder(
         self,
         builder: &mut LyonPathBuilder,

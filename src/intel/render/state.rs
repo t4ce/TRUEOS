@@ -74,10 +74,19 @@ pub struct RenderWarmState {
 }
 
 #[derive(Copy, Clone)]
+struct TriangleIndexBufferPrep {
+    index_count: u32,
+    byte_len: u32,
+    gpu_addr: u64,
+}
+
+#[derive(Copy, Clone)]
 struct TriangleDrawPrep {
     vertex_count: u32,
     vertex_stride: u32,
+    vertex_buffer_bytes: u32,
     vertex_gpu_addr: u64,
+    index_buffer: Option<TriangleIndexBufferPrep>,
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
     rt_pitch: u32,

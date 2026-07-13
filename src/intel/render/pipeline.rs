@@ -1375,7 +1375,7 @@ fn encode_triangle_probe_batch(
         };
     push(batch_dwords, &mut cursor, vertex_buffer_dw1)?;
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
-    push(batch_dwords, &mut cursor, draw.vertex_count.saturating_mul(draw.vertex_stride))?;
+    push(batch_dwords, &mut cursor, draw.vertex_buffer_bytes)?;
     intel_render_verbose_log!(
         "probe-vb-state dw1=0x{:08X} pitch={} mocs={} address_modify=1 l3_bypass_disable={} gpu=0x{:X} bytes={} source=mesa-gen12-verified-draw\n",
         vertex_buffer_dw1,
@@ -1383,7 +1383,7 @@ fn encode_triangle_probe_batch(
         VERTEX_BUFFER_MOCS,
         (vertex_buffer_dw1 >> 25) & 0x1,
         draw.vertex_gpu_addr,
-        draw.vertex_count.saturating_mul(draw.vertex_stride),
+        draw.vertex_buffer_bytes,
     );
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
@@ -1568,6 +1568,29 @@ fn encode_triangle_probe_batch(
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
     push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
+    if let Some(index_buffer) = draw.index_buffer {
+        log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
+        let index_buffer_dw1 = (RENDER_MOCS & 0x7F)
+            | (INDEX_BUFFER_FORMAT_DWORD << 8)
+            | if device_is_gfx12(warm.device_id) {
+                INDEX_BUFFER_L3_BYPASS_DISABLE
+            } else {
+                0
+            };
+        push(batch_dwords, &mut cursor, index_buffer_dw1)?;
+        push_addr(batch_dwords, &mut cursor, index_buffer.gpu_addr)?;
+        push(batch_dwords, &mut cursor, index_buffer.byte_len)?;
+        intel_render_focus_log!(
+            "{} index-buffer-state accepted=1 format=u32 count={} bytes={} gpu=0x{:X} mocs={} l3_bypass_disable={} primitive_access=random retained=1 does_not_prove=index_fetch\n",
+            submit_name,
+            index_buffer.index_count,
+            index_buffer.byte_len,
+            index_buffer.gpu_addr,
+            RENDER_MOCS,
+            (index_buffer_dw1 >> 11) & 0x1,
+        );
+    }
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
     let vf_sgvs_dw1 = if mesa_host_fixed_function {
@@ -2383,7 +2406,15 @@ fn encode_triangle_probe_batch(
         // host packet is 0x7B000808 followed by nine zero/default fields apart
         // from vertex and instance counts.
         push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE_EXTENDED)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            if draw.index_buffer.is_some() {
+                PRIMITIVE_VERTEX_ACCESS_RANDOM
+            } else {
+                0
+            },
+        )?;
         push(batch_dwords, &mut cursor, draw.vertex_count)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 1)?;
@@ -2394,7 +2425,16 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     } else {
         push(batch_dwords, &mut cursor, CMD_3DPRIMITIVE)?;
-        push(batch_dwords, &mut cursor, batch_mode.topology())?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            batch_mode.topology()
+                | if draw.index_buffer.is_some() {
+                    PRIMITIVE_VERTEX_ACCESS_RANDOM
+                } else {
+                    0
+                },
+        )?;
         push(batch_dwords, &mut cursor, draw.vertex_count)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 1)?;
@@ -3177,7 +3217,7 @@ fn encode_minimal_streamout_proof_batch(
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
     let gfx125_3d_mode_dw1 = gfx125_slice_hash.map(gfx125_3d_mode_dw1).unwrap_or(0);
     let gfx125_3d_mode_dw3 = gfx125_3d_mode_dw3();
-    let vb_size_bytes = draw.vertex_count.saturating_mul(draw.vertex_stride);
+    let vb_size_bytes = draw.vertex_buffer_bytes;
     let vb_cmd = cmd_3dstate_vertex_buffers(1)?;
     let ve_cmd = cmd_3dstate_vertex_elements(if vs_config.is_some() {
         1

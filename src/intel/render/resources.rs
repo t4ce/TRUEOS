@@ -335,7 +335,9 @@ fn prepare_triangle_draw_resources_for_geometry(
     Some(TriangleDrawPrep {
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
+        vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
         vertex_gpu_addr: vertex_proof.gpu_addr,
+        index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_pitch,
@@ -396,7 +398,88 @@ fn prepare_triangle_draw_resources_for_vertex_slice(
     Some(TriangleDrawPrep {
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
+        vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
         vertex_gpu_addr: vertex_proof.gpu_addr,
+        index_buffer: None,
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_pitch,
+        target_w,
+        target_h,
+    })
+}
+
+fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    vertices: &[[f32; 3]],
+    indices: &[u32],
+) -> Option<TriangleDrawPrep> {
+    let target_w = u32::try_from(rect_w).ok()?;
+    let target_h = u32::try_from(rect_h).ok()?;
+    let rt_pitch = u32::try_from(pitch).ok()?;
+    if vertices.len() < 3
+        || indices.is_empty()
+        || !indices.len().is_multiple_of(3)
+        || indices
+            .iter()
+            .any(|index| *index as usize >= vertices.len())
+    {
+        return None;
+    }
+
+    let vertex_proof = write_triangle_vertex_slice(warm, label, vertices)?;
+    let index_offset = crate::intel::align_up(vertex_proof.byte_len, 64)?;
+    let index_byte_len = indices.len().checked_mul(core::mem::size_of::<u32>())?;
+    let upload_end = index_offset.checked_add(index_byte_len)?;
+    if upload_end > warm.vertex_len {
+        return None;
+    }
+
+    let index_dst = unsafe { warm.vertex_virt.add(index_offset) as *mut u32 };
+    let index_slice = unsafe { core::slice::from_raw_parts_mut(index_dst, indices.len()) };
+    index_slice.copy_from_slice(indices);
+    let cpu_readback_ok = index_slice == indices;
+    crate::intel::dma_flush(unsafe { warm.vertex_virt.add(index_offset) }, index_byte_len);
+
+    let index_gpu_addr = GPU_VA_VERTEX_BASE.checked_add(index_offset as u64)?;
+    intel_render_focus_log!(
+        "indexed-mesh-upload-proof accepted={} geometry={} unique_vertices={} indices={} triangles={} vertex_bytes={} index_bytes={} total_bytes={} vb_gpu=0x{:X} ib_gpu=0x{:X} index_format=u32 persistent_mapping=1 cpu_readback_ok={} does_not_prove=index_fetch\n",
+        cpu_readback_ok as u8,
+        label,
+        vertices.len(),
+        indices.len(),
+        indices.len() / 3,
+        vertex_proof.byte_len,
+        index_byte_len,
+        upload_end,
+        vertex_proof.gpu_addr,
+        index_gpu_addr,
+        cpu_readback_ok as u8,
+    );
+    if !cpu_readback_ok {
+        return None;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    }
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+
+    Some(TriangleDrawPrep {
+        vertex_count: u32::try_from(indices.len()).ok()?,
+        vertex_stride: vertex_proof.vertex_stride,
+        vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
+        vertex_gpu_addr: vertex_proof.gpu_addr,
+        index_buffer: Some(TriangleIndexBufferPrep {
+            index_count: u32::try_from(indices.len()).ok()?,
+            byte_len: u32::try_from(index_byte_len).ok()?,
+            gpu_addr: index_gpu_addr,
+        }),
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_pitch,
@@ -438,7 +521,9 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
     Some(TriangleDrawPrep {
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
+        vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
         vertex_gpu_addr: vertex_proof.gpu_addr,
+        index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_pitch,
@@ -851,7 +936,9 @@ fn prepare_vf_streamout_proof_resources(
     Some(TriangleDrawPrep {
         vertex_count: TRIANGLE_DRAW_VERTICES as u32,
         vertex_stride: vertex_stride as u32,
+        vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
+        index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_pitch,
