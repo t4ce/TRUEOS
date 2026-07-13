@@ -1,3 +1,5 @@
+static RENDER_PPGTT_PML4_PHYS: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
     if let Some(warm) = *WARM_STATE.lock() {
         return warm;
@@ -319,8 +321,44 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         gpgpu_arena_virt,
         gpgpu_arena_len,
     };
+    if let Some(ppgtt) = crate::intel::ppgtt::build_sparse_ppgtt_for_ranges(&[
+        crate::intel::ppgtt::PpgttRange {
+            gpu: GPU_VA_BATCH_BASE,
+            phys: warm.batch_phys,
+            bytes: warm.batch_len,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: GPU_VA_DRAW_STATE_BASE,
+            phys: warm.draw_state_phys,
+            bytes: warm.draw_state_len,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: GPU_VA_VERTEX_BASE,
+            phys: warm.vertex_phys,
+            bytes: warm.vertex_len,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: GPU_VA_RESULT_BASE,
+            phys: warm.result_phys,
+            bytes: warm.result_len,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: GPU_VA_STREAMOUT_BASE,
+            phys: warm.streamout_phys,
+            bytes: warm.streamout_len,
+        },
+    ]) {
+        RENDER_PPGTT_PML4_PHYS.store(ppgtt.pml4_phys(), Ordering::Release);
+        // Warm render allocations are permanent for the lifetime of the
+        // device; keep their page-table pages permanent as well.
+        core::mem::forget(ppgtt);
+    }
     *WARM_STATE.lock() = Some(warm);
     warm
+}
+
+fn render_ppgtt_pml4_phys() -> u64 {
+    RENDER_PPGTT_PML4_PHYS.load(Ordering::Acquire)
 }
 
 pub fn warm_state() -> Option<RenderWarmState> {

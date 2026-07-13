@@ -4,6 +4,18 @@ fn upload_triangle_shader_pipeline(
 ) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
+    let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
+    let upload_host_ps_pair = pipeline.ps.code.as_ptr()
+        == crate::intel::shader::triangle_pipeline().ps.code.as_ptr();
+    let host_simd16 = if upload_host_ps_pair {
+        Some(stage_range(
+            "ps-simd16",
+            host_simd16_pipeline.ps.meta.kernel,
+            host_simd16_pipeline.ps.code,
+        )?)
+    } else {
+        None
+    };
 
     if pipeline.vs.meta.kernel.grf_used == 0 {
         return Err("vs-shader-grf-used-zero");
@@ -24,16 +36,43 @@ fn upload_triangle_shader_pipeline(
         return Err("shader-code-overlap");
     }
 
-    let used_end = core::cmp::max(
+    let mut used_end = core::cmp::max(
         stage_end(vs.code_offset_bytes, vs.code_size_bytes).ok_or("shader-code-overflow")?,
         stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?,
     );
+    if let Some(host_simd16) = host_simd16 {
+        if ranges_overlap(
+            ps.code_offset_bytes,
+            ps.code_size_bytes,
+            host_simd16.code_offset_bytes,
+            host_simd16.code_size_bytes,
+        ) || ranges_overlap(
+            vs.code_offset_bytes,
+            vs.code_size_bytes,
+            host_simd16.code_offset_bytes,
+            host_simd16.code_size_bytes,
+        ) {
+            return Err("host-ps-pair-code-overlap");
+        }
+        used_end = core::cmp::max(
+            used_end,
+            stage_end(host_simd16.code_offset_bytes, host_simd16.code_size_bytes)
+                .ok_or("host-ps-pair-code-overflow")?,
+        );
+    }
     if used_end > warm.draw_state_len {
         return Err("shader-code-exceeds-state-bo");
     }
 
     upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
     upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
+    if let Some(host_simd16) = host_simd16 {
+        upload_stage_code(
+            warm.draw_state_virt,
+            host_simd16.code_offset_bytes,
+            host_simd16_pipeline.ps.code,
+        )?;
+    }
 
     crate::intel::dma_flush(warm.draw_state_virt, used_end);
 

@@ -83,7 +83,8 @@ const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 // 10 KiB of XYZ vertices for the non-indexed 3DPRIMITIVE path.
 const WARM_VERTEX_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
-const WARM_STREAMOUT_BYTES: usize = 4096;
+// The font proof renders into this allocation as a linear 64x64 RGBA8 image.
+const WARM_STREAMOUT_BYTES: usize = 64 * 64 * core::mem::size_of::<u32>();
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -135,6 +136,7 @@ const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_NOOP: u32 = 0;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 const GEN8_CTX_VALID: u32 = 1 << 0;
+const GEN8_CTX_PPGTT_ENABLE: u32 = 1 << 5;
 const GEN8_CTX_PRIVILEGE: u32 = 1 << 8;
 const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
@@ -176,13 +178,25 @@ const PRIMARY_PERIODIC_LOG_EVERY: u32 = 30;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const TS_GPGPU_THREADS_DISPATCHED_LO: usize = 0x2290;
 const TS_GPGPU_THREADS_DISPATCHED_HI: usize = 0x2294;
-const RENDER_MOCS: u32 = 1;
+const RENDER_MOCS: u32 = 4;
+// The verified Gen12 Mesa draw uses MOCS 4 for vertex buffers.  Gen12 also
+// requires L3BypassDisable when vertex data is consumed through the L3
+// read-only path; PIPE_CONTROL_INVALIDATE_BITS already invalidates that path.
+const VERTEX_BUFFER_MOCS: u32 = 4;
+const VERTEX_BUFFER_L3_BYPASS_DISABLE: u32 = 1 << 25;
+// Vertex/index buffer addresses are absolute on Gen12.  Mesa therefore keeps
+// the indirect-object SBA at zero and opens its range to the architectural
+// 20-bit maximum instead of rebasing absolute VERTEX_BUFFER_STATE addresses.
+const INDIRECT_OBJECT_SBA_BASE: u64 = 0;
+const INDIRECT_OBJECT_SBA_SIZE_BYTES: usize = 0xFFFF_F000;
+const BINDLESS_SURFACE_STATE_SIZE: u32 = 0xFFFF_F000;
 const GEN12_L3ALLOC: usize = 0xB134;
 const GEN12_L3ALLOC_ADL_DEFAULT: u32 = (32 << 1) | (88 << 25);
 const GFX125_L3ALLOC_FULL_WAYS: u32 = 1 << 9;
 const SURFTYPE_2D: u32 = 1;
 const SURFTYPE_NULL: u32 = 7;
-const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 10;
+const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 192;
+const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
@@ -217,7 +231,12 @@ const PS_EXTRA_PIXEL_SHADER_VALID: u32 = 1 << 31;
 const VFCOMP_STORE_SRC: u32 = 1;
 const VFCOMP_STORE_0: u32 = 2;
 const VFCOMP_STORE_1_FP: u32 = 3;
-const PIPELINE_SELECT_3D: u32 = (4 << 16) | (1 << 24) | (1 << 27) | (3 << 29);
+// Gfx12 requires the low-field write masks when selecting the 3D pipeline.
+// Bit 4 enables media-sampler DOP clock gating and mask 0x13 applies both it
+// and PipelineSelection=3D.  Without these bits the command header parses but
+// leaves inherited pipeline/power state unchanged.
+const PIPELINE_SELECT_3D: u32 =
+    (4 << 16) | (1 << 24) | (1 << 27) | (3 << 29) | (0x13 << 8) | (1 << 4);
 const PIPE_CONTROL_CMD: u32 = 4 | (2 << 24) | (3 << 27) | (3 << 29);
 const STATE_BASE_ADDRESS_CMD: u32 = 20 | (1 << 16) | (1 << 24) | (3 << 29);
 const BINDING_TABLE_POOL_ENABLE: u32 = 1 << 11;
@@ -231,6 +250,18 @@ const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
     2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES: u32 =
     (109 << 16) | (0x1F << 8) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS: u32 =
+    (109 << 16) | (0x11 << 8) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_VS: u32 =
+    (18 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_HS: u32 =
+    (19 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_DS: u32 =
+    (20 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_GS: u32 =
+    (21 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_PS: u32 =
+    (22 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_GS: u32 = 8 | (17 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CLEAR_PARAMS: u32 = 1 | (4 << 16) | (3 << 27) | (3 << 29);
@@ -265,6 +296,7 @@ const CMD_3DSTATE_SAMPLER_STATE_POINTERS_VS: u32 = (43 << 16) | (3 << 27) | (3 <
 const CMD_3DSTATE_SAMPLER_STATE_POINTERS_PS: u32 = (47 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VF_STATISTICS: u32 = (11 << 16) | (1 << 27) | (3 << 29);
 const CMD_3DSTATE_VF: u32 = (12 << 16) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_VF_COMPONENT_PACKING: u32 = 3 | (85 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VFG: u32 = 2 | (87 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_MULTISAMPLE: u32 = (13 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_DRAWING_RECTANGLE: u32 = 2 | (1 << 24) | (3 << 27) | (3 << 29);
@@ -289,6 +321,7 @@ const CMD_3DSTATE_VF_SGVS_2: u32 = 1 | (86 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VERTEX_BUFFERS_1: u32 = 3 | (8 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VERTEX_ELEMENTS_1: u32 = 1 | (9 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DPRIMITIVE: u32 = 5 | (3 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DPRIMITIVE_EXTENDED: u32 = 8 | (1 << 11) | (3 << 24) | (3 << 27) | (3 << 29);
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER: u32 = 1 << 9;
 const PIPE_CONTROL_UNTYPED_DATAPORT_FLUSH_HEADER: u32 = 1 << 11;
 const PIPE_CONTROL_DEPTH_CACHE_FLUSH: u32 = 1 << 0;
@@ -332,6 +365,13 @@ const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
 const PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS: u32 = PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
     PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
+// Exact successful gfx12 post-draw completion packet from the Mesa capture.
+// It targets PPGTT (DEST_GGTT clear) and avoids HDC flush, whose gfx12 form
+// additionally requires a header bit.
+const PIPE_CONTROL_POST_DRAW_HOST_SYNC_BITS: u32 = PIPE_CONTROL_STALL_AT_SCOREBOARD
+    | PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+    | PIPE_CONTROL_CS_STALL
+    | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE;
 const OAR_OACONTROL: usize = 0x2960;
 const OAR_OACONTROL_FORMAT_A24_A14_B8_C8: u32 = 5 << 1;
 const OAR_OACONTROL_COUNTER_ENABLE: u32 = 1 << 0;
@@ -384,7 +424,11 @@ const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
 const TRIANGLE_TOPOLOGY_RECTLIST: u32 = 15;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
-const TRIANGLE_VS_URB_ENTRIES: u32 = 192;
+// ADL GT1 with the programmed 32-way URB L3 allocation has 512 KiB of URB.
+// Mesa reserves the first 32 KiB (four 8-KiB chunks) for push constants and,
+// for a single 64-byte VS entry with no tessellation or GS, allocates the
+// hardware maximum of 3576 VS entries.
+const TRIANGLE_VS_URB_ENTRIES: u32 = 3576;
 const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-like",

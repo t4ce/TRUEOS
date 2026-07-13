@@ -75,9 +75,9 @@ pub(crate) fn submit_font_mesh_once(
         "font-tessel-full-mesh",
         "lyon-font-indexed-mesh/deindexed-once",
         TriangleBlendProbeMode::MesaZeroedState,
-        BackendProbeMode::WmLateReemit,
-        PostDrawSyncVariant::LightPostSyncNoCs,
-        VS_DRAW_FRONTIER_CONTRACTS[2],
+        BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
     );
@@ -2654,6 +2654,9 @@ fn submit_render_custom_triangle_probe_locked(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> Result<RenderJokerResult, &'static str> {
+    const FONT_STAMP_SIZE: usize = 64;
+    const LEGACY_PROBE_SIZE: usize = 8;
+
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
         crate::log!(
@@ -2675,13 +2678,20 @@ fn submit_render_custom_triangle_probe_locked(
         return Err("no-device");
     };
     let warm = warm_once(dev);
+    let target_size = if submit_name == "font-tessel-3d-once" {
+        FONT_STAMP_SIZE
+    } else {
+        LEGACY_PROBE_SIZE
+    };
+    let target_pitch = target_size * core::mem::size_of::<u32>();
+    let target_bytes = target_pitch.saturating_mul(target_size);
     if warm.ring_len == 0
         || warm.context_len == 0
         || warm.batch_len == 0
         || warm.draw_state_len == 0
         || warm.vertex_len == 0
         || warm.result_len == 0
-        || warm.streamout_len < 8 * 8 * core::mem::size_of::<u32>()
+        || warm.streamout_len < target_bytes
         || warm.streamout_virt.is_null()
     {
         crate::log!("custom-triangle skipped reason=warm-buffers submit={}\n", submit_name);
@@ -2698,9 +2708,13 @@ fn submit_render_custom_triangle_probe_locked(
 
     unsafe {
         core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
-        core::ptr::write_volatile(warm.streamout_virt as *mut u32, 0xDEAD_BEEF);
+        let scratch_pixels = core::slice::from_raw_parts_mut(
+            warm.streamout_virt as *mut u32,
+            target_size * target_size,
+        );
+        scratch_pixels.fill(0xDEAD_BEEF);
     }
-    crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+    crate::intel::dma_flush(warm.streamout_virt, target_bytes);
 
     intel_render_focus_log!(
         "custom-triangle begin seq={} submit={} target=scratch backend={} blend={} sync={} front_end={} source={}\n",
@@ -2716,9 +2730,9 @@ fn submit_render_custom_triangle_probe_locked(
         dev,
         warm,
         GPU_VA_STREAMOUT_BASE,
-        8 * core::mem::size_of::<u32>(),
-        8,
-        8,
+        target_pitch,
+        target_size,
+        target_size,
         blend_mode,
         vertices,
         geometry_label,
@@ -5953,7 +5967,10 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
     let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
-        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        let scratch_surface_bytes = (draw.rt_pitch as usize)
+            .saturating_mul(draw.target_h as usize)
+            .min(warm.streamout_len);
+        crate::intel::dma_flush(warm.streamout_virt, scratch_surface_bytes);
         let center_x = draw.target_w / 2;
         let center_y = draw.target_h / 2;
         let center_offset = center_y
@@ -5980,28 +5997,58 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     } else {
         None
     };
+    let scratch_pixels_before = if scratch_rt_before.is_some() {
+        let mut pixels = Vec::with_capacity(
+            usize::try_from(draw.target_w.saturating_mul(draw.target_h)).unwrap_or(0),
+        );
+        for y in 0..draw.target_h {
+            for x in 0..draw.target_w {
+                let byte_offset = y
+                    .saturating_mul(draw.rt_pitch)
+                    .saturating_add(x.saturating_mul(4)) as usize;
+                if byte_offset.saturating_add(4) <= warm.streamout_len {
+                    let value = unsafe {
+                        let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
+                        core::ptr::read_volatile(ptr)
+                    };
+                    pixels.push(value);
+                }
+            }
+        }
+        Some(pixels)
+    } else {
+        None
+    };
     let scratch_stats_before = if scratch_rt_before.is_some() {
         Some(capture_triangle_stage_stats(dev))
     } else {
         None
     };
 
-    let completed = submit_warm_render_batch(
-        dev,
-        warm,
-        RCS_EXEC_RESULT_DONE,
-        RESULT_SLOT_FINAL_DWORD,
-        submit_name,
-    );
-    if !completed {
-        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
-    }
+    let (completion_value, completion_slot, completion_kind) = if submit_name
+        == "font-tessel-3d-once"
+        && post_draw_sync_variant == PostDrawSyncVariant::HeavyAll
+    {
+        (
+            RCS_EXEC_RESULT_DRAW_POST3D,
+            RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD,
+            "cs-stalled-postsync-rt-flush",
+        )
+    } else {
+        (RCS_EXEC_RESULT_DONE, RESULT_SLOT_FINAL_DWORD, "mi-tail-store")
+    };
+    let completed =
+        submit_warm_render_batch(dev, warm, completion_value, completion_slot, submit_name);
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
         Some(stats_before),
-    ) = (scratch_rt_before, scratch_stats_before)
+        Some(pixels_before),
+    ) = (scratch_rt_before, scratch_stats_before, scratch_pixels_before)
     {
-        crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
+        let scratch_surface_bytes = (draw.rt_pitch as usize)
+            .saturating_mul(draw.target_h as usize)
+            .min(warm.streamout_len);
+        crate::intel::dma_flush(warm.streamout_virt, scratch_surface_bytes);
         let read_scratch_dword = |byte_offset: usize| -> u32 {
             if byte_offset.saturating_add(core::mem::size_of::<u32>()) > warm.streamout_len {
                 return 0;
@@ -6014,34 +6061,119 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
+        let mut pixels_after = Vec::with_capacity(pixels_before.len());
+        for y in 0..draw.target_h {
+            for x in 0..draw.target_w {
+                let byte_offset = y
+                    .saturating_mul(draw.rt_pitch)
+                    .saturating_add(x.saturating_mul(4)) as usize;
+                if byte_offset.saturating_add(4) <= warm.streamout_len {
+                    pixels_after.push(read_scratch_dword(byte_offset));
+                }
+            }
+        }
+        let changed_pixels = pixels_before
+            .iter()
+            .zip(pixels_after.iter())
+            .filter(|(before, after)| before != after)
+            .count();
+        let first_changed_pixel = pixels_before
+            .iter()
+            .zip(pixels_after.iter())
+            .position(|(before, after)| before != after);
         let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
-        let rt_changed = scratch_after != scratch_before
-            || center_after != center_before
-            || post_after != post_before;
+        let rt_changed = changed_pixels != 0;
         let accepted = ps_counter_accept || rt_changed;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "{} scratch-rt-fragment-proof accepted={} completed={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} changed={} ps_delta={} cps_delta={} ps_depth_delta={} source=font-lyon-triangle does_not_prove=display_scanout\n",
+            "{} scratch-rt-fragment-proof accepted={} completed={} completion={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} changed_pixels={} first_changed_pixel={} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} ia_vtx_delta={} ia_prim_delta={} vs_delta={} cl_delta={} cl_prim_delta={} ps_delta={} cps_delta={} ps_depth_delta={} source=font-lyon-triangle does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
+            completion_kind,
             draw.rt_gpu_addr,
             draw.target_w,
             draw.target_h,
             draw.rt_pitch,
+            changed_pixels,
+            first_changed_pixel
+                .map(|index| index as i32)
+                .unwrap_or(-1),
             scratch_before,
             scratch_after,
             center_before,
             center_after,
             post_before,
             post_after,
-            rt_changed as u8,
+            delta.ia_vertices,
+            delta.ia_primitives,
+            delta.vs_invocations,
+            delta.cl_invocations,
+            delta.cl_primitives,
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
         );
+        if submit_name == "font-tessel-3d-once" && completed && changed_pixels != 0 {
+            const DISPLAY_SCALE: usize = 4;
+
+            // Read back the complete linear render target. Pixels which retain
+            // the pre-draw poison become transparent; shader-written RGBA8
+            // pixels are enlarged by a nearest-neighbor display-only lens and
+            // copied into the existing overlay plane. The GPU proof remains a
+            // native 64x64 render target.
+            let mut visible_rgba = Vec::with_capacity(pixels_after.len().saturating_mul(4));
+            for (before, after) in pixels_before.iter().zip(pixels_after.iter()) {
+                if before == after {
+                    visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
+                } else {
+                    visible_rgba.extend_from_slice(&after.to_le_bytes());
+                }
+            }
+            let source_width = draw.target_w as usize;
+            let source_height = draw.target_h as usize;
+            let display_width = source_width.saturating_mul(DISPLAY_SCALE);
+            let display_height = source_height.saturating_mul(DISPLAY_SCALE);
+            let display_pitch = display_width.saturating_mul(4);
+            let mut display_rgba = Vec::with_capacity(display_pitch.saturating_mul(display_height));
+            for source_y in 0..source_height {
+                let source_row = &visible_rgba
+                    [source_y * source_width * 4..(source_y + 1) * source_width * 4];
+                for _ in 0..DISPLAY_SCALE {
+                    for pixel in source_row.chunks_exact(4) {
+                        for _ in 0..DISPLAY_SCALE {
+                            display_rgba.extend_from_slice(pixel);
+                        }
+                    }
+                }
+            }
+            let presented = crate::intel::display::present_rgba_overlay_at(
+                &display_rgba,
+                display_width as u32,
+                display_height as u32,
+                display_pitch,
+                96,
+                96,
+                true,
+                "font-tessel-render-target",
+            );
+            intel_render_focus_log!(
+                "{} visible-stamp presented={} pos=96x96 source_size={}x{} display_size={}x{} scale={} changed_pixels={} source=whole-linear-rgba8-readback\n",
+                submit_name,
+                presented as u8,
+                draw.target_w,
+                draw.target_h,
+                display_width,
+                display_height,
+                DISPLAY_SCALE,
+                changed_pixels,
+            );
+        }
+    }
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, submit_name);
     }
     completed
 }

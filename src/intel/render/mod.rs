@@ -30,7 +30,7 @@
 // stage proofs should only accept on counters or memory changes owned by that
 // boundary.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
 macro_rules! intel_render_focus_log {

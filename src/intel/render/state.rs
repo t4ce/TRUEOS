@@ -328,7 +328,7 @@ const POST_DRAW_PC_RETIRE_SPECTRUM: [PostDrawSyncVariant; 3] = [
 impl PostDrawSyncVariant {
     fn label(self) -> &'static str {
         match self {
-            Self::HeavyAll => "heavy-all",
+            Self::HeavyAll => "host-cs-postsync-rt-flush",
             Self::LightOnlyRetire => "light-only-retire",
             Self::LightPostSyncNoCs => "pc-postsync-no-cs",
             Self::LightCsNoPostSync => "pc-cs-no-postsync",
@@ -370,6 +370,7 @@ impl PostDrawSyncVariant {
 
     fn light_sync_flags(self) -> u32 {
         match self {
+            Self::HeavyAll => PIPE_CONTROL_POST_DRAW_HOST_SYNC_BITS,
             Self::LightPostSyncNoCs => PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS,
             Self::LightCsNoPostSync => PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS,
             _ => PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS,
@@ -386,7 +387,9 @@ impl PostDrawSyncVariant {
 
     fn heavy_sync_flags(self) -> Option<u32> {
         let flags = match self {
-            Self::HeavyAll => PIPE_CONTROL_POST_DRAW_SYNC_BITS,
+            // HeavyAll emits its full flush as the single light-positioned
+            // completion packet, so it cannot be blocked by an earlier PC.
+            Self::HeavyAll => return None,
             Self::LightOnlyRetire => return None,
             Self::LightPostSyncNoCs => return None,
             Self::LightCsNoPostSync => return None,
@@ -939,6 +942,10 @@ impl BackendProbeMode {
 
     fn clip_accept_all(self) -> bool {
         !matches!(self, Self::RasterWmInputOaClipNormal)
+    }
+
+    fn mesa_clip_bypass(self) -> bool {
+        matches!(self, Self::WmLateReemit)
     }
 
     fn enable_perspective_divide(self) -> bool {
@@ -1498,7 +1505,8 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_scratch_rt_submit_name(base);
     }
-    if is_vs_draw_frontier_scratch_submit_name(submit_name)
+    if submit_name == "font-tessel-3d-once"
+        || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {
         return true;

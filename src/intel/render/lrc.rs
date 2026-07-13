@@ -3,6 +3,7 @@ fn init_gen12_lrc_context_image(
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
+    pml4_phys: u64,
 ) -> bool {
     let total_dwords = warm.context_len / core::mem::size_of::<u32>();
     if total_dwords <= LRC_STATE_OFFSET_DWORDS {
@@ -74,9 +75,9 @@ fn init_gen12_lrc_context_image(
     state[idx + 12] = 0x2278;
     state[idx + 13] = 0;
     state[idx + 14] = 0x2274;
-    state[idx + 15] = 0;
+    state[idx + 15] = (pml4_phys >> 32) as u32;
     state[idx + 16] = 0x2270;
-    state[idx + 17] = 0;
+    state[idx + 17] = pml4_phys as u32;
     idx += 18;
 
     state[idx] = mi_lri_cmd(3, MI_LRI_FORCE_POSTED);

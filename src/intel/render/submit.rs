@@ -6,11 +6,12 @@ fn submit_warm_render_batch(
     submit_name: &'static str,
 ) -> bool {
     let stats_before = capture_triangle_stage_stats(dev);
-    let surface_samples_before = if is_surface_draw_submit_name(submit_name) {
-        crate::intel::display::capture_primary_surface_samples()
-    } else {
-        None
-    };
+    let surface_samples_before =
+        if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
+            crate::intel::display::capture_primary_surface_samples()
+        } else {
+            None
+        };
     if is_triangle_debug_submit_name(submit_name) {
         log_triangle_stage_stats(submit_name, "before-submit", true, stats_before, None);
         recover_render_engine_after_nonretired_submit(dev, warm, "triangle-pre-submit");
@@ -20,6 +21,7 @@ fn submit_warm_render_batch(
         crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
     }
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
+    let pml4_phys = render_ppgtt_pml4_phys();
     let Some(ring_ctl) = ring_ctl_value(warm.ring_len) else {
         return false;
     };
@@ -28,10 +30,12 @@ fn submit_warm_render_batch(
         GPU_VA_RING_BASE as u32,
         ring_tail_bytes as u32,
         ring_ctl,
+        pml4_phys,
     ) {
         return false;
     }
-    let (context_desc_lo, context_desc_hi) = build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE);
+    let (context_desc_lo, context_desc_hi) =
+        build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE, pml4_phys != 0);
     write_lrc_ring_tail(warm, ring_tail_bytes as u32);
     log_lrc_ring_image(warm, submit_name);
     let pphwsp_gpu = (GPU_VA_CONTEXT_BASE & !0xFFF) as u32;
@@ -73,7 +77,12 @@ fn submit_warm_render_batch(
 
     let mut completed = false;
     let mut iter = 0usize;
-    while iter < 4096 {
+    let poll_limit = if submit_name == "font-tessel-3d-once" {
+        200_000
+    } else {
+        4096
+    };
+    while iter < poll_limit {
         let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
         let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
         let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
@@ -121,7 +130,11 @@ fn submit_warm_render_batch(
             break;
         }
         if should_log_primary_probe_detail()
-            && (iter == 0 || iter == 256 || iter == 1024 || iter == 4095)
+            && (iter == 0
+                || iter == 256
+                || iter == 4096
+                || iter == 65_536
+                || iter + 1 == poll_limit)
         {
             let poll_stats = capture_triangle_stage_stats(dev);
             crate::log!(
@@ -139,23 +152,6 @@ fn submit_warm_render_batch(
                 result0,
                 result1,
                 result2
-            );
-            intel_render_verbose_log!(
-                "{} poll-stage iter={} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X}\n",
-                submit_name,
-                iter,
-                result_batch_entry,
-                result3,
-                result4,
-                result5,
-                result6,
-                result7,
-                result_pre_light_pc,
-                result_post3d_light,
-                result_post3d_light_hi,
-                result_final_after_light,
-                result_post3d_eop,
-                result_post3d_eop_hi
             );
             intel_render_verbose_log!(
                 "{} poll-counters iter={} ia_vtx={} ia_prim={} vs={} hs={} ds={} gs={} gs_prim={} cl={} cl_prim={} ps={} cps={} ps_depth={} so0={} so_write0={}\n",
@@ -201,7 +197,7 @@ fn submit_warm_render_batch(
     let result_batch_entry = read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD);
     if should_log_primary_probe_detail() {
         crate::log!(
-            "{} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} batch_entry=0x{:08X} post_vf=0x{:08X} post_vs=0x{:08X} post_ps_state=0x{:08X} post_clip=0x{:08X} post_raster=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X}\n",
+            "{} complete={} result0=0x{:08X} result1=0x{:08X} result2=0x{:08X} batch_entry=0x{:08X} vf_state_packet_cs_marker=0x{:08X} vs_state_packet_cs_marker=0x{:08X} ps_state_packet_cs_marker=0x{:08X} clip_state_packet_cs_marker=0x{:08X} raster_state_packet_cs_marker=0x{:08X} pre_light_pc=0x{:08X} post3d_light=0x{:08X} post3d_light_hi=0x{:08X} final_after_light=0x{:08X} post3d_eop=0x{:08X} post3d_hi=0x{:08X} ctl=0x{:08X} instdone=0x{:08X} packet_markers_do_not_prove=engine_stage_execution\n",
             submit_name,
             completed as u8,
             result0,
@@ -222,7 +218,9 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, RCS_RING_CTL),
             crate::intel::mmio_read(dev, RCS_RING_INSTDONE)
         );
-        crate::intel::display::log_primary_surface_samples("post-render");
+        if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
+            crate::intel::display::log_primary_surface_samples("post-render-primary-target");
+        }
     }
     if is_triangle_debug_submit_name(submit_name) {
         intel_render_focus_log!(
@@ -290,7 +288,7 @@ fn submit_warm_render_batch(
                 crate::intel::mmio_read(dev, RCS_RING_IPEHR)
             );
             intel_render_focus_log!(
-                "{} pc-retire-triad-proof accepted={} variant={} light_flags=0x{:08X} light_postsync={} light_cs_stall={} before_light={} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} does_not_prove=rt_write\n",
+                "{} pc-retire-triad-proof accepted={} variant={} light_flags=0x{:08X} light_postsync={} light_cs_stall={} before_light={} post3d_light={} final_after_light={} post3d_heavy={} final={} acthd=0x{:08X} ipehr=0x{:08X} missing_postsync_with_following_mi_retired_means=sync-marker-failure-not-ps-stop does_not_prove=rt_write\n",
                 submit_name,
                 (pre_light_pc_ok && final_after_light_ok) as u8,
                 postdraw_variant.label(),
@@ -568,7 +566,7 @@ fn submit_warm_render_batch(
             result7,
         );
     }
-    if is_surface_draw_submit_name(submit_name) {
+    if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
         if let (Some(before), Some(after)) =
             (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
         {
@@ -1330,7 +1328,7 @@ fn log_triangle_named_proofs(
     );
 
     intel_render_focus_log!(
-        "{} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} post_vf=0x{:08X} post_vf_marker={} vf_vue_clip_frontier={} does_not_prove=vs_or_pixels\n",
+        "{} vf-proof accepted={} ia_vtx_delta={} ia_prim_delta={} vf_state_packet_cs_marker=0x{:08X} vf_state_packet_cs_marker_ok={} vf_vue_clip_frontier={} does_not_prove=vs_or_pixels\n",
         submit_name,
         vf_accept as u8,
         delta.ia_vertices,
@@ -1340,7 +1338,7 @@ fn log_triangle_named_proofs(
         vf_vue_vf_frontier_accept as u8,
     );
     intel_render_focus_log!(
-        "{} vs-proof accepted={} vs_delta={} post_vs=0x{:08X} post_vs_marker={} vf_vue_clip_frontier={} does_not_prove=clip_raster_or_pixels\n",
+        "{} vs-proof accepted={} vs_delta={} vs_state_packet_cs_marker=0x{:08X} vs_state_packet_cs_marker_ok={} vf_vue_clip_frontier={} does_not_prove=clip_raster_or_pixels\n",
         submit_name,
         vs_accept as u8,
         delta.vs_invocations,
@@ -1349,7 +1347,7 @@ fn log_triangle_named_proofs(
         vf_vue_clip_frontier_accept as u8,
     );
     intel_render_focus_log!(
-        "{} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} post_clip=0x{:08X} post_raster=0x{:08X} packet_markers={} does_not_prove=ps_or_rt_write\n",
+        "{} clip-raster-proof accepted={} cl_delta={} cl_prim_delta={} clip_state_packet_cs_marker=0x{:08X} raster_state_packet_cs_marker=0x{:08X} packet_markers={} packet_markers_do_not_prove=clip_or_raster_execution does_not_prove=ps_or_rt_write\n",
         submit_name,
         clip_raster_accept as u8,
         delta.cl_invocations,
@@ -1366,7 +1364,7 @@ fn log_triangle_named_proofs(
         delta.cl_primitives,
     );
     intel_render_focus_log!(
-        "{} raster-packet-proof accepted={} post_clip=0x{:08X} post_raster=0x{:08X} clip_counter={} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} does_not_prove=fragment_samples_or_ps\n",
+        "{} raster-packet-proof accepted={} clip_state_packet_cs_marker=0x{:08X} raster_state_packet_cs_marker=0x{:08X} clip_counter={} sc_instdone=0x{:08X} sc_extra=0x{:08X} sc_extra2=0x{:08X} packet_markers_do_not_prove=raster_execution does_not_prove=fragment_samples_or_ps\n",
         submit_name,
         raster_packet_accept as u8,
         post_clip_marker,
@@ -1928,7 +1926,10 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     set_bits | (update << 16)
 }
 
-fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+fn build_execlist_context_descriptor(
+    context_gpu_addr: u64,
+    ppgtt_enable: bool,
+) -> (u32, u32) {
     static RCS_SUBMIT_COUNTER: core::sync::atomic::AtomicU32 =
         core::sync::atomic::AtomicU32::new(0);
 
@@ -1936,6 +1937,7 @@ fn build_execlist_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let desc = base
         | GEN8_CTX_VALID
         | CTX_DESC_FORCE_RESTORE
+        | if ppgtt_enable { GEN8_CTX_PPGTT_ENABLE } else { 0 }
         | GEN8_CTX_PRIVILEGE
         | GEN12_CTX_PRIORITY_NORMAL
         | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);

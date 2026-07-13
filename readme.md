@@ -1,3 +1,30 @@
+# TRUEOS — native Intel Gen12 3D rendering on bare metal
+
+> [!IMPORTANT]
+> **Milestone reached on 13 July 2026:** TRUEOS directly brought up the Intel
+> Gen12/Xe-LP 3D pipeline, rendered its unchanged tessellated `hello world`
+> mesh, read back the complete RGBA8 render target, and presented the result
+> through its own bare-metal display stack.
+
+The proven draw processed **807 vertices / 269 triangles**, advanced the
+IA, VS, clipping and pixel-shader hardware counters, produced **134 verified
+render-target pixels** in a linear 64×64 buffer, and displayed the result as a
+4× enlarged 256×256 hardware-plane overlay. The demonstrated path is native
+TRUEOS code; Linux DRM/i915, Mesa and vendor graphics drivers are not running
+underneath it.
+
+To the best of our public-source research, this appears to be the **first
+publicly documented hobby-built operating system to directly bring up a modern
+Intel Gen12 3D pipeline and present its rendered output using its own display
+stack**. This is deliberately a public-record claim—private or unpublished
+experiments cannot be surveyed. The closest documented projects are
+[Genode/Sculpt](https://genode.org/documentation/release-notes/22.11), which
+uses Mesa Iris with a custom GPU multiplexer, and Google's institutional
+[Fuchsia Magma](https://fuchsia.dev/fuchsia-src/development/graphics/magma)
+driver architecture. The OSDev Intel documentation still notes that its native
+Intel guide does not cover shader-driven 2D/3D acceleration
+([reference](https://wiki.osdev.org/Native_Intel_graphics)).
+
 Copyright (c) 2026 Jonas Baethke. All rights reserved.
 
 TRUEOS uses a two-lane permission model under `LICENSE`: the first-party source

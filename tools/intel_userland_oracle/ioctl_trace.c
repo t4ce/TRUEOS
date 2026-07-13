@@ -744,14 +744,16 @@ static void log_execbuffer(int fd, const struct drm_i915_gem_execbuffer2 *exec, 
             bo && bo->addr,
             bo ? bo->map_len : 0
         );
+        const int is_batch_object = i + 1 == exec->buffer_count;
         if (bo && bo->addr && (dump_every_exec || !bo->dumped_pre_exec)) {
             dump_bo_bytes("pre_exec", obj->handle, bo->map_bo_offset, bo->addr, bo->map_len);
-            if (strcmp(phase, "pre") == 0 && i == 0) {
+            if (strcmp(phase, "pre") == 0 && is_batch_object) {
                 dump_temp_mmap_bytes(fd, "pre_exec_full_object", obj->handle, bo, 0, (size_t)bo->size);
             }
             bo->dumped_pre_exec = 1;
         }
-        if (bo && strcmp(phase, "pre") == 0 && i == 0 && (dump_every_exec || !bo->dumped_batch_start)) {
+        if (bo && strcmp(phase, "pre") == 0 && is_batch_object &&
+            (dump_every_exec || !bo->dumped_batch_start)) {
             dump_batch_start_window(fd, phase, exec, obj, bo);
             bo->dumped_batch_start = 1;
         }
