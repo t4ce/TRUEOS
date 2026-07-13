@@ -360,7 +360,7 @@ fn render_ppgtt_pml4_phys() -> u64 {
     RENDER_PPGTT_PML4_PHYS.load(Ordering::Acquire)
 }
 
-fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+pub(crate) fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
     let mut guard = RENDER_PPGTT.lock();
     let Some(ppgtt) = guard.as_mut() else {
         return false;
@@ -368,6 +368,14 @@ fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
     ppgtt
         .map_range(crate::intel::ppgtt::PpgttRange { gpu, phys, bytes })
         .is_some()
+}
+
+pub(crate) fn unmap_render_ppgtt_range(gpu: u64, bytes: usize) -> bool {
+    let mut guard = RENDER_PPGTT.lock();
+    let Some(ppgtt) = guard.as_mut() else {
+        return false;
+    };
+    ppgtt.unmap_range(gpu, bytes).is_some()
 }
 
 pub fn warm_state() -> Option<RenderWarmState> {

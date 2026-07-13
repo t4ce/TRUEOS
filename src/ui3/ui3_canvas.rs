@@ -381,16 +381,7 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
                         0
                     };
                     let canvas = current_canvas_rect();
-                    let presented = if result.ok {
-                        crate::ui3::ui3_orbits::submit_canvas_rgba(
-                            canvas,
-                            buffer.virt,
-                            buffer.pitch_bytes as usize,
-                            "ui3-canvas",
-                        ) as u32
-                    } else {
-                        0
-                    };
+        
                     let avg_submit_ms = if result.submitted == 0 {
                         0
                     } else {
@@ -405,7 +396,7 @@ async fn ui3_canvas_worker_task(target: MatrixTarget, session_id: u64, scene: Gp
                                 scene.name(),
                                 result.ok as u8,
                                 result.submitted,
-                                presented,
+                                0, // font opted out!!! temp solution warn may be error or unexpected as i did not fully understand but i just deleted 100 files manually mostly good
                                 result.elapsed_ms,
                                 avg_submit_ms,
                                 result.visible_points,

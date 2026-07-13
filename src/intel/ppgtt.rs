@@ -54,6 +54,12 @@ impl SparsePpgtt {
         self.flush();
         Some(())
     }
+
+    pub(crate) fn unmap_range(&mut self, gpu: u64, bytes: usize) -> Option<()> {
+        unmap_range(self, gpu, bytes)?;
+        self.flush();
+        Some(())
+    }
 }
 
 pub(crate) fn build_sparse_ppgtt_for_ranges(ranges: &[PpgttRange]) -> Option<SparsePpgtt> {
@@ -99,6 +105,45 @@ fn map_page(ppgtt: &mut SparsePpgtt, gpu: u64, phys: u64) -> Option<()> {
         core::ptr::write_volatile(pt.virt.add(pt_index), (phys & ENTRY_ADDR_MASK) | PTE_PRESENT_RW);
     }
     Some(())
+}
+
+fn unmap_range(ppgtt: &mut SparsePpgtt, gpu: u64, bytes: usize) -> Option<()> {
+    if bytes == 0 {
+        return Some(());
+    }
+    let page_count = bytes.checked_add(PAGE_BYTES - 1)? / PAGE_BYTES;
+    for page in 0..page_count {
+        let byte_off = page.checked_mul(PAGE_BYTES)?;
+        unmap_page(ppgtt, gpu.checked_add(byte_off as u64)?)?;
+    }
+    Some(())
+}
+
+fn unmap_page(ppgtt: &SparsePpgtt, gpu: u64) -> Option<()> {
+    let pml4_index = ((gpu >> 39) & 0x1FF) as usize;
+    let pdp_index = ((gpu >> 30) & 0x1FF) as usize;
+    let pd_index = ((gpu >> 21) & 0x1FF) as usize;
+    let pt_index = ((gpu >> 12) & 0x1FF) as usize;
+
+    let pdp = existing_child_table(ppgtt, ppgtt.pml4, pml4_index)?;
+    let pd = existing_child_table(ppgtt, pdp, pdp_index)?;
+    let pt = existing_child_table(ppgtt, pd, pd_index)?;
+    unsafe {
+        core::ptr::write_volatile(pt.virt.add(pt_index), 0);
+    }
+    Some(())
+}
+
+fn existing_child_table(
+    ppgtt: &SparsePpgtt,
+    parent: TablePage,
+    index: usize,
+) -> Option<TablePage> {
+    let entry = unsafe { core::ptr::read_volatile(parent.virt.add(index)) };
+    if entry & PAGE_PRESENT == 0 {
+        return None;
+    }
+    find_table_page(ppgtt, entry & ENTRY_ADDR_MASK)
 }
 
 fn ensure_child_table(

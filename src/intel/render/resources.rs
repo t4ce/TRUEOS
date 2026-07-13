@@ -491,6 +491,188 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
     })
 }
 
+pub(crate) fn create_resident_font_mesh(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+) -> Result<ResidentFontMesh, &'static str> {
+    if vertices.len() < 3
+        || indices.is_empty()
+        || !indices.len().is_multiple_of(3)
+        || indices
+            .iter()
+            .any(|index| *index as usize >= vertices.len())
+    {
+        return Err("resident-font-shape");
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return Err("no-device");
+    };
+    let warm = warm_once(dev);
+    if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
+        return Err("render-ppgtt");
+    }
+
+    let (min_x, min_y, max_x, max_y) = bounds;
+    let width = (max_x - min_x).max(1.0);
+    let height = (max_y - min_y).max(1.0);
+    let scale = 1.8 / width.max(height);
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+    let mut draw_vertices = Vec::with_capacity(vertices.len());
+    for source in vertices {
+        draw_vertices.push([
+            (source[0] - center_x) * scale,
+            (center_y - source[1]) * scale,
+            0.5,
+        ]);
+    }
+    let mut draw_indices = Vec::with_capacity(indices.len());
+    for triangle in indices.chunks_exact(3) {
+        let v0 = draw_vertices[triangle[0] as usize];
+        let v1 = draw_vertices[triangle[1] as usize];
+        let v2 = draw_vertices[triangle[2] as usize];
+        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1])
+            - (v1[1] - v0[1]) * (v2[0] - v0[0]);
+        if area2 < 0.0 {
+            draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
+        } else {
+            draw_indices.extend_from_slice(triangle);
+        }
+    }
+
+    let vertex_bytes = draw_vertices
+        .len()
+        .checked_mul(core::mem::size_of::<[f32; 3]>())
+        .ok_or("resident-font-bytes")?;
+    let index_offset = crate::intel::align_up(vertex_bytes, 64).ok_or("resident-font-align")?;
+    let index_bytes = draw_indices
+        .len()
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("resident-font-bytes")?;
+    let used_bytes = index_offset
+        .checked_add(index_bytes)
+        .ok_or("resident-font-bytes")?;
+    let storage_bytes = crate::intel::align_up(used_bytes, 4096).ok_or("resident-font-align")?;
+    let gpu_base = reserve_persistent_font_gpu_va(storage_bytes).ok_or("resident-font-va")?;
+    let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-font-count")?;
+    let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-font-count")?;
+    let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-font-count")?;
+    let index_bytes_u32 = u32::try_from(index_bytes).map_err(|_| "resident-font-count")?;
+    let index_gpu_addr = gpu_base
+        .checked_add(index_offset as u64)
+        .ok_or("resident-font-address")?;
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+        return Err("resident-font-alloc");
+    };
+
+    unsafe {
+        core::ptr::write_bytes(storage_virt, 0, storage_bytes);
+        core::ptr::copy_nonoverlapping(
+            draw_vertices.as_ptr() as *const u8,
+            storage_virt,
+            vertex_bytes,
+        );
+        core::ptr::copy_nonoverlapping(
+            draw_indices.as_ptr() as *const u8,
+            storage_virt.add(index_offset),
+            index_bytes,
+        );
+    }
+    crate::intel::dma_flush(storage_virt, storage_bytes);
+    if !map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes) {
+        crate::dma::dealloc(storage_virt, storage_bytes);
+        return Err("resident-font-map");
+    }
+
+    let resident = ResidentFontMesh {
+        storage_phys,
+        storage_virt,
+        storage_bytes,
+        gpu_base,
+        vertex_gpu_addr: gpu_base,
+        vertex_count,
+        vertex_bytes: vertex_bytes_u32,
+        index_gpu_addr,
+        index_count,
+        index_bytes: index_bytes_u32,
+    };
+    intel_render_focus_log!(
+        "resident-font upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} cpu_uploads=1 retained=1\n",
+        resident.storage_phys,
+        resident.gpu_base,
+        resident.storage_bytes,
+        resident.vertex_count,
+        resident.index_count,
+    );
+    Ok(resident)
+}
+
+pub(crate) fn release_resident_font_mesh(mesh: &ResidentFontMesh) -> bool {
+    if !unmap_render_ppgtt_range(mesh.gpu_base, mesh.storage_bytes) {
+        return false;
+    }
+    crate::dma::dealloc(mesh.storage_virt, mesh.storage_bytes);
+    true
+}
+
+fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
+    let bytes = crate::intel::align_up(bytes, 4096)? as u64;
+    loop {
+        let current = PERSISTENT_FONT_GPU_VA_CURSOR.load(Ordering::Acquire);
+        let aligned = (current.checked_add(4095)?) & !4095;
+        let next = aligned.checked_add(bytes)?;
+        if next > GPU_VA_PERSISTENT_FONT_LIMIT {
+            return None;
+        }
+        if PERSISTENT_FONT_GPU_VA_CURSOR
+            .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(aligned);
+        }
+    }
+}
+
+fn prepare_triangle_draw_resources_for_resident_font_mesh(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    mesh: &ResidentFontMesh,
+) -> Option<TriangleDrawPrep> {
+    if mesh.vertex_count < 3
+        || mesh.index_count < 3
+        || !mesh.index_count.is_multiple_of(3)
+        || mesh.vertex_bytes == 0
+        || mesh.index_bytes == 0
+    {
+        return None;
+    }
+    unsafe {
+        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    }
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+    Some(TriangleDrawPrep {
+        vertex_count: mesh.index_count,
+        vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
+        vertex_buffer_bytes: mesh.vertex_bytes,
+        vertex_format: TriangleVertexFormat::Float3,
+        vertex_gpu_addr: mesh.vertex_gpu_addr,
+        index_buffer: Some(TriangleIndexBufferPrep {
+            index_count: mesh.index_count,
+            byte_len: mesh.index_bytes,
+            gpu_addr: mesh.index_gpu_addr,
+        }),
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_pitch: u32::try_from(pitch).ok()?,
+        target_w: u32::try_from(rect_w).ok()?,
+        target_h: u32::try_from(rect_h).ok()?,
+    })
+}
+
 fn prepare_triangle_draw_resources_for_gpu_font_mesh(
     warm: RenderWarmState,
     dst_gpu_addr: u64,

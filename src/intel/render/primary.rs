@@ -37,6 +37,10 @@ pub(crate) fn submit_font_mesh_once(
     )
 }
 
+pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
+    native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
+}
+
 /// Submit the already-tessellated font mesh at a native pixel scale.
 ///
 /// Scaling is performed by the 3D viewport after tessellation: the mesh and
@@ -50,7 +54,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
     if vertices.is_empty() || indices.is_empty() || !indices.len().is_multiple_of(3) {
         return Err("font-mesh-shape");
     }
-    if native_scale == 0 || native_scale > FONT_STAMP_MAX_NATIVE_SCALE {
+    if !font_native_scale_supported(native_scale) {
         return Err("font-native-scale-range");
     }
     if PRIMARY_PROBE_IN_FLIGHT
@@ -103,10 +107,57 @@ pub(crate) fn submit_font_mesh_once_scaled(
     let result = submit_render_custom_triangle_probe_locked_at_size(
         &draw_vertices,
         Some(&draw_indices),
+        None,
         "font-tessel-once",
         "font-tessel-3d-once",
         "font-tessel-full-mesh",
         "lyon-font-indexed-mesh/gpu-index-fetch",
+        TriangleBlendProbeMode::MesaZeroedState,
+        BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        TriangleBatchMode::Draw,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
+        target_size,
+    );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
+/// Draw a kernel-owned font mesh directly from its persistent render-PPGTT
+/// allocation. Only transient pipeline state and the target are rebuilt; the
+/// vertex and index bytes are neither copied nor uploaded again.
+pub(crate) fn submit_resident_font_mesh_once(
+    mesh: &ResidentFontMesh,
+    native_scale: u32,
+) -> Result<RenderJokerResult, &'static str> {
+    if mesh.vertex_count < 3
+        || mesh.index_count < 3
+        || !mesh.index_count.is_multiple_of(3)
+        || mesh.vertex_bytes == 0
+        || mesh.index_bytes == 0
+    {
+        return Err("resident-font-shape");
+    }
+    if !font_native_scale_supported(native_scale) {
+        return Err("font-native-scale-range");
+    }
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
+    let result = submit_render_custom_triangle_probe_locked_at_size(
+        &[],
+        None,
+        Some(mesh),
+        "font-resident-reuse",
+        "font-resident-3d",
+        "kernel-font-service-resident-indexed-mesh",
+        "resident-render-ppgtt-vb-ib",
         TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
@@ -178,6 +229,7 @@ pub(crate) fn submit_gpu_font_outline_mesh_once(
             &[],
             None,
             Some(mesh),
+            None,
             "skrifa-gpgpu-full-text-outline-stroke",
             SUBMIT_NAME,
             TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -2798,6 +2850,7 @@ fn submit_render_custom_triangle_probe_locked(
     submit_render_custom_triangle_probe_locked_at_size(
         vertices,
         indices,
+        None,
         variant,
         submit_name,
         geometry_label,
@@ -2815,6 +2868,7 @@ fn submit_render_custom_triangle_probe_locked(
 fn submit_render_custom_triangle_probe_locked_at_size(
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
+    resident_mesh: Option<&ResidentFontMesh>,
     variant: &'static str,
     submit_name: &'static str,
     geometry_label: &'static str,
@@ -2887,7 +2941,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         submit_name,
         target_size,
         target_size,
-        if submit_name == "font-tessel-3d-once" {
+        if matches!(submit_name, "font-tessel-3d-once" | "font-resident-3d") {
             target_size / FONT_STAMP_BASE_SIZE
         } else {
             1
@@ -2909,6 +2963,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         vertices,
         indices,
         None,
+        resident_mesh,
         geometry_label,
         submit_name,
         front_end_contract,
@@ -5893,6 +5948,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
     gpu_mesh: Option<crate::intel::gpgpu::GpgpuFontOutlineMesh>,
+    resident_mesh: Option<&ResidentFontMesh>,
     geometry_label: &'static str,
     submit_name: &'static str,
     front_end_contract: TriangleFrontEndContract,
@@ -5901,7 +5957,20 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> bool {
-    let draw = if let Some(mesh) = gpu_mesh {
+    let draw = if let Some(mesh) = resident_mesh {
+        if batch_mode.vf_synthesized_vue() {
+            None
+        } else {
+            prepare_triangle_draw_resources_for_resident_font_mesh(
+                warm,
+                dst_gpu_addr,
+                pitch,
+                rect_w,
+                rect_h,
+                mesh,
+            )
+        }
+    } else if let Some(mesh) = gpu_mesh {
         if batch_mode.vf_synthesized_vue() {
             None
         } else {
@@ -6014,17 +6083,36 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline_note
     );
     let sf_viewport_transform = !batch_mode.screen_space_raster();
-    let coverage_contract = if gpu_mesh.is_some() {
+    let coverage_contract = if resident_mesh.is_some() {
+        "kernel-font-service-resident-indexed-clip-space"
+    } else if gpu_mesh.is_some() {
         "gpgpu-generated-full-text-outline-stroke-clip-space"
     } else if sf_viewport_transform {
         "font-lyon-clip-field-viewport-transform"
     } else {
         "font-lyon-clip-field-screen-space"
     };
-    let unique_vertex_count = gpu_mesh
+    let unique_vertex_count = resident_mesh
         .map(|mesh| mesh.vertex_count as usize)
+        .or_else(|| gpu_mesh.map(|mesh| mesh.vertex_count as usize))
         .unwrap_or(vertices.len());
-    if let Some(mesh) = gpu_mesh {
+    if let Some(mesh) = resident_mesh {
+        intel_render_focus_log!(
+            "{} fragment-candidate-shape accepted=1 geometry={} producer=kernel-font-service authority=borrowed-gpu-resident topology=trilist indexed=1 unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} vb_gpu=0x{:X} ib_gpu=0x{:X} resident_bytes=0x{:X} target={}x{} coverage_contract={} cpu_geometry_copy=0 does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry_label,
+            mesh.vertex_count,
+            draw.vertex_count,
+            draw.vertex_count / 3,
+            sf_viewport_transform as u8,
+            mesh.vertex_gpu_addr,
+            mesh.index_gpu_addr,
+            mesh.storage_bytes,
+            draw.target_w,
+            draw.target_h,
+            coverage_contract,
+        );
+    } else if let Some(mesh) = gpu_mesh {
         intel_render_focus_log!(
             "{} fragment-candidate-shape accepted=1 geometry={} producer=gpgpu topology=trilist indexed=1 unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} bounds=[{:.2},{:.2}..{:.2},{:.2}] target={}x{} coverage_contract={} cpu_vertex_readback=0 does_not_prove=raster_samples_or_ps\n",
             submit_name,
@@ -6270,7 +6358,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 
     let (completion_value, completion_slot, completion_kind) = if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
     )
         && post_draw_sync_variant == PostDrawSyncVariant::HeavyAll
     {
@@ -6360,7 +6448,9 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
-            if gpu_mesh.is_some() {
+            if resident_mesh.is_some() {
+                "kernel-font-service-resident-indexed"
+            } else if gpu_mesh.is_some() {
                 "gpgpu-generated-indexed-stroke"
             } else {
                 "font-lyon-triangle"
@@ -6368,7 +6458,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         );
         if matches!(
             submit_name,
-            "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+            "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
         ) && completed
             && changed_pixels != 0
         {

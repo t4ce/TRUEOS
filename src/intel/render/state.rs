@@ -111,6 +111,27 @@ struct TriangleVertexUploadProof {
     cpu_readback_ok: bool,
 }
 
+/// Kernel-owned, page-backed font geometry retained in the render PPGTT.
+///
+/// The CPU virtual address exists only so the owning font-service lease can
+/// eventually release the DMA allocation. Draw submission consumes the GPU
+/// addresses directly and never re-uploads these bytes through warm scratch.
+pub(crate) struct ResidentFontMesh {
+    pub(crate) storage_phys: u64,
+    pub(crate) storage_virt: *mut u8,
+    pub(crate) storage_bytes: usize,
+    pub(crate) gpu_base: u64,
+    pub(crate) vertex_gpu_addr: u64,
+    pub(crate) vertex_count: u32,
+    pub(crate) vertex_bytes: u32,
+    pub(crate) index_gpu_addr: u64,
+    pub(crate) index_count: u32,
+    pub(crate) index_bytes: u32,
+}
+
+unsafe impl Send for ResidentFontMesh {}
+unsafe impl Sync for ResidentFontMesh {}
+
 #[derive(Copy, Clone)]
 struct TriangleShaderStageLayout {
     code_offset_bytes: u32,
@@ -1523,7 +1544,7 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     }
     if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
     )
         || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)

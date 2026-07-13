@@ -432,7 +432,6 @@ pub fn apply_report(
         let ch = ascii[idx];
         if key != 0 && !key_is_down(&prev_keys, key) {
             if key == 0x2C && (modifiers & KEYBOARD_CTRL_MOD_MASK) != 0 {
-                crate::ui3::ui3_orbits::toggle_slot1_cursor_orbit_buttons();
                 continue;
             }
             if let Some(key_code) = hid_boot_keycode_to_named_key(key) {
