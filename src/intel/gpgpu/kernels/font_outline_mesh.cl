@@ -18,13 +18,15 @@
 
 #define REPORT_DWORDS 64u
 #define VERTEX_DWORD_OFFSET 64u
-#define INDEX_DWORD_OFFSET 1536u
-#define OUTPUT_LAYOUT_VERSION 1u
+#define INDEX_DWORD_OFFSET 8192u
+#define OUTPUT_LAYOUT_VERSION 2u
 #define RESULT_MAGIC 0xF07ECA00u
 #define RESULT_DONE 0xC001D00Du
 
 inline float2 map_font_point(float2 p, float scale, float2 origin) {
-    return (float2)(origin.x + p.x * scale, origin.y - p.y * scale);
+    // The render viewport already has a negative Y scale. Preserve the font's
+    // Y-up coordinates here so ascenders remain above the baseline on screen.
+    return (float2)(origin.x + p.x * scale, origin.y + p.y * scale);
 }
 
 inline void include_bounds(float2 p, float2 *lo, float2 *hi, uint *have_bounds) {

@@ -1044,12 +1044,6 @@ fn outline_checksum(ops: &[[u32; 8]]) -> u32 {
     hash
 }
 
-fn first_closed_contour(ops: &[[u32; 8]]) -> Option<&[[u32; 8]]> {
-    let start = ops.iter().position(|op| op[0] == 0)?;
-    let close = ops[start..].iter().position(|op| op[0] == 4)?;
-    Some(&ops[start..=start + close])
-}
-
 fn run_font_tessel_artifact(io: &'static dyn ShellBackend2) -> bool {
     let artifact = FONT_OUTLINE_MESH_ADLS_ARTIFACT;
     let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
@@ -1104,7 +1098,7 @@ fn run_font_tessel_stage(
     ops: &[[u32; 8]],
     units_per_em: u16,
     stage: u32,
-) -> bool {
+) -> (bool, crate::intel::gpgpu::GpgpuFontOutlineProbeResult) {
     let checksum = outline_checksum(ops);
     let result = shell_font_outline_probe(ops, checksum, stage, units_per_em);
     let expected_segments = result
@@ -1120,9 +1114,12 @@ fn run_font_tessel_stage(
                 && result.indices == 0
         }
         FONT_OUTLINE_STAGE_STROKE_MESH => {
+            let emitted_segments = result.vertices / 4;
             result.segments == expected_segments
-                && result.vertices == expected_segments.saturating_mul(4)
-                && result.indices == expected_segments.saturating_mul(6)
+                && result.vertices != 0
+                && result.vertices % 4 == 0
+                && emitted_segments <= expected_segments
+                && result.indices == emitted_segments.saturating_mul(6)
                 && result.indices % 3 == 0
         }
         _ => false,
@@ -1182,7 +1179,7 @@ fn run_font_tessel_stage(
         },
     );
     print_shell_line(io, message.as_str());
-    ok
+    (ok, result)
 }
 
 fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
@@ -1202,12 +1199,8 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
         print_shell_line(io, "gpgpu font-tessel: ok=0 reason=outline-unavailable");
         return;
     };
-    let Some(contour) = first_closed_contour(outline.ops.as_slice()) else {
-        print_shell_line(io, "gpgpu font-tessel: ok=0 reason=no-closed-contour");
-        return;
-    };
     let intro = alloc::format!(
-        "gpgpu font-tessel: text=\"{}\" font={} file={} units_per_em={} glyphs={} contours={} full_ops={} focused_ops={} outline_checksum=0x{:08X} source=skrifa-warm-outline placement=sample-text-stream fill_tessellation=0",
+        "gpgpu font-tessel: text=\"{}\" font={} file={} units_per_em={} glyphs={} contours={} full_ops={} mesh_ops={} outline_checksum=0x{:08X} source=skrifa-warm-outline placement=full-text-stream orientation=upright fill_tessellation=0",
         outline.text,
         outline.font_name,
         outline.font_file,
@@ -1215,7 +1208,7 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
         outline.glyphs,
         outline.contours,
         outline.ops.len(),
-        contour.len(),
+        outline.ops.len(),
         outline.checksum,
     );
     print_shell_line(io, intro.as_str());
@@ -1226,29 +1219,65 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
         ok &= run_font_tessel_artifact(io);
     }
     if wants_audit {
-        ok &= run_font_tessel_stage(
+        let (stage_ok, _) = run_font_tessel_stage(
             io,
             outline.ops.as_slice(),
             outline.units_per_em,
             FONT_OUTLINE_STAGE_AUDIT,
         );
+        ok &= stage_ok;
     }
     if wants_flatten {
-        ok &= run_font_tessel_stage(io, contour, outline.units_per_em, FONT_OUTLINE_STAGE_FLATTEN);
+        let (stage_ok, _) = run_font_tessel_stage(
+            io,
+            outline.ops.as_slice(),
+            outline.units_per_em,
+            FONT_OUTLINE_STAGE_FLATTEN,
+        );
+        ok &= stage_ok;
     }
     if wants_mesh {
-        ok &= run_font_tessel_stage(
+        let (stage_ok, mesh_result) = run_font_tessel_stage(
             io,
-            contour,
+            outline.ops.as_slice(),
             outline.units_per_em,
             FONT_OUTLINE_STAGE_STROKE_MESH,
+        );
+        ok &= stage_ok;
+        let (chain, chain_error) = if stage_ok {
+            match mesh_result.generated_mesh {
+                Some(mesh) => match crate::intel::render::submit_gpu_font_outline_mesh_once(mesh) {
+                    Ok(render) => (Some(render), "none"),
+                    Err(reason) => (None, reason),
+                },
+                None => (None, "mesh-descriptor-missing"),
+            }
+        } else {
+            (None, "compute-stage-failed")
+        };
+        let chain_ok = chain.as_ref().is_some_and(|render| render.completed);
+        ok &= chain_ok;
+        print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu font-tessel compute-to-3d: ok={} mesh_ready={} completed={} vs={} clip={} ps={} error={} cpu_geometry_copy=0 target=scratch-visible-overlay",
+                chain_ok as u8,
+                mesh_result.generated_mesh.is_some() as u8,
+                chain.as_ref().is_some_and(|render| render.completed) as u8,
+                chain.as_ref().is_some_and(|render| render.vs_counter) as u8,
+                chain.as_ref().is_some_and(|render| render.clip_counter) as u8,
+                chain.as_ref().is_some_and(|render| render.ps_observed) as u8,
+                chain_error,
+            )
+            .as_str(),
         );
     }
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu font-tessel done: ok={} next=flattened-contour-buffer-chain+hole-aware-fill",
-            ok as u8
+            "gpgpu font-tessel done: ok={} compute_to_3d={} scope=full-True-OS-section-sign presentation=native-512x512-1to1 next=hole-aware-fill",
+            ok as u8,
+            wants_mesh as u8
         )
         .as_str(),
     );

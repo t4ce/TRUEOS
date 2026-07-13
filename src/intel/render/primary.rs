@@ -29,8 +29,29 @@ pub(crate) fn submit_font_mesh_once(
     indices: &[u32],
     bounds: (f32, f32, f32, f32),
 ) -> Result<RenderJokerResult, &'static str> {
+    submit_font_mesh_once_scaled(
+        vertices,
+        indices,
+        bounds,
+        FONT_STAMP_DEFAULT_NATIVE_SCALE,
+    )
+}
+
+/// Submit the already-tessellated font mesh at a native pixel scale.
+///
+/// Scaling is performed by the 3D viewport after tessellation: the mesh and
+/// index topology remain unchanged, and presentation remains a 1:1 copy.
+pub(crate) fn submit_font_mesh_once_scaled(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+    native_scale: u32,
+) -> Result<RenderJokerResult, &'static str> {
     if vertices.is_empty() || indices.is_empty() || !indices.len().is_multiple_of(3) {
         return Err("font-mesh-shape");
+    }
+    if native_scale == 0 || native_scale > FONT_STAMP_MAX_NATIVE_SCALE {
+        return Err("font-native-scale-range");
     }
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -76,7 +97,10 @@ pub(crate) fn submit_font_mesh_once(
         }
     }
 
-    let result = submit_render_custom_triangle_probe_locked(
+    // The validated 1..=8 range and 64px base make this multiplication bounded
+    // by FONT_PROOF_TARGET_SIZE.
+    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
+    let result = submit_render_custom_triangle_probe_locked_at_size(
         &draw_vertices,
         Some(&draw_indices),
         "font-tessel-once",
@@ -89,7 +113,101 @@ pub(crate) fn submit_font_mesh_once(
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
+        target_size,
     );
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
+pub(crate) fn submit_gpu_font_outline_mesh_once(
+    mesh: crate::intel::gpgpu::GpgpuFontOutlineMesh,
+) -> Result<RenderJokerResult, &'static str> {
+    const SUBMIT_NAME: &str = "font-outline-gpu-mesh-3d";
+
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+    let result = (|| {
+        let Some(dev) = crate::intel::claimed_device() else {
+            return Err("no-device");
+        };
+        let warm = warm_once(dev);
+        let target_pitch = FONT_PROOF_TARGET_SIZE * core::mem::size_of::<u32>();
+        let target_bytes = target_pitch * FONT_PROOF_TARGET_SIZE;
+        if warm.streamout_len < target_bytes || warm.streamout_virt.is_null() {
+            return Err("warm-scratch");
+        }
+        if !forcewake_render_acquire(warm) {
+            return Err("forcewake");
+        }
+        if !ensure_smoke_buffers_mapped(dev, warm) {
+            return Err("render-map");
+        }
+
+        unsafe {
+            let scratch_pixels = core::slice::from_raw_parts_mut(
+                warm.streamout_virt as *mut u32,
+                FONT_PROOF_TARGET_SIZE * FONT_PROOF_TARGET_SIZE,
+            );
+            scratch_pixels.fill(0xDEAD_BEEF);
+        }
+        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
+
+        let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+        intel_render_focus_log!(
+            "gpu-font-chain begin seq={} submit={} producer=gpgpu consumer=3d vertices={} indices={} storage_phys=0x{:X} cpu_geometry_copy=0 target={}x{}\n",
+            probe_seq,
+            SUBMIT_NAME,
+            mesh.vertex_count,
+            mesh.index_count,
+            mesh.storage_phys,
+            FONT_PROOF_TARGET_SIZE,
+            FONT_PROOF_TARGET_SIZE,
+        );
+        let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
+            dev,
+            warm,
+            GPU_VA_STREAMOUT_BASE,
+            target_pitch,
+            FONT_PROOF_TARGET_SIZE,
+            FONT_PROOF_TARGET_SIZE,
+            TriangleBlendProbeMode::MesaZeroedState,
+            &[],
+            None,
+            Some(mesh),
+            "skrifa-gpgpu-full-text-outline-stroke",
+            SUBMIT_NAME,
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            BackendProbeMode::MesaLike,
+            PostDrawSyncVariant::HeavyAll,
+            TriangleBatchMode::Draw,
+            StreamoutProofExperiment::PositionSlot1,
+        );
+        let frontier = latest_render_frontier_summary();
+        intel_render_focus_log!(
+            "gpu-font-chain end seq={} submit={} completed={} vs={} clip={} ps={} cpu_geometry_copy=0\n",
+            probe_seq,
+            SUBMIT_NAME,
+            completed as u8,
+            frontier.vs_counter as u8,
+            frontier.clip_counter as u8,
+            frontier.ps_observed as u8,
+        );
+        Ok(RenderJokerResult {
+            variant: "gpgpu-full-text-outline-stroke-indexed",
+            submit_name: SUBMIT_NAME,
+            target: "scratch",
+            completed,
+            vs_counter: frontier.vs_counter,
+            ps_state_marker: frontier.ps_state_marker,
+            raster_packet: frontier.raster_packet,
+            clip_counter: frontier.clip_counter,
+            ps_observed: frontier.ps_observed,
+        })
+    })();
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
 }
@@ -2670,9 +2788,45 @@ fn submit_render_custom_triangle_probe_locked(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> Result<RenderJokerResult, &'static str> {
-    const FONT_STAMP_SIZE: usize = 64;
     const LEGACY_PROBE_SIZE: usize = 8;
 
+    let target_size = if submit_name == "font-tessel-3d-once" {
+        FONT_STAMP_BASE_SIZE
+    } else {
+        LEGACY_PROBE_SIZE
+    };
+    submit_render_custom_triangle_probe_locked_at_size(
+        vertices,
+        indices,
+        variant,
+        submit_name,
+        geometry_label,
+        source_label,
+        blend_mode,
+        backend_probe_mode,
+        post_draw_sync_variant,
+        front_end_contract,
+        batch_mode,
+        streamout_experiment,
+        target_size,
+    )
+}
+
+fn submit_render_custom_triangle_probe_locked_at_size(
+    vertices: &[[f32; 3]],
+    indices: Option<&[u32]>,
+    variant: &'static str,
+    submit_name: &'static str,
+    geometry_label: &'static str,
+    source_label: &'static str,
+    blend_mode: TriangleBlendProbeMode,
+    backend_probe_mode: BackendProbeMode,
+    post_draw_sync_variant: PostDrawSyncVariant,
+    front_end_contract: TriangleFrontEndContract,
+    batch_mode: TriangleBatchMode,
+    streamout_experiment: StreamoutProofExperiment,
+    target_size: usize,
+) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
         crate::log!(
@@ -2694,11 +2848,6 @@ fn submit_render_custom_triangle_probe_locked(
         return Err("no-device");
     };
     let warm = warm_once(dev);
-    let target_size = if submit_name == "font-tessel-3d-once" {
-        FONT_STAMP_SIZE
-    } else {
-        LEGACY_PROBE_SIZE
-    };
     let target_pitch = target_size * core::mem::size_of::<u32>();
     let target_bytes = target_pitch.saturating_mul(target_size);
     if warm.ring_len == 0
@@ -2733,9 +2882,16 @@ fn submit_render_custom_triangle_probe_locked(
     crate::intel::dma_flush(warm.streamout_virt, target_bytes);
 
     intel_render_focus_log!(
-        "custom-triangle begin seq={} submit={} target=scratch backend={} blend={} sync={} front_end={} source={}\n",
+        "custom-triangle begin seq={} submit={} target=scratch size={}x{} native_font_scale={} backend={} blend={} sync={} front_end={} source={}\n",
         probe_seq,
         submit_name,
+        target_size,
+        target_size,
+        if submit_name == "font-tessel-3d-once" {
+            target_size / FONT_STAMP_BASE_SIZE
+        } else {
+            1
+        },
         backend_probe_mode.label(),
         blend_mode.label(),
         post_draw_sync_variant.label(),
@@ -2752,6 +2908,7 @@ fn submit_render_custom_triangle_probe_locked(
         blend_mode,
         vertices,
         indices,
+        None,
         geometry_label,
         submit_name,
         front_end_contract,
@@ -4576,7 +4733,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     );
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
-        Some(stats_before),
+        Some(_stats_before),
     ) = (scratch_rt_before, scratch_stats_before)
     {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
@@ -4592,7 +4749,10 @@ fn submit_triangle_vf_draw_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
-        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
+        // submit_warm_render_batch installs a freshly zeroed LRC image. The
+        // pre-submit MMIO sample is from the outgoing context, while these are
+        // the complete counters of the submitted context.
+        let delta = capture_triangle_stage_stats(dev);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
         let rt_changed = scratch_after != scratch_before
@@ -5674,7 +5834,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     }
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
-        Some(stats_before),
+        Some(_stats_before),
     ) = (scratch_rt_before, scratch_stats_before)
     {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
@@ -5690,7 +5850,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
-        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
+        let delta = capture_triangle_stage_stats(dev);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
         let rt_changed = scratch_after != scratch_before
@@ -5732,6 +5892,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     blend_mode: TriangleBlendProbeMode,
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
+    gpu_mesh: Option<crate::intel::gpgpu::GpgpuFontOutlineMesh>,
     geometry_label: &'static str,
     submit_name: &'static str,
     front_end_contract: TriangleFrontEndContract,
@@ -5740,7 +5901,20 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
 ) -> bool {
-    let draw = if let Some(indices) = indices {
+    let draw = if let Some(mesh) = gpu_mesh {
+        if batch_mode.vf_synthesized_vue() {
+            None
+        } else {
+            prepare_triangle_draw_resources_for_gpu_font_mesh(
+                warm,
+                dst_gpu_addr,
+                pitch,
+                rect_w,
+                rect_h,
+                mesh,
+            )
+        }
+    } else if let Some(indices) = indices {
         if batch_mode.vf_synthesized_vue() {
             None
         } else {
@@ -5840,41 +6014,65 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline_note
     );
     let sf_viewport_transform = !batch_mode.screen_space_raster();
-    let coverage_contract = if sf_viewport_transform {
+    let coverage_contract = if gpu_mesh.is_some() {
+        "gpgpu-generated-full-text-outline-stroke-clip-space"
+    } else if sf_viewport_transform {
         "font-lyon-clip-field-viewport-transform"
     } else {
         "font-lyon-clip-field-screen-space"
     };
-    let first_triangle_indices = indices
-        .map(|indices| [indices[0] as usize, indices[1] as usize, indices[2] as usize])
-        .unwrap_or([0, 1, 2]);
-    let first_triangle = [
-        vertices[first_triangle_indices[0]],
-        vertices[first_triangle_indices[1]],
-        vertices[first_triangle_indices[2]],
-    ];
-    intel_render_focus_log!(
-        "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist indexed={} unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} first_triangle=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
-        submit_name,
-        geometry_label,
-        draw.index_buffer.is_some() as u8,
-        vertices.len(),
-        draw.vertex_count,
-        draw.vertex_count / 3,
-        sf_viewport_transform as u8,
-        first_triangle[0][0],
-        first_triangle[0][1],
-        first_triangle[0][2],
-        first_triangle[1][0],
-        first_triangle[1][1],
-        first_triangle[1][2],
-        first_triangle[2][0],
-        first_triangle[2][1],
-        first_triangle[2][2],
-        draw.target_w,
-        draw.target_h,
-        coverage_contract,
-    );
+    let unique_vertex_count = gpu_mesh
+        .map(|mesh| mesh.vertex_count as usize)
+        .unwrap_or(vertices.len());
+    if let Some(mesh) = gpu_mesh {
+        intel_render_focus_log!(
+            "{} fragment-candidate-shape accepted=1 geometry={} producer=gpgpu topology=trilist indexed=1 unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} bounds=[{:.2},{:.2}..{:.2},{:.2}] target={}x{} coverage_contract={} cpu_vertex_readback=0 does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry_label,
+            mesh.vertex_count,
+            draw.vertex_count,
+            draw.vertex_count / 3,
+            sf_viewport_transform as u8,
+            mesh.min_x,
+            mesh.min_y,
+            mesh.max_x,
+            mesh.max_y,
+            draw.target_w,
+            draw.target_h,
+            coverage_contract,
+        );
+    } else {
+        let first_triangle_indices = indices
+            .map(|indices| [indices[0] as usize, indices[1] as usize, indices[2] as usize])
+            .unwrap_or([0, 1, 2]);
+        let first_triangle = [
+            vertices[first_triangle_indices[0]],
+            vertices[first_triangle_indices[1]],
+            vertices[first_triangle_indices[2]],
+        ];
+        intel_render_focus_log!(
+            "{} fragment-candidate-shape accepted=1 geometry={} topology=trilist indexed={} unique_vertices={} draw_vertices={} triangles={} sf_viewport_transform={} first_triangle=v0[{:.3},{:.3},{:.3}] v1[{:.3},{:.3},{:.3}] v2[{:.3},{:.3},{:.3}] target={}x{} coverage_contract={} does_not_prove=raster_samples_or_ps\n",
+            submit_name,
+            geometry_label,
+            draw.index_buffer.is_some() as u8,
+            unique_vertex_count,
+            draw.vertex_count,
+            draw.vertex_count / 3,
+            sf_viewport_transform as u8,
+            first_triangle[0][0],
+            first_triangle[0][1],
+            first_triangle[0][2],
+            first_triangle[1][0],
+            first_triangle[1][1],
+            first_triangle[1][2],
+            first_triangle[2][0],
+            first_triangle[2][1],
+            first_triangle[2][2],
+            draw.target_w,
+            draw.target_h,
+            coverage_contract,
+        );
+    }
 
     let programmed_vs_urb_output_length = front_end_contract
         .vs_urb_output_length_override
@@ -5922,7 +6120,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         draw.target_h,
         draw.rt_pitch,
         draw.index_buffer.is_some() as u8,
-        vertices.len(),
+        unique_vertex_count,
         draw.vertex_count,
         draw.vertex_stride,
         shader_layout.vs.code_size_bytes,
@@ -6070,8 +6268,10 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         None
     };
 
-    let (completion_value, completion_slot, completion_kind) = if submit_name
-        == "font-tessel-3d-once"
+    let (completion_value, completion_slot, completion_kind) = if matches!(
+        submit_name,
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+    )
         && post_draw_sync_variant == PostDrawSyncVariant::HeavyAll
     {
         (
@@ -6086,7 +6286,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         submit_warm_render_batch(dev, warm, completion_value, completion_slot, submit_name);
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
-        Some(stats_before),
+        Some(_stats_before),
         Some(pixels_before),
     ) = (scratch_rt_before, scratch_stats_before, scratch_pixels_before)
     {
@@ -6126,14 +6326,14 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             .iter()
             .zip(pixels_after.iter())
             .position(|(before, after)| before != after);
-        let delta = capture_triangle_stage_stats(dev).delta_since(stats_before);
+        let delta = capture_triangle_stage_stats(dev);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
         let rt_changed = changed_pixels != 0;
         let accepted = ps_counter_accept || rt_changed;
         record_fragment_boundary_probe(true, accepted);
         intel_render_focus_log!(
-            "{} scratch-rt-fragment-proof accepted={} completed={} completion={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} changed_pixels={} first_changed_pixel={} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} ia_vtx_delta={} ia_prim_delta={} vs_delta={} cl_delta={} cl_prim_delta={} ps_delta={} cps_delta={} ps_depth_delta={} source=font-lyon-triangle does_not_prove=display_scanout\n",
+            "{} scratch-rt-fragment-proof accepted={} completed={} completion={} rt_gpu=0x{:X} size={}x{} pitch=0x{:X} changed_pixels={} first_changed_pixel={} before=0x{:08X} after=0x{:08X} center_before=0x{:08X} center_after=0x{:08X} post_before=0x{:08X} post_after=0x{:08X} ia_vtx_delta={} ia_prim_delta={} vs_delta={} cl_delta={} cl_prim_delta={} ps_delta={} cps_delta={} ps_depth_delta={} source={} does_not_prove=display_scanout\n",
             submit_name,
             accepted as u8,
             completed as u8,
@@ -6160,15 +6360,22 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             delta.ps_invocations,
             delta.cps_invocations,
             delta.ps_depth,
+            if gpu_mesh.is_some() {
+                "gpgpu-generated-indexed-stroke"
+            } else {
+                "font-lyon-triangle"
+            },
         );
-        if submit_name == "font-tessel-3d-once" && completed && changed_pixels != 0 {
-            const DISPLAY_SCALE: usize = 4;
-
+        if matches!(
+            submit_name,
+            "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+        ) && completed
+            && changed_pixels != 0
+        {
             // Read back the complete linear render target. Pixels which retain
-            // the pre-draw poison become transparent; shader-written RGBA8
-            // pixels are enlarged by a nearest-neighbor display-only lens and
-            // copied into the existing overlay plane. The GPU proof remains a
-            // native 64x64 render target.
+            // the pre-draw poison become transparent. Shader-written RGBA8
+            // pixels are copied 1:1 into the existing overlay plane: the 3D
+            // render target and the presented stamp have identical dimensions.
             let mut visible_rgba = Vec::with_capacity(pixels_after.len().saturating_mul(4));
             for (before, after) in pixels_before.iter().zip(pixels_after.iter()) {
                 if before == after {
@@ -6177,25 +6384,11 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                     visible_rgba.extend_from_slice(&after.to_le_bytes());
                 }
             }
-            let source_width = draw.target_w as usize;
-            let source_height = draw.target_h as usize;
-            let display_width = source_width.saturating_mul(DISPLAY_SCALE);
-            let display_height = source_height.saturating_mul(DISPLAY_SCALE);
+            let display_width = draw.target_w as usize;
+            let display_height = draw.target_h as usize;
             let display_pitch = display_width.saturating_mul(4);
-            let mut display_rgba = Vec::with_capacity(display_pitch.saturating_mul(display_height));
-            for source_y in 0..source_height {
-                let source_row = &visible_rgba
-                    [source_y * source_width * 4..(source_y + 1) * source_width * 4];
-                for _ in 0..DISPLAY_SCALE {
-                    for pixel in source_row.chunks_exact(4) {
-                        for _ in 0..DISPLAY_SCALE {
-                            display_rgba.extend_from_slice(pixel);
-                        }
-                    }
-                }
-            }
             let presented = crate::intel::display::present_rgba_overlay_at(
-                &display_rgba,
+                &visible_rgba,
                 display_width as u32,
                 display_height as u32,
                 display_pitch,
@@ -6205,14 +6398,13 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 "font-tessel-render-target",
             );
             intel_render_focus_log!(
-                "{} visible-stamp presented={} pos=96x96 source_size={}x{} display_size={}x{} scale={} changed_pixels={} source=whole-linear-rgba8-readback\n",
+                "{} visible-stamp presented={} pos=96x96 source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} source=whole-linear-rgba8-readback\n",
                 submit_name,
                 presented as u8,
                 draw.target_w,
                 draw.target_h,
                 display_width,
                 display_height,
-                DISPLAY_SCALE,
                 changed_pixels,
             );
         }

@@ -80,11 +80,18 @@ struct TriangleIndexBufferPrep {
     gpu_addr: u64,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum TriangleVertexFormat {
+    Float2,
+    Float3,
+}
+
 #[derive(Copy, Clone)]
 struct TriangleDrawPrep {
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,
+    vertex_format: TriangleVertexFormat,
     vertex_gpu_addr: u64,
     index_buffer: Option<TriangleIndexBufferPrep>,
     state_gpu_addr: u64,
@@ -1514,7 +1521,10 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     if let Some(base) = fragment_target_variant_base(submit_name) {
         return is_scratch_rt_submit_name(base);
     }
-    if submit_name == "font-tessel-3d-once"
+    if matches!(
+        submit_name,
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+    )
         || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {

@@ -377,8 +377,8 @@ pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x2d, 0xf6, 0x0c, 0xb8, 0x11, 0x71, 0x5c, 0x37, 0x0e, 0xc9, 0x59, 0xde, 0x6d, 0x3a, 0xf8, 0x93,
 ];
 pub(crate) const FONT_OUTLINE_MESH_ADLS_BIN_SHA256: [u8; 32] = [
-    0xd0, 0x1e, 0x80, 0xa1, 0x55, 0x0d, 0x58, 0x74, 0xef, 0x4d, 0x4d, 0x6a, 0x72, 0x1e, 0xf5, 0xb4,
-    0x5b, 0xd1, 0x8e, 0x8e, 0x39, 0xab, 0x86, 0x40, 0x28, 0xd5, 0x3a, 0xc6, 0xc1, 0xc8, 0x50, 0xfb,
+    0xbf, 0x78, 0xe5, 0xd6, 0x87, 0x0f, 0x23, 0x03, 0xb7, 0x07, 0xd3, 0x03, 0x20, 0xd8, 0xda, 0xa1,
+    0x55, 0x54, 0x08, 0x5a, 0x75, 0xd4, 0x7a, 0x48, 0xb5, 0x1f, 0xb9, 0x32, 0xf4, 0xfa, 0x3d, 0x25,
 ];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
@@ -654,7 +654,7 @@ const CANVAS3D_PROJECT_VERTEX_BYTES: usize =
 const CANVAS3D_PROJECT_OUT_BYTES: usize =
     CANVAS3D_PROJECT_VERTEX_COUNT * core::mem::size_of::<Canvas3dProjectedRgba8>();
 const CANVAS3D_PROJECT_TEST_BYTES: usize = CANVAS3D_PROJECT_VERTEX_BYTES;
-const CANVAS3D_PROJECT_OUT_ALLOC_BYTES: usize = 16 * 1024;
+const CANVAS3D_PROJECT_OUT_ALLOC_BYTES: usize = 64 * 1024;
 const CANVAS3D_PROJECT_OUT_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE;
 const CANVAS3D_TMP_GPU: u64 = DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE;
 const CANVAS3D_TRANSFORM_IDD_OFFSET_BYTES: usize = 0x3000;
@@ -807,12 +807,12 @@ const FONT_OUTLINE_MESH_PRE_MARKER: u32 = 0xC0DE_F701;
 const FONT_OUTLINE_MESH_POST_MARKER: u32 = 0xC0DE_F702;
 const FONT_OUTLINE_MESH_RESULT_MAGIC_BASE: u32 = 0xF07E_CA00;
 const FONT_OUTLINE_MESH_RESULT_DONE: u32 = 0xC001_D00D;
-const FONT_OUTLINE_MESH_LAYOUT_VERSION: u32 = 1;
+const FONT_OUTLINE_MESH_LAYOUT_VERSION: u32 = 2;
 const FONT_OUTLINE_MESH_VERTEX_DWORD_OFFSET: u32 = 64;
-const FONT_OUTLINE_MESH_INDEX_DWORD_OFFSET: u32 = 1536;
+const FONT_OUTLINE_MESH_INDEX_DWORD_OFFSET: u32 = 8192;
 const FONT_OUTLINE_MESH_MAX_OPS: usize = CLEAR_RECT_TEST_BYTES / (8 * core::mem::size_of::<u32>());
-const FONT_OUTLINE_MESH_MAX_VERTICES: u32 = 512;
-const FONT_OUTLINE_MESH_MAX_INDICES: u32 = 1024;
+const FONT_OUTLINE_MESH_MAX_VERTICES: u32 = 3072;
+const FONT_OUTLINE_MESH_MAX_INDICES: u32 = 4096;
 pub(crate) const FONT_OUTLINE_STAGE_AUDIT: u32 = 1;
 pub(crate) const FONT_OUTLINE_STAGE_FLATTEN: u32 = 2;
 pub(crate) const FONT_OUTLINE_STAGE_STROKE_MESH: u32 = 3;
@@ -1539,6 +1539,21 @@ struct FontOutlineMeshParams {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuFontOutlineMesh {
+    pub(crate) storage_phys: u64,
+    pub(crate) storage_bytes: usize,
+    pub(crate) vertex_offset_bytes: u32,
+    pub(crate) vertex_count: u32,
+    pub(crate) vertex_stride: u32,
+    pub(crate) index_offset_bytes: u32,
+    pub(crate) index_count: u32,
+    pub(crate) min_x: f32,
+    pub(crate) min_y: f32,
+    pub(crate) max_x: f32,
+    pub(crate) max_y: f32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuFontOutlineProbeResult {
     pub(crate) stage: u32,
     pub(crate) available: bool,
@@ -1563,6 +1578,7 @@ pub(crate) struct GpgpuFontOutlineProbeResult {
     pub(crate) vertices: u32,
     pub(crate) segments: u32,
     pub(crate) indices: u32,
+    pub(crate) generated_mesh: Option<GpgpuFontOutlineMesh>,
     pub(crate) checksum: u32,
     pub(crate) expected_checksum: u32,
     pub(crate) invalid: u32,
@@ -9292,10 +9308,12 @@ pub(crate) fn shell_font_outline_probe(
         subdivisions: 8,
         max_vertices: FONT_OUTLINE_MESH_MAX_VERTICES,
         max_indices: FONT_OUTLINE_MESH_MAX_INDICES,
-        scale: 48.0 / f32::from(units_per_em.max(1)),
-        origin_x: 32.0,
-        origin_y: 96.0,
-        stroke_half_width: 0.75,
+        // Fit the complete sample string into clip space. The kernel keeps
+        // font Y-up orientation; the render viewport performs the screen flip.
+        scale: 0.32 / f32::from(units_per_em.max(1)),
+        origin_x: -0.85,
+        origin_y: -0.25,
+        stroke_half_width: 0.008,
     };
     result.forcewake_ok = direct_rcs_forcewake(dev);
     result.mapped_ok = result.forcewake_ok && direct_rcs_map_state(dev, state);
@@ -9390,6 +9408,21 @@ pub(crate) fn shell_font_outline_probe(
         && result.invalid == 0
         && !result.truncated
         && result.indices_in_range;
+    if result.ok && stage == FONT_OUTLINE_STAGE_STROKE_MESH {
+        result.generated_mesh = Some(GpgpuFontOutlineMesh {
+            storage_phys: state.canvas3d_out_phys,
+            storage_bytes: CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            vertex_offset_bytes: FONT_OUTLINE_MESH_VERTEX_DWORD_OFFSET * 4,
+            vertex_count: result.vertices,
+            vertex_stride: 2 * core::mem::size_of::<f32>() as u32,
+            index_offset_bytes: FONT_OUTLINE_MESH_INDEX_DWORD_OFFSET * 4,
+            index_count: result.indices,
+            min_x: result.min_x,
+            min_y: result.min_y,
+            max_x: result.max_x,
+            max_y: result.max_y,
+        });
+    }
 
     let level_ok = result.ok;
     let message = alloc::format!(

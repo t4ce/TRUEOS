@@ -1,4 +1,5 @@
 static RENDER_PPGTT_PML4_PHYS: AtomicU64 = AtomicU64::new(0);
+static RENDER_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
 
 pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
     if let Some(warm) = *WARM_STATE.lock() {
@@ -349,9 +350,7 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
         },
     ]) {
         RENDER_PPGTT_PML4_PHYS.store(ppgtt.pml4_phys(), Ordering::Release);
-        // Warm render allocations are permanent for the lifetime of the
-        // device; keep their page-table pages permanent as well.
-        core::mem::forget(ppgtt);
+        *RENDER_PPGTT.lock() = Some(ppgtt);
     }
     *WARM_STATE.lock() = Some(warm);
     warm
@@ -359,6 +358,16 @@ pub(crate) fn warm_once(dev: crate::intel::Dev) -> RenderWarmState {
 
 fn render_ppgtt_pml4_phys() -> u64 {
     RENDER_PPGTT_PML4_PHYS.load(Ordering::Acquire)
+}
+
+fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+    let mut guard = RENDER_PPGTT.lock();
+    let Some(ppgtt) = guard.as_mut() else {
+        return false;
+    };
+    ppgtt
+        .map_range(crate::intel::ppgtt::PpgttRange { gpu, phys, bytes })
+        .is_some()
 }
 
 pub fn warm_state() -> Option<RenderWarmState> {

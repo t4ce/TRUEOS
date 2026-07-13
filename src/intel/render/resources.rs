@@ -336,6 +336,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
+        vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
@@ -399,6 +400,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice(
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
+        vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
@@ -474,10 +476,94 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         vertex_count: u32::try_from(indices.len()).ok()?,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
+        vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: Some(TriangleIndexBufferPrep {
             index_count: u32::try_from(indices.len()).ok()?,
             byte_len: u32::try_from(index_byte_len).ok()?,
+            gpu_addr: index_gpu_addr,
+        }),
+        state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
+        rt_gpu_addr: dst_gpu_addr,
+        rt_pitch,
+        target_w,
+        target_h,
+    })
+}
+
+fn prepare_triangle_draw_resources_for_gpu_font_mesh(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    mesh: crate::intel::gpgpu::GpgpuFontOutlineMesh,
+) -> Option<TriangleDrawPrep> {
+    let target_w = u32::try_from(rect_w).ok()?;
+    let target_h = u32::try_from(rect_h).ok()?;
+    let rt_pitch = u32::try_from(pitch).ok()?;
+    if mesh.storage_phys == 0
+        || mesh.storage_bytes == 0
+        || mesh.vertex_count < 3
+        || mesh.index_count < 3
+        || !mesh.index_count.is_multiple_of(3)
+        || mesh.vertex_stride != 2 * core::mem::size_of::<f32>() as u32
+    {
+        return None;
+    }
+    let vertex_bytes = mesh.vertex_count.checked_mul(mesh.vertex_stride)?;
+    let index_bytes = mesh
+        .index_count
+        .checked_mul(core::mem::size_of::<u32>() as u32)?;
+    let vertex_end = mesh.vertex_offset_bytes.checked_add(vertex_bytes)? as usize;
+    let index_end = mesh.index_offset_bytes.checked_add(index_bytes)? as usize;
+    if vertex_end > mesh.storage_bytes || index_end > mesh.storage_bytes {
+        return None;
+    }
+    if !map_render_ppgtt_range(
+        GPU_VA_COMPUTE_FONT_MESH_BASE,
+        mesh.storage_phys,
+        mesh.storage_bytes,
+    ) {
+        return None;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    }
+    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
+
+    let vertex_gpu_addr = GPU_VA_COMPUTE_FONT_MESH_BASE
+        .checked_add(mesh.vertex_offset_bytes as u64)?;
+    let index_gpu_addr =
+        GPU_VA_COMPUTE_FONT_MESH_BASE.checked_add(mesh.index_offset_bytes as u64)?;
+    intel_render_focus_log!(
+        "gpu-font-mesh-import accepted=1 producer=gpgpu consumer=3d storage_phys=0x{:X} storage_gpu=0x{:X} storage_bytes=0x{:X} vertices={} vertex_stride={} vertex_bytes={} vb_gpu=0x{:X} indices={} index_bytes={} ib_gpu=0x{:X} bounds=[{:.2},{:.2}..{:.2},{:.2}] cpu_geometry_copy=0 shared_physical_storage=1 ppgtt_mapped=1\n",
+        mesh.storage_phys,
+        GPU_VA_COMPUTE_FONT_MESH_BASE,
+        mesh.storage_bytes,
+        mesh.vertex_count,
+        mesh.vertex_stride,
+        vertex_bytes,
+        vertex_gpu_addr,
+        mesh.index_count,
+        index_bytes,
+        index_gpu_addr,
+        mesh.min_x,
+        mesh.min_y,
+        mesh.max_x,
+        mesh.max_y,
+    );
+
+    Some(TriangleDrawPrep {
+        vertex_count: mesh.index_count,
+        vertex_stride: mesh.vertex_stride,
+        vertex_buffer_bytes: vertex_bytes,
+        vertex_format: TriangleVertexFormat::Float2,
+        vertex_gpu_addr,
+        index_buffer: Some(TriangleIndexBufferPrep {
+            index_count: mesh.index_count,
+            byte_len: index_bytes,
             gpu_addr: index_gpu_addr,
         }),
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
@@ -522,6 +608,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
+        vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: vertex_proof.gpu_addr,
         index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
@@ -937,6 +1024,7 @@ fn prepare_vf_streamout_proof_resources(
         vertex_count: TRIANGLE_DRAW_VERTICES as u32,
         vertex_stride: vertex_stride as u32,
         vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,
+        vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
         index_buffer: None,
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,

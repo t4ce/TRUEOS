@@ -4,7 +4,7 @@
 //! bytes plus size-independent outline commands resident, while leaving
 //! tessellation, raster masks, and GPU coverage as later consumers.
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::mem::size_of;
 
 use lyon_tessellation::{
@@ -22,8 +22,8 @@ use skrifa::{
 use spin::Mutex;
 
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
-const FONT_TESSEL_SAMPLE_TEXT: &str = "hello world";
-const FONT_TESSEL_SAMPLE_PX: f32 = 48.0;
+const FONT_TESSEL_SAMPLE_TEXT: &str = "True OS §";
+pub(crate) const FONT_TESSEL_BASE_PX: f32 = 48.0;
 pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // The restored render probes retain their one/two/all clip-field dispatch
 // labels. Keep the original full-field vertex count at the graphics boundary.
@@ -89,11 +89,11 @@ pub(crate) struct FontRegistrySummary {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FontTesselSummary {
     pub(crate) status: &'static str,
     pub(crate) reason: &'static str,
-    pub(crate) text: &'static str,
+    pub(crate) text: String,
     pub(crate) font_name: &'static str,
     pub(crate) font_file: &'static str,
     pub(crate) outline_source: &'static str,
@@ -216,7 +216,7 @@ impl FontTesselMesh {
         reason: &'static str,
         font_name: &'static str,
         font_file: &'static str,
-        text: &'static str,
+        text: &str,
         px_size: f32,
         total_start: u64,
     ) -> Self {
@@ -240,14 +240,14 @@ impl FontTesselSummary {
         reason: &'static str,
         font_name: &'static str,
         font_file: &'static str,
-        text: &'static str,
+        text: &str,
         px_size: f32,
         total_start: u64,
     ) -> Self {
         Self {
             status: "failed",
             reason,
-            text,
+            text: text.into(),
             font_name,
             font_file,
             outline_source: "",
@@ -314,10 +314,32 @@ pub(crate) fn tessellate_default_text() -> FontTesselSummary {
 }
 
 pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
-    tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_SAMPLE_PX)
+    tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_BASE_PX)
 }
 
-fn tessellate_text_mesh(name: &'static str, text: &'static str, px_size: f32) -> FontTesselMesh {
+pub(crate) fn tessellate_text_mesh(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(name, text, px_size, None)
+}
+
+pub(crate) fn tessellate_text_rows_mesh(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+    row_lengths: &[usize],
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(name, text, px_size, Some(row_lengths))
+}
+
+fn tessellate_text_mesh_grouped(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+    row_lengths: Option<&[usize]>,
+) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
     if warm_embedded_fonts_once().is_err() {
         return FontTesselMesh::failed("font-warm-failed", name, "", text, px_size, total_start);
@@ -368,17 +390,36 @@ fn tessellate_text_mesh(name: &'static str, text: &'static str, px_size: f32) ->
     let mut empty_glyphs = 0usize;
     let mut path_commands = 0usize;
     let mut pen_x = 0.0f32;
-    let baseline_y = px_size;
+    let mut baseline_y = px_size;
+    let mut row_index = 0usize;
+    let mut chars_placed = 0usize;
+    let mut next_row_at = row_lengths
+        .and_then(|lengths| lengths.first().copied())
+        .unwrap_or(usize::MAX);
     let mut bounds = TesselBounds::default();
     for ch in text.chars() {
+        if row_lengths.is_some_and(|lengths| {
+            chars_placed == next_row_at && row_index + 1 < lengths.len()
+        }) {
+            pen_x = 0.0;
+            baseline_y += px_size * 1.25;
+            row_index += 1;
+            next_row_at = next_row_at.saturating_add(
+                row_lengths
+                    .and_then(|lengths| lengths.get(row_index).copied())
+                    .unwrap_or(0),
+            );
+        }
         glyphs = glyphs.saturating_add(1);
         if ch.is_whitespace() {
             pen_x += space_advance * scale;
+            chars_placed = chars_placed.saturating_add(1);
             continue;
         }
         let Some(glyph_id) = charmap.map(ch) else {
             glyph_misses = glyph_misses.saturating_add(1);
             pen_x += fallback_advance * scale;
+            chars_placed = chars_placed.saturating_add(1);
             continue;
         };
         glyph_hits = glyph_hits.saturating_add(1);
@@ -397,6 +438,7 @@ fn tessellate_text_mesh(name: &'static str, text: &'static str, px_size: f32) ->
             path_commands = path_commands.saturating_add(appended);
         }
         pen_x += metrics.advance_width(glyph_id).unwrap_or(fallback_advance) * scale;
+        chars_placed = chars_placed.saturating_add(1);
     }
     let path = builder.build();
     let path_ms = elapsed_ms_since(path_start);
@@ -426,7 +468,7 @@ fn tessellate_text_mesh(name: &'static str, text: &'static str, px_size: f32) ->
         } else {
             "lyon-fill-failed"
         },
-        text,
+        text: text.into(),
         font_name: font_record.name,
         font_file: font_record.file_name,
         outline_source: outline.name,

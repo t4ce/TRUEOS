@@ -79,12 +79,19 @@ const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
 const WARM_BATCH_BYTES: usize = 512 * 4096;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
-// The default 48px "hello world" mesh expands its u32 index stream to about
-// 10 KiB of XYZ vertices for the non-indexed 3DPRIMITIVE path.
+// The default font mesh expands its u32 index stream to about 10 KiB of XYZ
+// vertices for the non-indexed 3DPRIMITIVE path.
 const WARM_VERTEX_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
-// The font proof renders into this allocation as a linear 64x64 RGBA8 image.
-const WARM_STREAMOUT_BYTES: usize = 64 * 64 * core::mem::size_of::<u32>();
+// Render the font proof at its final visible resolution. Presentation copies
+// this linear RGBA8 target 1:1; there is no display-side enlargement lens.
+const FONT_PROOF_TARGET_SIZE: usize = 512;
+pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
+const FONT_STAMP_BASE_SIZE: usize = 64;
+const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
+    (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
+const WARM_STREAMOUT_BYTES: usize =
+    FONT_PROOF_TARGET_SIZE * FONT_PROOF_TARGET_SIZE * core::mem::size_of::<u32>();
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -95,6 +102,9 @@ const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
+// Keep the imported 64 KiB compute mesh outside the 1 MiB native font render
+// target at 0x0088_0000..0x0098_0000.
+const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x00B0_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
 const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3800;
@@ -200,6 +210,7 @@ const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
 const SURFACE_FORMAT_R32G32B32_FLOAT: u32 = 64;
+const SURFACE_FORMAT_R32G32_FLOAT: u32 = 133;
 const DEPTH_SURFACE_FORMAT_D32_FLOAT: u32 = 1;
 const SURFACE_HALIGN_4: u32 = 1;
 const SURFACE_HALIGN_128_GFX125: u32 = 3;

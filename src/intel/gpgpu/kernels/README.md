@@ -154,21 +154,21 @@ font-unit coordinates, and a reserved zero. The shell command exposes three
 incremental hardware proofs:
 
 - `audit`: validates opcodes, contour sequencing, finite coordinates, reserved
-  fields, and the CPU/GPU FNV-1a checksum over the full `hello world` stream
-- `flatten`: expands one closed contour's quadratic and cubic curves into
+  fields, and the CPU/GPU FNV-1a checksum over the full `True OS §` stream
+- `flatten`: expands every contour in the full `True OS §` stream into
   fixed-subdivision points entirely in compute
-- `mesh`: emits four vertices and six indices per flattened segment and checks
-  every generated index before reporting success
+- `mesh`: emits four vertices and six indices per flattened segment for all
+  glyph contours and checks every generated index before reporting success
 
-The mesh stage is intentionally contour-stroke geometry. It proves the
-GPU-resident indexed-buffer shape but does not claim hole-aware glyph fill yet;
-that is the next artifact iteration before chaining the buffers into the 3D
-raster pipeline. During bring-up the CPU reads only the fixed report and index
-range to produce proof logs; the generated geometry itself is not converted or
-used for CPU tessellation. Runtime overrides must match:
+The mesh stage is intentionally full-text outline-stroke geometry. It proves the
+GPU-resident indexed-buffer shape and chains that same physical allocation into
+the 3D raster pipeline, but does not claim hole-aware glyph fill yet. During
+bring-up the CPU reads only the fixed report and index range to produce proof
+logs; the generated geometry itself is not converted or used for CPU
+tessellation. Runtime overrides must match:
 
 ```text
-d01e80a1550d5874ef4d4d6a721ef5b45bd18e8e39ab864028d53ac6c1c850fb
+bf78e5d6870f2303b707d30320d8daa15554085a75d47a48b51fb932f4fa3d25
 ```
 
 Regenerate one or more ADL-S artifacts with the Intel IGC/`ocloc` toolchain:

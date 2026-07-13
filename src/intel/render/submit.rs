@@ -5,7 +5,11 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
-    let stats_before = capture_triangle_stage_stats(dev);
+    // The MMIO counters visible here still belong to the outgoing context.
+    // Every probe below rebuilds a zeroed LRC image before ELSP submission, so
+    // the incoming context's counter baseline is zero, not this snapshot.
+    let stats_outgoing_context = capture_triangle_stage_stats(dev);
+    let stats_context_baseline = TriangleStageStats::default();
     let surface_samples_before =
         if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
             crate::intel::display::capture_primary_surface_samples()
@@ -13,7 +17,13 @@ fn submit_warm_render_batch(
             None
         };
     if is_triangle_debug_submit_name(submit_name) {
-        log_triangle_stage_stats(submit_name, "before-submit", true, stats_before, None);
+        log_triangle_stage_stats(
+            submit_name,
+            "before-submit-outgoing-context",
+            true,
+            stats_outgoing_context,
+            None,
+        );
         recover_render_engine_after_nonretired_submit(dev, warm, "triangle-pre-submit");
     }
     if is_gpgpu_submit_name(submit_name) {
@@ -77,7 +87,10 @@ fn submit_warm_render_batch(
 
     let mut completed = false;
     let mut iter = 0usize;
-    let poll_limit = if submit_name == "font-tessel-3d-once" {
+    let poll_limit = if matches!(
+        submit_name,
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+    ) {
         200_000
     } else {
         4096
@@ -532,12 +545,12 @@ fn submit_warm_render_batch(
             "after-submit",
             completed,
             stats_after,
-            Some(stats_before),
+            Some(stats_context_baseline),
         );
         log_triangle_stage_frontier(
             submit_name,
             completed,
-            stats_before,
+            stats_context_baseline,
             stats_after,
             result_pre_light_pc,
             result_post3d_light,
@@ -552,12 +565,17 @@ fn submit_warm_render_batch(
             result6,
             result7,
         );
-        log_triangle_stage_diagnosis(submit_name, completed, stats_before, stats_after);
+        log_triangle_stage_diagnosis(
+            submit_name,
+            completed,
+            stats_context_baseline,
+            stats_after,
+        );
         log_triangle_named_proofs(
             dev,
             submit_name,
             completed,
-            stats_before,
+            stats_context_baseline,
             stats_after,
             result3,
             result4,
@@ -571,7 +589,7 @@ fn submit_warm_render_batch(
             (surface_samples_before, crate::intel::display::capture_primary_surface_samples())
         {
             let stats_after = capture_triangle_stage_stats(dev);
-            let delta = stats_after.delta_since(stats_before);
+            let delta = stats_after.delta_since(stats_context_baseline);
             let any_change = after.any_changed_since(before);
             let triangle_change = after.triangle_points_changed_since(before);
             intel_render_focus_log!(

@@ -1377,9 +1377,10 @@ fn encode_triangle_probe_batch(
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
     push(batch_dwords, &mut cursor, draw.vertex_buffer_bytes)?;
     intel_render_verbose_log!(
-        "probe-vb-state dw1=0x{:08X} pitch={} mocs={} address_modify=1 l3_bypass_disable={} gpu=0x{:X} bytes={} source=mesa-gen12-verified-draw\n",
+        "probe-vb-state dw1=0x{:08X} pitch={} format={:?} mocs={} address_modify=1 l3_bypass_disable={} gpu=0x{:X} bytes={} source=mesa-gen12-verified-draw\n",
         vertex_buffer_dw1,
         draw.vertex_stride,
+        draw.vertex_format,
         VERTEX_BUFFER_MOCS,
         (vertex_buffer_dw1 >> 25) & 0x1,
         draw.vertex_gpu_addr,
@@ -1523,17 +1524,30 @@ fn encode_triangle_probe_batch(
             }
         }
     } else {
-        push_vertex_element_state(
-            batch_dwords,
-            &mut cursor,
-            0,
-            0,
-            SURFACE_FORMAT_R32G32B32_FLOAT,
-            VFCOMP_STORE_SRC,
-            VFCOMP_STORE_SRC,
-            VFCOMP_STORE_SRC,
-            VFCOMP_STORE_1_FP,
-        )?;
+        match draw.vertex_format {
+            TriangleVertexFormat::Float2 => push_vertex_element_state(
+                batch_dwords,
+                &mut cursor,
+                0,
+                0,
+                SURFACE_FORMAT_R32G32_FLOAT,
+                VFCOMP_STORE_SRC,
+                VFCOMP_STORE_SRC,
+                VFCOMP_STORE_0,
+                VFCOMP_STORE_1_FP,
+            )?,
+            TriangleVertexFormat::Float3 => push_vertex_element_state(
+                batch_dwords,
+                &mut cursor,
+                0,
+                0,
+                SURFACE_FORMAT_R32G32B32_FLOAT,
+                VFCOMP_STORE_SRC,
+                VFCOMP_STORE_SRC,
+                VFCOMP_STORE_SRC,
+                VFCOMP_STORE_1_FP,
+            )?,
+        }
     }
 
     log_batch_offset(cursor, "3DSTATE_VF_STATISTICS");

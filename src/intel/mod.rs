@@ -8,6 +8,7 @@ mod display;
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]
 pub(crate) mod gpgpu;
+pub(crate) mod gpu_font;
 #[path = "sound/hda.rs"]
 pub mod hda;
 mod hw_cursor;

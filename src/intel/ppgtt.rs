@@ -31,6 +31,9 @@ pub(crate) struct SparsePpgtt {
     pages: Vec<TablePage>,
 }
 
+unsafe impl Send for SparsePpgtt {}
+unsafe impl Sync for SparsePpgtt {}
+
 impl SparsePpgtt {
     pub(crate) fn pml4_phys(&self) -> u64 {
         self.pml4.phys
@@ -44,6 +47,12 @@ impl SparsePpgtt {
         for page in &self.pages {
             crate::intel::dma_flush(page.virt as *mut u8, PAGE_BYTES);
         }
+    }
+
+    pub(crate) fn map_range(&mut self, range: PpgttRange) -> Option<()> {
+        map_range(self, range)?;
+        self.flush();
+        Some(())
     }
 }
 

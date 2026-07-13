@@ -294,12 +294,23 @@ async fn font_tessel_boot_probe_task() {
     Timer::after(EmbassyDuration::from_secs(10)).await;
     crate::log!("font-boot-tessel: begin delay_s=10\n");
 
-    let mesh = crate::graphics::font::tessellate_default_text_mesh();
-    let tessel = mesh.summary;
+    let warm = match crate::intel::gpu_font::warm_default_font_once() {
+        Ok(warm) => warm,
+        Err(reason) => {
+            crate::log!("font-boot-tessel: status=failed reason={}\n", reason);
+            return;
+        }
+    };
+    let Some(tessel) = crate::intel::gpu_font::cached_default_font_summary() else {
+        crate::log!("font-boot-tessel: status=failed reason=cache-missing-after-warm\n");
+        return;
+    };
     crate::log!(
-        "font-boot-tessel: status={} reason={} text=\"{}\" font={} file={} px={} vertices={} indices={} triangles={} total_ms={}\n",
+        "font-boot-tessel: status={} reason={} cache_hit={} generation={} text=\"{}\" font={} file={} px={} vertices={} indices={} triangles={} total_ms={}\n",
         tessel.status,
         tessel.reason,
+        warm.cache_hit as u8,
+        warm.generation,
         tessel.text,
         tessel.font_name,
         tessel.font_file,
@@ -310,10 +321,8 @@ async fn font_tessel_boot_probe_task() {
         tessel.total_ms
     );
 
-    match crate::intel::render::submit_font_mesh_once(
-        &mesh.vertices,
-        &mesh.indices,
-        (tessel.min_x, tessel.min_y, tessel.max_x, tessel.max_y),
+    match crate::intel::gpu_font::render_default_font(
+        crate::intel::render::FONT_STAMP_DEFAULT_NATIVE_SCALE,
     ) {
         Ok(render) => crate::log!(
             "font-boot-tessel-render: submit={} target={} completed={} vs={} ps_state={} raster={} clip={} ps={}\n",
@@ -331,6 +340,18 @@ async fn font_tessel_boot_probe_task() {
             reason
         ),
     }
+    let cache = crate::intel::gpu_font::cache_status();
+    crate::log!(
+        "font-boot-cache: ready={} generation={} requests={} hits={} misses={} failures={} invalidations={} geometry_bytes={}\n",
+        cache.ready as u8,
+        cache.generation,
+        cache.warm_requests,
+        cache.cache_hits,
+        cache.cache_misses,
+        cache.build_failures,
+        cache.invalidations,
+        cache.geometry_bytes,
+    );
 }
 
 fn spawn_font_tessel_boot_probe(spawner: Spawner) -> SpawnAttempt {
