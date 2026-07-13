@@ -57,6 +57,21 @@ SECTIONS
     KEEP(*(.limine_requests))
   } :text
 
+  /*
+   * Keep all file-backed GOT variants ahead of .bss. If one is left as an
+   * orphan after .bss, even a zero-sized section can extend PT_LOAD's file
+   * range across the entire otherwise-NOBITS .bss allocation.
+   */
+  .got : AT(ADDR(.got) - KERNEL_OFFSET) {
+    *(.got)
+    *(.igot)
+  } :text
+
+  .got.plt : AT(ADDR(.got.plt) - KERNEL_OFFSET) {
+    *(.got.plt)
+    *(.igot.plt)
+  } :text
+
   .bss : AT(ADDR(.bss) - KERNEL_OFFSET) {
     __bss_start = .;
     . = ALIGN(0x1000);

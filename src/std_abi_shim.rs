@@ -55,6 +55,7 @@ const SOCKET_FD_CAPACITY: usize = 128;
 pub(crate) const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EADDRINUSE: c_int = 98;
 const TRUEOS_EBUSY: c_int = 16;
+const TRUEOS_EDEADLK: c_int = 35;
 const TRUEOS_ENOENT: c_int = 2;
 pub(crate) const TRUEOS_EINVAL: c_int = 22;
 const TRUEOS_ENAMETOOLONG: c_int = 36;
@@ -218,6 +219,8 @@ struct PthreadTlsSlot {
 #[repr(C)]
 struct PthreadMutexStorage {
     owner: AtomicUsize,
+    depth: AtomicUsize,
+    kind: AtomicI32,
 }
 
 #[repr(C)]
@@ -226,6 +229,11 @@ struct PthreadCondStorage {
 }
 
 const PTHREAD_MUTEX_ABI_BYTES: usize = 40;
+const PTHREAD_MUTEXATTR_ABI_BYTES: usize = core::mem::size_of::<c_int>();
+// x86_64 Linux pthread ABI values. PTHREAD_MUTEX_DEFAULT aliases NORMAL.
+const TRUEOS_PTHREAD_MUTEX_NORMAL: c_int = 0;
+const TRUEOS_PTHREAD_MUTEX_RECURSIVE: c_int = 1;
+const TRUEOS_PTHREAD_MUTEX_ERRORCHECK: c_int = 2;
 const PTHREAD_COND_ABI_BYTES: usize = 48;
 const _: () = assert!(core::mem::size_of::<PthreadMutexStorage>() <= PTHREAD_MUTEX_ABI_BYTES);
 const _: () = assert!(core::mem::size_of::<PthreadCondStorage>() <= PTHREAD_COND_ABI_BYTES);
@@ -633,14 +641,26 @@ fn pthread_mutex_unlock_key(key: usize) -> c_int {
     let Some(state) = pthread_mutex_storage(key) else {
         return TRUEOS_EINVAL;
     };
-    let state = unsafe { state.as_ref() };
+    pthread_mutex_unlock_state(unsafe { state.as_ref() }, owner)
+}
+
+fn pthread_mutex_unlock_state(state: &PthreadMutexStorage, owner: usize) -> c_int {
     let held_by = state.owner.load(Ordering::Acquire);
     if held_by == 0 {
-        return 0;
+        return TRUEOS_EPERM;
     }
     if held_by != owner {
+        return TRUEOS_EPERM;
+    }
+    let depth = state.depth.load(Ordering::Relaxed);
+    if depth == 0 {
         return TRUEOS_EINVAL;
     }
+    if state.kind.load(Ordering::Relaxed) == TRUEOS_PTHREAD_MUTEX_RECURSIVE && depth > 1 {
+        state.depth.store(depth - 1, Ordering::Relaxed);
+        return 0;
+    }
+    state.depth.store(0, Ordering::Relaxed);
     state.owner.store(0, Ordering::Release);
     0
 }
@@ -652,15 +672,38 @@ fn pthread_mutex_lock_key(key: usize) -> c_int {
     let Some(state) = pthread_mutex_storage(key) else {
         return TRUEOS_EINVAL;
     };
-    let state = unsafe { state.as_ref() };
+    pthread_mutex_lock_state(unsafe { state.as_ref() }, owner)
+}
+
+fn pthread_mutex_lock_state(state: &PthreadMutexStorage, owner: usize) -> c_int {
     loop {
         let held_by = state.owner.load(Ordering::Acquire);
+        if held_by == owner {
+            return match state.kind.load(Ordering::Relaxed) {
+                TRUEOS_PTHREAD_MUTEX_RECURSIVE => {
+                    let depth = state.depth.load(Ordering::Relaxed);
+                    if depth == usize::MAX {
+                        TRUEOS_EAGAIN
+                    } else {
+                        state.depth.store(depth + 1, Ordering::Relaxed);
+                        0
+                    }
+                }
+                TRUEOS_PTHREAD_MUTEX_ERRORCHECK => TRUEOS_EDEADLK,
+                TRUEOS_PTHREAD_MUTEX_NORMAL => {
+                    core::hint::spin_loop();
+                    continue;
+                }
+                _ => TRUEOS_EINVAL,
+            };
+        }
         if held_by == 0
             && state
                 .owner
                 .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
                 .is_ok()
         {
+            state.depth.store(1, Ordering::Relaxed);
             return 0;
         }
         core::hint::spin_loop();
@@ -674,8 +717,19 @@ fn pthread_mutex_trylock_key(key: usize) -> c_int {
     let Some(state) = pthread_mutex_storage(key) else {
         return TRUEOS_EINVAL;
     };
-    let state = unsafe { state.as_ref() };
+    pthread_mutex_trylock_state(unsafe { state.as_ref() }, owner)
+}
+
+fn pthread_mutex_trylock_state(state: &PthreadMutexStorage, owner: usize) -> c_int {
     let held_by = state.owner.load(Ordering::Acquire);
+    if held_by == owner && state.kind.load(Ordering::Relaxed) == TRUEOS_PTHREAD_MUTEX_RECURSIVE {
+        let depth = state.depth.load(Ordering::Relaxed);
+        if depth == usize::MAX {
+            return TRUEOS_EAGAIN;
+        }
+        state.depth.store(depth + 1, Ordering::Relaxed);
+        return 0;
+    }
     if held_by != 0 {
         return TRUEOS_EBUSY;
     }
@@ -683,8 +737,78 @@ fn pthread_mutex_trylock_key(key: usize) -> c_int {
         .owner
         .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
     {
-        Ok(_) => 0,
+        Ok(_) => {
+            state.depth.store(1, Ordering::Relaxed);
+            0
+        }
         Err(_) => TRUEOS_EBUSY,
+    }
+}
+
+fn pthread_mutexattr_kind(attr: *const c_void) -> Option<c_int> {
+    let host = pthread_object_host_ptr(attr.cast_mut().cast::<u8>(), PTHREAD_MUTEXATTR_ABI_BYTES)?;
+    Some(unsafe { ptr::read_unaligned(host.cast::<c_int>()) })
+}
+
+fn pthread_mutexattr_set_kind(attr: *mut c_void, kind: c_int) -> bool {
+    let Some(host) = pthread_object_host_ptr(attr.cast::<u8>(), PTHREAD_MUTEXATTR_ABI_BYTES) else {
+        return false;
+    };
+    unsafe { ptr::write_unaligned(host.cast::<c_int>(), kind) };
+    true
+}
+
+#[cfg(test)]
+mod pthread_mutex_tests {
+    use super::*;
+
+    fn mutex_state(kind: c_int) -> PthreadMutexStorage {
+        PthreadMutexStorage {
+            owner: AtomicUsize::new(0),
+            depth: AtomicUsize::new(0),
+            kind: AtomicI32::new(kind),
+        }
+    }
+
+    #[test]
+    fn recursive_mutex_tracks_depth_until_final_unlock() {
+        let state = mutex_state(TRUEOS_PTHREAD_MUTEX_RECURSIVE);
+        assert_eq!(pthread_mutex_lock_state(&state, 7), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 7), 0);
+        assert_eq!(state.owner.load(Ordering::Relaxed), 7);
+        assert_eq!(state.depth.load(Ordering::Relaxed), 2);
+
+        assert_eq!(pthread_mutex_unlock_state(&state, 7), 0);
+        assert_eq!(state.owner.load(Ordering::Relaxed), 7);
+        assert_eq!(state.depth.load(Ordering::Relaxed), 1);
+        assert_eq!(pthread_mutex_unlock_state(&state, 7), 0);
+        assert_eq!(state.owner.load(Ordering::Relaxed), 0);
+        assert_eq!(state.depth.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn recursive_trylock_by_owner_also_increments_depth() {
+        let state = mutex_state(TRUEOS_PTHREAD_MUTEX_RECURSIVE);
+        assert_eq!(pthread_mutex_trylock_state(&state, 9), 0);
+        assert_eq!(pthread_mutex_trylock_state(&state, 9), 0);
+        assert_eq!(state.depth.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn errorcheck_mutex_reports_same_owner_deadlock() {
+        let state = mutex_state(TRUEOS_PTHREAD_MUTEX_ERRORCHECK);
+        assert_eq!(pthread_mutex_lock_state(&state, 11), 0);
+        assert_eq!(pthread_mutex_lock_state(&state, 11), TRUEOS_EDEADLK);
+        assert_eq!(pthread_mutex_trylock_state(&state, 11), TRUEOS_EBUSY);
+    }
+
+    #[test]
+    fn mutex_rejects_unlock_by_non_owner() {
+        let state = mutex_state(TRUEOS_PTHREAD_MUTEX_RECURSIVE);
+        assert_eq!(pthread_mutex_lock_state(&state, 13), 0);
+        assert_eq!(pthread_mutex_unlock_state(&state, 17), TRUEOS_EPERM);
+        assert_eq!(state.owner.load(Ordering::Relaxed), 13);
+        assert_eq!(state.depth.load(Ordering::Relaxed), 1);
     }
 }
 
@@ -3757,24 +3881,60 @@ pub unsafe extern "C" fn pthread_getspecific(key: u32) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutexattr_init(_attr: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutexattr_init(attr: *mut c_void) -> c_int {
+    if pthread_mutexattr_set_kind(attr, TRUEOS_PTHREAD_MUTEX_NORMAL) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutexattr_settype(_attr: *mut c_void, _kind: c_int) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutexattr_settype(attr: *mut c_void, kind: c_int) -> c_int {
+    if !matches!(
+        kind,
+        TRUEOS_PTHREAD_MUTEX_NORMAL
+            | TRUEOS_PTHREAD_MUTEX_RECURSIVE
+            | TRUEOS_PTHREAD_MUTEX_ERRORCHECK
+    ) {
+        return TRUEOS_EINVAL;
+    }
+    if pthread_mutexattr_set_kind(attr, kind) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutexattr_destroy(_attr: *mut c_void) -> c_int {
-    0
+pub unsafe extern "C" fn pthread_mutexattr_destroy(attr: *mut c_void) -> c_int {
+    if pthread_mutexattr_set_kind(attr, -1) {
+        0
+    } else {
+        TRUEOS_EINVAL
+    }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_void) -> c_int {
+pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, attr: *const c_void) -> c_int {
     let Some(key) = pthread_key(mutex) else {
         return TRUEOS_EINVAL;
+    };
+    let kind = if attr.is_null() {
+        TRUEOS_PTHREAD_MUTEX_NORMAL
+    } else {
+        let Some(kind) = pthread_mutexattr_kind(attr) else {
+            return TRUEOS_EINVAL;
+        };
+        if !matches!(
+            kind,
+            TRUEOS_PTHREAD_MUTEX_NORMAL
+                | TRUEOS_PTHREAD_MUTEX_RECURSIVE
+                | TRUEOS_PTHREAD_MUTEX_ERRORCHECK
+        ) {
+            return TRUEOS_EINVAL;
+        }
+        kind
     };
     pthread_sync_trace("mutex.init", key);
     let Some(state) = pthread_mutex_storage(key) else {
@@ -3783,6 +3943,8 @@ pub unsafe extern "C" fn pthread_mutex_init(mutex: *mut c_void, _attr: *const c_
     unsafe {
         state.as_ptr().write(PthreadMutexStorage {
             owner: AtomicUsize::new(0),
+            depth: AtomicUsize::new(0),
+            kind: AtomicI32::new(kind),
         });
     }
     0
@@ -3796,6 +3958,11 @@ pub unsafe extern "C" fn pthread_mutex_destroy(mutex: *mut c_void) -> c_int {
             return TRUEOS_EINVAL;
         };
         let state = unsafe { state.as_ref() };
+        if state.owner.load(Ordering::Acquire) != 0 {
+            return TRUEOS_EBUSY;
+        }
+        state.depth.store(0, Ordering::Relaxed);
+        state.kind.store(-1, Ordering::Relaxed);
         state.owner.store(0, Ordering::Release);
     }
     0

@@ -8,8 +8,16 @@ pub(crate) mod flags {
     use core::sync::atomic::AtomicBool;
 
     use log::{Level, LevelFilter};
-    pub(crate) use log_os_core::{LogArea, LogLevelPolicy};
+    pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
+
+    // Intel-first GPGPU diagnostic profile. Keep failures, lifecycle summaries,
+    // and the lowest-level trace records while deliberately leaving Debug out:
+    // LogLevelPolicy::Only lets this profile select non-contiguous levels.
+    const GPGPU_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
+        .union(LogLevelSet::WARN)
+        .union(LogLevelSet::INFO)
+        .union(LogLevelSet::TRACE);
 
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
@@ -17,10 +25,11 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    // GPGPU hot paths rate-limit their progress records; keep their concise
-    // bring-up and command summaries visible alongside warnings and errors.
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    // GPGPU diagnosis needs the Intel device/display setup that surrounds
+    // kernel upload and submission, not just the GPGPU records themselves.
+    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
+    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     // Blueprint log facades remain Info by default and opt individual hunt
@@ -52,9 +61,10 @@ pub(crate) mod flags {
     pub(crate) const PORTAL_LOGS: bool = true;
     pub(crate) const HTML_SHACK_VERBOSE: bool = false;
     pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
-    pub(crate) const INTEL_STAGE1_LOGS: bool = true;
+    // Stage1 suppresses the rate-limited present diagnostics when enabled.
+    pub(crate) const INTEL_STAGE1_LOGS: bool = false;
     pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
-    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = false;
+    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = true;
     pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
     pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
@@ -76,6 +86,7 @@ pub(crate) mod flags {
             LogArea::Storage => STORAGE_LOG_LEVEL,
             LogArea::Gfx => GFX_LOG_LEVEL,
             LogArea::Gpgpu => GPGPU_LOG_LEVEL,
+            LogArea::Render => RENDER_LOG_LEVEL,
             LogArea::Hda => HDA_LOG_LEVEL,
             LogArea::Hv => HV_LOG_LEVEL,
             LogArea::Apps => APPS_LOG_LEVEL,
