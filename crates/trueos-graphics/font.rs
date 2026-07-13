@@ -24,6 +24,9 @@ use spin::Mutex;
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
 const FONT_TESSEL_SAMPLE_TEXT: &str = "hello world";
 const FONT_TESSEL_SAMPLE_PX: f32 = 48.0;
+// The restored render probes retain their one/two/all clip-field dispatch
+// labels. Keep the original full-field vertex count at the graphics boundary.
+pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 
 const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
     name: "font",
@@ -117,6 +120,36 @@ pub(crate) struct FontTesselSummary {
     pub(crate) total_ms: u64,
 }
 
+pub(crate) struct FontTesselMesh {
+    pub(crate) summary: FontTesselSummary,
+    pub(crate) vertices: Vec<[f32; 2]>,
+    pub(crate) indices: Vec<u32>,
+}
+
+impl FontTesselMesh {
+    fn failed(
+        reason: &'static str,
+        font_name: &'static str,
+        font_file: &'static str,
+        text: &'static str,
+        px_size: f32,
+        total_start: u64,
+    ) -> Self {
+        Self {
+            summary: FontTesselSummary::failed(
+                reason,
+                font_name,
+                font_file,
+                text,
+                px_size,
+                total_start,
+            ),
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        }
+    }
+}
+
 impl FontTesselSummary {
     fn failed(
         reason: &'static str,
@@ -192,18 +225,26 @@ pub(crate) fn registry_summary() -> FontRegistrySummary {
 }
 
 pub(crate) fn tessellate_default_text() -> FontTesselSummary {
-    tessellate_text("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_SAMPLE_PX)
+    tessellate_default_text_mesh().summary
 }
 
-fn tessellate_text(name: &'static str, text: &'static str, px_size: f32) -> FontTesselSummary {
+pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
+    tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_SAMPLE_PX)
+}
+
+fn tessellate_text_mesh(
+    name: &'static str,
+    text: &'static str,
+    px_size: f32,
+) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
     if warm_embedded_fonts_once().is_err() {
-        return FontTesselSummary::failed("font-warm-failed", name, "", text, px_size, total_start);
+        return FontTesselMesh::failed("font-warm-failed", name, "", text, px_size, total_start);
     }
 
     let registry = FONT_REGISTRY.lock();
     let Some(font_record) = registry.font_by_name(name) else {
-        return FontTesselSummary::failed(
+        return FontTesselMesh::failed(
             "font-not-registered",
             name,
             "",
@@ -213,7 +254,7 @@ fn tessellate_text(name: &'static str, text: &'static str, px_size: f32) -> Font
         );
     };
     let Some(FontWarmEndState::Outline(outline)) = font_record.outline_endstate() else {
-        return FontTesselSummary::failed(
+        return FontTesselMesh::failed(
             "outline-cache-missing",
             font_record.name,
             font_record.file_name,
@@ -223,7 +264,7 @@ fn tessellate_text(name: &'static str, text: &'static str, px_size: f32) -> Font
         );
     };
     let Ok(font) = FontRef::new(font_record.bytes) else {
-        return FontTesselSummary::failed(
+        return FontTesselMesh::failed(
             "font-parse-failed",
             font_record.name,
             font_record.file_name,
@@ -304,7 +345,7 @@ fn tessellate_text(name: &'static str, text: &'static str, px_size: f32) -> Font
     let index_bytes = indices.saturating_mul(size_of::<u32>());
     let geometry_bytes = vertex_bytes.saturating_add(index_bytes);
 
-    FontTesselSummary {
+    let summary = FontTesselSummary {
         status: if tessellated.is_ok() { "ok" } else { "failed" },
         reason: if tessellated.is_ok() {
             "tessellated"
@@ -337,6 +378,12 @@ fn tessellate_text(name: &'static str, text: &'static str, px_size: f32) -> Font
         path_ms,
         tessellate_ms,
         total_ms: elapsed_ms_since(total_start),
+    };
+
+    FontTesselMesh {
+        summary,
+        vertices: buffers.vertices,
+        indices: buffers.indices,
     }
 }
 

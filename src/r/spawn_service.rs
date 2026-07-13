@@ -294,7 +294,8 @@ async fn font_tessel_boot_probe_task() {
     Timer::after(EmbassyDuration::from_secs(10)).await;
     crate::log!("font-boot-tessel: begin delay_s=10\n");
 
-    let tessel = crate::graphics::font::tessellate_default_text();
+    let mesh = crate::graphics::font::tessellate_default_text_mesh();
+    let tessel = mesh.summary;
     crate::log!(
         "font-boot-tessel: status={} reason={} text=\"{}\" font={} file={} px={} vertices={} indices={} triangles={} total_ms={}\n",
         tessel.status,
@@ -309,37 +310,27 @@ async fn font_tessel_boot_probe_task() {
         tessel.total_ms
     );
 
-    let marker = crate::intel::gpgpu::submit_direct_rcs_marker_probe_now();
-    crate::log!(
-        "font-boot-tessel-intel: probe=rcs-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={} observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}\n",
-        marker.available as u8,
-        marker.forcewake_ok as u8,
-        marker.mapped_ok as u8,
-        marker.ppgtt_ok as u8,
-        marker.batch_ok as u8,
-        marker.submitted as u8,
-        marker.retired as u8,
-        marker.observed,
-        marker.expected,
-        marker.retire_ms,
-        marker.submit_seq
-    );
-
-    let pipe = crate::intel::gpgpu::submit_direct_rcs_3d_pipe_marker_probe_now();
-    crate::log!(
-        "font-boot-tessel-intel: probe=3d-pipe-marker available={} forcewake={} mapped={} ppgtt={} batch={} submitted={} retired={} observed=0x{:08X} expected=0x{:08X} retire_ms={} submit_seq={}\n",
-        pipe.available as u8,
-        pipe.forcewake_ok as u8,
-        pipe.mapped_ok as u8,
-        pipe.ppgtt_ok as u8,
-        pipe.batch_ok as u8,
-        pipe.submitted as u8,
-        pipe.retired as u8,
-        pipe.observed,
-        pipe.expected,
-        pipe.retire_ms,
-        pipe.submit_seq
-    );
+    match crate::intel::render::submit_font_mesh_once(
+        &mesh.vertices,
+        &mesh.indices,
+        (tessel.min_x, tessel.min_y, tessel.max_x, tessel.max_y),
+    ) {
+        Ok(render) => crate::log!(
+            "font-boot-tessel-render: submit={} target={} completed={} vs={} ps_state={} raster={} clip={} ps={}\n",
+            render.submit_name,
+            render.target,
+            render.completed as u8,
+            render.vs_counter as u8,
+            render.ps_state_marker as u8,
+            render.raster_packet as u8,
+            render.clip_counter as u8,
+            render.ps_observed as u8,
+        ),
+        Err(reason) => crate::log!(
+            "font-boot-tessel-render: status=skipped reason={}\n",
+            reason
+        ),
+    }
 }
 
 fn spawn_font_tessel_boot_probe(spawner: Spawner) -> SpawnAttempt {
@@ -1215,7 +1206,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_codec_service,
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "font-tessel-boot-probe",
         0,
         &FONT_TESSEL_BOOT_PROBE_STARTED,

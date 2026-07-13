@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 
-const [logPath = 'bld/baremetal-logs/latest.log', vitePath = '/home/t4ce/REPOS/Parse5/pixi-render-tree.json'] =
+const [logPath = 'bld/baremetal-logs/LatestOfThree.logs', vitePath = '/home/t4ce/REPOS/Parse5/pixi-render-tree.json'] =
   process.argv.slice(2);
 
 function stableHashText(text) {

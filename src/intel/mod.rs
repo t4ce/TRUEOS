@@ -14,6 +14,8 @@ mod hw_cursor;
 pub(crate) mod media;
 pub(crate) mod opencl;
 pub(crate) mod ppgtt;
+pub(crate) mod render;
+pub(crate) mod shader;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod types;

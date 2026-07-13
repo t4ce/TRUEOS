@@ -59,7 +59,7 @@ start() {
     local log_path
     log_path="$(next_log_path)"
     : > "$log_path"
-    ln -sfn "$(basename "$log_path")" "$log_dir/latest.log"
+    ln -sfn "$(basename "$log_path")" "$log_dir/LatestOfThree.logs"
 
     setsid bash -c '
         set -euo pipefail
@@ -80,7 +80,7 @@ start() {
 
     local pid=$!
     printf '%s\n' "$pid" > "$pid_file"
-    echo "baremetal-log-drain: pid=$pid log=$(realpath "$log_path") latest=$(realpath "$log_dir/latest.log") target=$host:$port delay=${delay}s"
+    echo "baremetal-log-drain: pid=$pid log=$(realpath "$log_path") latest_of_three=$(realpath "$log_dir/LatestOfThree.logs") target=$host:$port delay=${delay}s"
 }
 
 case "$cmd" in
