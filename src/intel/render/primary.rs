@@ -156,6 +156,17 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) rgba: Option<Vec<u8>>,
 }
 
+pub(crate) fn resident_scene_target_dimensions() -> (usize, usize) {
+    crate::intel::display::active_scanout_dimensions()
+        .map(|(width, height)| {
+            (
+                (width as usize).clamp(1, DRAW3D_MAX_TARGET_WIDTH),
+                (height as usize).clamp(1, DRAW3D_MAX_TARGET_HEIGHT),
+            )
+        })
+        .unwrap_or((FONT_PROOF_TARGET_SIZE, FONT_PROOF_TARGET_SIZE))
+}
+
 /// Render a back-to-front list of persistent triangle jobs into one shared
 /// target. The target is cleared once and read back/presented once; individual
 /// jobs bind their own full-precision RGBA push data.
@@ -165,19 +176,21 @@ pub(crate) fn submit_resident_triangle_scene_frame(
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
-    const TARGET_SIZE: usize = FONT_PROOF_TARGET_SIZE;
+    let (target_width, target_height) = resident_scene_target_dimensions();
+    let target_pitch = target_width * core::mem::size_of::<u32>();
+    let target_bytes = target_pitch * target_height;
 
     if draws.is_empty() {
         let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
-        let mut pixels = alloc::vec![0u8; TARGET_SIZE * TARGET_SIZE * 4];
+        let mut pixels = alloc::vec![0u8; target_bytes];
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.copy_from_slice(&clear);
         }
         let presented = present_resident_scene_target(
             &pixels,
-            TARGET_SIZE as u32,
-            TARGET_SIZE as u32,
-            TARGET_SIZE * 4,
+            target_width as u32,
+            target_height as u32,
+            target_pitch,
             clear_rgba,
             "draw3d-scene-clear",
         );
@@ -187,8 +200,8 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             requested_draws: 0,
             changed_pixels: 0,
             presented,
-            width: TARGET_SIZE as u32,
-            height: TARGET_SIZE as u32,
+            width: target_width as u32,
+            height: target_height as u32,
             rgba,
         });
     }
@@ -209,8 +222,6 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             return Err("no-device");
         };
         let warm = warm_once(dev);
-        let target_pitch = TARGET_SIZE * core::mem::size_of::<u32>();
-        let target_bytes = target_pitch * TARGET_SIZE;
         if warm.streamout_virt.is_null() || warm.streamout_len < target_bytes {
             return Err("warm-scratch");
         }
@@ -225,7 +236,7 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
             core::slice::from_raw_parts_mut(
                 warm.streamout_virt as *mut u32,
-                TARGET_SIZE * TARGET_SIZE,
+                target_width * target_height,
             )
             .fill(0xDEAD_BEEF);
         }
@@ -238,8 +249,8 @@ pub(crate) fn submit_resident_triangle_scene_frame(
                 warm,
                 GPU_VA_STREAMOUT_BASE,
                 target_pitch,
-                TARGET_SIZE,
-                TARGET_SIZE,
+                target_width,
+                target_height,
                 TriangleBlendProbeMode::MesaZeroedState,
                 &[],
                 None,
@@ -265,7 +276,7 @@ pub(crate) fn submit_resident_triangle_scene_frame(
         let pixels = unsafe {
             core::slice::from_raw_parts(
                 warm.streamout_virt as *const u32,
-                TARGET_SIZE * TARGET_SIZE,
+                target_width * target_height,
             )
         };
         let mut changed_pixels = 0usize;
@@ -288,8 +299,8 @@ pub(crate) fn submit_resident_triangle_scene_frame(
         let presented = frame_complete
             && present_resident_scene_target(
                 &visible_rgba,
-                TARGET_SIZE as u32,
-                TARGET_SIZE as u32,
+                target_width as u32,
+                target_height as u32,
                 target_pitch,
                 clear_rgba,
                 "draw3d-scene-render-target",
@@ -300,8 +311,8 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             requested_draws: draws.len(),
             changed_pixels,
             presented,
-            width: TARGET_SIZE as u32,
-            height: TARGET_SIZE as u32,
+            width: target_width as u32,
+            height: target_height as u32,
             rgba,
         })
     })();
@@ -4894,26 +4905,24 @@ fn submit_triangle_vf_draw_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(
-            warm,
-            draw,
-            shader_layout,
-            blend_mode,
-            backend_probe_mode,
-            None,
-        )
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        None,
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -6008,26 +6017,24 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(
-            warm,
-            draw,
-            shader_layout,
-            blend_mode,
-            backend_probe_mode,
-            None,
-        )
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        None,
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -6494,26 +6501,24 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(
-            warm,
-            draw,
-            shader_layout,
-            blend_mode,
-            backend_probe_mode,
-            draw_rgba,
-        )
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        draw_rgba,
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);

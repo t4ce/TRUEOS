@@ -71,7 +71,8 @@ Applied replies contain affected count and current scene statistics. Stats conta
 instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
 the encoded image bytes through the end of the frame. After the first successful live scene frame,
-the service caches the exact straight-alpha 512x512 RGBA8 target handed to the display. A render
+the service caches the exact straight-alpha RGBA8 target handed to the display. Its dimensions are
+derived from the active scanout, up to the current 2560x1440 residency cap. A render
 request encodes the most recent presented scene target as RGBA PNG, including after the scene is
 stopped. A clear-only start also counts as a presented frame. Before any frame has been presented,
 or if PNG encoding fails, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
@@ -87,7 +88,7 @@ instance is projected
 through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
 uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
 frames. RGBA is volatile shader state, so `set color` does not upload geometry. Jobs are ordered
-back-to-front into one 512x512 target. TCP changes are coalesced on a 33 ms cadence (at most about
+back-to-front into one active-scanout-sized target. TCP changes are coalesced on a 33 ms cadence (at most about
 30 presented updates per second); unchanged scenes retain their overlay without redundant GPU
 submission. A target is presented and cached only after every mesh draw completes. Incomplete
 frames retain the last complete presentation and are retried on the next tick. When start supplies

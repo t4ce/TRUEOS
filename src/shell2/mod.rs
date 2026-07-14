@@ -10,6 +10,7 @@ use heapless::String as HString;
 pub(crate) mod backends;
 pub(crate) mod cmds;
 mod ecma48;
+mod font_draw3d;
 mod interface;
 mod matrix;
 mod shell2_apps;

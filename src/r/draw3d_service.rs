@@ -137,7 +137,9 @@ fn apply_command(
 }
 
 fn projected_scene() -> Vec<ProjectedMesh> {
-    with_scene(|scene| project_scene(scene, 1.0))
+    let (width, height) = crate::intel::render::resident_scene_target_dimensions();
+    let aspect = width as f32 / height.max(1) as f32;
+    with_scene(|scene| project_scene(scene, aspect))
 }
 
 fn scene_clear_rgba() -> Option<[u8; 4]> {
@@ -233,10 +235,13 @@ pub async fn draw3d_render_task() {
     let mut was_running = false;
     let mut clear_rgba = None;
 
+    let (target_width, target_height) = crate::intel::render::resident_scene_target_dimensions();
     crate::log_info!(
         target: "draw3d";
-        "draw3d: render engine online running=0 control=tcp-start-stop target_fps=30 frame_ms={} max_meshes=100 max_instances=100 max_vertices_per_mesh=1000 target=512x512\n",
-        FRAME_PERIOD_MS
+        "draw3d: render engine online running=0 control=tcp-start-stop target_fps=30 frame_ms={} max_meshes=100 max_instances=100 max_vertices_per_mesh=1000 target={}x{} source=active-scanout\n",
+        FRAME_PERIOD_MS,
+        target_width,
+        target_height,
     );
     loop {
         next_frame += EmbassyDuration::from_millis(FRAME_PERIOD_MS);

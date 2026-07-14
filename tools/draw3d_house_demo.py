@@ -231,6 +231,8 @@ def main():
         "--output", type=Path, default=Path("bld/draw3d-captures/house-tree-gabled.png")
     )
     parser.add_argument("--settle", type=float, default=1.5)
+    parser.add_argument("--expect-width", type=int, default=2560)
+    parser.add_argument("--expect-height", type=int, default=1440)
     args = parser.parse_args()
 
     client = Draw3dClient(args.host)
@@ -247,8 +249,11 @@ def main():
             f"capture format={image_format} size={width}x{height} bytes={len(image)} "
             f"sha256={hashlib.sha256(image).hexdigest()} path={output}"
         )
-        if image_format != 2 or (width, height) != (512, 512):
-            raise RuntimeError("live scene did not return the expected 512x512 PNG")
+        if image_format != 2 or (width, height) != (args.expect_width, args.expect_height):
+            raise RuntimeError(
+                "live scene did not return the expected "
+                f"{args.expect_width}x{args.expect_height} PNG"
+            )
     finally:
         client.close()
 

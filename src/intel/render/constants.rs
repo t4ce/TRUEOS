@@ -89,8 +89,10 @@ const FONT_PROOF_TARGET_SIZE: usize = 512;
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
 const FONT_STAMP_MAX_NATIVE_SCALE: u32 = (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
+pub(crate) const DRAW3D_MAX_TARGET_WIDTH: usize = 2560;
+pub(crate) const DRAW3D_MAX_TARGET_HEIGHT: usize = 1440;
 const WARM_STREAMOUT_BYTES: usize =
-    FONT_PROOF_TARGET_SIZE * FONT_PROOF_TARGET_SIZE * core::mem::size_of::<u32>();
+    DRAW3D_MAX_TARGET_WIDTH * DRAW3D_MAX_TARGET_HEIGHT * core::mem::size_of::<u32>();
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -101,9 +103,9 @@ const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
-// Keep the imported 64 KiB compute mesh outside the 1 MiB native font render
-// target at 0x0088_0000..0x0098_0000.
-const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x00B0_0000;
+// Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
+// target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
+const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPU_VA_PERSISTENT_FONT_BASE: u64 = 0x2000_0000;
 const GPU_VA_PERSISTENT_FONT_LIMIT: u64 = 0x2800_0000;

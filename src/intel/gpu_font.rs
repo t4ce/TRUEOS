@@ -118,7 +118,7 @@ impl GpuFontColorProgram {
         }
     }
 
-    fn sample(self, elapsed_ms: u64) -> GpuFontRgba {
+    pub(crate) fn sample(self, elapsed_ms: u64) -> GpuFontRgba {
         match self {
             Self::Static(rgba) => rgba,
             Self::Transition(transition) => transition.sample(elapsed_ms),
@@ -457,6 +457,18 @@ struct BuiltGpuFontJob {
     text_chars: usize,
     rows: usize,
     glyphs: usize,
+}
+
+/// CPU tessellation result prepared for submission through the Draw3D scene
+/// protocol. It deliberately carries no render allocation or persistence
+/// authority; the Draw3D service acquires those only after accepting the mesh.
+pub(crate) struct GpuFontSceneMesh {
+    pub(crate) vertices: Vec<[f32; 3]>,
+    pub(crate) indices: Vec<u32>,
+    pub(crate) entries: usize,
+    pub(crate) text_chars: usize,
+    pub(crate) rows: usize,
+    pub(crate) glyphs: usize,
 }
 
 struct CachedGpuFont {
@@ -958,9 +970,7 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
         }
     }
     grid.color_proof_pixels = grid.color_proof_pixels.saturating_add(proof_pixels);
-    grid.color_proof_mismatches = grid
-        .color_proof_mismatches
-        .saturating_add(proof_mismatches);
+    grid.color_proof_mismatches = grid.color_proof_mismatches.saturating_add(proof_mismatches);
     if !changed || grid.cells.iter().any(|cell| cell.readback.is_none()) {
         return true;
     }
@@ -1288,6 +1298,45 @@ fn build_font_job_mesh(
         text_chars,
         rows,
         glyphs,
+    })
+}
+
+/// Tessellate and normalize a font job without submitting it to Intel render.
+///
+/// The returned world-space mesh is sized for Draw3D's default perspective
+/// camera. Shell2 uses this API to remain a pure TCP client of the scene
+/// service while retaining the established font shaping/tessellation path.
+pub(crate) fn tessellate_font_job_for_scene(
+    job: GpuFontJob<'_>,
+) -> Result<GpuFontSceneMesh, &'static str> {
+    let built = build_font_job_mesh(job.entries, job.font)?;
+    if built.vertices.len() > 1_000 || built.indices.len() / 3 > 2_000 {
+        return Err("font-scene-budget");
+    }
+
+    let (min_x, min_y, max_x, max_y) = built.bounds;
+    let width = (max_x - min_x).max(1.0);
+    let height = (max_y - min_y).max(1.0);
+    let world_extent = 3.0 * job.native_scale as f32 / 5.0;
+    let scale = world_extent / width.max(height);
+    let center_x = (min_x + max_x) * 0.5;
+    let center_y = (min_y + max_y) * 0.5;
+    let mut vertices = Vec::with_capacity(built.vertices.len());
+    for source in &built.vertices {
+        vertices.push([
+            (source[0] - center_x) * scale,
+            (center_y - source[1]) * scale,
+            0.0,
+        ]);
+    }
+
+    Ok(GpuFontSceneMesh {
+        vertices,
+        indices: built.indices,
+        entries: built.entries,
+        text_chars: built.text_chars,
+        rows: built.rows,
+        glyphs: built.glyphs,
     })
 }
 

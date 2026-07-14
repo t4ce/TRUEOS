@@ -1,8 +1,7 @@
-use alloc::{format, string::String, vec::Vec};
-use core::sync::atomic::{AtomicBool, Ordering};
+use alloc::{format, string::String, vec, vec::Vec};
 
 use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_draw3d::{Transform, Vec3};
 
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpu_font::{
@@ -14,7 +13,6 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 const MIN_NATIVE_SCALE: u32 = 1;
 const MAX_NATIVE_SCALE: u32 = 8;
-const PERSISTENT_ENGINE_FRAME_MS: u64 = 16;
 const MIN_COLOR_DURATION_MS: u32 = 16;
 const MAX_COLOR_DURATION_MS: u32 = 600_000;
 
@@ -30,12 +28,9 @@ const DEMO_COLOR_CHECK_RGBA: [GpuFontRgba; 9] = [
     GpuFontRgba::new(0, 0, 0, 255),
 ];
 
-static PERSISTENT_ENGINE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
-
 struct FontCommand {
     rows: Vec<String>,
     multi_row: bool,
-    persistent: bool,
     font: GpuFontFace,
     native_scale: u32,
     color_program: GpuFontColorProgram,
@@ -294,29 +289,25 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    if rest.trim().eq_ignore_ascii_case("persist stop") {
-        match crate::intel::gpu_font::stop_persistent_font_animation() {
-            Ok(stopped) => {
-                print_shell_line(io, format!("font persist: stopped={}", stopped as u8).as_str())
-            }
+    if rest.trim().eq_ignore_ascii_case("stop") {
+        match super::super::font_draw3d::stop(spawner) {
+            Ok(()) => print_shell_line(io, "font: stop_queued=1 transport=tcp:4246"),
             Err(reason) => {
-                print_shell_line(io, format!("font persist: stopped=0 reason={reason}").as_str())
+                print_shell_line(io, format!("font: stop_queued=0 reason={reason}").as_str())
             }
         }
         return ParseOutcome::Handled;
     }
-    if rest.trim().eq_ignore_ascii_case("persist status") {
+    if rest.trim().eq_ignore_ascii_case("status") {
         print_persistent_status(io);
         return ParseOutcome::Handled;
     }
-    if let Some(after_persist) = strip_keyword(rest.trim(), "persist")
-        && let Some(after_demo) = strip_keyword(after_persist.trim_start(), "demo")
-    {
+    if let Some(after_demo) = strip_keyword(rest.trim(), "demo") {
         let selector = after_demo.trim();
         if selector == "list" {
             print_shell_line(
                 io,
-                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; all=`font persist demo 1-9`; exact opaque RGBA check=`font persist demo colors`",
+                "font demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; all=`font demo 1-9`; exact opaque RGBA check=`font demo colors`",
             );
             return ParseOutcome::Handled;
         }
@@ -331,38 +322,33 @@ pub(crate) fn try_parse(
         let id = match selector.parse::<u8>() {
             Ok(id @ 1..=9) => id,
             _ => {
-                print_shell_line(io, "font persist demo: installed=0 reason=expected-id-1-to-9");
+                print_shell_line(io, "font demo: installed=0 reason=expected-id-1-to-9");
                 return ParseOutcome::Handled;
             }
         };
         run_persistent_demo(spawner, io, id);
         return ParseOutcome::Handled;
     }
-    if let Some(after_persist) = strip_keyword(rest.trim(), "persist")
-        && let Some(after_set) = strip_keyword(after_persist.trim_start(), "set")
-    {
+    if let Some(after_set) = strip_keyword(rest.trim(), "set") {
         let color_program = match parse_color_program_control(after_set.trim_start()) {
             Ok(program) => program,
             Err(reason) => {
-                print_shell_line(io, format!("font persist: updated=0 reason={reason}").as_str());
+                print_shell_line(io, format!("font: updated=0 reason={reason}").as_str());
                 print_usage(io);
                 return ParseOutcome::Handled;
             }
         };
-        match crate::intel::gpu_font::set_persistent_font_color_program(color_program) {
-            Ok(status) => print_shell_line(
+        match super::super::font_draw3d::set_color_program(spawner, color_program) {
+            Ok(()) => print_shell_line(
                 io,
                 format!(
-                    "font persist: updated=1 id={} generation={} program={} geometry_uploads=0 elapsed_ms={}",
-                    status.id,
-                    status.generation,
-                    status.color_program.name(),
-                    status.elapsed_ms,
+                    "font: update_queued=1 program={} transport=tcp:4246 geometry_uploads=0",
+                    color_program.name(),
                 )
                 .as_str(),
             ),
             Err(reason) => {
-                print_shell_line(io, format!("font persist: updated=0 reason={reason}").as_str())
+                print_shell_line(io, format!("font: updated=0 reason={reason}").as_str())
             }
         }
         return ParseOutcome::Handled;
@@ -383,53 +369,13 @@ pub(crate) fn try_parse(
     } else {
         GpuFontTextRequest::SingleLine(row_refs[0])
     };
-    if command.persistent {
-        run_persistent_command(spawner, io, &command, request);
-        return ParseOutcome::Handled;
-    }
-    match crate::intel::gpu_font::render_text_once_with_font(
-        request,
-        command.font,
-        command.native_scale,
-    ) {
-        Ok(result) => print_shell_line(
-            io,
-            format!(
-                "font: presented=1 font_id={} font={} file={} layout={} text_chars={} rows={} native_scale={} native_size={}x{} glyphs={} glyph_hits={} glyph_misses={} vertices={} indices={} submits=1 completed={} ps={}",
-                command.font.id(),
-                result.summary.font_name,
-                result.summary.font_file,
-                result.layout.name(),
-                result.text_chars,
-                result.rows,
-                command.native_scale,
-                64 * command.native_scale,
-                64 * command.native_scale,
-                result.summary.glyphs,
-                result.summary.glyph_hits,
-                result.summary.glyph_misses,
-                result.summary.vertices,
-                result.summary.indices,
-                result.render.completed as u8,
-                result.render.ps_observed as u8,
-            )
-            .as_str(),
-        ),
-        Err(reason) => {
-            print_shell_line(io, format!("font: presented=0 reason={}", reason).as_str());
-        }
-    }
+    run_persistent_command(spawner, io, &command, request);
 
     ParseOutcome::Handled
 }
 
 fn parse_request(rest: &str) -> Result<FontCommand, &'static str> {
     let input = rest.trim();
-    let (persistent, input) = if let Some(after_persist) = strip_keyword(input, "persist") {
-        (true, after_persist.trim_start())
-    } else {
-        (false, input)
-    };
     let (multi_row, mut remaining) = if let Some(after_rows) = strip_keyword(input, "rows") {
         (true, after_rows.trim_start())
     } else {
@@ -449,12 +395,10 @@ fn parse_request(rest: &str) -> Result<FontCommand, &'static str> {
         return Err("text-must-be-quoted");
     }
 
-    let (font, native_scale, color_program) =
-        parse_font_scale_and_color_program(remaining, persistent)?;
+    let (font, native_scale, color_program) = parse_font_scale_and_color_program(remaining)?;
     Ok(FontCommand {
         rows,
         multi_row,
-        persistent,
         font,
         native_scale,
         color_program,
@@ -529,16 +473,13 @@ fn parse_unicode_escape(
 
 fn parse_font_scale_and_color_program(
     input: &str,
-    persistent: bool,
 ) -> Result<(GpuFontFace, u32, GpuFontColorProgram), &'static str> {
     let mut font = GpuFontFace::Default;
     let mut scale = crate::intel::render::FONT_STAMP_DEFAULT_NATIVE_SCALE;
     let mut numeric_arguments = 0usize;
     let mut color = ColorProgramOptions::new();
-    let mut color_option_seen = false;
     for part in input.split_whitespace() {
         if color.consume(part)? {
-            color_option_seen = true;
             continue;
         }
         let number = part.parse::<u32>().map_err(|_| "unexpected-argument")?;
@@ -553,9 +494,6 @@ fn parse_font_scale_and_color_program(
     }
     if !(MIN_NATIVE_SCALE..=MAX_NATIVE_SCALE).contains(&scale) {
         return Err("scale-out-of-range-1-to-8");
-    }
-    if !persistent && color_option_seen {
-        return Err("color-requires-persist");
     }
     Ok((font, scale, color.finish()?))
 }
@@ -647,20 +585,26 @@ fn run_persistent_command(
         font: command.font,
         native_scale: command.native_scale,
     };
-    match install_persistent_job(spawner, job, command.color_program) {
-        Ok(status) => print_shell_line(
+    match scene_add(job, command.color_program, Transform::IDENTITY, true)
+        .and_then(|addition| super::super::font_draw3d::add(spawner, vec![addition]))
+    {
+        Ok(()) => print_shell_line(
             io,
-            persistent_install_message(status, command.font.id(), command.native_scale).as_str(),
+            format!(
+                "font: add_queued=1 font_id={} scale={} program={} transport=tcp:4246",
+                command.font.id(),
+                command.native_scale,
+                command.color_program.name(),
+            )
+            .as_str(),
         ),
-        Err(reason) => {
-            print_shell_line(io, format!("font persist: installed=0 reason={reason}").as_str())
-        }
+        Err(reason) => print_shell_line(io, format!("font: installed=0 reason={reason}").as_str()),
     }
 }
 
 fn run_persistent_demo(spawner: &Spawner, io: &'static dyn ShellBackend2, id: u8) {
     let Some(demo) = persistent_font_demo(id) else {
-        print_shell_line(io, "font persist demo: installed=0 reason=expected-id-1-to-9");
+        print_shell_line(io, "font demo: installed=0 reason=expected-id-1-to-9");
         return;
     };
     let entries: Vec<GpuFontJobEntry<'_>> = demo
@@ -676,27 +620,23 @@ fn run_persistent_demo(spawner: &Spawner, io: &'static dyn ShellBackend2, id: u8
         font: demo.font,
         native_scale: demo.native_scale,
     };
-    match install_persistent_job(spawner, job, demo.color_program) {
-        Ok(status) => {
-            print_shell_line(
-                io,
-                format!(
-                    "font persist demo: installed=1 demo={} name={} entries={} geometry_uploads=1 animation={}",
-                    id,
-                    demo.name,
-                    demo.entries.len(),
-                    demo.color_program.name(),
-                )
-                .as_str(),
-            );
-            print_shell_line(
-                io,
-                persistent_install_message(status, demo.font.id(), demo.native_scale).as_str(),
-            );
-        }
+    match scene_add(job, demo.color_program, Transform::IDENTITY, false)
+        .and_then(|addition| super::super::font_draw3d::add(spawner, vec![addition]))
+    {
+        Ok(()) => print_shell_line(
+            io,
+            format!(
+                "font demo: add_queued=1 demo={} name={} entries={} animation={} transport=tcp:4246",
+                id,
+                demo.name,
+                demo.entries.len(),
+                demo.color_program.name(),
+            )
+            .as_str(),
+        ),
         Err(reason) => print_shell_line(
             io,
-            format!("font persist demo: installed=0 demo={id} reason={reason}").as_str(),
+            format!("font demo: installed=0 demo={id} reason={reason}").as_str(),
         ),
     }
 }
@@ -706,25 +646,10 @@ fn run_persistent_demo_grid(
     io: &'static dyn ShellBackend2,
     exact_color_check: bool,
 ) {
-    if let Err(reason) = ensure_persistent_engine_task(spawner) {
-        print_shell_line(
-            io,
-            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
-        );
-        return;
-    }
-    if let Err(reason) = crate::intel::gpu_font::stop_persistent_font_animation() {
-        print_shell_line(
-            io,
-            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
-        );
-        return;
-    }
-
-    let mut resident = Vec::with_capacity(9);
+    let mut additions = Vec::with_capacity(9);
     for index in 0..9usize {
         let Some(demo) = persistent_font_demo(index as u8 + 1) else {
-            print_shell_line(io, "font persist demo grid: installed=0 reason=demo-catalog");
+            print_shell_line(io, "font demo grid: installed=0 reason=demo-catalog");
             return;
         };
         let entries: Vec<GpuFontJobEntry<'_>> = demo
@@ -740,187 +665,81 @@ fn run_persistent_demo_grid(
             font: demo.font,
             native_scale: demo.native_scale,
         };
-        let tag = match crate::intel::gpu_font::persistent_font_demo_grid_tag(index) {
-            Ok(tag) => tag,
-            Err(reason) => {
-                print_shell_line(
-                    io,
-                    format!("font persist demo grid: installed=0 reason={reason}").as_str(),
-                );
-                return;
-            }
-        };
-        let lease = match crate::intel::gpu_font::persist_font_job(tag, job) {
-            Ok(lease) => lease,
-            Err(reason) => {
-                print_shell_line(
-                    io,
-                    format!("font persist demo grid: installed=0 reason={reason}").as_str(),
-                );
-                return;
-            }
-        };
         let color_program = if exact_color_check {
             GpuFontColorProgram::Static(DEMO_COLOR_CHECK_RGBA[index])
         } else {
             demo.color_program
         };
-        resident.push((lease, color_program));
+        let column = (index % 3) as f32;
+        let row = (index / 3) as f32;
+        let transform = Transform {
+            location: Vec3::new((column - 1.0) * 2.0, (1.0 - row) * 2.0, 0.0),
+            rotation: Vec3::ZERO,
+            scale: Vec3::new(0.28, 0.28, 0.28),
+        };
+        match scene_add(job, color_program, transform, false) {
+            Ok(addition) => additions.push(addition),
+            Err(reason) => {
+                print_shell_line(
+                    io,
+                    format!("font demo grid: installed=0 reason={reason}").as_str(),
+                );
+                return;
+            }
+        }
     }
 
-    match crate::intel::gpu_font::install_persistent_font_demo_grid(resident, exact_color_check) {
+    match super::super::font_draw3d::add(spawner, additions) {
         Ok(()) if exact_color_check => print_shell_line(
             io,
-            "font persist color-check: installed=1 layout=3x3 mapping=red,green,blue/cyan,magenta,yellow/white,gray,black alpha=255 expected=exact-rgba render-target-proof=logged",
+            "font color-check: add_queued=1 layout=3x3 mapping=red,green,blue/cyan,magenta,yellow/white,gray,black alpha=255 transport=tcp:4246",
         ),
         Ok(()) => print_shell_line(
             io,
-            "font persist demo grid: installed=1 demos=1-9 cells=9 layout=3x3 geometry_uploads=9 clock=monotonic-elapsed overlay_commits=1-per-update",
+            "font demo grid: add_queued=1 demos=1-9 cells=9 layout=3x3 transport=tcp:4246 clock=monotonic-elapsed",
         ),
-        Err(reason) => print_shell_line(
-            io,
-            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
-        ),
+        Err(reason) => {
+            print_shell_line(io, format!("font demo grid: installed=0 reason={reason}").as_str())
+        }
     }
 }
 
-fn install_persistent_job(
-    spawner: &Spawner,
+fn scene_add(
     job: GpuFontJob<'_>,
     color_program: GpuFontColorProgram,
-) -> Result<crate::intel::gpu_font::PersistentGpuFontAnimationStatus, &'static str> {
-    ensure_persistent_engine_task(spawner)?;
-    // Persistent shell jobs have single-active replacement semantics. Wait for
-    // the current synchronous frame, retire it, unmap it and only then reuse
-    // the one attributable residency tag. A quarantined draw deliberately
-    // blocks replacement rather than leaking another resident allocation.
-    crate::intel::gpu_font::stop_persistent_font_animation()?;
-    let tag = match crate::intel::gpu_font::next_persistent_font_animation_tag() {
-        Ok(tag) => tag,
-        Err(reason) => return Err(reason),
-    };
-    let lease = match crate::intel::gpu_font::persist_font_job(tag, job) {
-        Ok(lease) => lease,
-        Err(reason) => return Err(reason),
-    };
-    crate::intel::gpu_font::install_persistent_font_animation(lease, color_program)
-}
-
-fn ensure_persistent_engine_task(spawner: &Spawner) -> Result<(), &'static str> {
-    if PERSISTENT_ENGINE_TASK_STARTED.swap(true, Ordering::AcqRel) {
-        return Ok(());
-    }
-    match persistent_font_engine_task() {
-        Ok(token) => {
-            spawner.spawn(token);
-            Ok(())
-        }
-        Err(_) => {
-            PERSISTENT_ENGINE_TASK_STARTED.store(false, Ordering::Release);
-            Err("engine-frame-task-unavailable")
-        }
-    }
-}
-
-#[embassy_executor::task(pool_size = 1)]
-async fn persistent_font_engine_task() {
-    loop {
-        crate::intel::gpu_font::submit_persistent_font_animation_engine_frame();
-        Timer::after(EmbassyDuration::from_millis(PERSISTENT_ENGINE_FRAME_MS)).await;
-    }
-}
-
-fn persistent_install_message(
-    status: crate::intel::gpu_font::PersistentGpuFontAnimationStatus,
-    font_id: u8,
-    native_scale: u32,
-) -> String {
-    let prefix = format!(
-        "font persist: installed=1 id={} generation={} font_id={} scale={} program={} cadence_ms={}",
-        status.id,
-        status.generation,
-        font_id,
-        native_scale,
-        status.color_program.name(),
-        PERSISTENT_ENGINE_FRAME_MS,
-    );
-    match status.color_program {
-        GpuFontColorProgram::Static(rgba) => {
-            format!("{prefix} color={}", rgba_hex(rgba))
-        }
-        GpuFontColorProgram::Transition(transition) => format!(
-            "{prefix} from={} to={} channels={} duration_ms={} timing={} iteration={} clock=monotonic-elapsed",
-            rgba_hex(transition.from),
-            rgba_hex(transition.to),
-            transition.channels.name(),
-            transition.duration_ms,
-            transition.timing.name(),
-            transition.iteration.name(),
-        ),
-    }
-}
-
-fn persistent_status_message(
-    status: crate::intel::gpu_font::PersistentGpuFontAnimationStatus,
-) -> String {
-    let common = format!(
-        "font persist: active=1 id={} generation={} program={} elapsed_ms={} engine_frame_requests={} submitted_frames={} failures={} halted={} last_rgba={:?}",
-        status.id,
-        status.generation,
-        status.color_program.name(),
-        status.elapsed_ms,
-        status.engine_frame_requests,
-        status.submitted_frames,
-        status.failures,
-        status.halted as u8,
-        status.last_submitted,
-    );
-    match status.color_program {
-        GpuFontColorProgram::Static(rgba) => format!("{common} color={}", rgba_hex(rgba)),
-        GpuFontColorProgram::Transition(transition) => format!(
-            "{common} from={} to={} channels={} duration_ms={} timing={} iteration={}",
-            rgba_hex(transition.from),
-            rgba_hex(transition.to),
-            transition.channels.name(),
-            transition.duration_ms,
-            transition.timing.name(),
-            transition.iteration.name(),
-        ),
-    }
-}
-
-fn rgba_hex(rgba: GpuFontRgba) -> String {
-    format!("{:02X}{:02X}{:02X}{:02X}", rgba.r, rgba.g, rgba.b, rgba.a)
+    transform: Transform,
+    auto_layout: bool,
+) -> Result<super::super::font_draw3d::FontSceneAdd, &'static str> {
+    let mesh = crate::intel::gpu_font::tessellate_font_job_for_scene(job)?;
+    Ok(super::super::font_draw3d::FontSceneAdd {
+        mesh,
+        color_program,
+        transform,
+        auto_layout,
+    })
 }
 
 fn print_persistent_status(io: &'static dyn ShellBackend2) {
-    if let Some(status) = crate::intel::gpu_font::persistent_font_demo_grid_status() {
-        print_shell_line(
-            io,
-            format!(
-                "font persist: active=1 mode=demo-grid cells={} layout=3x3 engine_frame_requests={} presented_frames={} failures={} halted_cells={} exact_color_check={} color_proof_pixels={} color_proof_mismatches={} clock=monotonic-elapsed",
-                status.cells,
-                status.engine_frame_requests,
-                status.presented_frames,
-                status.failures,
-                status.halted_cells,
-                status.exact_color_check as u8,
-                status.color_proof_pixels,
-                status.color_proof_mismatches,
-            )
-            .as_str(),
-        );
-        return;
-    }
-    match crate::intel::gpu_font::persistent_font_animation_status() {
-        Some(status) => print_shell_line(io, persistent_status_message(status).as_str()),
-        None => print_shell_line(io, "font persist: active=0"),
-    }
+    let status = super::super::font_draw3d::status();
+    print_shell_line(
+        io,
+        format!(
+            "font: active={} transport=tcp:4246 owned_items={} pending={} scene_running={} service_meshes={} service_instances={} last_error={}",
+            (status.items != 0) as u8,
+            status.items,
+            status.pending,
+            status.running as u8,
+            status.mesh_count,
+            status.instance_count,
+            status.last_error.unwrap_or("none"),
+        )
+        .as_str(),
+    );
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9`, all: `font persist demo 1-9`, RGBA proof: `font persist demo colors`, catalogue: `font persist demo list`; persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
+        "font: scene text uses `font \"text\" [font_id 1|2] [scale 1..8] color=RRGGBBAA`; demos: `font demo 1` .. `font demo 9`, all: `font demo 1-9`, RGBA proof: `font demo colors`, catalogue: `font demo list`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active scene meshes: `font set <color|transition options>`; control: `font status|stop`; rows: `font rows \"row 1\" \"row 2\" ...`; transport: Draw3D TCP port 4246",
     );
 }
