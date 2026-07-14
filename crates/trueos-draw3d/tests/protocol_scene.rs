@@ -4,6 +4,53 @@ use trueos_draw3d::{
     decode_response, encode_command, encode_response,
 };
 
+#[test]
+fn default_scene_enforces_the_experimental_residency_budget() {
+    let mut scene = Scene::default();
+    let oversized = Mesh::new(vec![Vec3::ZERO; 1_001], Vec::new(), Vec::new(), Rgba8::WHITE);
+    assert_eq!(
+        scene.apply(Command::PutMesh {
+            mesh_id: 1,
+            mesh: oversized,
+        }),
+        Err(ApplyError::VertexLimit)
+    );
+
+    let fan = Mesh::new(
+        vec![Vec3::ZERO; 1_000],
+        Vec::new(),
+        vec![
+            Face::new((0u32..1_000).collect()),
+            Face::new((0u32..1_000).collect()),
+            Face::new((0u32..1_000).collect()),
+        ],
+        Rgba8::WHITE,
+    );
+    assert_eq!(
+        scene.apply(Command::PutMesh {
+            mesh_id: 2,
+            mesh: fan,
+        }),
+        Err(ApplyError::FaceLimit)
+    );
+
+    for mesh_id in 0..100 {
+        scene
+            .apply(Command::PutMesh {
+                mesh_id,
+                mesh: triangle(Rgba8::WHITE),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        scene.apply(Command::PutMesh {
+            mesh_id: 100,
+            mesh: triangle(Rgba8::WHITE),
+        }),
+        Err(ApplyError::MeshLimit)
+    );
+}
+
 fn triangle(color: Rgba8) -> Mesh {
     Mesh::new(
         vec![

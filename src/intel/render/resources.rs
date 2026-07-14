@@ -642,29 +642,60 @@ pub(crate) fn create_resident_font_mesh(
         }
     }
 
+    create_resident_triangle_mesh(&draw_vertices, &draw_indices)
+}
+
+/// Upload an indexed clip-space triangle mesh into persistent render PPGTT
+/// storage. Draw calls borrow its GPU addresses directly until release.
+pub(crate) fn create_resident_triangle_mesh(
+    draw_vertices: &[[f32; 3]],
+    draw_indices: &[u32],
+) -> Result<ResidentTriangleMesh, &'static str> {
+    if draw_vertices.len() < 3
+        || draw_indices.is_empty()
+        || !draw_indices.len().is_multiple_of(3)
+        || draw_vertices
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+        || draw_indices
+            .iter()
+            .any(|index| *index as usize >= draw_vertices.len())
+    {
+        return Err("resident-triangle-shape");
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return Err("no-device");
+    };
+    let warm = warm_once(dev);
+    if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
+        return Err("render-ppgtt");
+    }
+
     let vertex_bytes = draw_vertices
         .len()
         .checked_mul(core::mem::size_of::<[f32; 3]>())
-        .ok_or("resident-font-bytes")?;
-    let index_offset = crate::intel::align_up(vertex_bytes, 64).ok_or("resident-font-align")?;
+        .ok_or("resident-triangle-bytes")?;
+    let index_offset = crate::intel::align_up(vertex_bytes, 64).ok_or("resident-triangle-align")?;
     let index_bytes = draw_indices
         .len()
         .checked_mul(core::mem::size_of::<u32>())
-        .ok_or("resident-font-bytes")?;
+        .ok_or("resident-triangle-bytes")?;
     let used_bytes = index_offset
         .checked_add(index_bytes)
-        .ok_or("resident-font-bytes")?;
-    let storage_bytes = crate::intel::align_up(used_bytes, 4096).ok_or("resident-font-align")?;
-    let gpu_base = reserve_persistent_font_gpu_va(storage_bytes).ok_or("resident-font-va")?;
-    let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-font-count")?;
-    let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-font-count")?;
-    let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-font-count")?;
-    let index_bytes_u32 = u32::try_from(index_bytes).map_err(|_| "resident-font-count")?;
+        .ok_or("resident-triangle-bytes")?;
+    let storage_bytes =
+        crate::intel::align_up(used_bytes, 4096).ok_or("resident-triangle-align")?;
+    let gpu_base = reserve_persistent_font_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
+    let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-triangle-count")?;
+    let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-triangle-count")?;
+    let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-triangle-count")?;
+    let index_bytes_u32 = u32::try_from(index_bytes).map_err(|_| "resident-triangle-count")?;
     let index_gpu_addr = gpu_base
         .checked_add(index_offset as u64)
-        .ok_or("resident-font-address")?;
+        .ok_or("resident-triangle-address")?;
     let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
-        return Err("resident-font-alloc");
+        return Err("resident-triangle-alloc");
     };
 
     unsafe {
@@ -683,10 +714,10 @@ pub(crate) fn create_resident_font_mesh(
     crate::intel::dma_flush(storage_virt, storage_bytes);
     if !map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes) {
         crate::dma::dealloc(storage_virt, storage_bytes);
-        return Err("resident-font-map");
+        return Err("resident-triangle-map");
     }
 
-    let resident = ResidentFontMesh {
+    let resident = ResidentTriangleMesh {
         storage_phys,
         storage_virt,
         storage_bytes,
@@ -699,7 +730,7 @@ pub(crate) fn create_resident_font_mesh(
         index_bytes: index_bytes_u32,
     };
     intel_render_focus_log!(
-        "resident-font upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} cpu_uploads=1 retained=1\n",
+        "resident-triangle upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} cpu_uploads=1 retained=1\n",
         resident.storage_phys,
         resident.gpu_base,
         resident.storage_bytes,
@@ -710,15 +741,87 @@ pub(crate) fn create_resident_font_mesh(
 }
 
 pub(crate) fn release_resident_font_mesh(mesh: &ResidentFontMesh) -> bool {
+    release_resident_triangle_mesh(mesh)
+}
+
+/// Replace a resident job's vertex/index payload without changing its PPGTT
+/// mapping. Stable projected topology makes camera and transform updates cheap
+/// while color changes require no geometry write at all.
+pub(crate) fn update_resident_triangle_mesh(
+    mesh: &ResidentTriangleMesh,
+    vertices: &[[f32; 3]],
+    indices: &[u32],
+) -> Result<(), &'static str> {
+    let vertex_bytes = vertices
+        .len()
+        .checked_mul(core::mem::size_of::<[f32; 3]>())
+        .ok_or("resident-triangle-bytes")?;
+    let index_bytes = indices
+        .len()
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("resident-triangle-bytes")?;
+    if vertices.len() != mesh.vertex_count as usize
+        || indices.len() != mesh.index_count as usize
+        || vertex_bytes != mesh.vertex_bytes as usize
+        || index_bytes != mesh.index_bytes as usize
+        || vertices
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+        || indices
+            .iter()
+            .any(|index| *index as usize >= vertices.len())
+    {
+        return Err("resident-triangle-update-shape");
+    }
+    let index_offset = usize::try_from(mesh.index_gpu_addr.saturating_sub(mesh.gpu_base))
+        .map_err(|_| "resident-triangle-address")?;
+    if index_offset.saturating_add(index_bytes) > mesh.storage_bytes {
+        return Err("resident-triangle-address");
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            vertices.as_ptr() as *const u8,
+            mesh.storage_virt,
+            vertex_bytes,
+        );
+        core::ptr::copy_nonoverlapping(
+            indices.as_ptr() as *const u8,
+            mesh.storage_virt.add(index_offset),
+            index_bytes,
+        );
+    }
+    crate::intel::dma_flush(mesh.storage_virt, mesh.storage_bytes);
+    Ok(())
+}
+
+pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> bool {
     if !unmap_render_ppgtt_range(mesh.gpu_base, mesh.storage_bytes) {
         return false;
     }
     crate::dma::dealloc(mesh.storage_virt, mesh.storage_bytes);
+    recycle_persistent_triangle_gpu_va(mesh.gpu_base, mesh.storage_bytes);
     true
 }
 
 fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
     let bytes = crate::intel::align_up(bytes, 4096)? as u64;
+    {
+        let mut free = PERSISTENT_TRIANGLE_GPU_VA_FREE.lock();
+        if let Some(index) = free
+            .iter()
+            .position(|(start, end)| end.saturating_sub(*start) >= bytes)
+        {
+            let (start, end) = free[index];
+            let next = start.checked_add(bytes)?;
+            if next == end {
+                free.swap_remove(index);
+            } else {
+                free[index].0 = next;
+            }
+            return Some(start);
+        }
+    }
     loop {
         let current = PERSISTENT_FONT_GPU_VA_CURSOR.load(Ordering::Acquire);
         let aligned = (current.checked_add(4095)?) & !4095;
@@ -733,6 +836,29 @@ fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
             return Some(aligned);
         }
     }
+}
+
+fn recycle_persistent_triangle_gpu_va(gpu_base: u64, bytes: usize) {
+    let Some(bytes) = crate::intel::align_up(bytes, 4096).map(|value| value as u64) else {
+        return;
+    };
+    let Some(end) = gpu_base.checked_add(bytes) else {
+        return;
+    };
+    let mut free = PERSISTENT_TRIANGLE_GPU_VA_FREE.lock();
+    free.push((gpu_base, end));
+    free.sort_unstable_by_key(|range| range.0);
+    let mut write = 0usize;
+    for read in 0..free.len() {
+        let range = free[read];
+        if write != 0 && range.0 <= free[write - 1].1 {
+            free[write - 1].1 = free[write - 1].1.max(range.1);
+        } else {
+            free[write] = range;
+            write += 1;
+        }
+    }
+    free.truncate(write);
 }
 
 fn prepare_triangle_draw_resources_for_resident_font_mesh(

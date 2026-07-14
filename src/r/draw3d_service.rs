@@ -5,12 +5,13 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use trueos_draw3d::{
-    Command, FrameDecoder, ImageFormat, RenderImage, Response, ResponseError, Scene, SceneStats,
-    encode_response,
+    Command, FrameDecoder, ImageFormat, ProjectedMesh, RenderImage, Response, ResponseError, Scene,
+    SceneStats, encode_response, project_scene,
 };
 
 use crate::net::adapter::{
@@ -27,6 +28,18 @@ const PLACEHOLDER_RENDER_WIDTH: u32 = 3_840;
 const PLACEHOLDER_RENDER_HEIGHT: u32 = 2_160;
 
 static SCENE: Mutex<Option<Scene>> = Mutex::new(None);
+static SCENE_REVISION: AtomicU64 = AtomicU64::new(1);
+static SCENE_GEOMETRY_REVISION: AtomicU64 = AtomicU64::new(1);
+
+const FRAME_PERIOD_MS: u64 = 33;
+const FRAME_LOG_INTERVAL: u64 = 300;
+
+struct SceneRenderJob {
+    instance_id: u64,
+    mesh_id: u64,
+    color: trueos_draw3d::Rgba8,
+    resident: crate::intel::render::ResidentTriangleMesh,
+}
 
 /// Read the current shared scene without copying mesh buffers.
 ///
@@ -44,8 +57,193 @@ pub fn scene_stats() -> SceneStats {
 fn apply_command(
     command: Command,
 ) -> Result<trueos_draw3d::ApplyOutcome, trueos_draw3d::ApplyError> {
+    let geometry_changed = !matches!(&command, Command::SetColor { .. });
     let mut scene = SCENE.lock();
-    scene.get_or_insert_with(Scene::default).apply(command)
+    let outcome = scene.get_or_insert_with(Scene::default).apply(command)?;
+    SCENE_REVISION.fetch_add(1, Ordering::AcqRel);
+    if geometry_changed {
+        SCENE_GEOMETRY_REVISION.fetch_add(1, Ordering::AcqRel);
+    }
+    Ok(outcome)
+}
+
+fn projected_scene() -> Vec<ProjectedMesh> {
+    with_scene(|scene| project_scene(scene, 1.0))
+}
+
+fn refresh_render_job_colors(jobs: &mut [SceneRenderJob]) {
+    with_scene(|scene| {
+        for job in jobs {
+            if let Some(mesh) = scene.mesh(job.mesh_id) {
+                job.color = mesh.color;
+            }
+        }
+    });
+}
+
+fn release_render_job(job: SceneRenderJob) {
+    if !crate::intel::render::release_resident_triangle_mesh(&job.resident) {
+        crate::log_warn!(
+            target: "draw3d";
+            "draw3d: resident release quarantined instance={} mesh={}\n",
+            job.instance_id,
+            job.mesh_id
+        );
+        core::mem::forget(job);
+    }
+}
+
+fn sync_render_jobs(
+    old_jobs: &mut Vec<SceneRenderJob>,
+    projected: Vec<ProjectedMesh>,
+) -> Result<(), &'static str> {
+    let mut previous = core::mem::take(old_jobs);
+    let mut next = Vec::with_capacity(projected.len());
+    let mut first_error = None;
+
+    for source in projected {
+        let old_position = previous
+            .iter()
+            .position(|job| job.instance_id == source.instance_id);
+        let reusable = old_position.map(|position| previous.swap_remove(position));
+        if let Some(mut job) = reusable {
+            if crate::intel::render::update_resident_triangle_mesh(
+                &job.resident,
+                &source.vertices,
+                &source.indices,
+            )
+            .is_ok()
+            {
+                job.mesh_id = source.mesh_id;
+                job.color = source.color;
+                next.push(job);
+                continue;
+            }
+            release_render_job(job);
+        }
+
+        match crate::intel::render::create_resident_triangle_mesh(&source.vertices, &source.indices)
+        {
+            Ok(resident) => next.push(SceneRenderJob {
+                instance_id: source.instance_id,
+                mesh_id: source.mesh_id,
+                color: source.color,
+                resident,
+            }),
+            Err(error) => {
+                first_error.get_or_insert(error);
+            }
+        }
+    }
+    for stale in previous {
+        release_render_job(stale);
+    }
+    *old_jobs = next;
+    first_error.map_or(Ok(()), Err)
+}
+
+#[embassy_executor::task]
+pub async fn draw3d_render_task() {
+    let mut jobs = Vec::new();
+    let mut resident_revision = 0u64;
+    let mut resident_geometry_revision = 0u64;
+    let mut frame = 0u64;
+    let mut next_frame = Instant::now();
+    let mut last_sync_error = None;
+    let mut last_render_error = None;
+
+    crate::log_info!(
+        target: "draw3d";
+        "draw3d: render engine online target_fps=30 frame_ms={} max_meshes=100 max_instances=100 max_vertices_per_mesh=1000 target=512x512\n",
+        FRAME_PERIOD_MS
+    );
+    loop {
+        next_frame += EmbassyDuration::from_millis(FRAME_PERIOD_MS);
+        let revision = SCENE_REVISION.load(Ordering::Acquire);
+        let geometry_revision = SCENE_GEOMETRY_REVISION.load(Ordering::Acquire);
+        if revision != resident_revision {
+            let had_jobs = !jobs.is_empty();
+            let sync_result = if geometry_revision != resident_geometry_revision {
+                sync_render_jobs(&mut jobs, projected_scene())
+            } else {
+                refresh_render_job_colors(&mut jobs);
+                Ok(())
+            };
+            match sync_result {
+                Ok(()) => {
+                    resident_revision = revision;
+                    resident_geometry_revision = geometry_revision;
+                    last_sync_error = None;
+                    crate::log_info!(
+                        target: "draw3d";
+                        "draw3d: scene resident revision={} jobs={}\n",
+                        revision,
+                        jobs.len()
+                    );
+                    if had_jobs && jobs.is_empty() {
+                        let _ = crate::intel::render::submit_resident_triangle_scene_frame(&[]);
+                    }
+                }
+                Err(error) => {
+                    if last_sync_error != Some(error) {
+                        crate::log_warn!(
+                            target: "draw3d";
+                            "draw3d: scene residency pending revision={} jobs={} error={}\n",
+                            revision,
+                            jobs.len(),
+                            error
+                        );
+                        last_sync_error = Some(error);
+                    }
+                }
+            }
+        }
+
+        if !jobs.is_empty() {
+            let draws = jobs
+                .iter()
+                .map(|job| crate::intel::render::ResidentSceneDraw {
+                    mesh: &job.resident,
+                    rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
+                })
+                .collect::<Vec<_>>();
+            match crate::intel::render::submit_resident_triangle_scene_frame(&draws) {
+                Ok(result) => {
+                    last_render_error = None;
+                    if frame == 0 || frame.is_multiple_of(FRAME_LOG_INTERVAL) {
+                        crate::log_info!(
+                            target: "draw3d";
+                            "draw3d: frame success frame={} revision={} draws={}/{} changed_pixels={} presented={}\n",
+                            frame,
+                            resident_revision,
+                            result.completed_draws,
+                            result.requested_draws,
+                            result.changed_pixels,
+                            result.presented as u8
+                        );
+                    }
+                }
+                Err(error) => {
+                    if last_render_error != Some(error) {
+                        crate::log_warn!(
+                            target: "draw3d";
+                            "draw3d: frame pending frame={} jobs={} error={}\n",
+                            frame,
+                            jobs.len(),
+                            error
+                        );
+                        last_render_error = Some(error);
+                    }
+                }
+            }
+        }
+        frame = frame.wrapping_add(1);
+
+        if next_frame <= Instant::now() {
+            next_frame = Instant::now();
+        }
+        Timer::at(next_frame).await;
+    }
 }
 
 fn request_listener(commands: &NetQueue<NetCommand>) -> bool {

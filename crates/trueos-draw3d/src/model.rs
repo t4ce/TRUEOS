@@ -172,9 +172,27 @@ impl Transform {
         self.location.is_finite() && self.rotation.is_finite() && self.scale.is_finite()
     }
 
-    /// Applies the scale and translation portion. Rotation remains renderer-defined Euler data.
-    pub fn scale_and_translate(self, point: Vec3) -> Vec3 {
-        point.component_mul(self.scale) + self.location
+    /// Applies scale, then intrinsic X/Y/Z Euler rotation, then translation.
+    pub fn transform_point(self, point: Vec3) -> Vec3 {
+        let scaled = point.component_mul(self.scale);
+        let (sin_x, cos_x) = libm::sincosf(self.rotation.x);
+        let (sin_y, cos_y) = libm::sincosf(self.rotation.y);
+        let (sin_z, cos_z) = libm::sincosf(self.rotation.z);
+        let x_rotated = Vec3::new(
+            scaled.x,
+            scaled.y * cos_x - scaled.z * sin_x,
+            scaled.y * sin_x + scaled.z * cos_x,
+        );
+        let y_rotated = Vec3::new(
+            x_rotated.x * cos_y + x_rotated.z * sin_y,
+            x_rotated.y,
+            -x_rotated.x * sin_y + x_rotated.z * cos_y,
+        );
+        Vec3::new(
+            y_rotated.x * cos_z - y_rotated.y * sin_z,
+            y_rotated.x * sin_z + y_rotated.y * cos_z,
+            y_rotated.z,
+        ) + self.location
     }
 }
 
@@ -240,6 +258,7 @@ pub struct SceneLimits {
     pub max_instances: usize,
     pub max_vertices_per_mesh: usize,
     pub max_edges_per_mesh: usize,
+    /// Maximum triangle count after polygon fan triangulation.
     pub max_faces_per_mesh: usize,
     pub max_vertices_per_face: usize,
 }
@@ -247,12 +266,14 @@ pub struct SceneLimits {
 impl Default for SceneLimits {
     fn default() -> Self {
         Self {
-            max_meshes: 4_096,
-            max_instances: 65_536,
-            max_vertices_per_mesh: 16_777_216,
-            max_edges_per_mesh: 16_777_216,
-            max_faces_per_mesh: crate::protocol::MAX_FACES_PER_COMMAND,
-            max_vertices_per_face: u16::MAX as usize,
+            // The experimental render service deliberately has a small,
+            // predictable residency envelope.
+            max_meshes: 100,
+            max_instances: 100,
+            max_vertices_per_mesh: 1_000,
+            max_edges_per_mesh: 3_000,
+            max_faces_per_mesh: 2_000,
+            max_vertices_per_face: 1_000,
         }
     }
 }
@@ -434,7 +455,7 @@ impl Scene {
                 1
             }
             Command::SetFaces { mesh_id, faces } => {
-                if faces.len() > self.limits.max_faces_per_mesh {
+                if triangulated_face_count(&faces) > self.limits.max_faces_per_mesh {
                     return Err(ApplyError::FaceLimit);
                 }
                 let vertex_count = self
@@ -573,7 +594,7 @@ impl Scene {
         if mesh.edges.len() > self.limits.max_edges_per_mesh {
             return Err(ApplyError::EdgeLimit);
         }
-        if mesh.faces.len() > self.limits.max_faces_per_mesh {
+        if triangulated_face_count(&mesh.faces) > self.limits.max_faces_per_mesh {
             return Err(ApplyError::FaceLimit);
         }
         validate_vectors(&mesh.vertices)?;
@@ -678,6 +699,12 @@ fn validate_faces(
         }
     }
     Ok(())
+}
+
+fn triangulated_face_count(faces: &[Face]) -> usize {
+    faces
+        .iter()
+        .fold(0usize, |total, face| total.saturating_add(face.vertices.len().saturating_sub(2)))
 }
 
 fn validate_indices(

@@ -88,8 +88,7 @@ const WARM_RESULT_BYTES: usize = 4096;
 const FONT_PROOF_TARGET_SIZE: usize = 512;
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
-const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
-    (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
+const FONT_STAMP_MAX_NATIVE_SCALE: u32 = (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
 const WARM_STREAMOUT_BYTES: usize =
     FONT_PROOF_TARGET_SIZE * FONT_PROOF_TARGET_SIZE * core::mem::size_of::<u32>();
 const BLT_RING_DWORDS: usize = 4;
@@ -108,8 +107,9 @@ const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x00B0_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPU_VA_PERSISTENT_FONT_BASE: u64 = 0x2000_0000;
 const GPU_VA_PERSISTENT_FONT_LIMIT: u64 = 0x2800_0000;
-static PERSISTENT_FONT_GPU_VA_CURSOR: AtomicU64 =
-    AtomicU64::new(GPU_VA_PERSISTENT_FONT_BASE);
+static PERSISTENT_FONT_GPU_VA_CURSOR: AtomicU64 = AtomicU64::new(GPU_VA_PERSISTENT_FONT_BASE);
+static PERSISTENT_TRIANGLE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
+    spin::Mutex::new(alloc::vec::Vec::new());
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
 const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3800;
 const GPGPU_TILE_ROWS: usize = 256;
@@ -265,18 +265,12 @@ const CMD_3DSTATE_BINDING_TABLE_POOL_ALLOC: u32 =
     2 | (25 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES: u32 =
     (109 << 16) | (0x1F << 8) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS: u32 =
-    (109 << 16) | (0x11 << 8) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_VS: u32 =
-    (18 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_HS: u32 =
-    (19 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_DS: u32 =
-    (20 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_GS: u32 =
-    (21 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
-const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_PS: u32 =
-    (22 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_CONSTANT_ALL_EMPTY_VS_PS: u32 = (109 << 16) | (0x11 << 8) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_VS: u32 = (18 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_HS: u32 = (19 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_DS: u32 = (20 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_GS: u32 = (21 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
+const CMD_3DSTATE_PUSH_CONSTANT_ALLOC_PS: u32 = (22 << 16) | (1 << 24) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_VS: u32 = 7 | (16 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_GS: u32 = 8 | (17 << 16) | (3 << 27) | (3 << 29);
 const CMD_3DSTATE_CLEAR_PARAMS: u32 = 1 | (4 << 16) | (3 << 27) | (3 << 29);

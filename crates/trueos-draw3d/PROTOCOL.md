@@ -1,4 +1,6 @@
-# TRUEOS 3D draw protocol v1 The 3D draw service listens on TCP port 4246.
+# TRUEOS 3D draw protocol v1
+
+The 3D draw service listens on TCP port 4246.
 
 The wire format is little-endian and intentionally contains no names, JSON, alignment padding,
 or checksum. TCP supplies ordering and integrity. A client may pipeline requests; `request_id`
@@ -17,8 +19,8 @@ correlates each reply.
 
 IDs are `u64`, counts and vertex indices are `u32`, vector components are IEEE-754 `f32`,
 and RGBA is four bytes. A `Vec3` is 12 bytes. A transform is location, Euler rotation in
-radians, then scale (36 bytes total). Faces preserve polygons: `u16 vertex_count` followed by
-that many `u32` indices.
+radians, then scale (36 bytes total). The renderer applies scale, then intrinsic X/Y/Z rotation,
+then translation. Faces preserve polygons: `u16 vertex_count` followed by that many `u32` indices.
 
 ## Commands
 
@@ -61,7 +63,22 @@ Applied replies contain affected count and current scene statistics. Stats conta
 instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
 the encoded image bytes through the end of the frame. The current placeholder response is the
-kernel's embedded 3840x2160 `logo.jpg`; no scene renderer is implied yet.
+kernel's embedded 3840x2160 `logo.jpg`. This remains intentionally separate from the live scene
+preview while render-image transport is being proven.
+
+## Experimental live renderer
+
+The service owns the Intel triangle engine for this experiment. Each placed instance is projected
+through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
+uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
+frames. RGBA is volatile shader state, so `set color` does not upload geometry. Jobs are ordered
+back-to-front into one 512x512 target and presented on a 33 ms cadence (about 30 FPS). Triangles
+which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
+Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
+
+The active scene budget is 100 stored meshes, 100 placed instances, 1,000 vertices per mesh,
+3,000 edges per mesh, and 2,000 triangles per mesh after polygon fan triangulation. These are
+service-level limits; the larger wire decoder ceilings below only protect framing and allocation.
 
 The service accepts payloads up to 128 MiB, with per-command safety ceilings of 16,777,216
 vertices, 16,777,216 edges, and 4,194,304 faces. These limits are checked before allocation.

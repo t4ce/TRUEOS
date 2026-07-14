@@ -140,14 +140,157 @@ pub(crate) fn submit_resident_font_mesh_once(
     submit_resident_font_mesh_inner(mesh, native_scale, rgba, None)
 }
 
+pub(crate) struct ResidentSceneDraw<'a> {
+    pub(crate) mesh: &'a ResidentTriangleMesh,
+    pub(crate) rgba: [u8; 4],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResidentSceneFrameResult {
+    pub(crate) completed_draws: usize,
+    pub(crate) requested_draws: usize,
+    pub(crate) changed_pixels: usize,
+    pub(crate) presented: bool,
+}
+
+/// Render a back-to-front list of persistent triangle jobs into one shared
+/// target. The target is cleared once and read back/presented once; individual
+/// jobs retain their own constant RGBA specialization.
+pub(crate) fn submit_resident_triangle_scene_frame(
+    draws: &[ResidentSceneDraw<'_>],
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    const SUBMIT_NAME: &str = "draw3d-scene";
+    const TARGET_SIZE: usize = FONT_PROOF_TARGET_SIZE;
+
+    if draws.is_empty() {
+        let transparent = alloc::vec![0u8; TARGET_SIZE * TARGET_SIZE * 4];
+        let presented = crate::intel::display::present_rgba_overlay_at(
+            &transparent,
+            TARGET_SIZE as u32,
+            TARGET_SIZE as u32,
+            TARGET_SIZE * 4,
+            96,
+            96,
+            true,
+            "draw3d-scene-clear",
+        );
+        return Ok(ResidentSceneFrameResult {
+            completed_draws: 0,
+            requested_draws: 0,
+            changed_pixels: 0,
+            presented,
+        });
+    }
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+
+    let result = (|| {
+        let Some(dev) = crate::intel::claimed_device() else {
+            return Err("no-device");
+        };
+        let warm = warm_once(dev);
+        let target_pitch = TARGET_SIZE * core::mem::size_of::<u32>();
+        let target_bytes = target_pitch * TARGET_SIZE;
+        if warm.streamout_virt.is_null() || warm.streamout_len < target_bytes {
+            return Err("warm-scratch");
+        }
+        if !forcewake_render_acquire(warm) {
+            return Err("forcewake");
+        }
+        if !ensure_smoke_buffers_mapped(dev, warm) {
+            return Err("render-map");
+        }
+
+        unsafe {
+            core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+            core::slice::from_raw_parts_mut(
+                warm.streamout_virt as *mut u32,
+                TARGET_SIZE * TARGET_SIZE,
+            )
+            .fill(0xDEAD_BEEF);
+        }
+        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
+
+        let mut completed_draws = 0usize;
+        for draw in draws {
+            let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
+                dev,
+                warm,
+                GPU_VA_STREAMOUT_BASE,
+                target_pitch,
+                TARGET_SIZE,
+                TARGET_SIZE,
+                TriangleBlendProbeMode::MesaZeroedState,
+                &[],
+                None,
+                None,
+                Some(draw.mesh),
+                Some(draw.rgba),
+                "draw3d-resident-instance",
+                SUBMIT_NAME,
+                TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+                BackendProbeMode::MesaLike,
+                PostDrawSyncVariant::HeavyAll,
+                TriangleBatchMode::Draw,
+                StreamoutProofExperiment::HeaderAndPositionSlots01,
+                None,
+            );
+            if !completed {
+                break;
+            }
+            completed_draws += 1;
+        }
+
+        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
+        let pixels = unsafe {
+            core::slice::from_raw_parts(
+                warm.streamout_virt as *const u32,
+                TARGET_SIZE * TARGET_SIZE,
+            )
+        };
+        let mut changed_pixels = 0usize;
+        let mut visible_rgba = Vec::with_capacity(target_bytes);
+        for pixel in pixels {
+            if *pixel == 0xDEAD_BEEF {
+                visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                changed_pixels += 1;
+                visible_rgba.extend_from_slice(&pixel.to_le_bytes());
+            }
+        }
+        let presented = completed_draws != 0
+            && crate::intel::display::present_rgba_overlay_at(
+                &visible_rgba,
+                TARGET_SIZE as u32,
+                TARGET_SIZE as u32,
+                target_pitch,
+                96,
+                96,
+                true,
+                "draw3d-scene-render-target",
+            );
+        Ok(ResidentSceneFrameResult {
+            completed_draws,
+            requested_draws: draws.len(),
+            changed_pixels,
+            presented,
+        })
+    })();
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
+}
+
 pub(crate) fn submit_resident_font_mesh_readback_once(
     mesh: &ResidentFontMesh,
     native_scale: u32,
     rgba: crate::intel::gpu_font::GpuFontRgba,
 ) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
     let mut readback = None;
-    let render =
-        submit_resident_font_mesh_inner(mesh, native_scale, rgba, Some(&mut readback))?;
+    let render = submit_resident_font_mesh_inner(mesh, native_scale, rgba, Some(&mut readback))?;
     Ok((render, readback))
 }
 
@@ -4789,7 +4932,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     );
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
-    let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
+    let scratch_rt_before = if should_capture_scratch_rt_proof(submit_name) {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
         let center_x = draw.target_w / 2;
         let center_y = draw.target_h / 2;
@@ -5887,7 +6030,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     intel_render_verbose_log!("{} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
-    let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
+    let scratch_rt_before = if should_capture_scratch_rt_proof(submit_name) {
         crate::intel::dma_flush(warm.streamout_virt, warm.streamout_len.min(64));
         let center_x = draw.target_w / 2;
         let center_y = draw.target_h / 2;
@@ -6355,7 +6498,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     intel_render_verbose_log!("{} blend-probe={}\n", submit_name, blend_mode.label());
     log_triangle_probe_state(warm, shader_layout, probe_state);
 
-    let scratch_rt_before = if is_scratch_rt_submit_name(submit_name) {
+    let scratch_rt_before = if should_capture_scratch_rt_proof(submit_name) {
         let scratch_surface_bytes = (draw.rt_pitch as usize)
             .saturating_mul(draw.target_h as usize)
             .min(warm.streamout_len);

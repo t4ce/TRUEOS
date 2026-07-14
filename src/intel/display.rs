@@ -168,6 +168,7 @@ pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) height: u32,
     pub(crate) pitch_bytes: usize,
     pub(crate) pixels: &'a [u8],
+    pub(crate) expected_rgba: Option<Rgba8>,
 }
 
 impl PrimarySurfaceSampleSet {
@@ -2804,10 +2805,18 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
         surface.height,
         0,
     );
+    let mut contract_pixels = 0u64;
+    let mut source_mismatches = 0u64;
+    let mut storage_mismatches = 0u64;
     for tile in tiles {
-        if !copy_rgba_tile_into_overlay(surface, tile) {
+        let Some((pixels, source_errors, storage_errors)) =
+            copy_rgba_tile_into_overlay(surface, tile)
+        else {
             return false;
-        }
+        };
+        contract_pixels = contract_pixels.saturating_add(pixels);
+        source_mismatches = source_mismatches.saturating_add(source_errors);
+        storage_mismatches = storage_mismatches.saturating_add(storage_errors);
     }
     crate::intel::dma_flush(surface.virt, surface.byte_len);
 
@@ -2830,6 +2839,16 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
             surface.width,
             surface.height,
             surface.pitch_bytes,
+        );
+    }
+    if tiles.iter().any(|tile| tile.expected_rgba.is_some()) {
+        crate::log!(
+            "intel/display: rgba-color-contract-proof tiles={} written_pixels={} source_mismatches={} storage_mismatches={} exact={} source_format=straight-rgba8 plane_storage=premultiplied-bgra8 alpha_contract=opaque-identity\n",
+            tiles.len(),
+            contract_pixels,
+            source_mismatches,
+            storage_mismatches,
+            (contract_pixels != 0 && source_mismatches == 0 && storage_mismatches == 0) as u8,
         );
     }
     true
@@ -5144,20 +5163,26 @@ fn copy_rgba_into_overlay(
     true
 }
 
-fn copy_rgba_tile_into_overlay(surface: OverlaySurface, tile: &RgbaOverlayTile<'_>) -> bool {
+fn copy_rgba_tile_into_overlay(
+    surface: OverlaySurface,
+    tile: &RgbaOverlayTile<'_>,
+) -> Option<(u64, u64, u64)> {
     if tile.width == 0
         || tile.height == 0
         || tile.pitch_bytes < tile.width as usize * 4
         || tile.pixels.len() < tile.pitch_bytes.saturating_mul(tile.height as usize)
     {
-        return false;
+        return None;
     }
     let copy_w = tile.width.min(surface.width.saturating_sub(tile.x));
     let copy_h = tile.height.min(surface.height.saturating_sub(tile.y));
     if copy_w == 0 || copy_h == 0 {
-        return false;
+        return None;
     }
     let dst_pitch = surface.pitch_bytes as usize;
+    let mut contract_pixels = 0u64;
+    let mut source_mismatches = 0u64;
+    let mut storage_mismatches = 0u64;
     for row in 0..copy_h as usize {
         let src_row_off = row.saturating_mul(tile.pitch_bytes);
         let dst_row_off = (tile.y as usize + row)
@@ -5167,17 +5192,28 @@ fn copy_rgba_tile_into_overlay(surface: OverlaySurface, tile: &RgbaOverlayTile<'
         for col in 0..copy_w as usize {
             let src_off = src_row_off.saturating_add(col.saturating_mul(4));
             let Some(pixel) = tile.pixels.get(src_off..src_off.saturating_add(4)) else {
-                return false;
+                return None;
             };
             let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+            if let Some(expected) = tile.expected_rgba
+                && a != 0
+            {
+                contract_pixels = contract_pixels.saturating_add(1);
+                if [r, g, b, a] != [expected.r, expected.g, expected.b, expected.a] {
+                    source_mismatches = source_mismatches.saturating_add(1);
+                }
+            }
             let premultiplied =
                 u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), premultiplied);
+                if core::ptr::read_volatile(dst_row.add(col)) != premultiplied {
+                    storage_mismatches = storage_mismatches.saturating_add(1);
+                }
             }
         }
     }
-    true
+    Some((contract_pixels, source_mismatches, storage_mismatches))
 }
 
 #[inline]

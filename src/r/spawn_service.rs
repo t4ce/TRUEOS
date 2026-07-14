@@ -472,7 +472,22 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task())
+    let service = spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task());
+    if !matches!(service, SpawnAttempt::Spawned) {
+        return service;
+    }
+    match spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_render_task()) {
+        SpawnAttempt::Spawned => SpawnAttempt::Spawned,
+        SpawnAttempt::Skipped => SpawnAttempt::Spawned,
+        SpawnAttempt::Failed(error) => {
+            crate::log_warn!(
+                target: "draw3d";
+                "draw3d: render task spawn failed error={:?}\n",
+                error
+            );
+            SpawnAttempt::Spawned
+        }
+    }
 }
 
 fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {

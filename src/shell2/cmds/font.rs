@@ -18,6 +18,18 @@ const PERSISTENT_ENGINE_FRAME_MS: u64 = 16;
 const MIN_COLOR_DURATION_MS: u32 = 16;
 const MAX_COLOR_DURATION_MS: u32 = 600_000;
 
+const DEMO_COLOR_CHECK_RGBA: [GpuFontRgba; 9] = [
+    GpuFontRgba::new(255, 0, 0, 255),
+    GpuFontRgba::new(0, 255, 0, 255),
+    GpuFontRgba::new(0, 0, 255, 255),
+    GpuFontRgba::new(0, 255, 255, 255),
+    GpuFontRgba::new(255, 0, 255, 255),
+    GpuFontRgba::new(255, 255, 0, 255),
+    GpuFontRgba::new(255, 255, 255, 255),
+    GpuFontRgba::new(128, 128, 128, 255),
+    GpuFontRgba::new(0, 0, 0, 255),
+];
+
 static PERSISTENT_ENGINE_TASK_STARTED: AtomicBool = AtomicBool::new(false);
 
 struct FontCommand {
@@ -304,12 +316,16 @@ pub(crate) fn try_parse(
         if selector == "list" {
             print_shell_line(
                 io,
-                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; run one with `font persist demo N`, or all with `font persist demo 1-9`",
+                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; all=`font persist demo 1-9`; exact opaque RGBA check=`font persist demo colors`",
             );
             return ParseOutcome::Handled;
         }
         if selector == "1-9" {
-            run_persistent_demo_grid(spawner, io);
+            run_persistent_demo_grid(spawner, io, false);
+            return ParseOutcome::Handled;
+        }
+        if selector.eq_ignore_ascii_case("colors") {
+            run_persistent_demo_grid(spawner, io, true);
             return ParseOutcome::Handled;
         }
         let id = match selector.parse::<u8>() {
@@ -685,7 +701,11 @@ fn run_persistent_demo(spawner: &Spawner, io: &'static dyn ShellBackend2, id: u8
     }
 }
 
-fn run_persistent_demo_grid(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+fn run_persistent_demo_grid(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    exact_color_check: bool,
+) {
     if let Err(reason) = ensure_persistent_engine_task(spawner) {
         print_shell_line(
             io,
@@ -740,10 +760,19 @@ fn run_persistent_demo_grid(spawner: &Spawner, io: &'static dyn ShellBackend2) {
                 return;
             }
         };
-        resident.push((lease, demo.color_program));
+        let color_program = if exact_color_check {
+            GpuFontColorProgram::Static(DEMO_COLOR_CHECK_RGBA[index])
+        } else {
+            demo.color_program
+        };
+        resident.push((lease, color_program));
     }
 
-    match crate::intel::gpu_font::install_persistent_font_demo_grid(resident) {
+    match crate::intel::gpu_font::install_persistent_font_demo_grid(resident, exact_color_check) {
+        Ok(()) if exact_color_check => print_shell_line(
+            io,
+            "font persist color-check: installed=1 layout=3x3 mapping=red,green,blue/cyan,magenta,yellow/white,gray,black alpha=255 expected=exact-rgba render-target-proof=logged",
+        ),
         Ok(()) => print_shell_line(
             io,
             "font persist demo grid: installed=1 demos=1-9 cells=9 layout=3x3 geometry_uploads=9 clock=monotonic-elapsed overlay_commits=1-per-update",
@@ -869,12 +898,15 @@ fn print_persistent_status(io: &'static dyn ShellBackend2) {
         print_shell_line(
             io,
             format!(
-                "font persist: active=1 mode=demo-grid cells={} layout=3x3 engine_frame_requests={} presented_frames={} failures={} halted_cells={} clock=monotonic-elapsed",
+                "font persist: active=1 mode=demo-grid cells={} layout=3x3 engine_frame_requests={} presented_frames={} failures={} halted_cells={} exact_color_check={} color_proof_pixels={} color_proof_mismatches={} clock=monotonic-elapsed",
                 status.cells,
                 status.engine_frame_requests,
                 status.presented_frames,
                 status.failures,
                 status.halted_cells,
+                status.exact_color_check as u8,
+                status.color_proof_pixels,
+                status.color_proof_mismatches,
             )
             .as_str(),
         );
@@ -889,6 +921,6 @@ fn print_persistent_status(io: &'static dyn ShellBackend2) {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9`, all: `font persist demo 1-9`, catalogue: `font persist demo list`; persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
+        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9`, all: `font persist demo 1-9`, RGBA proof: `font persist demo colors`, catalogue: `font persist demo list`; persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
     );
 }

@@ -547,6 +547,9 @@ struct PersistentGpuFontGrid {
     cells: Vec<PersistentGpuFontGridCell>,
     engine_frame_requests: u64,
     presented_frames: u64,
+    exact_color_check: bool,
+    color_proof_pixels: u64,
+    color_proof_mismatches: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -569,6 +572,9 @@ pub(crate) struct PersistentGpuFontGridStatus {
     pub(crate) presented_frames: u64,
     pub(crate) failures: u64,
     pub(crate) halted_cells: usize,
+    pub(crate) exact_color_check: bool,
+    pub(crate) color_proof_pixels: u64,
+    pub(crate) color_proof_mismatches: u64,
 }
 
 static PERSISTENT_GPU_FONT_ANIMATION: Mutex<Option<PersistentGpuFontAnimation>> = Mutex::new(None);
@@ -616,6 +622,7 @@ pub(crate) fn persistent_font_demo_grid_tag(
 
 pub(crate) fn install_persistent_font_demo_grid(
     jobs: Vec<(PersistentGpuFontJob, GpuFontColorProgram)>,
+    exact_color_check: bool,
 ) -> Result<(), &'static str> {
     if jobs.len() != 9 {
         return Err("font-demo-grid-count");
@@ -644,11 +651,15 @@ pub(crate) fn install_persistent_font_demo_grid(
             cells,
             engine_frame_requests: 0,
             presented_frames: 0,
+            exact_color_check,
+            color_proof_pixels: 0,
+            color_proof_mismatches: 0,
         });
     drop(old);
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: demo-grid-install cells=9 layout=3x3 policy=elapsed-time-sampled-per-engine-frame overlay_commits=one-per-grid-frame authority=kernel-service-owned\n",
+        "intel/gpu-font: demo-grid-install cells=9 layout=3x3 policy=elapsed-time-sampled-per-engine-frame overlay_commits=one-per-grid-frame exact_color_check={} authority=kernel-service-owned\n",
+        exact_color_check as u8,
     );
     Ok(())
 }
@@ -801,6 +812,9 @@ pub(crate) fn persistent_font_demo_grid_status() -> Option<PersistentGpuFontGrid
         presented_frames: grid.presented_frames,
         failures: grid.cells.iter().map(|cell| cell.failures).sum(),
         halted_cells: grid.cells.iter().filter(|cell| cell.halted).count(),
+        exact_color_check: grid.exact_color_check,
+        color_proof_pixels: grid.color_proof_pixels,
+        color_proof_mismatches: grid.color_proof_mismatches,
     })
 }
 
@@ -880,7 +894,10 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
     grid.engine_frame_requests = grid.engine_frame_requests.saturating_add(1);
     let now_ms = Instant::now().as_millis();
     let mut changed = false;
-    for cell in &mut grid.cells {
+    let exact_color_check = grid.exact_color_check;
+    let mut proof_pixels = 0u64;
+    let mut proof_mismatches = 0u64;
+    for (cell_index, cell) in grid.cells.iter_mut().enumerate() {
         if cell.halted {
             continue;
         }
@@ -891,6 +908,23 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
         }
         match cell.lease.submit_rgba_readback(rgba) {
             Ok((render, Some(captured))) if render.completed => {
+                if exact_color_check {
+                    let (pixels, mismatches) = exact_font_readback_color(&captured, rgba);
+                    proof_pixels = proof_pixels.saturating_add(pixels);
+                    proof_mismatches = proof_mismatches.saturating_add(mismatches);
+                    crate::log_info!(
+                        target: "render";
+                        "intel/gpu-font: color-contract-rt-proof cell={} requested={:02X}{:02X}{:02X}{:02X} written_pixels={} mismatches={} exact={} stage=post-ps-linear-rgba8-readback\n",
+                        cell_index + 1,
+                        rgba.r,
+                        rgba.g,
+                        rgba.b,
+                        rgba.a,
+                        pixels,
+                        mismatches,
+                        (pixels != 0 && mismatches == 0) as u8,
+                    );
+                }
                 cell.last_submitted = Some(rgba);
                 cell.readback = Some(captured);
                 changed = true;
@@ -923,6 +957,10 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
             }
         }
     }
+    grid.color_proof_pixels = grid.color_proof_pixels.saturating_add(proof_pixels);
+    grid.color_proof_mismatches = grid
+        .color_proof_mismatches
+        .saturating_add(proof_mismatches);
     if !changed || grid.cells.iter().any(|cell| cell.readback.is_none()) {
         return true;
     }
@@ -953,6 +991,11 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
             height: captured.height,
             pitch_bytes: captured.width as usize * 4,
             pixels: captured.pixels.as_slice(),
+            expected_rgba: if exact_color_check {
+                cell.last_submitted
+            } else {
+                None
+            },
         });
     }
     if crate::intel::display::present_rgba_overlay_tiles(tiles.as_slice(), "font-persist-demo-grid")
@@ -970,6 +1013,25 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
         }
     }
     true
+}
+
+fn exact_font_readback_color(
+    captured: &crate::intel::render::FontRenderTargetReadback,
+    expected: GpuFontRgba,
+) -> (u64, u64) {
+    let expected = [expected.r, expected.g, expected.b, expected.a];
+    let mut written = 0u64;
+    let mut mismatches = 0u64;
+    for pixel in captured.pixels.chunks_exact(4) {
+        if pixel[3] == 0 {
+            continue;
+        }
+        written = written.saturating_add(1);
+        if pixel != expected {
+            mismatches = mismatches.saturating_add(1);
+        }
+    }
+    (written, mismatches)
 }
 
 fn acquire_default_font() -> Result<(Arc<CachedGpuFont>, bool), &'static str> {

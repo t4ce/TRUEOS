@@ -111,12 +111,12 @@ struct TriangleVertexUploadProof {
     cpu_readback_ok: bool,
 }
 
-/// Kernel-owned, page-backed font geometry retained in the render PPGTT.
+/// Kernel-owned, page-backed triangle geometry retained in the render PPGTT.
 ///
-/// The CPU virtual address exists only so the owning font-service lease can
-/// eventually release the DMA allocation. Draw submission consumes the GPU
+/// The CPU virtual address exists so the owning service can update or release
+/// the DMA allocation. Draw submission consumes the GPU
 /// addresses directly and never re-uploads these bytes through warm scratch.
-pub(crate) struct ResidentFontMesh {
+pub(crate) struct ResidentTriangleMesh {
     pub(crate) storage_phys: u64,
     pub(crate) storage_virt: *mut u8,
     pub(crate) storage_bytes: usize,
@@ -129,8 +129,11 @@ pub(crate) struct ResidentFontMesh {
     pub(crate) index_bytes: u32,
 }
 
-unsafe impl Send for ResidentFontMesh {}
-unsafe impl Sync for ResidentFontMesh {}
+unsafe impl Send for ResidentTriangleMesh {}
+unsafe impl Sync for ResidentTriangleMesh {}
+
+/// The font service is the first consumer of the generic resident resource.
+pub(crate) type ResidentFontMesh = ResidentTriangleMesh;
 
 #[derive(Copy, Clone)]
 struct TriangleShaderStageLayout {
@@ -538,9 +541,7 @@ impl BackendProbeMode {
             Self::RasterWmInputOaPayloadBaryPlanes => "raster-wm-input-oa-payload-bary-planes",
             Self::RasterWmInputOaSampleAll => "raster-wm-input-oa-sample-all",
             Self::RasterWmInputOaWmHandoff => "raster-wm-input-oa-wm-handoff",
-            Self::RasterWmInputOaSampleAllWmHandoff => {
-                "raster-wm-input-oa-sample-all-wm-handoff"
-            }
+            Self::RasterWmInputOaSampleAllWmHandoff => "raster-wm-input-oa-sample-all-wm-handoff",
             Self::RasterWmInputOaFrontCcw => "raster-wm-input-oa-front-ccw",
             Self::RasterWmInputOaNoPrimitiveReplication => {
                 "raster-wm-input-oa-no-primitive-replication"
@@ -1031,10 +1032,7 @@ impl BackendProbeMode {
     }
 
     fn disable_sbe_attr_swizzle(self) -> bool {
-        matches!(
-            self,
-            Self::PsPrmSbeNoAttrSwizzle | Self::PsPrmNoPrimitiveReplication
-        )
+        matches!(self, Self::PsPrmSbeNoAttrSwizzle | Self::PsPrmNoPrimitiveReplication)
     }
 
     fn force_sbe_read0(self) -> bool {
@@ -1375,7 +1373,9 @@ impl StreamoutProofExperiment {
             Self::PrmVueHeaderPositionSlots01
             | Self::PrmVueHeaderPositionXywzSlots01
             | Self::HeaderAndPositionSlots01
-            | Self::PointSizeSlot0PositionSlot1 => 5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29),
+            | Self::PointSizeSlot0PositionSlot1 => {
+                5 | (23 << 16) | (1 << 24) | (3 << 27) | (3 << 29)
+            }
         }
     }
 
@@ -1544,9 +1544,8 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
     }
     if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
-    )
-        || is_vs_draw_frontier_scratch_submit_name(submit_name)
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d" | "draw3d-scene"
+    ) || is_vs_draw_frontier_scratch_submit_name(submit_name)
         || is_font_vf_vue_ps_replay_submit_name(submit_name)
     {
         return true;
@@ -1695,6 +1694,10 @@ fn is_scratch_rt_submit_name(submit_name: &str) -> bool {
             | "font-tessel-clip-counter-vf-vue-big-inbounds-scratch"
             | "screen-rect-oa-early"
     )
+}
+
+fn should_capture_scratch_rt_proof(submit_name: &str) -> bool {
+    is_scratch_rt_submit_name(submit_name) && submit_name != "draw3d-scene"
 }
 
 fn is_raster_wm_oa_submit_name(submit_name: &str) -> bool {
