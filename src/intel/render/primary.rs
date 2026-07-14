@@ -145,12 +145,15 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) rgba: [u8; 4],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
     pub(crate) requested_draws: usize,
     pub(crate) changed_pixels: usize,
     pub(crate) presented: bool,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Option<Vec<u8>>,
 }
 
 /// Render a back-to-front list of persistent triangle jobs into one shared
@@ -158,27 +161,35 @@ pub(crate) struct ResidentSceneFrameResult {
 /// jobs retain their own constant RGBA specialization.
 pub(crate) fn submit_resident_triangle_scene_frame(
     draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
     const TARGET_SIZE: usize = FONT_PROOF_TARGET_SIZE;
 
     if draws.is_empty() {
-        let transparent = alloc::vec![0u8; TARGET_SIZE * TARGET_SIZE * 4];
-        let presented = crate::intel::display::present_rgba_overlay_at(
-            &transparent,
+        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
+        let mut pixels = alloc::vec![0u8; TARGET_SIZE * TARGET_SIZE * 4];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&clear);
+        }
+        let presented = present_resident_scene_target(
+            &pixels,
             TARGET_SIZE as u32,
             TARGET_SIZE as u32,
             TARGET_SIZE * 4,
-            96,
-            96,
-            true,
+            clear_rgba,
             "draw3d-scene-clear",
         );
+        let rgba = (presented && clear_rgba.is_some()).then_some(pixels);
         return Ok(ResidentSceneFrameResult {
             completed_draws: 0,
             requested_draws: 0,
             changed_pixels: 0,
             presented,
+            width: TARGET_SIZE as u32,
+            height: TARGET_SIZE as u32,
+            rgba,
         });
     }
     if PRIMARY_PROBE_IN_FLIGHT
@@ -187,6 +198,11 @@ pub(crate) fn submit_resident_triangle_scene_frame(
     {
         return Err("in-flight");
     }
+
+    // Draw3d reports one scene-level result. Keep the renderer's proof
+    // transcript available for a deliberate stalled-frame diagnostic retry,
+    // but do not repeat it for every mesh in ordinary scene updates.
+    let _summary_only = (!diagnostic_logs).then(RenderSummaryOnlyGuard::enter);
 
     let result = (|| {
         let Some(dev) = crate::intel::claimed_device() else {
@@ -254,34 +270,69 @@ pub(crate) fn submit_resident_triangle_scene_frame(
         };
         let mut changed_pixels = 0usize;
         let mut visible_rgba = Vec::with_capacity(target_bytes);
+        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
         for pixel in pixels {
             if *pixel == 0xDEAD_BEEF {
-                visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
+                visible_rgba.extend_from_slice(&clear);
             } else {
                 changed_pixels += 1;
                 visible_rgba.extend_from_slice(&pixel.to_le_bytes());
             }
         }
-        let presented = completed_draws != 0
-            && crate::intel::display::present_rgba_overlay_at(
+        // A scene is one atomic visual result.  A timed-out draw leaves the
+        // shared target partially updated, so never expose it to either the
+        // display or request-render cache.  The caller will retry the same
+        // revision on the next scene tick while the last complete frame stays
+        // visible.
+        let frame_complete = completed_draws == draws.len();
+        let presented = frame_complete
+            && present_resident_scene_target(
                 &visible_rgba,
                 TARGET_SIZE as u32,
                 TARGET_SIZE as u32,
                 target_pitch,
-                96,
-                96,
-                true,
+                clear_rgba,
                 "draw3d-scene-render-target",
             );
+        let rgba = presented.then_some(visible_rgba);
         Ok(ResidentSceneFrameResult {
             completed_draws,
             requested_draws: draws.len(),
             changed_pixels,
             presented,
+            width: TARGET_SIZE as u32,
+            height: TARGET_SIZE as u32,
+            rgba,
         })
     })();
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
+}
+
+fn present_resident_scene_target(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    pitch_bytes: usize,
+    clear_rgba: Option<[u8; 4]>,
+    reason: &str,
+) -> bool {
+    let (scanout_width, scanout_height) =
+        crate::intel::display::active_scanout_dimensions().unwrap_or((width, height));
+    let x = scanout_width.saturating_sub(width) / 2;
+    let y = scanout_height.saturating_sub(height) / 2;
+
+    let tile = crate::intel::display::RgbaOverlayTile {
+        x,
+        y,
+        width,
+        height,
+        pitch_bytes,
+        pixels,
+        expected_rgba: None,
+    };
+    let background = clear_rgba.map(|[r, g, b, a]| crate::intel::types::Rgba8::new(r, g, b, a));
+    crate::intel::display::present_rgba_overlay_tiles_with_background(&[tile], background, reason)
 }
 
 pub(crate) fn submit_resident_font_mesh_readback_once(
@@ -5715,7 +5766,7 @@ fn should_log_primary_probe(reason: &str, seq: u32) -> bool {
 }
 
 fn should_log_primary_probe_detail() -> bool {
-    if crate::log_os::flags::INTEL_STAGE1_LOGS {
+    if crate::log_os::flags::INTEL_STAGE1_LOGS || !render_detail_logs_enabled() {
         return false;
     }
     let seq = PRIMARY_PROBE_SEQ.load(Ordering::Acquire);

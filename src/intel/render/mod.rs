@@ -33,9 +33,33 @@
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
+static SUMMARY_ONLY_SUBMIT_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+struct RenderSummaryOnlyGuard;
+
+impl RenderSummaryOnlyGuard {
+    fn enter() -> Self {
+        SUMMARY_ONLY_SUBMIT_DEPTH.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for RenderSummaryOnlyGuard {
+    fn drop(&mut self) {
+        SUMMARY_ONLY_SUBMIT_DEPTH.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn render_detail_logs_enabled() -> bool {
+    SUMMARY_ONLY_SUBMIT_DEPTH.load(Ordering::Acquire) == 0
+}
+
 macro_rules! intel_render_focus_log {
     ($($arg:tt)*) => {
-        if crate::log_os::flags::INTEL_STAGE1_LOGS || crate::log_os::flags::INTEL_RENDER_NGIN_LOGS {
+        if render_detail_logs_enabled()
+            && (crate::log_os::flags::INTEL_STAGE1_LOGS
+                || crate::log_os::flags::INTEL_RENDER_NGIN_LOGS)
+        {
             crate::log_info!(target: "render"; $($arg)*);
         }
     };
@@ -43,7 +67,10 @@ macro_rules! intel_render_focus_log {
 
 macro_rules! intel_render_verbose_log {
     ($($arg:tt)*) => {
-        if crate::log_os::flags::INTEL_RENDER_NGIN_LOGS && !crate::log_os::flags::INTEL_STAGE1_LOGS {
+        if render_detail_logs_enabled()
+            && crate::log_os::flags::INTEL_RENDER_NGIN_LOGS
+            && !crate::log_os::flags::INTEL_STAGE1_LOGS
+        {
             crate::log_trace!(target: "render"; $($arg)*);
         }
     };
@@ -51,7 +78,10 @@ macro_rules! intel_render_verbose_log {
 
 macro_rules! intel_render_batch_log {
     ($($arg:tt)*) => {
-        if crate::log_os::flags::INTEL_RENDER_NGIN_BATCH_LOGS && !crate::log_os::flags::INTEL_STAGE1_LOGS {
+        if render_detail_logs_enabled()
+            && crate::log_os::flags::INTEL_RENDER_NGIN_BATCH_LOGS
+            && !crate::log_os::flags::INTEL_STAGE1_LOGS
+        {
             crate::log_trace!(target: "render"; $($arg)*);
         }
     };

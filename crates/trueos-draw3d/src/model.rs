@@ -320,6 +320,8 @@ pub struct Scene {
     meshes: BTreeMap<MeshId, Mesh>,
     instances: BTreeMap<InstanceId, Instance>,
     camera: ViewCamera,
+    running: bool,
+    clear_color: Option<Rgba8>,
     limits: SceneLimits,
 }
 
@@ -335,6 +337,8 @@ impl Scene {
             meshes: BTreeMap::new(),
             instances: BTreeMap::new(),
             camera: ViewCamera::default(),
+            running: false,
+            clear_color: None,
             limits,
         }
     }
@@ -349,6 +353,16 @@ impl Scene {
 
     pub const fn camera(&self) -> ViewCamera {
         self.camera
+    }
+
+    /// Whether the live renderer should submit frames for this scene.
+    pub const fn is_running(&self) -> bool {
+        self.running
+    }
+
+    /// Background requested for the current live-scene run.
+    pub const fn clear_color(&self) -> Option<Rgba8> {
+        self.clear_color
     }
 
     pub fn meshes(&self) -> impl Iterator<Item = (MeshId, &Mesh)> {
@@ -578,6 +592,20 @@ impl Scene {
                 self.meshes.clear();
                 self.instances.clear();
                 affected
+            }
+            Command::StartScene { clear } => {
+                let changed =
+                    !self.running || clear.is_some_and(|color| self.clear_color != Some(color));
+                if !self.running || clear.is_some() {
+                    self.clear_color = clear;
+                }
+                self.running = true;
+                usize::from(changed)
+            }
+            Command::StopScene => {
+                let changed = self.running;
+                self.running = false;
+                usize::from(changed)
             }
             Command::GetStats | Command::Ping { .. } | Command::RequestRender => 0,
         };

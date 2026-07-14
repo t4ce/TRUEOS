@@ -33,6 +33,8 @@ pub enum Opcode {
     SetRotation = 0x16,
     SetScale = 0x17,
     Clear = 0x18,
+    StartScene = 0x19,
+    StopScene = 0x1a,
     GetStats = 0x20,
     Ping = 0x21,
     SetViewCamera = 0x22,
@@ -58,6 +60,8 @@ impl Opcode {
             0x16 => Self::SetRotation,
             0x17 => Self::SetScale,
             0x18 => Self::Clear,
+            0x19 => Self::StartScene,
+            0x1a => Self::StopScene,
             0x20 => Self::GetStats,
             0x21 => Self::Ping,
             0x22 => Self::SetViewCamera,
@@ -129,6 +133,10 @@ pub enum Command {
         scale: Vec3,
     },
     Clear,
+    StartScene {
+        clear: Option<Rgba8>,
+    },
+    StopScene,
     GetStats,
     Ping {
         nonce: u64,
@@ -158,6 +166,8 @@ impl Command {
             Self::SetRotation { .. } => Opcode::SetRotation,
             Self::SetScale { .. } => Opcode::SetScale,
             Self::Clear => Opcode::Clear,
+            Self::StartScene { .. } => Opcode::StartScene,
+            Self::StopScene => Opcode::StopScene,
             Self::GetStats => Opcode::GetStats,
             Self::Ping { .. } => Opcode::Ping,
             Self::SetViewCamera { .. } => Opcode::SetViewCamera,
@@ -183,6 +193,8 @@ impl Command {
             Self::SetRotation { .. } => "set_rotation",
             Self::SetScale { .. } => "set_scale",
             Self::Clear => "clear",
+            Self::StartScene { .. } => "start_scene",
+            Self::StopScene => "stop_scene",
             Self::GetStats => "get_stats",
             Self::Ping { .. } => "ping",
             Self::SetViewCamera { .. } => "set_view_camera",
@@ -444,6 +456,14 @@ fn decode_command_payload(opcode: Opcode, payload: &[u8]) -> Result<Command, Dec
             scale: reader.vec3()?,
         },
         Opcode::Clear => Command::Clear,
+        Opcode::StartScene => Command::StartScene {
+            clear: if reader.is_empty() {
+                None
+            } else {
+                Some(reader.rgba()?)
+            },
+        },
+        Opcode::StopScene => Command::StopScene,
         Opcode::GetStats => Command::GetStats,
         Opcode::Ping => Command::Ping {
             nonce: reader.u64()?,
@@ -540,7 +560,12 @@ pub fn encode_command(request_id: u32, command: &Command) -> Result<Vec<u8>, Enc
             put_u64(&mut payload, *instance_id);
             put_vec3(&mut payload, *scale);
         }
-        Command::Clear | Command::GetStats => {}
+        Command::StartScene { clear } => {
+            if let Some(color) = clear {
+                put_rgba(&mut payload, *color);
+            }
+        }
+        Command::Clear | Command::StopScene | Command::GetStats => {}
         Command::Ping { nonce } => put_u64(&mut payload, *nonce),
         Command::SetViewCamera { camera } => put_camera(&mut payload, *camera),
         Command::RequestRender => {}
@@ -863,6 +888,10 @@ struct Reader<'a> {
 impl<'a> Reader<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.offset == self.bytes.len()
     }
 
     fn finish(self) -> Result<(), DecodeError> {

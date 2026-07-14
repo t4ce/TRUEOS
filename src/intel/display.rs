@@ -2781,6 +2781,14 @@ pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str
 /// here, so independently rendered font demos cannot be presented as nine
 /// consecutive plane moves (only the final move would remain visible).
 pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: &str) -> bool {
+    present_rgba_overlay_tiles_with_background(tiles, None, reason)
+}
+
+pub(crate) fn present_rgba_overlay_tiles_with_background(
+    tiles: &[RgbaOverlayTile<'_>],
+    background: Option<Rgba8>,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -2798,12 +2806,15 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
     let Some(surface) = ensure_overlay_surface(dev, width, height) else {
         return false;
     };
+    let background_pixel = background
+        .map(|color| overlay_scanout_pixel_bgra_premul(color.r, color.g, color.b, color.a))
+        .unwrap_or(0);
     fill_surface_color(
         surface.virt,
         surface.pitch_bytes as usize,
         surface.width,
         surface.height,
-        0,
+        background_pixel,
     );
     let mut contract_pixels = 0u64;
     let mut source_mismatches = 0u64;
@@ -2830,7 +2841,7 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
     let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: rgba-tile-overlay-present seq={} reason={} pipe={} slot={} tiles={} scanout={}x{} pitch=0x{:X}\n",
+            "intel/display: rgba-tile-overlay-present seq={} reason={} pipe={} slot={} tiles={} scanout={}x{} pitch=0x{:X} background={:?}\n",
             seq,
             reason,
             surface.pipe.name,
@@ -2839,6 +2850,7 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
             surface.width,
             surface.height,
             surface.pitch_bytes,
+            background,
         );
     }
     if tiles.iter().any(|tile| tile.expected_rgba.is_some()) {

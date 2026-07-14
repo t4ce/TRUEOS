@@ -89,7 +89,7 @@ fn submit_warm_render_batch(
     let mut iter = 0usize;
     let poll_limit = if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "draw3d-scene"
     ) {
         200_000
     } else {

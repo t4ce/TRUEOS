@@ -1,4 +1,4 @@
-//! Minimal PNG encoder for RGB output.
+//! Minimal PNG encoder for RGB and RGBA output.
 
 use alloc::vec::Vec;
 
@@ -48,7 +48,7 @@ pub(crate) fn encode_rgb_u32_png(
         }
     }
 
-    encode_filtered_rgb_png(width, height, filtered.as_slice())
+    encode_filtered_png(width, height, 2, filtered.as_slice())
 }
 
 pub(crate) fn encode_rgb8_png(
@@ -89,7 +89,44 @@ pub(crate) fn encode_rgb8_png(
         filtered.extend_from_slice(&rgb[row_start..row_start + row_bytes]);
     }
 
-    encode_filtered_rgb_png(width, height, filtered.as_slice())
+    encode_filtered_png(width, height, 2, filtered.as_slice())
+}
+
+pub(crate) fn encode_rgba8_png(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    stride_bytes: usize,
+) -> Result<Vec<u8>, PngEncodeError> {
+    let width_usize = usize::try_from(width).map_err(|_| PngEncodeError::DimensionTooLarge)?;
+    let height_usize = usize::try_from(height).map_err(|_| PngEncodeError::DimensionTooLarge)?;
+    if width_usize == 0 || height_usize == 0 {
+        return Err(PngEncodeError::InvalidDimensions);
+    }
+    let row_bytes = width_usize
+        .checked_mul(4)
+        .ok_or(PngEncodeError::DimensionTooLarge)?;
+    if stride_bytes < row_bytes {
+        return Err(PngEncodeError::BufferTooSmall);
+    }
+    let need = stride_bytes
+        .checked_mul(height_usize.saturating_sub(1))
+        .and_then(|base| base.checked_add(row_bytes))
+        .ok_or(PngEncodeError::DimensionTooLarge)?;
+    if rgba.len() < need {
+        return Err(PngEncodeError::BufferTooSmall);
+    }
+
+    let mut filtered = Vec::with_capacity(checked_filtered_len(width_usize, height_usize, 4)?);
+    for y in 0..height_usize {
+        let row_start = y
+            .checked_mul(stride_bytes)
+            .ok_or(PngEncodeError::DimensionTooLarge)?;
+        filtered.push(0);
+        filtered.extend_from_slice(&rgba[row_start..row_start + row_bytes]);
+    }
+
+    encode_filtered_png(width, height, 6, filtered.as_slice())
 }
 
 fn checked_pixel_count(width: usize, height: usize) -> Result<usize, PngEncodeError> {
@@ -111,12 +148,13 @@ fn checked_filtered_len(
         .ok_or(PngEncodeError::DimensionTooLarge)
 }
 
-fn encode_filtered_rgb_png(
+fn encode_filtered_png(
     width: u32,
     height: u32,
-    filtered_rgb: &[u8],
+    color_type: u8,
+    filtered_pixels: &[u8],
 ) -> Result<Vec<u8>, PngEncodeError> {
-    let compressed = compress_to_vec_zlib(filtered_rgb, 6);
+    let compressed = compress_to_vec_zlib(filtered_pixels, 6);
     let mut png = Vec::with_capacity(
         8usize
             .saturating_add(25)
@@ -129,7 +167,7 @@ fn encode_filtered_rgb_png(
     let mut ihdr = Vec::with_capacity(13);
     push_be_u32(&mut ihdr, width);
     push_be_u32(&mut ihdr, height);
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    ihdr.extend_from_slice(&[8, color_type, 0, 0, 0]);
     append_png_chunk(&mut png, b"IHDR", ihdr.as_slice());
     append_png_chunk(&mut png, b"IDAT", compressed.as_slice());
     append_png_chunk(&mut png, b"IEND", &[]);

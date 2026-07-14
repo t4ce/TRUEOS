@@ -226,6 +226,83 @@ fn camera_command_round_trips_and_rejects_degenerate_axes() {
 }
 
 #[test]
+fn scene_start_stop_is_idempotent_and_preserves_content() {
+    let mut scene = Scene::default();
+    assert!(!scene.is_running());
+
+    let started = scene.apply(Command::StartScene { clear: None }).unwrap();
+    assert_eq!(started.affected, 1);
+    assert!(scene.is_running());
+    assert_eq!(
+        scene
+            .apply(Command::StartScene { clear: None })
+            .unwrap()
+            .affected,
+        0
+    );
+
+    let white = Rgba8::new(255, 255, 255, 255);
+    assert_eq!(
+        scene
+            .apply(Command::StartScene { clear: Some(white) })
+            .unwrap()
+            .affected,
+        1
+    );
+    assert_eq!(scene.clear_color(), Some(white));
+    assert_eq!(
+        scene
+            .apply(Command::StartScene { clear: Some(white) })
+            .unwrap()
+            .affected,
+        0
+    );
+    assert_eq!(
+        scene
+            .apply(Command::StartScene { clear: None })
+            .unwrap()
+            .affected,
+        0
+    );
+    assert_eq!(scene.clear_color(), Some(white));
+
+    scene
+        .apply(Command::PutMesh {
+            mesh_id: 7,
+            mesh: triangle(Rgba8::new(7, 8, 9, 255)),
+        })
+        .unwrap();
+    let stopped = scene.apply(Command::StopScene).unwrap();
+    assert_eq!(stopped.affected, 1);
+    assert!(!scene.is_running());
+    assert!(scene.mesh(7).is_some());
+    assert_eq!(scene.apply(Command::StopScene).unwrap().affected, 0);
+    assert_eq!(
+        scene
+            .apply(Command::StartScene { clear: None })
+            .unwrap()
+            .affected,
+        1
+    );
+    assert_eq!(scene.clear_color(), None);
+    scene.apply(Command::StopScene).unwrap();
+
+    for (request_id, command) in [
+        (90, Command::StartScene { clear: None }),
+        (91, Command::StartScene { clear: Some(white) }),
+        (92, Command::StopScene),
+    ] {
+        let bytes = encode_command(request_id, &command).unwrap();
+        assert_eq!(bytes.len(), 12 + usize::from(request_id == 91) * 4);
+        let mut decoder = FrameDecoder::new();
+        decoder.push(&bytes).unwrap();
+        let request = decoder.next_request().unwrap().unwrap();
+        assert_eq!(request.request_id, request_id);
+        assert_eq!(request.command.unwrap(), command);
+    }
+}
+
+#[test]
 fn render_image_reply_preserves_binary_image_bytes() {
     let request_bytes = encode_command(55, &Command::RequestRender).unwrap();
     let mut request_decoder = FrameDecoder::new();

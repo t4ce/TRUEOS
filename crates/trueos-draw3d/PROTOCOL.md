@@ -1,6 +1,7 @@
 # TRUEOS 3D draw protocol v1
 
-The 3D draw service listens on TCP port 4246.
+The 3D draw service listens on TCP port 4246. Ip of the testrig is:
+192.168.178.94
 
 The wire format is little-endian and intentionally contains no names, JSON, alignment padding,
 or checksum. TCP supplies ordering and integrity. A client may pipeline requests; `request_id`
@@ -42,6 +43,8 @@ then translation. Faces preserve polygons: `u16 vertex_count` followed by that m
 | `16` | set rotation | instance ID, Vec3 |
 | `17` | set scale | instance ID, Vec3 |
 | `18` | clear scene and mesh store | empty |
+| `19` | start live scene rendering | empty, or RGBA clear color |
+| `1a` | stop live scene rendering | empty |
 | `20` | get statistics | empty |
 | `21` | ping | nonce (`u64`) |
 | `22` | set view camera | position, view direction, up axis, near, far, vertical FOV |
@@ -55,6 +58,11 @@ The camera payload is 48 bytes: three `Vec3` values followed by near plane, far 
 vertical FOV as `f32`. FOV is in radians. Near must be positive, far must be greater than near,
 FOV must be between zero and pi, and the view/up vectors must be nonzero and nonparallel.
 
+The start-scene payload is either empty for a transparent scene background or exactly four RGBA
+bytes. The four-byte form is backward-compatible with the original empty command and avoids a
+separate option tag. Repeating start while running is idempotent unless it supplies a different
+clear color; stopping and then starting empty restores the transparent background.
+
 ## Replies
 
 The first payload byte is status (`0` for success; nonzero values are compact error codes).
@@ -62,17 +70,32 @@ The second success byte selects the body: applied=`0`, stats=`1`, pong=`2`, rend
 Applied replies contain affected count and current scene statistics. Stats contain mesh and
 instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
-the encoded image bytes through the end of the frame. The current placeholder response is the
-kernel's embedded 3840x2160 `logo.jpg`. This remains intentionally separate from the live scene
-preview while render-image transport is being proven.
+the encoded image bytes through the end of the frame. After the first successful live scene frame,
+the service caches the exact straight-alpha 512x512 RGBA8 target handed to the display. A render
+request encodes the most recent presented scene target as RGBA PNG, including after the scene is
+stopped. A clear-only start also counts as a presented frame. Before any frame has been presented,
+or if PNG encoding fails, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
 
 ## Experimental live renderer
 
-The service owns the Intel triangle engine for this experiment. Each placed instance is projected
+The service owns the Intel triangle engine for this experiment. A scene starts in the stopped
+state. `start scene` enables frame submission; `stop scene` clears the live overlay and suspends
+submission while retaining all meshes, instances, camera state, and resident GPU allocations.
+Both lifecycle commands are idempotent: applied `affected` is one for a transition or a changed
+clear color and zero when the requested running state and color are already active. Each placed
+instance is projected
 through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
 uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
 frames. RGBA is volatile shader state, so `set color` does not upload geometry. Jobs are ordered
-back-to-front into one 512x512 target and presented on a 33 ms cadence (about 30 FPS). Triangles
+back-to-front into one 512x512 target. TCP changes are coalesced on a 33 ms cadence (at most about
+30 presented updates per second); unchanged scenes retain their overlay without redundant GPU
+submission. A target is presented and cached only after every mesh draw completes. Incomplete
+frames retain the last complete presentation and are retried on the next tick. When start supplies
+a clear color, the full-scanout overlay is cleared to that RGBA value and the same color backs
+untouched pixels in render-image captures. Mesh alpha is preserved through the render target,
+PNG response, and final display-plane composition. The experimental triangle target does not yet
+blend overlapping meshes with each other, so partially transparent geometry should not overlap
+other scene geometry yet. Triangles
 which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
 Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
 
