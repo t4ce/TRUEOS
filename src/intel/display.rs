@@ -160,6 +160,16 @@ impl LiveOverlayRect {
     }
 }
 
+/// One RGBA8 image placed into a full-scanout overlay composition.
+pub(crate) struct RgbaOverlayTile<'a> {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: usize,
+    pub(crate) pixels: &'a [u8],
+}
+
 impl PrimarySurfaceSampleSet {
     pub(crate) fn any_changed_since(self, before: Self) -> bool {
         self.tl != before.tl
@@ -2765,6 +2775,66 @@ pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str
     present_live_overlay_rects_preserving(rects, None, reason)
 }
 
+/// Compose positioned RGBA tiles into one full-scanout transparent surface and
+/// commit the hardware overlay once. Intel exposes one usable UI overlay plane
+/// here, so independently rendered font demos cannot be presented as nine
+/// consecutive plane moves (only the final move would remain visible).
+pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: &str) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some((width, height)) = active_scanout_dimensions().or_else(|| {
+        PRIMARY_SURFACE
+            .lock()
+            .as_ref()
+            .map(|primary| (primary.width, primary.height))
+    }) else {
+        return false;
+    };
+    if width == 0 || height == 0 || tiles.is_empty() {
+        return false;
+    }
+    let Some(surface) = ensure_overlay_surface(dev, width, height) else {
+        return false;
+    };
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0,
+    );
+    for tile in tiles {
+        if !copy_rgba_tile_into_overlay(surface, tile) {
+            return false;
+        }
+    }
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+
+    if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+        program_three_plane_stack_resources(dev, surface.pipe, reason);
+        if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
+            return false;
+        }
+    }
+
+    let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        crate::log!(
+            "intel/display: rgba-tile-overlay-present seq={} reason={} pipe={} slot={} tiles={} scanout={}x{} pitch=0x{:X}\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            tiles.len(),
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+        );
+    }
+    true
+}
+
 pub(crate) fn present_live_overlay_rects_preserving(
     rects: &[LiveOverlayRect],
     preserve: Option<LiveOverlayRect>,
@@ -5071,6 +5141,42 @@ fn copy_rgba_into_overlay(
         }
     }
 
+    true
+}
+
+fn copy_rgba_tile_into_overlay(surface: OverlaySurface, tile: &RgbaOverlayTile<'_>) -> bool {
+    if tile.width == 0
+        || tile.height == 0
+        || tile.pitch_bytes < tile.width as usize * 4
+        || tile.pixels.len() < tile.pitch_bytes.saturating_mul(tile.height as usize)
+    {
+        return false;
+    }
+    let copy_w = tile.width.min(surface.width.saturating_sub(tile.x));
+    let copy_h = tile.height.min(surface.height.saturating_sub(tile.y));
+    if copy_w == 0 || copy_h == 0 {
+        return false;
+    }
+    let dst_pitch = surface.pitch_bytes as usize;
+    for row in 0..copy_h as usize {
+        let src_row_off = row.saturating_mul(tile.pitch_bytes);
+        let dst_row_off = (tile.y as usize + row)
+            .saturating_mul(dst_pitch)
+            .saturating_add(tile.x as usize * 4);
+        let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
+        for col in 0..copy_w as usize {
+            let src_off = src_row_off.saturating_add(col.saturating_mul(4));
+            let Some(pixel) = tile.pixels.get(src_off..src_off.saturating_add(4)) else {
+                return false;
+            };
+            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+            let premultiplied =
+                u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), premultiplied);
+            }
+        }
+    }
     true
 }
 

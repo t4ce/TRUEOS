@@ -232,6 +232,13 @@ pub struct DecodedRequest {
     pub command: Result<Command, DecodeError>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecodedResponse {
+    pub request_id: u32,
+    pub opcode: Opcode,
+    pub response: Result<Response, DecodeError>,
+}
+
 pub struct FrameDecoder {
     buffer: Vec<u8>,
     start: usize,
@@ -301,6 +308,27 @@ impl FrameDecoder {
             request_id,
             opcode,
             command,
+        }))
+    }
+
+    /// Decodes a reply directly from the receive buffer. Image bytes are copied only into the
+    /// returned `RenderImage`, rather than through an intermediate full-frame payload.
+    pub fn next_response(&mut self) -> Result<Option<DecodedResponse>, DecodeError> {
+        let Some((request_id, opcode, is_response, payload_len)) = self.next_header()? else {
+            return Ok(None);
+        };
+        let frame_len = HEADER_LEN + payload_len;
+        if !is_response {
+            self.consume(frame_len);
+            return Err(DecodeError::UnexpectedRequest);
+        }
+        let payload = &self.buffer[self.start + HEADER_LEN..self.start + frame_len];
+        let response = decode_response_payload(payload);
+        self.consume(frame_len);
+        Ok(Some(DecodedResponse {
+            request_id,
+            opcode,
+            response,
         }))
     }
 
@@ -611,7 +639,7 @@ pub fn encode_response(opcode: Opcode, request_id: u32, response: &Response) -> 
         Response::Stats(stats) => {
             payload.push(0);
             payload.push(1);
-            put_stats(&mut payload, stats);
+            put_stats(&mut payload, *stats);
         }
         Response::Pong(nonce) => {
             payload.push(0);
@@ -637,7 +665,11 @@ pub fn decode_response(frame: Frame) -> Result<Response, DecodeError> {
     if !frame.is_response {
         return Err(DecodeError::UnexpectedRequest);
     }
-    let mut reader = Reader::new(&frame.payload);
+    decode_response_payload(&frame.payload)
+}
+
+fn decode_response_payload(payload: &[u8]) -> Result<Response, DecodeError> {
+    let mut reader = Reader::new(payload);
     let status = reader.u8()?;
     let response = if status != 0 {
         Response::Error(decode_error_code(status).ok_or(DecodeError::UnknownErrorCode)?)
@@ -650,8 +682,7 @@ pub fn decode_response(frame: Frame) -> Result<Response, DecodeError> {
             1 => Response::Stats(reader.stats()?),
             2 => Response::Pong(reader.u64()?),
             3 => Response::RenderImage(RenderImage {
-                format: ImageFormat::from_u8(reader.u8()?)
-                    .ok_or(DecodeError::InvalidResponse)?,
+                format: ImageFormat::from_u8(reader.u8()?).ok_or(DecodeError::InvalidResponse)?,
                 width: reader.u32()?,
                 height: reader.u32()?,
                 bytes: reader.remaining(),
@@ -706,6 +737,11 @@ fn error_code(error: ResponseError) -> u8 {
             ApplyError::FaceTooSmall => 42,
             ApplyError::VertexIndexOutOfRange => 43,
             ApplyError::NonFiniteVector => 44,
+            ApplyError::InvalidClipPlanes => 45,
+            ApplyError::InvalidFieldOfView => 46,
+            ApplyError::ZeroViewDirection => 47,
+            ApplyError::ZeroUpAxis => 48,
+            ApplyError::ParallelCameraAxes => 49,
         },
     }
 }
@@ -739,6 +775,11 @@ fn decode_error_code(code: u8) -> Option<ResponseError> {
         42 => ResponseError::Apply(ApplyError::FaceTooSmall),
         43 => ResponseError::Apply(ApplyError::VertexIndexOutOfRange),
         44 => ResponseError::Apply(ApplyError::NonFiniteVector),
+        45 => ResponseError::Apply(ApplyError::InvalidClipPlanes),
+        46 => ResponseError::Apply(ApplyError::InvalidFieldOfView),
+        47 => ResponseError::Apply(ApplyError::ZeroViewDirection),
+        48 => ResponseError::Apply(ApplyError::ZeroUpAxis),
+        49 => ResponseError::Apply(ApplyError::ParallelCameraAxes),
         _ => return None,
     })
 }
@@ -774,6 +815,15 @@ fn put_transform(out: &mut Vec<u8>, value: Transform) {
     put_vec3(out, value.location);
     put_vec3(out, value.rotation);
     put_vec3(out, value.scale);
+}
+
+fn put_camera(out: &mut Vec<u8>, value: ViewCamera) {
+    put_vec3(out, value.position);
+    put_vec3(out, value.view_direction);
+    put_vec3(out, value.up_axis);
+    out.extend_from_slice(&value.near_plane.to_le_bytes());
+    out.extend_from_slice(&value.far_plane.to_le_bytes());
+    out.extend_from_slice(&value.vertical_fov.to_le_bytes());
 }
 
 fn put_rgba(out: &mut Vec<u8>, value: Rgba8) {
@@ -873,6 +923,23 @@ impl<'a> Reader<'a> {
             rotation: self.vec3()?,
             scale: self.vec3()?,
         })
+    }
+
+    fn camera(&mut self) -> Result<ViewCamera, DecodeError> {
+        Ok(ViewCamera {
+            position: self.vec3()?,
+            view_direction: self.vec3()?,
+            up_axis: self.vec3()?,
+            near_plane: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+            far_plane: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+            vertical_fov: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+        })
+    }
+
+    fn remaining(&mut self) -> Vec<u8> {
+        let bytes = self.bytes[self.offset..].to_vec();
+        self.offset = self.bytes.len();
+        bytes
     }
 
     fn stats(&mut self) -> Result<SceneStats, DecodeError> {

@@ -301,11 +301,15 @@ pub(crate) fn try_parse(
         && let Some(after_demo) = strip_keyword(after_persist.trim_start(), "demo")
     {
         let selector = after_demo.trim();
-        if matches!(selector, "list" | "1-9") {
+        if selector == "list" {
             print_shell_line(
                 io,
-                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; run one with `font persist demo N`",
+                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; run one with `font persist demo N`, or all with `font persist demo 1-9`",
             );
+            return ParseOutcome::Handled;
+        }
+        if selector == "1-9" {
+            run_persistent_demo_grid(spawner, io);
             return ParseOutcome::Handled;
         }
         let id = match selector.parse::<u8>() {
@@ -681,6 +685,76 @@ fn run_persistent_demo(spawner: &Spawner, io: &'static dyn ShellBackend2, id: u8
     }
 }
 
+fn run_persistent_demo_grid(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+    if let Err(reason) = ensure_persistent_engine_task(spawner) {
+        print_shell_line(
+            io,
+            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
+        );
+        return;
+    }
+    if let Err(reason) = crate::intel::gpu_font::stop_persistent_font_animation() {
+        print_shell_line(
+            io,
+            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
+        );
+        return;
+    }
+
+    let mut resident = Vec::with_capacity(9);
+    for index in 0..9usize {
+        let Some(demo) = persistent_font_demo(index as u8 + 1) else {
+            print_shell_line(io, "font persist demo grid: installed=0 reason=demo-catalog");
+            return;
+        };
+        let entries: Vec<GpuFontJobEntry<'_>> = demo
+            .entries
+            .iter()
+            .map(|(text, position)| GpuFontJobEntry {
+                text: GpuFontTextRequest::SingleLine(text),
+                position: *position,
+            })
+            .collect();
+        let job = GpuFontJob {
+            entries: entries.as_slice(),
+            font: demo.font,
+            native_scale: demo.native_scale,
+        };
+        let tag = match crate::intel::gpu_font::persistent_font_demo_grid_tag(index) {
+            Ok(tag) => tag,
+            Err(reason) => {
+                print_shell_line(
+                    io,
+                    format!("font persist demo grid: installed=0 reason={reason}").as_str(),
+                );
+                return;
+            }
+        };
+        let lease = match crate::intel::gpu_font::persist_font_job(tag, job) {
+            Ok(lease) => lease,
+            Err(reason) => {
+                print_shell_line(
+                    io,
+                    format!("font persist demo grid: installed=0 reason={reason}").as_str(),
+                );
+                return;
+            }
+        };
+        resident.push((lease, demo.color_program));
+    }
+
+    match crate::intel::gpu_font::install_persistent_font_demo_grid(resident) {
+        Ok(()) => print_shell_line(
+            io,
+            "font persist demo grid: installed=1 demos=1-9 cells=9 layout=3x3 geometry_uploads=9 clock=monotonic-elapsed overlay_commits=1-per-update",
+        ),
+        Err(reason) => print_shell_line(
+            io,
+            format!("font persist demo grid: installed=0 reason={reason}").as_str(),
+        ),
+    }
+}
+
 fn install_persistent_job(
     spawner: &Spawner,
     job: GpuFontJob<'_>,
@@ -791,6 +865,21 @@ fn rgba_hex(rgba: GpuFontRgba) -> String {
 }
 
 fn print_persistent_status(io: &'static dyn ShellBackend2) {
+    if let Some(status) = crate::intel::gpu_font::persistent_font_demo_grid_status() {
+        print_shell_line(
+            io,
+            format!(
+                "font persist: active=1 mode=demo-grid cells={} layout=3x3 engine_frame_requests={} presented_frames={} failures={} halted_cells={} clock=monotonic-elapsed",
+                status.cells,
+                status.engine_frame_requests,
+                status.presented_frames,
+                status.failures,
+                status.halted_cells,
+            )
+            .as_str(),
+        );
+        return;
+    }
     match crate::intel::gpu_font::persistent_font_animation_status() {
         Some(status) => print_shell_line(io, persistent_status_message(status).as_str()),
         None => print_shell_line(io, "font persist: active=0"),
@@ -800,6 +889,6 @@ fn print_persistent_status(io: &'static dyn ShellBackend2) {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9` (`demo list`); persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
+        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9`, all: `font persist demo 1-9`, catalogue: `font persist demo list`; persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
     );
 }

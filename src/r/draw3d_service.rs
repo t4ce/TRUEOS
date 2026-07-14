@@ -9,7 +9,8 @@ use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_draw3d::{
-    Command, FrameDecoder, Response, ResponseError, Scene, SceneStats, encode_response,
+    Command, FrameDecoder, ImageFormat, RenderImage, Response, ResponseError, Scene, SceneStats,
+    encode_response,
 };
 
 use crate::net::adapter::{
@@ -21,6 +22,9 @@ const OWNER: &str = "draw3d-service";
 const EVENT_BATCH: usize = 64;
 const COMMAND_QUEUE_DEPTH: usize = 512;
 const EVENT_QUEUE_DEPTH: usize = 512;
+const PLACEHOLDER_RENDER_JPEG: &[u8] = include_bytes!("../../logo.jpg");
+const PLACEHOLDER_RENDER_WIDTH: u32 = 3_840;
+const PLACEHOLDER_RENDER_HEIGHT: u32 = 2_160;
 
 static SCENE: Mutex<Option<Scene>> = Mutex::new(None);
 
@@ -134,7 +138,7 @@ fn process_data(
                     encode_response(
                         opcode,
                         request_id,
-                        Response::Error(ResponseError::Decode(error)),
+                        &Response::Error(ResponseError::Decode(error)),
                     ),
                 );
                 continue;
@@ -145,13 +149,19 @@ fn process_data(
         let response = match command {
             Command::Ping { nonce } => Response::Pong(nonce),
             Command::GetStats => Response::Stats(scene_stats()),
+            Command::RequestRender => Response::RenderImage(RenderImage {
+                format: ImageFormat::Jpeg,
+                width: PLACEHOLDER_RENDER_WIDTH,
+                height: PLACEHOLDER_RENDER_HEIGHT,
+                bytes: PLACEHOLDER_RENDER_JPEG.to_vec(),
+            }),
             command => match apply_command(command) {
                 Ok(outcome) => Response::Applied(outcome),
                 Err(error) => Response::Error(ResponseError::Apply(error)),
             },
         };
 
-        match response {
+        match &response {
             Response::Applied(outcome) => crate::log_info!(
                 target: "draw3d";
                 "draw3d: success command={} request={} handle={} affected={} meshes={} instances={} vertices={} edges={} faces={} mesh_bytes={}\n",
@@ -185,6 +195,31 @@ fn process_data(
                 handle.0,
                 nonce
             ),
+            Response::RenderImage(image) => {
+                let camera = with_scene(Scene::camera);
+                crate::log_info!(
+                    target: "draw3d";
+                    "draw3d: success command=request_render request={} handle={} placeholder=1 format={:?} width={} height={} bytes={} camera_pos=({},{},{}) camera_dir=({},{},{}) camera_up=({},{},{}) near={} far={} vfov={}\n",
+                    request_id,
+                    handle.0,
+                    image.format,
+                    image.width,
+                    image.height,
+                    image.bytes.len(),
+                    camera.position.x,
+                    camera.position.y,
+                    camera.position.z,
+                    camera.view_direction.x,
+                    camera.view_direction.y,
+                    camera.view_direction.z,
+                    camera.up_axis.x,
+                    camera.up_axis.y,
+                    camera.up_axis.z,
+                    camera.near_plane,
+                    camera.far_plane,
+                    camera.vertical_fov
+                );
+            }
             Response::Error(error) => crate::log_warn!(
                 target: "draw3d";
                 "draw3d: command failed command={} request={} handle={} error={:?}\n",
@@ -195,7 +230,7 @@ fn process_data(
             ),
         }
 
-        send_reply(commands, handle, encode_response(opcode, request_id, response));
+        send_reply(commands, handle, encode_response(opcode, request_id, &response));
     }
 }
 

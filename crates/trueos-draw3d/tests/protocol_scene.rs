@@ -1,6 +1,7 @@
 use trueos_draw3d::{
-    ApplyError, ApplyOutcome, Command, Edge, Face, FrameDecoder, Instance, Mesh, Opcode, Response,
-    Rgba8, Scene, SceneStats, Transform, Vec3, decode_response, encode_command, encode_response,
+    ApplyError, ApplyOutcome, Command, Edge, Face, FrameDecoder, ImageFormat, Instance, Mesh,
+    Opcode, RenderImage, Response, Rgba8, Scene, SceneStats, Transform, Vec3, ViewCamera,
+    decode_response, encode_command, encode_response,
 };
 
 fn triangle(color: Rgba8) -> Mesh {
@@ -136,11 +137,73 @@ fn response_frames_round_trip_with_correlation() {
             mesh_bytes: 2048,
         },
     });
-    let bytes = encode_response(Opcode::PutMesh, 1234, response);
+    let bytes = encode_response(Opcode::PutMesh, 1234, &response);
     let mut decoder = FrameDecoder::new();
     decoder.push(&bytes).unwrap();
     let frame = decoder.next_frame().unwrap().unwrap();
     assert_eq!(frame.request_id, 1234);
     assert!(frame.is_response);
     assert_eq!(decode_response(frame).unwrap(), response);
+}
+
+#[test]
+fn camera_command_round_trips_and_rejects_degenerate_axes() {
+    let camera = ViewCamera {
+        position: Vec3::new(4.0, 3.0, 2.0),
+        view_direction: Vec3::new(-1.0, -0.5, -2.0),
+        up_axis: Vec3::new(0.0, 1.0, 0.0),
+        near_plane: 0.25,
+        far_plane: 4_000.0,
+        vertical_fov: 1.1,
+    };
+    let command = Command::SetViewCamera { camera };
+    let bytes = encode_command(44, &command).unwrap();
+    let mut decoder = FrameDecoder::new();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(decoder.next_request().unwrap().unwrap().command.unwrap(), command);
+
+    let mut scene = Scene::default();
+    scene.apply(command).unwrap();
+    assert_eq!(scene.camera(), camera);
+
+    let invalid = ViewCamera {
+        view_direction: Vec3::new(0.0, 1.0, 0.0),
+        up_axis: Vec3::new(0.0, 2.0, 0.0),
+        ..camera
+    };
+    assert_eq!(
+        scene.apply(Command::SetViewCamera { camera: invalid }),
+        Err(ApplyError::ParallelCameraAxes)
+    );
+    assert_eq!(scene.camera(), camera);
+}
+
+#[test]
+fn render_image_reply_preserves_binary_image_bytes() {
+    let request_bytes = encode_command(55, &Command::RequestRender).unwrap();
+    let mut request_decoder = FrameDecoder::new();
+    request_decoder.push(&request_bytes).unwrap();
+    assert_eq!(
+        request_decoder
+            .next_request()
+            .unwrap()
+            .unwrap()
+            .command
+            .unwrap(),
+        Command::RequestRender
+    );
+
+    let response = Response::RenderImage(RenderImage {
+        format: ImageFormat::Jpeg,
+        width: 3840,
+        height: 2160,
+        bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+    });
+    let bytes = encode_response(Opcode::RequestRender, 55, &response);
+    let mut decoder = FrameDecoder::new();
+    decoder.push(&bytes).unwrap();
+    let decoded = decoder.next_response().unwrap().unwrap();
+    assert_eq!(decoded.request_id, 55);
+    assert_eq!(decoded.opcode, Opcode::RequestRender);
+    assert_eq!(decoded.response.unwrap(), response);
 }

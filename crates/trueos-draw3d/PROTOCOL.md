@@ -1,4 +1,4 @@
-# TRUEOS 3D draw protocol v1
+# TRUEOS 3D draw protocol v1 The 3D draw service listens on TCP port 4246.
 
 The wire format is little-endian and intentionally contains no names, JSON, alignment padding,
 or checksum. TCP supplies ordering and integrity. A client may pipeline requests; `request_id`
@@ -42,17 +42,26 @@ that many `u32` indices.
 | `18` | clear scene and mesh store | empty |
 | `20` | get statistics | empty |
 | `21` | ping | nonce (`u64`) |
+| `22` | set view camera | position, view direction, up axis, near, far, vertical FOV |
+| `23` | request render | empty |
 
 Arrays start with a `u32` count. An edge is two `u32` vertex indices. Mesh deletion fails while
 instances reference it unless `cascade` is `1`; cascading also deletes those instances. Put
 operations replace an existing object with the same ID. Copy requires an unused target ID.
 
+The camera payload is 48 bytes: three `Vec3` values followed by near plane, far plane, and
+vertical FOV as `f32`. FOV is in radians. Near must be positive, far must be greater than near,
+FOV must be between zero and pi, and the view/up vectors must be nonzero and nonparallel.
+
 ## Replies
 
 The first payload byte is status (`0` for success; nonzero values are compact error codes).
-The second success byte selects the body: applied=`0`, stats=`1`, pong=`2`. Applied replies
-contain affected count and current scene statistics. Stats contain mesh and instance counts,
-vertex/edge/face totals, and estimated mesh bytes. Pong contains the original nonce.
+The second success byte selects the body: applied=`0`, stats=`1`, pong=`2`, render image=`3`.
+Applied replies contain affected count and current scene statistics. Stats contain mesh and
+instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
+nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
+the encoded image bytes through the end of the frame. The current placeholder response is the
+kernel's embedded 3840x2160 `logo.jpg`; no scene renderer is implied yet.
 
 The service accepts payloads up to 128 MiB, with per-command safety ceilings of 16,777,216
 vertices, 16,777,216 edges, and 4,194,304 faces. These limits are checked before allocation.
@@ -64,3 +73,5 @@ unknown error code, and collection limit. Codes `32..44` are state errors: missi
 missing instance, target exists, mesh in use, mesh limit, instance limit, vertex limit, edge
 limit, face limit, per-face vertex limit, face too small, vertex index out of range, and a
 non-finite vector.
+Camera state errors continue at `45..49`: invalid clipping planes, invalid FOV, zero view
+direction, zero up axis, and parallel view/up axes.

@@ -24,6 +24,15 @@ pub(crate) struct RenderJokerResult {
     pub(crate) ps_observed: bool,
 }
 
+/// CPU-visible copy of one completed font render target. The bounded 3x3 demo
+/// compositor needs all nine independently colored results before committing
+/// the single display overlay plane.
+pub(crate) struct FontRenderTargetReadback {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pixels: Vec<u8>,
+}
+
 pub(crate) fn submit_font_mesh_once(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -114,6 +123,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         target_size,
+        None,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
@@ -126,6 +136,26 @@ pub(crate) fn submit_resident_font_mesh_once(
     mesh: &ResidentFontMesh,
     native_scale: u32,
     rgba: crate::intel::gpu_font::GpuFontRgba,
+) -> Result<RenderJokerResult, &'static str> {
+    submit_resident_font_mesh_inner(mesh, native_scale, rgba, None)
+}
+
+pub(crate) fn submit_resident_font_mesh_readback_once(
+    mesh: &ResidentFontMesh,
+    native_scale: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
+) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
+    let mut readback = None;
+    let render =
+        submit_resident_font_mesh_inner(mesh, native_scale, rgba, Some(&mut readback))?;
+    Ok((render, readback))
+}
+
+fn submit_resident_font_mesh_inner(
+    mesh: &ResidentFontMesh,
+    native_scale: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
+    readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
     if mesh.vertex_count < 3
         || mesh.index_count < 3
@@ -170,6 +200,7 @@ pub(crate) fn submit_resident_font_mesh_once(
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         target_size,
+        readback,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
@@ -243,6 +274,7 @@ pub(crate) fn submit_gpu_font_outline_mesh_once(
             PostDrawSyncVariant::HeavyAll,
             TriangleBatchMode::Draw,
             StreamoutProofExperiment::PositionSlot1,
+            None,
         );
         let frontier = latest_render_frontier_summary();
         intel_render_focus_log!(
@@ -2869,6 +2901,7 @@ fn submit_render_custom_triangle_probe_locked(
         batch_mode,
         streamout_experiment,
         target_size,
+        None,
     )
 }
 
@@ -2888,6 +2921,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
     target_size: usize,
+    readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
@@ -2980,6 +3014,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         post_draw_sync_variant,
         batch_mode,
         streamout_experiment,
+        readback,
     );
     intel_render_focus_log!(
         "custom-triangle end seq={} submit={} target=scratch completed={}\n",
@@ -5966,6 +6001,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     post_draw_sync_variant: PostDrawSyncVariant,
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
+    mut readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> bool {
     let draw = if let Some(mesh) = resident_mesh {
         if batch_mode.vf_synthesized_vue() {
@@ -6497,20 +6533,32 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             let display_width = draw.target_w as usize;
             let display_height = draw.target_h as usize;
             let display_pitch = display_width.saturating_mul(4);
-            let presented = crate::intel::display::present_rgba_overlay_at(
-                &visible_rgba,
-                display_width as u32,
-                display_height as u32,
-                display_pitch,
-                96,
-                96,
-                true,
-                "font-tessel-render-target",
-            );
+            let captured = readback.is_some();
+            let presented = if let Some(output) = readback.as_deref_mut() {
+                *output = Some(FontRenderTargetReadback {
+                    width: display_width as u32,
+                    height: display_height as u32,
+                    pixels: visible_rgba,
+                });
+                false
+            } else {
+                crate::intel::display::present_rgba_overlay_at(
+                    &visible_rgba,
+                    display_width as u32,
+                    display_height as u32,
+                    display_pitch,
+                    96,
+                    96,
+                    true,
+                    "font-tessel-render-target",
+                )
+            };
             intel_render_focus_log!(
-                "{} visible-stamp presented={} pos=96x96 source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} source=whole-linear-rgba8-readback\n",
+                "{} visible-stamp presented={} captured={} pos={} source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} source=whole-linear-rgba8-readback\n",
                 submit_name,
                 presented as u8,
+                captured as u8,
+                if captured { "deferred-grid" } else { "96x96" },
                 draw.target_w,
                 draw.target_h,
                 display_width,

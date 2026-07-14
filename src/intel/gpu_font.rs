@@ -313,6 +313,21 @@ impl PersistentGpuFontJob {
         submit_persistent_font_job_rgba(self, rgba)
     }
 
+    fn submit_rgba_readback(
+        &self,
+        rgba: GpuFontRgba,
+    ) -> Result<
+        (
+            crate::intel::render::RenderJokerResult,
+            Option<crate::intel::render::FontRenderTargetReadback>,
+        ),
+        &'static str,
+    > {
+        let mut readback = None;
+        let render = submit_persistent_font_job_inner(self, None, rgba, Some(&mut readback))?;
+        Ok((render, readback))
+    }
+
     /// Reuse the same resident geometry at another supported native size.
     pub(crate) fn submit_at_scale(
         &self,
@@ -518,6 +533,22 @@ struct PersistentGpuFontAnimation {
     halted: bool,
 }
 
+struct PersistentGpuFontGridCell {
+    lease: PersistentGpuFontJob,
+    color_program: GpuFontColorProgram,
+    started_ms: u64,
+    last_submitted: Option<GpuFontRgba>,
+    readback: Option<crate::intel::render::FontRenderTargetReadback>,
+    failures: u64,
+    halted: bool,
+}
+
+struct PersistentGpuFontGrid {
+    cells: Vec<PersistentGpuFontGridCell>,
+    engine_frame_requests: u64,
+    presented_frames: u64,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PersistentGpuFontAnimationStatus {
     pub(crate) id: u64,
@@ -531,7 +562,17 @@ pub(crate) struct PersistentGpuFontAnimationStatus {
     pub(crate) halted: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PersistentGpuFontGridStatus {
+    pub(crate) cells: usize,
+    pub(crate) engine_frame_requests: u64,
+    pub(crate) presented_frames: u64,
+    pub(crate) failures: u64,
+    pub(crate) halted_cells: usize,
+}
+
 static PERSISTENT_GPU_FONT_ANIMATION: Mutex<Option<PersistentGpuFontAnimation>> = Mutex::new(None);
+static PERSISTENT_GPU_FONT_GRID: Mutex<Option<PersistentGpuFontGrid>> = Mutex::new(None);
 
 /// Return the single statically attributable shell-animation identity.
 ///
@@ -548,6 +589,68 @@ pub(crate) fn next_persistent_font_animation_tag() -> Result<GpuFontResidencyTag
     } else {
         Ok(TAG)
     }
+}
+
+pub(crate) fn persistent_font_demo_grid_tag(
+    index: usize,
+) -> Result<GpuFontResidencyTag, &'static str> {
+    const TAGS: [GpuFontResidencyTag; 9] = [
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-1"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-2"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-3"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-4"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-5"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-6"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-7"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-8"),
+        GpuFontResidencyTag::new("shell2", "font-demo-grid-9"),
+    ];
+    let tag = *TAGS.get(index).ok_or("font-demo-grid-index")?;
+    let service = GPU_FONT_SERVICE.lock();
+    if service.resident_jobs.iter().any(|record| record.tag == tag) {
+        Err("resident-animation-slot-in-use")
+    } else {
+        Ok(tag)
+    }
+}
+
+pub(crate) fn install_persistent_font_demo_grid(
+    jobs: Vec<(PersistentGpuFontJob, GpuFontColorProgram)>,
+) -> Result<(), &'static str> {
+    if jobs.len() != 9 {
+        return Err("font-demo-grid-count");
+    }
+    if jobs.iter().any(|(_, program)| {
+        matches!(program, GpuFontColorProgram::Transition(transition) if transition.duration_ms == 0)
+    }) {
+        return Err("font-color-duration-zero");
+    }
+    let started_ms = Instant::now().as_millis();
+    let cells = jobs
+        .into_iter()
+        .map(|(lease, color_program)| PersistentGpuFontGridCell {
+            lease,
+            color_program,
+            started_ms,
+            last_submitted: None,
+            readback: None,
+            failures: 0,
+            halted: false,
+        })
+        .collect();
+    let old = PERSISTENT_GPU_FONT_GRID
+        .lock()
+        .replace(PersistentGpuFontGrid {
+            cells,
+            engine_frame_requests: 0,
+            presented_frames: 0,
+        });
+    drop(old);
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: demo-grid-install cells=9 layout=3x3 policy=elapsed-time-sampled-per-engine-frame overlay_commits=one-per-grid-frame authority=kernel-service-owned\n",
+    );
+    Ok(())
 }
 
 /// Atomically replace the active animation after its new resident mesh exists.
@@ -624,31 +727,50 @@ pub(crate) fn set_persistent_font_color_program(
 
 pub(crate) fn stop_persistent_font_animation() -> Result<bool, &'static str> {
     let old = PERSISTENT_GPU_FONT_ANIMATION.lock().take();
-    let Some(animation) = old else {
+    let mut grid = PERSISTENT_GPU_FONT_GRID.lock().take();
+    if old.is_none() && grid.is_none() {
         return Ok(false);
-    };
-    let id = animation.lease.id();
-    let generation = animation.lease.generation();
-    match animation.lease.release() {
-        Ok(()) => {
-            crate::log_info!(
+    }
+    let mut first_error = None;
+    if let Some(animation) = old {
+        let id = animation.lease.id();
+        let generation = animation.lease.generation();
+        match animation.lease.release() {
+            Ok(()) => crate::log_info!(
                 target: "render";
                 "intel/gpu-font: animation-stop id={} generation={} authority=kernel-service->unmapped->released\n",
                 id,
                 generation,
-            );
-            Ok(true)
+            ),
+            Err(reason) => {
+                first_error = Some(reason);
+                crate::log_error!(
+                    target: "render";
+                    "intel/gpu-font: animation-stop id={} generation={} released=0 reason={} authority=gpu-quarantine\n",
+                    id,
+                    generation,
+                    reason,
+                );
+            }
         }
-        Err(reason) => {
-            crate::log_error!(
-                target: "render";
-                "intel/gpu-font: animation-stop id={} generation={} released=0 reason={} authority=gpu-quarantine\n",
-                id,
-                generation,
-                reason,
-            );
-            Err(reason)
+    }
+    if let Some(grid) = grid.as_mut() {
+        for cell in grid.cells.drain(..) {
+            if let Err(reason) = cell.lease.release()
+                && first_error.is_none()
+            {
+                first_error = Some(reason);
+            }
         }
+        crate::log_info!(
+            target: "render";
+            "intel/gpu-font: demo-grid-stop cells=9 authority=kernel-service->unmapped->released-or-quarantined\n",
+        );
+    }
+    if let Some(reason) = first_error {
+        Err(reason)
+    } else {
+        Ok(true)
     }
 }
 
@@ -670,10 +792,25 @@ pub(crate) fn persistent_font_animation_status() -> Option<PersistentGpuFontAnim
     })
 }
 
+pub(crate) fn persistent_font_demo_grid_status() -> Option<PersistentGpuFontGridStatus> {
+    let active = PERSISTENT_GPU_FONT_GRID.lock();
+    let grid = active.as_ref()?;
+    Some(PersistentGpuFontGridStatus {
+        cells: grid.cells.len(),
+        engine_frame_requests: grid.engine_frame_requests,
+        presented_frames: grid.presented_frames,
+        failures: grid.cells.iter().map(|cell| cell.failures).sum(),
+        halted_cells: grid.cells.iter().filter(|cell| cell.halted).count(),
+    })
+}
+
 /// Sample elapsed time and submit at most one color for one render-engine
 /// frame. Animation time is monotonic rather than submission-count based, so a
 /// slow draw reduces sampling frequency without slowing the requested effect.
 pub(crate) fn submit_persistent_font_animation_engine_frame() {
+    if submit_persistent_font_demo_grid_engine_frame() {
+        return;
+    }
     let mut active = PERSISTENT_GPU_FONT_ANIMATION.lock();
     let Some(animation) = active.as_mut() else {
         return;
@@ -733,6 +870,106 @@ pub(crate) fn submit_persistent_font_animation_engine_frame() {
             }
         }
     }
+}
+
+fn submit_persistent_font_demo_grid_engine_frame() -> bool {
+    let mut active = PERSISTENT_GPU_FONT_GRID.lock();
+    let Some(grid) = active.as_mut() else {
+        return false;
+    };
+    grid.engine_frame_requests = grid.engine_frame_requests.saturating_add(1);
+    let now_ms = Instant::now().as_millis();
+    let mut changed = false;
+    for cell in &mut grid.cells {
+        if cell.halted {
+            continue;
+        }
+        let elapsed_ms = now_ms.saturating_sub(cell.started_ms);
+        let rgba = cell.color_program.sample(elapsed_ms);
+        if cell.last_submitted == Some(rgba) && cell.readback.is_some() {
+            continue;
+        }
+        match cell.lease.submit_rgba_readback(rgba) {
+            Ok((render, Some(captured))) if render.completed => {
+                cell.last_submitted = Some(rgba);
+                cell.readback = Some(captured);
+                changed = true;
+            }
+            Ok((render, _)) if !render.completed => {
+                cell.failures = cell.failures.saturating_add(1);
+                cell.halted = true;
+            }
+            Ok(_) => {
+                cell.failures = cell.failures.saturating_add(1);
+                cell.halted = true;
+                crate::log_error!(
+                    target: "render";
+                    "intel/gpu-font: demo-grid-cell halted=1 id={} reason=completed-without-readback failures={}\n",
+                    cell.lease.id(),
+                    cell.failures,
+                );
+            }
+            Err(reason) => {
+                cell.failures = cell.failures.saturating_add(1);
+                if cell.failures <= 4 || cell.failures.is_multiple_of(60) {
+                    crate::log_error!(
+                        target: "render";
+                        "intel/gpu-font: demo-grid-cell submitted=0 id={} reason={} failures={}\n",
+                        cell.lease.id(),
+                        reason,
+                        cell.failures,
+                    );
+                }
+            }
+        }
+    }
+    if !changed || grid.cells.iter().any(|cell| cell.readback.is_none()) {
+        return true;
+    }
+
+    let Some((scanout_w, scanout_h)) = crate::intel::active_scanout_dimensions() else {
+        return true;
+    };
+    let cell_w = scanout_w / 3;
+    let cell_h = scanout_h / 3;
+    if cell_w == 0 || cell_h == 0 {
+        return true;
+    }
+    let mut tiles = Vec::with_capacity(9);
+    for (index, cell) in grid.cells.iter().enumerate() {
+        let captured = cell.readback.as_ref().expect("checked above");
+        let column = index as u32 % 3;
+        let row = index as u32 / 3;
+        let x = column
+            .saturating_mul(cell_w)
+            .saturating_add(cell_w.saturating_sub(captured.width) / 2);
+        let y = row
+            .saturating_mul(cell_h)
+            .saturating_add(cell_h.saturating_sub(captured.height) / 2);
+        tiles.push(crate::intel::display::RgbaOverlayTile {
+            x,
+            y,
+            width: captured.width,
+            height: captured.height,
+            pitch_bytes: captured.width as usize * 4,
+            pixels: captured.pixels.as_slice(),
+        });
+    }
+    if crate::intel::display::present_rgba_overlay_tiles(tiles.as_slice(), "font-persist-demo-grid")
+    {
+        grid.presented_frames = grid.presented_frames.saturating_add(1);
+        if grid.presented_frames <= 8 || grid.presented_frames.is_multiple_of(60) {
+            crate::log_info!(
+                target: "render";
+                "intel/gpu-font: demo-grid-frame frame={} engine_requests={} cells=9 layout=3x3 scanout={}x{} overlay_commits=1 clock=monotonic-elapsed geometry_uploads=0\n",
+                grid.presented_frames,
+                grid.engine_frame_requests,
+                scanout_w,
+                scanout_h,
+            );
+        }
+    }
+    true
 }
 
 fn acquire_default_font() -> Result<(Arc<CachedGpuFont>, bool), &'static str> {
@@ -1086,7 +1323,7 @@ pub(crate) fn submit_persistent_font_job_rgba(
     lease: &PersistentGpuFontJob,
     rgba: GpuFontRgba,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-    submit_persistent_font_job_inner(lease, None, rgba)
+    submit_persistent_font_job_inner(lease, None, rgba, None)
 }
 
 pub(crate) fn submit_persistent_font_job_at_scale(
@@ -1104,13 +1341,14 @@ pub(crate) fn submit_persistent_font_job_at_scale_rgba(
     if !crate::intel::render::font_native_scale_supported(native_scale) {
         return Err("font-native-scale-range");
     }
-    submit_persistent_font_job_inner(lease, Some(native_scale), rgba)
+    submit_persistent_font_job_inner(lease, Some(native_scale), rgba, None)
 }
 
 fn submit_persistent_font_job_inner(
     lease: &PersistentGpuFontJob,
     native_scale_override: Option<u32>,
     rgba: GpuFontRgba,
+    readback: Option<&mut Option<crate::intel::render::FontRenderTargetReadback>>,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
     if lease.released {
         return Err("resident-lease-released");
@@ -1142,7 +1380,21 @@ fn submit_persistent_font_job_inner(
         native_scale_override.unwrap_or(service.resident_jobs[position].native_scale);
     let result = {
         let record = &service.resident_jobs[position];
-        crate::intel::render::submit_resident_font_mesh_once(&record.mesh, native_scale, rgba)
+        if let Some(output) = readback {
+            match crate::intel::render::submit_resident_font_mesh_readback_once(
+                &record.mesh,
+                native_scale,
+                rgba,
+            ) {
+                Ok((render, captured)) => {
+                    *output = captured;
+                    Ok(render)
+                }
+                Err(reason) => Err(reason),
+            }
+        } else {
+            crate::intel::render::submit_resident_font_mesh_once(&record.mesh, native_scale, rgba)
+        }
     };
     let completed = result.as_ref().is_ok_and(|render| render.completed);
     let (submit_count, gpu_base, resident_bytes) = {

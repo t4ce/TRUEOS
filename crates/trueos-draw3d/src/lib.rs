@@ -10,8 +10,8 @@ pub use model::{
     SceneLimits, SceneStats, Transform, Vec3, ViewCamera,
 };
 pub use protocol::{
-    Command, DecodeError, DecodedRequest, EncodeError, Frame, FrameDecoder, HEADER_LEN,
-    ImageFormat, MAX_EDGES_PER_COMMAND, MAX_FACES_PER_COMMAND, MAX_PAYLOAD_LEN,
+    Command, DecodeError, DecodedRequest, DecodedResponse, EncodeError, Frame, FrameDecoder,
+    HEADER_LEN, ImageFormat, MAX_EDGES_PER_COMMAND, MAX_FACES_PER_COMMAND, MAX_PAYLOAD_LEN,
     MAX_VERTICES_PER_COMMAND, Opcode, PROTOCOL_VERSION, RenderImage, Response, ResponseError,
     decode_response, encode_command, encode_response,
 };

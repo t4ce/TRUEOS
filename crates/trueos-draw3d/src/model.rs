@@ -636,10 +636,7 @@ fn validate_camera(camera: ViewCamera) -> Result<(), ApplyError> {
     if camera.up_axis.length_squared() <= MIN_AXIS_LENGTH_SQUARED {
         return Err(ApplyError::ZeroUpAxis);
     }
-    if camera
-        .view_direction
-        .cross(camera.up_axis)
-        .length_squared()
+    if camera.view_direction.cross(camera.up_axis).length_squared()
         <= MIN_CROSS_LENGTH_SQUARED
             * camera.view_direction.length_squared()
             * camera.up_axis.length_squared()
