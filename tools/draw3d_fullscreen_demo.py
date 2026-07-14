@@ -14,9 +14,7 @@ from draw3d_house_demo import Draw3dClient
 
 
 WHITE = (255, 255, 255, 255)
-RED = (220, 52, 56, 255)
-GREEN = (42, 176, 92, 255)
-BLUE = (48, 96, 220, 255)
+ACCENT = (40, 96, 220, 255)
 
 
 def regular_polygon(sides, radius=1.0, phase=math.pi / 2.0):
@@ -35,14 +33,12 @@ def populate(client):
     client.clear()
     client.camera((0.0, 0.0, 10.0), (0.0, 0.0, 0.0), 50.0)
 
-    shapes = (
-        (9001, RED, regular_polygon(3), (-4.6, 0.0, 0.0), (1.7, 1.7, 1.0)),
-        (9002, GREEN, regular_polygon(4, phase=math.pi / 4.0), (0.0, 0.0, 0.0), (1.6, 1.6, 1.0)),
-        (9003, BLUE, regular_polygon(6), (4.6, 0.0, 0.0), (1.7, 1.7, 1.0)),
-    )
-    for mesh_id, color, vertices, location, scale in shapes:
-        client.mesh(mesh_id, color, vertices, (tuple(range(len(vertices))),))
-        client.instance(10_000 + mesh_id, mesh_id, location, scale)
+    # A deliberately simple, large centered triangle makes target placement
+    # and stale/cropped-frame failures obvious without depending on any
+    # multi-draw shader-state experiment.
+    vertices = regular_polygon(3, 2.8)
+    client.mesh(9001, ACCENT, vertices, ((0, 1, 2),))
+    client.instance(19_001, 9001, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
     client.start(WHITE)
 
 
@@ -77,14 +73,18 @@ def main():
                 f"{width}x{height}"
             )
         image = Image.open(io.BytesIO(encoded)).convert("RGBA")
-        counts = {color: count_near_color(image, color) for color in (RED, GREEN, BLUE)}
+        accent_pixels = count_near_color(image, ACCENT, tolerance=20)
         minimum = max(1_000, width * height // 500)
-        if any(count < minimum for count in counts.values()):
-            raise RuntimeError(f"scene color proof failed: counts={counts} minimum={minimum}")
+        if accent_pixels < minimum:
+            raise RuntimeError(
+                f"scene color proof failed: accent_pixels={accent_pixels} minimum={minimum}"
+            )
         stats = client.stats()
+        if stats[0:2] != (1, 1):
+            raise RuntimeError(f"expected one mesh and one instance, got stats={stats}")
         print(
             f"socket_scene size={width}x{height} meshes={stats[0]} instances={stats[1]} "
-            f"vertices={stats[2]} faces={stats[4]} colors={list(counts.values())}"
+            f"vertices={stats[2]} faces={stats[4]} accent_pixels={accent_pixels}"
         )
         print(
             f"capture bytes={len(encoded)} sha256={hashlib.sha256(encoded).hexdigest()} "

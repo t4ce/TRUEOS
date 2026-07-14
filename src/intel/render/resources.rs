@@ -71,9 +71,7 @@ fn upload_triangle_shader_pipeline(
 
     upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
     upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
-    if let (Some(host_simd16), Some(host_simd16_pipeline)) =
-        (host_simd16, host_simd16_pipeline)
-    {
+    if let (Some(host_simd16), Some(host_simd16_pipeline)) = (host_simd16, host_simd16_pipeline) {
         upload_stage_code(
             warm.draw_state_virt,
             host_simd16.code_offset_bytes,

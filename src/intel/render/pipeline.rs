@@ -38,10 +38,8 @@ fn log_render_packet_encodings() {
     if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS {
         return;
     }
-    let (ctx_desc_lo, ctx_desc_hi) = build_execlist_context_descriptor(
-        GPU_VA_CONTEXT_BASE,
-        render_ppgtt_pml4_phys() != 0,
-    );
+    let (ctx_desc_lo, ctx_desc_hi) =
+        build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE, render_ppgtt_pml4_phys() != 0);
     intel_render_verbose_log!(
         "encodings mi_store_data_imm=0x{:08X} ctx_desc=0x{:08X}:0x{:08X} state_base_address=0x{:08X} pipe_control=0x{:08X} pc_post_sync_immediate=0x{:08X} pc_dest_ggtt=0x{:08X}\n",
         MI_STORE_DATA_IMM_GGTT_DW1,
@@ -180,9 +178,7 @@ fn write_triangle_probe_state(
         .ok_or("probe-state-overflow")?;
     let push_constant_offset = if draw_rgba.is_some() {
         let offset = crate::intel::align_up(cursor, 32).ok_or("probe-state-align")?;
-        cursor = offset
-            .checked_add(32)
-            .ok_or("probe-state-overflow")?;
+        cursor = offset.checked_add(32).ok_or("probe-state-overflow")?;
         offset
     } else {
         0
@@ -704,12 +700,14 @@ fn encode_triangle_probe_batch(
     if (ps_push_constant_bytes == 0) != (ps_push_constant_gpu_addr == 0) {
         return Err("probe-push-constant-contract");
     }
-    let sbe_vertex_read_offset = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0() {
+    let sbe_vertex_read_offset = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0()
+    {
         0
     } else {
         front_end_contract.sbe_read_offset as u32
     };
-    let sbe_vertex_read_length = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0() {
+    let sbe_vertex_read_length = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0()
+    {
         0
     } else {
         front_end_contract.sbe_read_length as u32
@@ -814,9 +812,7 @@ fn encode_triangle_probe_batch(
     } else {
         (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
     };
-    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero()
-        || TRIANGLE_VS_URB_ENTRIES >= 192
-    {
+    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
         0
     } else {
         1 << 29
@@ -1097,8 +1093,15 @@ fn encode_triangle_probe_batch(
     let ps_grf_start = backend_probe_mode
         .ps_grf_start_override()
         .unwrap_or(pipeline.ps.meta.kernel.grf_start_register);
-    let ps_dw6 = (if mesa_host_fixed_function { 1 } else { ps_dispatch_8 })
-        | ((if mesa_host_fixed_function { 1 } else { ps_dispatch_16 }) << 1)
+    let ps_dw6 = (if mesa_host_fixed_function {
+        1
+    } else {
+        ps_dispatch_8
+    }) | ((if mesa_host_fixed_function {
+        1
+    } else {
+        ps_dispatch_16
+    }) << 1)
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
@@ -1186,6 +1189,25 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_BATCH_ENTRY,
     )?;
 
+    if device_is_gfx12(warm.device_id) && ps_push_constant_enable {
+        // Match the verified Mesa host context setup for constant-buffer
+        // addresses. Keep this scoped to the push-color path so the baked
+        // shader remains an unchanged control while this state is isolated.
+        let cs_debug_mode2 =
+            masked_bits_update(CS_DEBUG_MODE2_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE, 0);
+        log_batch_offset(cursor, "MI_LOAD_REGISTER_IMM CS_DEBUG_MODE2 constant-address-absolute");
+        // Mesa's captured packet is the unposted 0x11000001 form.
+        push(batch_dwords, &mut cursor, mi_lri_cmd(1, 0))?;
+        push(batch_dwords, &mut cursor, RCS_CS_DEBUG_MODE2 as u32)?;
+        push(batch_dwords, &mut cursor, cs_debug_mode2)?;
+        intel_render_focus_log!(
+            "push-constant-address-mode device=0x{:04X} reg=0x{:X} value=0x{:08X} absolute=1\n",
+            warm.device_id,
+            RCS_CS_DEBUG_MODE2,
+            cs_debug_mode2,
+        );
+    }
+
     if device_is_gfx12(warm.device_id) {
         let l3alloc = if device_is_gfx125(warm.device_id) {
             GFX125_L3ALLOC_FULL_WAYS
@@ -1229,33 +1251,16 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        INDIRECT_OBJECT_SBA_BASE,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, INDIRECT_OBJECT_SBA_BASE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
-    push_sba_size(
-        batch_dwords,
-        &mut cursor,
-        true,
-        INDIRECT_OBJECT_SBA_SIZE_BYTES,
-    )?;
+    push_sba_size(batch_dwords, &mut cursor, true, INDIRECT_OBJECT_SBA_SIZE_BYTES)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     // Complete the 22-DWORD Gen12 SBA.  The host keeps a valid bindless
     // surface range and an explicitly modified null bindless-sampler base;
     // leaving all six DWORDs zero leaves non-zero-MOCS state unspecified.
-    push_sba_address(
-        batch_dwords,
-        &mut cursor,
-        true,
-        RENDER_MOCS,
-        GPU_VA_DRAW_STATE_BASE,
-    )?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push(batch_dwords, &mut cursor, BINDLESS_SURFACE_STATE_SIZE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -1384,11 +1389,7 @@ fn encode_triangle_probe_batch(
             // Match the verified RPL-S host draw: use the highest legacy PS
             // constant slot so a previously committed zero-length slot 3 is
             // never followed by a non-empty slot 0 without a 3D flush.
-            let command = (23 << 16)
-                | (RENDER_MOCS << 8)
-                | (3 << 27)
-                | (3 << 29)
-                | 9;
+            let command = (23 << 16) | (RENDER_MOCS << 8) | (3 << 27) | (3 << 29) | 9;
             log_batch_offset(cursor, "3DSTATE_CONSTANT_PS slot3-push-color");
             push(batch_dwords, &mut cursor, command)?;
             push(batch_dwords, &mut cursor, 0)?;
@@ -1674,7 +1675,11 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if mesa_host_fixed_function { 0x3001_0001 } else { 0 },
+        if mesa_host_fixed_function {
+            0x3001_0001
+        } else {
+            0
+        },
     )?;
     push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 2 } else { 0 })?;
     if mesa_simple_rect_stack && vf_synthesized_vue {

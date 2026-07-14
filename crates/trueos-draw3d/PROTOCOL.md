@@ -72,10 +72,10 @@ instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contain
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
 the encoded image bytes through the end of the frame. After the first successful live scene frame,
 the service caches the exact straight-alpha RGBA8 target handed to the display. Its dimensions are
-derived from the active scanout, up to the current 2560x1440 residency cap. A render
-request encodes the most recent presented scene target as RGBA PNG, including after the scene is
-stopped. A clear-only start also counts as a presented frame. Before any frame has been presented,
-or if PNG encoding fails, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
+fixed at the test rig's native 2560x1440 resolution. A render request encodes the most recent
+presented scene target as RGBA PNG, including after the scene is stopped. A clear-only start also
+counts as a presented frame. Before any frame has been presented, or if PNG encoding fails, the
+response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
 
 ## Experimental live renderer
 
@@ -88,24 +88,30 @@ instance is projected
 through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
 uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
 frames. RGBA is volatile shader state, so `set color` does not upload geometry. Jobs are ordered
-back-to-front into one active-scanout-sized target. TCP changes are coalesced on a 33 ms cadence (at most about
-30 presented updates per second); unchanged scenes retain their overlay without redundant GPU
-submission. A target is presented and cached only after every mesh draw completes. Incomplete
-frames retain the last complete presentation and are retried on the next tick. When start supplies
-a clear color, the full-scanout overlay is cleared to that RGBA value and the same color backs
-untouched pixels in render-image captures. Mesh alpha is preserved through the render target,
+back-to-front into one native 2560x1440 RGBA8 render target, with one GPU submission per placed
+instance. The target is copied pixel-for-pixel to both the display and render-image response; there
+is no tiling, tile compositing, or scaling step. TCP changes are coalesced on a 33 ms cadence (at most
+about 30 presented updates per second); unchanged scenes retain their overlay without redundant GPU
+submission. A target is presented and cached only after every mesh draw completes. Incomplete frames
+retain the last complete presentation and are retried at 500 ms intervals, up to ten times after
+the initial submission. After the final failure that revision remains resident but dormant until a new
+scene revision or a stop/start restart; a successful frame or an empty scene also resets the failure budget. When start
+supplies a clear color, the full-scanout overlay is cleared to that RGBA value and the same color
+backs untouched pixels in render-image captures. Mesh alpha is preserved through the render target,
 PNG response, and final display-plane composition. The experimental triangle target does not yet
 blend overlapping meshes with each other, so partially transparent geometry should not overlap
 other scene geometry yet. Triangles
 which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
 Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
 
-The active scene budget is 100 stored meshes, 100 placed instances, 1,000 vertices per mesh,
-3,000 edges per mesh, and 2,000 triangles per mesh after polygon fan triangulation. These are
-service-level limits; the larger wire decoder ceilings below only protect framing and allocation.
+The active scene budget is 100 stored meshes, 100 placed instances, and 100,000 triangles after
+polygon fan triangulation. The old roughly 1K-vertex per-mesh soft cap is gone: one mesh may use
+the whole budget, up to 300,000 vertices and 300,000 edges. Stored source geometry and the placed
+instance workload are both checked scene-wide; instances share their source mesh but each placement
+counts toward the 100,000 triangles and 300,000 projected vertices submitted to the GPU.
 
-The service accepts payloads up to 128 MiB, with per-command safety ceilings of 16,777,216
-vertices, 16,777,216 edges, and 4,194,304 faces. These limits are checked before allocation.
+The service accepts payloads up to 128 MiB, with per-command safety ceilings of 300,000 vertices,
+300,000 edges, and 100,000 faces. These limits are checked before collection allocation.
 
 Error status codes `1..14` are framing/schema errors in this order: buffer limit, bad magic,
 unsupported version, unknown opcode, payload too large, truncated payload, trailing bytes,

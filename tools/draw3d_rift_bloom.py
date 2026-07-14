@@ -168,6 +168,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="192.168.178.94")
     parser.add_argument("--settle", type=float, default=2.0)
+    parser.add_argument("--width", type=int, default=2560)
+    parser.add_argument("--height", type=int, default=1440)
     parser.add_argument("--output", type=Path, default=Path("bld/draw3d-captures/rift-bloom-live.png"))
     args = parser.parse_args()
     client = Draw3dClient(args.host)
@@ -178,8 +180,8 @@ def main():
         stats = client.stats()
         print(f"scene meshes={stats[0]} instances={stats[1]} vertices={stats[2]} edges={stats[3]} faces={stats[4]} mesh_bytes={stats[5]}")
         print(f"capture format={image_format} size={width}x{height} bytes={len(image)} sha256={hashlib.sha256(image).hexdigest()} path={output}")
-        if image_format != 2 or (width, height) != (512, 512):
-            raise RuntimeError("live scene did not return the expected 512x512 PNG")
+        if image_format != 2 or (width, height) != (args.width, args.height):
+            raise RuntimeError(f"live scene did not return the expected {args.width}x{args.height} PNG")
     finally:
         client.close()
 

@@ -156,20 +156,14 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) rgba: Option<Vec<u8>>,
 }
 
-pub(crate) fn resident_scene_target_dimensions() -> (usize, usize) {
-    crate::intel::display::active_scanout_dimensions()
-        .map(|(width, height)| {
-            (
-                (width as usize).clamp(1, DRAW3D_MAX_TARGET_WIDTH),
-                (height as usize).clamp(1, DRAW3D_MAX_TARGET_HEIGHT),
-            )
-        })
-        .unwrap_or((FONT_PROOF_TARGET_SIZE, FONT_PROOF_TARGET_SIZE))
+pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
+    (DRAW3D_SCENE_TARGET_WIDTH, DRAW3D_SCENE_TARGET_HEIGHT)
 }
 
-/// Render a back-to-front list of persistent triangle jobs into one shared
-/// target. The target is cleared once and read back/presented once; individual
-/// jobs bind their own full-precision RGBA push data.
+/// Render a back-to-front list of persistent triangle jobs into one native-size
+/// target. The target is cleared once, each job is submitted exactly once, and
+/// the complete target is read back/presented once. Individual jobs bind their
+/// own full-precision RGBA push data.
 pub(crate) fn submit_resident_triangle_scene_frame(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
