@@ -3261,8 +3261,14 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         return Err("no-device");
     };
     let warm = warm_once(dev);
-    let target_pitch = target_width.saturating_mul(core::mem::size_of::<u32>());
-    let target_bytes = target_pitch.saturating_mul(target_height);
+    let target_row_bytes = target_width
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("font-target-row-overflow")?;
+    let target_pitch = crate::intel::align_up(target_row_bytes, LINEAR_RENDER_TARGET_PITCH_ALIGN)
+        .ok_or("font-target-pitch-overflow")?;
+    let target_bytes = target_pitch
+        .checked_mul(target_height)
+        .ok_or("font-target-bytes-overflow")?;
     if warm.ring_len == 0
         || warm.context_len == 0
         || warm.batch_len == 0
@@ -3288,7 +3294,7 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         core::ptr::write_bytes(warm.streamout_virt, 0, target_bytes);
         let scratch_pixels = core::slice::from_raw_parts_mut(
             warm.streamout_virt as *mut u32,
-            target_width.saturating_mul(target_height),
+            target_bytes / core::mem::size_of::<u32>(),
         );
         scratch_pixels.fill(0xDEAD_BEEF);
     }
@@ -6764,18 +6770,24 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
-        let pixel_count = usize::try_from(draw.target_w.saturating_mul(draw.target_h)).unwrap_or(0);
+        let target_width = draw.target_w as usize;
+        let target_height = draw.target_h as usize;
+        let pixel_count = target_width.saturating_mul(target_height);
         let mut changed_pixels = 0usize;
         let mut first_changed_pixel = None;
-        for pixel_index in 0..pixel_count {
-            let byte_offset = pixel_index.saturating_mul(4);
-            if byte_offset.saturating_add(4) > scratch_surface_bytes {
-                break;
-            }
-            if read_scratch_dword(byte_offset) != 0xDEAD_BEEF {
-                changed_pixels = changed_pixels.saturating_add(1);
-                if first_changed_pixel.is_none() {
-                    first_changed_pixel = Some(pixel_index);
+        for y in 0..target_height {
+            let row_offset = y.saturating_mul(draw.rt_pitch as usize);
+            for x in 0..target_width {
+                let byte_offset = row_offset.saturating_add(x.saturating_mul(4));
+                if byte_offset.saturating_add(4) > scratch_surface_bytes {
+                    break;
+                }
+                if read_scratch_dword(byte_offset) != 0xDEAD_BEEF {
+                    changed_pixels = changed_pixels.saturating_add(1);
+                    if first_changed_pixel.is_none() {
+                        first_changed_pixel =
+                            Some(y.saturating_mul(target_width).saturating_add(x));
+                    }
                 }
             }
         }
@@ -6836,16 +6848,19 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 .unwrap_or_default();
             visible_rgba.clear();
             visible_rgba.reserve_exact(target_bytes);
-            for pixel_index in 0..pixel_count {
-                let after = read_scratch_dword(pixel_index.saturating_mul(4));
-                if after == 0xDEAD_BEEF {
-                    visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
-                } else {
-                    visible_rgba.extend_from_slice(&after.to_le_bytes());
+            for y in 0..target_height {
+                let row_offset = y.saturating_mul(draw.rt_pitch as usize);
+                for x in 0..target_width {
+                    let after = read_scratch_dword(row_offset.saturating_add(x.saturating_mul(4)));
+                    if after == 0xDEAD_BEEF {
+                        visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
+                    } else {
+                        visible_rgba.extend_from_slice(&after.to_le_bytes());
+                    }
                 }
             }
-            let display_width = draw.target_w as usize;
-            let display_height = draw.target_h as usize;
+            let display_width = target_width;
+            let display_height = target_height;
             let display_pitch = display_width.saturating_mul(4);
             let captured = readback.is_some();
             let presented = if let Some(output) = readback.as_deref_mut() {

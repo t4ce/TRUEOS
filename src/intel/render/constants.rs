@@ -84,9 +84,10 @@ const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 // Target-aware font quality must remain inside this proven 64 KiB allocation.
 const WARM_VERTEX_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
-// Keep the transient font proof within the individually proven render-target
-// size. Compatibility presentation copies it 1:1; the shell font stamp may
-// crop its visible bounds and scale that readback during primary composition.
+const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
+// Legacy/resident compatibility probes retain their proven square target.
+// Shell2's one-shot stamp path bypasses this scale API and uses a fitted
+// rectangular target up to the full scanout dimensions below.
 const FONT_PROOF_TARGET_SIZE: usize = 512;
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
