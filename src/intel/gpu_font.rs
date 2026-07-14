@@ -533,33 +533,21 @@ pub(crate) struct PersistentGpuFontAnimationStatus {
 
 static PERSISTENT_GPU_FONT_ANIMATION: Mutex<Option<PersistentGpuFontAnimation>> = Mutex::new(None);
 
-/// Pick an unused, statically attributable shell-animation identity.
+/// Return the single statically attributable shell-animation identity.
 ///
-/// More than two names are intentional: an uncertain retirement permanently
-/// quarantines that allocation for safety, but must not be misreported as an
-/// ordinary double-buffer collision. The pool remains strictly bounded so
-/// repeated hardware failures cannot create an unbounded kernel leak.
+/// Shell persistence is replace-in-place at the service boundary: the active
+/// lease must retire and release before this tag can be acquired again. If a
+/// draw has uncertain retirement, the one record remains quarantined and the
+/// slot stays unavailable instead of accumulating replacement allocations.
 pub(crate) fn next_persistent_font_animation_tag() -> Result<GpuFontResidencyTag, &'static str> {
-    const TAGS: [GpuFontResidencyTag; 8] = [
-        GpuFontResidencyTag::new("shell2", "font-persist-0"),
-        GpuFontResidencyTag::new("shell2", "font-persist-1"),
-        GpuFontResidencyTag::new("shell2", "font-persist-2"),
-        GpuFontResidencyTag::new("shell2", "font-persist-3"),
-        GpuFontResidencyTag::new("shell2", "font-persist-4"),
-        GpuFontResidencyTag::new("shell2", "font-persist-5"),
-        GpuFontResidencyTag::new("shell2", "font-persist-6"),
-        GpuFontResidencyTag::new("shell2", "font-persist-7"),
-    ];
+    const TAG: GpuFontResidencyTag = GpuFontResidencyTag::new("shell2", "font-persist-0");
 
     let service = GPU_FONT_SERVICE.lock();
-    TAGS.into_iter()
-        .find(|tag| {
-            !service
-                .resident_jobs
-                .iter()
-                .any(|record| record.tag == *tag)
-        })
-        .ok_or("resident-animation-slots-exhausted")
+    if service.resident_jobs.iter().any(|record| record.tag == TAG) {
+        Err("resident-animation-slot-in-use")
+    } else {
+        Ok(TAG)
+    }
 }
 
 /// Atomically replace the active animation after its new resident mesh exists.
@@ -603,17 +591,65 @@ pub(crate) fn install_persistent_font_animation(
     persistent_font_animation_status().ok_or("font-animation-install")
 }
 
-pub(crate) fn stop_persistent_font_animation() -> bool {
-    let old = PERSISTENT_GPU_FONT_ANIMATION.lock().take();
-    let stopped = old.is_some();
-    drop(old);
-    if stopped {
-        crate::log_info!(
-            target: "render";
-            "intel/gpu-font: animation-stop authority=kernel-service->released\n",
-        );
+/// Replace only the volatile color contract of the active resident geometry.
+/// No outline parsing, tessellation, allocation, mapping, or VB/IB upload is
+/// performed by this operation.
+pub(crate) fn set_persistent_font_color_program(
+    color_program: GpuFontColorProgram,
+) -> Result<PersistentGpuFontAnimationStatus, &'static str> {
+    if let GpuFontColorProgram::Transition(transition) = color_program
+        && transition.duration_ms == 0
+    {
+        return Err("font-color-duration-zero");
     }
-    stopped
+    let (id, generation) = {
+        let mut active = PERSISTENT_GPU_FONT_ANIMATION.lock();
+        let animation = active.as_mut().ok_or("font-animation-inactive")?;
+        if animation.halted {
+            return Err("font-animation-halted");
+        }
+        animation.color_program = color_program;
+        animation.started_ms = Instant::now().as_millis();
+        (animation.lease.id(), animation.lease.generation())
+    };
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: animation-update id={} generation={} color_program={} geometry_uploads=0 authority=kernel-service-owned\n",
+        id,
+        generation,
+        color_program.name(),
+    );
+    persistent_font_animation_status().ok_or("font-animation-update")
+}
+
+pub(crate) fn stop_persistent_font_animation() -> Result<bool, &'static str> {
+    let old = PERSISTENT_GPU_FONT_ANIMATION.lock().take();
+    let Some(animation) = old else {
+        return Ok(false);
+    };
+    let id = animation.lease.id();
+    let generation = animation.lease.generation();
+    match animation.lease.release() {
+        Ok(()) => {
+            crate::log_info!(
+                target: "render";
+                "intel/gpu-font: animation-stop id={} generation={} authority=kernel-service->unmapped->released\n",
+                id,
+                generation,
+            );
+            Ok(true)
+        }
+        Err(reason) => {
+            crate::log_error!(
+                target: "render";
+                "intel/gpu-font: animation-stop id={} generation={} released=0 reason={} authority=gpu-quarantine\n",
+                id,
+                generation,
+                reason,
+            );
+            Err(reason)
+        }
+    }
 }
 
 pub(crate) fn persistent_font_animation_status() -> Option<PersistentGpuFontAnimationStatus> {

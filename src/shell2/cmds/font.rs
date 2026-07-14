@@ -29,18 +29,322 @@ struct FontCommand {
     color_program: GpuFontColorProgram,
 }
 
+struct ColorProgramOptions {
+    static_color: Option<GpuFontRgba>,
+    from: Option<GpuFontRgba>,
+    to: Option<GpuFontRgba>,
+    channels: GpuFontColorChannels,
+    duration_ms: u32,
+    timing: GpuFontColorTiming,
+    iteration: GpuFontColorIteration,
+    transition_option_seen: bool,
+}
+
+struct PersistentFontDemo {
+    name: &'static str,
+    entries: &'static [(&'static str, [f32; 2])],
+    font: GpuFontFace,
+    native_scale: u32,
+    color_program: GpuFontColorProgram,
+}
+
+impl ColorProgramOptions {
+    const fn new() -> Self {
+        Self {
+            static_color: None,
+            from: None,
+            to: None,
+            channels: GpuFontColorChannels::RGBA,
+            duration_ms: 1_000,
+            timing: GpuFontColorTiming::Linear,
+            iteration: GpuFontColorIteration::Alternate,
+            transition_option_seen: false,
+        }
+    }
+
+    fn consume(&mut self, part: &str) -> Result<bool, &'static str> {
+        if part.starts_with("rgba=") {
+            return Err("rgba-queue-removed-use-color-or-from-to");
+        }
+        if let Some(encoded) = part.strip_prefix("color=") {
+            if self.static_color.replace(parse_rgba(encoded)?).is_some() {
+                return Err("color-duplicate");
+            }
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("from=") {
+            self.from = Some(parse_rgba(encoded)?);
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("to=") {
+            self.to = Some(parse_rgba(encoded)?);
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("channels=") {
+            self.channels = parse_color_channels(encoded)?;
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("duration=") {
+            self.duration_ms = parse_color_duration_ms(encoded)?;
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("timing=") {
+            self.timing = parse_color_timing(encoded)?;
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        if let Some(encoded) = part.strip_prefix("iteration=") {
+            self.iteration = parse_color_iteration(encoded)?;
+            self.transition_option_seen = true;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn finish(self) -> Result<GpuFontColorProgram, &'static str> {
+        if self.transition_option_seen {
+            if self.static_color.is_some() {
+                return Err("color-conflicts-with-transition");
+            }
+            Ok(GpuFontColorProgram::Transition(GpuFontColorTransition {
+                from: self.from.ok_or("transition-from-required")?,
+                to: self.to.ok_or("transition-to-required")?,
+                channels: self.channels,
+                duration_ms: self.duration_ms,
+                timing: self.timing,
+                iteration: self.iteration,
+            }))
+        } else {
+            Ok(GpuFontColorProgram::Static(self.static_color.unwrap_or(GPU_FONT_LEGACY_BLUE)))
+        }
+    }
+}
+
+fn demo_transition(
+    from: GpuFontRgba,
+    to: GpuFontRgba,
+    channels: GpuFontColorChannels,
+    duration_ms: u32,
+    timing: GpuFontColorTiming,
+) -> GpuFontColorProgram {
+    GpuFontColorProgram::Transition(GpuFontColorTransition {
+        from,
+        to,
+        channels,
+        duration_ms,
+        timing,
+        iteration: GpuFontColorIteration::Alternate,
+    })
+}
+
+fn persistent_font_demo(id: u8) -> Option<PersistentFontDemo> {
+    let demo = match id {
+        1 => PersistentFontDemo {
+            name: "blue-breathe",
+            entries: &[("True OS", [0.0, 0.0])],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(0, 64, 255, 48),
+                GpuFontRgba::new(0, 64, 255, 255),
+                GpuFontColorChannels::ALPHA,
+                2_800,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        2 => PersistentFontDemo {
+            name: "quiet-linear",
+            entries: &[("resident", [0.0, 0.0]), ("geometry", [72.0, 92.0])],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(220, 232, 255, 72),
+                GpuFontRgba::new(220, 232, 255, 230),
+                GpuFontColorChannels::ALPHA,
+                3_500,
+                GpuFontColorTiming::Linear,
+            ),
+        },
+        3 => PersistentFontDemo {
+            name: "kernel-scatter",
+            entries: &[
+                ("kernel", [0.0, 0.0]),
+                ("font", [150.0, 82.0]),
+                ("service", [28.0, 174.0]),
+            ],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(64, 128, 255, 255),
+                GpuFontRgba::new(64, 216, 255, 255),
+                GpuFontColorChannels::RGB,
+                4_000,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        4 => PersistentFontDemo {
+            name: "warm-diagonal",
+            entries: &[("hello", [0.0, 0.0]), ("world", [142.0, 104.0])],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(224, 152, 64, 144),
+                GpuFontRgba::new(255, 208, 112, 255),
+                GpuFontColorChannels::RGBA,
+                4_500,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        5 => PersistentFontDemo {
+            name: "noto-bilingual",
+            entries: &[("你好", [0.0, 0.0]), ("True OS", [132.0, 112.0])],
+            font: GpuFontFace::NotoSansSc,
+            native_scale: 6,
+            color_program: demo_transition(
+                GpuFontRgba::new(36, 96, 210, 255),
+                GpuFontRgba::new(28, 176, 156, 255),
+                GpuFontColorChannels::RGB,
+                5_000,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        6 => PersistentFontDemo {
+            name: "rgba-steps",
+            entries: &[
+                ("GPU", [0.0, 0.0]),
+                ("RGBA", [132.0, 76.0]),
+                ("frame", [42.0, 166.0]),
+            ],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(112, 96, 224, 112),
+                GpuFontRgba::new(176, 144, 255, 255),
+                GpuFontColorChannels::RGBA,
+                3_800,
+                GpuFontColorTiming::Linear,
+            ),
+        },
+        7 => PersistentFontDemo {
+            name: "alpha-breath",
+            entries: &[("alpha", [0.0, 0.0]), ("breath", [126.0, 112.0])],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(236, 240, 255, 32),
+                GpuFontRgba::new(236, 240, 255, 224),
+                GpuFontColorChannels::ALPHA,
+                5_500,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        8 => PersistentFontDemo {
+            name: "resident-proof",
+            entries: &[
+                ("one mesh", [0.0, 0.0]),
+                ("one draw", [58.0, 102.0]),
+                ("no upload", [116.0, 204.0]),
+            ],
+            font: GpuFontFace::Default,
+            native_scale: 5,
+            color_program: demo_transition(
+                GpuFontRgba::new(96, 152, 184, 255),
+                GpuFontRgba::new(112, 216, 224, 255),
+                GpuFontColorChannels::RGB,
+                6_000,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        9 => PersistentFontDemo {
+            name: "trueos-authority",
+            entries: &[("TRUE OS §", [0.0, 0.0]), ("iGPU resident", [38.0, 132.0])],
+            font: GpuFontFace::Default,
+            native_scale: 6,
+            color_program: demo_transition(
+                GpuFontRgba::new(112, 72, 208, 176),
+                GpuFontRgba::new(64, 152, 255, 255),
+                GpuFontColorChannels::RGBA,
+                6_500,
+                GpuFontColorTiming::EaseInOutSine,
+            ),
+        },
+        _ => return None,
+    };
+    Some(demo)
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
     if rest.trim().eq_ignore_ascii_case("persist stop") {
-        let stopped = crate::intel::gpu_font::stop_persistent_font_animation();
-        print_shell_line(io, format!("font persist: stopped={}", stopped as u8).as_str());
+        match crate::intel::gpu_font::stop_persistent_font_animation() {
+            Ok(stopped) => {
+                print_shell_line(io, format!("font persist: stopped={}", stopped as u8).as_str())
+            }
+            Err(reason) => {
+                print_shell_line(io, format!("font persist: stopped=0 reason={reason}").as_str())
+            }
+        }
         return ParseOutcome::Handled;
     }
     if rest.trim().eq_ignore_ascii_case("persist status") {
         print_persistent_status(io);
+        return ParseOutcome::Handled;
+    }
+    if let Some(after_persist) = strip_keyword(rest.trim(), "persist")
+        && let Some(after_demo) = strip_keyword(after_persist.trim_start(), "demo")
+    {
+        let selector = after_demo.trim();
+        if matches!(selector, "list" | "1-9") {
+            print_shell_line(
+                io,
+                "font persist demos: 1=blue-breathe 2=quiet-linear 3=kernel-scatter 4=warm-diagonal 5=noto-bilingual 6=rgba-steps 7=alpha-breath 8=resident-proof 9=trueos-authority; run one with `font persist demo N`",
+            );
+            return ParseOutcome::Handled;
+        }
+        let id = match selector.parse::<u8>() {
+            Ok(id @ 1..=9) => id,
+            _ => {
+                print_shell_line(io, "font persist demo: installed=0 reason=expected-id-1-to-9");
+                return ParseOutcome::Handled;
+            }
+        };
+        run_persistent_demo(spawner, io, id);
+        return ParseOutcome::Handled;
+    }
+    if let Some(after_persist) = strip_keyword(rest.trim(), "persist")
+        && let Some(after_set) = strip_keyword(after_persist.trim_start(), "set")
+    {
+        let color_program = match parse_color_program_control(after_set.trim_start()) {
+            Ok(program) => program,
+            Err(reason) => {
+                print_shell_line(io, format!("font persist: updated=0 reason={reason}").as_str());
+                print_usage(io);
+                return ParseOutcome::Handled;
+            }
+        };
+        match crate::intel::gpu_font::set_persistent_font_color_program(color_program) {
+            Ok(status) => print_shell_line(
+                io,
+                format!(
+                    "font persist: updated=1 id={} generation={} program={} geometry_uploads=0 elapsed_ms={}",
+                    status.id,
+                    status.generation,
+                    status.color_program.name(),
+                    status.elapsed_ms,
+                )
+                .as_str(),
+            ),
+            Err(reason) => {
+                print_shell_line(io, format!("font persist: updated=0 reason={reason}").as_str())
+            }
+        }
         return ParseOutcome::Handled;
     }
 
@@ -210,55 +514,11 @@ fn parse_font_scale_and_color_program(
     let mut font = GpuFontFace::Default;
     let mut scale = crate::intel::render::FONT_STAMP_DEFAULT_NATIVE_SCALE;
     let mut numeric_arguments = 0usize;
-    let mut static_color = None;
-    let mut from = None;
-    let mut to = None;
-    let mut channels = GpuFontColorChannels::RGBA;
-    let mut duration_ms = 1_000;
-    let mut timing = GpuFontColorTiming::Linear;
-    let mut iteration = GpuFontColorIteration::Alternate;
-    let mut transition_option_seen = false;
+    let mut color = ColorProgramOptions::new();
+    let mut color_option_seen = false;
     for part in input.split_whitespace() {
-        if part.starts_with("rgba=") {
-            return Err("rgba-queue-removed-use-color-or-from-to");
-        }
-        if let Some(encoded) = part.strip_prefix("color=") {
-            if !persistent {
-                return Err("color-requires-persist");
-            }
-            if static_color.replace(parse_rgba(encoded)?).is_some() {
-                return Err("color-duplicate");
-            }
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("from=") {
-            from = Some(parse_rgba(encoded)?);
-            transition_option_seen = true;
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("to=") {
-            to = Some(parse_rgba(encoded)?);
-            transition_option_seen = true;
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("channels=") {
-            channels = parse_color_channels(encoded)?;
-            transition_option_seen = true;
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("duration=") {
-            duration_ms = parse_color_duration_ms(encoded)?;
-            transition_option_seen = true;
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("timing=") {
-            timing = parse_color_timing(encoded)?;
-            transition_option_seen = true;
-            continue;
-        }
-        if let Some(encoded) = part.strip_prefix("iteration=") {
-            iteration = parse_color_iteration(encoded)?;
-            transition_option_seen = true;
+        if color.consume(part)? {
+            color_option_seen = true;
             continue;
         }
         let number = part.parse::<u32>().map_err(|_| "unexpected-argument")?;
@@ -274,25 +534,23 @@ fn parse_font_scale_and_color_program(
     if !(MIN_NATIVE_SCALE..=MAX_NATIVE_SCALE).contains(&scale) {
         return Err("scale-out-of-range-1-to-8");
     }
-    if !persistent && (static_color.is_some() || transition_option_seen) {
+    if !persistent && color_option_seen {
         return Err("color-requires-persist");
     }
-    let color_program = if transition_option_seen {
-        if static_color.is_some() {
-            return Err("color-conflicts-with-transition");
+    Ok((font, scale, color.finish()?))
+}
+
+fn parse_color_program_control(input: &str) -> Result<GpuFontColorProgram, &'static str> {
+    if input.is_empty() {
+        return Err("color-program-required");
+    }
+    let mut color = ColorProgramOptions::new();
+    for part in input.split_whitespace() {
+        if !color.consume(part)? {
+            return Err("unexpected-color-program-argument");
         }
-        GpuFontColorProgram::Transition(GpuFontColorTransition {
-            from: from.ok_or("transition-from-required")?,
-            to: to.ok_or("transition-to-required")?,
-            channels,
-            duration_ms,
-            timing,
-            iteration,
-        })
-    } else {
-        GpuFontColorProgram::Static(static_color.unwrap_or(GPU_FONT_LEGACY_BLUE))
-    };
-    Ok((font, scale, color_program))
+    }
+    color.finish()
 }
 
 fn parse_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
@@ -360,10 +618,6 @@ fn run_persistent_command(
     command: &FontCommand,
     request: GpuFontTextRequest<'_>,
 ) {
-    if let Err(reason) = ensure_persistent_engine_task(spawner) {
-        print_shell_line(io, format!("font persist: installed=0 reason={reason}").as_str());
-        return;
-    }
     let entry = GpuFontJobEntry {
         text: request,
         position: [0.0, 0.0],
@@ -373,21 +627,7 @@ fn run_persistent_command(
         font: command.font,
         native_scale: command.native_scale,
     };
-    let tag = match crate::intel::gpu_font::next_persistent_font_animation_tag() {
-        Ok(tag) => tag,
-        Err(reason) => {
-            print_shell_line(io, format!("font persist: installed=0 reason={reason}").as_str());
-            return;
-        }
-    };
-    let lease = match crate::intel::gpu_font::persist_font_job(tag, job) {
-        Ok(lease) => lease,
-        Err(reason) => {
-            print_shell_line(io, format!("font persist: installed=0 reason={reason}").as_str());
-            return;
-        }
-    };
-    match crate::intel::gpu_font::install_persistent_font_animation(lease, command.color_program) {
+    match install_persistent_job(spawner, job, command.color_program) {
         Ok(status) => print_shell_line(
             io,
             persistent_install_message(status, command.font.id(), command.native_scale).as_str(),
@@ -396,6 +636,71 @@ fn run_persistent_command(
             print_shell_line(io, format!("font persist: installed=0 reason={reason}").as_str())
         }
     }
+}
+
+fn run_persistent_demo(spawner: &Spawner, io: &'static dyn ShellBackend2, id: u8) {
+    let Some(demo) = persistent_font_demo(id) else {
+        print_shell_line(io, "font persist demo: installed=0 reason=expected-id-1-to-9");
+        return;
+    };
+    let entries: Vec<GpuFontJobEntry<'_>> = demo
+        .entries
+        .iter()
+        .map(|(text, position)| GpuFontJobEntry {
+            text: GpuFontTextRequest::SingleLine(text),
+            position: *position,
+        })
+        .collect();
+    let job = GpuFontJob {
+        entries: entries.as_slice(),
+        font: demo.font,
+        native_scale: demo.native_scale,
+    };
+    match install_persistent_job(spawner, job, demo.color_program) {
+        Ok(status) => {
+            print_shell_line(
+                io,
+                format!(
+                    "font persist demo: installed=1 demo={} name={} entries={} geometry_uploads=1 animation={}",
+                    id,
+                    demo.name,
+                    demo.entries.len(),
+                    demo.color_program.name(),
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                persistent_install_message(status, demo.font.id(), demo.native_scale).as_str(),
+            );
+        }
+        Err(reason) => print_shell_line(
+            io,
+            format!("font persist demo: installed=0 demo={id} reason={reason}").as_str(),
+        ),
+    }
+}
+
+fn install_persistent_job(
+    spawner: &Spawner,
+    job: GpuFontJob<'_>,
+    color_program: GpuFontColorProgram,
+) -> Result<crate::intel::gpu_font::PersistentGpuFontAnimationStatus, &'static str> {
+    ensure_persistent_engine_task(spawner)?;
+    // Persistent shell jobs have single-active replacement semantics. Wait for
+    // the current synchronous frame, retire it, unmap it and only then reuse
+    // the one attributable residency tag. A quarantined draw deliberately
+    // blocks replacement rather than leaking another resident allocation.
+    crate::intel::gpu_font::stop_persistent_font_animation()?;
+    let tag = match crate::intel::gpu_font::next_persistent_font_animation_tag() {
+        Ok(tag) => tag,
+        Err(reason) => return Err(reason),
+    };
+    let lease = match crate::intel::gpu_font::persist_font_job(tag, job) {
+        Ok(lease) => lease,
+        Err(reason) => return Err(reason),
+    };
+    crate::intel::gpu_font::install_persistent_font_animation(lease, color_program)
 }
 
 fn ensure_persistent_engine_task(spawner: &Spawner) -> Result<(), &'static str> {
@@ -495,6 +800,6 @@ fn print_persistent_status(io: &'static dyn ShellBackend2) {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
+        "font: `font \"text\" [font_id 1|2] [scale 1..8]`; demos: `font persist demo 1` .. `font persist demo 9` (`demo list`); persistent static: `font persist \"text\" [font_id] [scale] color=RRGGBBAA`; transition options: `from=RRGGBBAA to=RRGGBBAA channels=a|rgb|rgba duration=2s timing=linear|sine iteration=once|loop|alternate`; update active geometry without upload: `font persist set <color|transition options>`; control: `font persist status|stop`; rows: `font [persist] rows \"row 1\" \"row 2\" ...`",
     );
 }

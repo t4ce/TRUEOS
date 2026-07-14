@@ -1,0 +1,12 @@
+[package]
+name = "trueos-draw3d"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+

@@ -2,6 +2,7 @@ pub mod blocking;
 pub mod codec;
 pub mod cursor;
 pub mod disc;
+pub mod draw3d_service;
 pub mod fs;
 pub mod hid_udp_srv;
 pub mod io;

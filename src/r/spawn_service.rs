@@ -51,6 +51,7 @@ define_started_flags!(
     NTP_SYNC_STARTED,
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
+    DRAW3D_SERVICE_STARTED,
     TACTICS_SRV_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
@@ -468,6 +469,10 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_net_tcp_shell::net_shell_task())
+}
+
+fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task())
 }
 
 fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
@@ -1193,7 +1198,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 54 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 55 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1269,6 +1274,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    TaskSpec::enabled(
+        "draw3d-service",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &DRAW3D_SERVICE_STARTED,
+        spawn_draw3d_service,
+    ),
     TaskSpec::disabled(
         "tactics-srv",
         crate::r::readiness::NET_ANY_CONFIGURED,

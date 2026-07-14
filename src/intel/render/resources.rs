@@ -120,12 +120,36 @@ const TRIANGLE_PS_COLOR_WORDS: [usize; 4] = [1, 3, 5, 7];
 
 fn encode_compacted_float_immediate(component: u8) -> u32 {
     let normalized = component as f32 / u8::MAX as f32;
-    // This compacted gfx12 MOV immediate carries only the upper IEEE-754
-    // payload bits in this dword. Bits 15:0 are instruction encoding, not
-    // additional float mantissa. Copying an arbitrary f32 verbatim here can
-    // turn an otherwise valid MOV into an invalid instruction and stall the
-    // pixel backend before any PS invocation is counted.
-    (normalized.to_bits() & 0xFFFF_0000) | 0x0001_0000
+    // A compacted gfx12 float immediate carries only IEEE-754 bits 31:19.
+    // Bits 18:16 are the compacted source/instruction index and must remain
+    // `001`; bits 15:0 are instruction encoding. The baked 0.0, 0.25 and 1.0
+    // constants all happen to have zeroes in float bits 18:16, which hid this
+    // boundary. Copying bits 18:16 from arbitrary RGBA values corrupts the
+    // compacted MOV and can stall the pixel backend before PS invocation.
+    (normalized.to_bits() & 0xFFF8_0000) | 0x0001_0000
+}
+
+#[cfg(test)]
+mod compacted_float_immediate_tests {
+    use super::encode_compacted_float_immediate;
+
+    #[test]
+    fn every_rgba_byte_preserves_the_compacted_instruction_fields() {
+        for component in u8::MIN..=u8::MAX {
+            let normalized = component as f32 / u8::MAX as f32;
+            let encoded = encode_compacted_float_immediate(component);
+            assert_eq!(encoded & 0xFFF8_0000, normalized.to_bits() & 0xFFF8_0000);
+            assert_eq!(encoded & 0x0007_0000, 0x0001_0000);
+            assert_eq!(encoded & 0x0000_FFFF, 0);
+        }
+    }
+
+    #[test]
+    fn baked_shader_constants_remain_bit_exact() {
+        assert_eq!(encode_compacted_float_immediate(0), 0x0001_0000);
+        assert_eq!(encode_compacted_float_immediate(64), 0x3E81_0000);
+        assert_eq!(encode_compacted_float_immediate(255), 0x3F81_0000);
+    }
 }
 
 fn specialize_uploaded_triangle_ps_color(
