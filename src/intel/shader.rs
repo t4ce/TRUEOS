@@ -78,6 +78,14 @@ pub(crate) fn triangle_pipeline_ps_eot() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_ps_eot()
 }
 
+pub(crate) fn triangle_pipeline_push_color() -> &'static TrianglePipeline {
+    generated_triangle::triangle_pipeline_push_color()
+}
+
+pub(crate) fn triangle_pipeline_push_color_simd16() -> &'static TrianglePipeline {
+    generated_triangle::triangle_pipeline_push_color_simd16()
+}
+
 pub(crate) fn triangle_pipeline_is_placeholder() -> bool {
     false
 }
@@ -92,4 +100,8 @@ pub(crate) fn triangle_pipeline_simd16_note() -> &'static str {
 
 pub(crate) fn triangle_pipeline_ps_eot_note() -> &'static str {
     generated_triangle::TRIANGLE_PIPELINE_PS_EOT_NOTE
+}
+
+pub(crate) fn triangle_pipeline_push_color_note() -> &'static str {
+    generated_triangle::TRIANGLE_PIPELINE_PUSH_COLOR_NOTE
 }

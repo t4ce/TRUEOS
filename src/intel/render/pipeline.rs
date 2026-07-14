@@ -157,6 +157,7 @@ fn write_triangle_probe_state(
     shader_layout: TriangleShaderLayout,
     blend_mode: TriangleBlendProbeMode,
     backend_probe_mode: BackendProbeMode,
+    draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleProbeStateLayout, &'static str> {
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
@@ -177,6 +178,15 @@ fn write_triangle_probe_state(
     cursor = scissor_rect_offset
         .checked_add(8)
         .ok_or("probe-state-overflow")?;
+    let push_constant_offset = if draw_rgba.is_some() {
+        let offset = crate::intel::align_up(cursor, 32).ok_or("probe-state-align")?;
+        cursor = offset
+            .checked_add(32)
+            .ok_or("probe-state-overflow")?;
+        offset
+    } else {
+        0
+    };
     let cps_state_offset = crate::intel::align_up(cursor, 32).ok_or("probe-state-align")?;
     cursor = cps_state_offset
         .checked_add(CPS_STATE_DWORDS * core::mem::size_of::<u32>())
@@ -289,6 +299,14 @@ fn write_triangle_probe_state(
     scissor_rect[0] = 0;
     scissor_rect[1] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
 
+    if let Some(rgba) = draw_rgba {
+        let push_constants = &mut dwords[push_constant_offset / 4..push_constant_offset / 4 + 8];
+        push_constants.fill(0);
+        for (slot, component) in push_constants[..4].iter_mut().zip(rgba) {
+            *slot = (component as f32 / u8::MAX as f32).to_bits();
+        }
+    }
+
     let cps_state = &mut dwords[cps_state_offset / 4..cps_state_offset / 4 + CPS_STATE_DWORDS];
     cps_state.fill(0);
 
@@ -318,6 +336,7 @@ fn write_triangle_probe_state(
         cc_viewport_offset_bytes: cc_viewport_offset as u32,
         sf_clip_viewport_offset_bytes: sf_clip_viewport_offset as u32,
         scissor_rect_offset_bytes: scissor_rect_offset as u32,
+        push_constant_offset_bytes: push_constant_offset as u32,
         cps_state_offset_bytes: cps_state_offset as u32,
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
     })
@@ -675,6 +694,16 @@ fn encode_triangle_probe_batch(
     };
     let vs_ksp_offset = shader_layout.vs.code_offset_bytes + shader_layout.vs.ksp_offset_bytes;
     let ps_ksp_offset = shader_layout.ps.code_offset_bytes + shader_layout.ps.ksp_offset_bytes;
+    let ps_push_constant_bytes = pipeline.ps.meta.kernel.push_constant_bytes as u32;
+    let ps_push_constant_read_length = ps_push_constant_bytes.div_ceil(32);
+    let ps_push_constant_gpu_addr = if probe_state.push_constant_offset_bytes == 0 {
+        0
+    } else {
+        GPU_VA_DRAW_STATE_BASE + probe_state.push_constant_offset_bytes as u64
+    };
+    if (ps_push_constant_bytes == 0) != (ps_push_constant_gpu_addr == 0) {
+        return Err("probe-push-constant-contract");
+    }
     let sbe_vertex_read_offset = if mesa_host_fixed_function || backend_probe_mode.force_sbe_read0() {
         0
     } else {
@@ -1059,8 +1088,7 @@ fn encode_triangle_probe_batch(
         };
     let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
         | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
-        | (u32::from(pipeline.ps.meta.uses_vmask || mesa_host_fixed_function)
-            * PS_VECTOR_MASK_ENABLE);
+        | (u32::from(pipeline.ps.meta.uses_vmask) * PS_VECTOR_MASK_ENABLE);
     let ps_push_constant_enable = pipeline.ps.meta.kernel.push_constant_bytes > 0
         || matches!(backend_probe_mode, BackendProbeMode::PsPayloadPushConstant);
     let ps_max_threads_per_psd = backend_probe_mode
@@ -1351,6 +1379,32 @@ fn encode_triangle_probe_batch(
         log_batch_offset(cursor, "3DSTATE_CONSTANT_ALL empty-all-stages pre-ps");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_CONSTANT_ALL_EMPTY_ALL_STAGES)?;
         push(batch_dwords, &mut cursor, RENDER_MOCS)?;
+
+        if ps_push_constant_read_length != 0 {
+            // Match the verified RPL-S host draw: use the highest legacy PS
+            // constant slot so a previously committed zero-length slot 3 is
+            // never followed by a non-empty slot 0 without a 3D flush.
+            let command = (23 << 16)
+                | (RENDER_MOCS << 8)
+                | (3 << 27)
+                | (3 << 29)
+                | 9;
+            log_batch_offset(cursor, "3DSTATE_CONSTANT_PS slot3-push-color");
+            push(batch_dwords, &mut cursor, command)?;
+            push(batch_dwords, &mut cursor, 0)?;
+            push(batch_dwords, &mut cursor, ps_push_constant_read_length << 16)?;
+            for _ in 0..6 {
+                push(batch_dwords, &mut cursor, 0)?;
+            }
+            push(batch_dwords, &mut cursor, ps_push_constant_gpu_addr as u32)?;
+            push(batch_dwords, &mut cursor, (ps_push_constant_gpu_addr >> 32) as u32)?;
+            intel_render_verbose_log!(
+                "probe-ps-push-constant gpu=0x{:X} bytes={} read_32b={} slot=3 source=draw-rgba-full-f32\n",
+                ps_push_constant_gpu_addr,
+                ps_push_constant_bytes,
+                ps_push_constant_read_length,
+            );
+        }
     }
 
     log_batch_offset(cursor, "3DSTATE_VIEWPORT_STATE_POINTERS_CC");

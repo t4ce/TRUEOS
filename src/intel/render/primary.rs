@@ -158,7 +158,7 @@ pub(crate) struct ResidentSceneFrameResult {
 
 /// Render a back-to-front list of persistent triangle jobs into one shared
 /// target. The target is cleared once and read back/presented once; individual
-/// jobs retain their own constant RGBA specialization.
+/// jobs bind their own full-precision RGBA push data.
 pub(crate) fn submit_resident_triangle_scene_frame(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
@@ -371,8 +371,8 @@ fn submit_resident_font_mesh_inner(
 
     let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
     // Keep the default color on the exact shader binary already proven on
-    // hardware. Other colors specialize only the four compact immediates;
-    // resident geometry remains untouched in either case.
+    // hardware. Other colors use the static push-color shader; resident
+    // geometry remains untouched in either case.
     let draw_rgba = if rgba == crate::intel::gpu_font::GPU_FONT_LEGACY_BLUE {
         None
     } else {
@@ -4792,7 +4792,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -4895,7 +4895,14 @@ fn submit_triangle_vf_draw_to_surface_ext(
     );
 
     let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        match write_triangle_probe_state(
+            warm,
+            draw,
+            shader_layout,
+            blend_mode,
+            backend_probe_mode,
+            None,
+        )
         {
             Ok(layout) => layout,
             Err(reason) => {
@@ -5336,7 +5343,7 @@ fn submit_triangle_vs_streamout_proof(
             return false;
         }
     };
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("vs-streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5456,7 +5463,7 @@ fn submit_triangle_streamout_proof(
         crate::log!("streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5469,6 +5476,7 @@ fn submit_triangle_streamout_proof(
         shader_layout,
         TriangleBlendProbeMode::ExplicitRt0,
         BackendProbeMode::MesaLike,
+        None,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -5956,7 +5964,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -5968,7 +5976,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name, None);
+    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -6001,7 +6009,14 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
     );
 
     let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        match write_triangle_probe_state(
+            warm,
+            draw,
+            shader_layout,
+            blend_mode,
+            backend_probe_mode,
+            None,
+        )
         {
             Ok(layout) => layout,
             Err(reason) => {
@@ -6272,7 +6287,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         return false;
     };
 
-    let (pipeline, pipeline_note) = match backend_probe_mode {
+    let (base_pipeline, base_pipeline_note) = match backend_probe_mode {
         BackendProbeMode::PsSimd16 => (
             crate::intel::shader::triangle_pipeline_simd16(),
             crate::intel::shader::triangle_pipeline_simd16_note(),
@@ -6285,6 +6300,14 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             crate::intel::shader::triangle_pipeline(),
             crate::intel::shader::triangle_pipeline_note(),
         ),
+    };
+    let (pipeline, pipeline_note) = if draw_rgba.is_some() {
+        (
+            crate::intel::shader::triangle_pipeline_push_color(),
+            crate::intel::shader::triangle_pipeline_push_color_note(),
+        )
+    } else {
+        (base_pipeline, base_pipeline_note)
     };
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
@@ -6425,7 +6448,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.num_varying_inputs,
     );
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, draw_rgba) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -6437,13 +6460,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(
-        warm,
-        pipeline,
-        shader_layout,
-        submit_name,
-        draw_rgba,
-    );
+    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} indexed={} unique_vertices={} draw_vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -6478,7 +6495,14 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     );
 
     let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        match write_triangle_probe_state(
+            warm,
+            draw,
+            shader_layout,
+            blend_mode,
+            backend_probe_mode,
+            draw_rgba,
+        )
         {
             Ok(layout) => layout,
             Err(reason) => {

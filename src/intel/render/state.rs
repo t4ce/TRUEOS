@@ -163,6 +163,7 @@ struct TriangleProbeStateLayout {
     cc_viewport_offset_bytes: u32,
     sf_clip_viewport_offset_bytes: u32,
     scissor_rect_offset_bytes: u32,
+    push_constant_offset_bytes: u32,
     cps_state_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
 }
