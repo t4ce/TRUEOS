@@ -55,6 +55,35 @@ pub(crate) fn submit_font_mesh_once_scaled(
     bounds: (f32, f32, f32, f32),
     native_scale: u32,
 ) -> Result<RenderJokerResult, &'static str> {
+    submit_font_mesh_once_scaled_inner(vertices, indices, bounds, native_scale, None)
+}
+
+/// Render a transient font mesh once and return its transparent native-size
+/// RGBA target instead of claiming the hardware overlay plane.
+pub(crate) fn submit_font_mesh_readback_once_scaled(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+    native_scale: u32,
+) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
+    let mut readback = None;
+    let render = submit_font_mesh_once_scaled_inner(
+        vertices,
+        indices,
+        bounds,
+        native_scale,
+        Some(&mut readback),
+    )?;
+    Ok((render, readback))
+}
+
+fn submit_font_mesh_once_scaled_inner(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+    native_scale: u32,
+    readback: Option<&mut Option<FontRenderTargetReadback>>,
+) -> Result<RenderJokerResult, &'static str> {
     if vertices.is_empty() || indices.is_empty() || !indices.len().is_multiple_of(3) {
         return Err("font-mesh-shape");
     }
@@ -123,7 +152,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         target_size,
-        None,
+        readback,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result

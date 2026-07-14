@@ -17,6 +17,8 @@ use crate::graphics::font::{FontTesselMesh, FontTesselSummary};
 pub(crate) use crate::graphics::primitives::Rgba8 as GpuFontRgba;
 
 pub(crate) const MAX_DYNAMIC_TEXT_CHARS: usize = 256;
+const MIN_FONT_STAMP_SIZE_PERCENT: u32 = 1;
+const MAX_FONT_STAMP_SIZE_PERCENT: u32 = 100;
 
 /// Original shader color retained by the compatibility submit helpers.
 /// Color is deliberately absent from `ResidentFontMesh`: changing this
@@ -437,6 +439,24 @@ pub(crate) struct GpuFontTextRender {
     pub(crate) rows: usize,
 }
 
+pub(crate) struct GpuFontTextStamp {
+    pub(crate) summary: FontTesselSummary,
+    pub(crate) render: crate::intel::render::RenderJokerResult,
+    pub(crate) layout: GpuFontTextLayout,
+    pub(crate) text_chars: usize,
+    pub(crate) rows: usize,
+    pub(crate) stamped: bool,
+    pub(crate) dst_x: i32,
+    pub(crate) dst_y: i32,
+    pub(crate) scanout_width: u32,
+    pub(crate) scanout_height: u32,
+    pub(crate) size_percent: u32,
+    pub(crate) source_width: u32,
+    pub(crate) source_height: u32,
+    pub(crate) stamp_width: u32,
+    pub(crate) stamp_height: u32,
+}
+
 pub(crate) struct GpuFontJobRender {
     pub(crate) summaries: Vec<FontTesselSummary>,
     pub(crate) render: crate::intel::render::RenderJokerResult,
@@ -457,18 +477,6 @@ struct BuiltGpuFontJob {
     text_chars: usize,
     rows: usize,
     glyphs: usize,
-}
-
-/// CPU tessellation result prepared for submission through the Draw3D scene
-/// protocol. It deliberately carries no render allocation or persistence
-/// authority; the Draw3D service acquires those only after accepting the mesh.
-pub(crate) struct GpuFontSceneMesh {
-    pub(crate) vertices: Vec<[f32; 3]>,
-    pub(crate) indices: Vec<u32>,
-    pub(crate) entries: usize,
-    pub(crate) text_chars: usize,
-    pub(crate) rows: usize,
-    pub(crate) glyphs: usize,
 }
 
 struct CachedGpuFont {
@@ -1185,6 +1193,200 @@ pub(crate) fn render_text_once_with_font(
     })
 }
 
+/// Tessellate and render one text request into the proven transient target,
+/// crop its visible glyph bounds, aspect-fit those bounds to the requested
+/// percentage of the primary scanout, and alpha-blend the result at center.
+/// Geometry and render-target ownership end before this function returns; only
+/// the stamped framebuffer pixels remain, just like the boot logo/BGRT stamps.
+pub(crate) fn stamp_text_once_with_font_centered(
+    request: GpuFontTextRequest<'_>,
+    font: GpuFontFace,
+    size_percent: u32,
+    rgba: GpuFontRgba,
+) -> Result<GpuFontTextStamp, &'static str> {
+    if !(MIN_FONT_STAMP_SIZE_PERCENT..=MAX_FONT_STAMP_SIZE_PERCENT).contains(&size_percent) {
+        return Err("font-size-percent-range-1-to-100");
+    }
+    let (scanout_width, scanout_height) =
+        crate::intel::active_scanout_dimensions().ok_or("no-active-scanout-dimensions")?;
+    let layout = match request {
+        GpuFontTextRequest::SingleLine(_) => GpuFontTextLayout::SingleLine,
+        GpuFontTextRequest::Rows(_) => GpuFontTextLayout::Rows,
+    };
+    let entry = GpuFontJobEntry {
+        text: request,
+        position: [0.0, 0.0],
+    };
+    let built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
+    let (render, mut readback) = crate::intel::render::submit_font_mesh_readback_once_scaled(
+        built.vertices.as_slice(),
+        built.indices.as_slice(),
+        built.bounds,
+        crate::intel::render::FONT_STAMP_MAX_NATIVE_SCALE,
+    )?;
+    let mut source_width = 0;
+    let mut source_height = 0;
+    let mut stamp_width = 0;
+    let mut stamp_height = 0;
+    let mut dst_x = 0;
+    let mut dst_y = 0;
+    let stamped = readback.as_mut().is_some_and(|target| {
+        let Some((source_x, source_y, visible_width, visible_height)) =
+            visible_font_target_bounds(target.pixels.as_slice(), target.width, target.height)
+        else {
+            return false;
+        };
+        source_width = visible_width;
+        source_height = visible_height;
+        (stamp_width, stamp_height) = fit_font_stamp_to_scanout(
+            visible_width,
+            visible_height,
+            scanout_width,
+            scanout_height,
+            size_percent,
+        );
+        dst_x = (scanout_width.saturating_sub(stamp_width) / 2) as i32;
+        dst_y = (scanout_height.saturating_sub(stamp_height) / 2) as i32;
+        recolor_transient_font_target(target.pixels.as_mut_slice(), rgba);
+        crate::intel::display::blend_rgba_primary_rect_scaled(
+            target.pixels.as_slice(),
+            target.width,
+            target.height,
+            target.width as usize * 4,
+            source_x,
+            source_y,
+            visible_width,
+            visible_height,
+            dst_x,
+            dst_y,
+            stamp_width,
+            stamp_height,
+            "shell2-font-primary-stamp",
+        )
+    });
+
+    let mut summaries = built.summaries;
+    let summary = summaries.pop().ok_or("font-job-summary")?;
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} source_native_scale={} vertices={} indices={} scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain rgba=[{},{},{},{}] submits=1 mesh_cache=none geometry_persistence=0 color_path=cpu-readback-scaled\n",
+        stamped as u8,
+        render.completed as u8,
+        font.id(),
+        font.registry_name(),
+        built.text_chars,
+        built.rows,
+        size_percent,
+        crate::intel::render::FONT_STAMP_MAX_NATIVE_SCALE,
+        built.vertices.len(),
+        built.indices.len(),
+        scanout_width,
+        scanout_height,
+        source_width,
+        source_height,
+        stamp_width,
+        stamp_height,
+        dst_x,
+        dst_y,
+        rgba.r,
+        rgba.g,
+        rgba.b,
+        rgba.a,
+    );
+    Ok(GpuFontTextStamp {
+        summary,
+        render,
+        layout,
+        text_chars: built.text_chars,
+        rows: built.rows,
+        stamped,
+        dst_x,
+        dst_y,
+        scanout_width,
+        scanout_height,
+        size_percent,
+        source_width,
+        source_height,
+        stamp_width,
+        stamp_height,
+    })
+}
+
+fn visible_font_target_bounds(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let pitch = width as usize * 4;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let alpha_offset = y as usize * pitch + x as usize * 4 + 3;
+            if pixels.get(alpha_offset).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            found = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    found.then(|| {
+        (
+            min_x,
+            min_y,
+            max_x.saturating_sub(min_x).saturating_add(1),
+            max_y.saturating_sub(min_y).saturating_add(1),
+        )
+    })
+}
+
+fn fit_font_stamp_to_scanout(
+    source_width: u32,
+    source_height: u32,
+    scanout_width: u32,
+    scanout_height: u32,
+    size_percent: u32,
+) -> (u32, u32) {
+    let max_width = ((u64::from(scanout_width) * u64::from(size_percent)) / 100).max(1);
+    let max_height = ((u64::from(scanout_height) * u64::from(size_percent)) / 100).max(1);
+    let source_width = u64::from(source_width.max(1));
+    let source_height = u64::from(source_height.max(1));
+    let (width, height) =
+        if source_width.saturating_mul(max_height) >= source_height.saturating_mul(max_width) {
+            let height = source_height
+                .saturating_mul(max_width)
+                .saturating_add(source_width / 2)
+                / source_width;
+            (max_width, height.max(1))
+        } else {
+            let width = source_width
+                .saturating_mul(max_height)
+                .saturating_add(source_height / 2)
+                / source_height;
+            (width.max(1), max_height)
+        };
+    (width as u32, height as u32)
+}
+
+fn recolor_transient_font_target(pixels: &mut [u8], rgba: GpuFontRgba) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        let coverage = pixel[3];
+        if coverage == 0 {
+            continue;
+        }
+        pixel[0] = rgba.r;
+        pixel[1] = rgba.g;
+        pixel[2] = rgba.b;
+        pixel[3] = ((u16::from(coverage) * u16::from(rgba.a) + 127) / 255) as u8;
+    }
+}
+
 /// Build all positioned text groups into one mesh and issue one indexed draw.
 ///
 /// Each entry retains the 256-character text-request limit. A job has no
@@ -1298,45 +1500,6 @@ fn build_font_job_mesh(
         text_chars,
         rows,
         glyphs,
-    })
-}
-
-/// Tessellate and normalize a font job without submitting it to Intel render.
-///
-/// The returned world-space mesh is sized for Draw3D's default perspective
-/// camera. Shell2 uses this API to remain a pure TCP client of the scene
-/// service while retaining the established font shaping/tessellation path.
-pub(crate) fn tessellate_font_job_for_scene(
-    job: GpuFontJob<'_>,
-) -> Result<GpuFontSceneMesh, &'static str> {
-    let built = build_font_job_mesh(job.entries, job.font)?;
-    if built.vertices.len() > 1_000 || built.indices.len() / 3 > 2_000 {
-        return Err("font-scene-budget");
-    }
-
-    let (min_x, min_y, max_x, max_y) = built.bounds;
-    let width = (max_x - min_x).max(1.0);
-    let height = (max_y - min_y).max(1.0);
-    let world_extent = 3.0 * job.native_scale as f32 / 5.0;
-    let scale = world_extent / width.max(height);
-    let center_x = (min_x + max_x) * 0.5;
-    let center_y = (min_y + max_y) * 0.5;
-    let mut vertices = Vec::with_capacity(built.vertices.len());
-    for source in &built.vertices {
-        vertices.push([
-            (source[0] - center_x) * scale,
-            (center_y - source[1]) * scale,
-            0.0,
-        ]);
-    }
-
-    Ok(GpuFontSceneMesh {
-        vertices,
-        indices: built.indices,
-        entries: built.entries,
-        text_chars: built.text_chars,
-        rows: built.rows,
-        glyphs: built.glyphs,
     })
 }
 

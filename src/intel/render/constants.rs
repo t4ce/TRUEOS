@@ -84,12 +84,14 @@ const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 // vertices for the non-indexed 3DPRIMITIVE path.
 const WARM_VERTEX_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
-// Render the font proof at its final visible resolution. Presentation copies
-// this linear RGBA8 target 1:1; there is no display-side enlargement lens.
+// Keep the transient font proof within the individually proven render-target
+// size. Compatibility presentation copies it 1:1; the shell font stamp may
+// crop its visible bounds and scale that readback during primary composition.
 const FONT_PROOF_TARGET_SIZE: usize = 512;
 pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
-const FONT_STAMP_MAX_NATIVE_SCALE: u32 = (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
+pub(crate) const FONT_STAMP_MAX_NATIVE_SCALE: u32 =
+    (FONT_PROOF_TARGET_SIZE / FONT_STAMP_BASE_SIZE) as u32;
 pub(crate) const DRAW3D_SCENE_TARGET_WIDTH: usize = 2560;
 pub(crate) const DRAW3D_SCENE_TARGET_HEIGHT: usize = 1440;
 const WARM_STREAMOUT_BYTES: usize =
