@@ -335,10 +335,7 @@ async fn font_tessel_boot_probe_task() {
             render.clip_counter as u8,
             render.ps_observed as u8,
         ),
-        Err(reason) => crate::log!(
-            "font-boot-tessel-render: status=skipped reason={}\n",
-            reason
-        ),
+        Err(reason) => crate::log!("font-boot-tessel-render: status=skipped reason={}\n", reason),
     }
     let cache = crate::intel::gpu_font::cache_status();
     crate::log!(

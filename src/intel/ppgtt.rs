@@ -134,11 +134,7 @@ fn unmap_page(ppgtt: &SparsePpgtt, gpu: u64) -> Option<()> {
     Some(())
 }
 
-fn existing_child_table(
-    ppgtt: &SparsePpgtt,
-    parent: TablePage,
-    index: usize,
-) -> Option<TablePage> {
+fn existing_child_table(ppgtt: &SparsePpgtt, parent: TablePage, index: usize) -> Option<TablePage> {
     let entry = unsafe { core::ptr::read_volatile(parent.virt.add(index)) };
     if entry & PAGE_PRESENT == 0 {
         return None;

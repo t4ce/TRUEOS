@@ -1,12 +1,13 @@
 fn upload_triangle_shader_pipeline(
     warm: RenderWarmState,
     pipeline: &'static crate::intel::shader::TrianglePipeline,
+    draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
     let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
-    let upload_host_ps_pair = pipeline.ps.code.as_ptr()
-        == crate::intel::shader::triangle_pipeline().ps.code.as_ptr();
+    let upload_host_ps_pair =
+        pipeline.ps.code.as_ptr() == crate::intel::shader::triangle_pipeline().ps.code.as_ptr();
     let host_simd16 = if upload_host_ps_pair {
         Some(stage_range(
             "ps-simd16",
@@ -66,6 +67,14 @@ fn upload_triangle_shader_pipeline(
 
     upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
     upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
+    if let Some(rgba) = draw_rgba {
+        specialize_uploaded_triangle_ps_color(
+            warm.draw_state_virt,
+            ps.code_offset_bytes,
+            pipeline,
+            rgba,
+        )?;
+    }
     if let Some(host_simd16) = host_simd16 {
         upload_stage_code(
             warm.draw_state_virt,
@@ -105,6 +114,52 @@ fn upload_triangle_shader_pipeline(
         state_region_offset_bytes: state_region_offset_bytes as u32,
         used_bytes: used_end as u32,
     })
+}
+
+const TRIANGLE_PS_COLOR_WORDS: [usize; 4] = [1, 3, 5, 7];
+
+fn encode_compacted_float_immediate(component: u8) -> u32 {
+    let normalized = component as f32 / u8::MAX as f32;
+    // This compacted gfx12 MOV immediate carries only the upper IEEE-754
+    // payload bits in this dword. Bits 15:0 are instruction encoding, not
+    // additional float mantissa. Copying an arbitrary f32 verbatim here can
+    // turn an otherwise valid MOV into an invalid instruction and stall the
+    // pixel backend before any PS invocation is counted.
+    (normalized.to_bits() & 0xFFFF_0000) | 0x0001_0000
+}
+
+fn specialize_uploaded_triangle_ps_color(
+    dst_base: *mut u8,
+    ps_offset_bytes: usize,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    rgba: [u8; 4],
+) -> Result<(), &'static str> {
+    let constant_color_pipeline = crate::intel::shader::triangle_pipeline();
+    if pipeline.ps.code.as_ptr() != constant_color_pipeline.ps.code.as_ptr()
+        || pipeline.ps.code.len() != 12
+        || pipeline.ps.code[0] != 0xA07E_0061
+        || pipeline.ps.code[2] != 0xA078_0061
+        || pipeline.ps.code[4] != 0xA07A_0061
+        || pipeline.ps.code[6] != 0xA07C_0061
+        || pipeline.ps.code[8..] != [0x0004_0132, 0x0000_0004, 0x5000_7E14, 0x00C4_7834]
+        || encode_compacted_float_immediate(0) != pipeline.ps.code[1]
+        || encode_compacted_float_immediate(64) != pipeline.ps.code[3]
+        || encode_compacted_float_immediate(255) != pipeline.ps.code[5]
+        || encode_compacted_float_immediate(255) != pipeline.ps.code[7]
+    {
+        return Err("ps-color-specialization-contract");
+    }
+
+    let uploaded = unsafe {
+        core::slice::from_raw_parts_mut(
+            dst_base.add(ps_offset_bytes) as *mut u32,
+            pipeline.ps.code.len(),
+        )
+    };
+    for (word_index, component) in TRIANGLE_PS_COLOR_WORDS.into_iter().zip(rgba) {
+        uploaded[word_index] = encode_compacted_float_immediate(component);
+    }
+    Ok(())
 }
 
 #[derive(Copy, Clone)]
@@ -192,6 +247,7 @@ fn log_uploaded_triangle_shader_verification(
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     submit_name: &'static str,
+    draw_rgba: Option<[u8; 4]>,
 ) {
     let uploaded_vs = unsafe {
         core::slice::from_raw_parts(
@@ -211,13 +267,29 @@ fn log_uploaded_triangle_shader_verification(
     let vs_uploaded_sig = shader_word_signature(uploaded_vs);
     let ps_baked_sig = shader_word_signature(pipeline.ps.code);
     let ps_uploaded_sig = shader_word_signature(uploaded_ps);
+    let ps_expected_match = uploaded_ps.iter().enumerate().all(|(index, uploaded)| {
+        let expected = draw_rgba
+            .and_then(|rgba| {
+                TRIANGLE_PS_COLOR_WORDS
+                    .iter()
+                    .position(|&word_index| word_index == index)
+                    .map(|component| encode_compacted_float_immediate(rgba[component]))
+            })
+            .unwrap_or(pipeline.ps.code[index]);
+        *uploaded == expected
+    });
+    let color_binding = if draw_rgba.is_some() {
+        "transient-ps-immediate-specialization"
+    } else {
+        "baked-ps-constant"
+    };
     let vs_first = pipeline.vs.code.first().copied().unwrap_or(0);
     let vs_uploaded_first = uploaded_vs.first().copied().unwrap_or(0);
     let vs_last = pipeline.vs.code.last().copied().unwrap_or(0);
     let vs_uploaded_last = uploaded_vs.last().copied().unwrap_or(0);
     if submit_name == "vs-draw-frontier" {
         intel_render_focus_log!(
-            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_expected_match={} ps_baked_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X} color_binding={} rgba={:?}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -227,13 +299,16 @@ fn log_uploaded_triangle_shader_verification(
             vs_uploaded_first,
             vs_last,
             vs_uploaded_last,
+            ps_expected_match as u8,
             (pipeline.ps.code == uploaded_ps) as u8,
             ps_baked_sig,
             ps_uploaded_sig,
+            color_binding,
+            draw_rgba,
         );
     } else {
         intel_render_verbose_log!(
-            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X}\n",
+            "{} shader-upload-verify note={} vs_match={} vs_baked_sig=0x{:016X} vs_uploaded_sig=0x{:016X} vs_first=0x{:08X}/0x{:08X} vs_last=0x{:08X}/0x{:08X} ps_expected_match={} ps_baked_match={} ps_baked_sig=0x{:016X} ps_uploaded_sig=0x{:016X} color_binding={} rgba={:?}\n",
             submit_name,
             crate::intel::shader::triangle_pipeline_note(),
             (pipeline.vs.code == uploaded_vs) as u8,
@@ -243,9 +318,12 @@ fn log_uploaded_triangle_shader_verification(
             vs_uploaded_first,
             vs_last,
             vs_uploaded_last,
+            ps_expected_match as u8,
             (pipeline.ps.code == uploaded_ps) as u8,
             ps_baked_sig,
             ps_uploaded_sig,
+            color_binding,
+            draw_rgba,
         );
     }
 }
@@ -532,8 +610,7 @@ pub(crate) fn create_resident_font_mesh(
         let v0 = draw_vertices[triangle[0] as usize];
         let v1 = draw_vertices[triangle[1] as usize];
         let v2 = draw_vertices[triangle[2] as usize];
-        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1])
-            - (v1[1] - v0[1]) * (v2[0] - v0[0]);
+        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
         if area2 < 0.0 {
             draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
         } else {
@@ -702,11 +779,8 @@ fn prepare_triangle_draw_resources_for_gpu_font_mesh(
     if vertex_end > mesh.storage_bytes || index_end > mesh.storage_bytes {
         return None;
     }
-    if !map_render_ppgtt_range(
-        GPU_VA_COMPUTE_FONT_MESH_BASE,
-        mesh.storage_phys,
-        mesh.storage_bytes,
-    ) {
+    if !map_render_ppgtt_range(GPU_VA_COMPUTE_FONT_MESH_BASE, mesh.storage_phys, mesh.storage_bytes)
+    {
         return None;
     }
 
@@ -715,8 +789,8 @@ fn prepare_triangle_draw_resources_for_gpu_font_mesh(
     }
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
-    let vertex_gpu_addr = GPU_VA_COMPUTE_FONT_MESH_BASE
-        .checked_add(mesh.vertex_offset_bytes as u64)?;
+    let vertex_gpu_addr =
+        GPU_VA_COMPUTE_FONT_MESH_BASE.checked_add(mesh.vertex_offset_bytes as u64)?;
     let index_gpu_addr =
         GPU_VA_COMPUTE_FONT_MESH_BASE.checked_add(mesh.index_offset_bytes as u64)?;
     intel_render_focus_log!(

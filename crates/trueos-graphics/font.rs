@@ -29,11 +29,18 @@ pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // labels. Keep the original full-field vertex count at the graphics boundary.
 pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 
-const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
-    name: "font",
-    file_name: "L_10646.TTF",
-    bytes: include_bytes!("../../tools/L_10646.TTF"),
-}];
+const EMBEDDED_FONTS: [EmbeddedFontSpec; 2] = [
+    EmbeddedFontSpec {
+        name: "font",
+        file_name: "L_10646.TTF",
+        bytes: include_bytes!("../../tools/L_10646.TTF"),
+    },
+    EmbeddedFontSpec {
+        name: "noto-sans-sc",
+        file_name: "NotoSansSC[wght].ttf",
+        bytes: include_bytes!("../../tools/NotoSansSC[wght].ttf"),
+    },
+];
 
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 
@@ -153,7 +160,10 @@ fn gpu_outline_for_text(
     name: &'static str,
     text: &'static str,
 ) -> Result<FontGpuOutline, &'static str> {
-    warm_embedded_fonts_once().map_err(|_| "font-warm-failed")?;
+    match warm_embedded_font_by_name(name).map_err(|_| "font-warm-failed")? {
+        Some(_) => {}
+        None => return Err("font-not-registered"),
+    }
     let registry = FONT_REGISTRY.lock();
     let font_record = registry.font_by_name(name).ok_or("font-not-registered")?;
     let FontWarmEndState::Outline(outline) = font_record
@@ -317,11 +327,7 @@ pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
     tessellate_text_mesh("font", FONT_TESSEL_SAMPLE_TEXT, FONT_TESSEL_BASE_PX)
 }
 
-pub(crate) fn tessellate_text_mesh(
-    name: &'static str,
-    text: &str,
-    px_size: f32,
-) -> FontTesselMesh {
+pub(crate) fn tessellate_text_mesh(name: &'static str, text: &str, px_size: f32) -> FontTesselMesh {
     tessellate_text_mesh_grouped(name, text, px_size, None)
 }
 
@@ -341,8 +347,28 @@ fn tessellate_text_mesh_grouped(
     row_lengths: Option<&[usize]>,
 ) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
-    if warm_embedded_fonts_once().is_err() {
-        return FontTesselMesh::failed("font-warm-failed", name, "", text, px_size, total_start);
+    match warm_embedded_font_by_name(name) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return FontTesselMesh::failed(
+                "font-not-registered",
+                name,
+                "",
+                text,
+                px_size,
+                total_start,
+            );
+        }
+        Err(_) => {
+            return FontTesselMesh::failed(
+                "font-warm-failed",
+                name,
+                "",
+                text,
+                px_size,
+                total_start,
+            );
+        }
     }
 
     let registry = FONT_REGISTRY.lock();
@@ -398,9 +424,9 @@ fn tessellate_text_mesh_grouped(
         .unwrap_or(usize::MAX);
     let mut bounds = TesselBounds::default();
     for ch in text.chars() {
-        if row_lengths.is_some_and(|lengths| {
-            chars_placed == next_row_at && row_index + 1 < lengths.len()
-        }) {
+        if row_lengths
+            .is_some_and(|lengths| chars_placed == next_row_at && row_index + 1 < lengths.len())
+        {
             pen_x = 0.0;
             baseline_y += px_size * 1.25;
             row_index += 1;
@@ -511,6 +537,15 @@ pub(crate) fn warm_embedded_fonts_once() -> Result<Vec<FontWarmSummary>, skrifa:
     Ok(summaries)
 }
 
+fn warm_embedded_font_by_name(
+    name: &str,
+) -> Result<Option<FontWarmSummary>, skrifa::raw::ReadError> {
+    let Some(index) = EMBEDDED_FONTS.iter().position(|spec| spec.name == name) else {
+        return Ok(None);
+    };
+    warm_embedded_font_once(index).map(Some)
+}
+
 fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw::ReadError> {
     let spec = EMBEDDED_FONTS[index];
     if let Some(summary) = font_summary(spec.name) {
@@ -584,28 +619,25 @@ fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw:
 
 #[embassy_executor::task]
 pub(crate) async fn font_warm_task() {
-    match warm_embedded_fonts_once() {
-        Ok(summaries) => {
-            for summary in summaries {
-                crate::log_info!(
-                    target: "boot";
-                    "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={}\n",
-                    summary.status,
-                    summary.name,
-                    summary.file_name,
-                    summary.endstate,
-                    summary.resident_bytes,
-                    summary.cache_bytes,
-                    summary.glyphs,
-                    summary.outline_success,
-                    summary.empty_outlines,
-                    summary.outline_failures,
-                    summary.commands,
-                    summary.outline_ms,
-                    summary.total_ms
-                );
-            }
-        }
+    match warm_embedded_font_once(0) {
+        Ok(summary) => crate::log_info!(
+            target: "boot";
+            "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} additional_embedded_fonts={} additional_policy=lazy-on-first-use\n",
+            summary.status,
+            summary.name,
+            summary.file_name,
+            summary.endstate,
+            summary.resident_bytes,
+            summary.cache_bytes,
+            summary.glyphs,
+            summary.outline_success,
+            summary.empty_outlines,
+            summary.outline_failures,
+            summary.commands,
+            summary.outline_ms,
+            summary.total_ms,
+            EMBEDDED_FONTS.len().saturating_sub(1),
+        ),
         Err(err) => crate::log_warn!(
             target: "boot";
             "graphics-font: status=failed err={:?}\n",

@@ -29,12 +29,7 @@ pub(crate) fn submit_font_mesh_once(
     indices: &[u32],
     bounds: (f32, f32, f32, f32),
 ) -> Result<RenderJokerResult, &'static str> {
-    submit_font_mesh_once_scaled(
-        vertices,
-        indices,
-        bounds,
-        FONT_STAMP_DEFAULT_NATIVE_SCALE,
-    )
+    submit_font_mesh_once_scaled(vertices, indices, bounds, FONT_STAMP_DEFAULT_NATIVE_SCALE)
 }
 
 pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
@@ -92,8 +87,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
             PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
             return Err("font-index-range");
         };
-        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1])
-            - (v1[1] - v0[1]) * (v2[0] - v0[0]);
+        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
         if area2 < 0.0 {
             draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
         } else {
@@ -107,6 +101,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
     let result = submit_render_custom_triangle_probe_locked_at_size(
         &draw_vertices,
         Some(&draw_indices),
+        None,
         None,
         "font-tessel-once",
         "font-tessel-3d-once",
@@ -130,6 +125,7 @@ pub(crate) fn submit_font_mesh_once_scaled(
 pub(crate) fn submit_resident_font_mesh_once(
     mesh: &ResidentFontMesh,
     native_scale: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
 ) -> Result<RenderJokerResult, &'static str> {
     if mesh.vertex_count < 3
         || mesh.index_count < 3
@@ -150,10 +146,19 @@ pub(crate) fn submit_resident_font_mesh_once(
     }
 
     let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
+    // Keep the default color on the exact shader binary already proven on
+    // hardware. Other colors specialize only the four compact immediates;
+    // resident geometry remains untouched in either case.
+    let draw_rgba = if rgba == crate::intel::gpu_font::GPU_FONT_LEGACY_BLUE {
+        None
+    } else {
+        Some([rgba.r, rgba.g, rgba.b, rgba.a])
+    };
     let result = submit_render_custom_triangle_probe_locked_at_size(
         &[],
         None,
         Some(mesh),
+        draw_rgba,
         "font-resident-reuse",
         "font-resident-3d",
         "kernel-font-service-resident-indexed-mesh",
@@ -229,6 +234,7 @@ pub(crate) fn submit_gpu_font_outline_mesh_once(
             &[],
             None,
             Some(mesh),
+            None,
             None,
             "skrifa-gpgpu-full-text-outline-stroke",
             SUBMIT_NAME,
@@ -2851,6 +2857,7 @@ fn submit_render_custom_triangle_probe_locked(
         vertices,
         indices,
         None,
+        None,
         variant,
         submit_name,
         geometry_label,
@@ -2869,6 +2876,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
     resident_mesh: Option<&ResidentFontMesh>,
+    draw_rgba: Option<[u8; 4]>,
     variant: &'static str,
     submit_name: &'static str,
     geometry_label: &'static str,
@@ -2964,6 +2972,7 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         indices,
         None,
         resident_mesh,
+        draw_rgba,
         geometry_label,
         submit_name,
         front_end_contract,
@@ -4554,7 +4563,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -5098,7 +5107,7 @@ fn submit_triangle_vs_streamout_proof(
             return false;
         }
     };
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("vs-streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5218,7 +5227,7 @@ fn submit_triangle_streamout_proof(
         crate::log!("streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5718,7 +5727,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -5730,7 +5739,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
+    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name, None);
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -5949,6 +5958,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     indices: Option<&[u32]>,
     gpu_mesh: Option<crate::intel::gpgpu::GpgpuFontOutlineMesh>,
     resident_mesh: Option<&ResidentFontMesh>,
+    draw_rgba: Option<[u8; 4]>,
     geometry_label: &'static str,
     submit_name: &'static str,
     front_end_contract: TriangleFrontEndContract,
@@ -6131,7 +6141,13 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         );
     } else {
         let first_triangle_indices = indices
-            .map(|indices| [indices[0] as usize, indices[1] as usize, indices[2] as usize])
+            .map(|indices| {
+                [
+                    indices[0] as usize,
+                    indices[1] as usize,
+                    indices[2] as usize,
+                ]
+            })
             .unwrap_or([0, 1, 2]);
         let first_triangle = [
             vertices[first_triangle_indices[0]],
@@ -6179,7 +6195,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.num_varying_inputs,
     );
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, draw_rgba) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -6191,7 +6207,13 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
+    log_uploaded_triangle_shader_verification(
+        warm,
+        pipeline,
+        shader_layout,
+        submit_name,
+        draw_rgba,
+    );
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} indexed={} unique_vertices={} draw_vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -6359,8 +6381,8 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     let (completion_value, completion_slot, completion_kind) = if matches!(
         submit_name,
         "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
-    )
-        && post_draw_sync_variant == PostDrawSyncVariant::HeavyAll
+    ) && post_draw_sync_variant
+        == PostDrawSyncVariant::HeavyAll
     {
         (
             RCS_EXEC_RESULT_DRAW_POST3D,
@@ -6431,9 +6453,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             draw.target_h,
             draw.rt_pitch,
             changed_pixels,
-            first_changed_pixel
-                .map(|index| index as i32)
-                .unwrap_or(-1),
+            first_changed_pixel.map(|index| index as i32).unwrap_or(-1),
             scratch_before,
             scratch_after,
             center_before,
