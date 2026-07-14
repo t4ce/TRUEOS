@@ -80,8 +80,8 @@ const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
 const WARM_BATCH_BYTES: usize = 512 * 4096;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
-// The default font mesh expands its u32 index stream to about 10 KiB of XYZ
-// vertices for the non-indexed 3DPRIMITIVE path.
+// The transient upload mapping ends where the adjacent scratch target begins.
+// Target-aware font quality must remain inside this proven 64 KiB allocation.
 const WARM_VERTEX_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 // Keep the transient font proof within the individually proven render-target

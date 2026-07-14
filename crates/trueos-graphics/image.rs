@@ -7,7 +7,6 @@ pub(crate) use super::jpeg_codec;
 pub(crate) use super::jpeg_layout;
 pub(crate) use super::png_codec;
 pub(crate) use super::png_decode_pool;
-pub(crate) use super::svg;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EncodedImageKind {
@@ -95,14 +94,7 @@ pub(crate) fn decode_encoded_image_kind_rgba(
                 rgba: decoded.rgba,
             })
             .map_err(|err| err.code()),
-        EncodedImageKind::Svg => {
-            svg::render_svg_bytes_rgba(bytes).map(|(info, rgba)| DecodedRgbaImage {
-                kind,
-                width: info.width,
-                height: info.height,
-                rgba,
-            })
-        }
+        EncodedImageKind::Svg => Err(kind.decode_error_code()),
         EncodedImageKind::Unknown => Err(kind.decode_error_code()),
     }
 }

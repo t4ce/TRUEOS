@@ -7,12 +7,6 @@
 use alloc::{string::String, vec::Vec};
 use core::mem::size_of;
 
-use lyon_tessellation::{
-    BuffersBuilder, FillOptions, FillTessellator, FillVertex as LyonFillVertex,
-    VertexBuffers as LyonVertexBuffers,
-    math::point,
-    path::{Builder as LyonPathBuilder, Path as LyonPath},
-};
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
     instance::{LocationRef, Size},
@@ -20,6 +14,8 @@ use skrifa::{
     raw::TableProvider,
 };
 use spin::Mutex;
+
+use super::path_mesh::{FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, point};
 
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
 const FONT_TESSEL_SAMPLE_TEXT: &str = "True OS §";
@@ -328,7 +324,22 @@ pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
 }
 
 pub(crate) fn tessellate_text_mesh(name: &'static str, text: &str, px_size: f32) -> FontTesselMesh {
-    tessellate_text_mesh_grouped(name, text, px_size, None)
+    tessellate_text_mesh_grouped(name, text, px_size, None, FillOptions::DEFAULT)
+}
+
+pub(crate) fn tessellate_text_mesh_with_tolerance(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+    tolerance: f32,
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(
+        name,
+        text,
+        px_size,
+        None,
+        FillOptions::DEFAULT.with_tolerance(tolerance),
+    )
 }
 
 pub(crate) fn tessellate_text_rows_mesh(
@@ -337,7 +348,23 @@ pub(crate) fn tessellate_text_rows_mesh(
     px_size: f32,
     row_lengths: &[usize],
 ) -> FontTesselMesh {
-    tessellate_text_mesh_grouped(name, text, px_size, Some(row_lengths))
+    tessellate_text_mesh_grouped(name, text, px_size, Some(row_lengths), FillOptions::DEFAULT)
+}
+
+pub(crate) fn tessellate_text_rows_mesh_with_tolerance(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+    row_lengths: &[usize],
+    tolerance: f32,
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(
+        name,
+        text,
+        px_size,
+        Some(row_lengths),
+        FillOptions::DEFAULT.with_tolerance(tolerance),
+    )
 }
 
 fn tessellate_text_mesh_grouped(
@@ -345,6 +372,7 @@ fn tessellate_text_mesh_grouped(
     text: &str,
     px_size: f32,
     row_lengths: Option<&[usize]>,
+    fill_options: FillOptions,
 ) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
     match warm_embedded_font_by_name(name) {
@@ -408,7 +436,7 @@ fn tessellate_text_mesh_grouped(
     let charmap_ms = elapsed_ms_since(charmap_start);
 
     let path_start = embassy_time_driver::now();
-    let mut builder = LyonPath::builder();
+    let mut builder = FillPath::builder_with_options(&fill_options);
     let mut glyphs = 0usize;
     let mut glyph_hits = 0usize;
     let mut glyph_misses = 0usize;
@@ -470,17 +498,11 @@ fn tessellate_text_mesh_grouped(
     let path_ms = elapsed_ms_since(path_start);
 
     let tessellate_start = embassy_time_driver::now();
-    let mut buffers: LyonVertexBuffers<[f32; 2], u32> = LyonVertexBuffers::new();
-    let tessellated = FillTessellator::new().tessellate_path(
-        &path,
-        &FillOptions::default(),
-        &mut BuffersBuilder::new(&mut buffers, |vertex: LyonFillVertex| {
-            let position = vertex.position();
-            [position.x, position.y]
-        }),
-    );
+    let tessellated = path.tessellate(&fill_options);
     let tessellate_ms = elapsed_ms_since(tessellate_start);
-    let tessellate_failures = usize::from(tessellated.is_err());
+    let tessellated_ok = tessellated.is_ok();
+    let tessellate_failures = usize::from(!tessellated_ok);
+    let buffers = tessellated.unwrap_or_default();
     let vertices = buffers.vertices.len();
     let indices = buffers.indices.len();
     let vertex_bytes = vertices.saturating_mul(size_of::<[f32; 2]>());
@@ -488,11 +510,11 @@ fn tessellate_text_mesh_grouped(
     let geometry_bytes = vertex_bytes.saturating_add(index_bytes);
 
     let summary = FontTesselSummary {
-        status: if tessellated.is_ok() { "ok" } else { "failed" },
-        reason: if tessellated.is_ok() {
+        status: if tessellated_ok { "ok" } else { "failed" },
+        reason: if tessellated_ok {
             "tessellated"
         } else {
-            "lyon-fill-failed"
+            "path-fill-failed"
         },
         text: text.into(),
         font_name: font_record.name,
@@ -619,30 +641,46 @@ fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw:
 
 #[embassy_executor::task]
 pub(crate) async fn font_warm_task() {
-    match warm_embedded_font_once(0) {
-        Ok(summary) => crate::log_info!(
+    for (index, spec) in EMBEDDED_FONTS.iter().enumerate() {
+        crate::log_info!(
             target: "boot";
-            "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} additional_embedded_fonts={} additional_policy=lazy-on-first-use\n",
-            summary.status,
-            summary.name,
-            summary.file_name,
-            summary.endstate,
-            summary.resident_bytes,
-            summary.cache_bytes,
-            summary.glyphs,
-            summary.outline_success,
-            summary.empty_outlines,
-            summary.outline_failures,
-            summary.commands,
-            summary.outline_ms,
-            summary.total_ms,
-            EMBEDDED_FONTS.len().saturating_sub(1),
-        ),
-        Err(err) => crate::log_warn!(
-            target: "boot";
-            "graphics-font: status=failed err={:?}\n",
-            err
-        ),
+            "graphics-font: status=warming name={} file={} warm_index={} warm_total={} warm_policy=eager-all\n",
+            spec.name,
+            spec.file_name,
+            index + 1,
+            EMBEDDED_FONTS.len(),
+        );
+
+        match warm_embedded_font_once(index) {
+            Ok(summary) => crate::log_info!(
+                target: "boot";
+                "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} warm_index={} warm_total={} warm_policy=eager-all\n",
+                summary.status,
+                summary.name,
+                summary.file_name,
+                summary.endstate,
+                summary.resident_bytes,
+                summary.cache_bytes,
+                summary.glyphs,
+                summary.outline_success,
+                summary.empty_outlines,
+                summary.outline_failures,
+                summary.commands,
+                summary.outline_ms,
+                summary.total_ms,
+                index + 1,
+                EMBEDDED_FONTS.len(),
+            ),
+            Err(err) => crate::log_warn!(
+                target: "boot";
+                "graphics-font: status=failed name={} file={} warm_index={} warm_total={} warm_policy=eager-all err={:?}\n",
+                spec.name,
+                spec.file_name,
+                index + 1,
+                EMBEDDED_FONTS.len(),
+                err,
+            ),
+        }
     }
 }
 
@@ -859,7 +897,7 @@ impl FontOutlineCache {
     fn append_glyph_path(
         &self,
         glyph_id: GlyphId,
-        builder: &mut LyonPathBuilder,
+        builder: &mut FillPathBuilder,
         pen_x: f32,
         baseline_y: f32,
         scale: f32,
@@ -1054,7 +1092,7 @@ impl WarmOutlineOp {
 
     fn append_to_builder(
         self,
-        builder: &mut LyonPathBuilder,
+        builder: &mut FillPathBuilder,
         pen_x: f32,
         baseline_y: f32,
         scale: f32,

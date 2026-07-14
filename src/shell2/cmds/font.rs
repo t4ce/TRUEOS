@@ -47,7 +47,7 @@ pub(crate) fn try_parse(
         Ok(result) => print_shell_line(
             io,
             format!(
-                "font: stamped={} target=primary-native scanout={}x{} placement=centered fit=contain size={}percent dst={},{} stamp={}x{} source={}x{} font_id={} font={} file={} layout={} text_chars={} rows={} rgba={:02X}{:02X}{:02X}{:02X} glyphs={} glyph_hits={} glyph_misses={} vertices={} indices={} submits=1 completed={} ps={} persistent=0 transport=kernel-direct",
+                "font: stamped={} target=primary-native scanout={}x{} placement=centered fit=contain size={}percent dst={},{} stamp={}x{} render_target={}x{} source_visible={}x{} scale_path=1to1 tessellation=target-aware tolerance={:.4} font_id={} font={} file={} layout={} text_chars={} rows={} rgba={:02X}{:02X}{:02X}{:02X} glyphs={} glyph_hits={} glyph_misses={} vertices={} indices={} submits=1 completed={} ps={} persistent=0 transport=kernel-direct",
                 result.stamped as u8,
                 result.scanout_width,
                 result.scanout_height,
@@ -56,8 +56,11 @@ pub(crate) fn try_parse(
                 result.dst_y,
                 result.stamp_width,
                 result.stamp_height,
+                result.render_target_width,
+                result.render_target_height,
                 result.source_width,
                 result.source_height,
+                result.tessellation_tolerance,
                 command.font.id(),
                 result.summary.font_name,
                 result.summary.font_file,

@@ -72,8 +72,6 @@ trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-lsd = { path = "crates/trueos-lsd" }
 trueos-silk = { path = "crates/trueos-silk" }
 trueos-draw3d = { path = "crates/trueos-draw3d" }
-lyon_geom = { version = "1.0.19", default-features = false }
-lyon_tessellation = { version = "1.0.20", default-features = false }
 euclid = { version = "=0.22.13", default-features = false }
 usvg = { version = "0.45.1", default-features = false }
 kurbo = { version = "=0.11.3", default-features = false }

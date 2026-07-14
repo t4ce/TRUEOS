@@ -19,6 +19,10 @@ pub(crate) use crate::graphics::primitives::Rgba8 as GpuFontRgba;
 pub(crate) const MAX_DYNAMIC_TEXT_CHARS: usize = 256;
 const MIN_FONT_STAMP_SIZE_PERCENT: u32 = 1;
 const MAX_FONT_STAMP_SIZE_PERCENT: u32 = 100;
+const NATIVE_FONT_STAMP_PADDING_PIXELS: u32 = 2;
+const DEFAULT_FONT_FILL_TOLERANCE: f32 = 0.1;
+const MIN_NATIVE_FONT_FILL_TOLERANCE: f32 = 0.005;
+const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
 
 /// Original shader color retained by the compatibility submit helpers.
 /// Color is deliberately absent from `ResidentFontMesh`: changing this
@@ -453,6 +457,9 @@ pub(crate) struct GpuFontTextStamp {
     pub(crate) size_percent: u32,
     pub(crate) source_width: u32,
     pub(crate) source_height: u32,
+    pub(crate) render_target_width: u32,
+    pub(crate) render_target_height: u32,
+    pub(crate) tessellation_tolerance: f32,
     pub(crate) stamp_width: u32,
     pub(crate) stamp_height: u32,
 }
@@ -541,6 +548,7 @@ impl KernelGpuFontService {
 }
 
 static GPU_FONT_SERVICE: Mutex<KernelGpuFontService> = Mutex::new(KernelGpuFontService::new());
+static TRANSIENT_FONT_STAMP_READBACK: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 struct PersistentGpuFontAnimation {
     lease: PersistentGpuFontJob,
@@ -1193,11 +1201,12 @@ pub(crate) fn render_text_once_with_font(
     })
 }
 
-/// Tessellate and render one text request into the proven transient target,
-/// crop its visible glyph bounds, aspect-fit those bounds to the requested
-/// percentage of the primary scanout, and alpha-blend the result at center.
-/// Geometry and render-target ownership end before this function returns; only
-/// the stamped framebuffer pixels remain, just like the boot logo/BGRT stamps.
+/// Tessellate and render one text request directly at its final stamp extent,
+/// aspect-fit that extent to the requested percentage of the primary scanout,
+/// and alpha-blend the result 1:1 at center. Large stamps use a correspondingly
+/// finer curve tolerance, while the warmed size-independent outlines remain
+/// unchanged. Geometry and render-target ownership end before this function
+/// returns; only the stamped framebuffer pixels remain, like logo/BGRT stamps.
 pub(crate) fn stamp_text_once_with_font_centered(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -1217,59 +1226,89 @@ pub(crate) fn stamp_text_once_with_font_centered(
         text: request,
         position: [0.0, 0.0],
     };
-    let built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
-    let (render, mut readback) = crate::intel::render::submit_font_mesh_readback_once_scaled(
-        built.vertices.as_slice(),
-        built.indices.as_slice(),
+    let mut built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
+    let mesh_width = libm::ceilf((built.bounds.2 - built.bounds.0).max(1.0)) as u32;
+    let mesh_height = libm::ceilf((built.bounds.3 - built.bounds.1).max(1.0)) as u32;
+    let (stamp_width, stamp_height) = fit_font_stamp_to_scanout(
+        mesh_width,
+        mesh_height,
+        scanout_width,
+        scanout_height,
+        size_percent,
+    );
+    let requested_tessellation_tolerance = native_font_fill_tolerance(
         built.bounds,
-        crate::intel::render::FONT_STAMP_MAX_NATIVE_SCALE,
-    )?;
-    let mut source_width = 0;
-    let mut source_height = 0;
-    let mut stamp_width = 0;
-    let mut stamp_height = 0;
-    let mut dst_x = 0;
-    let mut dst_y = 0;
-    let stamped = readback.as_mut().is_some_and(|target| {
-        let Some((source_x, source_y, visible_width, visible_height)) =
-            visible_font_target_bounds(target.pixels.as_slice(), target.width, target.height)
-        else {
-            return false;
-        };
-        source_width = visible_width;
-        source_height = visible_height;
-        (stamp_width, stamp_height) = fit_font_stamp_to_scanout(
-            visible_width,
-            visible_height,
-            scanout_width,
-            scanout_height,
-            size_percent,
-        );
-        dst_x = (scanout_width.saturating_sub(stamp_width) / 2) as i32;
-        dst_y = (scanout_height.saturating_sub(stamp_height) / 2) as i32;
-        recolor_transient_font_target(target.pixels.as_mut_slice(), rgba);
-        crate::intel::display::blend_rgba_primary_rect_scaled(
-            target.pixels.as_slice(),
-            target.width,
-            target.height,
-            target.width as usize * 4,
-            source_x,
-            source_y,
-            visible_width,
-            visible_height,
-            dst_x,
-            dst_y,
+        stamp_width,
+        stamp_height,
+        NATIVE_FONT_STAMP_PADDING_PIXELS,
+    );
+    let mut tessellation_tolerance = DEFAULT_FONT_FILL_TOLERANCE;
+    let mut quality_capacity_limited = false;
+    if requested_tessellation_tolerance < DEFAULT_FONT_FILL_TOLERANCE {
+        let candidate = build_font_job_mesh_with_tolerance(
+            core::slice::from_ref(&entry),
+            font,
+            requested_tessellation_tolerance,
+        )?;
+        if crate::intel::render::transient_font_mesh_upload_supported(
+            candidate.vertices.len(),
+            candidate.indices.len(),
+        ) {
+            built = candidate;
+            tessellation_tolerance = requested_tessellation_tolerance;
+        } else {
+            quality_capacity_limited = true;
+        }
+    }
+    if !crate::intel::render::transient_font_mesh_upload_supported(
+        built.vertices.len(),
+        built.indices.len(),
+    ) {
+        return Err("font-mesh-upload-capacity");
+    }
+
+    let reusable_pixels = core::mem::take(&mut *TRANSIENT_FONT_STAMP_READBACK.lock());
+    let (render, mut readback) =
+        crate::intel::render::submit_font_mesh_readback_once_at_extent_reusing(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            built.bounds,
             stamp_width,
             stamp_height,
-            "shell2-font-primary-stamp",
-        )
-    });
+            NATIVE_FONT_STAMP_PADDING_PIXELS,
+            reusable_pixels,
+        )?;
+    let mut source_width = 0;
+    let mut source_height = 0;
+    let dst_x = (scanout_width.saturating_sub(stamp_width) / 2) as i32;
+    let dst_y = (scanout_height.saturating_sub(stamp_height) / 2) as i32;
+    let stamped =
+        visible_font_target_bounds(readback.pixels.as_slice(), readback.width, readback.height)
+            .is_some_and(|(_, _, visible_width, visible_height)| {
+                source_width = visible_width;
+                source_height = visible_height;
+                recolor_transient_font_target(readback.pixels.as_mut_slice(), rgba);
+                crate::intel::display::blend_rgba_primary_rect(
+                    readback.pixels.as_slice(),
+                    readback.width,
+                    readback.height,
+                    readback.width as usize * 4,
+                    0,
+                    0,
+                    dst_x,
+                    dst_y,
+                    stamp_width,
+                    stamp_height,
+                    "shell2-font-primary-stamp",
+                )
+            });
+    recycle_transient_font_readback(core::mem::take(&mut readback.pixels));
 
     let mut summaries = built.summaries;
     let summary = summaries.pop().ok_or("font-job-summary")?;
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} source_native_scale={} vertices={} indices={} scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain rgba=[{},{},{},{}] submits=1 mesh_cache=none geometry_persistence=0 color_path=cpu-readback-scaled\n",
+        "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} tessellation_tolerance={:.4} requested_tolerance={:.4} curve_error_target_px={:.2} quality_capacity_limited={} vertices={} indices={} scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=1 mesh_cache=none outline_cache=warmed geometry_persistence=0 readback_buffers=1 readback_allocation=reused color_path=cpu-readback-1to1\n",
         stamped as u8,
         render.completed as u8,
         font.id(),
@@ -1277,7 +1316,13 @@ pub(crate) fn stamp_text_once_with_font_centered(
         built.text_chars,
         built.rows,
         size_percent,
-        crate::intel::render::FONT_STAMP_MAX_NATIVE_SCALE,
+        stamp_width,
+        stamp_height,
+        NATIVE_FONT_STAMP_PADDING_PIXELS,
+        tessellation_tolerance,
+        requested_tessellation_tolerance,
+        NATIVE_FONT_CURVE_ERROR_PIXELS,
+        quality_capacity_limited as u8,
         built.vertices.len(),
         built.indices.len(),
         scanout_width,
@@ -1307,9 +1352,45 @@ pub(crate) fn stamp_text_once_with_font_centered(
         size_percent,
         source_width,
         source_height,
+        render_target_width: stamp_width,
+        render_target_height: stamp_height,
+        tessellation_tolerance,
         stamp_width,
         stamp_height,
     })
+}
+
+fn native_font_fill_tolerance(
+    bounds: (f32, f32, f32, f32),
+    target_width: u32,
+    target_height: u32,
+    padding_pixels: u32,
+) -> f32 {
+    let mesh_width = (bounds.2 - bounds.0).max(1.0);
+    let mesh_height = (bounds.3 - bounds.1).max(1.0);
+    let padding_pixels = padding_pixels
+        .min(target_width.saturating_sub(1) / 2)
+        .min(target_height.saturating_sub(1) / 2);
+    let content_width = target_width
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let content_height = target_height
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let pixel_scale = (content_width as f32 / mesh_width).min(content_height as f32 / mesh_height);
+    if !pixel_scale.is_finite() || pixel_scale <= 0.0 {
+        return DEFAULT_FONT_FILL_TOLERANCE;
+    }
+    (NATIVE_FONT_CURVE_ERROR_PIXELS / pixel_scale)
+        .clamp(MIN_NATIVE_FONT_FILL_TOLERANCE, DEFAULT_FONT_FILL_TOLERANCE)
+}
+
+fn recycle_transient_font_readback(mut pixels: Vec<u8>) {
+    pixels.clear();
+    let mut recycled = TRANSIENT_FONT_STAMP_READBACK.lock();
+    if pixels.capacity() >= recycled.capacity() {
+        *recycled = pixels;
+    }
 }
 
 fn visible_font_target_bounds(
@@ -1430,6 +1511,22 @@ fn build_font_job_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
 ) -> Result<BuiltGpuFontJob, &'static str> {
+    build_font_job_mesh_inner(entries, font, None)
+}
+
+fn build_font_job_mesh_with_tolerance(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    tolerance: f32,
+) -> Result<BuiltGpuFontJob, &'static str> {
+    build_font_job_mesh_inner(entries, font, Some(tolerance))
+}
+
+fn build_font_job_mesh_inner(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    tolerance: Option<f32>,
+) -> Result<BuiltGpuFontJob, &'static str> {
     if entries.is_empty() {
         return Err("font-job-empty");
     }
@@ -1445,7 +1542,8 @@ fn build_font_job_mesh(
         if !entry.position[0].is_finite() || !entry.position[1].is_finite() {
             return Err("font-job-position");
         }
-        let (mesh, entry_chars, entry_rows) = tessellate_text_request(entry.text, font)?;
+        let (mesh, entry_chars, entry_rows) =
+            tessellate_text_request_with_tolerance(entry.text, font, tolerance)?;
         if vertices.len() > u32::MAX as usize {
             return Err("font-job-vertex-range");
         }
@@ -1819,6 +1917,14 @@ fn tessellate_text_request(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
 ) -> Result<(FontTesselMesh, usize, usize), &'static str> {
+    tessellate_text_request_with_tolerance(request, font, None)
+}
+
+fn tessellate_text_request_with_tolerance(
+    request: GpuFontTextRequest<'_>,
+    font: GpuFontFace,
+    tolerance: Option<f32>,
+) -> Result<(FontTesselMesh, usize, usize), &'static str> {
     let (layout, normalized, row_lengths) = normalize_text_request(request)?;
     let char_count = normalized.chars().count();
     if normalized.trim().is_empty() {
@@ -1828,13 +1934,30 @@ fn tessellate_text_request(
         return Err("text-too-long");
     }
     let rows = row_lengths.len();
-    let mesh = match layout {
-        GpuFontTextLayout::SingleLine => crate::graphics::font::tessellate_text_mesh(
+    let mesh = match (layout, tolerance) {
+        (GpuFontTextLayout::SingleLine, Some(tolerance)) => {
+            crate::graphics::font::tessellate_text_mesh_with_tolerance(
+                font.registry_name(),
+                normalized.as_str(),
+                crate::graphics::font::FONT_TESSEL_BASE_PX,
+                tolerance,
+            )
+        }
+        (GpuFontTextLayout::Rows, Some(tolerance)) => {
+            crate::graphics::font::tessellate_text_rows_mesh_with_tolerance(
+                font.registry_name(),
+                normalized.as_str(),
+                crate::graphics::font::FONT_TESSEL_BASE_PX,
+                row_lengths.as_slice(),
+                tolerance,
+            )
+        }
+        (GpuFontTextLayout::SingleLine, None) => crate::graphics::font::tessellate_text_mesh(
             font.registry_name(),
             normalized.as_str(),
             crate::graphics::font::FONT_TESSEL_BASE_PX,
         ),
-        GpuFontTextLayout::Rows => crate::graphics::font::tessellate_text_rows_mesh(
+        (GpuFontTextLayout::Rows, None) => crate::graphics::font::tessellate_text_rows_mesh(
             font.registry_name(),
             normalized.as_str(),
             crate::graphics::font::FONT_TESSEL_BASE_PX,

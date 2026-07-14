@@ -45,6 +45,24 @@ pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
     native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
 }
 
+pub(crate) fn transient_font_mesh_upload_supported(
+    vertex_count: usize,
+    index_count: usize,
+) -> bool {
+    let Some(vertex_bytes) = vertex_count.checked_mul(3 * core::mem::size_of::<f32>()) else {
+        return false;
+    };
+    let Some(index_offset) = crate::intel::align_up(vertex_bytes, 64) else {
+        return false;
+    };
+    let Some(index_bytes) = index_count.checked_mul(core::mem::size_of::<u32>()) else {
+        return false;
+    };
+    index_offset
+        .checked_add(index_bytes)
+        .is_some_and(|upload_bytes| upload_bytes <= WARM_VERTEX_BYTES)
+}
+
 /// Submit the already-tessellated font mesh at a native pixel scale.
 ///
 /// Scaling is performed by the 3D viewport after tessellation: the mesh and
@@ -77,6 +95,35 @@ pub(crate) fn submit_font_mesh_readback_once_scaled(
     Ok((render, readback))
 }
 
+/// Render one transient font mesh into a caller-sized rectangular target.
+/// The supplied pixel allocation is recycled into the completed readback so
+/// repeated shell stamps do not repeatedly allocate native-size RGBA buffers.
+pub(crate) fn submit_font_mesh_readback_once_at_extent_reusing(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+    target_width: u32,
+    target_height: u32,
+    padding_pixels: u32,
+    reusable_pixels: Vec<u8>,
+) -> Result<(RenderJokerResult, FontRenderTargetReadback), &'static str> {
+    let mut readback = Some(FontRenderTargetReadback {
+        width: 0,
+        height: 0,
+        pixels: reusable_pixels,
+    });
+    let render = submit_font_mesh_once_at_extent_inner(
+        vertices,
+        indices,
+        bounds,
+        target_width,
+        target_height,
+        padding_pixels,
+        Some(&mut readback),
+    )?;
+    Ok((render, readback.expect("font readback recycle slot")))
+}
+
 fn submit_font_mesh_once_scaled_inner(
     vertices: &[[f32; 2]],
     indices: &[u32],
@@ -84,11 +131,41 @@ fn submit_font_mesh_once_scaled_inner(
     native_scale: u32,
     readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
+    if !font_native_scale_supported(native_scale) {
+        return Err("font-native-scale-range");
+    }
+    let target_size = (FONT_STAMP_BASE_SIZE as u32)
+        .checked_mul(native_scale)
+        .ok_or("font-target-size-overflow")?;
+    submit_font_mesh_once_at_extent_inner(
+        vertices,
+        indices,
+        bounds,
+        target_size,
+        target_size,
+        target_size / 20,
+        readback,
+    )
+}
+
+fn submit_font_mesh_once_at_extent_inner(
+    vertices: &[[f32; 2]],
+    indices: &[u32],
+    bounds: (f32, f32, f32, f32),
+    target_width: u32,
+    target_height: u32,
+    padding_pixels: u32,
+    readback: Option<&mut Option<FontRenderTargetReadback>>,
+) -> Result<RenderJokerResult, &'static str> {
     if vertices.is_empty() || indices.is_empty() || !indices.len().is_multiple_of(3) {
         return Err("font-mesh-shape");
     }
-    if !font_native_scale_supported(native_scale) {
-        return Err("font-native-scale-range");
+    if target_width == 0
+        || target_height == 0
+        || target_width as usize > DRAW3D_SCENE_TARGET_WIDTH
+        || target_height as usize > DRAW3D_SCENE_TARGET_HEIGHT
+    {
+        return Err("font-target-extent-range");
     }
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -100,14 +177,25 @@ fn submit_font_mesh_once_scaled_inner(
     let (min_x, min_y, max_x, max_y) = bounds;
     let width = (max_x - min_x).max(1.0);
     let height = (max_y - min_y).max(1.0);
-    let scale = 1.8 / width.max(height);
+    let padding_pixels = padding_pixels
+        .min(target_width.saturating_sub(1) / 2)
+        .min(target_height.saturating_sub(1) / 2);
+    let content_width = target_width
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let content_height = target_height
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let pixel_scale = (content_width as f32 / width).min(content_height as f32 / height);
     let center_x = (min_x + max_x) * 0.5;
     let center_y = (min_y + max_y) * 0.5;
+    let ndc_x_scale = 2.0 * pixel_scale / target_width as f32;
+    let ndc_y_scale = 2.0 * pixel_scale / target_height as f32;
     let mut draw_vertices = Vec::with_capacity(vertices.len());
     for source in vertices {
         draw_vertices.push([
-            (source[0] - center_x) * scale,
-            (center_y - source[1]) * scale,
+            (source[0] - center_x) * ndc_x_scale,
+            (center_y - source[1]) * ndc_y_scale,
             0.5,
         ]);
     }
@@ -133,10 +221,7 @@ fn submit_font_mesh_once_scaled_inner(
         }
     }
 
-    // The validated 1..=8 range and 64px base make this multiplication bounded
-    // by FONT_PROOF_TARGET_SIZE.
-    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
-    let result = submit_render_custom_triangle_probe_locked_at_size(
+    let result = submit_render_custom_triangle_probe_locked_at_extent(
         &draw_vertices,
         Some(&draw_indices),
         None,
@@ -144,14 +229,15 @@ fn submit_font_mesh_once_scaled_inner(
         "font-tessel-once",
         "font-tessel-3d-once",
         "font-tessel-full-mesh",
-        "lyon-font-indexed-mesh/gpu-index-fetch",
+        "path-fill-indexed-mesh/gpu-index-fetch",
         TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        target_size,
+        target_width as usize,
+        target_height as usize,
         readback,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
@@ -412,7 +498,7 @@ fn submit_resident_font_mesh_inner(
     } else {
         Some([rgba.r, rgba.g, rgba.b, rgba.a])
     };
-    let result = submit_render_custom_triangle_probe_locked_at_size(
+    let result = submit_render_custom_triangle_probe_locked_at_extent(
         &[],
         None,
         Some(mesh),
@@ -427,6 +513,7 @@ fn submit_resident_font_mesh_inner(
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
+        target_size,
         target_size,
         readback,
     );
@@ -3113,7 +3200,7 @@ fn submit_render_custom_triangle_probe_locked(
     } else {
         LEGACY_PROBE_SIZE
     };
-    submit_render_custom_triangle_probe_locked_at_size(
+    submit_render_custom_triangle_probe_locked_at_extent(
         vertices,
         indices,
         None,
@@ -3129,11 +3216,12 @@ fn submit_render_custom_triangle_probe_locked(
         batch_mode,
         streamout_experiment,
         target_size,
+        target_size,
         None,
     )
 }
 
-fn submit_render_custom_triangle_probe_locked_at_size(
+fn submit_render_custom_triangle_probe_locked_at_extent(
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
     resident_mesh: Option<&ResidentFontMesh>,
@@ -3148,7 +3236,8 @@ fn submit_render_custom_triangle_probe_locked_at_size(
     front_end_contract: TriangleFrontEndContract,
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
-    target_size: usize,
+    target_width: usize,
+    target_height: usize,
     readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
@@ -3172,8 +3261,8 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         return Err("no-device");
     };
     let warm = warm_once(dev);
-    let target_pitch = target_size * core::mem::size_of::<u32>();
-    let target_bytes = target_pitch.saturating_mul(target_size);
+    let target_pitch = target_width.saturating_mul(core::mem::size_of::<u32>());
+    let target_bytes = target_pitch.saturating_mul(target_height);
     if warm.ring_len == 0
         || warm.context_len == 0
         || warm.batch_len == 0
@@ -3196,25 +3285,25 @@ fn submit_render_custom_triangle_probe_locked_at_size(
     }
 
     unsafe {
-        core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
+        core::ptr::write_bytes(warm.streamout_virt, 0, target_bytes);
         let scratch_pixels = core::slice::from_raw_parts_mut(
             warm.streamout_virt as *mut u32,
-            target_size * target_size,
+            target_width.saturating_mul(target_height),
         );
         scratch_pixels.fill(0xDEAD_BEEF);
     }
     crate::intel::dma_flush(warm.streamout_virt, target_bytes);
 
     intel_render_focus_log!(
-        "custom-triangle begin seq={} submit={} target=scratch size={}x{} native_font_scale={} backend={} blend={} sync={} front_end={} source={}\n",
+        "custom-triangle begin seq={} submit={} target=scratch size={}x{} extent_mode={} backend={} blend={} sync={} front_end={} source={}\n",
         probe_seq,
         submit_name,
-        target_size,
-        target_size,
+        target_width,
+        target_height,
         if matches!(submit_name, "font-tessel-3d-once" | "font-resident-3d") {
-            target_size / FONT_STAMP_BASE_SIZE
+            "font-native"
         } else {
-            1
+            "generic"
         },
         backend_probe_mode.label(),
         blend_mode.label(),
@@ -3227,8 +3316,8 @@ fn submit_render_custom_triangle_probe_locked_at_size(
         warm,
         GPU_VA_STREAMOUT_BASE,
         target_pitch,
-        target_size,
-        target_size,
+        target_width,
+        target_height,
         blend_mode,
         vertices,
         indices,
@@ -6632,28 +6721,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     } else {
         None
     };
-    let scratch_pixels_before = if scratch_rt_before.is_some() {
-        let mut pixels = Vec::with_capacity(
-            usize::try_from(draw.target_w.saturating_mul(draw.target_h)).unwrap_or(0),
-        );
-        for y in 0..draw.target_h {
-            for x in 0..draw.target_w {
-                let byte_offset = y
-                    .saturating_mul(draw.rt_pitch)
-                    .saturating_add(x.saturating_mul(4)) as usize;
-                if byte_offset.saturating_add(4) <= warm.streamout_len {
-                    let value = unsafe {
-                        let ptr = (warm.streamout_virt as *const u8).add(byte_offset) as *const u32;
-                        core::ptr::read_volatile(ptr)
-                    };
-                    pixels.push(value);
-                }
-            }
-        }
-        Some(pixels)
-    } else {
-        None
-    };
     let scratch_stats_before = if scratch_rt_before.is_some() {
         Some(capture_triangle_stage_stats(dev))
     } else {
@@ -6679,8 +6746,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     if let (
         Some((scratch_before, center_before, post_before, center_offset, post_offset)),
         Some(_stats_before),
-        Some(pixels_before),
-    ) = (scratch_rt_before, scratch_stats_before, scratch_pixels_before)
+    ) = (scratch_rt_before, scratch_stats_before)
     {
         let scratch_surface_bytes = (draw.rt_pitch as usize)
             .saturating_mul(draw.target_h as usize)
@@ -6698,26 +6764,21 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         let scratch_after = read_scratch_dword(0);
         let center_after = read_scratch_dword(center_offset);
         let post_after = read_scratch_dword(post_offset);
-        let mut pixels_after = Vec::with_capacity(pixels_before.len());
-        for y in 0..draw.target_h {
-            for x in 0..draw.target_w {
-                let byte_offset = y
-                    .saturating_mul(draw.rt_pitch)
-                    .saturating_add(x.saturating_mul(4)) as usize;
-                if byte_offset.saturating_add(4) <= warm.streamout_len {
-                    pixels_after.push(read_scratch_dword(byte_offset));
+        let pixel_count = usize::try_from(draw.target_w.saturating_mul(draw.target_h)).unwrap_or(0);
+        let mut changed_pixels = 0usize;
+        let mut first_changed_pixel = None;
+        for pixel_index in 0..pixel_count {
+            let byte_offset = pixel_index.saturating_mul(4);
+            if byte_offset.saturating_add(4) > scratch_surface_bytes {
+                break;
+            }
+            if read_scratch_dword(byte_offset) != 0xDEAD_BEEF {
+                changed_pixels = changed_pixels.saturating_add(1);
+                if first_changed_pixel.is_none() {
+                    first_changed_pixel = Some(pixel_index);
                 }
             }
         }
-        let changed_pixels = pixels_before
-            .iter()
-            .zip(pixels_after.iter())
-            .filter(|(before, after)| before != after)
-            .count();
-        let first_changed_pixel = pixels_before
-            .iter()
-            .zip(pixels_after.iter())
-            .position(|(before, after)| before != after);
         let delta = capture_triangle_stage_stats(dev);
         let ps_counter_accept =
             delta.ps_invocations > 0 || delta.cps_invocations > 0 || delta.ps_depth > 0;
@@ -6755,7 +6816,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             } else if gpu_mesh.is_some() {
                 "gpgpu-generated-indexed-stroke"
             } else {
-                "font-lyon-triangle"
+                "font-path-fill-triangle"
             },
         );
         if matches!(
@@ -6764,13 +6825,20 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         ) && completed
             && changed_pixels != 0
         {
-            // Read back the complete linear render target. Pixels which retain
-            // the pre-draw poison become transparent. Shader-written RGBA8
-            // pixels are copied 1:1 into the existing overlay plane: the 3D
-            // render target and the presented stamp have identical dimensions.
-            let mut visible_rgba = Vec::with_capacity(pixels_after.len().saturating_mul(4));
-            for (before, after) in pixels_before.iter().zip(pixels_after.iter()) {
-                if before == after {
+            // Read back the complete target once. It was seeded with a constant
+            // poison value, so full-size before/after vectors are redundant.
+            // Reuse the caller's allocation when this is a transient stamp.
+            let target_bytes = pixel_count.saturating_mul(4);
+            let mut visible_rgba = readback
+                .as_deref_mut()
+                .and_then(Option::take)
+                .map(|previous| previous.pixels)
+                .unwrap_or_default();
+            visible_rgba.clear();
+            visible_rgba.reserve_exact(target_bytes);
+            for pixel_index in 0..pixel_count {
+                let after = read_scratch_dword(pixel_index.saturating_mul(4));
+                if after == 0xDEAD_BEEF {
                     visible_rgba.extend_from_slice(&[0, 0, 0, 0]);
                 } else {
                     visible_rgba.extend_from_slice(&after.to_le_bytes());
@@ -6800,7 +6868,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 )
             };
             intel_render_focus_log!(
-                "{} visible-stamp presented={} captured={} pos={} source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} source=whole-linear-rgba8-readback\n",
+                "{} visible-stamp presented={} captured={} pos={} source_size={}x{} display_size={}x{} scale=1 native_1to1=1 changed_pixels={} readback_buffers=1 source=whole-linear-rgba8-readback\n",
                 submit_name,
                 presented as u8,
                 captured as u8,
