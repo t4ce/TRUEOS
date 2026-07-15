@@ -1595,49 +1595,10 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
-fn is_font_probe_submission(text: &str) -> bool {
+fn is_fnt_submission(text: &str) -> bool {
     text.split_whitespace()
         .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("font"))
-}
-
-pub(crate) fn log_utf8_text_probe(stage: &str, text: &str) {
-    let mut codepoints = AllocString::new();
-    for (index, ch) in text.chars().enumerate() {
-        if index != 0 {
-            codepoints.push(' ');
-        }
-        let _ = write!(codepoints, "U+{:04X}", u32::from(ch));
-    }
-
-    let mut utf8_hex = AllocString::new();
-    for (index, byte) in text.as_bytes().iter().copied().enumerate() {
-        if index != 0 {
-            utf8_hex.push(' ');
-        }
-        let _ = write!(utf8_hex, "{byte:02X}");
-    }
-
-    crate::log_info!(
-        target: "global";
-        "shell2: utf8-probe stage={} chars={} utf8_bytes={} codepoints=[{}] utf8_hex=[{}] text={:?}\n",
-        stage,
-        text.chars().count(),
-        text.len(),
-        codepoints,
-        utf8_hex,
-        text,
-    );
-}
-
-fn log_font_submit_marker(stage: &str, submitted: &str) {
-    if is_font_probe_submission(submitted) {
-        crate::log_info!(
-            target: "global";
-            "shell2: font-submit stage={}\n",
-            stage,
-        );
-    }
+        .is_some_and(|name| name.eq_ignore_ascii_case("fnt"))
 }
 
 fn pop_input_grapheme(line: &mut HString<MAX_LINE>) -> bool {
@@ -2134,15 +2095,19 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
-                    if is_font_probe_submission(submitted_raw) {
-                        log_utf8_text_probe("submit-decoded", submitted_raw);
+                    let fnt_submission = is_fnt_submission(submitted_raw);
+                    if fnt_submission && mode == ShellMode2::Cmd {
+                        let submitted = submitted_raw.trim();
+                        let rest = &submitted[3..];
+                        let _ = cmds::fnt::try_parse(io, rest);
+                        line.clear();
+                        out.prompt(output_mask);
+                        continue;
                     }
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
-                    log_font_submit_marker("history-recorded", submitted);
                     cmd_status_text = None;
                     out.prompt(output_mask);
-                    log_font_submit_marker("initial-prompt-written", submitted);
                     let active_slot = matrix::active_slot_id(output_mask);
                     let active_slot_lifetime_generation =
                         matrix::slot_lifetime_generation(&active_slot);
@@ -2344,15 +2309,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             );
                         } else {
                             if !submitted.is_empty() {
-                                log_font_submit_marker("transcript-record-begin", submitted);
                                 record_user_line_for_active_slot(io, submitted);
-                                log_font_submit_marker("transcript-record-end", submitted);
                                 transcript = current_transcript_for_task(io);
-                                log_font_submit_marker("transcript-render-begin", submitted);
                                 render_active_slot_content(&out, output_mask, &transcript);
-                                log_font_submit_marker("transcript-render-end", submitted);
                             }
-                            log_font_submit_marker("dispatch-begin", submitted);
                             let submit_result = handle_submit(
                                 &spawner,
                                 io,
@@ -2362,7 +2322,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 surf_prefix,
                                 submitted,
                             );
-                            log_font_submit_marker("dispatch-end", submitted);
                             match submit_result {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     set_line_width_for_output(output_mask, width);

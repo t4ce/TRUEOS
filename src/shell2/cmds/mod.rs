@@ -4,7 +4,7 @@ pub(crate) mod acpi;
 pub(crate) mod c4;
 pub(crate) mod diashow;
 pub(crate) mod disc;
-pub(crate) mod font;
+pub(crate) mod fnt;
 pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod gboy;
