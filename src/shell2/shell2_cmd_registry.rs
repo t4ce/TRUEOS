@@ -31,7 +31,7 @@ const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"str
 const TOOL_JSON_DIASHOW: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["diashow","gboy"],"description":"etc subcommand to run."},"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path for subcommand=gboy."}},"required":["subcommand"],"additionalProperties":false}"#;
-const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to echo."}},"required":["text"],"additionalProperties":false}"#;
+const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to render."},"size":{"type":"integer","minimum":1,"maximum":100,"description":"Percentage of the centered aspect-fit scanout size."},"font":{"type":"integer","minimum":1,"maximum":2,"description":"GPU font face id."},"color":{"type":"string","description":"RGBA color encoded as RRGGBBAA."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["canvas2d","canvas3d","artificial-pixel","chart","pixel","font-tessel","artifacts","smoke"],"description":"GPGPU command to run."},"canvas2d":{"type":"string","enum":["sprite","sprites64","mandel64"],"description":"Optional canvas2d mode."},"canvas3d":{"type":"string","enum":["cube","ico","para"],"description":"Optional canvas3d mode."},"probe":{"type":"string","enum":["artifact","audit","flatten","mesh","all","static","wave","plasma"],"description":"Optional staged chart, pixel, or font-tessel probe."},"duration_ms":{"type":"integer","description":"Optional probe runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional minimum launch cadence in milliseconds."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Optional canvas2d sprite descriptors per batch."},"present_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Optional present interval."},"iterations":{"type":"integer","description":"Optional canvas2d mandel64 iteration count."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
@@ -155,8 +155,8 @@ fn dispatch_fslog(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pa
     super::cmds::fslog::try_parse(io, rest)
 }
 
-fn dispatch_fnt(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::fnt::try_parse(io, rest)
+fn dispatch_fnt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::fnt::try_parse(spawner, io, rest)
 }
 
 fn dispatch_gboy(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -264,7 +264,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_fnt,
-        tool_description: Some("Echo quoted UTF-8 text."),
+        tool_description: Some("Render quoted UTF-8 text as a centered one-shot GPU stamp."),
         tool_parameters_json: Some(TOOL_JSON_FNT),
     },
     BuiltinShell2CmdEntry {
@@ -447,11 +447,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
 ];
 
 fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
-    if submitted.len() < name.len() {
-        return None;
-    }
-
-    let (head, tail) = submitted.split_at(name.len());
+    // Registry names are ASCII, but submitted text is unrestricted UTF-8.
+    // A byte length belonging to some unrelated command name can fall inside
+    // a multibyte scalar in `submitted`; checked slicing must reject that entry
+    // instead of panicking before the matching command is reached.
+    let head = submitted.get(..name.len())?;
+    let tail = submitted.get(name.len()..)?;
     if !head.eq_ignore_ascii_case(name) {
         return None;
     }
@@ -462,6 +463,25 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
     match tail.as_bytes()[0] {
         b' ' | b'\t' | b'\r' | b'\n' => Some(tail),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::starts_with_command;
+
+    #[test]
+    fn unrelated_command_length_may_land_inside_utf8() {
+        let submitted = "fnt \"中国 § العربية 🦀\"";
+
+        assert_eq!(starts_with_command(submitted, "install"), None);
+        assert_eq!(starts_with_command(submitted, "fnt"), Some(" \"中国 § العربية 🦀\""));
+    }
+
+    #[test]
+    fn command_match_still_requires_a_token_boundary() {
+        assert_eq!(starts_with_command("fntastic", "fnt"), None);
+        assert_eq!(starts_with_command("FNT\t\"§\"", "fnt"), Some("\t\"§\""));
     }
 }
 

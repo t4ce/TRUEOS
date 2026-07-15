@@ -352,6 +352,14 @@ Recommended resolution:
 - Keep the current flat RGBA path as an explicit `unlit_2d` or `unlit_layer` mode; it is useful for
   graphic compositions when named honestly.
 
+## Fresh-boot fullscreen retest — 2026-07-15
+
+The native 2560x1440 path was retested after a fresh boot with the smallest colored scene: one
+mesh, one instance, three vertices, and one triangle. The scene was accepted and vertex/clip
+counters advanced, but pixel-shader counters stayed at zero. The service reported `draws=0/1`
+after retries, and the PNG contained only the clear frame. This reproduces the failure after
+reboot, so it is not stale GPU state.
+
 ## What felt good
 
 Several parts of the API should be preserved:

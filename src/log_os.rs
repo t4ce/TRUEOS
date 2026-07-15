@@ -520,7 +520,10 @@ pub mod logtotcp {
 
         let mut tcp_handle: Option<NetHandle> = None;
         let mut conn_handle: Option<NetHandle> = None;
-        let mut pending: bool = false;
+        // A chunk is pending only until the adapter command queue accepts it.
+        // The adapter owns an internal TCP backlog after that point, so waiting
+        // for a TcpSent event here can wedge logging if that notification drops.
+        let mut pending_chunk: Option<Vec<u8>> = None;
 
         loop {
             for ev in events.drain(32) {
@@ -530,20 +533,17 @@ pub mod logtotcp {
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
                         conn_handle = Some(handle);
-                        pending = false;
+                        pending_chunk = None;
                         crate::log!(
                             "logtotcp: client connected handle={} ms={}\n",
                             handle.0,
                             Instant::now().as_millis()
                         );
                     }
-                    NetEvent::TcpSent { handle, .. } if conn_handle == Some(handle) => {
-                        pending = false;
-                    }
                     NetEvent::Closed { handle } => {
                         if conn_handle == Some(handle) {
                             conn_handle = None;
-                            pending = false;
+                            pending_chunk = None;
                             crate::log!(
                                 "logtotcp: client disconnected handle={} ms={}\n",
                                 handle.0,
@@ -561,20 +561,23 @@ pub mod logtotcp {
                 }
             }
 
-            if !pending {
-                if let Some(handle) = conn_handle {
+            if let Some(handle) = conn_handle {
+                if pending_chunk.is_none() {
                     let chunk = drain_bytes(DRAIN_CHUNK);
                     if !chunk.is_empty() {
-                        if cmds
-                            .push(NetCommand::SendTcp {
-                                handle,
-                                data: chunk,
-                            })
-                            .is_ok()
-                        {
-                            pending = true;
-                        }
+                        pending_chunk = Some(chunk);
                     }
+                }
+
+                if let Some(chunk) = pending_chunk.as_ref()
+                    && cmds
+                        .push(NetCommand::SendTcp {
+                            handle,
+                            data: chunk.clone(),
+                        })
+                        .is_ok()
+                {
+                    pending_chunk = None;
                 }
             }
 

@@ -439,6 +439,15 @@ pub(crate) fn active_terminal_hotkey_mode(output_mask: u8) -> bool {
     guard.slots[idx].hotkey_mode
 }
 
+/// Read the presentation-only hotkey flag without spinning behind a Matrix
+/// mutation running on another CPU.
+pub(crate) fn try_active_terminal_hotkey_mode(output_mask: u8) -> Option<bool> {
+    let mut guard = state().try_lock()?;
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    Some(guard.slots[idx].hotkey_mode)
+}
+
 pub(crate) fn set_active_terminal_hotkey_mode(output_mask: u8, enabled: bool) -> bool {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
@@ -738,6 +747,19 @@ pub(crate) fn visible_revision(output_mask: u8) -> u64 {
     active_view_revision_ref(&guard, output_mask)
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .wrapping_add(guard.slots[idx].revision)
+}
+
+/// Read the revision used by the paint loop without busy-spinning.  Shell2 can
+/// yield and retry when a producer is updating Matrix state on another CPU.
+pub(crate) fn try_visible_revision(output_mask: u8) -> Option<u64> {
+    let mut guard = state().try_lock()?;
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    Some(
+        active_view_revision_ref(&guard, output_mask)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(guard.slots[idx].revision),
+    )
 }
 
 pub(crate) fn history_total_lines() -> usize {

@@ -561,7 +561,9 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn prompt(&self, output_mask: u8) {
-        if active_terminal_hotkey_mode(output_mask) {
+        // Prompt painting is best-effort UI work.  Never busy-spin the async
+        // shell task if another CPU is updating Matrix state.
+        if matrix::try_active_terminal_hotkey_mode(output_mask).unwrap_or(false) {
             return;
         }
         self.move_to(PROMPT_ROW, 1);
@@ -1595,12 +1597,6 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
-fn is_fnt_submission(text: &str) -> bool {
-    text.split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("fnt"))
-}
-
 fn pop_input_grapheme(line: &mut HString<MAX_LINE>) -> bool {
     let Some((start, _)) = line.as_str().grapheme_indices(true).next_back() else {
         return false;
@@ -1740,6 +1736,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut csi_input = CsiInput::new();
     let mut text_decode = utf8::Decoder::new();
     let mut live_history_cursor: Option<usize> = None;
+    let mut input_bytes_since_yield = 0usize;
     let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
     let mut last_chrome_state = current_chrome_state(
         output_mask,
@@ -1761,7 +1758,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             continue;
         }
 
-        let matrix_revision = matrix::visible_revision(output_mask);
+        let Some(matrix_revision) = matrix::try_visible_revision(output_mask) else {
+            // A spin lock must not monopolize this executor: NetShell's TCP
+            // bridge runs cooperatively and needs a chance to drain output.
+            Timer::after(EmbassyDuration::from_millis(1)).await;
+            continue;
+        };
         if matrix_revision != last_matrix_revision {
             last_matrix_revision = matrix_revision;
             configure_output_view(&out, output_mask);
@@ -2095,15 +2097,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
-                    let fnt_submission = is_fnt_submission(submitted_raw);
-                    if fnt_submission && mode == ShellMode2::Cmd {
-                        let submitted = submitted_raw.trim();
-                        let rest = &submitted[3..];
-                        let _ = cmds::fnt::try_parse(io, rest);
-                        line.clear();
-                        out.prompt(output_mask);
-                        continue;
-                    }
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
@@ -2372,6 +2365,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     line.clear();
                     out.prompt(output_mask);
+                    input_bytes_since_yield = 0;
+                    if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+                        Timer::after(EmbassyDuration::from_millis(10)).await;
+                    } else {
+                        Timer::after(EmbassyDuration::from_micros(0)).await;
+                    }
                 }
                 0x08 | 0x7F => {
                     cmd_status_text = None;
@@ -2391,6 +2390,12 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     text_decode.reset();
                     cmd_status_text = None;
                 }
+            }
+
+            input_bytes_since_yield = input_bytes_since_yield.saturating_add(1);
+            if input_bytes_since_yield >= 64 {
+                input_bytes_since_yield = 0;
+                Timer::after(EmbassyDuration::from_micros(0)).await;
             }
         } else {
             if (output_mask & (OUTPUT_UI3_MASK | OUTPUT_NET_TCP_MASK)) == 0 {

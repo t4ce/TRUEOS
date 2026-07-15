@@ -157,9 +157,6 @@ pub async fn net_shell_task() {
         let mut ticks: u32 = 0;
         let mut logged_first_rx: bool = false;
         let mut logged_first_wire_rx: bool = false;
-        let mut pending: Option<Vec<u8>> = None;
-        let mut pending_ticks: u32 = 0;
-        let mut pending_len: usize = 0;
         let mut tx_log_budget: u32 = 16;
         let mut tcp_handle: Option<NetHandle> = None;
         let mut initial_repaint_handle: Option<NetHandle> = None;
@@ -211,9 +208,6 @@ pub async fn net_shell_task() {
                             resize_rx_probe.clear();
                             resize_query_ticks = 0;
                         }
-                        pending = None;
-                        pending_ticks = 0;
-                        pending_len = 0;
                         logged_first_rx = false;
                         logged_first_wire_rx = false;
                         tx_log_budget = 16;
@@ -358,9 +352,6 @@ pub async fn net_shell_task() {
                         if st.handle == Some(handle) {
                             st.handle = None;
                             st.rx.clear();
-                            pending = None;
-                            pending_ticks = 0;
-                            pending_len = 0;
                             if initial_repaint_handle == Some(handle) {
                                 initial_repaint_handle = None;
                                 initial_repaint_ticks = 0;
@@ -393,74 +384,50 @@ pub async fn net_shell_task() {
 
             // Flush buffered TX to the active TCP connection. Once the command is
             // queued successfully, the adapter owns those bytes.
-            if pending.is_none() {
-                let (handle, chunk) = {
-                    let st = NET_SHELL_STATE.lock();
-                    match st.handle {
-                        None => (None, Vec::new()),
-                        Some(handle) => {
-                            if st.tx.is_empty() {
-                                (Some(handle), Vec::new())
-                            } else {
-                                let mut v = Vec::with_capacity(TX_CHUNK_BYTES);
-                                for &b in st.tx.iter().take(TX_CHUNK_BYTES) {
-                                    v.push(b);
-                                }
-                                (Some(handle), v)
+            let (handle, chunk) = {
+                let st = NET_SHELL_STATE.lock();
+                match st.handle {
+                    None => (None, Vec::new()),
+                    Some(handle) => {
+                        if st.tx.is_empty() {
+                            (Some(handle), Vec::new())
+                        } else {
+                            let mut v = Vec::with_capacity(TX_CHUNK_BYTES);
+                            for &b in st.tx.iter().take(TX_CHUNK_BYTES) {
+                                v.push(b);
                             }
+                            (Some(handle), v)
                         }
-                    }
-                };
-
-                if let Some(handle) = handle
-                    && !chunk.is_empty()
-                {
-                    pending = Some(chunk.clone());
-                    pending_ticks = 0;
-                    pending_len = chunk.len();
-
-                    if tx_log_budget > 0 {
-                        tx_log_budget -= 1;
-                        crate::log!(
-                            "net-shell: tx queue handle={} len={}\n",
-                            handle.0,
-                            pending_len
-                        );
-                    }
-
-                    if cmds
-                        .push(NetCommand::SendTcp {
-                            handle,
-                            data: chunk.clone(),
-                        })
-                        .is_err()
-                    {
-                        // If the command queue is full, don't stall forever waiting for an event.
-                        pending = None;
-                        pending_ticks = 0;
-                        pending_len = 0;
-                        crate::log!("net-shell: tx queue full (dropping pending)\n");
-                    } else {
-                        let mut st = NET_SHELL_STATE.lock();
-                        for _ in 0..chunk.len() {
-                            let _ = st.tx.pop_front();
-                        }
-                        pending = None;
-                        pending_ticks = 0;
-                        pending_len = 0;
                     }
                 }
-            }
+            };
 
-            // Safety: if we somehow miss the `TcpSent` event (or the socket is briefly not-ready),
-            // don't wedge TX forever. We'll retry by clearing `pending` after a short timeout.
-            if pending.is_some() {
-                pending_ticks = pending_ticks.wrapping_add(1);
-                if pending_ticks == 250 {
-                    crate::log!("net-shell: tx stalled (pending_len={}), retrying\n", pending_len);
-                    pending = None;
-                    pending_ticks = 0;
-                    pending_len = 0;
+            if let Some(handle) = handle
+                && !chunk.is_empty()
+            {
+                let chunk_len = chunk.len();
+
+                if tx_log_budget > 0 {
+                    tx_log_budget -= 1;
+                    crate::log!("net-shell: tx queue handle={} len={}\n", handle.0, chunk_len);
+                }
+
+                if cmds
+                    .push(NetCommand::SendTcp {
+                        handle,
+                        data: chunk,
+                    })
+                    .is_err()
+                {
+                    // Bytes remain in NET_SHELL_STATE and will be retried.
+                    crate::log!("net-shell: tx queue full (will retry)\n");
+                } else {
+                    let mut st = NET_SHELL_STATE.lock();
+                    if st.handle == Some(handle) {
+                        for _ in 0..chunk_len {
+                            let _ = st.tx.pop_front();
+                        }
+                    }
                 }
             }
 
