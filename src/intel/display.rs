@@ -105,6 +105,8 @@ static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = 
 static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI3_FRAME_FLIP_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI3_FRAME_REARM_SEQ: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
 static PRIMARY_SWAP_SURFACE: Mutex<PrimarySwapSurfacePool> =
     Mutex::new(PrimarySwapSurfacePool::new());
@@ -279,6 +281,19 @@ pub(super) struct DisplayRgba8GpgpuSurface {
     pub(super) virt: *mut u8,
     pub(super) gpu: u64,
     pub(super) byte_len: usize,
+}
+
+/// Identifies the domain which completed a display frame surface.
+///
+/// CPU-written surfaces need their cached bytes flushed before display reads
+/// them. A GPU producer is responsible for completing its render-cache and
+/// command-stream visibility contract before calling commit, so walking the
+/// whole surface with CPU cache-line flushes would be both redundant and very
+/// expensive for a full-screen frame.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum DisplayFrameProducer {
+    CpuCached,
+    GpuCoherent,
 }
 
 #[derive(Copy, Clone)]
@@ -1568,6 +1583,14 @@ pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
 /// The GPGPU producer owns every pixel and the display engine consumes the
 /// native premultiplied ARGB result directly on the UI overlay plane.
 pub(super) fn ui3_frame_composition_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    acquire_ui3_frame_composition_gpgpu()
+}
+
+/// Acquires the persistent composition owner's current back surface.
+///
+/// No pixels are copied or cleared. The producer must define every pixel it
+/// wants in the completed frame, then either commit or discard this target.
+pub(super) fn acquire_ui3_frame_composition_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
     let dev = crate::intel::claimed_device()?;
     let (width, height) = active_scanout_dimensions()
         .or_else(|| {
@@ -1596,7 +1619,136 @@ pub(super) fn commit_ui3_frame_composition_gpgpu(
     target: DisplayRgba8GpgpuSurface,
     reason: &str,
 ) -> bool {
-    commit_ui3_canvas_overlay_gpgpu(target, reason)
+    // Preserve the original conservative behavior for existing callers. New
+    // persistent GPU frame owners should use the producer-aware entry point.
+    commit_ui3_frame_composition_produced(target, DisplayFrameProducer::CpuCached, reason)
+}
+
+/// Completes and presents one acquired UI3 frame-composition back surface.
+///
+/// This is the production-oriented frame boundary shared by UI3-style GPU
+/// producers. Acquisition does not copy or clear either buffer. A successful
+/// commit promotes the acquired back buffer to front; a failed commit leaves
+/// the previous complete front buffer visible.
+pub(super) fn commit_ui3_frame_composition_produced(
+    target: DisplayRgba8GpgpuSurface,
+    producer: DisplayFrameProducer,
+    reason: &str,
+) -> bool {
+    commit_ui3_canvas_overlay_produced(target, producer, reason)
+}
+
+/// Abandons an acquired composition surface without changing the visible
+/// front buffer. The same back surface can be acquired and rendered again.
+pub(super) fn discard_ui3_frame_composition_gpgpu(target: DisplayRgba8GpgpuSurface) -> bool {
+    let Some(surface) = overlay_surface_for_gpu(target.width, target.height, target.gpu) else {
+        return false;
+    };
+    if !display_gpgpu_surface_matches(target, surface) {
+        return false;
+    }
+    let pool = OVERLAY_SURFACE.lock();
+    pool.matches(surface.width, surface.height, surface.pipe)
+        && pool.front_index != Some(surface.buffer_index)
+}
+
+/// Permanently tears down the shared UI3 frame-composition owner.
+///
+/// This is deliberately stronger than discarding an incomplete frame: it
+/// disables the overlay plane, waits until scanout no longer references the
+/// front buffer, then releases both persistent surfaces. It is idempotent and
+/// safe to call when no frame has ever been acquired. If scanout cannot be
+/// proven detached, the pool is retained and the reset reports failure rather
+/// than freeing live display memory.
+pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
+    let mut owner = OVERLAY_SURFACE.lock();
+    let pool = *owner;
+    let Some(surface) = pool.surfaces.iter().flatten().copied().next() else {
+        *owner = OverlaySurfacePool::new();
+        return true;
+    };
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+
+    let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
+    let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+    let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+    let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
+    let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
+
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_before & !PLANE_CTL_ENABLE);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, 0);
+    crate::intel::mmio_write(
+        dev,
+        color_ctl_off,
+        plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque),
+    );
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, surface.pipe);
+    let (live_after, live_wait) = wait_for_plane_live(dev, plane_base, 0, 200_000);
+    let ctl_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
+    let surf_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+    let detached = (ctl_after & PLANE_CTL_ENABLE) == 0 && surf_after == 0 && live_after == 0;
+    if !detached {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: ui3-frame-owner reset deferred reason={} pipe={} slot={} ctl=0x{:08X}->0x{:08X} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={} live_wait={} potential_reason=scanout-still-references-frame-surface\n",
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            ctl_before,
+            ctl_after,
+            surf_before,
+            surf_after,
+            live_before,
+            live_after,
+            frame_before,
+            frame_after,
+            frame_wait,
+            live_wait,
+        );
+        return false;
+    }
+
+    // The plane is detached, so remove both scanout and render-context
+    // mappings before returning their backing pages to the DMA allocator.
+    // A render PPGTT unmap can legitimately report false when a surface was
+    // allocated but never submitted; the GGTT mapping always exists and is
+    // the release-safety authority here.
+    for surface in pool.surfaces.iter().flatten().copied() {
+        let _ = crate::intel::render::unmap_render_ppgtt_range(surface.gpu, surface.byte_len);
+        if !crate::intel::unmap_display_scanout_ggtt(dev, surface.byte_len, surface.gpu) {
+            crate::log_warn!(
+                target: "intel/display";
+                "intel/display: ui3-frame-owner reset deferred reason={} buffer={} gpu=0x{:X} bytes=0x{:X} potential_reason=scanout-ggtt-unmap-failed\n",
+                reason,
+                surface.buffer_index,
+                surface.gpu,
+                surface.byte_len,
+            );
+            return false;
+        }
+    }
+
+    *owner = OverlaySurfacePool::new();
+    let mut released = 0usize;
+    for surface in pool.surfaces.iter().flatten().copied() {
+        crate::dma::dealloc(surface.virt, surface.byte_len);
+        released += 1;
+    }
+    crate::log!(
+        "intel/display: ui3-frame-owner reset reason={} pipe={} slot={} released={} frame={}=>{} frame_wait={} live_wait={}\n",
+        reason,
+        surface.pipe.name,
+        surface.plane_slot,
+        released,
+        frame_before,
+        frame_after,
+        frame_wait,
+        live_wait,
+    );
+    true
 }
 
 pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayRgba8GpgpuSurface> {
@@ -1639,22 +1791,68 @@ pub(super) fn commit_ui3_canvas_overlay_gpgpu(
     target: DisplayRgba8GpgpuSurface,
     reason: &str,
 ) -> bool {
+    commit_ui3_canvas_overlay_produced(target, DisplayFrameProducer::CpuCached, reason)
+}
+
+fn commit_ui3_canvas_overlay_produced(
+    target: DisplayRgba8GpgpuSurface,
+    producer: DisplayFrameProducer,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
     let Some(surface) = overlay_surface_for_gpu(target.width, target.height, target.gpu) else {
         return false;
     };
-    if surface.virt != target.virt
-        || surface.byte_len != target.byte_len
-        || surface.pitch_bytes != target.pitch_bytes
-    {
+    if !display_gpgpu_surface_matches(target, surface) {
         return false;
     }
 
-    crate::intel::dma_flush(target.virt, target.byte_len);
+    if producer == DisplayFrameProducer::CpuCached {
+        crate::intel::dma_flush(target.virt, target.byte_len);
+    }
+    match overlay_plane_surface_flip_guard(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+        Ok(()) => return flip_overlay_plane_surface(dev, surface, reason),
+        Err(guard_reason) => {
+            let seq = UI3_FRAME_REARM_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+            if seq <= 8 || seq.is_multiple_of(60) {
+                if guard_reason == "no-complete-front" {
+                    crate::log_info!(
+                        target: "intel/display";
+                        "intel/display: ui3-frame-rearm seq={} reason={} guard={} path=full-plane-program expected=first-complete-frame\n",
+                        seq,
+                        reason,
+                        guard_reason,
+                    );
+                } else {
+                    crate::log_warn!(
+                        target: "intel/display";
+                        "intel/display: ui3-frame surface-only guard rejected seq={} reason={} guard={} path=full-plane-program potential_reason=plane-contract-changed-or-other-display-owner\n",
+                        seq,
+                        reason,
+                        guard_reason,
+                    );
+                }
+            }
+        }
+    }
     program_three_plane_stack_resources(dev, surface.pipe, reason);
     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason)
+}
+
+#[inline]
+fn display_gpgpu_surface_matches(
+    target: DisplayRgba8GpgpuSurface,
+    surface: OverlaySurface,
+) -> bool {
+    surface.virt == target.virt
+        && surface.phys == target.phys
+        && surface.gpu == target.gpu
+        && surface.width == target.width
+        && surface.height == target.height
+        && surface.byte_len == target.byte_len
+        && surface.pitch_bytes == target.pitch_bytes
 }
 
 pub(super) fn notify_primary_surface_external_write(
@@ -1870,6 +2068,7 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     dst: UiRect,
     reason: &str,
 ) -> bool {
+    let started_ns = crate::chronos::monotonic_nanos();
     let Some(primary) = *PRIMARY_SURFACE.lock() else {
         return false;
     };
@@ -1961,8 +2160,11 @@ pub(crate) fn present_ui_surface_to_primary_backing(
         notify_primary_surface_external_write(reason, rect.flush_offset, rect.flush_bytes);
     let seq = UI_SURFACE_PRIMARY_COPY_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
+        let copied_bytes = rect.row_bytes.saturating_mul(rect.height);
+        let copy_present_us =
+            crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
         crate::log!(
-            "intel/display: ui-surface-primary-copy seq={} reason={} fmt={:?} src={},{} {}x{} dst={},{} copied={}x{} presented={}\n",
+            "intel/display: ui-surface-primary-copy seq={} reason={} contract=cpu-convert-copy-to-primary zero_copy=0 fmt={:?} src={},{} {}x{} dst={},{} copied={}x{} copied_bytes=0x{:X} copy_present_us={} frame_budget_us=16667 over_budget={} presented={}\n",
             seq,
             reason,
             surface.format,
@@ -1974,6 +2176,9 @@ pub(crate) fn present_ui_surface_to_primary_backing(
             dst.y,
             rect.width,
             rect.height,
+            copied_bytes,
+            copy_present_us,
+            (copy_present_us > 16_667) as u8,
             presented as u8
         );
     }
@@ -3949,6 +4154,28 @@ fn wait_for_plane_live(
     (live, iter)
 }
 
+fn wait_for_plane_live_for(
+    dev: crate::intel::Dev,
+    plane_base: usize,
+    want_live: u32,
+    timeout_ns: u64,
+) -> (u32, usize) {
+    let started_ns = crate::chronos::monotonic_nanos();
+    let mut live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+    let mut iter = 0usize;
+    while iter < 5_000_000 && live != want_live {
+        if iter.is_multiple_of(256)
+            && crate::chronos::monotonic_nanos().saturating_sub(started_ns) >= timeout_ns
+        {
+            break;
+        }
+        core::hint::spin_loop();
+        live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+        iter += 1;
+    }
+    (live, iter)
+}
+
 fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
     let format = match PRIMARY_FORMAT_PROBE_MODE {
         PRIMARY_FORMAT_PROBE_XBGR => PrimaryPlaneSourceFormat::Xbgr8888,
@@ -4108,6 +4335,24 @@ fn program_plane_watermark_boot_safe(dev: crate::intel::Dev, plane_base: usize, 
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_TRANS_OFF, 0);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_SAGV_OFF, 0);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF, 0);
+}
+
+fn plane_watermarks_are_boot_safe(dev: crate::intel::Dev, plane_base: usize) -> bool {
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF)
+        != PLANE_WM_LEVEL0_BOOT_SAFE
+    {
+        return false;
+    }
+    let mut level = 1usize;
+    while level < UNI_PLANE_WM_LEVELS {
+        if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF + level * 4) != 0 {
+            return false;
+        }
+        level += 1;
+    }
+    crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_TRANS_OFF) == 0
+        && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_OFF) == 0
+        && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_SAGV_TRANS_OFF) == 0
 }
 
 fn program_plane_buf_cfg(
@@ -5409,6 +5654,173 @@ fn overlay_plane_needs_rearm(
         || surf != want_surf
         || surf_live != want_surf
         || (color_ctl & PLANE_COLOR_ALPHA_MASK) != (want_color_ctl & PLANE_COLOR_ALPHA_MASK)
+}
+
+fn overlay_plane_surface_flip_guard(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    pos_x: u32,
+    pos_y: u32,
+    alpha: OverlayAlphaMode,
+) -> Result<(), &'static str> {
+    let front_reg = {
+        let pool = OVERLAY_SURFACE.lock();
+        if !pool.matches(surface.width, surface.height, surface.pipe) {
+            return Err("surface-pool-shape");
+        }
+        let Some(front_index) = pool.front_index else {
+            return Err("no-complete-front");
+        };
+        let Some(front) = pool.surfaces[front_index] else {
+            return Err("front-metadata-missing");
+        };
+        u32::try_from(front.gpu).map_err(|_| "front-address-range")?
+    };
+    let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
+        return Err("stride-range");
+    };
+    let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
+    let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
+    let resources = [
+        (
+            overlay_plane_base(surface.pipe, 0),
+            PLANE_DBUF_PRIMARY_STACK_START,
+            PLANE_DBUF_PRIMARY_STACK_END,
+        ),
+        (
+            overlay_plane_base(surface.pipe, UI_OVERLAY_PLANE_SLOT),
+            PLANE_DBUF_UI_OVERLAY_STACK_START,
+            PLANE_DBUF_UI_OVERLAY_STACK_END,
+        ),
+        (
+            overlay_plane_base(surface.pipe, VIDEO_NV12_PLANE_SLOT),
+            PLANE_DBUF_VIDEO_NV12_UV_STACK_START,
+            PLANE_DBUF_VIDEO_NV12_UV_STACK_END,
+        ),
+        (
+            overlay_plane_base(surface.pipe, VIDEO_NV12_Y_PLANE_SLOT),
+            PLANE_DBUF_VIDEO_NV12_Y_STACK_START,
+            PLANE_DBUF_VIDEO_NV12_Y_STACK_END,
+        ),
+    ];
+    if !resources.iter().all(|(base, start, end)| {
+        plane_watermarks_are_boot_safe(dev, *base)
+            && crate::intel::mmio_read(dev, *base + UNI_PLANE_BUF_CFG_OFF)
+                == plane_buf_cfg_value(*start, *end)
+    }) {
+        return Err("dbuf-or-watermark-state");
+    }
+    if ctl != overlay_plane_ctl_enabled(ctl) {
+        return Err("plane-control");
+    }
+    if color_ctl != plane_color_ctl_alpha(color_ctl, alpha) {
+        return Err("plane-color-alpha");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF) != stride_reg {
+        return Err("plane-stride");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_POS_OFF)
+        != plane_pos_reg_value(pos_x, pos_y)
+    {
+        return Err("plane-position");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SIZE_OFF)
+        != plane_size_reg_value(surface.width, surface.height)
+    {
+        return Err("plane-size");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_OFFSET_OFF) != 0 {
+        return Err("plane-offset");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYVAL_OFF) != 0
+        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF) != 0
+        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF) != 0xFF00_0000
+    {
+        return Err("plane-color-key");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_DIST_OFF) != 0
+        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF) != 0
+    {
+        return Err("plane-aux-surface");
+    }
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF) != front_reg
+        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF) != front_reg
+    {
+        return Err("front-ownership");
+    }
+    Ok(())
+}
+
+/// Steady-state FRAME presentation changes only the surface address. Plane
+/// format, alpha, geometry, DBUF allocation, and watermarks remain owned by
+/// the established UI3 frame configuration.
+fn flip_overlay_plane_surface(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    reason: &str,
+) -> bool {
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
+        return false;
+    };
+    let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
+    let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
+    let frame_off = PIPE_FRMCOUNT_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
+    let frame_before = crate::intel::mmio_read(dev, frame_off);
+    let started_ns = crate::chronos::monotonic_nanos();
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
+    // SURFLIVE is the actual ownership proof. Use elapsed time rather than a
+    // CPU-speed-dependent spin count, with enough room for one 60 Hz latch.
+    let (live_after, live_iters) =
+        wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
+    let frame_after = crate::intel::mmio_read(dev, frame_off);
+    let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+    let ok = live_after == surface_reg;
+    if ok {
+        mark_overlay_surface_front(surface);
+    }
+    let seq = UI3_FRAME_FLIP_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if !ok {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: ui3-frame-flip failed seq={} reason={} path=surface-only pipe={} slot={} buffer={} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} frame={}=>{} live_iters={} commit_us={} timeout_us=25000 potential_reason=surface-latch-missed-or-plane-ownership-changed action=retain-last-confirmed-front\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            surface.buffer_index,
+            surf_before,
+            surface_reg,
+            live_before,
+            live_after,
+            frame_before,
+            frame_after,
+            live_iters,
+            elapsed_us,
+        );
+    } else if seq <= 8 || seq.is_multiple_of(60) {
+        crate::log_info!(
+            target: "intel/display";
+            "intel/display: ui3-frame-flip seq={} reason={} path=surface-only pipe={} slot={} buffer={} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} frame={}=>{} frame_advanced={} live_iters={} commit_us={} timeout_us=25000 ok={} preserved=ctl,stride,pos,size,color,dbuf,watermarks\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            surface.buffer_index,
+            surf_before,
+            surface_reg,
+            live_before,
+            live_after,
+            frame_before,
+            frame_after,
+            (frame_after != frame_before) as u8,
+            live_iters,
+            elapsed_us,
+            ok as u8,
+        );
+    }
+    ok
 }
 
 fn arm_overlay_plane(

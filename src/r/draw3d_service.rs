@@ -36,6 +36,7 @@ static SCENE_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_GEOMETRY_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_CAMERA_REVISION: AtomicU64 = AtomicU64::new(1);
 static LOCAL_DISPLAY_VIEW_REVISION: AtomicU64 = AtomicU64::new(1);
+static SCENE_PERMANENT_RESET_REVISION: AtomicU64 = AtomicU64::new(0);
 static SCENE_CAMERA_EPOCH_NS: AtomicU64 = AtomicU64::new(0);
 static SCENE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -130,8 +131,10 @@ fn cache_screenshot_frame(result: &mut crate::intel::render::ResidentSceneFrameR
 }
 
 fn request_render_image() -> RenderImage {
-    capture_screenshot_view();
-    let latest = LAST_SCREENSHOT_FRAME.lock().clone();
+    let request_started_ns = crate::chronos::monotonic_nanos();
+    let captured = capture_screenshot_view();
+    let capture_complete_ns = crate::chronos::monotonic_nanos();
+    let latest = captured.then(|| LAST_SCREENSHOT_FRAME.lock().clone()).flatten();
     if let Some(frame) = latest {
         let stride = usize::try_from(frame.width)
             .ok()
@@ -144,6 +147,16 @@ fn request_render_image() -> RenderImage {
                 stride,
             ) {
                 Ok(bytes) => {
+                    crate::log_info!(
+                        target: "draw3d";
+                        "draw3d: screenshot profile capture_us={} encode_us={} total_us={} fresh=1 format=png size={}x{} bytes={}\n",
+                        capture_complete_ns.saturating_sub(request_started_ns) / 1_000,
+                        crate::chronos::monotonic_nanos().saturating_sub(capture_complete_ns) / 1_000,
+                        crate::chronos::monotonic_nanos().saturating_sub(request_started_ns) / 1_000,
+                        frame.width,
+                        frame.height,
+                        bytes.len(),
+                    );
                     return RenderImage {
                         format: ImageFormat::Png,
                         width: frame.width,
@@ -238,6 +251,7 @@ fn apply_command(
     SCENE_RUNNING.store(scene.is_running(), Ordering::Release);
     if permanent_stop {
         *LAST_SCREENSHOT_FRAME.lock() = None;
+        SCENE_PERMANENT_RESET_REVISION.fetch_add(1, Ordering::AcqRel);
     }
     if outcome.affected != 0 {
         if visual_changed {
@@ -252,6 +266,23 @@ fn apply_command(
         }
     }
     Ok(outcome)
+}
+
+fn submit_local_scene_frame(
+    owner: &mut Option<crate::intel::render::ResidentSceneFrameOwner>,
+    draws: &[crate::intel::render::ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
+    if owner.is_none() {
+        *owner = Some(crate::intel::render::ResidentSceneFrameOwner::new()?);
+    }
+    crate::intel::render::submit_resident_triangle_scene_frame(
+        owner.as_mut().ok_or("scene-frame-owner")?,
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+    )
 }
 
 fn projected_scene_for_camera(camera: ViewCamera) -> Vec<ProjectedMesh> {
@@ -370,11 +401,12 @@ fn sync_render_jobs(
     first_error.map_or(Ok(()), Err)
 }
 
-fn capture_screenshot_view() {
+fn capture_screenshot_view() -> bool {
     if !SCENE_RUNNING.load(Ordering::Acquire) {
-        return;
+        return false;
     }
 
+    let capture_revision = SCENE_REVISION.load(Ordering::Acquire);
     let now_ns = crate::chronos::monotonic_nanos();
     let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
     let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f32 / 1_000_000_000.0;
@@ -401,7 +433,7 @@ fn capture_screenshot_view() {
             "draw3d: screenshot residency failed error={}\n",
             error
         );
-        return;
+        return false;
     }
 
     let capture = {
@@ -422,25 +454,41 @@ fn capture_screenshot_view() {
         Ok(mut result)
             if result.completed_draws == result.requested_draws && result.rgba.is_some() =>
         {
+            if SCENE_REVISION.load(Ordering::Acquire) != capture_revision {
+                crate::log_warn!(
+                    target: "draw3d";
+                    "draw3d: screenshot capture discarded revision={} potential_reason=scene-mutated-during-capture\n",
+                    capture_revision,
+                );
+                return false;
+            }
             cache_screenshot_frame(&mut result);
+            true
         }
-        Ok(result) => crate::log_warn!(
-            target: "draw3d";
-            "draw3d: screenshot capture incomplete draws={}/{}\n",
-            result.completed_draws,
-            result.requested_draws
-        ),
-        Err(error) => crate::log_warn!(
-            target: "draw3d";
-            "draw3d: screenshot capture failed error={}\n",
-            error
-        ),
+        Ok(result) => {
+            crate::log_warn!(
+                target: "draw3d";
+                "draw3d: screenshot capture incomplete draws={}/{}\n",
+                result.completed_draws,
+                result.requested_draws
+            );
+            false
+        }
+        Err(error) => {
+            crate::log_warn!(
+                target: "draw3d";
+                "draw3d: screenshot capture failed error={}\n",
+                error
+            );
+            false
+        }
     }
 }
 
 #[embassy_executor::task]
 pub async fn draw3d_render_task() {
     let mut jobs = Vec::new();
+    let mut frame_owner = None;
     let mut resident_revision = 0u64;
     let mut resident_geometry_revision = 0u64;
     let mut rendered_revision = 0u64;
@@ -457,6 +505,9 @@ pub async fn draw3d_render_task() {
     let mut residency_ready = false;
     let mut was_running = false;
     let mut clear_rgba = None;
+    let mut scene_prepare_seq = 0u64;
+    let mut observed_permanent_reset_revision =
+        SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
 
     let (target_width, target_height) = crate::intel::render::resident_scene_target_dimensions();
     let cpu_slot = crate::cpu::CpuProfile::current().map_or(u32::MAX, |profile| profile.slot());
@@ -471,6 +522,27 @@ pub async fn draw3d_render_task() {
     loop {
         next_frame += EmbassyDuration::from_micros(FRAME_PERIOD_US);
         let running = SCENE_RUNNING.load(Ordering::Acquire);
+        let permanent_reset_revision = SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
+        let permanent_reset = permanent_reset_revision != observed_permanent_reset_revision;
+        if permanent_reset {
+            let reset = crate::intel::render::reset_resident_triangle_scene_frame_owner(
+                &mut frame_owner,
+            );
+            if reset {
+                observed_permanent_reset_revision = permanent_reset_revision;
+                crate::log_info!(
+                    target: "draw3d";
+                    "draw3d: permanent scene-frame reset revision={} complete=1 action=release-overlay-and-render-state\n",
+                    permanent_reset_revision,
+                );
+            } else {
+                crate::log_warn!(
+                    target: "draw3d";
+                    "draw3d: permanent scene-frame reset revision={} complete=0 potential_reason=scanout-or-render-mapping-still-live action=retry-next-frame\n",
+                    permanent_reset_revision,
+                );
+            }
+        }
         let revision = SCENE_REVISION.load(Ordering::Acquire);
         let geometry_revision = SCENE_GEOMETRY_REVISION.load(Ordering::Acquire);
         let local_view_revision = LOCAL_DISPLAY_VIEW_REVISION.load(Ordering::Acquire);
@@ -508,16 +580,39 @@ pub async fn draw3d_render_task() {
             let next_clear_rgba = scene_clear_rgba();
             clear_rgba = next_clear_rgba;
             let had_jobs = !jobs.is_empty();
-            let sync_result =
-                if geometry_revision != resident_geometry_revision || view_changed || animate_frame
-                {
-                    sync_render_jobs(&mut jobs, projected_scene_for_camera(frame_camera), true)
-                } else {
-                    refresh_render_job_colors(&mut jobs);
-                    Ok(())
-                };
+            let rebuild_geometry =
+                geometry_revision != resident_geometry_revision || view_changed || animate_frame;
+            let prepare_started_ns = crate::chronos::monotonic_nanos();
+            let (sync_result, projection_complete_ns) = if rebuild_geometry {
+                let projected = projected_scene_for_camera(frame_camera);
+                let projection_complete_ns = crate::chronos::monotonic_nanos();
+                (
+                    sync_render_jobs(&mut jobs, projected, true),
+                    projection_complete_ns,
+                )
+            } else {
+                refresh_render_job_colors(&mut jobs);
+                (Ok(()), prepare_started_ns)
+            };
+            let prepare_complete_ns = crate::chronos::monotonic_nanos();
             match sync_result {
                 Ok(()) => {
+                    scene_prepare_seq = scene_prepare_seq.saturating_add(1);
+                    if scene_prepare_seq <= 8 || scene_prepare_seq.is_multiple_of(60) {
+                        crate::log_info!(
+                            target: "draw3d";
+                            "draw3d-scene-prepare seq={} revision={} geometry_revision={} jobs={} rebuild={} orbit_frame={} projection_us={} residency_us={} total_us={}\n",
+                            scene_prepare_seq,
+                            revision,
+                            geometry_revision,
+                            jobs.len(),
+                            rebuild_geometry as u8,
+                            animate_frame as u8,
+                            projection_complete_ns.saturating_sub(prepare_started_ns) / 1_000,
+                            prepare_complete_ns.saturating_sub(projection_complete_ns) / 1_000,
+                            prepare_complete_ns.saturating_sub(prepare_started_ns) / 1_000,
+                        );
+                    }
                     resident_revision = revision;
                     resident_geometry_revision = geometry_revision;
                     resident_view_key = desired_view_key;
@@ -533,7 +628,8 @@ pub async fn draw3d_render_task() {
                     );
                     if running && had_jobs && jobs.is_empty() {
                         if let Ok(result) =
-                            crate::intel::render::submit_resident_triangle_scene_frame(
+                            submit_local_scene_frame(
+                                &mut frame_owner,
                                 &[],
                                 clear_rgba,
                                 false,
@@ -562,20 +658,25 @@ pub async fn draw3d_render_task() {
         }
 
         if was_running && !running {
-            let cleared =
-                crate::intel::render::submit_resident_triangle_scene_frame(&[], None, false)
+            let cleared = if permanent_reset {
+                true
+            } else {
+                submit_local_scene_frame(&mut frame_owner, &[], None, false)
                     .map(|result| result.presented)
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+            };
             crate::log_info!(
                 target: "draw3d";
-                "draw3d: scene stopped revision={} resident_jobs={} overlay_cleared={}\n",
+                "draw3d: scene stopped revision={} resident_jobs={} overlay_cleared={} permanent_reset={}\n",
                 resident_revision,
                 jobs.len(),
-                cleared as u8
+                cleared as u8,
+                permanent_reset as u8,
             );
         } else if !was_running && running {
             if jobs.is_empty()
-                && let Ok(result) = crate::intel::render::submit_resident_triangle_scene_frame(
+                && let Ok(result) = submit_local_scene_frame(
+                    &mut frame_owner,
                     &[],
                     clear_rgba,
                     false,
@@ -615,7 +716,8 @@ pub async fn draw3d_render_task() {
                 })
                 .collect::<Vec<_>>();
             let diagnostic_submit = render_retry_count == RENDER_STALL_WARN_ATTEMPTS;
-            match crate::intel::render::submit_resident_triangle_scene_frame(
+            match submit_local_scene_frame(
+                &mut frame_owner,
                 &draws,
                 clear_rgba,
                 diagnostic_submit,
@@ -655,36 +757,30 @@ pub async fn draw3d_render_task() {
                                 result.requested_draws
                             );
                         } else if render_retry_count == RENDER_STALL_WARN_ATTEMPTS {
-                            if let Some(job) = jobs.get(result.completed_draws) {
-                                crate::log_warn!(
-                                    target: "draw3d";
-                                    "draw3d: frame stalled revision={} attempts={} draws={}/{} first_unretired_instance={} first_unretired_mesh={} triangles={} screen_equivalents={:.2} potential_reason={} action=retain-last-complete-frame-and-retry advice=split-high-coverage-mesh diagnostics=next-attempt\n",
-                                    resident_revision,
-                                    render_retry_count,
-                                    result.completed_draws,
-                                    result.requested_draws,
-                                    job.instance_id,
-                                    job.mesh_id,
-                                    job.triangle_count,
-                                    job.projected_coverage,
-                                    if job.projected_coverage
-                                        >= PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS
-                                    {
-                                        "high-screen-coverage-or-overdraw-in-one-submit"
-                                    } else {
-                                        "gpu-submit-timeout-or-front-end-stall"
-                                    }
-                                );
-                            } else {
-                                crate::log_warn!(
-                                    target: "draw3d";
-                                    "draw3d: frame stalled revision={} attempts={} draws={}/{} potential_reason=present-commit-did-not-complete action=retain-last-complete-frame-and-retry diagnostics=next-attempt\n",
-                                    resident_revision,
-                                    render_retry_count,
-                                    result.completed_draws,
-                                    result.requested_draws
-                                );
-                            }
+                            let total_triangles = jobs
+                                .iter()
+                                .fold(0usize, |sum, job| sum.saturating_add(job.triangle_count));
+                            let total_screen_equivalents = jobs
+                                .iter()
+                                .map(|job| job.projected_coverage)
+                                .sum::<f32>();
+                            crate::log_warn!(
+                                target: "draw3d";
+                                "draw3d: frame stalled revision={} attempts={} draws={}/{} triangles={} screen_equivalents={:.2} submission=one-scene-batch potential_reason={} action=retain-last-complete-frame-and-retry diagnostics=next-attempt\n",
+                                resident_revision,
+                                render_retry_count,
+                                result.completed_draws,
+                                result.requested_draws,
+                                total_triangles,
+                                total_screen_equivalents,
+                                if total_screen_equivalents
+                                    >= PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS
+                                {
+                                    "high-frame-overdraw-or-gpu-batch-timeout"
+                                } else {
+                                    "gpu-batch-timeout-or-front-end-stall"
+                                },
+                            );
                         } else if render_retry_count.is_multiple_of(RENDER_RETRY_TRACE_INTERVAL) {
                             crate::log_trace!(
                                 target: "draw3d";

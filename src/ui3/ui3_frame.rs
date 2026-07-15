@@ -569,11 +569,19 @@ fn log_present_stats(count: u64, frame_id: u32, frame: Ui3Frame, path: UiPresent
     if count > 8 && count % 60 != 0 {
         return;
     }
+    let contract = match path {
+        UiPresentPath::PlaneSourceOffset => "plane-source-offset",
+        UiPresentPath::PrimarySwapKernelBlit => "primary-swap-kernel-copy",
+        UiPresentPath::KernelBlit => "custom-kernel-copy-to-primary",
+        UiPresentPath::CpuCopy => "cpu-copy-to-primary",
+    };
     crate::log!(
-        "ui3/frame: present#{} frame={} path={:?} size={}x{} dst={},{} begin={} end={} sprite_calls={} sprite_bytes={} sprite_ms={} sprite_avg_us={} sprite_gpu_calls={} sprite_gpu_descs={} sprite_gpu_fallbacks={} sprite_gpu_tiled_quads={} sprite_gpu_tiled_descs={} sprite_gpu_order_groups={} solid_calls={} solid_bytes={} solid_ms={} solid_avg_us={} begin_ms={} present_flush_ms={} present_surface_ms={} present_avg_ms={} commit_ms={} target_switches={} offscreen_allocs={} sprite_misses={}\n",
+        "ui3/frame: present#{} frame={} path={:?} contract={} zero_copy={} size={}x{} dst={},{} begin={} end={} sprite_calls={} sprite_bytes={} sprite_ms={} sprite_avg_us={} sprite_gpu_calls={} sprite_gpu_descs={} sprite_gpu_fallbacks={} sprite_gpu_tiled_quads={} sprite_gpu_tiled_descs={} sprite_gpu_order_groups={} solid_calls={} solid_bytes={} solid_ms={} solid_avg_us={} begin_ms={} present_flush_ms={} present_surface_ms={} present_avg_ms={} commit_ms={} target_switches={} offscreen_allocs={} sprite_misses={}\n",
         count,
         frame_id,
         path,
+        contract,
+        matches!(path, UiPresentPath::PlaneSourceOffset) as u8,
         frame.width,
         frame.height,
         frame.x.max(0),

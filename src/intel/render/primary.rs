@@ -266,6 +266,171 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) rgba: [u8; 4],
 }
 
+static DRAW3D_FRAME_PROFILE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Persistent render state owned by the single Draw3D scene service.
+///
+/// Geometry remains scene-owned in its resident meshes. This allocation holds
+/// the per-object specialized shader/state records which must coexist until a
+/// complete scene batch retires; it is deliberately reset only by a permanent
+/// EndScene.
+pub(crate) struct ResidentSceneFrameOwner {
+    state_phys: u64,
+    state_virt: *mut u8,
+    state_mapped: bool,
+    target_mappings: [Option<ResidentSceneTargetMapping>; 2],
+}
+
+#[derive(Copy, Clone)]
+struct ResidentSceneTargetMapping {
+    gpu: u64,
+    phys: u64,
+    bytes: usize,
+}
+
+impl ResidentSceneFrameOwner {
+    pub(crate) fn new() -> Result<Self, &'static str> {
+        let dev = crate::intel::claimed_device().ok_or("no-device")?;
+        let warm = warm_once(dev);
+        if render_ppgtt_pml4_phys() == 0 || warm.batch_len == 0 {
+            return Err("render-ppgtt");
+        }
+        let Some((state_phys, state_virt)) =
+            crate::dma::alloc(DRAW3D_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
+        else {
+            return Err("scene-frame-state-alloc");
+        };
+        unsafe {
+            core::ptr::write_bytes(state_virt, 0, DRAW3D_SCENE_STATE_BYTES);
+        }
+        crate::intel::dma_flush(state_virt, DRAW3D_SCENE_STATE_BYTES);
+        if !map_render_ppgtt_range(
+            GPU_VA_DRAW3D_SCENE_STATE_BASE,
+            state_phys,
+            DRAW3D_SCENE_STATE_BYTES,
+        ) {
+            crate::dma::dealloc(state_virt, DRAW3D_SCENE_STATE_BYTES);
+            return Err("scene-frame-state-map");
+        }
+        crate::log!(
+            "draw3d-frame-owner: online state_gpu=0x{:X} bytes=0x{:X} slots={} submission=one-scene-batch\n",
+            GPU_VA_DRAW3D_SCENE_STATE_BASE,
+            DRAW3D_SCENE_STATE_BYTES,
+            DRAW3D_SCENE_MAX_DRAWS + 1,
+        );
+        Ok(Self {
+            state_phys,
+            state_virt,
+            state_mapped: true,
+            target_mappings: [None; 2],
+        })
+    }
+
+    fn ensure_target_mapped(
+        &mut self,
+        target: crate::intel::display::DisplayRgba8GpgpuSurface,
+    ) -> bool {
+        if self.target_mappings.iter().flatten().any(|mapping| {
+            mapping.gpu == target.gpu
+                && mapping.phys == target.phys
+                && mapping.bytes == target.byte_len
+        }) {
+            return true;
+        }
+
+        if let Some(slot) = self
+            .target_mappings
+            .iter_mut()
+            .find(|mapping| mapping.is_some_and(|mapping| mapping.gpu == target.gpu))
+        {
+            let old = slot.take().expect("checked scene target mapping");
+            if !unmap_render_ppgtt_range(old.gpu, old.bytes) {
+                *slot = Some(old);
+                return false;
+            }
+        }
+        if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
+            return false;
+        }
+        let Some(slot) = self.target_mappings.iter_mut().find(|mapping| mapping.is_none()) else {
+            let _ = unmap_render_ppgtt_range(target.gpu, target.byte_len);
+            return false;
+        };
+        *slot = Some(ResidentSceneTargetMapping {
+            gpu: target.gpu,
+            phys: target.phys,
+            bytes: target.byte_len,
+        });
+        true
+    }
+
+    fn state_warm(
+        &self,
+        warm: RenderWarmState,
+        slot: usize,
+    ) -> Result<(RenderWarmState, u64), &'static str> {
+        if !self.state_mapped || slot > DRAW3D_SCENE_MAX_DRAWS {
+            return Err("scene-frame-state-slot");
+        }
+        let offset = slot
+            .checked_mul(DRAW3D_SCENE_STATE_SLOT_BYTES)
+            .ok_or("scene-frame-state-slot")?;
+        let state_gpu = GPU_VA_DRAW3D_SCENE_STATE_BASE + offset as u64;
+        let state_warm = RenderWarmState {
+            draw_state_phys: self.state_phys + offset as u64,
+            draw_state_virt: unsafe { self.state_virt.add(offset) },
+            draw_state_len: DRAW3D_SCENE_STATE_SLOT_BYTES,
+            ..warm
+        };
+        Ok((state_warm, state_gpu))
+    }
+
+    fn release(&mut self) -> bool {
+        if !self.state_mapped {
+            return true;
+        }
+        if !unmap_render_ppgtt_range(
+            GPU_VA_DRAW3D_SCENE_STATE_BASE,
+            DRAW3D_SCENE_STATE_BYTES,
+        ) {
+            crate::log_warn!(
+                target: "draw3d";
+                "draw3d-frame-owner: reset deferred state_gpu=0x{:X} bytes=0x{:X} potential_reason=render-ppgtt-still-mapped\n",
+                GPU_VA_DRAW3D_SCENE_STATE_BASE,
+                DRAW3D_SCENE_STATE_BYTES,
+            );
+            return false;
+        }
+        crate::dma::dealloc(self.state_virt, DRAW3D_SCENE_STATE_BYTES);
+        self.state_mapped = false;
+        self.state_virt = core::ptr::null_mut();
+        crate::log!("draw3d-frame-owner: state released\n");
+        true
+    }
+}
+
+impl Drop for ResidentSceneFrameOwner {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
+/// Full scene-frame reset used only by permanent EndScene.
+pub(crate) fn reset_resident_triangle_scene_frame_owner(
+    owner: &mut Option<ResidentSceneFrameOwner>,
+) -> bool {
+    let display_reset =
+        crate::intel::display::reset_ui3_frame_composition_gpgpu("draw3d-permanent-stop");
+    let state_reset = match owner.as_mut() {
+        Some(owner) => owner.release(),
+        None => true,
+    };
+    if state_reset {
+        *owner = None;
+    }
+    display_reset && state_reset
+}
+
 #[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
@@ -291,16 +456,322 @@ pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
 /// display target. Screenshot conversion is deliberately excluded from this
 /// path.
 pub(crate) fn submit_resident_triangle_scene_frame(
+    owner: &mut ResidentSceneFrameOwner,
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_frame_to(
-        draws,
-        clear_rgba,
-        diagnostic_logs,
-        ResidentSceneFrameDestination::LocalDisplay,
-    )
+    submit_resident_triangle_scene_frame_batched(owner, draws, clear_rgba, diagnostic_logs)
+}
+
+fn stage_resident_scene_secondary(
+    warm: RenderWarmState,
+    state_warm: RenderWarmState,
+    state_gpu: u64,
+    mut draw: TriangleDrawPrep,
+    blend_mode: TriangleBlendProbeMode,
+    rgba: [u8; 4],
+    secondary_index: usize,
+) -> Result<usize, &'static str> {
+    draw.state_gpu_addr = state_gpu;
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    let shader_layout =
+        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
+    let probe_state = write_triangle_probe_state(
+        state_warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        BackendProbeMode::MesaLike,
+    )?;
+
+    let batch_offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+        .checked_add(
+            secondary_index
+                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .ok_or("scene-frame-batch-slot")?,
+        )
+        .ok_or("scene-frame-batch-slot")?;
+    let batch_end = batch_offset
+        .checked_add(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+        .ok_or("scene-frame-batch-slot")?;
+    if batch_end > warm.batch_len {
+        return Err("scene-frame-batch-capacity");
+    }
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt.add(batch_offset) as *mut u32,
+            DRAW3D_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    let bytes = encode_triangle_probe_batch(
+        "draw3d-scene",
+        batch,
+        state_warm,
+        draw,
+        blend_mode,
+        pipeline,
+        shader_layout,
+        probe_state,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
+        RCS_EXEC_RESULT_DONE,
+        TriangleBatchMode::Draw,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
+    )?;
+    crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
+    Ok(bytes)
+}
+
+fn encode_resident_scene_primary_batch(
+    warm: RenderWarmState,
+    secondary_count: usize,
+) -> Result<usize, &'static str> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt as *mut u32,
+            DRAW3D_SCENE_PRIMARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut cursor = 0usize;
+    let mut push = |value: u32| -> Result<(), &'static str> {
+        let Some(slot) = batch.get_mut(cursor) else {
+            return Err("scene-frame-primary-batch-exhausted");
+        };
+        *slot = value;
+        cursor += 1;
+        Ok(())
+    };
+
+    for secondary_index in 0..secondary_count {
+        let offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+            .checked_add(
+                secondary_index
+                    .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                    .ok_or("scene-frame-batch-slot")?,
+            )
+            .ok_or("scene-frame-batch-slot")?;
+        let gpu = GPU_VA_BATCH_BASE + offset as u64;
+        push(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT | MI_BATCH_2ND_LEVEL)?;
+        push(gpu as u32)?;
+        push((gpu >> 32) as u32)?;
+    }
+
+    let completion_gpu =
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
+    push(MI_STORE_DATA_IMM_GGTT_DW1)?;
+    push(completion_gpu as u32)?;
+    push((completion_gpu >> 32) as u32)?;
+    push(RCS_EXEC_RESULT_SCENE_FRAME_DONE)?;
+    push(MI_BATCH_BUFFER_END)?;
+    push(MI_NOOP)?;
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+fn submit_resident_triangle_scene_frame_batched(
+    owner: &mut ResidentSceneFrameOwner,
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    const CLEAR_TRIANGLE: [[f32; 3]; 3] =
+        [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+    if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
+        return Err("scene-frame-draw-limit");
+    }
+    if PRIMARY_PROBE_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("in-flight");
+    }
+    let _summary_only = (!diagnostic_logs).then(RenderSummaryOnlyGuard::enter);
+    let frame_started_ns = crate::chronos::monotonic_nanos();
+
+    let result = (|| {
+        let Some(dev) = crate::intel::claimed_device() else {
+            return Err("no-device");
+        };
+        let warm = warm_once(dev);
+        if !owner.state_mapped {
+            return Err("scene-frame-owner-reset");
+        }
+        if !forcewake_render_acquire(warm) {
+            return Err("forcewake");
+        }
+        if !ensure_smoke_buffers_mapped(dev, warm) {
+            return Err("render-map");
+        }
+
+        let (target_width, target_height) = resident_scene_target_dimensions();
+        let target_pitch = target_width * core::mem::size_of::<u32>();
+        let target_bytes = target_pitch * target_height;
+        let target = crate::intel::display::acquire_ui3_frame_composition_gpgpu()
+            .ok_or("ui3-frame-target")?;
+        if target.width as usize != target_width
+            || target.height as usize != target_height
+            || target.pitch_bytes as usize != target_pitch
+            || target.byte_len < target_bytes
+            || target.virt.is_null()
+        {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            return Err("ui3-frame-target-shape");
+        }
+        if !owner.ensure_target_mapped(target) {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            return Err("ui3-frame-target-map");
+        }
+        let acquire_complete_ns = crate::chronos::monotonic_nanos();
+
+        let secondary_count = draws.len() + 1;
+        let used_batch_bytes = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+            .checked_add(
+                secondary_count
+                    .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                    .ok_or("scene-frame-batch-capacity")?,
+            )
+            .ok_or("scene-frame-batch-capacity")?;
+        if used_batch_bytes > warm.batch_len {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            return Err("scene-frame-batch-capacity");
+        }
+
+        unsafe {
+            core::ptr::write_bytes(warm.batch_virt, 0, used_batch_bytes);
+            core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+            core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+        }
+        seed_result_debug_slots(warm);
+        crate::intel::dma_flush(warm.result_virt, warm.result_len);
+
+        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
+        let target_clear = [clear[2], clear[1], clear[0], clear[3]];
+        let (clear_warm, clear_state_gpu) = owner.state_warm(warm, 0)?;
+        let Some(clear_draw) = prepare_triangle_draw_resources_for_vertex_slice(
+            clear_warm,
+            target.gpu,
+            target_pitch,
+            target_width,
+            target_height,
+            "draw3d-fullscreen-clear",
+            &CLEAR_TRIANGLE,
+        ) else {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            return Err("target-clear-resources");
+        };
+        stage_resident_scene_secondary(
+            warm,
+            clear_warm,
+            clear_state_gpu,
+            clear_draw,
+            TriangleBlendProbeMode::MesaZeroedState,
+            target_clear,
+            0,
+        )?;
+
+        for (draw_index, scene_draw) in draws.iter().enumerate() {
+            let slot = draw_index + 1;
+            let (state_warm, state_gpu) = owner.state_warm(warm, slot)?;
+            let Some(draw) = prepare_triangle_draw_resources_for_resident_font_mesh(
+                state_warm,
+                target.gpu,
+                target_pitch,
+                target_width,
+                target_height,
+                scene_draw.mesh,
+            ) else {
+                let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+                return Err("scene-frame-resident-draw");
+            };
+            let target_rgba = [
+                scene_draw.rgba[2],
+                scene_draw.rgba[1],
+                scene_draw.rgba[0],
+                scene_draw.rgba[3],
+            ];
+            stage_resident_scene_secondary(
+                warm,
+                state_warm,
+                state_gpu,
+                draw,
+                TriangleBlendProbeMode::StraightAlpha,
+                target_rgba,
+                slot,
+            )?;
+        }
+
+        let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
+        crate::intel::dma_flush(warm.batch_virt, primary_bytes);
+        crate::intel::dma_flush(warm.batch_virt, used_batch_bytes);
+        let stage_complete_ns = crate::chronos::monotonic_nanos();
+        let completed = submit_warm_render_batch(
+            dev,
+            warm,
+            RCS_EXEC_RESULT_SCENE_FRAME_DONE,
+            RESULT_SLOT_SCENE_FRAME_DWORD,
+            "draw3d-scene",
+        );
+        let submit_complete_ns = crate::chronos::monotonic_nanos();
+        let presented = if completed {
+            crate::intel::display::commit_ui3_frame_composition_produced(
+                target,
+                crate::intel::display::DisplayFrameProducer::GpuCoherent,
+                "draw3d-ui3-frame",
+            )
+        } else {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            false
+        };
+        if completed && !presented {
+            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+        }
+        let commit_complete_ns = crate::chronos::monotonic_nanos();
+        let (gpu_poll_us, poll_iters) = draw3d_last_gpu_poll_profile();
+        let profile_seq = DRAW3D_FRAME_PROFILE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+        if profile_seq <= 8
+            || profile_seq.is_multiple_of(60)
+            || diagnostic_logs
+            || !completed
+            || !presented
+        {
+            let total_us = commit_complete_ns.saturating_sub(frame_started_ns) / 1_000;
+            crate::log_info!(
+                target: "render";
+                "draw3d-frame-profile seq={} source=direct-render-to-overlay target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_commit_us={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={}\n",
+                profile_seq,
+                target_width,
+                target_height,
+                draws.len(),
+                secondary_count,
+                used_batch_bytes,
+                acquire_complete_ns.saturating_sub(frame_started_ns) / 1_000,
+                stage_complete_ns.saturating_sub(acquire_complete_ns) / 1_000,
+                submit_complete_ns.saturating_sub(stage_complete_ns) / 1_000,
+                gpu_poll_us,
+                poll_iters,
+                commit_complete_ns.saturating_sub(submit_complete_ns) / 1_000,
+                total_us,
+                (total_us > 16_667) as u8,
+                completed as u8,
+                presented as u8,
+            );
+        }
+        Ok(ResidentSceneFrameResult {
+            completed_draws: if completed { draws.len() } else { 0 },
+            requested_draws: draws.len(),
+            changed_pixels: 0,
+            presented,
+            width: target_width as u32,
+            height: target_height as u32,
+            rgba: None,
+        })
+    })();
+    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    result
 }
 
 /// Render an off-screen straight-RGBA frame without changing local scanout.
@@ -328,11 +799,37 @@ fn submit_resident_triangle_scene_frame_to(
     let target_pitch = target_width * core::mem::size_of::<u32>();
     let target_bytes = target_pitch * target_height;
 
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err("in-flight");
+    let lock_started_ns = crate::chronos::monotonic_nanos();
+    let mut lock_spins = 0usize;
+    loop {
+        if PRIMARY_PROBE_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            break;
+        }
+        if destination == ResidentSceneFrameDestination::LocalDisplay {
+            return Err("in-flight");
+        }
+        // Screenshot rendering is intentionally independent, but it shares
+        // the one physical render context. Give the active local frame one
+        // bounded opportunity to retire instead of immediately returning an
+        // older cached image.
+        if lock_spins.is_multiple_of(256)
+            && crate::chronos::monotonic_nanos().saturating_sub(lock_started_ns) >= 50_000_000
+        {
+            return Err("in-flight-timeout");
+        }
+        core::hint::spin_loop();
+        lock_spins += 1;
+    }
+    if destination == ResidentSceneFrameDestination::Capture && lock_spins != 0 {
+        crate::log_info!(
+            target: "render";
+            "draw3d-screenshot-lock wait_us={} spins={} acquired=1\n",
+            crate::chronos::monotonic_nanos().saturating_sub(lock_started_ns) / 1_000,
+            lock_spins,
+        );
     }
 
     // Draw3d reports one scene-level result. Keep the renderer's proof

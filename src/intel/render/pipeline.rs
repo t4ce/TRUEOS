@@ -685,7 +685,7 @@ fn encode_triangle_probe_batch(
         shader_layout.state_region_gpu_addr + binding_table_pointer_offset as u64
     };
     let binding_table_entry0_gpu_addr =
-        GPU_VA_DRAW_STATE_BASE + probe_state.surface_state_offset_bytes as u64;
+        draw.state_gpu_addr + probe_state.surface_state_offset_bytes as u64;
     let binding_table_pool_enable = if surface_base_relative_binding_table {
         "disabled-host-style"
     } else if device_is_gfx125(warm.device_id) {
@@ -1228,12 +1228,12 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "STATE_BASE_ADDRESS");
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     // Stateless Data Port Access MOCS is explicitly non-zero in the Gen12
     // packet contract, even when this draw has no stateless shader access.
     push(batch_dwords, &mut cursor, RENDER_MOCS << 16)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push_sba_address(
         batch_dwords,
         &mut cursor,
@@ -1241,7 +1241,7 @@ fn encode_triangle_probe_batch(
         RENDER_MOCS,
         INDIRECT_OBJECT_SBA_BASE,
     )?;
-    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
+    push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, draw.state_gpu_addr)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(batch_dwords, &mut cursor, true, warm.draw_state_len)?;
     push_sba_size(
@@ -1259,7 +1259,7 @@ fn encode_triangle_probe_batch(
         &mut cursor,
         true,
         RENDER_MOCS,
-        GPU_VA_DRAW_STATE_BASE,
+        draw.state_gpu_addr,
     )?;
     push(batch_dwords, &mut cursor, BINDLESS_SURFACE_STATE_SIZE)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, 0)?;
@@ -1274,7 +1274,7 @@ fn encode_triangle_probe_batch(
             "cps-pointers-init device=0x{:04X} cps_ptr=0x{:X} cps_gpu=0x{:X} state_dwords={} mode=none source=mesa-gen12-init\n",
             warm.device_id,
             cps_ptr,
-            GPU_VA_DRAW_STATE_BASE + cps_ptr as u64,
+            draw.state_gpu_addr + cps_ptr as u64,
             CPS_STATE_DWORDS,
         );
     }
@@ -1926,7 +1926,7 @@ fn encode_triangle_probe_batch(
             "probe-cps-disabled backend={} cps_ptr=0x{:X} cps_gpu=0x{:X} state_dwords={} mode=none source=mesa-gen12-cps-pointers does_not_prove=ps_thread_launch\n",
             backend_probe_mode.label(),
             probe_state.cps_state_offset_bytes & !0x1F,
-            GPU_VA_DRAW_STATE_BASE + (probe_state.cps_state_offset_bytes as u64 & !0x1F),
+            draw.state_gpu_addr + (probe_state.cps_state_offset_bytes as u64 & !0x1F),
             CPS_STATE_DWORDS,
         );
     }

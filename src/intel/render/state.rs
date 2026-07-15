@@ -1522,9 +1522,10 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    is_surface_draw_submit_name(submit_name)
-        || is_streamout_submit_name(submit_name)
-        || is_scratch_rt_submit_name(submit_name)
+    submit_name != "draw3d-scene"
+        && (is_surface_draw_submit_name(submit_name)
+            || is_streamout_submit_name(submit_name)
+            || is_scratch_rt_submit_name(submit_name))
 }
 
 fn fragment_target_variant_base(submit_name: &str) -> Option<&str> {

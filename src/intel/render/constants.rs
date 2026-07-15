@@ -111,6 +111,16 @@ const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
+// One bounded state slot per Draw3D object plus the full-screen clear. The
+// scene service owns this mapping for its lifetime; probe state remains at the
+// historical warm-state VA above.
+const GPU_VA_DRAW3D_SCENE_STATE_BASE: u64 = 0x3000_0000;
+const DRAW3D_SCENE_MAX_DRAWS: usize = 100;
+const DRAW3D_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
+const DRAW3D_SCENE_STATE_BYTES: usize =
+    (DRAW3D_SCENE_MAX_DRAWS + 1) * DRAW3D_SCENE_STATE_SLOT_BYTES;
+const DRAW3D_SCENE_PRIMARY_BATCH_BYTES: usize = 4096;
+const DRAW3D_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
 // The original 64 KiB mapping lived directly below STREAMOUT_BASE. The raised
 // 512 KiB soft cap must live outside the full-resolution render target and the
 // persistent-font VA range.
@@ -156,6 +166,10 @@ const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_GTT: u32 = 2 << 6;
+// MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
+// Draw3D uses one small secondary per object beneath one frame-level primary
+// batch, so the render context is submitted exactly once per scene update.
+const MI_BATCH_2ND_LEVEL: u32 = 1 << 22;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
@@ -171,6 +185,7 @@ const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
+const RCS_EXEC_RESULT_SCENE_FRAME_DONE: u32 = 0xC0DE_7741;
 const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
 const RCS_EXEC_RESULT_MI_SCANOUT_DONE: u32 = 0xC0DE_7713;
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
@@ -439,6 +454,7 @@ const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD: usize = 19;
 const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
+const RESULT_SLOT_SCENE_FRAME_DWORD: usize = 23;
 const RESULT_OA_REPORT_DWORDS: usize = 64;
 const RESULT_OA_BEGIN_DWORD: usize = 64;
 const RESULT_OA_END_DWORD: usize = RESULT_OA_BEGIN_DWORD + RESULT_OA_REPORT_DWORDS;

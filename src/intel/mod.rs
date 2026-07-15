@@ -767,6 +767,40 @@ pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64
     map_ggtt_pages(dev, phys, len, gpu)
 }
 
+/// Remove a display-owned GGTT range after its plane has been proven idle.
+/// Stable display GPU slots can then be safely reused by a later frame owner.
+pub(crate) fn unmap_display_scanout_ggtt(dev: Dev, len: usize, gpu: u64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let page_bytes = GGTT_PAGE_BYTES as usize;
+    let page_count = match len.checked_add(page_bytes - 1) {
+        Some(bytes) => bytes / page_bytes,
+        None => return false,
+    };
+    for page in 0..page_count {
+        let byte_offset = match page.checked_mul(page_bytes) {
+            Some(offset) => offset,
+            None => return false,
+        };
+        let page_gpu = match gpu.checked_add(byte_offset as u64) {
+            Some(address) => address,
+            None => return false,
+        };
+        let Some(index) = ggtt_offset_index(page_gpu) else {
+            return false;
+        };
+        unsafe {
+            core::ptr::write_volatile(
+                dev.mmio.add(GGTT_ALIAS_BASE_OFF + index) as *mut u64,
+                0,
+            );
+        }
+    }
+    ggtt_invalidate(dev);
+    true
+}
+
 pub(crate) fn read_ggtt_pte(dev: Dev, gpu: u64) -> Option<u64> {
     let idx = ggtt_offset_index(gpu)?;
     Some(unsafe { core::ptr::read_volatile(dev.mmio.add(GGTT_ALIAS_BASE_OFF + idx) as *const u64) })

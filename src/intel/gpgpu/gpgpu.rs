@@ -999,6 +999,7 @@ static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+static PRESENT_RGBA8_TO_PRIMARY_XRGB_FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -4012,7 +4013,32 @@ pub(crate) fn present_rgba8_to_primary_xrgb_rect_stats(
     if stats.submits != 0 {
         return stats;
     }
-    submit_present_rgba8_to_primary_xrgb_spans_with_stats(src, dst, params, flavor)
+    let fallback_seq =
+        PRESENT_RGBA8_TO_PRIMARY_XRGB_FALLBACK_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let log_fallback = fallback_seq <= 8 || fallback_seq.is_multiple_of(60);
+    if log_fallback {
+        crate::log_warn!(
+            target: "intel-gpgpu";
+            "custom primary copy kernel preferred 2d submission failed; falling back to span batches occurrence={} kernel={} rect={}x{} possible_reason=kernel-contract-or-command-capacity\n",
+            fallback_seq,
+            flavor.name,
+            src_rect.width,
+            src_rect.height,
+        );
+    }
+    let fallback =
+        submit_present_rgba8_to_primary_xrgb_spans_with_stats(src, dst, params, flavor);
+    if fallback.submits == 0 && log_fallback {
+        crate::log_warn!(
+            target: "intel-gpgpu";
+            "custom primary copy kernel span fallback failed occurrence={} kernel={} rect={}x{} possible_reason=kernel-upload-mapping-or-render-retirement\n",
+            fallback_seq,
+            flavor.name,
+            src_rect.width,
+            src_rect.height,
+        );
+    }
+    fallback
 }
 
 pub(crate) fn present_rgba8_rect_to_primary_xrgb_stats(
@@ -7737,8 +7763,9 @@ fn log_present_rgba8_to_primary_stats(
         stats.spans / stats.submits
     };
     crate::log!(
-        "intel/gpgpu-present: seq={} rect={}x{} dst={},{} primary={}x{} pitch={} pixels={} spans={} submits={} spans_per_submit={} submit_ms={} total_ms={} avg_submit_us={}\n",
+        "intel/gpgpu-present: seq={} contract=custom-rgba-to-xrgb-copy-kernel zero_copy=0 kernel={} rect={}x{} dst={},{} primary={}x{} pitch={} pixels={} spans={} submits={} spans_per_submit={} submit_ms={} total_ms={} avg_submit_us={}\n",
         seq,
+        PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME,
         src_rect.width,
         src_rect.height,
         dst_xy.x,

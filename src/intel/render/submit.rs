@@ -1,3 +1,13 @@
+static DRAW3D_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
+static DRAW3D_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
+
+fn draw3d_last_gpu_poll_profile() -> (u64, u64) {
+    (
+        DRAW3D_LAST_GPU_POLL_US.load(Ordering::Acquire),
+        DRAW3D_LAST_GPU_POLL_ITERS.load(Ordering::Acquire),
+    )
+}
+
 fn submit_warm_render_batch(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -87,14 +97,21 @@ fn submit_warm_render_batch(
 
     let mut completed = false;
     let mut iter = 0usize;
-    let poll_limit = if matches!(
+    let draw3d_scene_submit = submit_name == "draw3d-scene";
+    let poll_limit = if draw3d_scene_submit {
+        // This is a safety ceiling only. Native scanout rendering is judged
+        // by elapsed time below rather than by CPU-dependent spin counts.
+        5_000_000
+    } else if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "draw3d-scene"
+        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d"
     ) {
         200_000
     } else {
         4096
     };
+    let poll_started_ns = crate::chronos::monotonic_nanos();
+    const DRAW3D_POLL_TIMEOUT_NS: u64 = 50_000_000;
     while iter < poll_limit {
         let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
         let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
@@ -136,10 +153,20 @@ fn submit_warm_render_batch(
             RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD => {
                 read_result_dword(warm, RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD)
             }
+            RESULT_SLOT_SCENE_FRAME_DWORD => {
+                read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD)
+            }
             _ => result0,
         };
         if observed == expected_result {
             completed = true;
+            break;
+        }
+        if draw3d_scene_submit
+            && iter.is_multiple_of(256)
+            && crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns)
+                >= DRAW3D_POLL_TIMEOUT_NS
+        {
             break;
         }
         if should_log_primary_probe_detail()
@@ -188,6 +215,13 @@ fn submit_warm_render_batch(
         }
         core::hint::spin_loop();
         iter += 1;
+    }
+    let poll_elapsed_us = crate::chronos::monotonic_nanos()
+        .saturating_sub(poll_started_ns)
+        / 1_000;
+    if draw3d_scene_submit {
+        DRAW3D_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
+        DRAW3D_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
     }
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
@@ -634,6 +668,12 @@ fn submit_warm_render_batch(
         let kicked = crate::intel::display::kick_primary_surface_scanout(label);
         intel_render_verbose_log!("{} scanout-kick={}\n", submit_name, kicked as u8);
         crate::intel::display::log_pipe_live_scanout_state(label);
+    }
+    // Draw3D no longer pays a speculative engine reset before every healthy
+    // frame. A genuinely non-retired scene batch still needs the proven
+    // recovery sequence before the service retries it.
+    if !completed && submit_name == "draw3d-scene" {
+        recover_render_engine_after_nonretired_submit(dev, warm, "draw3d-scene-nonretired");
     }
     completed
 }

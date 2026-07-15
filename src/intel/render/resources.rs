@@ -3,6 +3,21 @@ fn upload_triangle_shader_pipeline(
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleShaderLayout, &'static str> {
+    upload_triangle_shader_pipeline_at(warm, pipeline, draw_rgba, GPU_VA_DRAW_STATE_BASE)
+}
+
+/// Upload the proven triangle shaders into a caller-owned state slot.
+///
+/// Probe callers retain the historical warm-state VA. A persistent scene
+/// frame owner supplies a distinct VA per object, allowing all specialized
+/// color shaders and fixed-function state to coexist until one batched frame
+/// submission has retired.
+fn upload_triangle_shader_pipeline_at(
+    warm: RenderWarmState,
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    draw_rgba: Option<[u8; 4]>,
+    bo_gpu_base: u64,
+) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
     let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
@@ -91,7 +106,6 @@ fn upload_triangle_shader_pipeline(
         return Err("state-region-exceeds-state-bo");
     }
 
-    let bo_gpu_base = GPU_VA_DRAW_STATE_BASE;
     let vs_gpu = bo_gpu_base + vs.code_offset_bytes as u64;
     let ps_gpu = bo_gpu_base + ps.code_offset_bytes as u64;
 
