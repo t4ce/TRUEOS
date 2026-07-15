@@ -45,22 +45,28 @@ pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
     native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
 }
 
-pub(crate) fn transient_font_mesh_upload_supported(
+pub(crate) fn transient_font_mesh_upload_bytes(
     vertex_count: usize,
     index_count: usize,
-) -> bool {
+) -> Option<usize> {
     let Some(vertex_bytes) = vertex_count.checked_mul(3 * core::mem::size_of::<f32>()) else {
-        return false;
+        return None;
     };
     let Some(index_offset) = crate::intel::align_up(vertex_bytes, 64) else {
-        return false;
+        return None;
     };
     let Some(index_bytes) = index_count.checked_mul(core::mem::size_of::<u32>()) else {
-        return false;
+        return None;
     };
-    index_offset
-        .checked_add(index_bytes)
-        .is_some_and(|upload_bytes| upload_bytes <= WARM_VERTEX_BYTES)
+    index_offset.checked_add(index_bytes)
+}
+
+pub(crate) const fn transient_font_mesh_upload_capacity_bytes() -> usize {
+    WARM_VERTEX_BYTES
+}
+
+pub(crate) const fn transient_font_mesh_refinement_budget_bytes() -> usize {
+    FONT_MESH_REFINEMENT_BUDGET_BYTES
 }
 
 /// Submit the already-tessellated font mesh at a native pixel scale.

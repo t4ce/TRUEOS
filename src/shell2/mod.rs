@@ -7,6 +7,7 @@ use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
+use unicode_segmentation::UnicodeSegmentation;
 pub(crate) mod backends;
 pub(crate) mod cmds;
 mod ecma48;
@@ -21,6 +22,7 @@ mod shell2_qjs_c4;
 mod shell2_qjs_c4_contract;
 mod shell2_surf;
 mod term_style;
+mod utf8;
 #[allow(unused_imports)]
 pub(crate) use crate::shell2::backends::{
     CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, container_shell_drain_output,
@@ -568,10 +570,6 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::SHOW_CURSOR);
         self.io.raw_write_str(ecma48::CURSOR_COLOR_GRAY);
         self.io.raw_write_str(ecma48::CURSOR_BLINKING_BLOCK);
-    }
-
-    fn user_backspace(&self) {
-        self.io.raw_write_str("\x08 \x08");
     }
 
     fn user_char(&self, ch: char) {
@@ -1597,6 +1595,59 @@ fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: ch
     }
 }
 
+fn is_font_probe_submission(text: &str) -> bool {
+    text.split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("font"))
+}
+
+pub(crate) fn log_utf8_text_probe(stage: &str, text: &str) {
+    let mut codepoints = AllocString::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index != 0 {
+            codepoints.push(' ');
+        }
+        let _ = write!(codepoints, "U+{:04X}", u32::from(ch));
+    }
+
+    let mut utf8_hex = AllocString::new();
+    for (index, byte) in text.as_bytes().iter().copied().enumerate() {
+        if index != 0 {
+            utf8_hex.push(' ');
+        }
+        let _ = write!(utf8_hex, "{byte:02X}");
+    }
+
+    crate::log_info!(
+        target: "global";
+        "shell2: utf8-probe stage={} chars={} utf8_bytes={} codepoints=[{}] utf8_hex=[{}] text={:?}\n",
+        stage,
+        text.chars().count(),
+        text.len(),
+        codepoints,
+        utf8_hex,
+        text,
+    );
+}
+
+fn log_font_submit_marker(stage: &str, submitted: &str) {
+    if is_font_probe_submission(submitted) {
+        crate::log_info!(
+            target: "global";
+            "shell2: font-submit stage={}\n",
+            stage,
+        );
+    }
+}
+
+fn pop_input_grapheme(line: &mut HString<MAX_LINE>) -> bool {
+    let Some((start, _)) = line.as_str().grapheme_indices(true).next_back() else {
+        return false;
+    };
+    line.truncate(start);
+    true
+}
+
 fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
     if active_terminal_direct_input_mode(output_mask) {
         return;
@@ -1726,7 +1777,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut saw_cr = false;
     let mut esc = EscState::None;
     let mut csi_input = CsiInput::new();
-    let mut text_decode = ecma48::InputDecodeState::None;
+    let mut text_decode = utf8::Decoder::new();
     let mut live_history_cursor: Option<usize> = None;
     let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
     let mut last_chrome_state = current_chrome_state(
@@ -1797,7 +1848,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         if let Some(b) = io.read_byte() {
             if b == UI3_ESCAPE_KEY_BYTE {
                 esc = EscState::None;
-                text_decode = ecma48::InputDecodeState::None;
+                text_decode.reset();
                 live_history_cursor = None;
                 cmd_status_text = None;
                 if active_terminal_hotkey_mode(output_mask) {
@@ -1829,7 +1880,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             }
             if b == UI3_F1_KEY_BYTE && !active_matrix_slot_is_vmx(output_mask) {
                 esc = EscState::None;
-                text_decode = ecma48::InputDecodeState::None;
+                text_decode.reset();
                 live_history_cursor = None;
                 cmd_status_text = None;
                 mode = ShellMode2::Surf;
@@ -1855,6 +1906,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             }
 
             if active_terminal_direct_input_mode(output_mask) {
+                text_decode.reset();
                 if let Some(vm_id) = active_matrix_vm_input_id(output_mask)
                     .or_else(|| active_matrix_vm_id(output_mask))
                 {
@@ -1864,7 +1916,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             }
             if b == 0x03 {
                 esc = EscState::None;
-                text_decode = ecma48::InputDecodeState::None;
+                text_decode.reset();
                 live_history_cursor = None;
                 cmd_status_text = None;
                 transcript = handle_control_c(io, &out, output_mask, &mut line);
@@ -1873,6 +1925,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             match esc {
                 EscState::None => {
                     if b == 0x1b {
+                        text_decode.reset();
                         esc = EscState::Esc;
                         continue;
                     }
@@ -2011,6 +2064,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
 
             match b {
                 b'\t' => {
+                    text_decode.reset();
                     if active_matrix_vm_id(output_mask).is_some() {
                         continue;
                     }
@@ -2075,16 +2129,20 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                 }
                 b'\r' | b'\n' => {
-                    if matches!(text_decode, ecma48::InputDecodeState::Utf8Seq { .. }) {
-                        push_input_char(&out, &mut line, 'Ü');
-                        text_decode = ecma48::InputDecodeState::None;
+                    if let Some(ch) = text_decode.finish_lossy() {
+                        push_input_char(&out, &mut line, ch);
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
+                    if is_font_probe_submission(submitted_raw) {
+                        log_utf8_text_probe("submit-decoded", submitted_raw);
+                    }
                     matrix::record_user_input(submitted_raw);
                     let submitted = submitted_raw.trim();
+                    log_font_submit_marker("history-recorded", submitted);
                     cmd_status_text = None;
                     out.prompt(output_mask);
+                    log_font_submit_marker("initial-prompt-written", submitted);
                     let active_slot = matrix::active_slot_id(output_mask);
                     let active_slot_lifetime_generation =
                         matrix::slot_lifetime_generation(&active_slot);
@@ -2286,11 +2344,16 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             );
                         } else {
                             if !submitted.is_empty() {
+                                log_font_submit_marker("transcript-record-begin", submitted);
                                 record_user_line_for_active_slot(io, submitted);
+                                log_font_submit_marker("transcript-record-end", submitted);
                                 transcript = current_transcript_for_task(io);
+                                log_font_submit_marker("transcript-render-begin", submitted);
                                 render_active_slot_content(&out, output_mask, &transcript);
+                                log_font_submit_marker("transcript-render-end", submitted);
                             }
-                            match handle_submit(
+                            log_font_submit_marker("dispatch-begin", submitted);
+                            let submit_result = handle_submit(
                                 &spawner,
                                 io,
                                 mode,
@@ -2298,7 +2361,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                 apps_mode,
                                 surf_prefix,
                                 submitted,
-                            ) {
+                            );
+                            log_font_submit_marker("dispatch-end", submitted);
+                            match submit_result {
                                 HandleSubmitResult::SetLineWidth(width) => {
                                     set_line_width_for_output(output_mask, width);
                                     configure_output_view(&out, output_mask);
@@ -2350,22 +2415,22 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     out.prompt(output_mask);
                 }
                 0x08 | 0x7F => {
-                    text_decode = ecma48::InputDecodeState::None;
                     cmd_status_text = None;
-                    if line.pop().is_some() {
-                        out.user_backspace();
+                    if text_decode.is_pending() {
+                        text_decode.reset();
+                    } else if pop_input_grapheme(&mut line) {
+                        render_prompt_line(&out, output_mask, &line);
                     }
                 }
-                0x20..=0x7E => {
-                    text_decode = ecma48::InputDecodeState::None;
+                0x20..=0x7E | 0x80..=0xFF => {
                     cmd_status_text = None;
-                    push_input_char(&out, &mut line, b as char);
-                }
-                _ => {
-                    cmd_status_text = None;
-                    if let Some(ch) = ecma48::decode_input_byte_lossy(&mut text_decode, b) {
+                    for ch in text_decode.push(b).chars() {
                         push_input_char(&out, &mut line, ch);
                     }
+                }
+                _ => {
+                    text_decode.reset();
+                    cmd_status_text = None;
                 }
             }
         } else {

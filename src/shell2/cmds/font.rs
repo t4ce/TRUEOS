@@ -9,6 +9,9 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 const MIN_SIZE_PERCENT: u32 = 1;
 const MAX_SIZE_PERCENT: u32 = 100;
 const DEFAULT_SIZE_PERCENT: u32 = 100;
+// Temporary end-to-end input probe. Keep the real render path below intact so
+// removing this switch restores font stamping after the shell/log check.
+const FONT_INPUT_ECHO_ONLY: bool = true;
 
 struct FontCommand {
     rows: Vec<String>,
@@ -32,6 +35,11 @@ pub(crate) fn try_parse(
         }
     };
 
+    if FONT_INPUT_ECHO_ONLY {
+        log_font_input_probe(&command);
+        return ParseOutcome::Handled;
+    }
+
     let row_refs: Vec<&str> = command.rows.iter().map(String::as_str).collect();
     let request = if command.multi_row {
         GpuFontTextRequest::Rows(row_refs.as_slice())
@@ -47,7 +55,7 @@ pub(crate) fn try_parse(
         Ok(result) => print_shell_line(
             io,
             format!(
-                "font: stamped={} target=primary-native scanout={}x{} placement=centered fit=contain size={}percent dst={},{} stamp={}x{} render_target={}x{} source_visible={}x{} scale_path=1to1 tessellation=target-aware tolerance={:.4} font_id={} font={} file={} layout={} text_chars={} rows={} rgba={:02X}{:02X}{:02X}{:02X} glyphs={} glyph_hits={} glyph_misses={} vertices={} indices={} submits=1 completed={} ps={} persistent=0 transport=kernel-direct",
+                "font: stamped={} target=primary-native scanout={}x{} placement=centered fit=contain size={}percent dst={},{} stamp={}x{} render_target={}x{} source_visible={}x{} scale_path=1to1 tessellation=cpu-scanline-per-glyph tolerance={:.4} font_id={} font={} file={} layout={} text_chars={} rows={} rgba={:02X}{:02X}{:02X}{:02X} glyphs={} glyph_hits={} glyph_misses={} vertices={} indices={} submits=1 completed={} ps={} persistent=0 transport=kernel-direct",
                 result.stamped as u8,
                 result.scanout_width,
                 result.scanout_height,
@@ -87,6 +95,18 @@ pub(crate) fn try_parse(
     }
 
     ParseOutcome::Handled
+}
+
+fn log_font_input_probe(command: &FontCommand) {
+    for (row_index, text) in command.rows.iter().enumerate() {
+        let row = row_index.saturating_add(1);
+        crate::log_info!(
+            target: "global";
+            "shell2: font-input-probe render_bypassed=1 row={}\n",
+            row,
+        );
+        super::super::log_utf8_text_probe("font-parsed-row", text);
+    }
 }
 
 fn parse_request(rest: &str) -> Result<FontCommand, &'static str> {

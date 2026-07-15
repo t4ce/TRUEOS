@@ -1204,9 +1204,10 @@ pub(crate) fn render_text_once_with_font(
 /// Tessellate and render one text request directly at its final stamp extent,
 /// aspect-fit that extent to the requested percentage of the primary scanout,
 /// and alpha-blend the result 1:1 at center. Large stamps use a correspondingly
-/// finer curve tolerance, while the warmed size-independent outlines remain
-/// unchanged. Geometry and render-target ownership end before this function
-/// returns; only the stamped framebuffer pixels remain, like logo/BGRT stamps.
+/// finer curve tolerance when the small refinement budget permits it, while
+/// the warmed size-independent outlines remain unchanged. Geometry and
+/// render-target ownership end before this function returns; only the stamped
+/// framebuffer pixels remain, like logo/BGRT stamps.
 pub(crate) fn stamp_text_once_with_font_centered(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -1218,6 +1219,25 @@ pub(crate) fn stamp_text_once_with_font_centered(
     }
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().ok_or("no-active-scanout-dimensions")?;
+    let (requested_chars, requested_rows) = match request {
+        GpuFontTextRequest::SingleLine(text) => (text.chars().count(), 1),
+        GpuFontTextRequest::Rows(rows) => (
+            rows.iter()
+                .fold(0usize, |count, row| count.saturating_add(row.chars().count())),
+            rows.len(),
+        ),
+    };
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: job-stamp-begin font_id={} font={} text_chars={} rows={} size_percent={} scanout={}x{} tessellation=cpu-scanline-per-glyph repeated_glyph_cache=per-call geometry_persistence=0\n",
+        font.id(),
+        font.registry_name(),
+        requested_chars,
+        requested_rows,
+        size_percent,
+        scanout_width,
+        scanout_height,
+    );
     let layout = match request {
         GpuFontTextRequest::SingleLine(_) => GpuFontTextLayout::SingleLine,
         GpuFontTextRequest::Rows(_) => GpuFontTextLayout::Rows,
@@ -1242,29 +1262,52 @@ pub(crate) fn stamp_text_once_with_font_centered(
         stamp_height,
         NATIVE_FONT_STAMP_PADDING_PIXELS,
     );
+    let upload_capacity = crate::intel::render::transient_font_mesh_upload_capacity_bytes();
+    let base_upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
+        built.vertices.len(),
+        built.indices.len(),
+    );
+    // Reject an unrenderable default mesh before attempting the optional,
+    // finer tessellation. In particular, repeated contour-heavy glyphs must
+    // not spend more CPU/allocation work on a mesh that cannot be uploaded.
+    if !base_upload_bytes.is_some_and(|bytes| bytes <= upload_capacity) {
+        crate::log_warn!(
+            target: "render";
+            "intel/gpu-font: transient-mesh-capacity warning=stamp-rejected required_bytes={} soft_cap_bytes={} vertices={} indices={} target={}x{} tolerance={:.4} resolution_scope=1440p future_scope=4k-8k action=raise-or-grow-transient-staging\n",
+            base_upload_bytes.unwrap_or(usize::MAX),
+            upload_capacity,
+            built.vertices.len(),
+            built.indices.len(),
+            stamp_width,
+            stamp_height,
+            DEFAULT_FONT_FILL_TOLERANCE,
+        );
+        return Err("font-mesh-upload-capacity");
+    }
+
     let mut tessellation_tolerance = DEFAULT_FONT_FILL_TOLERANCE;
     let mut quality_capacity_limited = false;
     if requested_tessellation_tolerance < DEFAULT_FONT_FILL_TOLERANCE {
-        let candidate = build_font_job_mesh_with_tolerance(
-            core::slice::from_ref(&entry),
-            font,
-            requested_tessellation_tolerance,
-        )?;
-        if crate::intel::render::transient_font_mesh_upload_supported(
-            candidate.vertices.len(),
-            candidate.indices.len(),
-        ) {
-            built = candidate;
-            tessellation_tolerance = requested_tessellation_tolerance;
+        let refinement_budget = crate::intel::render::transient_font_mesh_refinement_budget_bytes();
+        if base_upload_bytes.is_some_and(|bytes| bytes <= refinement_budget) {
+            let candidate = build_font_job_mesh_with_tolerance(
+                core::slice::from_ref(&entry),
+                font,
+                requested_tessellation_tolerance,
+            )?;
+            let candidate_upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
+                candidate.vertices.len(),
+                candidate.indices.len(),
+            );
+            if candidate_upload_bytes.is_some_and(|bytes| bytes <= refinement_budget) {
+                built = candidate;
+                tessellation_tolerance = requested_tessellation_tolerance;
+            } else {
+                quality_capacity_limited = true;
+            }
         } else {
             quality_capacity_limited = true;
         }
-    }
-    if !crate::intel::render::transient_font_mesh_upload_supported(
-        built.vertices.len(),
-        built.indices.len(),
-    ) {
-        return Err("font-mesh-upload-capacity");
     }
 
     let reusable_pixels = core::mem::take(&mut *TRANSIENT_FONT_STAMP_READBACK.lock());

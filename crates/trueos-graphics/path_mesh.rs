@@ -4,6 +4,10 @@ use alloc::vec::Vec;
 
 const DEFAULT_CURVE_TOLERANCE: f32 = 0.1;
 const MAX_CURVE_DEPTH: u8 = 12;
+// A shell command must never monopolize its executor with unbounded fill work.
+// The active-edge implementation normally stays far below this; the limit is
+// a final safety contract for malformed or unusually complex outlines.
+const MAX_TESSELLATION_WORK_UNITS: usize = 2_000_000;
 const EPSILON: f32 = 1.0e-5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -65,6 +69,16 @@ impl VertexBuffers {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FillError {
     IndexOverflow,
+    WorkBudgetExceeded,
+}
+
+impl FillError {
+    pub(crate) const fn reason(self) -> &'static str {
+        match self {
+            Self::IndexOverflow => "path-fill-index-overflow",
+            Self::WorkBudgetExceeded => "path-fill-work-budget",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -271,22 +285,43 @@ fn tessellate_non_zero(segments: &[Segment]) -> Result<VertexBuffers, FillError>
     levels.sort_by(f32::total_cmp);
     levels.dedup_by(|a, b| (*a - *b).abs() <= EPSILON);
 
+    let mut edges: Vec<Segment> = segments
+        .iter()
+        .copied()
+        .filter(|segment| (segment.to.y - segment.from.y).abs() > EPSILON)
+        .collect();
+    edges.sort_by(|a, b| min_y(*a).total_cmp(&min_y(*b)));
+
     let mut output = VertexBuffers::new();
+    let mut active = Vec::new();
     let mut crossings = Vec::new();
+    let mut next_edge = 0usize;
+    let mut work = 0usize;
     for band in levels.windows(2) {
+        spend_work(&mut work, 1)?;
         let y0 = band[0];
         let y1 = band[1];
         if y1 - y0 <= EPSILON {
             continue;
         }
         let sample_y = (y0 + y1) * 0.5;
-        crossings.clear();
-        for segment in segments {
-            let min_y = segment.from.y.min(segment.to.y);
-            let max_y = segment.from.y.max(segment.to.y);
-            if max_y - min_y <= EPSILON || sample_y <= min_y || sample_y >= max_y {
-                continue;
+
+        spend_work(&mut work, active.len())?;
+        active.retain(|segment| max_y(*segment) > sample_y);
+        while let Some(segment) = edges.get(next_edge).copied() {
+            if min_y(segment) >= sample_y {
+                break;
             }
+            next_edge += 1;
+            spend_work(&mut work, 1)?;
+            if max_y(segment) > sample_y {
+                active.push(segment);
+            }
+        }
+
+        crossings.clear();
+        spend_work(&mut work, active.len())?;
+        for segment in &active {
             crossings.push(Crossing {
                 segment: *segment,
                 x: x_at_y(*segment, sample_y),
@@ -297,6 +332,7 @@ fn tessellate_non_zero(segments: &[Segment]) -> Result<VertexBuffers, FillError>
 
         let mut winding = 0i32;
         let mut left = None;
+        spend_work(&mut work, crossings.len())?;
         for crossing in &crossings {
             let was_inside = winding != 0;
             winding = winding.saturating_add(crossing.winding);
@@ -311,6 +347,24 @@ fn tessellate_non_zero(segments: &[Segment]) -> Result<VertexBuffers, FillError>
         }
     }
     Ok(output)
+}
+
+fn min_y(segment: Segment) -> f32 {
+    segment.from.y.min(segment.to.y)
+}
+
+fn max_y(segment: Segment) -> f32 {
+    segment.from.y.max(segment.to.y)
+}
+
+fn spend_work(work: &mut usize, amount: usize) -> Result<(), FillError> {
+    *work = work
+        .checked_add(amount)
+        .ok_or(FillError::WorkBudgetExceeded)?;
+    if *work > MAX_TESSELLATION_WORK_UNITS {
+        return Err(FillError::WorkBudgetExceeded);
+    }
+    Ok(())
 }
 
 fn x_at_y(segment: Segment, y: f32) -> f32 {

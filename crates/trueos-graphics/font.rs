@@ -15,7 +15,9 @@ use skrifa::{
 };
 use spin::Mutex;
 
-use super::path_mesh::{FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, point};
+use super::path_mesh::{
+    FillError, FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, point,
+};
 
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
 const FONT_TESSEL_SAMPLE_TEXT: &str = "True OS §";
@@ -128,6 +130,17 @@ pub(crate) struct FontTesselMesh {
     pub(crate) summary: FontTesselSummary,
     pub(crate) vertices: Vec<[f32; 2]>,
     pub(crate) indices: Vec<u32>,
+}
+
+/// Per-call glyph geometry. This avoids running the scanline fill over one
+/// combined multi-glyph path and lets repeated glyphs reuse their local mesh.
+/// It is dropped with the completed text mesh and is never made resident.
+struct TransientGlyphMesh {
+    glyph_index: u32,
+    path_commands: usize,
+    bounds: TesselBounds,
+    vertices: Vec<[f32; 2]>,
+    indices: Vec<u32>,
 }
 
 /// GPU-facing, size-independent outline stream for the font compute probes.
@@ -435,8 +448,6 @@ fn tessellate_text_mesh_grouped(
         .unwrap_or(fallback_advance);
     let charmap_ms = elapsed_ms_since(charmap_start);
 
-    let path_start = embassy_time_driver::now();
-    let mut builder = FillPath::builder_with_options(&fill_options);
     let mut glyphs = 0usize;
     let mut glyph_hits = 0usize;
     let mut glyph_misses = 0usize;
@@ -451,6 +462,13 @@ fn tessellate_text_mesh_grouped(
         .and_then(|lengths| lengths.first().copied())
         .unwrap_or(usize::MAX);
     let mut bounds = TesselBounds::default();
+    let mut path_ms = 0u64;
+    let mut tessellate_ms = 0u64;
+    let mut tessellate_failures = 0usize;
+    let mut tessellate_error = None;
+    let mut glyph_meshes: Vec<TransientGlyphMesh> = Vec::new();
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
     for ch in text.chars() {
         if row_lengths
             .is_some_and(|lengths| chars_placed == next_row_at && row_index + 1 < lengths.len())
@@ -477,45 +495,106 @@ fn tessellate_text_mesh_grouped(
             continue;
         };
         glyph_hits = glyph_hits.saturating_add(1);
-        let appended = outline.append_glyph_path(
-            glyph_id,
-            &mut builder,
-            pen_x,
-            baseline_y,
-            scale,
-            &mut bounds,
-        );
-        if appended == 0 {
+        let glyph_index = glyph_id.to_u32();
+        let cache_index = if let Some(index) = glyph_meshes
+            .iter()
+            .position(|cached| cached.glyph_index == glyph_index)
+        {
+            index
+        } else {
+            let path_start = embassy_time_driver::now();
+            let mut builder = FillPath::builder_with_options(&fill_options);
+            let mut glyph_bounds = TesselBounds::default();
+            let appended = outline.append_glyph_path(
+                glyph_id,
+                &mut builder,
+                0.0,
+                0.0,
+                scale,
+                &mut glyph_bounds,
+            );
+            let path = builder.build();
+            path_ms = path_ms.saturating_add(elapsed_ms_since(path_start));
+
+            let (glyph_vertices, glyph_indices) = if appended == 0 {
+                (Vec::new(), Vec::new())
+            } else {
+                let tessellate_start = embassy_time_driver::now();
+                let tessellated = path.tessellate(&fill_options);
+                tessellate_ms = tessellate_ms.saturating_add(elapsed_ms_since(tessellate_start));
+                match tessellated {
+                    Ok(buffers) => (buffers.vertices, buffers.indices),
+                    Err(error) => {
+                        tessellate_failures = tessellate_failures.saturating_add(1);
+                        tessellate_error.get_or_insert(error);
+                        (Vec::new(), Vec::new())
+                    }
+                }
+            };
+            glyph_meshes.push(TransientGlyphMesh {
+                glyph_index,
+                path_commands: appended,
+                bounds: glyph_bounds,
+                vertices: glyph_vertices,
+                indices: glyph_indices,
+            });
+            glyph_meshes.len() - 1
+        };
+
+        let cached = &glyph_meshes[cache_index];
+        if cached.path_commands == 0 {
             empty_glyphs = empty_glyphs.saturating_add(1);
         } else {
             outline_glyphs = outline_glyphs.saturating_add(1);
-            path_commands = path_commands.saturating_add(appended);
+            path_commands = path_commands.saturating_add(cached.path_commands);
+            if cached.bounds.has_bounds {
+                bounds.include(cached.bounds.min_x + pen_x, cached.bounds.min_y + baseline_y);
+                bounds.include(cached.bounds.max_x + pen_x, cached.bounds.max_y + baseline_y);
+            }
+
+            let Ok(base_index) = u32::try_from(vertices.len()) else {
+                tessellate_failures = tessellate_failures.saturating_add(1);
+                tessellate_error.get_or_insert(FillError::IndexOverflow);
+                break;
+            };
+            if cached
+                .indices
+                .iter()
+                .any(|index| base_index.checked_add(*index).is_none())
+            {
+                tessellate_failures = tessellate_failures.saturating_add(1);
+                tessellate_error.get_or_insert(FillError::IndexOverflow);
+                break;
+            }
+            vertices.reserve(cached.vertices.len());
+            vertices.extend(
+                cached
+                    .vertices
+                    .iter()
+                    .map(|vertex| [vertex[0] + pen_x, vertex[1] + baseline_y]),
+            );
+            indices.reserve(cached.indices.len());
+            indices.extend(cached.indices.iter().map(|index| base_index + *index));
         }
         pen_x += metrics.advance_width(glyph_id).unwrap_or(fallback_advance) * scale;
         chars_placed = chars_placed.saturating_add(1);
     }
-    let path = builder.build();
-    let path_ms = elapsed_ms_since(path_start);
-
-    let tessellate_start = embassy_time_driver::now();
-    let tessellated = path.tessellate(&fill_options);
-    let tessellate_ms = elapsed_ms_since(tessellate_start);
-    let tessellated_ok = tessellated.is_ok();
-    let tessellate_failures = usize::from(!tessellated_ok);
-    let buffers = tessellated.unwrap_or_default();
-    let vertices = buffers.vertices.len();
-    let indices = buffers.indices.len();
-    let vertex_bytes = vertices.saturating_mul(size_of::<[f32; 2]>());
-    let index_bytes = indices.saturating_mul(size_of::<u32>());
+    let tessellated_ok = tessellate_failures == 0;
+    if !tessellated_ok {
+        vertices.clear();
+        indices.clear();
+    }
+    let vertex_count = vertices.len();
+    let index_count = indices.len();
+    let vertex_bytes = vertex_count.saturating_mul(size_of::<[f32; 2]>());
+    let index_bytes = index_count.saturating_mul(size_of::<u32>());
     let geometry_bytes = vertex_bytes.saturating_add(index_bytes);
 
     let summary = FontTesselSummary {
         status: if tessellated_ok { "ok" } else { "failed" },
-        reason: if tessellated_ok {
-            "tessellated"
-        } else {
-            "path-fill-failed"
-        },
+        reason: tessellate_error
+            .map(FillError::reason)
+            .unwrap_or("tessellated"),
         text: text.into(),
         font_name: font_record.name,
         font_file: font_record.file_name,
@@ -528,9 +607,9 @@ fn tessellate_text_mesh_grouped(
         empty_glyphs,
         path_commands,
         tessellate_failures,
-        vertices,
-        indices,
-        triangles: indices / 3,
+        vertices: vertex_count,
+        indices: index_count,
+        triangles: index_count / 3,
         vertex_bytes,
         index_bytes,
         geometry_bytes,
@@ -546,8 +625,8 @@ fn tessellate_text_mesh_grouped(
 
     FontTesselMesh {
         summary,
-        vertices: buffers.vertices,
-        indices: buffers.indices,
+        vertices,
+        indices,
     }
 }
 

@@ -80,9 +80,15 @@ const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
 const WARM_BATCH_BYTES: usize = 512 * 4096;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
-// The transient upload mapping ends where the adjacent scratch target begins.
-// Target-aware font quality must remain inside this proven 64 KiB allocation.
-const WARM_VERTEX_BYTES: usize = 16 * 4096;
+// Reusable transient geometry staging. This is intentionally a bounded warm
+// allocation rather than scene-owned storage. Keep the cap visible so a future
+// 4K/8K path can replace it with growable staging instead of silently growing
+// permanent kernel memory.
+const WARM_VERTEX_BYTES: usize = 128 * 4096;
+// Optional target-aware retessellation must stay a small quality optimization.
+// Raising the upload allocation must not also authorize an 8x increase in CPU
+// tessellation work for contour-heavy glyphs.
+const FONT_MESH_REFINEMENT_BUDGET_BYTES: usize = 16 * 4096;
 const WARM_RESULT_BYTES: usize = 4096;
 const LINEAR_RENDER_TARGET_PITCH_ALIGN: usize = 64;
 // Legacy/resident compatibility probes retain their proven square target.
@@ -105,7 +111,10 @@ const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
 const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
-const GPU_VA_VERTEX_BASE: u64 = 0x0087_0000;
+// The original 64 KiB mapping lived directly below STREAMOUT_BASE. The raised
+// 512 KiB soft cap must live outside the full-resolution render target and the
+// persistent-font VA range.
+const GPU_VA_VERTEX_BASE: u64 = 0x2800_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
