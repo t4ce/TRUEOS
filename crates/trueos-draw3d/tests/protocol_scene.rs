@@ -1,7 +1,7 @@
 use trueos_draw3d::{
-    ApplyError, ApplyOutcome, Command, Edge, Face, FrameDecoder, ImageFormat, Instance, Mesh,
-    Opcode, RenderImage, Response, Rgba8, Scene, SceneStats, Transform, Vec3, ViewCamera,
-    decode_response, encode_command, encode_response,
+    ApplyError, ApplyOutcome, CameraOrbit, Command, Edge, Face, FrameDecoder, ImageFormat,
+    Instance, Mesh, Opcode, RenderImage, Response, Rgba8, Scene, SceneStats, Transform, Vec3,
+    ViewCamera, decode_response, encode_command, encode_response,
 };
 
 #[test]
@@ -203,8 +203,12 @@ fn camera_command_round_trips_and_rejects_degenerate_axes() {
         far_plane: 4_000.0,
         vertical_fov: 1.1,
     };
-    let command = Command::SetViewCamera { camera };
+    let command = Command::SetViewCamera {
+        camera,
+        orbit: None,
+    };
     let bytes = encode_command(44, &command).unwrap();
+    assert_eq!(bytes.len(), 12 + 48);
     let mut decoder = FrameDecoder::new();
     decoder.push(&bytes).unwrap();
     assert_eq!(decoder.next_request().unwrap().unwrap().command.unwrap(), command);
@@ -219,10 +223,60 @@ fn camera_command_round_trips_and_rejects_degenerate_axes() {
         ..camera
     };
     assert_eq!(
-        scene.apply(Command::SetViewCamera { camera: invalid }),
+        scene.apply(Command::SetViewCamera {
+            camera: invalid,
+            orbit: None,
+        }),
         Err(ApplyError::ParallelCameraAxes)
     );
     assert_eq!(scene.camera(), camera);
+}
+
+#[test]
+fn optional_camera_orbit_round_trips_and_evaluates_an_ellipse() {
+    let camera = ViewCamera {
+        near_plane: 0.25,
+        far_plane: 4_000.0,
+        vertical_fov: 1.1,
+        ..ViewCamera::DEFAULT
+    };
+    let orbit = CameraOrbit::new(Vec3::new(1.0, 2.0, 3.0), Vec3::ZERO, [10.0, 5.0], 0.75);
+    let command = Command::SetViewCamera {
+        camera,
+        orbit: Some(orbit),
+    };
+    let bytes = encode_command(45, &command).unwrap();
+    assert_eq!(bytes.len(), 12 + 48 + 36);
+    let mut decoder = FrameDecoder::new();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(decoder.next_request().unwrap().unwrap().command.unwrap(), command);
+
+    let mut scene = Scene::default();
+    scene.apply(command).unwrap();
+    assert_eq!(scene.camera_orbit(), Some(orbit));
+
+    let phase_zero = scene.camera_at(0.0);
+    assert_eq!(phase_zero.position, Vec3::new(11.0, 2.0, 3.0));
+    assert_eq!(phase_zero.view_direction, Vec3::new(-10.0, 0.0, 0.0));
+    assert_eq!(phase_zero.up_axis, Vec3::new(0.0, 1.0, 0.0));
+
+    let quarter_turn = scene.camera_at(core::f32::consts::FRAC_PI_2);
+    assert!((quarter_turn.position.x - 1.0).abs() < 1.0e-5);
+    assert!((quarter_turn.position.y - 2.0).abs() < 1.0e-5);
+    assert!((quarter_turn.position.z - 8.0).abs() < 1.0e-5);
+
+    let invalid = CameraOrbit {
+        scale: [0.0, 5.0],
+        ..orbit
+    };
+    assert_eq!(
+        scene.apply(Command::SetViewCamera {
+            camera,
+            orbit: Some(invalid),
+        }),
+        Err(ApplyError::InvalidOrbitScale)
+    );
+    assert_eq!(scene.camera_orbit(), Some(orbit));
 }
 
 #[test]

@@ -202,6 +202,59 @@ impl Default for Transform {
     }
 }
 
+/// Optional motion for a view camera around an explicit look-at point.
+///
+/// The source ellipse lies in the X/Z plane. `scale[0]` and `scale[1]` are
+/// its X and Z radii, and `rotation` tilts that plane using the same intrinsic
+/// X/Y/Z Euler convention as [`Transform`]. `angular_speed` is in radians per
+/// second and may be negative; zero keeps the phase-zero camera static.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraOrbit {
+    pub look_at: Vec3,
+    pub rotation: Vec3,
+    pub scale: [f32; 2],
+    pub angular_speed: f32,
+}
+
+impl CameraOrbit {
+    pub const fn new(look_at: Vec3, rotation: Vec3, scale: [f32; 2], angular_speed: f32) -> Self {
+        Self {
+            look_at,
+            rotation,
+            scale,
+            angular_speed,
+        }
+    }
+
+    pub fn is_finite(self) -> bool {
+        self.look_at.is_finite()
+            && self.rotation.is_finite()
+            && self.scale[0].is_finite()
+            && self.scale[1].is_finite()
+            && self.angular_speed.is_finite()
+    }
+
+    /// Evaluates this orbit at an angle in radians while preserving the
+    /// camera's clipping planes and field of view.
+    pub fn camera_at(self, mut camera: ViewCamera, angle: f32) -> ViewCamera {
+        let (sin_angle, cos_angle) = libm::sincosf(angle);
+        let rotation = Transform {
+            location: Vec3::ZERO,
+            rotation: self.rotation,
+            scale: Vec3::ONE,
+        };
+        let offset = rotation.transform_point(Vec3::new(
+            cos_angle * self.scale[0],
+            0.0,
+            sin_angle * self.scale[1],
+        ));
+        camera.position = self.look_at + offset;
+        camera.view_direction = self.look_at - camera.position;
+        camera.up_axis = rotation.transform_point(Vec3::new(0.0, 1.0, 0.0));
+        camera
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct ViewCamera {
@@ -305,6 +358,7 @@ pub enum ApplyError {
     NonFiniteVector,
     InvalidClipPlanes,
     InvalidFieldOfView,
+    InvalidOrbitScale,
     ZeroViewDirection,
     ZeroUpAxis,
     ParallelCameraAxes,
@@ -320,6 +374,7 @@ pub struct Scene {
     meshes: BTreeMap<MeshId, Mesh>,
     instances: BTreeMap<InstanceId, Instance>,
     camera: ViewCamera,
+    camera_orbit: Option<CameraOrbit>,
     running: bool,
     clear_color: Option<Rgba8>,
     limits: SceneLimits,
@@ -337,6 +392,7 @@ impl Scene {
             meshes: BTreeMap::new(),
             instances: BTreeMap::new(),
             camera: ViewCamera::default(),
+            camera_orbit: None,
             running: false,
             clear_color: None,
             limits,
@@ -353,6 +409,15 @@ impl Scene {
 
     pub const fn camera(&self) -> ViewCamera {
         self.camera
+    }
+
+    pub const fn camera_orbit(&self) -> Option<CameraOrbit> {
+        self.camera_orbit
+    }
+
+    pub fn camera_at(&self, angle: f32) -> ViewCamera {
+        self.camera_orbit
+            .map_or(self.camera, |orbit| orbit.camera_at(self.camera, angle))
     }
 
     /// Whether the live renderer should submit frames for this scene.
@@ -582,9 +647,16 @@ impl Scene {
                     .scale = scale;
                 1
             }
-            Command::SetViewCamera { camera } => {
+            Command::SetViewCamera { camera, orbit } => {
                 validate_camera(camera)?;
+                if let Some(orbit) = orbit {
+                    validate_camera_orbit(orbit)?;
+                    // This also verifies the derived view/up axes before any
+                    // camera state is committed.
+                    validate_camera(orbit.camera_at(camera, 0.0))?;
+                }
                 self.camera = camera;
+                self.camera_orbit = orbit;
                 1
             }
             Command::Clear => {
@@ -691,6 +763,18 @@ fn validate_camera(camera: ViewCamera) -> Result<(), ApplyError> {
             * camera.up_axis.length_squared()
     {
         return Err(ApplyError::ParallelCameraAxes);
+    }
+    Ok(())
+}
+
+fn validate_camera_orbit(orbit: CameraOrbit) -> Result<(), ApplyError> {
+    const MIN_RADIUS: f32 = 1.0e-6;
+
+    if !orbit.is_finite() {
+        return Err(ApplyError::NonFiniteVector);
+    }
+    if orbit.scale[0] < MIN_RADIUS || orbit.scale[1] < MIN_RADIUS {
+        return Err(ApplyError::InvalidOrbitScale);
     }
     Ok(())
 }

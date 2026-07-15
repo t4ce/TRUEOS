@@ -43,6 +43,8 @@ const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"i
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
+const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"Text to synthesize and play through the kernel HDA lane."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.25,"maximum":4.0,"description":"Speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
+const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"fps":{"type":"integer","minimum":1,"maximum":144,"description":"Playback speed in frames per second."},"loop":{"type":"boolean","description":"Repeat playback until the video task is replaced."},"direction":{"type":"string","enum":["forward","reverse"],"description":"Forward only or chained forward then reverse playback."},"cache":{"type":"string","enum":["off","tail","full"],"description":"Decoded-frame cache strategy for reverse playback experiments. Default is off, including reverse."},"study":{"type":"boolean","description":"Write stripe-study artifacts from the full decoded cache."},"fill":{"type":"boolean","description":"Show frames while filling reverse GOP cache."},"warm":{"type":"boolean","description":"Use noreset-lite decode mode. Default is true."}},"required":["fps"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -182,6 +184,14 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 fn dispatch_txt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     super::cmds::txt::try_parse(io, rest)
+}
+
+fn dispatch_tts(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::ttstt::try_parse_tts(spawner, io, rest)
+}
+
+fn dispatch_stt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::ttstt::try_parse_stt(spawner, io, rest)
 }
 
 fn dispatch_vid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -407,6 +417,28 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
+        name: "tts",
+        mode: "cmd",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_tts,
+        tool_description: Some(
+            "Synthesize text through the resident AP2+ TTSTT CPU service and queue PCM to Intel HDA.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_TTS),
+    },
+    BuiltinShell2CmdEntry {
+        name: "stt",
+        mode: "cmd",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_stt,
+        tool_description: Some(
+            "Transcribe a TRUEOSFS PCM WAV through the resident AP2+ TTSTT CPU service.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_STT),
+    },
+    BuiltinShell2CmdEntry {
         name: "vid",
         mode: "cmd",
         color: Some(STATUS_BLUE_RGB),
@@ -502,7 +534,7 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
-        "fnt", "gpgpu", "vid", "acpi", "tlb", "smp", "etc",
+        "tts", "stt", "fnt", "gpgpu", "vid", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

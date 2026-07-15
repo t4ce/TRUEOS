@@ -11,8 +11,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use trueos_draw3d::{
-    Command, FrameDecoder, ImageFormat, ProjectedMesh, RenderImage, Response, ResponseError, Scene,
-    SceneStats, encode_response, project_scene,
+    CameraOrbit, Command, FrameDecoder, ImageFormat, ProjectedMesh, RenderImage, Response,
+    ResponseError, Scene, SceneStats, encode_response, project_scene_at,
 };
 
 use crate::net::adapter::{
@@ -32,6 +32,7 @@ static SCENE: Mutex<Option<Scene>> = Mutex::new(None);
 static LAST_PRESENTED_FRAME: Mutex<Option<Arc<PresentedSceneFrame>>> = Mutex::new(None);
 static SCENE_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_GEOMETRY_REVISION: AtomicU64 = AtomicU64::new(1);
+static SCENE_CAMERA_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static REPLY_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -119,6 +120,7 @@ pub fn scene_stats() -> SceneStats {
 fn apply_command(
     command: Command,
 ) -> Result<trueos_draw3d::ApplyOutcome, trueos_draw3d::ApplyError> {
+    let camera_changed = matches!(&command, Command::SetViewCamera { .. });
     let geometry_changed = !matches!(
         &command,
         Command::SetColor { .. } | Command::StartScene { .. } | Command::StopScene
@@ -132,12 +134,19 @@ fn apply_command(
         if geometry_changed {
             SCENE_GEOMETRY_REVISION.fetch_add(1, Ordering::AcqRel);
         }
+        if camera_changed {
+            SCENE_CAMERA_REVISION.fetch_add(1, Ordering::AcqRel);
+        }
     }
     Ok(outcome)
 }
 
-fn projected_scene() -> Vec<ProjectedMesh> {
-    with_scene(|scene| project_scene(scene, 1.0))
+fn projected_scene(orbit_angle: f32) -> Vec<ProjectedMesh> {
+    with_scene(|scene| project_scene_at(scene, 1.0, orbit_angle))
+}
+
+fn scene_camera_orbit() -> Option<CameraOrbit> {
+    with_scene(Scene::camera_orbit)
 }
 
 fn scene_clear_rgba() -> Option<[u8; 4]> {
@@ -226,6 +235,9 @@ pub async fn draw3d_render_task() {
     let mut resident_geometry_revision = 0u64;
     let mut rendered_revision = 0u64;
     let mut next_frame = Instant::now();
+    let mut camera_revision = 0u64;
+    let mut camera_orbit = None;
+    let mut orbit_epoch = Instant::now();
     let mut last_sync_error = None;
     let mut last_render_error = None;
     let mut render_retry_count = 0u32;
@@ -246,14 +258,31 @@ pub async fn draw3d_render_task() {
         let running = SCENE_RUNNING.load(Ordering::Acquire);
         let revision = SCENE_REVISION.load(Ordering::Acquire);
         let geometry_revision = SCENE_GEOMETRY_REVISION.load(Ordering::Acquire);
+        let next_camera_revision = SCENE_CAMERA_REVISION.load(Ordering::Acquire);
+        let now = Instant::now();
+        if next_camera_revision != camera_revision {
+            camera_revision = next_camera_revision;
+            camera_orbit = scene_camera_orbit();
+            orbit_epoch = now;
+        }
+        let orbit_moving = camera_orbit.is_some_and(|orbit| orbit.angular_speed != 0.0);
+        let orbit_angle = camera_orbit.map_or(0.0, |orbit| {
+            let elapsed_seconds =
+                now.saturating_duration_since(orbit_epoch).as_millis() as f32 / 1_000.0;
+            orbit.angular_speed * elapsed_seconds
+        });
+        // Do not mutate resident vertex buffers while a prior submission is
+        // being retried. Once that frame retires, wall-clock evaluation makes
+        // the orbit catch up without accumulating timer drift.
+        let animate_frame = running && orbit_moving && render_retry_count == 0;
         let mut background_changed = false;
-        if revision != resident_revision {
+        if revision != resident_revision || animate_frame {
             let next_clear_rgba = scene_clear_rgba();
             background_changed = next_clear_rgba != clear_rgba;
             clear_rgba = next_clear_rgba;
             let had_jobs = !jobs.is_empty();
-            let sync_result = if geometry_revision != resident_geometry_revision {
-                sync_render_jobs(&mut jobs, projected_scene())
+            let sync_result = if geometry_revision != resident_geometry_revision || animate_frame {
+                sync_render_jobs(&mut jobs, projected_scene(orbit_angle))
             } else {
                 refresh_render_job_colors(&mut jobs);
                 Ok(())
@@ -341,7 +370,11 @@ pub async fn draw3d_render_task() {
         // the 30 Hz scene tick and draw only a new revision (or retry a frame
         // which did not fully retire).  This removes continuous GPU probe
         // traffic for static scenes while retaining a 30 FPS update ceiling.
-        if running && residency_ready && !jobs.is_empty() && rendered_revision != resident_revision
+        let retry_frame = render_retry_count != 0;
+        if running
+            && residency_ready
+            && !jobs.is_empty()
+            && (rendered_revision != resident_revision || animate_frame || retry_frame)
         {
             let draws = jobs
                 .iter()

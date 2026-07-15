@@ -22,6 +22,7 @@ pub(crate) mod sha;
 pub(crate) mod smp;
 pub(crate) mod tlb;
 pub(crate) mod tlb_helper;
+pub(crate) mod ttstt;
 pub(crate) mod txt;
 pub(crate) mod update;
 pub(crate) mod vid;

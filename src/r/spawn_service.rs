@@ -37,6 +37,7 @@ macro_rules! define_started_flags {
 define_started_flags!(
     JOB_RUNNER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
+    TTSTT_CPU_SERVICE_STARTED,
     SMP_HLT_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
@@ -248,6 +249,10 @@ fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::blocking::blocking_job_dispatcher_task())
+}
+
+fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::ttstt_service::service_task())
 }
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
@@ -1213,7 +1218,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 55 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1221,6 +1226,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &BLOCKING_JOB_DISPATCHER_STARTED,
         spawn_blocking_service_lanes,
+    ),
+    TaskSpec::enabled(
+        "ttstt-cpu-service",
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+            | crate::r::readiness::TRUEOSFS_INDEX_READY
+            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &TTSTT_CPU_SERVICE_STARTED,
+        spawn_ttstt_cpu_service,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::disabled(

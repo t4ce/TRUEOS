@@ -7,8 +7,8 @@ pub mod protocol;
 pub mod render;
 
 pub use model::{
-    ApplyError, ApplyOutcome, Edge, Face, Instance, InstanceId, Mesh, MeshId, Rgba8, Scene,
-    SceneLimits, SceneStats, Transform, Vec3, ViewCamera,
+    ApplyError, ApplyOutcome, CameraOrbit, Edge, Face, Instance, InstanceId, Mesh, MeshId, Rgba8,
+    Scene, SceneLimits, SceneStats, Transform, Vec3, ViewCamera,
 };
 pub use protocol::{
     Command, DecodeError, DecodedRequest, DecodedResponse, EncodeError, Frame, FrameDecoder,
@@ -16,4 +16,4 @@ pub use protocol::{
     MAX_VERTICES_PER_COMMAND, Opcode, PROTOCOL_VERSION, RenderImage, Response, ResponseError,
     decode_response, encode_command, encode_response,
 };
-pub use render::{ProjectedMesh, project_scene};
+pub use render::{ProjectedMesh, project_scene, project_scene_at};

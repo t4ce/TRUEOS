@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::{InstanceId, MeshId, Rgba8, Scene, Vec3};
+use crate::{InstanceId, MeshId, Rgba8, Scene, Vec3, ViewCamera};
 
 /// One scene instance converted to indexed clip-space triangles.
 ///
@@ -31,8 +31,7 @@ struct CameraBasis {
 }
 
 impl CameraBasis {
-    fn from_scene(scene: &Scene, aspect: f32) -> Self {
-        let camera = scene.camera();
+    fn from_camera(camera: ViewCamera, aspect: f32) -> Self {
         let forward = normalize(camera.view_direction);
         let right = normalize(forward.cross(camera.up_axis));
         let up = normalize(right.cross(forward));
@@ -67,7 +66,24 @@ impl CameraBasis {
 /// Polygon faces use a compact fan triangulation. A triangle crossing a near
 /// or far clip plane is omitted for now; X/Y clipping remains GPU-owned.
 pub fn project_scene(scene: &Scene, aspect: f32) -> Vec<ProjectedMesh> {
-    let camera = CameraBasis::from_scene(scene, aspect);
+    project_scene_with_camera(scene, aspect, scene.camera())
+}
+
+/// Project a scene after evaluating its optional camera orbit at `angle`.
+///
+/// `angle` is in radians. For a camera without an orbit this is identical to
+/// [`project_scene`]. Keeping time outside the model makes protocol/state tests
+/// deterministic and lets the kernel render loop choose its own clock.
+pub fn project_scene_at(scene: &Scene, aspect: f32, angle: f32) -> Vec<ProjectedMesh> {
+    project_scene_with_camera(scene, aspect, scene.camera_at(angle))
+}
+
+fn project_scene_with_camera(
+    scene: &Scene,
+    aspect: f32,
+    view_camera: ViewCamera,
+) -> Vec<ProjectedMesh> {
+    let camera = CameraBasis::from_camera(view_camera, aspect);
     let mut projected = Vec::with_capacity(scene.stats().instance_count as usize);
 
     for (instance_id, instance) in scene.instances() {

@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::model::{
-    ApplyError, ApplyOutcome, Edge, Face, Instance, Mesh, Rgba8, SceneStats, Transform, Vec3,
-    ViewCamera,
+    ApplyError, ApplyOutcome, CameraOrbit, Edge, Face, Instance, Mesh, Rgba8, SceneStats,
+    Transform, Vec3, ViewCamera,
 };
 
 pub const PROTOCOL_VERSION: u8 = 1;
@@ -143,6 +143,7 @@ pub enum Command {
     },
     SetViewCamera {
         camera: ViewCamera,
+        orbit: Option<CameraOrbit>,
     },
     RequestRender,
 }
@@ -468,9 +469,15 @@ fn decode_command_payload(opcode: Opcode, payload: &[u8]) -> Result<Command, Dec
         Opcode::Ping => Command::Ping {
             nonce: reader.u64()?,
         },
-        Opcode::SetViewCamera => Command::SetViewCamera {
-            camera: reader.camera()?,
-        },
+        Opcode::SetViewCamera => {
+            let camera = reader.camera()?;
+            let orbit = if reader.is_empty() {
+                None
+            } else {
+                Some(reader.camera_orbit()?)
+            };
+            Command::SetViewCamera { camera, orbit }
+        }
         Opcode::RequestRender => Command::RequestRender,
     };
     reader.finish()?;
@@ -567,7 +574,12 @@ pub fn encode_command(request_id: u32, command: &Command) -> Result<Vec<u8>, Enc
         }
         Command::Clear | Command::StopScene | Command::GetStats => {}
         Command::Ping { nonce } => put_u64(&mut payload, *nonce),
-        Command::SetViewCamera { camera } => put_camera(&mut payload, *camera),
+        Command::SetViewCamera { camera, orbit } => {
+            put_camera(&mut payload, *camera);
+            if let Some(orbit) = orbit {
+                put_camera_orbit(&mut payload, *orbit);
+            }
+        }
         Command::RequestRender => {}
     }
     if payload.len() > MAX_PAYLOAD_LEN {
@@ -767,6 +779,7 @@ fn error_code(error: ResponseError) -> u8 {
             ApplyError::ZeroViewDirection => 47,
             ApplyError::ZeroUpAxis => 48,
             ApplyError::ParallelCameraAxes => 49,
+            ApplyError::InvalidOrbitScale => 50,
         },
     }
 }
@@ -805,6 +818,7 @@ fn decode_error_code(code: u8) -> Option<ResponseError> {
         47 => ResponseError::Apply(ApplyError::ZeroViewDirection),
         48 => ResponseError::Apply(ApplyError::ZeroUpAxis),
         49 => ResponseError::Apply(ApplyError::ParallelCameraAxes),
+        50 => ResponseError::Apply(ApplyError::InvalidOrbitScale),
         _ => return None,
     })
 }
@@ -849,6 +863,14 @@ fn put_camera(out: &mut Vec<u8>, value: ViewCamera) {
     out.extend_from_slice(&value.near_plane.to_le_bytes());
     out.extend_from_slice(&value.far_plane.to_le_bytes());
     out.extend_from_slice(&value.vertical_fov.to_le_bytes());
+}
+
+fn put_camera_orbit(out: &mut Vec<u8>, value: CameraOrbit) {
+    put_vec3(out, value.look_at);
+    put_vec3(out, value.rotation);
+    out.extend_from_slice(&value.scale[0].to_le_bytes());
+    out.extend_from_slice(&value.scale[1].to_le_bytes());
+    out.extend_from_slice(&value.angular_speed.to_le_bytes());
 }
 
 fn put_rgba(out: &mut Vec<u8>, value: Rgba8) {
@@ -962,6 +984,18 @@ impl<'a> Reader<'a> {
             near_plane: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
             far_plane: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
             vertical_fov: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+        })
+    }
+
+    fn camera_orbit(&mut self) -> Result<CameraOrbit, DecodeError> {
+        Ok(CameraOrbit {
+            look_at: self.vec3()?,
+            rotation: self.vec3()?,
+            scale: [
+                f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+                f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
+            ],
+            angular_speed: f32::from_le_bytes(self.take(4)?.try_into().unwrap()),
         })
     }
 

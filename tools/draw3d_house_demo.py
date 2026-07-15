@@ -65,7 +65,22 @@ class Draw3dClient:
     def stop(self):
         self.call(0x1A)
 
-    def camera(self, position, target, fov_degrees=54.0):
+    def camera(
+        self,
+        position,
+        target,
+        fov_degrees=54.0,
+        *,
+        orbit_scale=None,
+        orbit_rotation=(0.0, 0.0, 0.0),
+        orbit_speed=0.0,
+    ):
+        """Set a static camera or an optional elliptical look-at orbit.
+
+        Orbit rotation and speed are radians and radians/second. The two scale
+        values are the radii of the source ellipse's X and Z axes. Supplying no
+        orbit scale emits the original 48-byte static-camera packet.
+        """
         direction = tuple(target[index] - position[index] for index in range(3))
         payload = struct.pack(
             "<12f",
@@ -78,6 +93,21 @@ class Draw3dClient:
             100.0,
             math.radians(fov_degrees),
         )
+        if orbit_scale is None:
+            if orbit_speed != 0.0:
+                raise ValueError("orbit_speed requires orbit_scale=(x_radius, z_radius)")
+        else:
+            if len(orbit_scale) != 2:
+                raise ValueError("orbit_scale must contain X and Z radii")
+            if len(orbit_rotation) != 3:
+                raise ValueError("orbit_rotation must contain XYZ Euler radians")
+            payload += struct.pack(
+                "<9f",
+                *target,
+                *orbit_rotation,
+                *orbit_scale,
+                orbit_speed,
+            )
         self.call(0x22, payload)
 
     def mesh(self, mesh_id, color, vertices, faces):

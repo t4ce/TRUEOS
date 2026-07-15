@@ -47,16 +47,34 @@ then translation. Faces preserve polygons: `u16 vertex_count` followed by that m
 | `1a` | stop live scene rendering | empty |
 | `20` | get statistics | empty |
 | `21` | ping | nonce (`u64`) |
-| `22` | set view camera | position, view direction, up axis, near, far, vertical FOV |
+| `22` | set view camera | legacy camera, optionally followed by look-at orbit |
 | `23` | request render | empty |
 
 Arrays start with a `u32` count. An edge is two `u32` vertex indices. Mesh deletion fails while
 instances reference it unless `cascade` is `1`; cascading also deletes those instances. Put
 operations replace an existing object with the same ID. Copy requires an unused target ID.
 
-The camera payload is 48 bytes: three `Vec3` values followed by near plane, far plane, and
-vertical FOV as `f32`. FOV is in radians. Near must be positive, far must be greater than near,
-FOV must be between zero and pi, and the view/up vectors must be nonzero and nonparallel.
+The original static camera payload remains 48 bytes: three `Vec3` values (position, view direction,
+and up axis) followed by near plane, far plane, and vertical FOV as `f32`. FOV is in radians. Near
+must be positive, far must be greater than near, FOV must be between zero and pi, and the view/up
+vectors must be nonzero and nonparallel. Sending this original payload also disables any previously
+configured orbit, so existing clients retain exactly the static behavior they had before.
+
+An optional 36-byte tail turns the command into a look-at orbit. The tail is look-at `Vec3`, XYZ
+Euler rotation `Vec3`, X radius `f32`, Z radius `f32`, then angular speed `f32`. Its unrotated
+ellipse is:
+
+```text
+look_at + (cos(angle) * x_radius, 0, sin(angle) * z_radius)
+angle = angular_speed * seconds_since_camera_command
+```
+
+The Euler rotation tilts the ellipse and its up axis with the same intrinsic X/Y/Z convention used
+by instance transforms. Rotation is in radians and speed is in radians per second; negative speed
+reverses direction. Both radii must be finite and greater than zero. A speed of zero evaluates the
+phase-zero position once and remains static, while retaining the explicit protocol-level look-at.
+The legacy camera's clipping planes and FOV are retained for an orbit; its position, direction, and
+up axis are replaced by the evaluated look-at camera.
 
 The start-scene payload is either empty for a transparent scene background or exactly four RGBA
 bytes. The four-byte form is backward-compatible with the original empty command and avoids a
@@ -86,10 +104,12 @@ clear color and zero when the requested running state and color are already acti
 instance is projected
 through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
 uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
-frames. RGBA is volatile shader state, so `set color` does not upload geometry. Jobs are ordered
-back-to-front into one 512x512 target. TCP changes are coalesced on a 33 ms cadence (at most about
-30 presented updates per second); unchanged scenes retain their overlay without redundant GPU
-submission. A target is presented and cached only after every mesh draw completes. Incomplete
+frames. A camera orbit with nonzero speed reprojects and presents at that same scene cadence; absent
+or zero-speed orbits remain revision-driven and static. RGBA is volatile shader state, so `set color`
+does not upload geometry. Jobs are ordered back-to-front into one 512x512 target. TCP changes are
+coalesced on a 33 ms cadence (at most about 30 presented updates per second); unchanged static scenes
+retain their overlay without redundant GPU submission. A target is presented and cached only after
+every mesh draw completes. Incomplete
 frames retain the last complete presentation and are retried on the next tick. When start supplies
 a clear color, the full-scanout overlay is cleared to that RGBA value and the same color backs
 untouched pixels in render-image captures. Mesh alpha is preserved through the render target,
@@ -114,4 +134,4 @@ missing instance, target exists, mesh in use, mesh limit, instance limit, vertex
 limit, face limit, per-face vertex limit, face too small, vertex index out of range, and a
 non-finite vector.
 Camera state errors continue at `45..49`: invalid clipping planes, invalid FOV, zero view
-direction, zero up axis, and parallel view/up axes.
+direction, zero up axis, and parallel view/up axes. Code `50` is an invalid orbit scale.

@@ -375,6 +375,53 @@ pub struct PcmStreamInfo {
     pub native_layout: PcmSampleLayout,
 }
 
+/// Read-only discovery state for the not-yet-enabled capture path.
+///
+/// This deliberately does not claim that input DMA is configured. It lets
+/// experimental consumers distinguish useful HDA capture hardware from the
+/// output-only stream implementation currently active in the driver.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PcmCaptureCapabilities {
+    pub input_streams: u8,
+    pub adc_widgets: usize,
+    pub microphone_pins: usize,
+    pub line_input_pins: usize,
+    pub dma_configured: bool,
+}
+
+pub fn pcm_capture_capabilities() -> Option<PcmCaptureCapabilities> {
+    let hda = HDA.lock();
+    let controller = hda.as_ref()?;
+    let adc_widgets = controller
+        .widgets
+        .iter()
+        .filter(|widget| widget.widget_type == WidgetType::AudioInput)
+        .count();
+    let microphone_pins = controller
+        .widgets
+        .iter()
+        .filter(|widget| {
+            widget.widget_type == WidgetType::PinComplex && ((widget.pin_config >> 20) & 0xF) == 0xA
+        })
+        .count();
+    let line_input_pins = controller
+        .widgets
+        .iter()
+        .filter(|widget| {
+            widget.widget_type == WidgetType::PinComplex
+                && matches!((widget.pin_config >> 20) & 0xF, 0x8 | 0x9)
+        })
+        .count();
+
+    Some(PcmCaptureCapabilities {
+        input_streams: controller.num_iss,
+        adc_widgets,
+        microphone_pins,
+        line_input_pins,
+        dma_configured: false,
+    })
+}
+
 impl PcmStreamInfo {
     pub const fn current(buffer_bytes: usize) -> Self {
         Self {
@@ -3257,30 +3304,34 @@ pub fn parse_wav(data: &[u8]) -> Result<WavInfo, &'static str> {
             data[offset + 6],
             data[offset + 7],
         ]) as usize;
+        let payload_offset = offset + 8;
 
         if chunk_id == b"fmt " && chunk_size >= 16 {
-            let audio_format = u16::from_le_bytes([data[offset + 8], data[offset + 9]]);
+            let fmt = data
+                .get(payload_offset..payload_offset + 16)
+                .ok_or("WAV: truncated fmt chunk")?;
+            let audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
             if audio_format != 1 {
                 return Err("WAV: not PCM format");
             }
-            channels = u16::from_le_bytes([data[offset + 10], data[offset + 11]]);
-            sample_rate = u32::from_le_bytes([
-                data[offset + 12],
-                data[offset + 13],
-                data[offset + 14],
-                data[offset + 15],
-            ]);
-            bits_per_sample = u16::from_le_bytes([data[offset + 22], data[offset + 23]]);
+            channels = u16::from_le_bytes([fmt[2], fmt[3]]);
+            sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
+            bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
         } else if chunk_id == b"data" {
-            data_offset = offset + 8;
+            data_offset = payload_offset;
             data_size = chunk_size.min(data.len() - data_offset);
             break;
         }
 
-        offset += 8 + chunk_size;
-        if offset % 2 != 0 {
-            offset += 1;
-        } // Word alignment
+        let padded_size = chunk_size
+            .checked_add(chunk_size & 1)
+            .ok_or("WAV: chunk size overflow")?;
+        offset = payload_offset
+            .checked_add(padded_size)
+            .ok_or("WAV: chunk offset overflow")?;
+        if offset > data.len() {
+            return Err("WAV: truncated chunk");
+        }
     }
 
     if data_offset == 0 || channels == 0 {
