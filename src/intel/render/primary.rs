@@ -347,13 +347,20 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             return Err("render-map");
         }
 
+        // Draw3D uses straight-alpha blending.  The GPU must see the real
+        // clear color as its destination for the first translucent draw;
+        // using the old readback sentinel here would blend the first shape
+        // against 0xDEAD_BEEF.  Readback below compares against this same
+        // clear word to retain changed-pixel accounting.
+        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
+        let clear_word = u32::from_le_bytes(clear);
         unsafe {
             core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
             core::slice::from_raw_parts_mut(
                 warm.streamout_virt as *mut u32,
                 target_width * target_height,
             )
-            .fill(0xDEAD_BEEF);
+            .fill(clear_word);
         }
         crate::intel::dma_flush(warm.streamout_virt, target_bytes);
 
@@ -366,7 +373,7 @@ pub(crate) fn submit_resident_triangle_scene_frame(
                 target_pitch,
                 target_width,
                 target_height,
-                TriangleBlendProbeMode::MesaZeroedState,
+                TriangleBlendProbeMode::StraightAlpha,
                 &[],
                 None,
                 None,
@@ -396,14 +403,28 @@ pub(crate) fn submit_resident_triangle_scene_frame(
         };
         let mut changed_pixels = 0usize;
         let mut visible_rgba = Vec::with_capacity(target_bytes);
-        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
         for pixel in pixels {
-            if *pixel == 0xDEAD_BEEF {
-                visible_rgba.extend_from_slice(&clear);
-            } else {
+            let raw = pixel.to_le_bytes();
+            if raw != clear {
                 changed_pixels += 1;
-                visible_rgba.extend_from_slice(&pixel.to_le_bytes());
             }
+            // The fixed-function over blend produces premultiplied RGB in
+            // the intermediate RGBA target.  The display tile contract is
+            // straight RGBA and premultiplies exactly once while uploading,
+            // so restore straight RGB at this boundary.
+            let [mut r, mut g, mut b, a] = raw;
+            if a != 0 && a != u8::MAX {
+                r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                    / u16::from(a))
+                    .min(u16::from(u8::MAX)) as u8;
+                g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                    / u16::from(a))
+                    .min(u16::from(u8::MAX)) as u8;
+                b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                    / u16::from(a))
+                    .min(u16::from(u8::MAX)) as u8;
+            }
+            visible_rgba.extend_from_slice(&[r, g, b, a]);
         }
         // A scene is one atomic visual result.  A timed-out draw leaves the
         // shared target partially updated, so never expose it to either the
@@ -4927,7 +4948,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -5035,7 +5056,6 @@ fn submit_triangle_vf_draw_to_surface_ext(
         shader_layout,
         blend_mode,
         backend_probe_mode,
-        None,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -5476,7 +5496,7 @@ fn submit_triangle_vs_streamout_proof(
             return false;
         }
     };
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("vs-streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5596,7 +5616,7 @@ fn submit_triangle_streamout_proof(
         crate::log!("streamout-proof skipped reason=placeholder-pipeline\n");
         return false;
     }
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!("streamout-proof skipped reason=shader-layout detail={}\n", reason);
@@ -5609,7 +5629,6 @@ fn submit_triangle_streamout_proof(
         shader_layout,
         TriangleBlendProbeMode::ExplicitRt0,
         BackendProbeMode::MesaLike,
-        None,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -6097,7 +6116,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         );
     }
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, None) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -6109,7 +6128,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
+    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name, None);
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -6147,7 +6166,6 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         shader_layout,
         blend_mode,
         backend_probe_mode,
-        None,
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -6432,14 +6450,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             crate::intel::shader::triangle_pipeline_note(),
         ),
     };
-    let (pipeline, pipeline_note) = if draw_rgba.is_some() {
-        (
-            crate::intel::shader::triangle_pipeline_push_color(),
-            crate::intel::shader::triangle_pipeline_push_color_note(),
-        )
-    } else {
-        (base_pipeline, base_pipeline_note)
-    };
+    let (pipeline, pipeline_note) = (base_pipeline, base_pipeline_note);
     log_render_buffer_layout(warm, Some(dst_gpu_addr));
     log_render_packet_encodings();
     if crate::intel::shader::triangle_pipeline_is_placeholder() {
@@ -6579,7 +6590,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.num_varying_inputs,
     );
 
-    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline) {
+    let shader_layout = match upload_triangle_shader_pipeline(warm, pipeline, draw_rgba) {
         Ok(layout) => layout,
         Err(reason) => {
             crate::log!(
@@ -6591,7 +6602,13 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             return false;
         }
     };
-    log_uploaded_triangle_shader_verification(warm, pipeline, shader_layout, submit_name);
+    log_uploaded_triangle_shader_verification(
+        warm,
+        pipeline,
+        shader_layout,
+        submit_name,
+        draw_rgba,
+    );
 
     intel_render_verbose_log!(
         "{} staged rt=0x{:X} vb=0x{:X} state=0x{:X} used_end=0x{:X} state_off=0x{:X} state_region=0x{:X} free=0x{:X} size={}x{} pitch=0x{:X} indexed={} unique_vertices={} draw_vertices={} stride={} status=pipeline-ready vs_bytes={} vs_off=0x{:X} vs_gpu=0x{:X} vs_ksp_off=0x{:X} vs_ksp=0x{:X} ps_bytes={} ps_off=0x{:X} ps_gpu=0x{:X} ps_ksp_off=0x{:X} ps_ksp=0x{:X} varyings={} ps_dispatch={:?}\n",
@@ -6631,7 +6648,6 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         shader_layout,
         blend_mode,
         backend_probe_mode,
-        draw_rgba,
     ) {
         Ok(layout) => layout,
         Err(reason) => {

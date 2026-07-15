@@ -261,32 +261,19 @@ pub struct SceneLimits {
     /// Maximum triangle count after polygon fan triangulation.
     pub max_faces_per_mesh: usize,
     pub max_vertices_per_face: usize,
-    /// Stored source geometry budget across the mesh list.
-    pub max_scene_vertices: usize,
-    pub max_scene_edges: usize,
-    /// Triangle budget both for stored meshes and for placed instances.
-    pub max_scene_triangles: usize,
 }
-
-pub const DEFAULT_MAX_SCENE_TRIANGLES: usize = 100_000;
-pub const DEFAULT_MAX_SCENE_VERTICES: usize = DEFAULT_MAX_SCENE_TRIANGLES * 3;
-pub const DEFAULT_MAX_SCENE_EDGES: usize = DEFAULT_MAX_SCENE_TRIANGLES * 3;
 
 impl Default for SceneLimits {
     fn default() -> Self {
         Self {
-            // One hundred objects remain plenty for the control plane. The
-            // geometry hot path is budgeted scene-wide instead of imposing
-            // the old ~1K-vertex ceiling on every mesh.
+            // The experimental render service deliberately has a small,
+            // predictable residency envelope.
             max_meshes: 100,
             max_instances: 100,
-            max_vertices_per_mesh: DEFAULT_MAX_SCENE_VERTICES,
-            max_edges_per_mesh: DEFAULT_MAX_SCENE_EDGES,
-            max_faces_per_mesh: DEFAULT_MAX_SCENE_TRIANGLES,
-            max_vertices_per_face: u16::MAX as usize,
-            max_scene_vertices: DEFAULT_MAX_SCENE_VERTICES,
-            max_scene_edges: DEFAULT_MAX_SCENE_EDGES,
-            max_scene_triangles: DEFAULT_MAX_SCENE_TRIANGLES,
+            max_vertices_per_mesh: 1_000,
+            max_edges_per_mesh: 3_000,
+            max_faces_per_mesh: 2_000,
+            max_vertices_per_face: 1_000,
         }
     }
 }
@@ -412,12 +399,6 @@ impl Scene {
                 {
                     return Err(ApplyError::MeshLimit);
                 }
-                self.validate_mesh_budget(
-                    mesh_id,
-                    mesh.vertices.len(),
-                    mesh.edges.len(),
-                    triangulated_face_count(&mesh.faces),
-                )?;
                 self.meshes.insert(mesh_id, mesh);
                 1
             }
@@ -455,12 +436,6 @@ impl Scene {
                     .get(&source_id)
                     .ok_or(ApplyError::MeshMissing)?
                     .clone();
-                self.validate_mesh_budget(
-                    target_id,
-                    mesh.vertices.len(),
-                    mesh.edges.len(),
-                    triangulated_face_count(&mesh.faces),
-                )?;
                 self.meshes.insert(target_id, mesh);
                 1
             }
@@ -476,12 +451,6 @@ impl Scene {
                     &mesh.faces,
                     self.limits.max_vertices_per_face,
                 )?;
-                self.validate_mesh_budget(
-                    mesh_id,
-                    vertices.len(),
-                    mesh.edges.len(),
-                    triangulated_face_count(&mesh.faces),
-                )?;
                 self.meshes.get_mut(&mesh_id).unwrap().vertices = vertices;
                 1
             }
@@ -496,13 +465,6 @@ impl Scene {
                     .vertices
                     .len();
                 validate_edges(vertex_count, &edges)?;
-                let mesh = self.meshes.get(&mesh_id).unwrap();
-                self.validate_mesh_budget(
-                    mesh_id,
-                    mesh.vertices.len(),
-                    edges.len(),
-                    triangulated_face_count(&mesh.faces),
-                )?;
                 self.meshes.get_mut(&mesh_id).unwrap().edges = edges;
                 1
             }
@@ -517,13 +479,6 @@ impl Scene {
                     .vertices
                     .len();
                 validate_faces(vertex_count, &faces, self.limits.max_vertices_per_face)?;
-                let mesh = self.meshes.get(&mesh_id).unwrap();
-                self.validate_mesh_budget(
-                    mesh_id,
-                    mesh.vertices.len(),
-                    mesh.edges.len(),
-                    triangulated_face_count(&faces),
-                )?;
                 self.meshes.get_mut(&mesh_id).unwrap().faces = faces;
                 1
             }
@@ -544,7 +499,6 @@ impl Scene {
                 {
                     return Err(ApplyError::InstanceLimit);
                 }
-                self.validate_instance_budget(instance_id, instance.mesh_id)?;
                 self.instances.insert(instance_id, instance);
                 1
             }
@@ -568,7 +522,6 @@ impl Scene {
                     .instances
                     .get(&source_id)
                     .ok_or(ApplyError::InstanceMissing)?;
-                self.validate_instance_budget(target_id, instance.mesh_id)?;
                 self.instances.insert(target_id, instance);
                 1
             }
@@ -579,11 +532,10 @@ impl Scene {
                 if !self.meshes.contains_key(&mesh_id) {
                     return Err(ApplyError::MeshMissing);
                 }
-                if !self.instances.contains_key(&instance_id) {
-                    return Err(ApplyError::InstanceMissing);
-                }
-                self.validate_instance_budget(instance_id, mesh_id)?;
-                self.instances.get_mut(&instance_id).unwrap().mesh_id = mesh_id;
+                self.instances
+                    .get_mut(&instance_id)
+                    .ok_or(ApplyError::InstanceMissing)?
+                    .mesh_id = mesh_id;
                 1
             }
             Command::SetTransform {
@@ -687,89 +639,6 @@ impl Scene {
             return Err(ApplyError::MeshMissing);
         }
         validate_transform(instance.transform)
-    }
-
-    fn validate_mesh_budget(
-        &self,
-        replacement_id: MeshId,
-        replacement_vertices: usize,
-        replacement_edges: usize,
-        replacement_triangles: usize,
-    ) -> Result<(), ApplyError> {
-        let mut stored_vertices = replacement_vertices;
-        let mut stored_edges = replacement_edges;
-        let mut stored_triangles = replacement_triangles;
-        for (mesh_id, mesh) in self.meshes() {
-            if mesh_id == replacement_id {
-                continue;
-            }
-            stored_vertices = stored_vertices.saturating_add(mesh.vertices.len());
-            stored_edges = stored_edges.saturating_add(mesh.edges.len());
-            stored_triangles =
-                stored_triangles.saturating_add(triangulated_face_count(&mesh.faces));
-        }
-        if stored_vertices > self.limits.max_scene_vertices {
-            return Err(ApplyError::VertexLimit);
-        }
-        if stored_edges > self.limits.max_scene_edges {
-            return Err(ApplyError::EdgeLimit);
-        }
-        if stored_triangles > self.limits.max_scene_triangles {
-            return Err(ApplyError::FaceLimit);
-        }
-
-        // Instances share source data, but each placement remains its own GPU
-        // draw and therefore counts against the render hot-path budget.
-        let mut active_vertices = 0usize;
-        let mut active_triangles = 0usize;
-        for (_, instance) in self.instances() {
-            if instance.mesh_id == replacement_id {
-                active_vertices = active_vertices.saturating_add(replacement_vertices);
-                active_triangles = active_triangles.saturating_add(replacement_triangles);
-            } else if let Some(mesh) = self.mesh(instance.mesh_id) {
-                active_vertices = active_vertices.saturating_add(mesh.vertices.len());
-                active_triangles =
-                    active_triangles.saturating_add(triangulated_face_count(&mesh.faces));
-            }
-        }
-        self.validate_active_budget(active_vertices, active_triangles)
-    }
-
-    fn validate_instance_budget(
-        &self,
-        replacement_id: InstanceId,
-        replacement_mesh_id: MeshId,
-    ) -> Result<(), ApplyError> {
-        let replacement = self
-            .mesh(replacement_mesh_id)
-            .ok_or(ApplyError::MeshMissing)?;
-        let mut active_vertices = replacement.vertices.len();
-        let mut active_triangles = triangulated_face_count(&replacement.faces);
-        for (instance_id, instance) in self.instances() {
-            if instance_id == replacement_id {
-                continue;
-            }
-            if let Some(mesh) = self.mesh(instance.mesh_id) {
-                active_vertices = active_vertices.saturating_add(mesh.vertices.len());
-                active_triangles =
-                    active_triangles.saturating_add(triangulated_face_count(&mesh.faces));
-            }
-        }
-        self.validate_active_budget(active_vertices, active_triangles)
-    }
-
-    fn validate_active_budget(
-        &self,
-        active_vertices: usize,
-        active_triangles: usize,
-    ) -> Result<(), ApplyError> {
-        if active_vertices > self.limits.max_scene_vertices {
-            return Err(ApplyError::VertexLimit);
-        }
-        if active_triangles > self.limits.max_scene_triangles {
-            return Err(ApplyError::FaceLimit);
-        }
-        Ok(())
     }
 }
 

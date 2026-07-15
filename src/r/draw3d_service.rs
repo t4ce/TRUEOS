@@ -37,8 +37,8 @@ static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static REPLY_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 const FRAME_PERIOD_MS: u64 = 33;
-const RENDER_RETRY_INTERVAL_MS: u64 = 500;
-const RENDER_MAX_RETRIES: u32 = 10;
+const RENDER_STALL_WARN_ATTEMPTS: u32 = 30;
+const RENDER_RETRY_TRACE_INTERVAL: u32 = 300;
 
 struct PresentedSceneFrame {
     width: u32,
@@ -137,9 +137,7 @@ fn apply_command(
 }
 
 fn projected_scene() -> Vec<ProjectedMesh> {
-    let (width, height) = crate::intel::render::resident_scene_target_dimensions();
-    let aspect = width as f32 / height.max(1) as f32;
-    with_scene(|scene| project_scene(scene, aspect))
+    with_scene(|scene| project_scene(scene, 1.0))
 }
 
 fn scene_clear_rgba() -> Option<[u8; 4]> {
@@ -228,10 +226,9 @@ pub async fn draw3d_render_task() {
     let mut resident_geometry_revision = 0u64;
     let mut rendered_revision = 0u64;
     let mut next_frame = Instant::now();
-    let mut next_render_attempt = Instant::now();
     let mut last_sync_error = None;
+    let mut last_render_error = None;
     let mut render_retry_count = 0u32;
-    let mut failed_revision = None;
     let mut residency_ready = false;
     let mut was_running = false;
     let mut clear_rgba = None;
@@ -239,12 +236,10 @@ pub async fn draw3d_render_task() {
     let (target_width, target_height) = crate::intel::render::resident_scene_target_dimensions();
     crate::log_info!(
         target: "draw3d";
-        "draw3d: render engine online running=0 control=tcp-start-stop target_fps=30 frame_ms={} max_meshes=100 max_instances=100 max_scene_triangles={} max_scene_vertices={} target={}x{} surface=single source=fixed-testrig\n",
+        "draw3d: render engine online running=0 control=tcp-start-stop target_fps=30 frame_ms={} max_meshes=100 max_instances=100 max_vertices_per_mesh=1000 target={}x{}\n",
         FRAME_PERIOD_MS,
-        trueos_draw3d::DEFAULT_MAX_SCENE_TRIANGLES,
-        trueos_draw3d::DEFAULT_MAX_SCENE_VERTICES,
         target_width,
-        target_height,
+        target_height
     );
     loop {
         next_frame += EmbassyDuration::from_millis(FRAME_PERIOD_MS);
@@ -270,8 +265,6 @@ pub async fn draw3d_render_task() {
                     residency_ready = true;
                     last_sync_error = None;
                     render_retry_count = 0;
-                    failed_revision = None;
-                    next_render_attempt = Instant::now();
                     crate::log_trace!(
                         target: "draw3d";
                         "draw3d: resident revision={} jobs={} geometry_revision={}\n",
@@ -308,9 +301,6 @@ pub async fn draw3d_render_task() {
         }
 
         if was_running && !running {
-            render_retry_count = 0;
-            failed_revision = None;
-            next_render_attempt = Instant::now();
             let cleared =
                 crate::intel::render::submit_resident_triangle_scene_frame(&[], None, false)
                     .map(|result| result.presented)
@@ -348,17 +338,10 @@ pub async fn draw3d_render_task() {
         }
 
         // The overlay persists without resubmission.  Coalesce TCP updates at
-        // the 30 Hz scene tick and draw only a new revision.  A non-retiring
-        // frame is retried at a deliberately slow cadence with a bounded
-        // per-revision failure budget. A failed revision remains resident but
-        // dormant until a genuinely new revision or a scene restart.
-        if running
-            && residency_ready
-            && !jobs.is_empty()
-            && rendered_revision != resident_revision
-            && failed_revision != Some(resident_revision)
-            && render_retry_count <= RENDER_MAX_RETRIES
-            && Instant::now() >= next_render_attempt
+        // the 30 Hz scene tick and draw only a new revision (or retry a frame
+        // which did not fully retire).  This removes continuous GPU probe
+        // traffic for static scenes while retaining a 30 FPS update ceiling.
+        if running && residency_ready && !jobs.is_empty() && rendered_revision != resident_revision
         {
             let draws = jobs
                 .iter()
@@ -367,7 +350,7 @@ pub async fn draw3d_render_task() {
                     rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
                 })
                 .collect::<Vec<_>>();
-            let diagnostic_submit = render_retry_count == RENDER_MAX_RETRIES;
+            let diagnostic_submit = render_retry_count == RENDER_STALL_WARN_ATTEMPTS;
             match crate::intel::render::submit_resident_triangle_scene_frame(
                 &draws,
                 clear_rgba,
@@ -378,6 +361,7 @@ pub async fn draw3d_render_task() {
                     if complete && result.presented {
                         cache_presented_frame(&mut result);
                         rendered_revision = resident_revision;
+                        last_render_error = None;
                         if render_retry_count == 0 {
                             crate::log_trace!(
                                 target: "draw3d";
@@ -397,31 +381,32 @@ pub async fn draw3d_render_task() {
                             );
                         }
                         render_retry_count = 0;
-                        failed_revision = None;
-                        next_render_attempt = Instant::now();
                     } else {
+                        last_render_error = None;
                         render_retry_count = render_retry_count.saturating_add(1);
-                        if render_retry_count <= RENDER_MAX_RETRIES {
-                            next_render_attempt = Instant::now()
-                                + EmbassyDuration::from_millis(RENDER_RETRY_INTERVAL_MS);
+                        if render_retry_count == 1 {
+                            crate::log_trace!(
+                                target: "draw3d";
+                                "draw3d: frame retry revision={} draws={}/{} reason=incomplete\n",
+                                resident_revision,
+                                result.completed_draws,
+                                result.requested_draws
+                            );
+                        } else if render_retry_count == RENDER_STALL_WARN_ATTEMPTS {
                             crate::log_warn!(
                                 target: "draw3d";
-                                "draw3d: frame incomplete revision={} retry={}/{} draws={}/{} retry_in_ms={}\n",
+                                "draw3d: frame stalled revision={} attempts={} draws={}/{} action=retain-and-retry diagnostics=next-attempt\n",
                                 resident_revision,
                                 render_retry_count,
-                                RENDER_MAX_RETRIES,
                                 result.completed_draws,
-                                result.requested_draws,
-                                RENDER_RETRY_INTERVAL_MS,
+                                result.requested_draws
                             );
-                        } else {
-                            failed_revision = Some(resident_revision);
-                            crate::log_error!(
+                        } else if render_retry_count.is_multiple_of(RENDER_RETRY_TRACE_INTERVAL) {
+                            crate::log_trace!(
                                 target: "draw3d";
-                                "draw3d: frame failed revision={} attempts={} retries={} draws={}/{} action=suspend-until-new-revision-or-restart\n",
+                                "draw3d: frame still retrying revision={} attempts={} draws={}/{}\n",
                                 resident_revision,
                                 render_retry_count,
-                                RENDER_MAX_RETRIES,
                                 result.completed_draws,
                                 result.requested_draws
                             );
@@ -430,27 +415,22 @@ pub async fn draw3d_render_task() {
                 }
                 Err(error) => {
                     render_retry_count = render_retry_count.saturating_add(1);
-                    if render_retry_count <= RENDER_MAX_RETRIES {
-                        next_render_attempt =
-                            Instant::now() + EmbassyDuration::from_millis(RENDER_RETRY_INTERVAL_MS);
+                    if last_render_error != Some(error) {
+                        crate::log_trace!(
+                            target: "draw3d";
+                            "draw3d: frame retry revision={} jobs={} error={}\n",
+                            resident_revision,
+                            jobs.len(),
+                            error
+                        );
+                        last_render_error = Some(error);
+                    }
+                    if render_retry_count == RENDER_STALL_WARN_ATTEMPTS {
                         crate::log_warn!(
                             target: "draw3d";
-                            "draw3d: frame submit failed revision={} retry={}/{} jobs={} error={} retry_in_ms={}\n",
+                            "draw3d: frame stalled revision={} attempts={} jobs={} error={} action=retry diagnostics=next-attempt\n",
                             resident_revision,
                             render_retry_count,
-                            RENDER_MAX_RETRIES,
-                            jobs.len(),
-                            error,
-                            RENDER_RETRY_INTERVAL_MS,
-                        );
-                    } else {
-                        failed_revision = Some(resident_revision);
-                        crate::log_error!(
-                            target: "draw3d";
-                            "draw3d: frame failed revision={} attempts={} retries={} jobs={} error={} action=suspend-until-new-revision-or-restart\n",
-                            resident_revision,
-                            render_retry_count,
-                            RENDER_MAX_RETRIES,
                             jobs.len(),
                             error
                         );

@@ -352,6 +352,84 @@ Recommended resolution:
 - Keep the current flat RGBA path as an explicit `unlit_2d` or `unlit_layer` mode; it is useful for
   graphic compositions when named honestly.
 
+### 11. The live target dimensions do not match the written contract
+
+Classification: **runtime/specification drift; exact source not yet isolated**
+
+Expected:
+
+`PROTOCOL.md` currently states that the service caches and returns an exact 512x512 RGBA8 target.
+The artistic client therefore treated any other dimensions as evidence that it had received a
+fallback image or the wrong render path.
+
+Observed on 2026-07-15:
+
+- Before the garden upload, a fresh connection captured the rig's existing two-mesh test scene as
+  a 2560x1440 PNG.
+- After uploading the full ten-mesh garden, a new capture was also a successful 2560x1440 PNG.
+- The garden capture contained the complete artwork rather than a fallback image and reported the
+  expected scene statistics: ten meshes, ten instances, 1,306 vertices, and 1,468 faces.
+- Its SHA-256 was
+  `956abcae024fef6334c1b1011d16c0c49dcacb3e123619f0eee262c81661267d`.
+
+This does not by itself prove whether the defect is in the running rig image, the current worktree,
+or the protocol document. It does prove that a conforming client cannot safely use the documented
+fixed size to distinguish a scene capture from the fallback path. The scene client was relaxed to
+require a non-empty PNG and to trust the dimensions carried by the response.
+
+Recommended resolution:
+
+- Synchronize the running image and `PROTOCOL.md`, and record the renderer build identity in logs or
+  a queryable response.
+- Return the active target dimensions from `get capabilities`.
+- Add an explicit render-image source field so dimensions are never used to infer live-cache versus
+  fallback-logo provenance.
+
+### 12. TCP cannot reference the kernel's embedded fonts
+
+Classification: **API omission / duplicated font authority**
+
+Expected:
+
+A retained kernel scene API with embedded vector fonts should let a TCP client name a font, supply
+UTF-8 text, and receive an ordinary stored mesh which can then be instanced and transformed like
+the rest of the scene.
+
+Observed on 2026-07-15:
+
+The TCP protocol exposes only caller-supplied vertices, edges, and faces. To put `TRUE OS` into the
+garden without using the shell, the client had to open `tools/L_10646.TTF`—the same file embedded by
+the kernel—rasterize it locally, convert merged glyph-mask runs into shallow cuboids, and upload the
+result through `put mesh`. The result did use the normal persistent draw3d scene path and rendered
+successfully as an eleventh resident mesh, but font selection and geometry generation happened
+outside the kernel.
+
+The title mesh contained 832 vertices, 624 faces, and 1,248 triangles. The complete scene contained
+eleven meshes and eleven instances. Its 2560x1440 PNG SHA-256 was
+`3dea3395db88ce7af00bee05afbfefdbf6897c4eed93bcde63897a05e3eeafd2`.
+
+Why this matters:
+
+- The client and kernel can silently use different revisions of the nominally same font.
+- Every client must bring its own font parser, tessellator, shaping policy, and fallback behavior.
+- The kernel's already-warmed outline cache and persistent font machinery cannot be reused over TCP.
+- A scene cannot reproduce text from its wire description unless the client also preserves the
+  external font file and exact mesh-generation algorithm.
+
+Recommended resolution:
+
+Add a command such as:
+
+```text
+put_embedded_text_mesh(mesh_id, font_id, RGBA, UTF-8 text, tessellation options)
+```
+
+The command should generate a normal stored scene mesh. Existing instance, transform, color,
+copy, delete, persistence, statistics, and rendering operations can then remain unchanged. A
+capability query should enumerate font IDs, stable font names, font asset hashes, supported shaping,
+and the maximum text length. Returning the generated mesh counts in the applied reply would make
+budget failures predictable.
+
 ## Fresh-boot fullscreen retest — 2026-07-15
 
 The native 2560x1440 path was retested after a fresh boot with the smallest colored scene: one
@@ -359,6 +437,18 @@ mesh, one instance, three vertices, and one triangle. The scene was accepted and
 counters advanced, but pixel-shader counters stayed at zero. The service reported `draws=0/1`
 after retries, and the PNG contained only the clear frame. This reproduces the failure after
 reboot, so it is not stale GPU state.
+
+## Rollback confirmation — 2026-07-15
+
+The renderer was restored to the last confirmed smaller baseline: a 512x512 resident target and
+the earlier baked/static-color pixel-shader binding. After rebuilding and rebooting, the minimal
+one-mesh/one-instance triangle rendered successfully and returned a 512x512 PNG. The capture had
+30,732 accent-colored pixels on the white clear background, and the presented-frame log reported
+`draws=1` with `changed_pixels=30732`.
+
+This leaves the artistic decision isolated: enlarge the target first, or investigate the newer
+push-constant shader path first. The current baseline is the reliable comparison point for either
+experiment.
 
 ## What felt good
 
@@ -384,11 +474,13 @@ official client library without changing the protocol.
 1. **P1:** Add real opaque depth testing, or expose an explicit instance sort key as an interim
    control.
 2. **P1:** Add a capability query so clients can discover the renderer's actual semantic contract.
-3. **P2:** Add instance color overrides to decouple reuse, material grouping, and draw ordering.
-4. **P2:** Rename `request render` to reflect cached-frame capture behavior.
-5. **P2:** Constrain or rename polygon faces so invalid concave expectations fail early.
-6. **P2:** Mark edges as non-rendered, or add an actual line-rendering capability.
-7. **P3:** Add atomic update batches and structured error detail.
+3. **P1:** Resolve the live target-size/specification mismatch and expose renderer build identity.
+4. **P2:** Add instance color overrides to decouple reuse, material grouping, and draw ordering.
+5. **P2:** Add embedded-font-to-stored-mesh creation for TCP scene clients.
+6. **P2:** Rename `request render` to reflect cached-frame capture behavior.
+7. **P2:** Constrain or rename polygon faces so invalid concave expectations fail early.
+8. **P2:** Mark edges as non-rendered, or add an actual line-rendering capability.
+9. **P3:** Add atomic update batches and structured error detail.
 
 ## Minimal API evolution sketch
 
@@ -399,6 +491,7 @@ get_capabilities -> target, limits, topology flags, tessellation mode,
                     depth/compositing mode, capture formats
 set_instance_color(instance_id, RGBA | inherit)
 set_instance_sort_key(instance_id, i32 | automatic)
+put_embedded_text_mesh(mesh_id, font_id, RGBA, text, options)
 capture_presented_frame
 begin_update
 commit_update
@@ -416,3 +509,19 @@ material grouping, and disconnected geometry can unexpectedly change visual occl
 exposing control over depth order would improve artistic usability more than adding new primitive
 types. After that, capability discovery and clearer names would make the existing limitations feel
 intentional rather than surprising.
+
+## TCP pattern and alpha/size probes — 2026-07-15
+
+The socket-only ten-concept cadence was run at 500 ms per concept. All ten simple shapes returned
+PNG captures at 2560x1440 with one mesh and one instance; accent coverage ranged from 431,434 to
+996,840 pixels. This is a passing native opaque proof without stress loading.
+
+The alpha path was then exercised with two coincident half-alpha triangles:
+
+- 512x512 target: 43,978 overlap pixels at alpha 192.
+- 2560x1440 target: 617,765 overlap pixels at alpha 192.
+
+The patch enables Gen12 straight-alpha over blending, initializes the GPU target with the actual
+clear color instead of the readback sentinel, and converts the premultiplied intermediate back to
+the API's straight-RGBA capture contract before display upload. The final native capture returned
+the expected straight color `(106,66,186,192)` for blue over red.

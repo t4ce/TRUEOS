@@ -188,6 +188,7 @@ struct VsStreamoutProofConfig {
 #[derive(Copy, Clone)]
 enum TriangleBlendProbeMode {
     ExplicitRt0,
+    StraightAlpha,
     MesaZeroedState,
     MesaZeroedNoBlendPointer,
 }
@@ -205,6 +206,7 @@ impl TriangleBlendProbeMode {
     fn label(self) -> &'static str {
         match self {
             Self::ExplicitRt0 => "explicit-rt0",
+            Self::StraightAlpha => "straight-alpha",
             Self::MesaZeroedState => "mesa-zeroed",
             Self::MesaZeroedNoBlendPointer => "mesa-zeroed-no-blend-ptr",
         }

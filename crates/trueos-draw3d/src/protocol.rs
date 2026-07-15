@@ -8,9 +8,9 @@ use crate::model::{
 pub const PROTOCOL_VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 12;
 pub const MAX_PAYLOAD_LEN: usize = 128 * 1024 * 1024;
-pub const MAX_VERTICES_PER_COMMAND: usize = 300_000;
-pub const MAX_EDGES_PER_COMMAND: usize = 300_000;
-pub const MAX_FACES_PER_COMMAND: usize = 100_000;
+pub const MAX_VERTICES_PER_COMMAND: usize = 16_777_216;
+pub const MAX_EDGES_PER_COMMAND: usize = 16_777_216;
+pub const MAX_FACES_PER_COMMAND: usize = 4_194_304;
 const MAGIC: [u8; 2] = *b"D3";
 const RESPONSE_BIT: u8 = 0x80;
 

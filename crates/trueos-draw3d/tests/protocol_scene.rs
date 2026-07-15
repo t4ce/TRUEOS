@@ -7,34 +7,33 @@ use trueos_draw3d::{
 #[test]
 fn default_scene_enforces_the_experimental_residency_budget() {
     let mut scene = Scene::default();
-    let formerly_oversized =
-        Mesh::new(vec![Vec3::ZERO; 1_001], Vec::new(), Vec::new(), Rgba8::WHITE);
-    scene
-        .apply(Command::PutMesh {
+    let oversized = Mesh::new(vec![Vec3::ZERO; 1_001], Vec::new(), Vec::new(), Rgba8::WHITE);
+    assert_eq!(
+        scene.apply(Command::PutMesh {
             mesh_id: 1,
-            mesh: formerly_oversized,
-        })
-        .unwrap();
-    scene.apply(Command::Clear).unwrap();
+            mesh: oversized,
+        }),
+        Err(ApplyError::VertexLimit)
+    );
 
-    let over_triangle_budget = Mesh::new(
-        vec![Vec3::ZERO; 50_003],
+    let fan = Mesh::new(
+        vec![Vec3::ZERO; 1_000],
         Vec::new(),
         vec![
-            Face::new((0u32..50_003).collect()),
-            Face::new((0u32..50_002).collect()),
+            Face::new((0u32..1_000).collect()),
+            Face::new((0u32..1_000).collect()),
+            Face::new((0u32..1_000).collect()),
         ],
         Rgba8::WHITE,
     );
     assert_eq!(
         scene.apply(Command::PutMesh {
             mesh_id: 2,
-            mesh: over_triangle_budget,
+            mesh: fan,
         }),
         Err(ApplyError::FaceLimit)
     );
 
-    scene.apply(Command::Clear).unwrap();
     for mesh_id in 0..100 {
         scene
             .apply(Command::PutMesh {
@@ -50,42 +49,6 @@ fn default_scene_enforces_the_experimental_residency_budget() {
         }),
         Err(ApplyError::MeshLimit)
     );
-}
-
-#[test]
-fn placed_instances_are_bounded_at_one_hundred_thousand_triangles() {
-    let mut scene = Scene::default();
-    scene
-        .apply(Command::PutMesh {
-            mesh_id: 1,
-            mesh: fan_mesh(50_000),
-        })
-        .unwrap();
-    for instance_id in 1..=2 {
-        scene
-            .apply(Command::PutInstance {
-                instance_id,
-                instance: Instance::new(1, Transform::IDENTITY),
-            })
-            .unwrap();
-    }
-    assert_eq!(
-        scene.apply(Command::PutInstance {
-            instance_id: 3,
-            instance: Instance::new(1, Transform::IDENTITY),
-        }),
-        Err(ApplyError::FaceLimit)
-    );
-}
-
-fn fan_mesh(triangle_count: u32) -> Mesh {
-    let vertex_count = triangle_count + 2;
-    Mesh::new(
-        vec![Vec3::ZERO; vertex_count as usize],
-        Vec::new(),
-        vec![Face::new((0..vertex_count).collect())],
-        Rgba8::WHITE,
-    )
 }
 
 fn triangle(color: Rgba8) -> Mesh {

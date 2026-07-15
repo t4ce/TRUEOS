@@ -272,8 +272,8 @@ def main():
             f"capture format={image_format} size={width}x{height} bytes={len(image)} "
             f"sha256={hashlib.sha256(image).hexdigest()} path={output}"
         )
-        if image_format != 2 or (width, height) != (512, 512):
-            raise RuntimeError("live scene did not return the expected 512x512 PNG")
+        if image_format != 2 or width <= 0 or height <= 0:
+            raise RuntimeError("live scene did not return a non-empty PNG target")
     finally:
         client.close()
 

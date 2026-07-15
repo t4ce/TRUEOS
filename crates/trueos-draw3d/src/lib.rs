@@ -7,8 +7,7 @@ pub mod protocol;
 pub mod render;
 
 pub use model::{
-    ApplyError, ApplyOutcome, DEFAULT_MAX_SCENE_EDGES, DEFAULT_MAX_SCENE_TRIANGLES,
-    DEFAULT_MAX_SCENE_VERTICES, Edge, Face, Instance, InstanceId, Mesh, MeshId, Rgba8, Scene,
+    ApplyError, ApplyOutcome, Edge, Face, Instance, InstanceId, Mesh, MeshId, Rgba8, Scene,
     SceneLimits, SceneStats, Transform, Vec3, ViewCamera,
 };
 pub use protocol::{
