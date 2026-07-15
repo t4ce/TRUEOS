@@ -394,7 +394,7 @@ fn submit_gpgpu_preflight(dev: crate::intel::Dev, warm: RenderWarmState) -> bool
     );
 
     crate::log!(
-        "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants submission=direct-execlist uc_fw_disabled=1 lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul\n",
+        "intel/gpgpu: preflight accepted={} completed={} backend=rcs-mi-store-constants submission=guc-ctb submission_owner=guc lanes={} marker=0x{:08X} dot={} sum_a={} sum_b={} batch_bytes=0x{:X} input_a_gpu=0x{:X} input_b_gpu=0x{:X} result_gpu=0x{:X} next=eu-kernel-dispatch does_not_prove=eu_thread_execution_or_matmul\n",
         accepted as u8,
         completed as u8,
         gpu_lanes,

@@ -933,16 +933,19 @@ const DIRECT_RCS_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
 const DIRECT_RCS_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
-const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x0080_0000;
-const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
-const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
+// GuC registrations require stable HWLRCAs. Keep the GPGPU context window
+// distinct from render/font's 0x0080_0000 window instead of remapping another
+// allocation underneath the same registered context.
+const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x01B0_0000;
+const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01B1_0000;
+const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x01B4_0000;
 const DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE: u64 = 0x0089_0000;
 const DIRECT_RCS_GPU_VA_SHELL_SURFACE_BASE: u64 = 0x008A_0000;
 const DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE: u64 = 0x008F_0000;
 const DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE: u64 = 0x0090_0000;
 const DIRECT_RCS_GPU_VA_PRESENT_STAGING_BASE: u64 = 0x00A0_0000;
 const DIRECT_RCS_GPU_VA_SOLID_RECT_SOURCE_BASE: u64 = 0x0400_0000;
-const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
+const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_FONT_TESSEL_MARKER: u32 = 0xF07E_5501;
 const DIRECT_RCS_FONT_TESSEL_3D_PIPE_MARKER: u32 = 0x3D00_5501;
@@ -5676,7 +5679,7 @@ pub(crate) fn submit_direct_rcs_smoke_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: direct-rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=gpgpu-walker\n",
+        "intel/gpgpu: rcs-smoke forcewake={} ggtt={} ppgtt={} batch={} submitted={} retired={} retire_ms={} observed=0x{:08X} expected=0x{:08X} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=guc-ctb submission_owner=guc direct_elsp=0 next=gpgpu-walker\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -5796,7 +5799,7 @@ pub(crate) fn submit_copy_rect_rgba8_strip_once() -> bool {
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: copy-rect-rgba8-strip forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} test_ppgtt={} batch={} submitted={} retired={} retire_ms={} src_before_ok={} dst_before_ok={} src_ok={} copy_ok={} copied={}/{} src_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] src_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} buf_gpu=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} idd_off=0x{:X} payload_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=direct-execlist no_guc_submit=1 next=recursive-copy-visual\n",
+        "intel/gpgpu: copy-rect-rgba8-strip forcewake={} ggtt={} ppgtt={} kernel_ppgtt={} test_ppgtt={} batch={} submitted={} retired={} retire_ms={} src_before_ok={} dst_before_ok={} src_ok={} copy_ok={} copied={}/{} src_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_before=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] src_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] dst_after=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} buf_gpu=0x{:X} rect={}x{} src_xy=0,0 dst_xy={},0 pitch={} idd_off=0x{:X} payload_off=0x{:X} simd=16 groups=1 threads_per_group={} ring_gpu=0x{:X} batch_gpu=0x{:X} result_gpu=0x{:X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} path=guc-ctb submission_owner=guc direct_elsp=0 next=recursive-copy-visual\n",
         forcewake_ok as u8,
         mapped_ok as u8,
         ppgtt_ok as u8,
@@ -8446,7 +8449,9 @@ pub(crate) fn shell_pixel_plasma_scanout(
     present: bool,
 ) -> Option<GpgpuShellPixelResult> {
     let total_start_tick = direct_rcs_now_tick();
-    let target = super::display::ui3_frame_composition_gpgpu()?;
+    let display_target = super::display::primary_display_output_target()?;
+    let output_frame = super::display::acquire_ui3_output_frame_composition_gpgpu(display_target)?;
+    let target = output_frame.surface;
     let dst = GpgpuRgba8Surface::new(
         target.phys,
         target.gpu,
@@ -8469,10 +8474,17 @@ pub(crate) fn shell_pixel_plasma_scanout(
     let submitted = marker == PIXEL_PLASMA_POST_MARKER;
     let present_start_tick = direct_rcs_now_tick();
     let presented = if submitted && present {
-        super::display::commit_ui3_frame_composition_gpgpu(target, "gpgpu-pixel-plasma-frame")
+        super::display::commit_ui3_output_frame_composition_gpgpu(
+            output_frame,
+            "gpgpu-pixel-plasma-frame",
+        )
     } else {
+        let _ = super::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
         false
     };
+    if submitted && present && !presented {
+        let _ = super::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
+    }
     let present_us = direct_rcs_elapsed_us_since(present_start_tick);
     Some(GpgpuShellPixelResult {
         ok: submitted && (!present || presented),
@@ -15301,28 +15313,11 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
         return false;
     }
     let (context_desc_lo, context_desc_hi) =
-        direct_rcs_context_descriptor(DIRECT_RCS_GPU_VA_CONTEXT_BASE);
+        guc_rcs_context_descriptor(DIRECT_RCS_GPU_VA_CONTEXT_BASE);
     direct_rcs_write_lrc_ring_tail(state, ring_tail_bytes as u32);
-    let pphwsp_gpu = (DIRECT_RCS_GPU_VA_CONTEXT_BASE & !0xFFF) as u32;
-
-    super::mmio_write(dev, GEN12_RCU_MODE, direct_rcs_masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
-    super::mmio_write(
-        dev,
-        RCS_RING_MODE_GEN7,
-        direct_rcs_masked_bit_enable(GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE),
-    );
-    let ctx_ctl = direct_rcs_ctx_control_value(false);
-    super::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl);
-    super::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl);
-    super::mmio_write(dev, RCS_RING_MI_MODE, direct_rcs_masked_bit_disable(RING_MI_MODE_STOP_RING));
-    super::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
     super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
-
-    direct_rcs_execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
-    super::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
-    super::mmio_write(dev, RCS_RING_TAIL, ring_tail_bytes as u32);
-    true
+    super::guc_submission::submit_rcs_lrc(dev, context_desc_lo, context_desc_hi)
 }
 
 fn direct_rcs_build_ring_batch_start(state: DirectRcsState, batch_gpu_addr: u64) -> usize {
@@ -15690,6 +15685,15 @@ fn direct_rcs_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let sw_context_id = (((submit_id & 0x3FF) << 1) ^ base_context_id).max(1) & 0x7FF;
     let desc_hi = ((context_gpu_addr >> 32) as u32) | (sw_context_id << 7);
     (desc, desc_hi)
+}
+
+fn guc_rcs_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+    let base = (context_gpu_addr as u32) & 0xFFFF_F000;
+    let descriptor = base
+        | GEN8_CTX_VALID
+        | GEN8_CTX_PRIVILEGE
+        | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
+    (descriptor, (context_gpu_addr >> 32) as u32)
 }
 
 fn direct_rcs_execlist_submit_port_push(

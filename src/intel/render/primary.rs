@@ -278,11 +278,15 @@ pub(crate) struct ResidentSceneFrameOwner {
     state_phys: u64,
     state_virt: *mut u8,
     state_mapped: bool,
-    target_mappings: [Option<ResidentSceneTargetMapping>; 2],
+    target_mappings: [
+        Option<ResidentSceneTargetMapping>;
+        crate::intel::display::DISPLAY_FRAME_TARGET_CAPACITY
+    ],
 }
 
 #[derive(Copy, Clone)]
 struct ResidentSceneTargetMapping {
+    pipeline: crate::intel::display::DisplayPipelineId,
     gpu: u64,
     phys: u64,
     bytes: usize,
@@ -322,7 +326,7 @@ impl ResidentSceneFrameOwner {
             state_phys,
             state_virt,
             state_mapped: true,
-            target_mappings: [None; 2],
+            target_mappings: [None; crate::intel::display::DISPLAY_FRAME_TARGET_CAPACITY],
         })
     }
 
@@ -331,7 +335,8 @@ impl ResidentSceneFrameOwner {
         target: crate::intel::display::DisplayRgba8GpgpuSurface,
     ) -> bool {
         if self.target_mappings.iter().flatten().any(|mapping| {
-            mapping.gpu == target.gpu
+            mapping.pipeline == target.pipeline
+                && mapping.gpu == target.gpu
                 && mapping.phys == target.phys
                 && mapping.bytes == target.byte_len
         }) {
@@ -345,8 +350,13 @@ impl ResidentSceneFrameOwner {
         {
             let old = slot.take().expect("checked scene target mapping");
             if !unmap_render_ppgtt_range(old.gpu, old.bytes) {
-                *slot = Some(old);
-                return false;
+                crate::log_warn!(
+                    target: "draw3d";
+                    "draw3d-frame-owner: stale target mapping not present during replacement pipeline={} gpu=0x{:X} bytes=0x{:X} potential_reason=display-owner-retired-previous-mode-surface action=attempt-current-target-map\n",
+                    old.pipeline.name(),
+                    old.gpu,
+                    old.bytes,
+                );
             }
         }
         if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
@@ -357,6 +367,7 @@ impl ResidentSceneFrameOwner {
             return false;
         };
         *slot = Some(ResidentSceneTargetMapping {
+            pipeline: target.pipeline,
             gpu: target.gpu,
             phys: target.phys,
             bytes: target.byte_len,
@@ -419,8 +430,41 @@ impl Drop for ResidentSceneFrameOwner {
 pub(crate) fn reset_resident_triangle_scene_frame_owner(
     owner: &mut Option<ResidentSceneFrameOwner>,
 ) -> bool {
-    let display_reset =
-        crate::intel::display::reset_ui3_frame_composition_gpgpu("draw3d-permanent-stop");
+    let mut pipelines = [None; crate::intel::display::DISPLAY_PIPELINE_COUNT];
+    if let Some(owner) = owner.as_ref() {
+        for mapping in owner.target_mappings.iter().flatten() {
+            if pipelines
+                .iter()
+                .flatten()
+                .all(|pipeline| *pipeline != mapping.pipeline)
+            {
+                if let Some(slot) = pipelines.iter_mut().find(|slot| slot.is_none()) {
+                    *slot = Some(mapping.pipeline);
+                }
+            }
+        }
+    }
+    if let Some(active) = crate::intel::display::active_display_pipeline_target() {
+        if pipelines
+            .iter()
+            .flatten()
+            .all(|pipeline| *pipeline != active.pipeline)
+        {
+            if let Some(slot) = pipelines.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(active.pipeline);
+            }
+        }
+    }
+    let mut display_reset = true;
+    for pipeline in pipelines.into_iter().flatten() {
+        display_reset &= crate::intel::display::reset_ui3_frame_composition_gpgpu(
+            pipeline,
+            "draw3d-permanent-stop",
+        );
+    }
+    if !display_reset {
+        return false;
+    }
     let state_reset = match owner.as_mut() {
         Some(owner) => owner.release(),
         None => true,
@@ -428,7 +472,7 @@ pub(crate) fn reset_resident_triangle_scene_frame_owner(
     if state_reset {
         *owner = None;
     }
-    display_reset && state_reset
+    state_reset
 }
 
 #[derive(Debug)]
@@ -607,22 +651,36 @@ fn submit_resident_triangle_scene_frame_batched(
             return Err("render-map");
         }
 
-        let (target_width, target_height) = resident_scene_target_dimensions();
+        let display_output_target =
+            crate::intel::display::primary_display_output_target().ok_or("ui3-frame-display")?;
+        let display_target = display_output_target.pipeline_target;
+        let target_width = display_target.width as usize;
+        let target_height = display_target.height as usize;
+        if target_width == 0
+            || target_height == 0
+            || target_width > DRAW3D_SCENE_TARGET_WIDTH
+            || target_height > DRAW3D_SCENE_TARGET_HEIGHT
+        {
+            return Err("ui3-frame-display-shape");
+        }
         let target_pitch = target_width * core::mem::size_of::<u32>();
         let target_bytes = target_pitch * target_height;
-        let target = crate::intel::display::acquire_ui3_frame_composition_gpgpu()
-            .ok_or("ui3-frame-target")?;
+        let output_frame = crate::intel::display::acquire_ui3_output_frame_composition_gpgpu(
+            display_output_target,
+        )
+        .ok_or("ui3-frame-target")?;
+        let target = output_frame.surface;
         if target.width as usize != target_width
             || target.height as usize != target_height
             || target.pitch_bytes as usize != target_pitch
             || target.byte_len < target_bytes
             || target.virt.is_null()
         {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("ui3-frame-target-shape");
         }
         if !owner.ensure_target_mapped(target) {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("ui3-frame-target-map");
         }
         let acquire_complete_ns = crate::chronos::monotonic_nanos();
@@ -636,7 +694,7 @@ fn submit_resident_triangle_scene_frame_batched(
             )
             .ok_or("scene-frame-batch-capacity")?;
         if used_batch_bytes > warm.batch_len {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("scene-frame-batch-capacity");
         }
 
@@ -660,7 +718,7 @@ fn submit_resident_triangle_scene_frame_batched(
             "draw3d-fullscreen-clear",
             &CLEAR_TRIANGLE,
         ) else {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("target-clear-resources");
         };
         stage_resident_scene_secondary(
@@ -684,7 +742,8 @@ fn submit_resident_triangle_scene_frame_batched(
                 target_height,
                 scene_draw.mesh,
             ) else {
-                let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+                let _ =
+                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
                 return Err("scene-frame-resident-draw");
             };
             let target_rgba = [
@@ -717,17 +776,17 @@ fn submit_resident_triangle_scene_frame_batched(
         );
         let submit_complete_ns = crate::chronos::monotonic_nanos();
         let presented = if completed {
-            crate::intel::display::commit_ui3_frame_composition_produced(
-                target,
+            crate::intel::display::commit_ui3_output_frame_composition_produced(
+                output_frame,
                 crate::intel::display::DisplayFrameProducer::GpuCoherent,
                 "draw3d-ui3-frame",
             )
         } else {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             false
         };
         if completed && !presented {
-            let _ = crate::intel::display::discard_ui3_frame_composition_gpgpu(target);
+            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
         }
         let commit_complete_ns = crate::chronos::monotonic_nanos();
         let (gpu_poll_us, poll_iters) = draw3d_last_gpu_poll_profile();
@@ -741,8 +800,14 @@ fn submit_resident_triangle_scene_frame_batched(
             let total_us = commit_complete_ns.saturating_sub(frame_started_ns) / 1_000;
             crate::log_info!(
                 target: "render";
-                "draw3d-frame-profile seq={} source=direct-render-to-overlay target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_commit_us={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={}\n",
+                "draw3d-frame-profile seq={} output={} pipeline={} state={} ddi={} link_mode={} bpc={} source=direct-render-to-overlay copy_path=none target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_commit_us={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={}\n",
                 profile_seq,
+                display_output_target.output.name(),
+                display_target.pipeline.name(),
+                display_target.activity.name(),
+                display_target.route.ddi.name(),
+                display_target.route.mode_name(),
+                display_target.route.bits_per_color(),
                 target_width,
                 target_height,
                 draws.len(),
@@ -795,7 +860,23 @@ fn submit_resident_triangle_scene_frame_to(
     destination: ResidentSceneFrameDestination,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
-    let (target_width, target_height) = resident_scene_target_dimensions();
+    let local_display_target = if destination == ResidentSceneFrameDestination::LocalDisplay {
+        Some(crate::intel::display::primary_display_output_target().ok_or("ui3-frame-display")?)
+    } else {
+        None
+    };
+    let (target_width, target_height) = local_display_target
+        .map(|target| {
+            (target.pipeline_target.width as usize, target.pipeline_target.height as usize)
+        })
+        .unwrap_or_else(resident_scene_target_dimensions);
+    if target_width == 0
+        || target_height == 0
+        || target_width > DRAW3D_SCENE_TARGET_WIDTH
+        || target_height > DRAW3D_SCENE_TARGET_HEIGHT
+    {
+        return Err("ui3-frame-display-shape");
+    }
     let target_pitch = target_width * core::mem::size_of::<u32>();
     let target_bytes = target_pitch * target_height;
 
@@ -853,25 +934,32 @@ fn submit_resident_triangle_scene_frame_to(
         }
 
         let local_target = if destination == ResidentSceneFrameDestination::LocalDisplay {
-            let target = crate::intel::display::ui3_frame_composition_gpgpu()
-                .ok_or("ui3-frame-target")?;
+            let display_target = local_display_target.ok_or("ui3-frame-display")?;
+            let output_frame =
+                crate::intel::display::acquire_ui3_output_frame_composition_gpgpu(display_target)
+                    .ok_or("ui3-frame-target")?;
+            let target = output_frame.surface;
             if target.width as usize != target_width
                 || target.height as usize != target_height
                 || target.pitch_bytes as usize != target_pitch
                 || target.byte_len < target_bytes
                 || target.virt.is_null()
             {
+                let _ =
+                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
                 return Err("ui3-frame-target-shape");
             }
             if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
+                let _ =
+                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
                 return Err("ui3-frame-target-map");
             }
-            Some(target)
+            Some(output_frame)
         } else {
             None
         };
-        let target_gpu = local_target.map_or(GPU_VA_STREAMOUT_BASE, |target| target.gpu);
-        let target_virt = local_target.map_or(warm.streamout_virt, |target| target.virt);
+        let target_gpu = local_target.map_or(GPU_VA_STREAMOUT_BASE, |frame| frame.surface.gpu);
+        let target_virt = local_target.map_or(warm.streamout_virt, |frame| frame.surface.virt);
 
         // Draw3D uses straight-alpha blending.  The GPU must see the real
         // clear color as its destination for the first translucent draw;
@@ -966,9 +1054,9 @@ fn submit_resident_triangle_scene_frame_to(
         if frame_complete {
             match destination {
                 ResidentSceneFrameDestination::LocalDisplay => {
-                    let target = local_target.ok_or("ui3-frame-target")?;
-                    presented = crate::intel::display::commit_ui3_frame_composition_gpgpu(
-                        target,
+                    let frame = local_target.ok_or("ui3-frame-target")?;
+                    presented = crate::intel::display::commit_ui3_output_frame_composition_gpgpu(
+                        frame,
                         "draw3d-ui3-frame",
                     );
                 }
@@ -1004,6 +1092,13 @@ fn submit_resident_triangle_scene_frame_to(
                     }
                     rgba = Some(visible_rgba);
                 }
+            }
+        }
+        if destination == ResidentSceneFrameDestination::LocalDisplay
+            && (!frame_complete || !presented)
+        {
+            if let Some(frame) = local_target {
+                let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(frame);
             }
         }
         Ok(ResidentSceneFrameResult {

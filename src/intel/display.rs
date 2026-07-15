@@ -89,27 +89,79 @@ const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
 const OVERLAY_COMPOSITION_PROOF_MARKER_X: u32 = 48;
 const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
 const OVERLAY_SWAP_BUFFER_COUNT: usize = 2;
-const OVERLAY_SWAP_GPU_BASE: u64 = 0x0700_0000;
-const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
+pub(super) const DISPLAY_PIPELINE_COUNT: usize = PIPES.len();
+pub(super) const DISPLAY_OUTPUT_COUNT: usize = 4;
+const _: () = assert!(DISPLAY_OUTPUT_COUNT == DISPLAY_PIPELINE_COUNT);
+// Both display GGTT and the legacy direct-RCS PPGTT consume these addresses.
+// The latter currently covers only the low 1 GiB, so keep all four pipelines'
+// two-buffer arenas below that boundary and outside the resident font/scene
+// ranges used by the production Draw3D render context.
+const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
+const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
+const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
+const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
 const PRIMARY_SWAP_BUFFER_COUNT: usize = 2;
-const PRIMARY_SWAP_GPU_BASE: u64 = 0x3000_0000;
-const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0200_0000;
+const PRIMARY_SWAP_GPU_BASE: u64 = 0x3100_0000;
+const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
+const PRIMARY_SWAP_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
+const PRIMARY_SECONDARY_PIPE_GPU_BASE: u64 = 0x3900_0000;
+const PRIMARY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
+const PRIMARY_LEGACY_PIPE_GPU_CAPACITY: u64 = 0x0100_0000;
+const _: () = assert!(OVERLAY_PIPE_GPU_STRIDE >= OVERLAY_SWAP_GPU_STRIDE * 2);
+const _: () = assert!(PRIMARY_SWAP_PIPE_GPU_STRIDE >= PRIMARY_SWAP_GPU_STRIDE * 2);
+const _: () = assert!(
+    OVERLAY_SWAP_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
+        <= PRIMARY_SWAP_GPU_BASE
+);
+const _: () = assert!(
+    PRIMARY_SWAP_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * PRIMARY_SWAP_PIPE_GPU_STRIDE
+        <= PRIMARY_SECONDARY_PIPE_GPU_BASE
+);
+const _: () = assert!(
+    PRIMARY_SECONDARY_PIPE_GPU_BASE + (DISPLAY_PIPELINE_COUNT as u64 - 1) * PRIMARY_PIPE_GPU_STRIDE
+        <= DISPLAY_DIRECT_RCS_VA_LIMIT
+);
+pub(super) const DISPLAY_FRAME_TARGET_CAPACITY: usize =
+    DISPLAY_PIPELINE_COUNT * OVERLAY_SWAP_BUFFER_COUNT;
 const VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE: bool = true;
 const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
-static PRIMARY_SURFACE: Mutex<Option<PrimarySurface>> = Mutex::new(None);
-static PRIMARY_PLANE_SOURCE_BINDING: Mutex<Option<PrimaryPlaneSourceBinding>> = Mutex::new(None);
+static PRIMARY_SURFACES: [Mutex<Option<PrimarySurface>>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+];
+static PRIMARY_PLANE_SOURCE_BINDINGS: [Mutex<Option<PrimaryPlaneSourceBinding>>;
+    DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+    Mutex::new(None),
+];
 static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI3_FRAME_FLIP_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI3_FRAME_REARM_SEQ: AtomicU32 = AtomicU32::new(0);
-static OVERLAY_SURFACE: Mutex<OverlaySurfacePool> = Mutex::new(OverlaySurfacePool::new());
-static PRIMARY_SWAP_SURFACE: Mutex<PrimarySwapSurfacePool> =
-    Mutex::new(PrimarySwapSurfacePool::new());
+static UI3_FRAME_TARGET_REJECT_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI3_OUTPUT_TARGET_REJECT_SEQ: AtomicU32 = AtomicU32::new(0);
+static DISPLAY_PIPELINE_SELECTION_SIGNATURE: AtomicU32 = AtomicU32::new(u32::MAX);
+static OVERLAY_SURFACES: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+];
+static PRIMARY_SWAP_SURFACES: [Mutex<PrimarySwapSurfacePool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(PrimarySwapSurfacePool::new()),
+    Mutex::new(PrimarySwapSurfacePool::new()),
+    Mutex::new(PrimarySwapSurfacePool::new()),
+    Mutex::new(PrimarySwapSurfacePool::new()),
+];
 static VIDEO_NV12_PLANE_ALPHA: AtomicU32 = AtomicU32::new(0xFF);
 static HW_LOGO_PENDING_IDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -272,15 +324,375 @@ struct DisplayRgba8Surface {
 unsafe impl Send for DisplayRgba8Surface {}
 unsafe impl Sync for DisplayRgba8Surface {}
 
-#[derive(Copy, Clone)]
-pub(super) struct DisplayRgba8GpgpuSurface {
+/// Stable identity for one of Intel's four display-pipeline slots.
+///
+/// A pipeline is not the same thing as a connector or a monitor. Routing can
+/// change later; frame and plane ownership remains keyed by this hardware
+/// slot so an inactive pipe never aliases the active pipe's resources.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(transparent)]
+pub(super) struct DisplayPipelineId(u8);
+
+impl DisplayPipelineId {
+    pub(super) const fn from_slot(slot: usize) -> Option<Self> {
+        if slot < DISPLAY_PIPELINE_COUNT {
+            Some(Self(slot as u8))
+        } else {
+            None
+        }
+    }
+
+    pub(super) const fn slot(self) -> usize {
+        self.0 as usize
+    }
+
+    pub(super) const fn name(self) -> &'static str {
+        match self.0 {
+            0 => "pipe-a",
+            1 => "pipe-b",
+            2 => "pipe-c",
+            3 => "pipe-d",
+            _ => "pipe-invalid",
+        }
+    }
+
+    fn from_pipe(pipe: PipeInfo) -> Option<Self> {
+        Self::from_slot(pipe.slot)
+    }
+
+    fn pipe(self) -> Option<PipeInfo> {
+        PIPES.get(self.slot()).copied()
+    }
+}
+
+/// Stable compositor-facing identity for one of the four logical display
+/// outputs. An output is not a pipe, DDI route, connector, or monitor. The
+/// current baseline assigns live hardware routes to these slots; connector
+/// discovery can later preserve an output while moving it between pipes.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(transparent)]
+pub(super) struct DisplayOutputId(u8);
+
+impl DisplayOutputId {
+    pub(super) const fn from_slot(slot: usize) -> Option<Self> {
+        if slot < DISPLAY_OUTPUT_COUNT {
+            Some(Self(slot as u8))
+        } else {
+            None
+        }
+    }
+
+    pub(super) const fn slot(self) -> usize {
+        self.0 as usize
+    }
+
+    pub(super) const fn name(self) -> &'static str {
+        match self.0 {
+            0 => "D01",
+            1 => "D02",
+            2 => "D03",
+            3 => "D04",
+            _ => "D-invalid",
+        }
+    }
+}
+
+fn primary_surface_owner(pipe: PipeInfo) -> &'static Mutex<Option<PrimarySurface>> {
+    &PRIMARY_SURFACES[pipe.slot]
+}
+
+fn primary_plane_source_binding_owner(
+    pipe: PipeInfo,
+) -> &'static Mutex<Option<PrimaryPlaneSourceBinding>> {
+    &PRIMARY_PLANE_SOURCE_BINDINGS[pipe.slot]
+}
+
+fn primary_plane_source_binding_conflict(
+    pipeline: DisplayPipelineId,
+    binding: PrimaryPlaneSourceBinding,
+) -> Option<(DisplayPipelineId, PrimaryPlaneSourceBinding)> {
+    for (slot, owner) in PRIMARY_PLANE_SOURCE_BINDINGS.iter().enumerate() {
+        let other_pipeline = DisplayPipelineId::from_slot(slot)?;
+        if other_pipeline == pipeline {
+            continue;
+        }
+        let Some(other) = *owner.lock() else {
+            continue;
+        };
+        let identical_mapping = binding.phys == other.phys
+            && binding.gpu == other.gpu
+            && binding.byte_len == other.byte_len;
+        if !identical_mapping
+            && display_gpu_ranges_overlap(binding.gpu, binding.byte_len, other.gpu, other.byte_len)
+        {
+            return Some((other_pipeline, other));
+        }
+    }
+    None
+}
+
+fn display_gpu_ranges_overlap(a_gpu: u64, a_len: usize, b_gpu: u64, b_len: usize) -> bool {
+    let Some(a_len) = u64::try_from(a_len).ok() else {
+        return true;
+    };
+    let Some(b_len) = u64::try_from(b_len).ok() else {
+        return true;
+    };
+    let Some(a_end) = a_gpu.checked_add(a_len) else {
+        return true;
+    };
+    let Some(b_end) = b_gpu.checked_add(b_len) else {
+        return true;
+    };
+    a_gpu < b_end && b_gpu < a_end
+}
+
+fn primary_surface_for_pipe(pipe: PipeInfo) -> Option<PrimarySurface> {
+    *primary_surface_owner(pipe).lock()
+}
+
+fn primary_surface_for_pipeline(pipeline: DisplayPipelineId) -> Option<PrimarySurface> {
+    primary_surface_for_pipe(pipeline.pipe()?)
+}
+
+fn active_primary_surface() -> Option<PrimarySurface> {
+    if let Some(dev) = crate::intel::claimed_device() {
+        if let Some(surface) = active_pipe(dev).and_then(primary_surface_for_pipe) {
+            return Some(surface);
+        }
+    }
+    PRIMARY_SURFACES.iter().find_map(|owner| *owner.lock())
+}
+
+fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
+    if pipe.slot == 0 {
+        return Some(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE);
+    }
+    PRIMARY_SECONDARY_PIPE_GPU_BASE
+        .checked_add((pipe.slot as u64 - 1).checked_mul(PRIMARY_PIPE_GPU_STRIDE)?)
+}
+
+fn primary_surface_gpu_capacity(pipe: PipeInfo) -> u64 {
+    if pipe.slot == 0 {
+        PRIMARY_LEGACY_PIPE_GPU_CAPACITY
+    } else {
+        PRIMARY_PIPE_GPU_STRIDE
+    }
+}
+
+/// Hardware evidence for whether a display pipeline is merely programmed or
+/// is complete enough to be treated as a live scanout path.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum DisplayPipelineActivity {
+    Inactive,
+    Programmed,
+    Scanout,
+}
+
+impl DisplayPipelineActivity {
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::Programmed => "programmed",
+            Self::Scanout => "scanout",
+        }
+    }
+}
+
+/// Route selected by TRANS_DDI_FUNC_CTL. This identifies the display-engine
+/// route, not a connector or monitor; connector discovery remains a separate
+/// policy layer.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum DisplayDdiRoute {
+    None,
+    DdiB,
+    DdiC,
+    DdiD,
+    DdiETc1,
+    DdiFTc2,
+    DdiGTc3,
+    DdiHTc4,
+}
+
+impl DisplayDdiRoute {
+    const fn from_select(select: u32) -> Self {
+        match select & 0x07 {
+            0 => Self::None,
+            1 => Self::DdiB,
+            2 => Self::DdiC,
+            3 => Self::DdiD,
+            4 => Self::DdiETc1,
+            5 => Self::DdiFTc2,
+            6 => Self::DdiGTc3,
+            _ => Self::DdiHTc4,
+        }
+    }
+
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::DdiB => "ddi-b",
+            Self::DdiC => "ddi-c",
+            Self::DdiD => "ddi-d",
+            Self::DdiETc1 => "ddi-e/tc1",
+            Self::DdiFTc2 => "ddi-f/tc2",
+            Self::DdiGTc3 => "ddi-g/tc3",
+            Self::DdiHTc4 => "ddi-h/tc4",
+        }
+    }
+
+    const fn select(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::DdiB => 1,
+            Self::DdiC => 2,
+            Self::DdiD => 3,
+            Self::DdiETc1 => 4,
+            Self::DdiFTc2 => 5,
+            Self::DdiGTc3 => 6,
+            Self::DdiHTc4 => 7,
+        }
+    }
+}
+
+/// Stable route facts which must remain true from frame acquisition through
+/// scanout commit. This catches same-resolution reroutes that a width/height
+/// comparison alone cannot see.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct DisplayPipelineRoute {
+    pub(super) ddi: DisplayDdiRoute,
+    pub(super) transcoder_mode: u8,
+    pub(super) bits_per_color_select: u8,
+    pub(super) sync_polarity: u8,
+    pub(super) port_width: u8,
+    pub(super) pipe_enabled: bool,
+    pub(super) transcoder_enabled: bool,
+    pub(super) primary_enabled: bool,
+    pub(super) primary_bound: bool,
+}
+
+impl DisplayPipelineRoute {
+    fn from_registers(
+        pipeconf: u32,
+        transcoder: u32,
+        primary_ctl: u32,
+        primary_surf: u32,
+        primary_live: u32,
+    ) -> Self {
+        Self {
+            ddi: DisplayDdiRoute::from_select((transcoder >> 27) & 0x07),
+            transcoder_mode: ((transcoder >> 24) & 0x07) as u8,
+            bits_per_color_select: ((transcoder >> 20) & 0x03) as u8,
+            sync_polarity: ((transcoder >> 16) & 0x03) as u8,
+            port_width: ((transcoder >> 1) & 0x07) as u8,
+            pipe_enabled: (pipeconf & (1 << 31)) != 0,
+            transcoder_enabled: (transcoder & (1 << 31)) != 0,
+            primary_enabled: (primary_ctl & PLANE_CTL_ENABLE) != 0,
+            primary_bound: primary_surf != 0 || primary_live != 0,
+        }
+    }
+
+    const fn complete(self) -> bool {
+        self.pipe_enabled
+            && self.transcoder_enabled
+            && !matches!(self.ddi, DisplayDdiRoute::None)
+            && self.primary_enabled
+            && self.primary_bound
+    }
+
+    pub(super) fn mode_name(self) -> &'static str {
+        decode_trans_ddi_mode(self.transcoder_mode as u32)
+    }
+
+    pub(super) fn bits_per_color(self) -> u32 {
+        decode_trans_bits_per_color(self.bits_per_color_select as u32)
+    }
+}
+
+/// A frame-route lease. Equality deliberately includes the output route and
+/// readiness facts, not just the framebuffer dimensions.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct DisplayPipelineTarget {
+    pub(super) pipeline: DisplayPipelineId,
     pub(super) width: u32,
     pub(super) height: u32,
+    pub(super) route: DisplayPipelineRoute,
+    pub(super) activity: DisplayPipelineActivity,
+}
+
+/// A logical-output lease over one concrete pipeline route. The output ID is
+/// compositor policy; the nested target is the hardware fact which must stay
+/// valid until the completed frame is committed.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct DisplayOutputTarget {
+    pub(super) output: DisplayOutputId,
+    pub(super) pipeline_target: DisplayPipelineTarget,
+}
+
+/// Read-only four-pipeline hardware baseline consumed by compositor policy.
+/// It deliberately keeps route, mode, and activity independent: a stale
+/// PIPE_SRC is a programmed mode, not proof that pixels reach a monitor.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct DisplayPipelineSnapshot {
+    pub(super) pipeline: DisplayPipelineId,
+    pub(super) activity: DisplayPipelineActivity,
+    pub(super) target: Option<DisplayPipelineTarget>,
+    pub(super) route: DisplayPipelineRoute,
+    pub(super) pipe_enabled: bool,
+    pub(super) transcoder_enabled: bool,
+    pub(super) primary_enabled: bool,
+    pub(super) primary_bound: bool,
+    pipe_src: u32,
+    pipeconf: u32,
+    transcoder: u32,
+    primary_ctl: u32,
+    primary_surf: u32,
+    primary_live: u32,
+    observed: bool,
+}
+
+#[derive(Copy, Clone)]
+struct CompatibilityPipelineSelection {
+    snapshot: DisplayPipelineSnapshot,
+    rank: u8,
+    reason: &'static str,
+    candidate_mask: u8,
+    best_mask: u8,
+    best_count: u8,
+    scanout_mask: u8,
+}
+
+#[derive(Copy, Clone)]
+pub(super) struct DisplayRgba8GpgpuSurface {
+    pub(super) pipeline: DisplayPipelineId,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) route: DisplayPipelineRoute,
+    pub(super) activity: DisplayPipelineActivity,
     pub(super) pitch_bytes: u32,
     pub(super) phys: u64,
     pub(super) virt: *mut u8,
     pub(super) gpu: u64,
     pub(super) byte_len: usize,
+}
+
+impl DisplayRgba8GpgpuSurface {
+    const fn frame_target(self) -> DisplayPipelineTarget {
+        DisplayPipelineTarget {
+            pipeline: self.pipeline,
+            width: self.width,
+            height: self.height,
+            route: self.route,
+            activity: self.activity,
+        }
+    }
+}
+
+/// One acquired UI3 frame tied to both its logical output and physical route.
+#[derive(Copy, Clone)]
+pub(super) struct DisplayOutputFrameGpgpu {
+    pub(super) output_target: DisplayOutputTarget,
+    pub(super) surface: DisplayRgba8GpgpuSurface,
 }
 
 /// Identifies the domain which completed a display frame surface.
@@ -299,6 +711,7 @@ pub(super) enum DisplayFrameProducer {
 #[derive(Copy, Clone)]
 #[allow(dead_code)]
 pub(super) struct PrimarySurfaceGpgpuTarget {
+    pub(super) pipeline: DisplayPipelineId,
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) pitch_bytes: u32,
@@ -340,6 +753,9 @@ struct OverlaySurfacePool {
     pipe_slot: usize,
     front_index: Option<usize>,
     surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
+    /// Previous-size surface retained only until the replacement is proven
+    /// live. It is not a render target and must be reclaimed after the latch.
+    retiring_front: Option<OverlaySurface>,
 }
 
 #[derive(Copy, Clone)]
@@ -388,6 +804,7 @@ impl OverlaySurfacePool {
             pipe_slot: usize::MAX,
             front_index: None,
             surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+            retiring_front: None,
         }
     }
 
@@ -425,6 +842,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 
     log_pipe_scanout_probe(dev, "before-primary-init");
     log_transcoder_a_state(dev, "before-primary-init");
+    log_display_pipeline_topology(dev, "before-primary-init");
 
     let Some(pipe) = active_pipe(dev) else {
         crate::log!("intel/display: primary-boot-surface skipped no active pipe discovered\n");
@@ -457,6 +875,29 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         crate::log!("intel/display: primary-boot-surface skipped surface too large\n");
         return;
     };
+    let Some(primary_gpu) = primary_surface_gpu_for_pipe(pipe) else {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: primary-boot-surface skipped pipeline_slot={} potential_reason=no-reserved-primary-gpu-address\n",
+            pipe.slot,
+        );
+        return;
+    };
+    let gpu_capacity = primary_surface_gpu_capacity(pipe);
+    if byte_len as u64 > gpu_capacity {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: primary-boot-surface skipped pipe={} size={}x{} backing={}x{} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-primary-pipeline-gpu-address-slot\n",
+            pipe.name,
+            width,
+            height,
+            backing_width,
+            backing_height,
+            byte_len,
+            gpu_capacity,
+        );
+        return;
+    }
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
         crate::log!("intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n", byte_len);
         return;
@@ -464,17 +905,14 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
 
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_display_scanout_ggtt(
-        dev,
-        phys,
-        byte_len,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
-    ) {
+    if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, primary_gpu) {
         crate::log!(
             "intel/display: primary-boot-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
             byte_len,
-            crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE
+            primary_gpu
         );
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, primary_gpu);
+        crate::dma::dealloc(virt, byte_len);
         return;
     }
     crate::intel::ggtt_invalidate(dev);
@@ -484,10 +922,14 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
             "intel/display: primary-boot-surface stride encode failed pitch=0x{:X}\n",
             pitch_bytes
         );
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, primary_gpu);
+        crate::dma::dealloc(virt, byte_len);
         return;
     };
-    let Some(surface_reg) = u32::try_from(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE).ok() else {
+    let Some(surface_reg) = u32::try_from(primary_gpu).ok() else {
         crate::log!("intel/display: primary-boot-surface gpu addr out of range\n");
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, primary_gpu);
+        crate::dma::dealloc(virt, byte_len);
         return;
     };
 
@@ -518,10 +960,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         byte_len,
         phys,
         virt,
-        gpu: crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        gpu: primary_gpu,
         pipe,
     };
-    *PRIMARY_SURFACE.lock() = Some(primary_surface);
+    *primary_surface_owner(pipe).lock() = Some(primary_surface);
     let default_overlay_marker_ok = init_default_overlay_marker(dev, primary_surface);
     let ui3_boot = crate::intel::full_ui3_boot_enabled();
     if ok && ui3_boot {
@@ -535,7 +977,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     }
     let ui3_base_ok = false;
     let ui3_frame_ok = false;
-    log_primary_scanout_pte_window(dev, "after-primary-init", byte_len);
+    log_primary_scanout_pte_window(dev, "after-primary-init", primary_gpu, byte_len);
 
     let logo_ok = if PRIMARY_BOOT_LOGO_ENABLED {
         let warmup_ok = if PRIMARY_BOOT_DISPLAY_WARMUP_ENABLED {
@@ -567,7 +1009,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         pitch_bytes,
         byte_len,
         PRIMARY_GPGPU_EDGE_GUARD_PIXELS,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        primary_gpu,
         phys,
         ((ctl_after & PLANE_CTL_ENABLE) != 0) as u8,
         ctl_before,
@@ -582,6 +1024,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         ui3_base_ok as u8,
         ui3_frame_ok as u8
     );
+    log_display_pipeline_topology(dev, "after-primary-init");
 }
 
 fn init_ui3_base_surface(
@@ -702,7 +1145,7 @@ fn stamp_bgrt_logo_bottom_right_screen() -> bool {
         return false;
     };
 
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -859,7 +1302,7 @@ pub(crate) async fn hw_logo_present_task() {
 
         let (visible_x, visible_y, visible_width, visible_height, target_width, target_height) =
             if output.width != 0 && output.height != 0 {
-                if let Some(surface) = *PRIMARY_SURFACE.lock() {
+                if let Some(surface) = active_primary_surface() {
                     let source_width = output.visible_width.max(1).min(output.width);
                     let source_height = output.visible_height.max(1).min(output.height);
                     if JPG_CENTER_CROP
@@ -1005,18 +1448,80 @@ fn log_transcoder_a_state(dev: crate::intel::Dev, label: &str) {
     );
 }
 
-fn decode_trans_ddi_select(v: u32) -> &'static str {
-    match v {
-        0 => "none",
-        1 => "ddi-b",
-        2 => "ddi-c",
-        3 => "ddi-d",
-        4 => "ddi-e/tc1",
-        5 => "ddi-f/tc2",
-        6 => "ddi-g/tc3",
-        7 => "ddi-h/tc4",
-        _ => "unknown",
+fn log_display_pipeline_topology(dev: crate::intel::Dev, label: &str) {
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let selection = select_compatibility_pipeline_from_snapshots(&snapshots);
+    for snapshot in snapshots {
+        let (width, height) = snapshot
+            .target
+            .map(|target| (target.width, target.height))
+            .unwrap_or((0, 0));
+        let selected = selection
+            .map(|selection| selection.snapshot.pipeline == snapshot.pipeline)
+            .unwrap_or(false);
+        let selection_reason = selection
+            .filter(|selection| selection.snapshot.pipeline == snapshot.pipeline)
+            .map(|selection| selection.reason)
+            .unwrap_or("-");
+        crate::log!(
+            "intel/display: pipeline-topology label={} pipeline={} slot={} state={} mode={}x{} pipe_enable={} transcoder_enable={} primary_enable={} primary_bound={} ddi={} link_mode={} bpc={} sync_pol=0x{:X} port_width={} compat_selected={} selection_reason={} pipe_src=0x{:08X} pipeconf=0x{:08X} transcoder=0x{:08X} primary_ctl=0x{:08X} surf=0x{:08X} live=0x{:08X} connector=unresolved\n",
+            label,
+            snapshot.pipeline.name(),
+            snapshot.pipeline.slot(),
+            snapshot.activity.name(),
+            width,
+            height,
+            snapshot.pipe_enabled as u8,
+            snapshot.transcoder_enabled as u8,
+            snapshot.primary_enabled as u8,
+            snapshot.primary_bound as u8,
+            snapshot.route.ddi.name(),
+            snapshot.route.mode_name(),
+            snapshot.route.bits_per_color(),
+            snapshot.route.sync_polarity,
+            snapshot.route.port_width,
+            selected as u8,
+            selection_reason,
+            snapshot.pipe_src,
+            snapshot.pipeconf,
+            snapshot.transcoder,
+            snapshot.primary_ctl,
+            snapshot.primary_surf,
+            snapshot.primary_live,
+        );
     }
+    let output_targets = display_output_targets_from_snapshots(&snapshots);
+    for output_slot in 0..DISPLAY_OUTPUT_COUNT {
+        let output = DisplayOutputId::from_slot(output_slot).expect("static display output slot");
+        match output_targets[output_slot] {
+            Some(target) => crate::log!(
+                "intel/display: output-topology label={} output={} slot={} assignment=provisional-pipeline-route pipeline={} state={} mode={}x{} ddi={} link_mode={} bpc={} connector=unresolved monitor_identity=unresolved\n",
+                label,
+                output.name(),
+                output.slot(),
+                target.pipeline_target.pipeline.name(),
+                target.pipeline_target.activity.name(),
+                target.pipeline_target.width,
+                target.pipeline_target.height,
+                target.pipeline_target.route.ddi.name(),
+                target.pipeline_target.route.mode_name(),
+                target.pipeline_target.route.bits_per_color(),
+            ),
+            None => crate::log!(
+                "intel/display: output-topology label={} output={} slot={} assignment=unassigned connector=unresolved monitor_identity=unresolved\n",
+                label,
+                output.name(),
+                output.slot(),
+            ),
+        }
+    }
+    if let Some(selection) = selection {
+        log_compatibility_pipeline_selection(selection);
+    }
+}
+
+fn decode_trans_ddi_select(v: u32) -> &'static str {
+    DisplayDdiRoute::from_select(v).name()
 }
 
 fn decode_trans_ddi_mode(v: u32) -> &'static str {
@@ -1062,30 +1567,352 @@ fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
 
 #[allow(dead_code)]
 pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
+    let target = primary_display_output_target()?.pipeline_target;
+    Some((target.width, target.height))
+}
+
+/// Compatibility wrapper for hardware-oriented callers. New compositor and
+/// scene owners should retain the logical output returned by
+/// `primary_display_output_target` through their whole frame transaction.
+pub(super) fn active_display_pipeline_target() -> Option<DisplayPipelineTarget> {
+    Some(primary_display_output_target()?.pipeline_target)
+}
+
+/// The primary logical output used by today's single-output services. D01 is
+/// stable at the compositor boundary even when compatibility policy selects a
+/// different hardware pipe after a future route change.
+pub(super) fn primary_display_output_target() -> Option<DisplayOutputTarget> {
+    display_output_target(DisplayOutputId::from_slot(0).expect("primary display output slot"))
+}
+
+/// Returns the current route lease for one logical output slot.
+pub(super) fn display_output_target(output: DisplayOutputId) -> Option<DisplayOutputTarget> {
     let dev = crate::intel::claimed_device()?;
-    let pipe = active_pipe(dev)?;
-    decode_pipe_src(crate::intel::mmio_read(dev, pipe.pipe_src_off)).or_else(framebuffer_hint)
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let selection = select_compatibility_pipeline_from_snapshots(&snapshots)?;
+    log_compatibility_pipeline_selection(selection);
+    display_output_targets_from_snapshots_with_selection(&snapshots, selection)[output.slot()]
+}
+
+/// Fixed four-slot compositor topology. D01 receives the best compatibility
+/// route so current single-monitor behavior remains unchanged. Additional
+/// complete scanout routes fill D02-D04 in stable pipeline order; incomplete
+/// secondary routes are intentionally not exposed as monitors.
+#[allow(dead_code)]
+pub(super) fn display_output_targets() -> [Option<DisplayOutputTarget>; DISPLAY_OUTPUT_COUNT] {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return [None; DISPLAY_OUTPUT_COUNT];
+    };
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let Some(selection) = select_compatibility_pipeline_from_snapshots(&snapshots) else {
+        return [None; DISPLAY_OUTPUT_COUNT];
+    };
+    log_compatibility_pipeline_selection(selection);
+    display_output_targets_from_snapshots_with_selection(&snapshots, selection)
+}
+
+/// Returns the currently programmed target for a stable A-D pipeline slot.
+/// Connector discovery remains a separate layer; callers never need to infer
+/// ownership from whichever pipe happened to be discovered first.
+#[allow(dead_code)]
+pub(super) fn display_pipeline_target(
+    pipeline: DisplayPipelineId,
+) -> Option<DisplayPipelineTarget> {
+    let dev = crate::intel::claimed_device()?;
+    display_pipeline_target_for_pipe(dev, pipeline.pipe()?)
+}
+
+/// Four-slot topology view for compositor policy. An empty entry means no
+/// usable mode is currently programmed on that hardware pipeline.
+#[allow(dead_code)]
+pub(super) fn display_pipeline_targets() -> [Option<DisplayPipelineTarget>; DISPLAY_PIPELINE_COUNT]
+{
+    let Some(dev) = crate::intel::claimed_device() else {
+        return [None; DISPLAY_PIPELINE_COUNT];
+    };
+    display_pipeline_snapshots_for_dev(dev).map(|snapshot| snapshot.target)
+}
+
+/// Full hardware topology view. Unlike `display_pipeline_targets`, inactive
+/// or partially programmed slots remain visible to routing policy.
+#[allow(dead_code)]
+pub(super) fn display_pipeline_snapshots()
+-> [Option<DisplayPipelineSnapshot>; DISPLAY_PIPELINE_COUNT] {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return [None; DISPLAY_PIPELINE_COUNT];
+    };
+    display_pipeline_snapshots_for_dev(dev).map(Some)
+}
+
+fn display_pipeline_target_for_pipe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+) -> Option<DisplayPipelineTarget> {
+    display_pipeline_snapshot_for_pipe(dev, pipe).target
+}
+
+fn display_pipeline_snapshot_for_pipe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+) -> DisplayPipelineSnapshot {
+    let pipeline = DisplayPipelineId::from_pipe(pipe).expect("static display pipe slot");
+    let pipe_src = crate::intel::mmio_read(dev, pipe.pipe_src_off);
+    let pipeconf =
+        crate::intel::mmio_read(dev, PIPECONF_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE));
+    let transcoder = crate::intel::mmio_read(
+        dev,
+        TRANS_DDI_FUNC_CTL_A + pipe.slot.saturating_mul(PIPE_MMIO_STRIDE),
+    );
+    let primary_ctl = crate::intel::mmio_read(dev, pipe.primary_plane().ctl());
+    let primary_surf = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
+    let primary_live = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
+    let dimensions = decode_pipe_src(pipe_src)
+        .or_else(|| primary_surface_for_pipe(pipe).map(|surface| (surface.width, surface.height)));
+    let route = DisplayPipelineRoute::from_registers(
+        pipeconf,
+        transcoder,
+        primary_ctl,
+        primary_surf,
+        primary_live,
+    );
+    let observed = dimensions.is_some()
+        || pipeconf != 0
+        || transcoder != 0
+        || primary_ctl != 0
+        || primary_surf != 0
+        || primary_live != 0;
+    let activity = if dimensions.is_some() && route.complete() {
+        DisplayPipelineActivity::Scanout
+    } else if observed {
+        DisplayPipelineActivity::Programmed
+    } else {
+        DisplayPipelineActivity::Inactive
+    };
+    let target = dimensions.map(|(width, height)| DisplayPipelineTarget {
+        pipeline,
+        width,
+        height,
+        route,
+        activity,
+    });
+
+    DisplayPipelineSnapshot {
+        pipeline,
+        activity,
+        target,
+        route,
+        pipe_enabled: route.pipe_enabled,
+        transcoder_enabled: route.transcoder_enabled,
+        primary_enabled: route.primary_enabled,
+        primary_bound: route.primary_bound,
+        pipe_src,
+        pipeconf,
+        transcoder,
+        primary_ctl,
+        primary_surf,
+        primary_live,
+        observed,
+    }
+}
+
+fn display_pipeline_snapshots_for_dev(
+    dev: crate::intel::Dev,
+) -> [DisplayPipelineSnapshot; DISPLAY_PIPELINE_COUNT] {
+    PIPES.map(|pipe| display_pipeline_snapshot_for_pipe(dev, pipe))
+}
+
+fn compatibility_pipeline_rank(snapshot: DisplayPipelineSnapshot) -> (u8, &'static str) {
+    if snapshot.activity == DisplayPipelineActivity::Scanout {
+        return (6, "complete-scanout");
+    }
+    if snapshot.target.is_some()
+        && snapshot.pipe_enabled
+        && snapshot.primary_enabled
+        && snapshot.primary_bound
+    {
+        return (5, "pipe-primary-live-transcoder-incomplete");
+    }
+    if snapshot.primary_enabled && snapshot.primary_bound {
+        return (4, "primary-live-mode-unresolved");
+    }
+    if snapshot.target.is_some() && (snapshot.pipe_enabled || snapshot.transcoder_enabled) {
+        return (3, "enabled-mode-primary-incomplete");
+    }
+    if snapshot.target.is_some() {
+        return (2, "programmed-mode-only");
+    }
+    if snapshot.observed {
+        return (1, "register-state-only");
+    }
+    (0, "inactive")
+}
+
+fn select_compatibility_pipeline_from_snapshots(
+    snapshots: &[DisplayPipelineSnapshot; DISPLAY_PIPELINE_COUNT],
+) -> Option<CompatibilityPipelineSelection> {
+    let mut selected = None;
+    let mut selected_rank = 0;
+    let mut selected_reason = "inactive";
+    let mut candidate_mask = 0u8;
+    let mut best_mask = 0u8;
+    let mut best_count = 0u8;
+    let mut scanout_mask = 0u8;
+
+    for snapshot in snapshots.iter().copied() {
+        let bit = 1u8 << snapshot.pipeline.slot();
+        let (rank, reason) = compatibility_pipeline_rank(snapshot);
+        if rank != 0 {
+            candidate_mask |= bit;
+        }
+        if snapshot.activity == DisplayPipelineActivity::Scanout {
+            scanout_mask |= bit;
+        }
+        if rank > selected_rank {
+            selected = Some(snapshot);
+            selected_rank = rank;
+            selected_reason = reason;
+            best_mask = bit;
+            best_count = 1;
+        } else if rank != 0 && rank == selected_rank {
+            best_mask |= bit;
+            best_count = best_count.saturating_add(1);
+        }
+    }
+
+    Some(CompatibilityPipelineSelection {
+        snapshot: selected?,
+        rank: selected_rank,
+        reason: selected_reason,
+        candidate_mask,
+        best_mask,
+        best_count,
+        scanout_mask,
+    })
+}
+
+fn display_output_targets_from_snapshots(
+    snapshots: &[DisplayPipelineSnapshot; DISPLAY_PIPELINE_COUNT],
+) -> [Option<DisplayOutputTarget>; DISPLAY_OUTPUT_COUNT] {
+    let Some(selection) = select_compatibility_pipeline_from_snapshots(snapshots) else {
+        return [None; DISPLAY_OUTPUT_COUNT];
+    };
+    display_output_targets_from_snapshots_with_selection(snapshots, selection)
+}
+
+fn display_output_targets_from_snapshots_with_selection(
+    snapshots: &[DisplayPipelineSnapshot; DISPLAY_PIPELINE_COUNT],
+    selection: CompatibilityPipelineSelection,
+) -> [Option<DisplayOutputTarget>; DISPLAY_OUTPUT_COUNT] {
+    let mut outputs = [None; DISPLAY_OUTPUT_COUNT];
+    let Some(primary_target) = selection.snapshot.target else {
+        return outputs;
+    };
+    outputs[0] = Some(DisplayOutputTarget {
+        output: DisplayOutputId::from_slot(0).expect("primary display output slot"),
+        pipeline_target: primary_target,
+    });
+
+    let mut output_slot = 1usize;
+    for snapshot in snapshots.iter().copied() {
+        if output_slot >= DISPLAY_OUTPUT_COUNT {
+            break;
+        }
+        if snapshot.pipeline == primary_target.pipeline
+            || snapshot.activity != DisplayPipelineActivity::Scanout
+        {
+            continue;
+        }
+        let Some(pipeline_target) = snapshot.target else {
+            continue;
+        };
+        outputs[output_slot] = Some(DisplayOutputTarget {
+            output: DisplayOutputId::from_slot(output_slot).expect("static display output slot"),
+            pipeline_target,
+        });
+        output_slot += 1;
+    }
+    outputs
+}
+
+fn log_compatibility_pipeline_selection(selection: CompatibilityPipelineSelection) {
+    let route = selection.snapshot.route;
+    let signature = (selection.snapshot.pipeline.slot() as u32)
+        | ((selection.rank as u32) << 2)
+        | ((selection.candidate_mask as u32) << 5)
+        | ((selection.best_mask as u32) << 9)
+        | ((selection.scanout_mask as u32) << 13)
+        | ((route.ddi.select() as u32) << 17)
+        | ((route.transcoder_mode as u32) << 20)
+        | ((route.bits_per_color_select as u32) << 23)
+        | ((route.sync_polarity as u32) << 25)
+        | ((route.port_width as u32) << 27);
+    if DISPLAY_PIPELINE_SELECTION_SIGNATURE.swap(signature, Ordering::AcqRel) == signature {
+        return;
+    }
+
+    if selection.rank < 6 || selection.best_count > 1 {
+        let potential_reason = if selection.best_count > 1 {
+            "multiple-equally-ranked-pipelines-in-single-display-compatibility-policy"
+        } else {
+            "selected-pipeline-is-partially-programmed-or-route-is-incomplete"
+        };
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: compatibility-pipeline selected={} rank={} reason={} candidates=0x{:X} best=0x{:X} scanout=0x{:X} ties={} potential_reason={} action=prefer-complete-scanout-then-lowest-stable-pipeline-slot\n",
+            selection.snapshot.pipeline.name(),
+            selection.rank,
+            selection.reason,
+            selection.candidate_mask,
+            selection.best_mask,
+            selection.scanout_mask,
+            selection.best_count,
+            potential_reason,
+        );
+    } else {
+        crate::log_info!(
+            target: "intel/display";
+            "intel/display: compatibility-pipeline selected={} rank={} reason={} route={} link_mode={} bpc={} port_width={} mode={}x{} candidates=0x{:X} scanout=0x{:X}\n",
+            selection.snapshot.pipeline.name(),
+            selection.rank,
+            selection.reason,
+            selection.snapshot.route.ddi.name(),
+            selection.snapshot.route.mode_name(),
+            selection.snapshot.route.bits_per_color(),
+            selection.snapshot.route.port_width,
+            selection.snapshot.target.map(|target| target.width).unwrap_or(0),
+            selection.snapshot.target.map(|target| target.height).unwrap_or(0),
+            selection.candidate_mask,
+            selection.scanout_mask,
+        );
+    }
+}
+
+fn select_compatibility_pipeline(dev: crate::intel::Dev) -> Option<CompatibilityPipelineSelection> {
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let selection = select_compatibility_pipeline_from_snapshots(&snapshots)?;
+    log_compatibility_pipeline_selection(selection);
+    Some(selection)
 }
 
 #[allow(dead_code)]
 pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
-    PRIMARY_SURFACE.lock().as_ref().map(|surface| surface.gpu)
+    active_primary_surface().map(|surface| surface.gpu)
 }
 
 pub(crate) fn log_primary_surface_samples(label: &str) {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return;
     };
     log_surface_samples(surface, label);
 }
 
 pub(crate) fn capture_primary_surface_samples() -> Option<PrimarySurfaceSampleSet> {
-    let surface = (*PRIMARY_SURFACE.lock())?;
+    let surface = active_primary_surface()?;
     capture_surface_samples(surface)
 }
 
 pub(crate) fn capture_primary_surface_bgra8() -> Option<PrimarySurfaceBgra8Snapshot> {
-    let surface = (*PRIMARY_SURFACE.lock())?;
+    let surface = active_primary_surface()?;
     let width = surface.width as usize;
     let height = surface.height as usize;
     let pitch_bytes = surface.pitch_bytes as usize;
@@ -1123,12 +1950,12 @@ pub(crate) fn capture_primary_surface_bgra8() -> Option<PrimarySurfaceBgra8Snaps
 }
 
 pub(crate) fn sample_primary_surface_pixel(x: u32, y: u32) -> Option<u32> {
-    let surface = (*PRIMARY_SURFACE.lock())?;
+    let surface = active_primary_surface()?;
     sample_surface_pixel(surface, x as usize, y as usize)
 }
 
 pub(crate) fn clear_primary_surface_color(color: u32, reason: &str) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         crate::log!(
             "intel/display: primary-clear skipped reason={} cause=no-primary-surface\n",
             reason,
@@ -1176,7 +2003,7 @@ pub(crate) fn present_i226_diagnostic_screen(
     snapshot: crate::net::i226::I226Snapshot,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         crate::log!(
             "intel/display: i226-screen skipped reason={} cause=no-primary-surface\n",
             reason
@@ -1510,9 +2337,21 @@ fn sample_surface_pixel(surface: PrimarySurface, x: usize, y: usize) -> Option<u
 }
 
 pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgpuTarget> {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
-        return None;
-    };
+    let surface = active_primary_surface()?;
+    let pipeline = DisplayPipelineId::from_pipe(surface.pipe)?;
+    primary_surface_gpgpu_marker_target_for_pipeline(pipeline)
+}
+
+/// Resolves the owned primary backing for one stable hardware pipeline.
+///
+/// The compatibility helper above preserves today's single-monitor callers;
+/// compositor and diagnostic owners can use this entry point without racing a
+/// later change in which pipeline is considered active.
+#[allow(dead_code)]
+pub(super) fn primary_surface_gpgpu_marker_target_for_pipeline(
+    pipeline: DisplayPipelineId,
+) -> Option<PrimarySurfaceGpgpuTarget> {
+    let surface = primary_surface_for_pipeline(pipeline)?;
     if surface.virt.is_null()
         || surface.width == 0
         || surface.height == 0
@@ -1532,6 +2371,7 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
     }
 
     Some(PrimarySurfaceGpgpuTarget {
+        pipeline,
         width: surface.backing_width,
         height: surface.backing_height,
         pitch_bytes: surface.pitch_bytes,
@@ -1548,13 +2388,17 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
 }
 
 pub(super) fn ui3_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let target = active_display_pipeline_target()?;
     let surface = (*UI3_BASE_SURFACE.lock())?;
     if surface.virt.is_null() || surface.byte_len == 0 {
         return None;
     }
     Some(DisplayRgba8GpgpuSurface {
+        pipeline: target.pipeline,
         width: surface.width,
         height: surface.height,
+        route: target.route,
+        activity: target.activity,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
         virt: surface.virt,
@@ -1564,13 +2408,17 @@ pub(super) fn ui3_base_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
 }
 
 pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+    let target = active_display_pipeline_target()?;
     let surface = (*UI3_FRAME_SURFACE.lock())?;
     if surface.virt.is_null() || surface.byte_len == 0 {
         return None;
     }
     Some(DisplayRgba8GpgpuSurface {
+        pipeline: target.pipeline,
         width: surface.width,
         height: surface.height,
+        route: target.route,
+        activity: target.activity,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
         virt: surface.virt,
@@ -1582,36 +2430,56 @@ pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
 /// Acquires the full-screen UI3 FRAME composition buffer without clearing it.
 /// The GPGPU producer owns every pixel and the display engine consumes the
 /// native premultiplied ARGB result directly on the UI overlay plane.
-pub(super) fn ui3_frame_composition_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
-    acquire_ui3_frame_composition_gpgpu()
+pub(super) fn ui3_frame_composition_gpgpu(
+    target: DisplayPipelineTarget,
+) -> Option<DisplayRgba8GpgpuSurface> {
+    acquire_ui3_frame_composition_gpgpu(target)
 }
 
 /// Acquires the persistent composition owner's current back surface.
 ///
 /// No pixels are copied or cleared. The producer must define every pixel it
 /// wants in the completed frame, then either commit or discard this target.
-pub(super) fn acquire_ui3_frame_composition_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
+pub(super) fn acquire_ui3_frame_composition_gpgpu(
+    target: DisplayPipelineTarget,
+) -> Option<DisplayRgba8GpgpuSurface> {
     let dev = crate::intel::claimed_device()?;
-    let (width, height) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
-        .unwrap_or((0, 0));
-    if width == 0 || height == 0 {
+    let pipe = target.pipeline.pipe()?;
+    let live_target = display_pipeline_target_for_pipe(dev, pipe)?;
+    if live_target != target || target.width == 0 || target.height == 0 {
+        log_ui3_frame_target_rejected(
+            "acquire",
+            "display-routing-or-mode-changed",
+            target,
+            Some(live_target),
+            0,
+        );
         return None;
     }
-    let surface = ensure_overlay_surface(dev, width, height)?;
+    let surface = ensure_overlay_surface_for_pipe(dev, pipe, target.width, target.height)?;
     Some(DisplayRgba8GpgpuSurface {
+        pipeline: target.pipeline,
         width: surface.width,
         height: surface.height,
+        route: target.route,
+        activity: target.activity,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
         virt: surface.virt,
         gpu: surface.gpu,
         byte_len: surface.byte_len,
+    })
+}
+
+/// Acquires one UI3 composition back buffer for a logical output. The nested
+/// pipeline lease is validated by the hardware-level acquisition path; the
+/// output assignment is retained for validation at commit.
+pub(super) fn acquire_ui3_output_frame_composition_gpgpu(
+    target: DisplayOutputTarget,
+) -> Option<DisplayOutputFrameGpgpu> {
+    Some(DisplayOutputFrameGpgpu {
+        output_target: target,
+        surface: acquire_ui3_frame_composition_gpgpu(target.pipeline_target)?,
     })
 }
 
@@ -1638,18 +2506,64 @@ pub(super) fn commit_ui3_frame_composition_produced(
     commit_ui3_canvas_overlay_produced(target, producer, reason)
 }
 
+pub(super) fn commit_ui3_output_frame_composition_gpgpu(
+    frame: DisplayOutputFrameGpgpu,
+    reason: &str,
+) -> bool {
+    commit_ui3_output_frame_composition_produced(frame, DisplayFrameProducer::CpuCached, reason)
+}
+
+/// Presents a completed logical-output frame only while both leases remain
+/// valid: the output must still resolve to the acquired pipeline target, and
+/// the lower-level commit revalidates that target against live MMIO state.
+pub(super) fn commit_ui3_output_frame_composition_produced(
+    frame: DisplayOutputFrameGpgpu,
+    producer: DisplayFrameProducer,
+    reason: &str,
+) -> bool {
+    let requested = frame.output_target;
+    if frame.surface.frame_target() != requested.pipeline_target {
+        log_ui3_output_target_rejected(
+            "commit",
+            "frame-surface-does-not-match-output-pipeline-lease",
+            requested,
+            display_output_target(requested.output),
+            frame.surface.gpu,
+        );
+        return false;
+    }
+    let live = display_output_target(requested.output);
+    if live != Some(requested) {
+        log_ui3_output_target_rejected(
+            "commit",
+            "logical-output-assignment-changed-during-frame",
+            requested,
+            live,
+            frame.surface.gpu,
+        );
+        return false;
+    }
+    commit_ui3_frame_composition_produced(frame.surface, producer, reason)
+}
+
 /// Abandons an acquired composition surface without changing the visible
 /// front buffer. The same back surface can be acquired and rendered again.
 pub(super) fn discard_ui3_frame_composition_gpgpu(target: DisplayRgba8GpgpuSurface) -> bool {
-    let Some(surface) = overlay_surface_for_gpu(target.width, target.height, target.gpu) else {
+    let Some(surface) =
+        overlay_surface_for_gpu(target.pipeline, target.width, target.height, target.gpu)
+    else {
         return false;
     };
     if !display_gpgpu_surface_matches(target, surface) {
         return false;
     }
-    let pool = OVERLAY_SURFACE.lock();
+    let pool = overlay_surface_pool(surface.pipe).lock();
     pool.matches(surface.width, surface.height, surface.pipe)
         && pool.front_index != Some(surface.buffer_index)
+}
+
+pub(super) fn discard_ui3_output_frame_composition_gpgpu(frame: DisplayOutputFrameGpgpu) -> bool {
+    discard_ui3_frame_composition_gpgpu(frame.surface)
 }
 
 /// Permanently tears down the shared UI3 frame-composition owner.
@@ -1660,10 +2574,20 @@ pub(super) fn discard_ui3_frame_composition_gpgpu(target: DisplayRgba8GpgpuSurfa
 /// safe to call when no frame has ever been acquired. If scanout cannot be
 /// proven detached, the pool is retained and the reset reports failure rather
 /// than freeing live display memory.
-pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
-    let mut owner = OVERLAY_SURFACE.lock();
+pub(super) fn reset_ui3_frame_composition_gpgpu(pipeline: DisplayPipelineId, reason: &str) -> bool {
+    let Some(pipe) = pipeline.pipe() else {
+        return false;
+    };
+    let mut owner = overlay_surface_pool(pipe).lock();
     let pool = *owner;
-    let Some(surface) = pool.surfaces.iter().flatten().copied().next() else {
+    let Some(surface) = pool
+        .surfaces
+        .iter()
+        .flatten()
+        .copied()
+        .chain(pool.retiring_front)
+        .next()
+    else {
         *owner = OverlaySurfacePool::new();
         return true;
     };
@@ -1693,8 +2617,9 @@ pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
     if !detached {
         crate::log_warn!(
             target: "intel/display";
-            "intel/display: ui3-frame-owner reset deferred reason={} pipe={} slot={} ctl=0x{:08X}->0x{:08X} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={} live_wait={} potential_reason=scanout-still-references-frame-surface\n",
+            "intel/display: ui3-frame-owner reset deferred reason={} pipeline={} pipe={} slot={} ctl=0x{:08X}->0x{:08X} surf=0x{:08X}->0x{:08X} live=0x{:08X}->0x{:08X} frame={}=>{} frame_wait={} live_wait={} potential_reason=scanout-still-references-frame-surface\n",
             reason,
+            pipeline.name(),
             surface.pipe.name,
             surface.plane_slot,
             ctl_before,
@@ -1716,13 +2641,20 @@ pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
     // A render PPGTT unmap can legitimately report false when a surface was
     // allocated but never submitted; the GGTT mapping always exists and is
     // the release-safety authority here.
-    for surface in pool.surfaces.iter().flatten().copied() {
+    for surface in pool
+        .surfaces
+        .iter()
+        .flatten()
+        .copied()
+        .chain(pool.retiring_front)
+    {
         let _ = crate::intel::render::unmap_render_ppgtt_range(surface.gpu, surface.byte_len);
         if !crate::intel::unmap_display_scanout_ggtt(dev, surface.byte_len, surface.gpu) {
             crate::log_warn!(
                 target: "intel/display";
-                "intel/display: ui3-frame-owner reset deferred reason={} buffer={} gpu=0x{:X} bytes=0x{:X} potential_reason=scanout-ggtt-unmap-failed\n",
+                "intel/display: ui3-frame-owner reset deferred reason={} pipeline={} buffer={} gpu=0x{:X} bytes=0x{:X} potential_reason=scanout-ggtt-unmap-failed\n",
                 reason,
+                pipeline.name(),
                 surface.buffer_index,
                 surface.gpu,
                 surface.byte_len,
@@ -1733,13 +2665,20 @@ pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
 
     *owner = OverlaySurfacePool::new();
     let mut released = 0usize;
-    for surface in pool.surfaces.iter().flatten().copied() {
+    for surface in pool
+        .surfaces
+        .iter()
+        .flatten()
+        .copied()
+        .chain(pool.retiring_front)
+    {
         crate::dma::dealloc(surface.virt, surface.byte_len);
         released += 1;
     }
     crate::log!(
-        "intel/display: ui3-frame-owner reset reason={} pipe={} slot={} released={} frame={}=>{} frame_wait={} live_wait={}\n",
+        "intel/display: ui3-frame-owner reset reason={} pipeline={} pipe={} slot={} released={} frame={}=>{} frame_wait={} live_wait={}\n",
         reason,
+        pipeline.name(),
         surface.pipe.name,
         surface.plane_slot,
         released,
@@ -1753,19 +2692,13 @@ pub(super) fn reset_ui3_frame_composition_gpgpu(reason: &str) -> bool {
 
 pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayRgba8GpgpuSurface> {
     let dev = crate::intel::claimed_device()?;
-    let (width, height) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
-        .unwrap_or((0, 0));
-    if width == 0 || height == 0 || rect.width == 0 || rect.height == 0 {
+    let target = active_display_pipeline_target()?;
+    let pipe = target.pipeline.pipe()?;
+    if target.width == 0 || target.height == 0 || rect.width == 0 || rect.height == 0 {
         return None;
     }
 
-    let surface = ensure_overlay_surface(dev, width, height)?;
+    let surface = ensure_overlay_surface_for_pipe(dev, pipe, target.width, target.height)?;
     fill_surface_color(
         surface.virt,
         surface.pitch_bytes as usize,
@@ -1777,8 +2710,11 @@ pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayR
     crate::intel::dma_flush(surface.virt, surface.byte_len);
 
     Some(DisplayRgba8GpgpuSurface {
+        pipeline: target.pipeline,
         width: surface.width,
         height: surface.height,
+        route: target.route,
+        activity: target.activity,
         pitch_bytes: surface.pitch_bytes,
         phys: surface.phys,
         virt: surface.virt,
@@ -1802,10 +2738,41 @@ fn commit_ui3_canvas_overlay_produced(
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some(surface) = overlay_surface_for_gpu(target.width, target.height, target.gpu) else {
+    let requested = target.frame_target();
+    let Some(surface) =
+        overlay_surface_for_gpu(target.pipeline, target.width, target.height, target.gpu)
+    else {
+        log_ui3_frame_target_rejected(
+            "commit",
+            "surface-not-owned-by-requested-pipeline-or-pool-was-resized",
+            requested,
+            target
+                .pipeline
+                .pipe()
+                .and_then(|pipe| display_pipeline_target_for_pipe(dev, pipe)),
+            target.gpu,
+        );
         return false;
     };
     if !display_gpgpu_surface_matches(target, surface) {
+        log_ui3_frame_target_rejected(
+            "commit",
+            "surface-identity-or-shape-changed-after-acquire",
+            requested,
+            display_pipeline_target_for_pipe(dev, surface.pipe),
+            target.gpu,
+        );
+        return false;
+    }
+    let live_target = display_pipeline_target_for_pipe(dev, surface.pipe);
+    if live_target != Some(requested) {
+        log_ui3_frame_target_rejected(
+            "commit",
+            "display-routing-or-mode-changed-during-frame",
+            requested,
+            live_target,
+            target.gpu,
+        );
         return false;
     }
 
@@ -1841,12 +2808,106 @@ fn commit_ui3_canvas_overlay_produced(
     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason)
 }
 
+fn log_ui3_frame_target_rejected(
+    stage: &str,
+    cause: &str,
+    requested: DisplayPipelineTarget,
+    live: Option<DisplayPipelineTarget>,
+    gpu: u64,
+) {
+    let seq = UI3_FRAME_TARGET_REJECT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq > 8 && !seq.is_multiple_of(60) {
+        return;
+    }
+    let (live_pipeline, live_width, live_height, live_activity, live_ddi, live_mode, live_bpc) = live
+        .map(|target| {
+            (
+                target.pipeline.name(),
+                target.width,
+                target.height,
+                target.activity.name(),
+                target.route.ddi.name(),
+                target.route.mode_name(),
+                target.route.bits_per_color(),
+            )
+        })
+        .unwrap_or(("unavailable", 0, 0, "unavailable", "unavailable", "unavailable", 0));
+    crate::log_warn!(
+        target: "intel/display";
+        "intel/display: ui3-frame target rejected seq={} stage={} requested_pipeline={} requested={}x{} requested_state={} requested_ddi={} requested_link={} requested_bpc={} gpu=0x{:X} live_pipeline={} live={}x{} live_state={} live_ddi={} live_link={} live_bpc={} potential_reason={}\n",
+        seq,
+        stage,
+        requested.pipeline.name(),
+        requested.width,
+        requested.height,
+        requested.activity.name(),
+        requested.route.ddi.name(),
+        requested.route.mode_name(),
+        requested.route.bits_per_color(),
+        gpu,
+        live_pipeline,
+        live_width,
+        live_height,
+        live_activity,
+        live_ddi,
+        live_mode,
+        live_bpc,
+        cause,
+    );
+}
+
+fn log_ui3_output_target_rejected(
+    stage: &str,
+    cause: &str,
+    requested: DisplayOutputTarget,
+    live: Option<DisplayOutputTarget>,
+    gpu: u64,
+) {
+    let seq = UI3_OUTPUT_TARGET_REJECT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq > 8 && !seq.is_multiple_of(60) {
+        return;
+    }
+    let (live_output, live_pipeline, live_width, live_height, live_activity, live_ddi) = live
+        .map(|target| {
+            (
+                target.output.name(),
+                target.pipeline_target.pipeline.name(),
+                target.pipeline_target.width,
+                target.pipeline_target.height,
+                target.pipeline_target.activity.name(),
+                target.pipeline_target.route.ddi.name(),
+            )
+        })
+        .unwrap_or(("unavailable", "unavailable", 0, 0, "unavailable", "unavailable"));
+    crate::log_warn!(
+        target: "intel/display";
+        "intel/display: ui3-output target rejected seq={} stage={} requested_output={} requested_pipeline={} requested={}x{} requested_state={} requested_ddi={} gpu=0x{:X} live_output={} live_pipeline={} live={}x{} live_state={} live_ddi={} potential_reason={} action=discard-incomplete-frame-keep-last-complete-front\n",
+        seq,
+        stage,
+        requested.output.name(),
+        requested.pipeline_target.pipeline.name(),
+        requested.pipeline_target.width,
+        requested.pipeline_target.height,
+        requested.pipeline_target.activity.name(),
+        requested.pipeline_target.route.ddi.name(),
+        gpu,
+        live_output,
+        live_pipeline,
+        live_width,
+        live_height,
+        live_activity,
+        live_ddi,
+        cause,
+    );
+}
+
 #[inline]
 fn display_gpgpu_surface_matches(
     target: DisplayRgba8GpgpuSurface,
     surface: OverlaySurface,
 ) -> bool {
-    surface.virt == target.virt
+    DisplayPipelineId::from_pipe(surface.pipe) == Some(target.pipeline)
+        && surface.virt == target.virt
         && surface.phys == target.phys
         && surface.gpu == target.gpu
         && surface.width == target.width
@@ -1860,7 +2921,7 @@ pub(super) fn notify_primary_surface_external_write(
     flush_offset: usize,
     flush_bytes: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     let byte_len = surface.byte_len;
@@ -1872,22 +2933,60 @@ pub(super) fn notify_primary_surface_external_write(
 }
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
-    set_primary_plane_source_inner(source, reason, false)
+    let Some(pipeline) =
+        active_primary_surface().and_then(|surface| DisplayPipelineId::from_pipe(surface.pipe))
+    else {
+        return false;
+    };
+    set_primary_plane_source_inner(pipeline, source, reason, false)
 }
 
 pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason: &str) -> bool {
-    set_primary_plane_source_inner(source, reason, true)
+    let Some(pipeline) =
+        active_primary_surface().and_then(|surface| DisplayPipelineId::from_pipe(surface.pipe))
+    else {
+        return false;
+    };
+    set_primary_plane_source_inner(pipeline, source, reason, true)
+}
+
+#[allow(dead_code)]
+pub(super) fn set_primary_plane_source_for_pipeline(
+    pipeline: DisplayPipelineId,
+    source: PrimaryPlaneSource,
+    reason: &str,
+) -> bool {
+    set_primary_plane_source_inner(pipeline, source, reason, false)
+}
+
+#[allow(dead_code)]
+pub(super) fn set_primary_plane_source_mapped_for_pipeline(
+    pipeline: DisplayPipelineId,
+    source: PrimaryPlaneSource,
+    reason: &str,
+) -> bool {
+    set_primary_plane_source_inner(pipeline, source, reason, true)
 }
 
 fn set_primary_plane_source_inner(
+    pipeline: DisplayPipelineId,
     source: PrimaryPlaneSource,
+    reason: &str,
+    already_mapped: bool,
+) -> bool {
+    program_primary_plane_source_for_pipeline(source, pipeline, reason, already_mapped)
+}
+
+fn program_primary_plane_source_for_pipeline(
+    source: PrimaryPlaneSource,
+    pipeline: DisplayPipelineId,
     reason: &str,
     already_mapped: bool,
 ) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some(primary) = *PRIMARY_SURFACE.lock() else {
+    let Some(primary) = primary_surface_for_pipeline(pipeline) else {
         return false;
     };
     if source.phys == 0
@@ -1941,8 +3040,26 @@ fn set_primary_plane_source_inner(
         pitch_bytes: source.pitch_bytes,
         format: source.format,
     };
+    if let Some((other_pipeline, other)) = primary_plane_source_binding_conflict(pipeline, binding)
+    {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: primary-plane-source rejected reason={} pipeline={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} conflict_pipeline={} conflict_gpu=0x{:X} conflict_phys=0x{:X} conflict_bytes=0x{:X} potential_reason=global-ggtt-range-alias-between-pipelines action=allocate-unique-address-range-or-share-identical-mapping\n",
+            reason,
+            pipeline.name(),
+            binding.gpu,
+            binding.phys,
+            binding.byte_len,
+            other_pipeline.name(),
+            other.gpu,
+            other.phys,
+            other.byte_len,
+        );
+        return false;
+    }
     let mut mapped_now = false;
-    if *PRIMARY_PLANE_SOURCE_BINDING.lock() != Some(binding) {
+    let binding_owner = primary_plane_source_binding_owner(primary.pipe);
+    if *binding_owner.lock() != Some(binding) {
         if !already_mapped
             && !crate::intel::map_display_scanout_ggtt(
                 dev,
@@ -1963,7 +3080,7 @@ fn set_primary_plane_source_inner(
         if !already_mapped {
             crate::intel::ggtt_invalidate(dev);
         }
-        *PRIMARY_PLANE_SOURCE_BINDING.lock() = Some(binding);
+        *binding_owner.lock() = Some(binding);
         mapped_now = !already_mapped;
     }
 
@@ -2069,7 +3186,7 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     reason: &str,
 ) -> bool {
     let started_ns = crate::chronos::monotonic_nanos();
-    let Some(primary) = *PRIMARY_SURFACE.lock() else {
+    let Some(primary) = active_primary_surface() else {
         return false;
     };
     if !matches!(
@@ -2161,8 +3278,7 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     let seq = UI_SURFACE_PRIMARY_COPY_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
         let copied_bytes = rect.row_bytes.saturating_mul(rect.height);
-        let copy_present_us =
-            crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+        let copy_present_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
         crate::log!(
             "intel/display: ui-surface-primary-copy seq={} reason={} contract=cpu-convert-copy-to-primary zero_copy=0 fmt={:?} src={},{} {}x{} dst={},{} copied={}x{} copied_bytes=0x{:X} copy_present_us={} frame_budget_us=16667 over_budget={} presented={}\n",
             seq,
@@ -2253,7 +3369,7 @@ pub(crate) fn present_rgba_primary(
     src_pitch_bytes: usize,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2315,7 +3431,7 @@ pub(crate) fn present_rgba_primary_center_unscaled_bg(
     bg_xrgb: u32,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2389,7 +3505,7 @@ pub(crate) fn present_rgba_primary_center_plane_bg(
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2445,7 +3561,11 @@ pub(crate) fn present_rgba_primary_center_plane_bg(
         crate::intel::dma_flush(unsafe { surface.virt.add(dst_row_off) }, copy_w.saturating_mul(4));
     }
 
+    let Some(pipeline) = DisplayPipelineId::from_pipe(surface.pipe) else {
+        return false;
+    };
     set_primary_plane_source_inner(
+        pipeline,
         PrimaryPlaneSource {
             phys: surface.phys,
             gpu: surface.gpu,
@@ -2476,7 +3596,7 @@ fn present_rgba_primary_center(
     src_pitch_bytes: usize,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2552,7 +3672,7 @@ pub(crate) fn blend_rgba_primary_rect(
     height: u32,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2669,7 +3789,7 @@ pub(crate) fn blend_rgba_primary_rect_scaled(
     dst_h: u32,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2795,7 +3915,7 @@ pub(crate) fn present_rgba_primary_rot180(
     src_pitch_bytes: usize,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2848,7 +3968,7 @@ pub(crate) fn present_rgba_primary_flip_y(
     src_pitch_bytes: usize,
     reason: &str,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2899,7 +4019,7 @@ pub(crate) fn present_rgba_primary_top_right(
     src_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null()
@@ -2997,12 +4117,9 @@ pub(crate) fn present_rgba_overlay_tiles_with_background(
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some((width, height)) = active_scanout_dimensions().or_else(|| {
-        PRIMARY_SURFACE
-            .lock()
-            .as_ref()
-            .map(|primary| (primary.width, primary.height))
-    }) else {
+    let Some((width, height)) = active_scanout_dimensions()
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
+    else {
         return false;
     };
     if width == 0 || height == 0 || tiles.is_empty() {
@@ -3080,12 +4197,7 @@ pub(crate) fn present_live_overlay_rects_preserving(
         return false;
     };
     let (width, height) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
         .unwrap_or((0, 0));
     if width == 0 || height == 0 {
         return false;
@@ -3151,12 +4263,7 @@ pub(crate) fn present_ui3_canvas_rgba(
         return false;
     };
     let (width, height) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
         .unwrap_or((0, 0));
     if width == 0
         || height == 0
@@ -3223,19 +4330,24 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let (width, height) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
-        .unwrap_or((0, 0));
-    if width == 0 || height == 0 || src_rect.is_empty() || dst_xy.x < 0 || dst_xy.y < 0 {
+    let Some(target) = active_display_pipeline_target() else {
+        return false;
+    };
+    let Some(pipe) = target.pipeline.pipe() else {
+        return false;
+    };
+    if target.width == 0
+        || target.height == 0
+        || src_rect.is_empty()
+        || dst_xy.x < 0
+        || dst_xy.y < 0
+    {
         return false;
     }
 
-    let Some(surface) = ensure_primary_swap_surface(dev, width, height) else {
+    let Some(surface) =
+        ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
+    else {
         return false;
     };
     let dst_x = dst_xy.x as u32;
@@ -3287,7 +4399,36 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
     }
 
     crate::intel::dma_flush(surface.virt, surface.byte_len);
-    if !set_primary_plane_source(
+    let live_target = display_pipeline_target_for_pipe(dev, pipe);
+    if live_target != Some(target) {
+        let live_activity = live_target
+            .map(|live| live.activity.name())
+            .unwrap_or("unavailable");
+        let live_ddi = live_target
+            .map(|live| live.route.ddi.name())
+            .unwrap_or("unavailable");
+        let live_mode = live_target
+            .map(|live| live.route.mode_name())
+            .unwrap_or("unavailable");
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: primary-swap commit rejected reason={} pipeline={} requested={}x{} requested_state={} requested_ddi={} requested_link={} live={}x{} live_state={} live_ddi={} live_link={} potential_reason=display-routing-or-mode-changed-during-custom-copy action=retain-current-scanout\n",
+            reason,
+            target.pipeline.name(),
+            target.width,
+            target.height,
+            target.activity.name(),
+            target.route.ddi.name(),
+            target.route.mode_name(),
+            live_target.map(|live| live.width).unwrap_or(0),
+            live_target.map(|live| live.height).unwrap_or(0),
+            live_activity,
+            live_ddi,
+            live_mode,
+        );
+        return false;
+    }
+    if !program_primary_plane_source_for_pipeline(
         PrimaryPlaneSource {
             phys: surface.phys,
             gpu: surface.gpu,
@@ -3303,7 +4444,9 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
             dst_w: surface.width,
             dst_h: surface.height,
         },
+        target.pipeline,
         reason,
+        true,
     ) {
         return false;
     }
@@ -3312,9 +4455,16 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
     let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: primary-swap-gpgpu-present seq={} reason={} pipe={} buffer={} rect={}x{}@{},{} size={}x{} pitch=0x{:X} gpu=0x{:X}\n",
+            "intel/display: primary-swap-gpgpu-present seq={} reason={} pipeline={} state={} ddi={} link_mode={} bpc={} pipe={} buffer={} copy_path=custom-gpgpu-rgba8-to-primary-xrgb zero_copy=0 rect={}x{}@{},{} size={}x{} pitch=0x{:X} gpu=0x{:X} spans={} submits={} submit_ms={} total_ms={}\n",
             seq,
             reason,
+            DisplayPipelineId::from_pipe(surface.pipe)
+                .map(DisplayPipelineId::name)
+                .unwrap_or("pipe-invalid"),
+            target.activity.name(),
+            target.route.ddi.name(),
+            target.route.mode_name(),
+            target.route.bits_per_color(),
             surface.pipe.name,
             surface.buffer_index,
             copy_w,
@@ -3325,6 +4475,10 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
             surface.height,
             surface.pitch_bytes,
             surface.gpu,
+            stats.spans,
+            stats.submits,
+            stats.submit_ms,
+            stats.total_ms,
         );
     }
 
@@ -3575,7 +4729,7 @@ pub(crate) fn present_imc3_surface_center(
     visible_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
@@ -3697,7 +4851,7 @@ pub(crate) fn present_ytile_nv12_surface_center(
     src_pitch_bytes: usize,
     src_uv_offset: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
@@ -3829,7 +4983,7 @@ pub(crate) fn present_nv12_surface_center(
     visible_height: u32,
     src_pitch_bytes: usize,
 ) -> bool {
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
     if surface.virt.is_null() || coded_width == 0 || coded_height == 0 {
@@ -4338,9 +5492,7 @@ fn program_plane_watermark_boot_safe(dev: crate::intel::Dev, plane_base: usize, 
 }
 
 fn plane_watermarks_are_boot_safe(dev: crate::intel::Dev, plane_base: usize) -> bool {
-    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF)
-        != PLANE_WM_LEVEL0_BOOT_SAFE
-    {
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF) != PLANE_WM_LEVEL0_BOOT_SAFE {
         return false;
     }
     let mut level = 1usize;
@@ -4776,7 +5928,7 @@ pub(crate) fn kick_primary_surface_scanout(label: &str) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return false;
     };
 
@@ -4829,7 +5981,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     let Some(dev) = crate::intel::claimed_device() else {
         return;
     };
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return;
     };
     let pipe = surface.pipe;
@@ -4990,21 +6142,25 @@ fn fuse_pg_distribution_done(raw: u32, pg: u32) -> u8 {
     ((raw >> (27 - pg)) & 0x1) as u8
 }
 
-fn log_primary_scanout_pte_window(dev: crate::intel::Dev, label: &str, byte_len: usize) {
+fn log_primary_scanout_pte_window(
+    dev: crate::intel::Dev,
+    label: &str,
+    base_gpu: u64,
+    byte_len: usize,
+) {
     let page_count = byte_len.div_ceil(crate::intel::WARM_ALIGN);
     let mut entries = [0u64; 4];
     let count = page_count.min(entries.len());
     let mut idx = 0usize;
     while idx < count {
-        let gpu = crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE
-            + (idx as u64) * crate::intel::WARM_ALIGN as u64;
+        let gpu = base_gpu + (idx as u64) * crate::intel::WARM_ALIGN as u64;
         entries[idx] = crate::intel::read_ggtt_pte(dev, gpu).unwrap_or(0);
         idx += 1;
     }
     intel_display_verbose_log!(
         "intel/display: primary-ggtt label={} gpu=0x{:X} bytes=0x{:X} pages={} pte0=0x{:016X} pte1=0x{:016X} pte2=0x{:016X} pte3=0x{:016X}\n",
         label,
-        crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE,
+        base_gpu,
         byte_len,
         page_count,
         entries[0],
@@ -5020,12 +6176,7 @@ fn overlay_plane_base(pipe: PipeInfo, plane_slot: usize) -> usize {
 
 fn overlay_plane_top_right_position(surface: OverlaySurface) -> (u32, u32) {
     let (scanout_w, scanout_h) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
         .unwrap_or((surface.width, surface.height));
     let x = scanout_w
         .saturating_sub(surface.width)
@@ -5036,12 +6187,7 @@ fn overlay_plane_top_right_position(surface: OverlaySurface) -> (u32, u32) {
 
 fn overlay_plane_clamped_position(surface: OverlaySurface, x: u32, y: u32) -> (u32, u32) {
     let (scanout_w, scanout_h) = active_scanout_dimensions()
-        .or_else(|| {
-            PRIMARY_SURFACE
-                .lock()
-                .as_ref()
-                .map(|primary| (primary.width, primary.height))
-        })
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
         .unwrap_or((surface.width, surface.height));
     (
         x.min(scanout_w.saturating_sub(surface.width)),
@@ -5049,23 +6195,36 @@ fn overlay_plane_clamped_position(surface: OverlaySurface, x: u32, y: u32) -> (u
     )
 }
 
-fn overlay_surface_gpu_for_index(index: usize) -> Option<u64> {
+fn overlay_surface_pool(pipe: PipeInfo) -> &'static Mutex<OverlaySurfacePool> {
+    &OVERLAY_SURFACES[pipe.slot]
+}
+
+fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfacePool> {
+    &PRIMARY_SWAP_SURFACES[pipe.slot]
+}
+
+fn overlay_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u64> {
     if index >= OVERLAY_SWAP_BUFFER_COUNT {
         return None;
     }
-    OVERLAY_SWAP_GPU_BASE.checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?)
+    OVERLAY_SWAP_GPU_BASE
+        .checked_add((pipe.slot as u64).checked_mul(OVERLAY_PIPE_GPU_STRIDE)?)?
+        .checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?)
 }
 
-fn primary_swap_surface_gpu_for_index(index: usize) -> Option<u64> {
+fn primary_swap_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u64> {
     if index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
     }
-    PRIMARY_SWAP_GPU_BASE.checked_add((index as u64).checked_mul(PRIMARY_SWAP_GPU_STRIDE)?)
+    PRIMARY_SWAP_GPU_BASE
+        .checked_add((pipe.slot as u64).checked_mul(PRIMARY_SWAP_PIPE_GPU_STRIDE)?)?
+        .checked_add((index as u64).checked_mul(PRIMARY_SWAP_GPU_STRIDE)?)
 }
 
 fn overlay_back_buffer_index(pool: OverlaySurfacePool) -> usize {
     pool.front_index
         .map(|front| (front + 1) % OVERLAY_SWAP_BUFFER_COUNT)
+        .or_else(|| pool.surfaces.iter().position(Option::is_some))
         .unwrap_or(0)
 }
 
@@ -5076,21 +6235,79 @@ fn primary_swap_back_buffer_index(pool: PrimarySwapSurfacePool) -> usize {
 }
 
 fn mark_overlay_surface_front(surface: OverlaySurface) {
-    let mut pool = OVERLAY_SURFACE.lock();
-    if pool.matches(surface.width, surface.height, surface.pipe) {
+    let retiring = {
+        let mut pool = overlay_surface_pool(surface.pipe).lock();
+        if !pool.matches(surface.width, surface.height, surface.pipe) {
+            return;
+        }
         pool.front_index = Some(surface.buffer_index);
+        pool.retiring_front.take()
+    };
+    if let Some(retiring) = retiring {
+        let Some(dev) = crate::intel::claimed_device() else {
+            overlay_surface_pool(surface.pipe).lock().retiring_front = Some(retiring);
+            return;
+        };
+        if !release_detached_overlay_surface(dev, retiring, "replacement-proven-live") {
+            overlay_surface_pool(surface.pipe).lock().retiring_front = Some(retiring);
+        }
     }
+}
+
+fn release_detached_overlay_surface(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    reason: &str,
+) -> bool {
+    let render_unmapped =
+        crate::intel::render::unmap_render_ppgtt_range(surface.gpu, surface.byte_len);
+    let scanout_unmapped =
+        crate::intel::unmap_display_scanout_ggtt(dev, surface.byte_len, surface.gpu);
+    if !scanout_unmapped {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: overlay-surface retire deferred reason={} pipeline={} buffer={} gpu=0x{:X} bytes=0x{:X} render_unmapped={} potential_reason=scanout-ggtt-unmap-failed\n",
+            reason,
+            DisplayPipelineId::from_pipe(surface.pipe)
+                .map(DisplayPipelineId::name)
+                .unwrap_or("pipe-invalid"),
+            surface.buffer_index,
+            surface.gpu,
+            surface.byte_len,
+            render_unmapped as u8,
+        );
+        return false;
+    }
+    crate::dma::dealloc(surface.virt, surface.byte_len);
+    crate::log!(
+        "intel/display: overlay-surface retired reason={} pipeline={} buffer={} gpu=0x{:X} bytes=0x{:X} render_unmapped={}\n",
+        reason,
+        DisplayPipelineId::from_pipe(surface.pipe)
+            .map(DisplayPipelineId::name)
+            .unwrap_or("pipe-invalid"),
+        surface.buffer_index,
+        surface.gpu,
+        surface.byte_len,
+        render_unmapped as u8,
+    );
+    true
 }
 
 fn mark_primary_swap_surface_front(surface: PrimarySwapSurface) {
-    let mut pool = PRIMARY_SWAP_SURFACE.lock();
+    let mut pool = primary_swap_surface_pool(surface.pipe).lock();
     if pool.matches(surface.width, surface.height, surface.pipe) {
         pool.front_index = Some(surface.buffer_index);
     }
 }
 
-fn overlay_surface_for_gpu(width: u32, height: u32, gpu: u64) -> Option<OverlaySurface> {
-    let pool = OVERLAY_SURFACE.lock();
+fn overlay_surface_for_gpu(
+    pipeline: DisplayPipelineId,
+    width: u32,
+    height: u32,
+    gpu: u64,
+) -> Option<OverlaySurface> {
+    let pipe = pipeline.pipe()?;
+    let pool = overlay_surface_pool(pipe).lock();
     if pool.width != width || pool.height != height {
         return None;
     }
@@ -5104,7 +6321,7 @@ fn overlay_surface_for_gpu(width: u32, height: u32, gpu: u64) -> Option<OverlayS
 
 fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
     let front = {
-        let pool = OVERLAY_SURFACE.lock();
+        let pool = overlay_surface_pool(back.pipe).lock();
         if !pool.matches(back.width, back.height, back.pipe) {
             return false;
         }
@@ -5134,7 +6351,7 @@ fn copy_overlay_front_into_back(back: OverlaySurface) -> bool {
 
 fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     let front = {
-        let pool = PRIMARY_SWAP_SURFACE.lock();
+        let pool = primary_swap_surface_pool(back.pipe).lock();
         if !pool.matches(back.width, back.height, back.pipe) {
             return false;
         }
@@ -5223,34 +6440,79 @@ fn ensure_overlay_surface(
     width: u32,
     height: u32,
 ) -> Option<OverlaySurface> {
-    let active_pipe = active_pipe(dev)?;
-    let (buffer_index, resize_guard) = {
-        let pool = OVERLAY_SURFACE.lock();
-        if pool.matches(width, height, active_pipe) {
+    let pipe = active_pipe(dev)?;
+    ensure_overlay_surface_for_pipe(dev, pipe, width, height)
+}
+
+fn ensure_overlay_surface_for_pipe(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    width: u32,
+    height: u32,
+) -> Option<OverlaySurface> {
+    let (buffer_index, resize_guard, stale_back) = {
+        let mut pool = overlay_surface_pool(pipe).lock();
+        if pool.matches(width, height, pipe) {
             let index = overlay_back_buffer_index(*pool);
             if let Some(surface) = pool.surfaces[index] {
                 return Some(surface);
             }
-            (index, None)
+            if pool
+                .retiring_front
+                .is_some_and(|retiring| retiring.buffer_index == index)
+            {
+                crate::log_warn!(
+                    target: "intel/display";
+                    "intel/display: overlay acquire deferred pipeline={} buffer={} potential_reason=previous-size-surface-retirement-pending\n",
+                    DisplayPipelineId::from_pipe(pipe)?.name(),
+                    index,
+                );
+                return None;
+            }
+            (index, None, None)
         } else {
             // Buffer GPU addresses are stable across surface-size changes.
             // Preserve the slot which the plane is currently scanning and
             // allocate the resized surface in the other slot. Reusing slot 0
             // unconditionally here can expose an incomplete first frame when
             // a small boot marker grows into a full-screen composition.
-            let guarded_front = pool
-                .front_index
-                .map(|front_index| (pool.width, pool.height, pool.pipe_slot, front_index));
+            let guarded_front = pool.front_index.and_then(|front_index| {
+                pool.surfaces[front_index]
+                    .map(|surface| (pool.width, pool.height, pool.pipe_slot, front_index, surface))
+            });
             let index = guarded_front
-                .map(|(_, _, _, front_index)| (front_index + 1) % OVERLAY_SWAP_BUFFER_COUNT)
+                .map(|(_, _, _, front_index, _)| (front_index + 1) % OVERLAY_SWAP_BUFFER_COUNT)
                 .unwrap_or(0);
-            (index, guarded_front)
+            let stale_back = pool.surfaces[index].take();
+            (index, guarded_front, stale_back)
         }
     };
-    let gpu = overlay_surface_gpu_for_index(buffer_index)?;
+    if let Some(stale_back) = stale_back {
+        if !release_detached_overlay_surface(dev, stale_back, "resize-stale-back") {
+            let mut pool = overlay_surface_pool(pipe).lock();
+            if pool.surfaces[buffer_index].is_none() {
+                pool.surfaces[buffer_index] = Some(stale_back);
+            }
+            return None;
+        }
+    }
+    let gpu = overlay_surface_gpu_for_index(pipe, buffer_index)?;
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    if byte_len as u64 > OVERLAY_SWAP_GPU_STRIDE {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: overlay-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
+            DisplayPipelineId::from_pipe(pipe)?.name(),
+            width,
+            height,
+            pitch_bytes,
+            byte_len,
+            OVERLAY_SWAP_GPU_STRIDE,
+        );
+        return None;
+    }
     let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
     crate::intel::dma_flush(virt, byte_len);
@@ -5258,7 +6520,7 @@ fn ensure_overlay_surface(
     if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
         crate::log!(
             "intel/display: overlay-surface ggtt map failed pipe={} slot={} buffer={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
-            active_pipe.name,
+            pipe.name,
             OVERLAY_PLANE_SLOT,
             buffer_index,
             width,
@@ -5266,6 +6528,8 @@ fn ensure_overlay_surface(
             byte_len,
             gpu
         );
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, gpu);
+        crate::dma::dealloc(virt, byte_len);
         return None;
     }
     crate::intel::ggtt_invalidate(dev);
@@ -5278,26 +6542,27 @@ fn ensure_overlay_surface(
         phys,
         virt,
         gpu,
-        pipe: active_pipe,
+        pipe,
         plane_slot: OVERLAY_PLANE_SLOT,
         buffer_index,
     };
     {
-        let mut pool = OVERLAY_SURFACE.lock();
-        if !pool.matches(width, height, active_pipe) {
+        let mut pool = overlay_surface_pool(pipe).lock();
+        if !pool.matches(width, height, pipe) {
             *pool = OverlaySurfacePool {
                 width,
                 height,
-                pipe_slot: active_pipe.slot,
+                pipe_slot: pipe.slot,
                 // The old surface metadata no longer matches, but its GPU
                 // slot remains live until this resized back buffer commits.
-                front_index: resize_guard.map(|(_, _, _, front_index)| front_index),
+                front_index: None,
                 surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+                retiring_front: resize_guard.map(|(_, _, _, _, surface)| surface),
             };
         }
         pool.surfaces[buffer_index] = Some(surface);
     }
-    if let Some((old_width, old_height, old_pipe_slot, front_index)) = resize_guard {
+    if let Some((old_width, old_height, old_pipe_slot, front_index, _)) = resize_guard {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: overlay resize guarded old={}x{} pipe_slot={} live_buffer={} new={}x{} staging_buffer={} potential_reason=avoid-overwriting-live-scanout-before-first-complete-frame\n",
@@ -5312,7 +6577,7 @@ fn ensure_overlay_surface(
     }
     crate::log!(
         "intel/display: overlay-surface pipe={} slot={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
-        active_pipe.name,
+        pipe.name,
         OVERLAY_PLANE_SLOT,
         buffer_index,
         width,
@@ -5325,15 +6590,15 @@ fn ensure_overlay_surface(
     Some(surface)
 }
 
-fn ensure_primary_swap_surface(
+fn ensure_primary_swap_surface_for_pipe(
     dev: crate::intel::Dev,
+    pipe: PipeInfo,
     width: u32,
     height: u32,
 ) -> Option<PrimarySwapSurface> {
-    let active_pipe = active_pipe(dev)?;
     let buffer_index = {
-        let pool = PRIMARY_SWAP_SURFACE.lock();
-        if pool.matches(width, height, active_pipe) {
+        let pool = primary_swap_surface_pool(pipe).lock();
+        if pool.matches(width, height, pipe) {
             let index = primary_swap_back_buffer_index(*pool);
             if let Some(surface) = pool.surfaces[index] {
                 return Some(surface);
@@ -5343,10 +6608,23 @@ fn ensure_primary_swap_surface(
             0
         }
     };
-    let gpu = primary_swap_surface_gpu_for_index(buffer_index)?;
+    let gpu = primary_swap_surface_gpu_for_index(pipe, buffer_index)?;
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    if byte_len as u64 > PRIMARY_SWAP_GPU_STRIDE {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: primary-swap-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
+            DisplayPipelineId::from_pipe(pipe)?.name(),
+            width,
+            height,
+            pitch_bytes,
+            byte_len,
+            PRIMARY_SWAP_GPU_STRIDE,
+        );
+        return None;
+    }
     let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
     crate::intel::dma_flush(virt, byte_len);
@@ -5354,13 +6632,15 @@ fn ensure_primary_swap_surface(
     if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
         crate::log!(
             "intel/display: primary-swap-surface ggtt map failed pipe={} buffer={} size={}x{} bytes=0x{:X} gpu=0x{:X}\n",
-            active_pipe.name,
+            pipe.name,
             buffer_index,
             width,
             height,
             byte_len,
             gpu
         );
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, gpu);
+        crate::dma::dealloc(virt, byte_len);
         return None;
     }
     crate::intel::ggtt_invalidate(dev);
@@ -5373,16 +6653,16 @@ fn ensure_primary_swap_surface(
         phys,
         virt,
         gpu,
-        pipe: active_pipe,
+        pipe,
         buffer_index,
     };
     {
-        let mut pool = PRIMARY_SWAP_SURFACE.lock();
-        if !pool.matches(width, height, active_pipe) {
+        let mut pool = primary_swap_surface_pool(pipe).lock();
+        if !pool.matches(width, height, pipe) {
             *pool = PrimarySwapSurfacePool {
                 width,
                 height,
-                pipe_slot: active_pipe.slot,
+                pipe_slot: pipe.slot,
                 front_index: None,
                 surfaces: [None; PRIMARY_SWAP_BUFFER_COUNT],
             };
@@ -5391,7 +6671,7 @@ fn ensure_primary_swap_surface(
     }
     crate::log!(
         "intel/display: primary-swap-surface pipe={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",
-        active_pipe.name,
+        pipe.name,
         buffer_index,
         width,
         height,
@@ -5664,16 +6944,15 @@ fn overlay_plane_surface_flip_guard(
     alpha: OverlayAlphaMode,
 ) -> Result<(), &'static str> {
     let front_reg = {
-        let pool = OVERLAY_SURFACE.lock();
+        let pool = overlay_surface_pool(surface.pipe).lock();
         if !pool.matches(surface.width, surface.height, surface.pipe) {
             return Err("surface-pool-shape");
         }
-        let Some(front_index) = pool.front_index else {
-            return Err("no-complete-front");
-        };
-        let Some(front) = pool.surfaces[front_index] else {
-            return Err("front-metadata-missing");
-        };
+        let front = pool
+            .front_index
+            .and_then(|front_index| pool.surfaces[front_index])
+            .or(pool.retiring_front)
+            .ok_or("no-complete-front")?;
         u32::try_from(front.gpu).map_err(|_| "front-address-range")?
     };
     let Some(stride_reg) = plane_stride_reg_value(surface.pitch_bytes) else {
@@ -5918,27 +7197,7 @@ fn arm_overlay_plane(
 }
 
 pub(super) fn active_pipe(dev: crate::intel::Dev) -> Option<PipeInfo> {
-    let mut enabled_plane = None;
-    let mut observed = None;
-    for pipe in PIPES {
-        let pipe_src = crate::intel::mmio_read(dev, pipe.pipe_src_off);
-        if decode_pipe_src(pipe_src).is_some() {
-            return Some(pipe);
-        }
-        let plane_ctl = crate::intel::mmio_read(dev, pipe.primary_plane().ctl());
-        let plane_surf = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
-        let plane_surf_live = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
-        if enabled_plane.is_none()
-            && (plane_ctl & PLANE_CTL_ENABLE) != 0
-            && (plane_surf != 0 || plane_surf_live != 0)
-        {
-            enabled_plane = Some(pipe);
-        }
-        if observed.is_none() && (plane_ctl != 0 || plane_surf != 0 || plane_surf_live != 0) {
-            observed = Some(pipe);
-        }
-    }
-    enabled_plane.or(observed)
+    select_compatibility_pipeline(dev)?.snapshot.pipeline.pipe()
 }
 
 fn decode_plane_format(ctl: u32) -> &'static str {

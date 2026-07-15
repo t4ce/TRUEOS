@@ -12,7 +12,6 @@ pub(crate) use super::png_decode_pool;
 pub(crate) enum EncodedImageKind {
     Png,
     Jpeg,
-    Svg,
     Unknown,
 }
 
@@ -21,14 +20,13 @@ impl EncodedImageKind {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpeg",
-            Self::Svg => "svg",
             Self::Unknown => "unknown",
         }
     }
 
     pub(crate) const fn decode_error_code(self) -> i32 {
         match self {
-            Self::Png | Self::Jpeg | Self::Svg => -7,
+            Self::Png | Self::Jpeg => -7,
             Self::Unknown => -8,
         }
     }
@@ -48,9 +46,6 @@ pub(crate) fn infer_encoded_image_kind(
 ) -> EncodedImageKind {
     let kind = declared_kind.to_ascii_lowercase();
     let url = url.to_ascii_lowercase();
-    if kind.contains("svg") || url.ends_with(".svg") || bytes.starts_with(b"<svg") {
-        return EncodedImageKind::Svg;
-    }
     if kind.contains("png") || url.ends_with(".png") || bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
         return EncodedImageKind::Png;
     }
@@ -94,7 +89,6 @@ pub(crate) fn decode_encoded_image_kind_rgba(
                 rgba: decoded.rgba,
             })
             .map_err(|err| err.code()),
-        EncodedImageKind::Svg => Err(kind.decode_error_code()),
         EncodedImageKind::Unknown => Err(kind.decode_error_code()),
     }
 }

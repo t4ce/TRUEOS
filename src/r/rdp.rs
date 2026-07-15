@@ -77,8 +77,6 @@ pub fn publish_texture_png(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
 pub fn publish_texture_jpeg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
 
-pub fn publish_texture_svg(_tex_id: u32, _flags: u32, _data: &[u8]) {}
-
 pub fn publish_draw_solid_batch(_frame_seq: u32, _rect_count: u32, _records: &[u8]) {}
 
 pub fn publish_draw_sprite_batch(

@@ -1,0 +1,1780 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Mosaic — Four-monitor compositor wall</title>
+  <style>
+    :root {
+      --ink: #f7f7fb;
+      --muted: rgba(235, 238, 247, .58);
+      --line: rgba(255, 255, 255, .12);
+      --line-strong: rgba(255, 255, 255, .22);
+      --panel: rgba(18, 20, 27, .72);
+      --panel-solid: #161821;
+      --glass-blur: 20px;
+      --window-radius: 18px;
+      --accent: 167 255 213;
+      --accent-2: 167 142 255;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .48), 0 2px 0 rgba(255, 255, 255, .05) inset;
+      --ease: cubic-bezier(.2, .8, .2, 1);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { min-width: 1020px; min-height: 720px; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow-x: auto;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 50% 20%, rgba(92, 70, 143, .2), transparent 32%),
+        radial-gradient(circle at 10% 80%, rgba(35, 121, 128, .14), transparent 28%),
+        linear-gradient(180deg, #0d0f15 0%, #090b10 70%, #07080c 100%);
+    }
+
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .page {
+      min-height: 100vh;
+      padding: 28px 34px 34px;
+      display: grid;
+      grid-template-rows: auto minmax(540px, 1fr) auto;
+      gap: 18px;
+      position: relative;
+      isolation: isolate;
+    }
+
+    .page::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .28;
+      background-image:
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, transparent, black 16%, black 78%, transparent);
+      z-index: -1;
+    }
+
+    .hero {
+      width: min(1510px, calc(100vw - 68px));
+      min-width: 950px;
+      margin: 0 auto;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 13px; }
+
+    .brand__mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      position: relative;
+      background: linear-gradient(145deg, rgba(var(--accent), .94), rgba(var(--accent-2), .88));
+      box-shadow: 0 10px 30px rgba(80, 208, 178, .18), 0 1px 0 rgba(255,255,255,.65) inset;
+    }
+
+    .brand__mark::before,
+    .brand__mark::after {
+      content: "";
+      position: absolute;
+      border: 1px solid rgba(6, 11, 15, .45);
+      border-radius: 7px;
+    }
+
+    .brand__mark::before { inset: 8px 12px 8px 7px; }
+    .brand__mark::after { inset: 12px 7px 12px 15px; }
+
+    .eyebrow {
+      margin: 0 0 3px;
+      color: rgba(var(--accent), .82);
+      font-size: 10px;
+      font-weight: 760;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(20px, 2vw, 28px);
+      line-height: 1;
+      letter-spacing: -.04em;
+      font-weight: 650;
+    }
+
+    .hero__note {
+      max-width: 480px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      text-align: right;
+    }
+
+    .rig-stage {
+      min-height: 540px;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+
+    .rig-stage::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 18px;
+      width: min(1080px, 70vw);
+      height: 90px;
+      transform: translateX(-50%);
+      background: radial-gradient(ellipse, rgba(0,0,0,.68), transparent 66%);
+      filter: blur(16px);
+      z-index: -1;
+    }
+
+    .rig {
+      width: min(1510px, calc(100vw - 70px));
+      min-width: 950px;
+      display: grid;
+      grid-template-columns: .92fr 1.42fr .92fr;
+      gap: clamp(14px, 1.8vw, 30px);
+      align-items: center;
+      transition: transform .7s var(--ease), gap .7s var(--ease);
+    }
+
+    .monitor {
+      min-width: 0;
+      position: relative;
+      transition: transform .7s var(--ease), filter .7s var(--ease), opacity .7s var(--ease);
+    }
+
+    .monitor--left { transform: translateY(12px) rotate(-.65deg) scale(.985); transform-origin: right center; }
+    .monitor--right { transform: translateY(12px) rotate(.65deg) scale(.985); transform-origin: left center; }
+    .monitor--center { transform: scale(1.025); }
+
+    .monitor__shell {
+      position: relative;
+      padding: 7px;
+      border-radius: 21px;
+      aspect-ratio: 16 / 10;
+      background: linear-gradient(155deg, #353942, #16181f 38%, #0b0d12 78%);
+      border: 1px solid rgba(255,255,255,.14);
+      box-shadow:
+        0 45px 85px rgba(0,0,0,.48),
+        0 2px 0 rgba(255,255,255,.18) inset,
+        0 -1px 0 rgba(0,0,0,.8) inset;
+    }
+
+    .monitor--center .monitor__shell { border-radius: 24px; padding: 8px; }
+
+    .monitor__shell::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      pointer-events: none;
+      border-radius: inherit;
+      background: linear-gradient(120deg, rgba(255,255,255,.1), transparent 20%, transparent 78%, rgba(255,255,255,.03));
+      mix-blend-mode: screen;
+    }
+
+    .screen {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      border-radius: 15px;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(119, 215, 193, .12), transparent 32%),
+        radial-gradient(circle at 88% 76%, rgba(126, 101, 219, .16), transparent 36%),
+        linear-gradient(145deg, #141823 0%, #0c0f17 48%, #11121b 100%);
+      box-shadow: 0 0 0 1px rgba(0,0,0,.8) inset, 0 0 42px rgba(78, 179, 161, .05) inset;
+    }
+
+    .screen::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .24;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 30px 30px;
+      mask-image: linear-gradient(140deg, rgba(0,0,0,.9), transparent 80%);
+      z-index: 0;
+    }
+
+    .screen::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      box-shadow: 0 0 45px rgba(0,0,0,.32) inset;
+      z-index: 90;
+    }
+
+    .desktop-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 9px;
+      color: rgba(245,247,252,.66);
+      font-size: 8px;
+      letter-spacing: .03em;
+      background: linear-gradient(180deg, rgba(8,10,15,.52), rgba(8,10,15,.1));
+      border-bottom: 1px solid rgba(255,255,255,.055);
+      z-index: 50;
+      user-select: none;
+    }
+
+    .desktop-bar__group { display: flex; align-items: center; gap: 7px; }
+
+    .desktop-bar__dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: rgb(var(--accent));
+      box-shadow: 0 0 10px rgba(var(--accent), .58);
+    }
+
+    .desktop-bar__pill {
+      padding: 3px 6px;
+      border-radius: 999px;
+      color: rgba(255,255,255,.82);
+      background: rgba(255,255,255,.075);
+      border: 1px solid rgba(255,255,255,.075);
+    }
+
+    .ambient-orb {
+      position: absolute;
+      width: 34%;
+      aspect-ratio: 1;
+      right: -12%;
+      bottom: -28%;
+      border-radius: 50%;
+      pointer-events: none;
+      background: radial-gradient(circle at 35% 35%, rgba(var(--accent), .32), rgba(var(--accent-2), .1) 42%, transparent 70%);
+      filter: blur(10px);
+      opacity: .75;
+      animation: orb 9s ease-in-out infinite alternate;
+      z-index: 1;
+    }
+
+    @keyframes orb { to { transform: translate(-20%, -12%) scale(1.18); opacity: .5; } }
+
+    .window {
+      position: absolute;
+      min-width: 118px;
+      min-height: 72px;
+      display: flex;
+      flex-direction: column;
+      border-radius: var(--window-radius);
+      overflow: hidden;
+      color: var(--ink);
+      background: linear-gradient(145deg, rgba(28,31,40,.85), rgba(15,17,24,.76));
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(var(--glass-blur)) saturate(1.12);
+      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.12);
+      z-index: 5;
+      transition:
+        opacity .35s var(--ease),
+        filter .35s var(--ease),
+        box-shadow .35s var(--ease),
+        border-color .35s var(--ease),
+        transform .55s var(--ease),
+        border-radius .4s var(--ease);
+      will-change: left, top;
+    }
+
+    .window:hover { border-color: rgba(255,255,255,.18); }
+
+    .window.is-active {
+      border-color: rgba(var(--accent), .32);
+      box-shadow: 0 30px 78px rgba(0,0,0,.58), 0 0 0 1px rgba(var(--accent), .08), 0 2px 0 rgba(255,255,255,.07) inset;
+    }
+
+    .window__bar {
+      height: 29px;
+      flex: 0 0 29px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 9px 0 10px;
+      background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.018));
+      border-bottom: 1px solid rgba(255,255,255,.075);
+      cursor: grab;
+      user-select: none;
+      touch-action: none;
+    }
+
+    .window__bar:active { cursor: grabbing; }
+
+    .window__identity {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .window__glyph {
+      width: 14px;
+      height: 14px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      color: rgb(var(--accent));
+      background: rgba(var(--accent), .09);
+      border: 1px solid rgba(var(--accent), .12);
+      font-size: 7px;
+      flex: 0 0 auto;
+    }
+
+    .window__title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 9px;
+      font-weight: 620;
+      letter-spacing: .015em;
+    }
+
+    .window__type {
+      color: rgba(255,255,255,.38);
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .window__actions { display: flex; align-items: center; gap: 5px; }
+
+    .window__action {
+      width: 15px;
+      height: 15px;
+      border: 0;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      color: rgba(255,255,255,.45);
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      font-size: 9px;
+      line-height: 1;
+    }
+
+    .window__action:hover { color: white; background: rgba(255,255,255,.09); }
+
+    .window__content { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
+
+    /* Initial placement */
+    #staticWindow { left: 8%; top: 15%; width: 84%; height: 72%; }
+    #renderWindow { left: 4%; top: 14%; width: 59%; height: 66%; }
+    #uiWindow { left: 65%; top: 18%; width: 31%; height: 61%; }
+    #commandWindow { left: 25%; top: 74%; width: 50%; height: 15%; min-height: 48px; }
+    #videoWindow { left: 6%; top: 13%; width: 88%; height: 58%; }
+    #queueWindow { left: 15%; top: 74%; width: 70%; height: 16%; min-height: 50px; }
+
+    /* Static surface */
+    .static-layout {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 1.22fr .78fr;
+      gap: 1px;
+      background: rgba(255,255,255,.06);
+    }
+
+    .static-art {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 70% 25%, rgba(230,255,241,.92) 0 3%, transparent 4%),
+        radial-gradient(circle at 33% 34%, rgba(99,244,205,.5), transparent 25%),
+        linear-gradient(145deg, #20302f, #171b22 47%, #4c376a 100%);
+    }
+
+    .static-art::before {
+      content: "";
+      position: absolute;
+      width: 70%;
+      aspect-ratio: 1;
+      left: -16%;
+      bottom: -34%;
+      border-radius: 42% 58% 55% 45%;
+      background: linear-gradient(145deg, rgba(var(--accent), .96), rgba(66, 104, 104, .08));
+      transform: rotate(18deg);
+      box-shadow: 28px -32px 90px rgba(105, 255, 214, .18);
+    }
+
+    .static-art::after {
+      content: "";
+      position: absolute;
+      width: 48%;
+      aspect-ratio: .72;
+      right: 8%;
+      top: 16%;
+      border-radius: 48% 52% 36% 64%;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.82), rgba(255,255,255,.03) 38%),
+        linear-gradient(160deg, rgba(var(--accent-2), .92), rgba(42,29,59,.8));
+      transform: rotate(-11deg);
+      box-shadow: 0 24px 52px rgba(0,0,0,.32);
+      border: 1px solid rgba(255,255,255,.18);
+    }
+
+    .static-art__label {
+      position: absolute;
+      left: 10%;
+      top: 12%;
+      z-index: 2;
+    }
+
+    .static-art__label strong {
+      display: block;
+      font-size: clamp(13px, 1.3vw, 22px);
+      letter-spacing: -.045em;
+      line-height: .95;
+      font-weight: 640;
+    }
+
+    .static-art__label span {
+      display: block;
+      margin-top: 7px;
+      color: rgba(255,255,255,.56);
+      font-size: 7px;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    .static-meta {
+      padding: clamp(11px, 1.2vw, 18px);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: rgba(11,13,19,.88);
+    }
+
+    .meta-kicker {
+      color: rgba(var(--accent), .72);
+      font-size: 7px;
+      font-weight: 760;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    .static-meta h3 {
+      margin: 7px 0 5px;
+      font-size: clamp(11px, 1vw, 16px);
+      line-height: 1.05;
+      letter-spacing: -.035em;
+      font-weight: 620;
+    }
+
+    .static-meta p {
+      margin: 0;
+      color: rgba(255,255,255,.47);
+      font-size: clamp(7px, .62vw, 9px);
+      line-height: 1.5;
+    }
+
+    .swatches { display: flex; gap: 5px; margin-top: 12px; }
+    .swatches i { width: 13px; height: 13px; border-radius: 50%; border: 1px solid rgba(255,255,255,.15); }
+    .swatches i:nth-child(1) { background: #a7ffd5; }
+    .swatches i:nth-child(2) { background: #7f70c9; }
+    .swatches i:nth-child(3) { background: #202b2f; }
+    .swatches i:nth-child(4) { background: #e9edf1; }
+
+    .static-facts { display: grid; gap: 6px; }
+    .fact { display: flex; justify-content: space-between; gap: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.07); font-size: 7px; }
+    .fact span:first-child { color: rgba(255,255,255,.35); }
+    .fact span:last-child { color: rgba(255,255,255,.72); }
+
+    /* Render surface */
+    .render-wrap { height: 100%; position: relative; background: #0b1017; }
+    #renderCanvas { display: block; width: 100%; height: 100%; }
+
+    .render-hud {
+      position: absolute;
+      inset: 0;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .render-hud__top { display: flex; justify-content: space-between; align-items: flex-start; }
+
+    .render-title strong {
+      display: block;
+      font-size: clamp(12px, 1.2vw, 19px);
+      letter-spacing: -.04em;
+      font-weight: 590;
+    }
+
+    .render-title span { color: rgba(255,255,255,.44); font-size: 7px; letter-spacing: .09em; }
+
+    .fps {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 6px;
+      border-radius: 999px;
+      color: rgba(255,255,255,.65);
+      background: rgba(5,8,12,.38);
+      border: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(8px);
+      font-size: 7px;
+    }
+
+    .fps i { width: 5px; height: 5px; border-radius: 50%; background: rgb(var(--accent)); box-shadow: 0 0 8px rgba(var(--accent), .7); }
+
+    .render-stats { display: flex; gap: 16px; }
+    .render-stat span { display: block; color: rgba(255,255,255,.32); font-size: 6px; letter-spacing: .12em; text-transform: uppercase; }
+    .render-stat strong { display: block; margin-top: 3px; font-size: 9px; font-weight: 560; }
+
+    /* UI surface */
+    .ui-panel {
+      height: 100%;
+      padding: clamp(9px, 1vw, 14px);
+      display: flex;
+      flex-direction: column;
+      gap: clamp(7px, .7vw, 10px);
+      overflow: auto;
+      background: linear-gradient(180deg, rgba(255,255,255,.025), transparent);
+    }
+
+    .ui-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .ui-heading strong { font-size: clamp(9px, .85vw, 13px); font-weight: 620; letter-spacing: -.025em; }
+
+    .live-badge {
+      padding: 3px 5px;
+      border-radius: 999px;
+      color: rgb(var(--accent));
+      background: rgba(var(--accent), .08);
+      border: 1px solid rgba(var(--accent), .12);
+      font-size: 6px;
+      font-weight: 800;
+      letter-spacing: .1em;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      padding: 3px;
+      border-radius: 9px;
+      background: rgba(0,0,0,.27);
+      border: 1px solid rgba(255,255,255,.07);
+    }
+
+    .segment {
+      border: 0;
+      padding: 5px 2px;
+      border-radius: 6px;
+      color: rgba(255,255,255,.42);
+      background: transparent;
+      cursor: pointer;
+      font-size: 6px;
+      font-weight: 700;
+    }
+
+    .segment.is-on { color: white; background: rgba(255,255,255,.1); box-shadow: 0 1px 0 rgba(255,255,255,.07) inset; }
+
+    .layer-list { display: grid; gap: 4px; }
+
+    .layer {
+      display: grid;
+      grid-template-columns: 17px 1fr auto;
+      align-items: center;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 9px;
+      background: rgba(255,255,255,.035);
+      border: 1px solid rgba(255,255,255,.055);
+    }
+
+    .layer__thumb {
+      width: 17px;
+      height: 17px;
+      border-radius: 5px;
+      background: linear-gradient(145deg, rgba(var(--accent), .8), rgba(var(--accent-2), .45));
+      box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
+    }
+
+    .layer:nth-child(2) .layer__thumb { background: linear-gradient(145deg, #252a35, #64529a); }
+    .layer:nth-child(3) .layer__thumb { background: linear-gradient(145deg, #eceff2, #5a796f); }
+
+    .layer__name { min-width: 0; }
+    .layer__name strong { display: block; font-size: 7px; font-weight: 570; }
+    .layer__name span { display: block; margin-top: 1px; color: rgba(255,255,255,.32); font-size: 5px; }
+
+    .layer__eye {
+      width: 19px;
+      height: 19px;
+      border: 0;
+      border-radius: 6px;
+      color: rgba(255,255,255,.55);
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+      font-size: 8px;
+    }
+
+    .layer__eye:hover { background: rgba(255,255,255,.08); color: white; }
+    .layer__eye[aria-pressed="false"] { color: rgba(255,255,255,.2); }
+
+    .control { display: grid; gap: 5px; }
+    .control__line { display: flex; align-items: center; justify-content: space-between; color: rgba(255,255,255,.52); font-size: 6px; }
+    .control__line output { color: rgba(255,255,255,.78); }
+
+    input[type="range"] {
+      width: 100%;
+      height: 3px;
+      appearance: none;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(var(--accent), .75) 0 var(--fill, 50%), rgba(255,255,255,.1) var(--fill, 50%) 100%);
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      appearance: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid #171a22;
+      background: rgb(var(--accent));
+      box-shadow: 0 0 0 1px rgba(255,255,255,.3);
+      cursor: pointer;
+    }
+
+    input[type="range"]::-moz-range-thumb {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      border: 2px solid #171a22;
+      background: rgb(var(--accent));
+      cursor: pointer;
+    }
+
+    /* Command surface */
+    .command {
+      height: 100%;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 0 11px;
+      background: rgba(13,15,21,.8);
+    }
+
+    .command__icon {
+      width: 19px;
+      height: 19px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      color: rgb(var(--accent));
+      background: rgba(var(--accent), .08);
+      border: 1px solid rgba(var(--accent), .1);
+      font-size: 8px;
+    }
+
+    .command__text { min-width: 0; }
+    .command__text strong { display: block; font-size: 8px; font-weight: 560; }
+    .command__text span { display: block; margin-top: 2px; color: rgba(255,255,255,.35); font-size: 6px; }
+
+    kbd {
+      padding: 3px 5px;
+      border-radius: 5px;
+      color: rgba(255,255,255,.45);
+      background: rgba(255,255,255,.055);
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 1px 0 rgba(255,255,255,.06) inset;
+      font-family: inherit;
+      font-size: 6px;
+    }
+
+    /* Video surface */
+    .video-stage { height: 100%; position: relative; background: #07080c; }
+
+    #videoSurface,
+    .video-fallback {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .video-stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, transparent 55%, rgba(4,5,8,.7));
+    }
+
+    .video-caption {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 11px;
+      z-index: 3;
+      display: grid;
+      gap: 7px;
+    }
+
+    .video-caption__row { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+
+    .video-caption strong {
+      display: block;
+      font-size: clamp(10px, 1vw, 15px);
+      letter-spacing: -.035em;
+      font-weight: 590;
+    }
+
+    .video-caption span { display: block; margin-top: 2px; color: rgba(255,255,255,.45); font-size: 6px; letter-spacing: .07em; }
+
+    .play-button {
+      width: 25px;
+      height: 25px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.2);
+      color: white;
+      background: rgba(8,10,14,.38);
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      font-size: 9px;
+    }
+
+    .play-button:hover { background: rgba(255,255,255,.13); }
+
+    .video-progress { --fill: 18%; cursor: pointer; }
+
+    /* Queue surface */
+    .queue {
+      height: 100%;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      background: rgba(14,16,22,.82);
+    }
+
+    .queue__thumb {
+      width: 28px;
+      height: 24px;
+      border-radius: 7px;
+      position: relative;
+      overflow: hidden;
+      background: linear-gradient(145deg, rgba(var(--accent-2), .86), rgba(var(--accent), .54));
+    }
+
+    .queue__thumb::after { content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: rgba(255,255,255,.42); right: -3px; bottom: -4px; }
+
+    .queue__copy { min-width: 0; }
+    .queue__copy strong { display: block; font-size: 7px; font-weight: 580; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .queue__copy span { display: block; margin-top: 2px; color: rgba(255,255,255,.34); font-size: 6px; }
+    .queue__time { color: rgba(255,255,255,.48); font-size: 6px; }
+
+    .monitor__chin {
+      position: relative;
+      width: 20%;
+      height: clamp(16px, 2vw, 29px);
+      margin: 0 auto;
+      background: linear-gradient(90deg, #15171d, #30333b 48%, #15171d);
+      clip-path: polygon(38% 0, 62% 0, 77% 100%, 23% 100%);
+      filter: drop-shadow(0 14px 10px rgba(0,0,0,.34));
+    }
+
+    .monitor__foot {
+      width: 34%;
+      height: 7px;
+      margin: -1px auto 0;
+      border-radius: 50% 50% 5px 5px;
+      background: linear-gradient(180deg, #363942, #14161b);
+      border: 1px solid rgba(255,255,255,.08);
+      box-shadow: 0 12px 20px rgba(0,0,0,.36);
+    }
+
+    .monitor--left .monitor__chin,
+    .monitor--right .monitor__chin { height: clamp(13px, 1.55vw, 23px); }
+
+    /* Controller */
+    .controller-wrap {
+      width: min(1510px, calc(100vw - 68px));
+      min-width: 950px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: center;
+    }
+
+    .controller {
+      max-width: 100%;
+      padding: 7px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 17px;
+      background: rgba(23,25,33,.72);
+      border: 1px solid rgba(255,255,255,.1);
+      box-shadow: 0 20px 50px rgba(0,0,0,.3), 0 1px 0 rgba(255,255,255,.08) inset;
+      backdrop-filter: blur(24px) saturate(1.2);
+      -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    }
+
+    .controller__brand {
+      padding: 0 8px 0 5px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: rgba(255,255,255,.57);
+      font-size: 9px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .controller__brand i { width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--accent)); box-shadow: 0 0 10px rgba(var(--accent), .65); }
+
+    .controller__divider { width: 1px; align-self: stretch; background: rgba(255,255,255,.08); }
+
+    .tool {
+      min-height: 30px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 0;
+      border-radius: 10px;
+      color: rgba(255,255,255,.56);
+      background: transparent;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 9px;
+      font-weight: 560;
+    }
+
+    .tool:hover { color: white; background: rgba(255,255,255,.07); }
+    .tool[aria-pressed="true"] { color: white; background: rgba(var(--accent), .11); box-shadow: 0 0 0 1px rgba(var(--accent), .1) inset; }
+    .tool__icon { color: rgba(var(--accent), .8); font-size: 11px; }
+
+    .status {
+      padding: 0 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,.34);
+      font-size: 8px;
+      white-space: nowrap;
+    }
+
+    .status b { color: rgba(255,255,255,.68); font-weight: 580; }
+
+    /* Modes */
+    body.focus-mode .window:not(.is-active) { opacity: .26; filter: saturate(.42) brightness(.72); }
+    body.focus-mode .monitor:not(:has(.window.is-active)) { filter: brightness(.68) saturate(.62); }
+
+    body.overview-mode .rig { transform: scale(.93) translateY(-3px); gap: clamp(24px, 3vw, 48px); }
+    body.overview-mode .monitor--left { transform: translate(-12px, 18px) rotate(-.2deg) scale(.97); }
+    body.overview-mode .monitor--right { transform: translate(12px, 18px) rotate(.2deg) scale(.97); }
+    body.overview-mode .monitor--center { transform: translateY(4px) scale(.98); }
+    body.overview-mode .window { transform: scale(.91); box-shadow: 0 16px 44px rgba(0,0,0,.42); }
+
+    body.frame-line .window { background: rgba(14,16,22,.7); box-shadow: 0 18px 48px rgba(0,0,0,.42); }
+    body.frame-line .window__bar { background: rgba(8,10,14,.4); }
+
+    body.frame-none .window { border-color: transparent; background: rgba(14,16,22,.38); box-shadow: 0 16px 42px rgba(0,0,0,.3); }
+    body.frame-none .window__bar { height: 12px; flex-basis: 12px; padding: 0 8px; border: 0; background: transparent; }
+    body.frame-none .window__identity,
+    body.frame-none .window__actions { opacity: 0; pointer-events: none; }
+
+    body.no-motion *, body.no-motion *::before, body.no-motion *::after { animation-play-state: paused !important; scroll-behavior: auto !important; }
+
+    .window.is-hidden { opacity: 0 !important; pointer-events: none !important; transform: scale(.9) !important; }
+
+    @media (max-height: 790px) {
+      .page { padding-top: 20px; padding-bottom: 22px; grid-template-rows: auto minmax(470px, 1fr) auto; }
+      .rig-stage { min-height: 470px; }
+      .hero__note { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+    }
+
+
+    /* Four-display hardware wall */
+    html { min-width: 960px; min-height: 700px; }
+
+    .page {
+      min-height: 100vh;
+      padding: 20px 28px 24px;
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 15px;
+    }
+
+    .rig-stage {
+      min-height: 0;
+      padding: 0;
+    }
+
+    .rig-stage::after {
+      bottom: -8px;
+      width: min(1240px, 82vw);
+      height: 110px;
+      opacity: .82;
+    }
+
+    .rig {
+      width: min(1280px, calc(100vw - 56px), calc(155vh - 184px));
+      min-width: 900px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: repeat(2, auto);
+      gap: clamp(12px, 1.15vw, 18px);
+      align-items: start;
+      position: relative;
+      transform-origin: center center;
+    }
+
+    .rig::before {
+      content: "";
+      position: absolute;
+      inset: 7% 9%;
+      z-index: -2;
+      pointer-events: none;
+      opacity: .26;
+      background:
+        linear-gradient(90deg, transparent 49.75%, rgba(255,255,255,.13) 49.9% 50.1%, transparent 50.25%),
+        linear-gradient(transparent 49.7%, rgba(255,255,255,.1) 49.9% 50.1%, transparent 50.3%);
+      filter: blur(.35px);
+    }
+
+    .monitor,
+    .monitor--left,
+    .monitor--center,
+    .monitor--right {
+      transform: none;
+      transform-origin: center;
+      filter: none;
+      opacity: 1;
+    }
+
+    .monitor__shell,
+    .monitor--center .monitor__shell {
+      aspect-ratio: 16 / 10;
+      padding: 7px;
+      border-radius: 20px;
+    }
+
+    .monitor--primary .monitor__shell {
+      border-color: rgba(var(--accent), .34);
+      box-shadow:
+        0 45px 85px rgba(0,0,0,.5),
+        0 0 0 1px rgba(var(--accent), .07),
+        0 0 44px rgba(var(--accent), .055),
+        0 2px 0 rgba(255,255,255,.18) inset,
+        0 -1px 0 rgba(0,0,0,.8) inset;
+    }
+
+    .monitor--primary .screen {
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,.8) inset,
+        0 0 0 1px rgba(var(--accent), .045) inset,
+        0 0 48px rgba(78,179,161,.07) inset;
+    }
+
+    .desktop-bar__pill--primary {
+      color: rgb(var(--accent));
+      background: rgba(var(--accent), .09);
+      border-color: rgba(var(--accent), .15);
+      font-weight: 760;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .monitor__chin,
+    .monitor__foot {
+      display: none;
+    }
+
+    /* Authored placement: one clear role per physical display. */
+    #renderWindow { left: 4%; top: 13%; width: 92%; height: 67%; }
+    #commandWindow { left: 18%; top: 78%; width: 64%; height: 14%; min-height: 48px; }
+    #uiWindow { left: 8%; top: 14%; width: 84%; height: 76%; }
+    #staticWindow { left: 8%; top: 14%; width: 84%; height: 74%; }
+    #videoWindow { left: 6%; top: 13%; width: 88%; height: 59%; }
+    #queueWindow { left: 15%; top: 75%; width: 70%; height: 15%; min-height: 50px; }
+
+    .controller-wrap {
+      width: min(1280px, calc(100vw - 56px), calc(155vh - 184px));
+      min-width: 900px;
+    }
+
+    .controller {
+      justify-content: center;
+    }
+
+    body.overview-mode .rig {
+      transform: scale(.965);
+      gap: clamp(15px, 1.45vw, 23px);
+    }
+
+    body.overview-mode .monitor,
+    body.overview-mode .monitor--left,
+    body.overview-mode .monitor--center,
+    body.overview-mode .monitor--right {
+      transform: none;
+    }
+
+    body.overview-mode .window {
+      transform: scale(.94);
+    }
+
+    @media (max-height: 850px) {
+      #uiWindow,
+      #staticWindow { top: 9%; height: 82%; }
+
+      .ui-panel { padding: 9px 10px; gap: 6px; }
+      .layer-list { gap: 3px; }
+      .layer { padding: 5px 6px; }
+      .control { gap: 3px; }
+
+      .static-meta { padding: 11px 12px; }
+      .static-meta h3 { margin: 6px 0 4px; }
+      .static-meta p { line-height: 1.4; }
+      .swatches { margin-top: 8px; }
+      .static-facts { gap: 4px; }
+      .fact { padding-top: 4px; }
+    }
+
+    @media (max-height: 790px) {
+      .page {
+        padding-top: 16px;
+        padding-bottom: 18px;
+        grid-template-rows: minmax(0, 1fr) auto;
+      }
+
+      .rig-stage { min-height: 0; }
+    }
+
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="rig-stage" aria-label="Four monitor compositor demo">
+      <div class="rig">
+        <!-- DISPLAY 01 / PRIMARY: RENDERED WORKSPACE -->
+        <article class="monitor monitor--primary" aria-label="Display one, primary rendered workspace" aria-current="true">
+          <div class="monitor__shell">
+            <div class="screen" data-screen="1" data-primary="true">
+              <div class="desktop-bar">
+                <div class="desktop-bar__group"><i class="desktop-bar__dot"></i><span>MOSAIC</span><span>·</span><span>DISPLAY 01</span></div>
+                <div class="desktop-bar__group"><span id="clock">12:48</span><span class="desktop-bar__pill desktop-bar__pill--primary">Primary</span></div>
+              </div>
+              <div class="ambient-orb"></div>
+
+              <section class="window is-active" data-kind="render" id="renderWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">R</i>
+              <span class="window__title">Field renderer</span>
+              <span class="window__type">GPU</span>
+              </div>
+              <div class="window__actions">
+              <button aria-label="Move rendered surface to next display" class="window__action" data-next-display="" title="Move to next display">↗</button>
+              <span aria-hidden="true" class="window__action">•••</span>
+              </div>
+              </header>
+              <div class="window__content render-wrap">
+              <canvas aria-label="Animated rendered particle field" id="renderCanvas"></canvas>
+              <div class="render-hud">
+              <div class="render-hud__top">
+              <div class="render-title"><strong>Resonant field</strong><span>REALTIME COMPOSITION / SCENE 07</span></div>
+              <div class="fps"><i></i><span id="fpsValue">60 fps</span></div>
+              </div>
+              <div class="render-stats">
+              <div class="render-stat"><span>Nodes</span><strong>32</strong></div>
+              <div class="render-stat"><span>Passes</span><strong>04</strong></div>
+              <div class="render-stat"><span>Latency</span><strong id="latencyValue">3.2 ms</strong></div>
+              </div>
+              </div>
+              </div>
+              </section>
+
+              <section class="window" data-kind="ui" id="commandWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">⌘</i>
+              <span class="window__title">Command surface</span>
+              <span class="window__type">Overlay</span>
+              </div>
+              <div class="window__actions"><span aria-hidden="true" class="window__action">•••</span></div>
+              </header>
+              <div class="window__content command">
+              <i class="command__icon">↗</i>
+              <div class="command__text"><strong>Move active surface to the next display</strong><span>Preserves content state and relative scale</span></div>
+              <kbd>⇧ D</kbd>
+              </div>
+              </section>
+            </div>
+          </div>
+        </article>
+
+        <!-- DISPLAY 02: COMPOSITOR UI -->
+        <article class="monitor" aria-label="Display two, compositor controls">
+          <div class="monitor__shell">
+            <div class="screen" data-screen="2">
+              <div class="desktop-bar">
+                <div class="desktop-bar__group"><i class="desktop-bar__dot"></i><span>DISPLAY 02</span></div>
+                <span class="desktop-bar__pill">Compositor</span>
+              </div>
+              <div class="ambient-orb"></div>
+
+              <section class="window" data-kind="ui" id="uiWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">U</i>
+              <span class="window__title">Surface stack</span>
+              <span class="window__type">UI</span>
+              </div>
+              <div class="window__actions">
+              <button aria-label="Move UI surface to next display" class="window__action" data-next-display="" title="Move to next display">↗</button>
+              <span aria-hidden="true" class="window__action">•••</span>
+              </div>
+              </header>
+              <div class="window__content">
+              <div class="ui-panel">
+              <div class="ui-heading"><strong>Compositor</strong><span class="live-badge">LIVE</span></div>
+              <div aria-label="Layout mode" class="segmented">
+              <button class="segment is-on" data-layout="free">Free</button>
+              <button class="segment" data-layout="tile">Tile</button>
+              <button class="segment" data-layout="focus">Focus</button>
+              </div>
+              <div class="layer-list">
+              <div class="layer">
+              <i class="layer__thumb"></i>
+              <div class="layer__name"><strong>Field renderer</strong><span>GPU surface</span></div>
+              <button aria-pressed="true" class="layer__eye" data-toggle-window="renderWindow" title="Toggle rendered surface">◉</button>
+              </div>
+              <div class="layer">
+              <i class="layer__thumb"></i>
+              <div class="layer__name"><strong>Video reel</strong><span>Media surface</span></div>
+              <button aria-pressed="true" class="layer__eye" data-toggle-window="videoWindow" title="Toggle video surface">◉</button>
+              </div>
+              <div class="layer">
+              <i class="layer__thumb"></i>
+              <div class="layer__name"><strong>Reference</strong><span>Static surface</span></div>
+              <button aria-pressed="true" class="layer__eye" data-toggle-window="staticWindow" title="Toggle static surface">◉</button>
+              </div>
+              </div>
+              <label class="control">
+              <span class="control__line"><span>Backdrop blur</span><output id="blurOutput">20</output></span>
+              <input id="blurRange" max="34" min="0" type="range" value="20"/>
+              </label>
+              <label class="control">
+              <span class="control__line"><span>Frame radius</span><output id="radiusOutput">18</output></span>
+              <input id="radiusRange" max="28" min="4" type="range" value="18"/>
+              </label>
+              </div>
+              </div>
+              </section>
+            </div>
+          </div>
+        </article>
+
+        <!-- DISPLAY 03: STATIC REFERENCE -->
+        <article class="monitor" aria-label="Display three, static reference content">
+          <div class="monitor__shell">
+            <div class="screen" data-screen="3">
+              <div class="desktop-bar">
+                <div class="desktop-bar__group"><i class="desktop-bar__dot"></i><span>DISPLAY 03</span></div>
+                <span class="desktop-bar__pill">Library</span>
+              </div>
+              <div class="ambient-orb"></div>
+
+              <section class="window" data-kind="static" id="staticWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">S</i>
+              <span class="window__title">Material study</span>
+              <span class="window__type">Static</span>
+              </div>
+              <div class="window__actions">
+              <button aria-label="Move static surface to next display" class="window__action" data-next-display="" title="Move to next display">↗</button>
+              <span aria-hidden="true" class="window__action">•••</span>
+              </div>
+              </header>
+              <div class="window__content">
+              <div class="static-layout">
+              <div class="static-art">
+              <div class="static-art__label">
+              <strong>Soft<br/>Geometry</strong>
+              <span>Volume / light / material</span>
+              </div>
+              </div>
+              <aside class="static-meta">
+              <div>
+              <span class="meta-kicker">Reference 024</span>
+              <h3>Calm frames, vivid content.</h3>
+              <p>The shell recedes while the surface keeps its own visual language.</p>
+              <div aria-label="Color swatches" class="swatches"><i></i><i></i><i></i><i></i></div>
+              </div>
+              <div class="static-facts">
+              <div class="fact"><span>Source</span><span>SVG / Image</span></div>
+              <div class="fact"><span>Scale</span><span>1.00×</span></div>
+              <div class="fact"><span>Color</span><span>P3 mapped</span></div>
+              </div>
+              </aside>
+              </div>
+              </div>
+              </section>
+            </div>
+          </div>
+        </article>
+
+        <!-- DISPLAY 04: VIDEO REVIEW -->
+        <article class="monitor" aria-label="Display four, video review content">
+          <div class="monitor__shell">
+            <div class="screen" data-screen="4">
+              <div class="desktop-bar">
+                <div class="desktop-bar__group"><i class="desktop-bar__dot"></i><span>DISPLAY 04</span></div>
+                <span class="desktop-bar__pill">Review</span>
+              </div>
+              <div class="ambient-orb"></div>
+
+              <section class="window" data-kind="video" id="videoWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">V</i>
+              <span class="window__title">Signal reel</span>
+              <span class="window__type">Video</span>
+              </div>
+              <div class="window__actions">
+              <button aria-label="Move video surface to next display" class="window__action" data-next-display="" title="Move to next display">↗</button>
+              <span aria-hidden="true" class="window__action">•••</span>
+              </div>
+              </header>
+              <div class="window__content video-stage" id="videoStage">
+              <video aria-label="Generated ambient motion video" autoplay="" id="videoSurface" muted="" playsinline=""></video>
+              <div class="video-caption">
+              <div class="video-caption__row">
+              <div><strong>Chromatic drift</strong><span>GENERATIVE MEDIA STREAM · 00:<b id="videoTime">03</b> / 00:18</span></div>
+              <button aria-label="Pause video" class="play-button" id="playButton">Ⅱ</button>
+              </div>
+              <input aria-label="Video playhead" class="video-progress" id="videoProgress" max="18" min="0" step="0.01" type="range" value="3"/>
+              </div>
+              </div>
+              </section>
+
+              <section class="window" data-kind="ui" id="queueWindow" tabindex="0">
+              <header class="window__bar">
+              <div class="window__identity">
+              <i class="window__glyph">Q</i>
+              <span class="window__title">Review queue</span>
+              <span class="window__type">UI</span>
+              </div>
+              <div class="window__actions"><span aria-hidden="true" class="window__action">•••</span></div>
+              </header>
+              <div class="window__content queue">
+              <i class="queue__thumb"></i>
+              <div class="queue__copy"><strong>Chromatic drift / take 04</strong><span>Current · composited preview</span></div>
+              <span class="queue__time">00:18</span>
+              </div>
+              </section>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <footer class="controller-wrap">
+      <nav class="controller" aria-label="Compositor controls">
+        <div class="controller__brand"><i></i><span>Mosaic</span></div>
+        <span class="controller__divider"></span>
+        <button class="tool" id="overviewButton" aria-pressed="false"><span class="tool__icon">⌗</span><span>Overview</span></button>
+        <button class="tool" id="frameButton" aria-pressed="false"><span class="tool__icon">▣</span><span id="frameLabel">Frame · Soft</span></button>
+        <button class="tool" id="focusButton" aria-pressed="false"><span class="tool__icon">◉</span><span>Focus</span></button>
+        <button class="tool" id="moveButton"><span class="tool__icon">↗</span><span>Move active</span></button>
+        <button class="tool" id="motionButton" aria-pressed="true"><span class="tool__icon">≈</span><span>Motion</span></button>
+        <span class="controller__divider"></span>
+        <div class="status"><span><b id="surfaceCount">6</b> surfaces</span><span>·</span><span><b>4</b> displays</span><span>·</span><span><b>D01</b> primary</span><span>·</span><span><b id="activeKind">GPU</b> active</span></div>
+      </nav>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const body = document.body;
+      const previewMode = new URLSearchParams(location.search).has('preview');
+      const screens = [...document.querySelectorAll('.screen')];
+      const windows = [...document.querySelectorAll('.window')];
+      let activeWindow = document.querySelector('.window.is-active');
+      let zCounter = 20;
+      let motionEnabled = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let layoutMode = 'free';
+      const savedFreeLayout = new Map();
+
+      const kindLabel = { static: 'STATIC', render: 'GPU', ui: 'UI', video: 'VIDEO' };
+
+      function updateActive(win) {
+        if (!win || win.classList.contains('is-hidden')) return;
+        windows.forEach(w => w.classList.remove('is-active'));
+        win.classList.add('is-active');
+        win.style.zIndex = ++zCounter;
+        activeWindow = win;
+        document.getElementById('activeKind').textContent = kindLabel[win.dataset.kind] || 'UI';
+      }
+
+      function saveLayout() {
+        windows.forEach(win => {
+          const screen = win.closest('.screen');
+          savedFreeLayout.set(win.id, {
+            screen,
+            left: win.style.left,
+            top: win.style.top,
+            width: win.style.width,
+            height: win.style.height
+          });
+        });
+      }
+
+      function restoreLayout() {
+        savedFreeLayout.forEach((state, id) => {
+          const win = document.getElementById(id);
+          if (!win) return;
+          state.screen.appendChild(win);
+          win.style.left = state.left;
+          win.style.top = state.top;
+          win.style.width = state.width;
+          win.style.height = state.height;
+        });
+      }
+
+      function tileAllScreens() {
+        screens.forEach(screen => {
+          const visible = [...screen.querySelectorAll('.window:not(.is-hidden)')];
+          if (!visible.length) return;
+          const pad = 8;
+          const bar = 31;
+          const gap = 7;
+          const areaW = screen.clientWidth - pad * 2;
+          const areaH = screen.clientHeight - bar - pad * 2;
+          const cols = visible.length === 1 ? 1 : 2;
+          const rows = Math.ceil(visible.length / cols);
+          const cellW = (areaW - gap * (cols - 1)) / cols;
+          const cellH = (areaH - gap * (rows - 1)) / rows;
+          visible.forEach((win, index) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            win.style.left = `${pad + col * (cellW + gap)}px`;
+            win.style.top = `${bar + pad + row * (cellH + gap)}px`;
+            win.style.width = `${cellW}px`;
+            win.style.height = `${cellH}px`;
+          });
+        });
+      }
+
+      function setLayout(mode) {
+        if (mode === layoutMode) return;
+        if (layoutMode === 'free') saveLayout();
+        body.classList.toggle('focus-mode', mode === 'focus');
+        document.getElementById('focusButton').setAttribute('aria-pressed', mode === 'focus' ? 'true' : 'false');
+        if (mode === 'tile') tileAllScreens();
+        if (mode === 'free') restoreLayout();
+        if (mode === 'focus' && savedFreeLayout.size) restoreLayout();
+        layoutMode = mode;
+        document.querySelectorAll('.segment').forEach(btn => btn.classList.toggle('is-on', btn.dataset.layout === mode));
+      }
+
+      windows.forEach(win => {
+        win.addEventListener('pointerdown', () => updateActive(win));
+        win.addEventListener('focus', () => updateActive(win));
+
+        const bar = win.querySelector('.window__bar');
+        if (!bar) return;
+        bar.addEventListener('pointerdown', event => {
+          if (event.target.closest('button')) return;
+          if (layoutMode === 'tile') setLayout('free');
+          updateActive(win);
+          const screen = win.closest('.screen');
+          const startRect = win.getBoundingClientRect();
+          const screenRect = screen.getBoundingClientRect();
+          const scaleX = screen.clientWidth / screenRect.width;
+          const scaleY = screen.clientHeight / screenRect.height;
+          const startX = event.clientX;
+          const startY = event.clientY;
+          const startLeft = win.offsetLeft;
+          const startTop = win.offsetTop;
+          bar.setPointerCapture(event.pointerId);
+
+          const move = e => {
+            const nextLeft = startLeft + (e.clientX - startX) * scaleX;
+            const nextTop = startTop + (e.clientY - startY) * scaleY;
+            const maxLeft = Math.max(0, screen.clientWidth - win.offsetWidth);
+            const maxTop = Math.max(27, screen.clientHeight - win.offsetHeight);
+            win.style.left = `${Math.min(maxLeft, Math.max(0, nextLeft))}px`;
+            win.style.top = `${Math.min(maxTop, Math.max(27, nextTop))}px`;
+          };
+
+          const end = e => {
+            bar.releasePointerCapture(e.pointerId);
+            bar.removeEventListener('pointermove', move);
+            bar.removeEventListener('pointerup', end);
+            bar.removeEventListener('pointercancel', end);
+          };
+
+          bar.addEventListener('pointermove', move);
+          bar.addEventListener('pointerup', end);
+          bar.addEventListener('pointercancel', end);
+        });
+      });
+
+      function moveWindowToNextDisplay(win = activeWindow) {
+        if (!win) return;
+        const current = win.closest('.screen');
+        const index = screens.indexOf(current);
+        const target = screens[(index + 1) % screens.length];
+        const currentRect = win.getBoundingClientRect();
+        const targetWidth = target.clientWidth;
+        const targetHeight = target.clientHeight;
+        const ratio = currentRect.width / Math.max(1, currentRect.height);
+        const width = Math.min(targetWidth * .78, Math.max(targetWidth * .42, currentRect.width));
+        const height = Math.min(targetHeight * .68, width / ratio);
+        target.appendChild(win);
+        win.style.width = `${width}px`;
+        win.style.height = `${height}px`;
+        win.style.left = `${Math.max(8, (targetWidth - width) / 2)}px`;
+        win.style.top = `${Math.max(34, (targetHeight - height) / 2)}px`;
+        updateActive(win);
+        if (layoutMode === 'tile') tileAllScreens();
+      }
+
+      document.querySelectorAll('[data-next-display]').forEach(button => {
+        button.addEventListener('click', event => {
+          event.stopPropagation();
+          moveWindowToNextDisplay(button.closest('.window'));
+        });
+      });
+
+      document.getElementById('moveButton').addEventListener('click', () => moveWindowToNextDisplay());
+
+      document.addEventListener('keydown', event => {
+        if (event.shiftKey && event.key.toLowerCase() === 'd') {
+          event.preventDefault();
+          moveWindowToNextDisplay();
+        }
+      });
+
+      document.querySelectorAll('.segment').forEach(button => {
+        button.addEventListener('click', () => setLayout(button.dataset.layout));
+      });
+
+      document.querySelectorAll('[data-toggle-window]').forEach(button => {
+        button.addEventListener('click', () => {
+          const target = document.getElementById(button.dataset.toggleWindow);
+          const willShow = target.classList.contains('is-hidden');
+          target.classList.toggle('is-hidden', !willShow);
+          button.setAttribute('aria-pressed', willShow ? 'true' : 'false');
+          button.textContent = willShow ? '◉' : '○';
+          document.getElementById('surfaceCount').textContent = windows.filter(w => !w.classList.contains('is-hidden')).length;
+          if (!willShow && target === activeWindow) {
+            const replacement = windows.find(w => !w.classList.contains('is-hidden') && w !== target);
+            updateActive(replacement);
+          }
+          if (layoutMode === 'tile') tileAllScreens();
+        });
+      });
+
+      const blurRange = document.getElementById('blurRange');
+      const radiusRange = document.getElementById('radiusRange');
+      function updateRange(range) {
+        const pct = ((range.value - range.min) / (range.max - range.min)) * 100;
+        range.style.setProperty('--fill', `${pct}%`);
+      }
+      [blurRange, radiusRange].forEach(updateRange);
+
+      blurRange.addEventListener('input', () => {
+        root.style.setProperty('--glass-blur', `${blurRange.value}px`);
+        document.getElementById('blurOutput').textContent = blurRange.value;
+        updateRange(blurRange);
+      });
+
+      radiusRange.addEventListener('input', () => {
+        root.style.setProperty('--window-radius', `${radiusRange.value}px`);
+        document.getElementById('radiusOutput').textContent = radiusRange.value;
+        updateRange(radiusRange);
+      });
+
+      const overviewButton = document.getElementById('overviewButton');
+      overviewButton.addEventListener('click', () => {
+        const on = !body.classList.contains('overview-mode');
+        body.classList.toggle('overview-mode', on);
+        overviewButton.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+
+      const focusButton = document.getElementById('focusButton');
+      focusButton.addEventListener('click', () => setLayout(body.classList.contains('focus-mode') ? 'free' : 'focus'));
+
+      const frameButton = document.getElementById('frameButton');
+      const frameLabel = document.getElementById('frameLabel');
+      const frameModes = [
+        { className: '', label: 'Frame · Soft' },
+        { className: 'frame-line', label: 'Frame · Line' },
+        { className: 'frame-none', label: 'Frame · None' }
+      ];
+      let frameIndex = 0;
+      frameButton.addEventListener('click', () => {
+        frameModes.forEach(mode => mode.className && body.classList.remove(mode.className));
+        frameIndex = (frameIndex + 1) % frameModes.length;
+        const mode = frameModes[frameIndex];
+        if (mode.className) body.classList.add(mode.className);
+        frameLabel.textContent = mode.label;
+        frameButton.setAttribute('aria-pressed', frameIndex ? 'true' : 'false');
+      });
+
+      const motionButton = document.getElementById('motionButton');
+      motionButton.setAttribute('aria-pressed', motionEnabled ? 'true' : 'false');
+      body.classList.toggle('no-motion', !motionEnabled);
+      motionButton.addEventListener('click', () => {
+        motionEnabled = !motionEnabled;
+        body.classList.toggle('no-motion', !motionEnabled);
+        motionButton.setAttribute('aria-pressed', motionEnabled ? 'true' : 'false');
+        if (motionEnabled && videoPaused === false) videoSurface.play().catch(() => {});
+        else if (!motionEnabled) videoSurface.pause();
+      });
+
+      function updateClock() {
+        const now = new Date();
+        document.getElementById('clock').textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      updateClock();
+      setInterval(updateClock, 30000);
+
+      // Realtime rendered surface
+      const renderCanvas = document.getElementById('renderCanvas');
+      const rctx = renderCanvas.getContext('2d');
+      const nodes = Array.from({ length: 32 }, (_, i) => ({
+        x: ((i * 47) % 101) / 100,
+        y: ((i * 71) % 97) / 100,
+        phase: i * .73,
+        speed: .6 + (i % 5) * .11
+      }));
+      let lastFpsStamp = performance.now();
+      let frameCounter = 0;
+      let measuredFps = 60;
+      let renderClock = 0;
+      let lastRenderTick = performance.now();
+
+      function fitCanvas(canvas, ctx) {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(2, Math.floor(rect.width * dpr));
+        const height = Math.max(2, Math.floor(rect.height * dpr));
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        return { width: rect.width, height: rect.height };
+      }
+
+      function drawRenderer(time) {
+        const { width, height } = fitCanvas(renderCanvas, rctx);
+        const dt = Math.min(.05, Math.max(0, (time - lastRenderTick) / 1000));
+        lastRenderTick = time;
+        if (motionEnabled) renderClock += dt;
+        const t = renderClock;
+        rctx.clearRect(0, 0, width, height);
+
+        const bg = rctx.createRadialGradient(width * .58, height * .42, 0, width * .52, height * .52, Math.max(width, height) * .75);
+        bg.addColorStop(0, 'rgba(81, 170, 153, .24)');
+        bg.addColorStop(.42, 'rgba(77, 64, 132, .18)');
+        bg.addColorStop(1, 'rgba(5, 10, 16, 1)');
+        rctx.fillStyle = bg;
+        rctx.fillRect(0, 0, width, height);
+
+        rctx.lineWidth = .55;
+        for (let y = 0; y < 9; y++) {
+          rctx.beginPath();
+          for (let x = 0; x <= 48; x++) {
+            const px = (x / 48) * width;
+            const base = (y / 8) * height;
+            const wave = Math.sin(x * .43 + t * .85 + y * .8) * (7 + y * .5) + Math.cos(x * .18 - t * .5) * 4;
+            const py = base + wave;
+            if (x === 0) rctx.moveTo(px, py); else rctx.lineTo(px, py);
+          }
+          rctx.strokeStyle = `rgba(157, 232, 213, ${.025 + y * .006})`;
+          rctx.stroke();
+        }
+
+        const points = nodes.map((node, i) => ({
+          x: (node.x + Math.sin(t * node.speed + node.phase) * .035) * width,
+          y: (node.y + Math.cos(t * node.speed * .74 + node.phase) * .05) * height,
+          r: 1.2 + (i % 4) * .45
+        }));
+
+        for (let i = 0; i < points.length; i++) {
+          for (let j = i + 1; j < points.length; j++) {
+            const dx = points[i].x - points[j].x;
+            const dy = points[i].y - points[j].y;
+            const distance = Math.hypot(dx, dy);
+            const threshold = Math.min(width, height) * .25;
+            if (distance < threshold) {
+              rctx.beginPath();
+              rctx.moveTo(points[i].x, points[i].y);
+              rctx.lineTo(points[j].x, points[j].y);
+              rctx.strokeStyle = `rgba(155, 238, 216, ${(1 - distance / threshold) * .12})`;
+              rctx.lineWidth = .65;
+              rctx.stroke();
+            }
+          }
+        }
+
+        points.forEach((point, i) => {
+          const glow = rctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, point.r * 5);
+          glow.addColorStop(0, i % 5 === 0 ? 'rgba(185, 161, 255, .95)' : 'rgba(174, 255, 229, .9)');
+          glow.addColorStop(1, 'rgba(120, 255, 218, 0)');
+          rctx.fillStyle = glow;
+          rctx.beginPath();
+          rctx.arc(point.x, point.y, point.r * 5, 0, Math.PI * 2);
+          rctx.fill();
+        });
+
+        frameCounter++;
+        if (time - lastFpsStamp > 700) {
+          measuredFps = Math.round((frameCounter * 1000) / (time - lastFpsStamp));
+          document.getElementById('fpsValue').textContent = `${Math.min(60, measuredFps)} fps`;
+          document.getElementById('latencyValue').textContent = `${(2.6 + (Math.sin(t) + 1) * .45).toFixed(1)} ms`;
+          frameCounter = 0;
+          lastFpsStamp = time;
+        }
+        requestAnimationFrame(drawRenderer);
+      }
+      requestAnimationFrame(drawRenderer);
+
+      // A real <video> fed by a generated canvas MediaStream, keeping the demo self-contained.
+      const videoSurface = document.getElementById('videoSurface');
+      const videoStage = document.getElementById('videoStage');
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = 720;
+      sourceCanvas.height = 420;
+      const vctx = sourceCanvas.getContext('2d');
+      let videoPaused = false;
+      let videoPlayhead = 3;
+      let lastVideoFrame = performance.now();
+      let phaseOffset = 0;
+      const videoProgress = document.getElementById('videoProgress');
+      const videoTime = document.getElementById('videoTime');
+      const playButton = document.getElementById('playButton');
+
+      function drawVideo(time) {
+        const dt = Math.min(.05, (time - lastVideoFrame) / 1000);
+        lastVideoFrame = time;
+        if (!videoPaused && motionEnabled) videoPlayhead = (videoPlayhead + dt) % 18;
+        const t = videoPlayhead + phaseOffset;
+        const w = sourceCanvas.width;
+        const h = sourceCanvas.height;
+
+        const base = vctx.createLinearGradient(0, 0, w, h);
+        base.addColorStop(0, `hsl(${188 + Math.sin(t * .4) * 18} 42% 15%)`);
+        base.addColorStop(.45, `hsl(${254 + Math.cos(t * .3) * 22} 48% 26%)`);
+        base.addColorStop(1, `hsl(${157 + Math.sin(t * .2) * 15} 52% 17%)`);
+        vctx.fillStyle = base;
+        vctx.fillRect(0, 0, w, h);
+
+        for (let i = 0; i < 5; i++) {
+          const x = w * (.5 + Math.sin(t * (.13 + i * .017) + i * 1.7) * (.28 + i * .018));
+          const y = h * (.5 + Math.cos(t * (.16 + i * .013) + i * 2.1) * (.25 + i * .012));
+          const radius = 120 + i * 36 + Math.sin(t + i) * 25;
+          const glow = vctx.createRadialGradient(x, y, 0, x, y, radius);
+          const hue = 153 + i * 27 + Math.sin(t * .5 + i) * 18;
+          glow.addColorStop(0, `hsla(${hue} 90% 75% / ${.24 - i * .025})`);
+          glow.addColorStop(.5, `hsla(${hue + 30} 75% 55% / .08)`);
+          glow.addColorStop(1, 'transparent');
+          vctx.fillStyle = glow;
+          vctx.fillRect(0, 0, w, h);
+        }
+
+        vctx.save();
+        vctx.translate(w * .5, h * .5);
+        vctx.rotate(t * .025);
+        for (let i = 0; i < 7; i++) {
+          vctx.strokeStyle = `rgba(230, 255, 247, ${.025 + i * .008})`;
+          vctx.lineWidth = 1;
+          vctx.beginPath();
+          vctx.ellipse(0, 0, 110 + i * 34 + Math.sin(t + i) * 9, 55 + i * 17, i * .18, 0, Math.PI * 2);
+          vctx.stroke();
+        }
+        vctx.restore();
+
+        vctx.globalCompositeOperation = 'soft-light';
+        vctx.fillStyle = 'rgba(255,255,255,.035)';
+        for (let y = 0; y < h; y += 4) vctx.fillRect(0, y, w, 1);
+        vctx.globalCompositeOperation = 'source-over';
+
+        videoProgress.value = videoPlayhead;
+        videoProgress.style.setProperty('--fill', `${(videoPlayhead / 18) * 100}%`);
+        videoTime.textContent = String(Math.floor(videoPlayhead)).padStart(2, '0');
+        requestAnimationFrame(drawVideo);
+      }
+
+      if (sourceCanvas.captureStream && !previewMode) {
+        videoSurface.srcObject = sourceCanvas.captureStream(30);
+        videoSurface.play().catch(() => {});
+      } else {
+        sourceCanvas.className = 'video-fallback';
+        videoSurface.replaceWith(sourceCanvas);
+      }
+      requestAnimationFrame(drawVideo);
+
+      function setVideoPaused(paused) {
+        videoPaused = paused;
+        playButton.textContent = paused ? '▶' : 'Ⅱ';
+        playButton.setAttribute('aria-label', paused ? 'Play video' : 'Pause video');
+        if (sourceCanvas.captureStream && !previewMode) {
+          if (paused || !motionEnabled) videoSurface.pause();
+          else videoSurface.play().catch(() => {});
+        }
+      }
+
+      playButton.addEventListener('click', () => setVideoPaused(!videoPaused));
+      videoProgress.addEventListener('input', () => {
+        videoPlayhead = Number(videoProgress.value);
+        videoProgress.style.setProperty('--fill', `${(videoPlayhead / 18) * 100}%`);
+      });
+
+      window.addEventListener('resize', () => {
+        if (layoutMode === 'tile') tileAllScreens();
+      });
+
+      // Preserve the authored percentage layout for returning from tile mode.
+      requestAnimationFrame(saveLayout);
+    })();
+  </script>
+</body>
+</html>

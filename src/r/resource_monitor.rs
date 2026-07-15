@@ -1,7 +1,7 @@
 //! Encoded UI/GFX resource preservation.
 //!
 //! This service owns a private TRUEOSFS ramdisk and records encoded texture
-//! assets at PNG/JPEG/SVG upload time, before decode.  The heavy decoded RGBA
+//! assets at PNG/JPEG upload time, before decode.  The heavy decoded RGBA
 //! path can later check this table instead of duplicating pixels.
 
 extern crate alloc;
@@ -29,7 +29,6 @@ const RESOURCE_MONITOR_ASSET_PREFIX: &str = "resource/asset-";
 pub enum EncodedKind {
     Png,
     Jpeg,
-    Svg,
 }
 
 impl EncodedKind {
@@ -37,7 +36,6 @@ impl EncodedKind {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpeg",
-            Self::Svg => "svg",
         }
     }
 }

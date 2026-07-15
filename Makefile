@@ -46,6 +46,10 @@ LIMINE_SOURCE_STAMP := $(LIMINE_DIST)/.source_stamp
 LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
 LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
+# Linux i915 selects the TGL GuC 70 firmware family for ADL-S/RKL. GuC is a
+# required render/compute dependency, so ISO creation fails if it is absent.
+GUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_guc_70.bin.zst
+GUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_guc_70.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 ENABLE_BLUEPRINTS ?= 0
@@ -203,6 +207,22 @@ iso: artifacts images limine
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
+		echo "error: required GuC firmware not found at $(GUC_FW_HOST_PATH)"; \
+		exit 1; \
+	fi
+	mkdir -p "$(ISO_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))"
+	@case "$(GUC_FW_HOST_PATH)" in \
+		*.zst) \
+			command -v zstd >/dev/null 2>&1 || { echo "error: zstd command not found; cannot unpack $(GUC_FW_HOST_PATH)"; exit 1; }; \
+			zstd -q -d -c "$(GUC_FW_HOST_PATH)" > "$(ISO_DIR)/$(GUC_FW_ISO_REL_PATH)"; \
+			;; \
+		*) \
+			cp "$(GUC_FW_HOST_PATH)" "$(ISO_DIR)/$(GUC_FW_ISO_REL_PATH)"; \
+			;; \
+	esac
+	mkdir -p "$(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))"
+	cp "$(ISO_DIR)/$(GUC_FW_ISO_REL_PATH)" "$(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)"
 	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
 		if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
 			echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \

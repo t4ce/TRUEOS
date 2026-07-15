@@ -331,9 +331,6 @@ fn encoded_resource_kind(
         crate::graphics::image::EncodedImageKind::Jpeg => {
             Some(crate::r::resource_monitor::EncodedKind::Jpeg)
         }
-        crate::graphics::image::EncodedImageKind::Svg => {
-            Some(crate::r::resource_monitor::EncodedKind::Svg)
-        }
         crate::graphics::image::EncodedImageKind::Unknown => None,
     }
 }
@@ -370,15 +367,6 @@ fn upload_jpeg_bytes_to_texture(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
     upload_encoded_image_bytes_to_texture(
         tex_id,
         crate::graphics::image::EncodedImageKind::Jpeg,
-        bytes,
-        flags,
-    )
-}
-
-fn upload_svg_bytes_to_texture_rgba(tex_id: u32, bytes: &[u8], flags: u32) -> i32 {
-    upload_encoded_image_bytes_to_texture(
-        tex_id,
-        crate::graphics::image::EncodedImageKind::Svg,
         bytes,
         flags,
     )
@@ -752,32 +740,6 @@ pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_jpeg_async(
         Err(code) => return set_error(tex_id, code),
     };
     upload_jpeg_bytes_to_texture(tex_id, bytes, 1)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg(
-    tex_id: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> i32 {
-    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
-        Ok(bytes) => bytes,
-        Err(code) => return set_error(tex_id, code),
-    };
-    upload_svg_bytes_to_texture_rgba(tex_id, bytes, 0)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_gfx_upload_texture_svg_async(
-    tex_id: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> i32 {
-    let bytes = match unsafe { encoded_bytes(data_ptr, data_len) } {
-        Ok(bytes) => bytes,
-        Err(code) => return set_error(tex_id, code),
-    };
-    upload_svg_bytes_to_texture_rgba(tex_id, bytes, 1)
 }
 
 #[unsafe(no_mangle)]

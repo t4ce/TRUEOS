@@ -8,6 +8,9 @@ mod display;
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]
 pub(crate) mod gpgpu;
+mod guc;
+pub(crate) mod guc_ctb;
+pub(crate) mod guc_submission;
 pub(crate) mod gpu_font;
 #[path = "sound/hda.rs"]
 pub mod hda;
@@ -32,6 +35,12 @@ use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
+// Permanent GuC GGTT reservations. Keep these below the legacy RCS arena at
+// 0x0080_0000; the archived proof addresses overlapped live render surfaces.
+pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0010_0000;
+pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0020_0000;
+pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x0700_0000;
+const GPU_VA_GUC_LOW_RESERVED_LIMIT: u64 = 0x0080_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_UI3_BASE_BASE: u64 = 0x0400_0000;
@@ -56,6 +65,17 @@ const FORCEWAKE_FALLBACK: u32 = 1 << 15;
 const FORCEWAKE_POLL_ITERS: usize = 20_000;
 const GFX_FLSH_CNTL_GEN6: usize = 0x101008;
 const GFX_FLSH_CNTL_EN: u32 = 1 << 0;
+const GUC_WOPCM_OFFSET_SHIFT: u32 = 14;
+const GUC_WOPCM_SIZE_MASK: u32 = 0xFFFFF << 12;
+const GEN11_WOPCM_SIZE: u32 = 0x0020_0000;
+const WOPCM_RESERVED_SIZE: u32 = 0x0000_4000;
+const GUC_WOPCM_RESERVED_SIZE: u32 = 0x0000_4000;
+const GUC_WOPCM_STACK_RESERVED_SIZE: u32 = 0x0000_2000;
+const WOPCM_HW_CTX_RESERVED_SIZE: u32 = 0x0000_9000;
+const GUC_WOPCM_OFFSET_ALIGNMENT: u32 = 1 << GUC_WOPCM_OFFSET_SHIFT;
+pub(crate) const GS_BOOTROM_MASK: u32 = 0x7F << 1;
+pub(crate) const GS_UKERNEL_MASK: u32 = 0xFF << 8;
+pub(crate) const GS_AUTH_STATUS_MASK: u32 = 0x03 << 30;
 const DISPLAY_PLANE1_BOOT_DEMO_ENABLED: bool = true;
 const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
@@ -110,7 +130,8 @@ pub fn init_once() {
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
     let full_ui3_boot = full_ui3_boot_enabled_for_device(dev.device_id);
-    if full_ui3_boot {
+    let guc_admitted = full_ui3_boot && init_required_guc_transport(dev);
+    if full_ui3_boot && guc_admitted {
         let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_gradient_rect_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
@@ -171,6 +192,11 @@ pub fn init_once() {
                 "intel/gpgpu: artifact boot smoketests skipped allcaps=0\n"
             );
         }
+    } else if full_ui3_boot {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: upload and boot probes blocked reason=guc-admission-failed submission_fallback=none display_continues=1\n"
+        );
     } else {
         crate::log_info!(
             target: "gpgpu";
@@ -179,12 +205,7 @@ pub fn init_once() {
             display_device_name(dev.device_id)
         );
     }
-    if full_ui3_boot {
-        let _ = self::blt::submit_bcs0_mi_smoke_once();
-        crate::log!(
-            "intel/uc-fw: firmware bring-up skipped reason=unused-by-display-render-media path=direct-execlist-and-vdbox\n"
-        );
-    } else {
+    if !full_ui3_boot {
         crate::log!(
             "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
             dev.device_id,
@@ -197,6 +218,91 @@ pub fn init_once() {
         crate::log!("intel/display: plane1 boot demo disabled\n");
     }
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
+}
+
+fn init_required_guc_transport(dev: Dev) -> bool {
+    let fw = self::guc::load_fw();
+    if fw.len == 0 {
+        crate::log!(
+            "intel/guc: admission accepted=0 reason=firmware-module-missing-or-invalid submission_fallback=none display_continues=1\n"
+        );
+        return false;
+    }
+    crate::log!(
+        "intel/guc: firmware found phys=0x{:X} gpu=0x{:X} len=0x{:X} xfer=0x{:X}\n",
+        fw.phys,
+        fw.gpu,
+        fw.len,
+        fw.xfer_len
+    );
+
+    let ads = self::guc::alloc_ads(fw.private_data_size);
+    if ads.len == 0 {
+        crate::log!(
+            "intel/guc: admission accepted=0 reason=ads-alloc-failed private_data=0x{:X} submission_fallback=none display_continues=1\n",
+            fw.private_data_size
+        );
+        return false;
+    }
+    let fw_end = fw.gpu.checked_add(fw.len as u64);
+    let ads_end = ads.gpu.checked_add(ads.len as u64);
+    if fw_end.is_none_or(|end| end > GPU_VA_GUC_ADS_BASE)
+        || ads_end.is_none_or(|end| end > GPU_VA_GUC_LOW_RESERVED_LIMIT)
+    {
+        crate::log!(
+            "intel/guc: admission accepted=0 reason=reserved-va-overflow fw_end=0x{:X} ads_end=0x{:X} reserved_limit=0x{:X}\n",
+            fw_end.unwrap_or(u64::MAX),
+            ads_end.unwrap_or(u64::MAX),
+            GPU_VA_GUC_LOW_RESERVED_LIMIT
+        );
+        return false;
+    }
+    if !map_ggtt(dev, fw.phys, fw.len, fw.gpu)
+        || !map_ggtt(dev, ads.phys, ads.len, ads.gpu)
+    {
+        crate::log!(
+            "intel/guc: admission accepted=0 reason=ggtt-map-failed fw_len=0x{:X} ads_len=0x{:X} submission_fallback=none display_continues=1\n",
+            fw.len,
+            ads.len
+        );
+        return false;
+    }
+
+    ggtt_invalidate(dev);
+    forcewake(dev);
+    let ready = self::guc::bootstrap(dev, fw, ads, false);
+    let status = self::guc::status(dev);
+    let (bootrom, ukernel, auth) = self::guc::describe_status(status);
+    crate::log!(
+        "intel/guc: bootstrap ready={} status=0x{:08X} bootrom={} ukernel={} auth=0x{:X} scheduler=enabled\n",
+        ready as u8,
+        status,
+        bootrom,
+        ukernel,
+        auth
+    );
+    if !ready {
+        crate::log!(
+            "intel/guc: admission accepted=0 reason=firmware-not-ready submission_fallback=none display_continues=1\n"
+        );
+        return false;
+    }
+
+    let ctb_ready = self::guc_ctb::init_and_enable(dev);
+    crate::log!(
+        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} submission_owner=guc fallback=none next=context-register-on-first-submit\n",
+        ctb_ready as u8,
+        ctb_ready as u8
+    );
+    ctb_ready
+}
+
+pub fn guc_ready() -> bool {
+    self::guc::ready()
+}
+
+pub(crate) fn guc_submission_ready() -> bool {
+    self::guc_submission::ready()
 }
 
 pub fn has_claimed_device() -> bool {
@@ -835,9 +941,29 @@ pub(crate) fn mask_en(v: u32) -> u32 {
 pub(crate) fn mask_dis(v: u32) -> u32 {
     v << 16
 }
+pub(crate) fn compute_wopcm(fw: u32) -> Option<(u32, u32)> {
+    let usable = GEN11_WOPCM_SIZE.checked_sub(WOPCM_HW_CTX_RESERVED_SIZE)?;
+    let minimum = fw
+        .checked_add(GUC_WOPCM_RESERVED_SIZE)?
+        .checked_add(GUC_WOPCM_STACK_RESERVED_SIZE)?;
+    let base = align_up_u32(WOPCM_RESERVED_SIZE, GUC_WOPCM_OFFSET_ALIGNMENT)?;
+    if base >= usable {
+        return None;
+    }
+    let size = (usable - base) & GUC_WOPCM_SIZE_MASK;
+    if size < minimum {
+        None
+    } else {
+        Some((base, size))
+    }
+}
 pub(crate) fn align_up(v: usize, a: usize) -> Option<usize> {
     let m = a.checked_sub(1)?;
     v.checked_add(m).map(|x| x & !m)
+}
+fn align_up_u32(v: u32, a: u32) -> Option<u32> {
+    let mask = a.checked_sub(1)?;
+    v.checked_add(mask).map(|value| value & !mask)
 }
 pub(crate) fn wr32(buf: &mut [u8], off: usize, v: u32) {
     if let Some(dst) = buf.get_mut(off..off + 4) {

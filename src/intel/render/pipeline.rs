@@ -38,12 +38,9 @@ fn log_render_packet_encodings() {
     if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS {
         return;
     }
-    let (ctx_desc_lo, ctx_desc_hi) = build_execlist_context_descriptor(
-        GPU_VA_CONTEXT_BASE,
-        render_ppgtt_pml4_phys() != 0,
-    );
+    let (ctx_desc_lo, ctx_desc_hi) = build_guc_context_descriptor(GPU_VA_CONTEXT_BASE);
     intel_render_verbose_log!(
-        "encodings mi_store_data_imm=0x{:08X} ctx_desc=0x{:08X}:0x{:08X} state_base_address=0x{:08X} pipe_control=0x{:08X} pc_post_sync_immediate=0x{:08X} pc_dest_ggtt=0x{:08X}\n",
+        "encodings mi_store_data_imm=0x{:08X} guc_hwlrca=0x{:08X}:0x{:08X} state_base_address=0x{:08X} pipe_control=0x{:08X} pc_post_sync_immediate=0x{:08X} pc_dest_ggtt=0x{:08X}\n",
         MI_STORE_DATA_IMM_GGTT_DW1,
         ctx_desc_hi,
         ctx_desc_lo,

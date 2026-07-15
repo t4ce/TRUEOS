@@ -202,7 +202,7 @@ fn log_active_pipe_raw_state(label: &str) {
     let Some(dev) = crate::intel::claimed_device() else {
         return;
     };
-    let Some(surface) = *PRIMARY_SURFACE.lock() else {
+    let Some(surface) = active_primary_surface() else {
         return;
     };
     let pipe = surface.pipe;

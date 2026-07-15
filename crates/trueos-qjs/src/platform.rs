@@ -51,16 +51,6 @@ pub mod gfx {
             data_ptr: *const u8,
             data_len: usize,
         ) -> i32;
-        fn trueos_cabi_gfx_upload_texture_svg(
-            tex_id: u32,
-            data_ptr: *const u8,
-            data_len: usize,
-        ) -> i32;
-        fn trueos_cabi_gfx_upload_texture_svg_async(
-            tex_id: u32,
-            data_ptr: *const u8,
-            data_len: usize,
-        ) -> i32;
     }
 
     #[inline]
@@ -100,20 +90,6 @@ pub mod gfx {
         data_len: usize,
     ) -> i32 {
         unsafe { trueos_cabi_gfx_upload_texture_jpeg_async(tex_id, data_ptr, data_len) }
-    }
-
-    #[inline]
-    pub unsafe fn upload_texture_svg(tex_id: u32, data_ptr: *const u8, data_len: usize) -> i32 {
-        unsafe { trueos_cabi_gfx_upload_texture_svg(tex_id, data_ptr, data_len) }
-    }
-
-    #[inline]
-    pub unsafe fn upload_texture_svg_async(
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32 {
-        unsafe { trueos_cabi_gfx_upload_texture_svg_async(tex_id, data_ptr, data_len) }
     }
 
     #[inline]

@@ -34,11 +34,6 @@ fn submit_warm_render_batch(
             stats_outgoing_context,
             None,
         );
-        recover_render_engine_after_nonretired_submit(dev, warm, "triangle-pre-submit");
-    }
-    if is_gpgpu_submit_name(submit_name) {
-        recover_render_engine_after_nonretired_submit(dev, warm, "gpgpu-pre-submit");
-        crate::intel::mmio_write(dev, GEN12_RCU_MODE, masked_bit_enable(GEN12_RCU_MODE_CCS_ENABLE));
     }
     let ring_tail_bytes = build_ring_batch_start(warm, GPU_VA_BATCH_BASE);
     let pml4_phys = render_ppgtt_pml4_phys();
@@ -54,44 +49,22 @@ fn submit_warm_render_batch(
     ) {
         return false;
     }
-    let (context_desc_lo, context_desc_hi) =
-        build_execlist_context_descriptor(GPU_VA_CONTEXT_BASE, pml4_phys != 0);
+    let (context_desc_lo, context_desc_hi) = build_guc_context_descriptor(GPU_VA_CONTEXT_BASE);
     write_lrc_ring_tail(warm, ring_tail_bytes as u32);
     log_lrc_ring_image(warm, submit_name);
-    let pphwsp_gpu = (GPU_VA_CONTEXT_BASE & !0xFFF) as u32;
-
-    crate::intel::mmio_write(
-        dev,
-        RCS_RING_MODE_GEN7,
-        masked_bit_enable(GFX_RUN_LIST_ENABLE | GEN11_GFX_DISABLE_LEGACY_MODE),
-    );
-    let ctx_ctl_after = rcs_ctx_control_value(false);
-    crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL, ctx_ctl_after);
-    crate::intel::mmio_write(dev, RCS_RING_CONTEXT_CONTROL_REF, ctx_ctl_after);
-    crate::intel::mmio_write(dev, RCS_RING_MI_MODE, masked_bit_disable(RING_MI_MODE_STOP_RING));
-    crate::intel::mmio_write(dev, RCS_RING_HWS_PGA, pphwsp_gpu);
-    let hws_after = crate::intel::mmio_read(dev, RCS_RING_HWS_PGA);
-
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    execlist_submit_port_push(dev, context_desc_lo, context_desc_hi, 0, 0);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+    if !crate::intel::guc_submission::submit_rcs_lrc(dev, context_desc_lo, context_desc_hi) {
+        return false;
+    }
 
     if should_log_primary_probe_detail() {
         crate::log!(
-            "{} execlist-start desc=0x{:08X}:0x{:08X} hws=0x{:08X} sq0=0x{:08X}:0x{:08X} sq1=0x{:08X}:0x{:08X} ctx_ctl=0x{:08X} mi_mode=0x{:08X} tail_req=0x{:08X} tail_rb=0x{:08X} gen12_sq_load=1\n",
+            "{} guc-sched-start hwlrca=0x{:08X}:0x{:08X} tail=0x{:08X} submission_owner=guc direct_elsp=0\n",
             submit_name,
             context_desc_hi,
             context_desc_lo,
-            hws_after,
-            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI),
-            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO),
-            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_HI + 8),
-            crate::intel::mmio_read(dev, RCS_RING_EXECLIST_SQ_LO + 8),
-            crate::intel::mmio_read(dev, RCS_RING_CONTEXT_CONTROL),
-            crate::intel::mmio_read(dev, RCS_RING_MI_MODE),
-            ring_tail_bytes as u32,
-            crate::intel::mmio_read(dev, RCS_RING_TAIL),
+            ring_tail_bytes as u32
         );
     }
 
@@ -669,11 +642,11 @@ fn submit_warm_render_batch(
         intel_render_verbose_log!("{} scanout-kick={}\n", submit_name, kicked as u8);
         crate::intel::display::log_pipe_live_scanout_state(label);
     }
-    // Draw3D no longer pays a speculative engine reset before every healthy
-    // frame. A genuinely non-retired scene batch still needs the proven
-    // recovery sequence before the service retries it.
     if !completed && submit_name == "draw3d-scene" {
-        recover_render_engine_after_nonretired_submit(dev, warm, "draw3d-scene-nonretired");
+        intel_render_focus_log!(
+            "{} recovery deferred owner=guc reason=nonretired-context direct-engine-reset=0\n",
+            submit_name
+        );
     }
     completed
 }
@@ -2006,6 +1979,15 @@ fn build_execlist_context_descriptor(
     // Gen11 SW-counter field out for this layout.
     let desc_hi = ((context_gpu_addr >> 32) as u32) | (sw_context_id << 7);
     (desc, desc_hi)
+}
+
+fn build_guc_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+    let base = (context_gpu_addr as u32) & 0xFFFF_F000;
+    let descriptor = base
+        | GEN8_CTX_VALID
+        | GEN8_CTX_PRIVILEGE
+        | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
+    (descriptor, (context_gpu_addr >> 32) as u32)
 }
 
 fn rcs_ctx_control_value(inhibit_restore: bool) -> u32 {
