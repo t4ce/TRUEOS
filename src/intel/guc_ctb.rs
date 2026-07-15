@@ -13,6 +13,10 @@ const CT_G2H_RING_BYTES: usize = 4 * CT_H2G_RING_BYTES;
 const CT_H2G_RING_DWORDS: usize = CT_H2G_RING_BYTES / 4;
 const CT_G2H_RING_DWORDS: usize = CT_G2H_RING_BYTES / 4;
 const CT_BLOB_BYTES: usize = CT_G2H_OFFSET + CT_G2H_RING_BYTES;
+const _: () = assert!(
+    crate::intel::GPU_VA_GUC_CTB_BASE + CT_BLOB_BYTES as u64
+        <= crate::intel::GPU_VA_GUC_RUNTIME_LIMIT
+);
 const CT_DESC_HEAD: usize = 0;
 const CT_DESC_TAIL: usize = 4;
 const CT_DESC_STATUS: usize = 8;

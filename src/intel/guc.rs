@@ -237,9 +237,10 @@ pub(crate) fn alloc_ads(private_data_size: usize) -> crate::intel::Buf {
     let Some(priv_off) = guc_ads_private_data_offset() else {
         return crate::intel::empty();
     };
-    let Some(len) =
-        priv_off.checked_add(crate::intel::align_up(private_data_size, 4096).unwrap_or(0))
-    else {
+    let Some(private_data_bytes) = crate::intel::align_up(private_data_size, 4096) else {
+        return crate::intel::empty();
+    };
+    let Some(len) = priv_off.checked_add(private_data_bytes) else {
         return crate::intel::empty();
     };
     let Some((phys, virt)) = crate::dma::alloc(len.max(4096), crate::intel::WARM_ALIGN) else {

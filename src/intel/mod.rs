@@ -35,12 +35,15 @@ use spin::Mutex;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
-// Permanent GuC GGTT reservations. Keep these below the legacy RCS arena at
-// 0x0080_0000; the archived proof addresses overlapped live render surfaces.
+// Permanent GuC GGTT reservations. Firmware stays below the legacy RCS arena.
+// ADS and CTB use the otherwise empty 0x0700_0000..0x0800_0000 window between
+// the display cursor and media arenas; GuC 70.49 requests about 8 MiB of
+// private ADS data, so it cannot share the small low-address firmware window.
 pub(crate) const GPU_VA_GUC_FW_BASE: u64 = 0x0010_0000;
-pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0020_0000;
-pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x0700_0000;
-const GPU_VA_GUC_LOW_RESERVED_LIMIT: u64 = 0x0080_0000;
+const GPU_VA_GUC_FW_LIMIT: u64 = 0x0080_0000;
+pub(crate) const GPU_VA_GUC_ADS_BASE: u64 = 0x0700_0000;
+pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x07F0_0000;
+pub(crate) const GPU_VA_GUC_RUNTIME_LIMIT: u64 = 0x0800_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_UI3_BASE_BASE: u64 = 0x0400_0000;
@@ -246,14 +249,15 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     }
     let fw_end = fw.gpu.checked_add(fw.len as u64);
     let ads_end = ads.gpu.checked_add(ads.len as u64);
-    if fw_end.is_none_or(|end| end > GPU_VA_GUC_ADS_BASE)
-        || ads_end.is_none_or(|end| end > GPU_VA_GUC_LOW_RESERVED_LIMIT)
+    if fw_end.is_none_or(|end| end > GPU_VA_GUC_FW_LIMIT)
+        || ads_end.is_none_or(|end| end > GPU_VA_GUC_CTB_BASE)
     {
         crate::log!(
-            "intel/guc: admission accepted=0 reason=reserved-va-overflow fw_end=0x{:X} ads_end=0x{:X} reserved_limit=0x{:X}\n",
+            "intel/guc: admission accepted=0 reason=reserved-va-overflow fw_end=0x{:X} fw_limit=0x{:X} ads_end=0x{:X} ads_limit=0x{:X}\n",
             fw_end.unwrap_or(u64::MAX),
+            GPU_VA_GUC_FW_LIMIT,
             ads_end.unwrap_or(u64::MAX),
-            GPU_VA_GUC_LOW_RESERVED_LIMIT
+            GPU_VA_GUC_CTB_BASE
         );
         return false;
     }
