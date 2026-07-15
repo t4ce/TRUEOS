@@ -78,7 +78,12 @@ pub fn project_scene_at(scene: &Scene, aspect: f32, angle: f32) -> Vec<Projected
     project_scene_with_camera(scene, aspect, scene.camera_at(angle))
 }
 
-fn project_scene_with_camera(
+/// Project a scene through an explicit view without mutating the scene's
+/// protocol-owned camera.
+///
+/// This is the renderer-facing boundary used by independent consumers such
+/// as a local fly camera and an off-screen screenshot view.
+pub fn project_scene_with_camera(
     scene: &Scene,
     aspect: f32,
     view_camera: ViewCamera,
@@ -199,6 +204,17 @@ mod tests {
         assert_eq!(jobs[0].indices, vec![0, 1, 2, 0, 2, 3]);
         assert_eq!(jobs[0].color, Rgba8::new(1, 2, 3, 4));
         assert!(jobs[0].vertices.iter().all(|point| point[2] > 0.0));
+
+        let stored_camera = scene.camera();
+        let fly_camera = ViewCamera {
+            position: Vec3::new(2.0, 0.0, 5.0),
+            view_direction: Vec3::new(-2.0, 0.0, -5.0),
+            ..stored_camera
+        };
+        let fly_jobs = project_scene_with_camera(&scene, 1.0, fly_camera);
+        assert_eq!(scene.camera(), stored_camera);
+        assert_eq!(fly_jobs.len(), 1);
+        assert_ne!(fly_jobs[0].vertices, jobs[0].vertices);
     }
 
     #[test]

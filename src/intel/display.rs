@@ -4979,16 +4979,27 @@ fn ensure_overlay_surface(
     height: u32,
 ) -> Option<OverlaySurface> {
     let active_pipe = active_pipe(dev)?;
-    let buffer_index = {
+    let (buffer_index, resize_guard) = {
         let pool = OVERLAY_SURFACE.lock();
         if pool.matches(width, height, active_pipe) {
             let index = overlay_back_buffer_index(*pool);
             if let Some(surface) = pool.surfaces[index] {
                 return Some(surface);
             }
-            index
+            (index, None)
         } else {
-            0
+            // Buffer GPU addresses are stable across surface-size changes.
+            // Preserve the slot which the plane is currently scanning and
+            // allocate the resized surface in the other slot. Reusing slot 0
+            // unconditionally here can expose an incomplete first frame when
+            // a small boot marker grows into a full-screen composition.
+            let guarded_front = pool
+                .front_index
+                .map(|front_index| (pool.width, pool.height, pool.pipe_slot, front_index));
+            let index = guarded_front
+                .map(|(_, _, _, front_index)| (front_index + 1) % OVERLAY_SWAP_BUFFER_COUNT)
+                .unwrap_or(0);
+            (index, guarded_front)
         }
     };
     let gpu = overlay_surface_gpu_for_index(buffer_index)?;
@@ -5033,11 +5044,26 @@ fn ensure_overlay_surface(
                 width,
                 height,
                 pipe_slot: active_pipe.slot,
-                front_index: None,
+                // The old surface metadata no longer matches, but its GPU
+                // slot remains live until this resized back buffer commits.
+                front_index: resize_guard.map(|(_, _, _, front_index)| front_index),
                 surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
             };
         }
         pool.surfaces[buffer_index] = Some(surface);
+    }
+    if let Some((old_width, old_height, old_pipe_slot, front_index)) = resize_guard {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: overlay resize guarded old={}x{} pipe_slot={} live_buffer={} new={}x{} staging_buffer={} potential_reason=avoid-overwriting-live-scanout-before-first-complete-frame\n",
+            old_width,
+            old_height,
+            old_pipe_slot,
+            front_index,
+            width,
+            height,
+            buffer_index
+        );
     }
     crate::log!(
         "intel/display: overlay-surface pipe={} slot={} buffer={} size={}x{} pitch=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X}\n",

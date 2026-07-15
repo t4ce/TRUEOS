@@ -53,6 +53,7 @@ define_started_flags!(
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     DRAW3D_SERVICE_STARTED,
+    DRAW3D_RENDER_STARTED,
     TACTICS_SRV_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
@@ -477,22 +478,11 @@ fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
-    let service = spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task());
-    if !matches!(service, SpawnAttempt::Spawned) {
-        return service;
-    }
-    match spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_render_task()) {
-        SpawnAttempt::Spawned => SpawnAttempt::Spawned,
-        SpawnAttempt::Skipped => SpawnAttempt::Spawned,
-        SpawnAttempt::Failed(error) => {
-            crate::log_warn!(
-                target: "draw3d";
-                "draw3d: render task spawn failed error={:?}\n",
-                error
-            );
-            SpawnAttempt::Spawned
-        }
-    }
+    spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task())
+}
+
+fn spawn_draw3d_render(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::draw3d_service::draw3d_render_task())
 }
 
 fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
@@ -624,6 +614,11 @@ fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
 #[inline]
 fn intel_cursor_service_gate() -> bool {
     crate::intel::has_claimed_device()
+}
+
+#[inline]
+fn ap1_ui_core_ready_gate() -> bool {
+    crate::workers::ap1_ui_core_spawner().is_some()
 }
 
 #[inline]
@@ -1218,7 +1213,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 56 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1307,6 +1302,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &DRAW3D_SERVICE_STARTED,
         spawn_draw3d_service,
+    ),
+    TaskSpec::enabled_gated(
+        "draw3d-render",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        ap1_ui_core_ready_gate,
+        &DRAW3D_RENDER_STARTED,
+        spawn_draw3d_render,
     ),
     TaskSpec::disabled(
         "tactics-srv",

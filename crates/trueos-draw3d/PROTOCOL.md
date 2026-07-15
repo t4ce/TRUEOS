@@ -44,7 +44,7 @@ then translation. Faces preserve polygons: `u16 vertex_count` followed by that m
 | `17` | set scale | instance ID, Vec3 |
 | `18` | clear scene and mesh store | empty |
 | `19` | start live scene rendering | empty, or RGBA clear color |
-| `1a` | stop live scene rendering | empty |
+| `1a` | stop live scene rendering | empty, or permanent boolean |
 | `20` | get statistics | empty |
 | `21` | ping | nonce (`u64`) |
 | `22` | set view camera | legacy camera, optionally followed by look-at orbit |
@@ -81,6 +81,12 @@ bytes. The four-byte form is backward-compatible with the original empty command
 separate option tag. Repeating start while running is idempotent unless it supplies a different
 clear color; stopping and then starting empty restores the transparent background.
 
+The stop-scene payload is empty for the original resumable pause, or one boolean byte. Omitting the
+byte or sending `0` stops presentation while retaining the complete scene and its resident GPU
+jobs. Sending `1` permanently stops and discards meshes and instances, resets camera/orbit/clear
+state, and invalidates the cached scene screenshot. A later start creates a fresh empty run; the
+permanent option does not lock out future scenes.
+
 ## Replies
 
 The first payload byte is status (`0` for success; nonzero values are compact error codes).
@@ -97,8 +103,12 @@ or if PNG encoding fails, the response falls back to the kernel's embedded 3840x
 ## Experimental live renderer
 
 The service owns the Intel triangle engine for this experiment. A scene starts in the stopped
-state. `start scene` enables frame submission; `stop scene` clears the live overlay and suspends
-submission while retaining all meshes, instances, camera state, and resident GPU allocations.
+state. `start scene` enables frame submission; an ordinary `stop scene` clears the live overlay and
+suspends submission while retaining all meshes, instances, camera state, and resident GPU
+allocations. A permanent stop additionally tears down the retained scene and releases its resident
+jobs. The event-driven TCP protocol task remains on the BSP executor, while the 60 Hz scene
+projection and GPU-submission task is pinned to CPU slot 1, the dedicated AP1 UI executor. It never
+uses the BSP or the AP2+ background-worker pool.
 Both lifecycle commands are idempotent: applied `affected` is one for a transition or a changed
 clear color and zero when the requested running state and color are already active. Each placed
 instance is projected
@@ -106,9 +116,9 @@ through the configured camera and fan-triangulated into a persistent indexed GPU
 uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
 frames. A camera orbit with nonzero speed reprojects and presents at that same scene cadence; absent
 or zero-speed orbits remain revision-driven and static. RGBA is volatile shader state, so `set color`
-does not upload geometry. Jobs are ordered back-to-front into one 512x512 target. TCP changes are
-coalesced on a 33 ms cadence (at most about 30 presented updates per second); unchanged static scenes
-retain their overlay without redundant GPU submission. A target is presented and cached only after
+does not upload geometry. Jobs are ordered back-to-front into the resident render target. TCP
+changes are coalesced on the 60 Hz local-view cadence; unchanged static scenes retain their overlay
+without redundant GPU submission. A target is presented and cached only after
 every mesh draw completes. Incomplete
 frames retain the last complete presentation and are retried on the next tick. When start supplies
 a clear color, the full-scanout overlay is cleared to that RGBA value and the same color backs
@@ -118,6 +128,19 @@ blend overlapping meshes with each other, so partially transparent geometry shou
 other scene geometry yet. Triangles
 which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
 Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
+
+Camera projection uses the resident render target's width divided by its height as the default
+aspect ratio for both local presentation and screenshot capture. Protocol clients therefore specify
+one camera without compensating geometry for a particular scanout shape.
+
+The live renderer also estimates projected coverage per resident draw. A draw above 1.75
+screen-equivalents emits an advisory warning with its instance and mesh IDs because combining many
+broad, overlapping room surfaces into one GPU submission can exceed the current per-submit
+completion window even while all protocol mesh limits remain satisfied. This is not a wire-level
+rejection: split that mesh into smaller retained draws when the warning accompanies a stall. Stall
+warnings identify the first unretired instance/mesh and distinguish likely high-overdraw pressure
+from a generic GPU timeout or front-end stall. Local overlay resizing preserves the currently
+scanned-out buffer slot until the first complete frame at the new size commits.
 
 The active scene budget is 100 stored meshes, 100 placed instances, 1,000 vertices per mesh,
 3,000 edges per mesh, and 2,000 triangles per mesh after polygon fan triangulation. These are

@@ -16,4 +16,4 @@ pub use protocol::{
     MAX_VERTICES_PER_COMMAND, Opcode, PROTOCOL_VERSION, RenderImage, Response, ResponseError,
     decode_response, encode_command, encode_response,
 };
-pub use render::{ProjectedMesh, project_scene, project_scene_at};
+pub use render::{ProjectedMesh, project_scene, project_scene_at, project_scene_with_camera};

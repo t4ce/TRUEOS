@@ -674,10 +674,25 @@ impl Scene {
                 self.running = true;
                 usize::from(changed)
             }
-            Command::StopScene => {
-                let changed = self.running;
+            Command::StopScene { permanent } => {
+                let changed = usize::from(self.running);
                 self.running = false;
-                usize::from(changed)
+                if permanent {
+                    let reset_view_state = self.camera != ViewCamera::default()
+                        || self.camera_orbit.is_some()
+                        || self.clear_color.is_some();
+                    let discarded = self.meshes.len().saturating_add(self.instances.len());
+                    self.meshes.clear();
+                    self.instances.clear();
+                    self.camera = ViewCamera::default();
+                    self.camera_orbit = None;
+                    self.clear_color = None;
+                    changed
+                        .saturating_add(discarded)
+                        .saturating_add(usize::from(reset_view_state))
+                } else {
+                    changed
+                }
             }
             Command::GetStats | Command::Ping { .. } | Command::RequestRender => 0,
         };

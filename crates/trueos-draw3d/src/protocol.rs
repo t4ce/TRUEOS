@@ -136,7 +136,9 @@ pub enum Command {
     StartScene {
         clear: Option<Rgba8>,
     },
-    StopScene,
+    StopScene {
+        permanent: bool,
+    },
     GetStats,
     Ping {
         nonce: u64,
@@ -168,7 +170,7 @@ impl Command {
             Self::SetScale { .. } => Opcode::SetScale,
             Self::Clear => Opcode::Clear,
             Self::StartScene { .. } => Opcode::StartScene,
-            Self::StopScene => Opcode::StopScene,
+            Self::StopScene { .. } => Opcode::StopScene,
             Self::GetStats => Opcode::GetStats,
             Self::Ping { .. } => Opcode::Ping,
             Self::SetViewCamera { .. } => Opcode::SetViewCamera,
@@ -195,7 +197,7 @@ impl Command {
             Self::SetScale { .. } => "set_scale",
             Self::Clear => "clear",
             Self::StartScene { .. } => "start_scene",
-            Self::StopScene => "stop_scene",
+            Self::StopScene { .. } => "stop_scene",
             Self::GetStats => "get_stats",
             Self::Ping { .. } => "ping",
             Self::SetViewCamera { .. } => "set_view_camera",
@@ -464,7 +466,13 @@ fn decode_command_payload(opcode: Opcode, payload: &[u8]) -> Result<Command, Dec
                 Some(reader.rgba()?)
             },
         },
-        Opcode::StopScene => Command::StopScene,
+        Opcode::StopScene => Command::StopScene {
+            permanent: if reader.is_empty() {
+                false
+            } else {
+                reader.boolean()?
+            },
+        },
         Opcode::GetStats => Command::GetStats,
         Opcode::Ping => Command::Ping {
             nonce: reader.u64()?,
@@ -572,7 +580,12 @@ pub fn encode_command(request_id: u32, command: &Command) -> Result<Vec<u8>, Enc
                 put_rgba(&mut payload, *color);
             }
         }
-        Command::Clear | Command::StopScene | Command::GetStats => {}
+        Command::StopScene { permanent } => {
+            if *permanent {
+                payload.push(1);
+            }
+        }
+        Command::Clear | Command::GetStats => {}
         Command::Ping { nonce } => put_u64(&mut payload, *nonce),
         Command::SetViewCamera { camera, orbit } => {
             put_camera(&mut payload, *camera);

@@ -326,11 +326,19 @@ fn scene_start_stop_is_idempotent_and_preserves_content() {
             mesh: triangle(Rgba8::new(7, 8, 9, 255)),
         })
         .unwrap();
-    let stopped = scene.apply(Command::StopScene).unwrap();
+    let stopped = scene
+        .apply(Command::StopScene { permanent: false })
+        .unwrap();
     assert_eq!(stopped.affected, 1);
     assert!(!scene.is_running());
     assert!(scene.mesh(7).is_some());
-    assert_eq!(scene.apply(Command::StopScene).unwrap().affected, 0);
+    assert_eq!(
+        scene
+            .apply(Command::StopScene { permanent: false })
+            .unwrap()
+            .affected,
+        0
+    );
     assert_eq!(
         scene
             .apply(Command::StartScene { clear: None })
@@ -339,21 +347,73 @@ fn scene_start_stop_is_idempotent_and_preserves_content() {
         1
     );
     assert_eq!(scene.clear_color(), None);
-    scene.apply(Command::StopScene).unwrap();
+    scene
+        .apply(Command::StopScene { permanent: false })
+        .unwrap();
 
-    for (request_id, command) in [
-        (90, Command::StartScene { clear: None }),
-        (91, Command::StartScene { clear: Some(white) }),
-        (92, Command::StopScene),
+    for (request_id, command, payload_len) in [
+        (90, Command::StartScene { clear: None }, 0),
+        (91, Command::StartScene { clear: Some(white) }, 4),
+        (92, Command::StopScene { permanent: false }, 0),
+        (93, Command::StopScene { permanent: true }, 1),
     ] {
         let bytes = encode_command(request_id, &command).unwrap();
-        assert_eq!(bytes.len(), 12 + usize::from(request_id == 91) * 4);
+        assert_eq!(bytes.len(), 12 + payload_len);
         let mut decoder = FrameDecoder::new();
         decoder.push(&bytes).unwrap();
         let request = decoder.next_request().unwrap().unwrap();
         assert_eq!(request.request_id, request_id);
         assert_eq!(request.command.unwrap(), command);
     }
+}
+
+#[test]
+fn permanent_stop_discards_scene_and_restores_fresh_defaults() {
+    let mut scene = Scene::default();
+    let white = Rgba8::new(255, 255, 255, 255);
+    let camera = ViewCamera {
+        position: Vec3::new(2.0, 3.0, 8.0),
+        view_direction: Vec3::new(-2.0, -1.0, -8.0),
+        ..ViewCamera::default()
+    };
+    scene
+        .apply(Command::PutMesh {
+            mesh_id: 7,
+            mesh: triangle(Rgba8::new(7, 8, 9, 255)),
+        })
+        .unwrap();
+    scene
+        .apply(Command::PutInstance {
+            instance_id: 70,
+            instance: Instance::new(7, Transform::IDENTITY),
+        })
+        .unwrap();
+    scene
+        .apply(Command::SetViewCamera {
+            camera,
+            orbit: None,
+        })
+        .unwrap();
+    scene
+        .apply(Command::StartScene { clear: Some(white) })
+        .unwrap();
+
+    let stopped = scene.apply(Command::StopScene { permanent: true }).unwrap();
+    assert_eq!(stopped.affected, 4);
+    assert_eq!(stopped.stats, SceneStats::default());
+    assert!(!scene.is_running());
+    assert!(scene.mesh(7).is_none());
+    assert!(scene.instance(70).is_none());
+    assert_eq!(scene.camera(), ViewCamera::default());
+    assert_eq!(scene.camera_orbit(), None);
+    assert_eq!(scene.clear_color(), None);
+    assert_eq!(
+        scene
+            .apply(Command::StopScene { permanent: true })
+            .unwrap()
+            .affected,
+        0
+    );
 }
 
 #[test]

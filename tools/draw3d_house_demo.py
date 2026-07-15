@@ -62,8 +62,9 @@ class Draw3dClient:
             raise ValueError("scene clear must be an RGBA four-tuple")
         self.call(0x19, payload)
 
-    def stop(self):
-        self.call(0x1A)
+    def stop(self, permanent=False):
+        """Pause the scene, or permanently discard it and its resident meshes."""
+        self.call(0x1A, b"\x01" if permanent else b"")
 
     def camera(
         self,

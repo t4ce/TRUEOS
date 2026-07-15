@@ -277,49 +277,57 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) rgba: Option<Vec<u8>>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ResidentSceneFrameDestination {
+    LocalDisplay,
+    Capture,
+}
+
 pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
     (DRAW3D_SCENE_TARGET_WIDTH, DRAW3D_SCENE_TARGET_HEIGHT)
 }
 
-/// Render a back-to-front list of persistent triangle jobs into one native-size
-/// target. The target is cleared once, each job is submitted exactly once, and
-/// the complete target is read back/presented once. Individual jobs bind their
-/// own full-precision RGBA push data.
+/// Render a back-to-front list of persistent triangle jobs into the local
+/// display target. Screenshot conversion is deliberately excluded from this
+/// path.
 pub(crate) fn submit_resident_triangle_scene_frame(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_frame_to(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        ResidentSceneFrameDestination::LocalDisplay,
+    )
+}
+
+/// Render an off-screen straight-RGBA frame without changing local scanout.
+pub(crate) fn capture_resident_triangle_scene_frame(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_frame_to(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        ResidentSceneFrameDestination::Capture,
+    )
+}
+
+fn submit_resident_triangle_scene_frame_to(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+    destination: ResidentSceneFrameDestination,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
     let (target_width, target_height) = resident_scene_target_dimensions();
     let target_pitch = target_width * core::mem::size_of::<u32>();
     let target_bytes = target_pitch * target_height;
 
-    if draws.is_empty() {
-        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
-        let mut pixels = alloc::vec![0u8; target_bytes];
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.copy_from_slice(&clear);
-        }
-        let presented = present_resident_scene_target(
-            &pixels,
-            target_width as u32,
-            target_height as u32,
-            target_pitch,
-            clear_rgba,
-            "draw3d-scene-clear",
-        );
-        let rgba = (presented && clear_rgba.is_some()).then_some(pixels);
-        return Ok(ResidentSceneFrameResult {
-            completed_draws: 0,
-            requested_draws: 0,
-            changed_pixels: 0,
-            presented,
-            width: target_width as u32,
-            height: target_height as u32,
-            rgba,
-        });
-    }
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -347,29 +355,81 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             return Err("render-map");
         }
 
+        let local_target = if destination == ResidentSceneFrameDestination::LocalDisplay {
+            let target = crate::intel::display::ui3_frame_composition_gpgpu()
+                .ok_or("ui3-frame-target")?;
+            if target.width as usize != target_width
+                || target.height as usize != target_height
+                || target.pitch_bytes as usize != target_pitch
+                || target.byte_len < target_bytes
+                || target.virt.is_null()
+            {
+                return Err("ui3-frame-target-shape");
+            }
+            if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
+                return Err("ui3-frame-target-map");
+            }
+            Some(target)
+        } else {
+            None
+        };
+        let target_gpu = local_target.map_or(GPU_VA_STREAMOUT_BASE, |target| target.gpu);
+        let target_virt = local_target.map_or(warm.streamout_virt, |target| target.virt);
+
         // Draw3D uses straight-alpha blending.  The GPU must see the real
         // clear color as its destination for the first translucent draw;
         // using the old readback sentinel here would blend the first shape
         // against 0xDEAD_BEEF.  Readback below compares against this same
         // clear word to retain changed-pixel accounting.
         let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
-        let clear_word = u32::from_le_bytes(clear);
-        unsafe {
-            core::ptr::write_bytes(warm.streamout_virt, 0, warm.streamout_len);
-            core::slice::from_raw_parts_mut(
-                warm.streamout_virt as *mut u32,
-                target_width * target_height,
-            )
-            .fill(clear_word);
+        let target_clear = match destination {
+            ResidentSceneFrameDestination::LocalDisplay => [clear[2], clear[1], clear[0], clear[3]],
+            ResidentSceneFrameDestination::Capture => clear,
+        };
+        // Clear through the same 3D context as the scene. An oversized clip-
+        // space triangle covers the target with blending disabled, including
+        // transparent clear colors, without a full-frame CPU write/flush or a
+        // cross-context compute handoff.
+        const CLEAR_TRIANGLE: [[f32; 3]; 3] =
+            [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+        let clear_completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
+            dev,
+            warm,
+            target_gpu,
+            target_pitch,
+            target_width,
+            target_height,
+            TriangleBlendProbeMode::MesaZeroedState,
+            &CLEAR_TRIANGLE,
+            None,
+            None,
+            None,
+            Some(target_clear),
+            "draw3d-fullscreen-clear",
+            SUBMIT_NAME,
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+            BackendProbeMode::MesaLike,
+            PostDrawSyncVariant::HeavyAll,
+            TriangleBatchMode::Draw,
+            StreamoutProofExperiment::HeaderAndPositionSlots01,
+            None,
+        );
+        if !clear_completed {
+            return Err("target-clear");
         }
-        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
 
         let mut completed_draws = 0usize;
         for draw in draws {
+            let target_rgba = match destination {
+                ResidentSceneFrameDestination::LocalDisplay => {
+                    [draw.rgba[2], draw.rgba[1], draw.rgba[0], draw.rgba[3]]
+                }
+                ResidentSceneFrameDestination::Capture => draw.rgba,
+            };
             let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 dev,
                 warm,
-                GPU_VA_STREAMOUT_BASE,
+                target_gpu,
                 target_pitch,
                 target_width,
                 target_height,
@@ -378,7 +438,7 @@ pub(crate) fn submit_resident_triangle_scene_frame(
                 None,
                 None,
                 Some(draw.mesh),
-                Some(draw.rgba),
+                Some(target_rgba),
                 "draw3d-resident-instance",
                 SUBMIT_NAME,
                 TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -394,54 +454,61 @@ pub(crate) fn submit_resident_triangle_scene_frame(
             completed_draws += 1;
         }
 
-        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
-        let pixels = unsafe {
-            core::slice::from_raw_parts(
-                warm.streamout_virt as *const u32,
-                target_width * target_height,
-            )
-        };
-        let mut changed_pixels = 0usize;
-        let mut visible_rgba = Vec::with_capacity(target_bytes);
-        for pixel in pixels {
-            let raw = pixel.to_le_bytes();
-            if raw != clear {
-                changed_pixels += 1;
-            }
-            // The fixed-function over blend produces premultiplied RGB in
-            // the intermediate RGBA target.  The display tile contract is
-            // straight RGBA and premultiplies exactly once while uploading,
-            // so restore straight RGB at this boundary.
-            let [mut r, mut g, mut b, a] = raw;
-            if a != 0 && a != u8::MAX {
-                r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                    / u16::from(a))
-                    .min(u16::from(u8::MAX)) as u8;
-                g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                    / u16::from(a))
-                    .min(u16::from(u8::MAX)) as u8;
-                b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                    / u16::from(a))
-                    .min(u16::from(u8::MAX)) as u8;
-            }
-            visible_rgba.extend_from_slice(&[r, g, b, a]);
+        if destination == ResidentSceneFrameDestination::Capture {
+            crate::intel::dma_flush(target_virt, target_bytes);
         }
+        let mut changed_pixels = 0usize;
         // A scene is one atomic visual result.  A timed-out draw leaves the
         // shared target partially updated, so never expose it to either the
         // display or request-render cache.  The caller will retry the same
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let frame_complete = completed_draws == draws.len();
-        let presented = frame_complete
-            && present_resident_scene_target(
-                &visible_rgba,
-                target_width as u32,
-                target_height as u32,
-                target_pitch,
-                clear_rgba,
-                "draw3d-scene-render-target",
-            );
-        let rgba = presented.then_some(visible_rgba);
+        let mut presented = false;
+        let mut rgba = None;
+        if frame_complete {
+            match destination {
+                ResidentSceneFrameDestination::LocalDisplay => {
+                    let target = local_target.ok_or("ui3-frame-target")?;
+                    presented = crate::intel::display::commit_ui3_frame_composition_gpgpu(
+                        target,
+                        "draw3d-ui3-frame",
+                    );
+                }
+                ResidentSceneFrameDestination::Capture => {
+                    let pixels = unsafe {
+                        core::slice::from_raw_parts(
+                            target_virt as *const u32,
+                            target_width * target_height,
+                        )
+                    };
+                    let mut visible_rgba = Vec::with_capacity(target_bytes);
+                    for pixel in pixels {
+                        let raw = pixel.to_le_bytes();
+                        if raw != clear {
+                            changed_pixels += 1;
+                        }
+                        // Fixed-function over blending produces premultiplied
+                        // RGB. Screenshots expose straight RGBA, so restore
+                        // straight channels only on this capture path.
+                        let [mut r, mut g, mut b, a] = raw;
+                        if a != 0 && a != u8::MAX {
+                            r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                                / u16::from(a))
+                            .min(u16::from(u8::MAX)) as u8;
+                            g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                                / u16::from(a))
+                            .min(u16::from(u8::MAX)) as u8;
+                            b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2)
+                                / u16::from(a))
+                            .min(u16::from(u8::MAX)) as u8;
+                        }
+                        visible_rgba.extend_from_slice(&[r, g, b, a]);
+                    }
+                    rgba = Some(visible_rgba);
+                }
+            }
+        }
         Ok(ResidentSceneFrameResult {
             completed_draws,
             requested_draws: draws.len(),
@@ -454,32 +521,6 @@ pub(crate) fn submit_resident_triangle_scene_frame(
     })();
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
     result
-}
-
-fn present_resident_scene_target(
-    pixels: &[u8],
-    width: u32,
-    height: u32,
-    pitch_bytes: usize,
-    clear_rgba: Option<[u8; 4]>,
-    reason: &str,
-) -> bool {
-    let (scanout_width, scanout_height) =
-        crate::intel::display::active_scanout_dimensions().unwrap_or((width, height));
-    let x = scanout_width.saturating_sub(width) / 2;
-    let y = scanout_height.saturating_sub(height) / 2;
-
-    let tile = crate::intel::display::RgbaOverlayTile {
-        x,
-        y,
-        width,
-        height,
-        pitch_bytes,
-        pixels,
-        expected_rgba: None,
-    };
-    let background = clear_rgba.map(|[r, g, b, a]| crate::intel::types::Rgba8::new(r, g, b, a));
-    crate::intel::display::present_rgba_overlay_tiles_with_background(&[tile], background, reason)
 }
 
 pub(crate) fn submit_resident_font_mesh_readback_once(
