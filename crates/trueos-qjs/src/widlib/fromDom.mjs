@@ -1,4 +1,3 @@
-import * as parse5 from 'parse5';
 import { BLOCK_TAGS, INLINE_TAGS, REPLACED_TAGS } from './tags.mjs';
 import {
   attrsToObject,
@@ -114,14 +113,6 @@ function makeWidget({ tag, key, attrs = {}, props = {}, children = [], registry,
       textStyle: metaTextStyle,
     },
   };
-}
-
-function svgMarkup(node) {
-  try {
-    return parse5.serialize(node);
-  } catch {
-    return '';
-  }
 }
 
 function selectProps(node) {
@@ -240,8 +231,6 @@ export function nodeToWidgets(node, path = '0', options = {}) {
     props = { value: extractText(node) };
   } else if (tag === 'select') {
     props = selectProps(node);
-  } else if (tag === 'svg') {
-    props = { markup: svgMarkup(node), dimensions: replacedDimensionsFromAttrs(attrs) };
   } else if (tag === 'progress' || tag === 'meter') {
     props = {
       fallbackText: normalizeWhitespace(extractText(node)),

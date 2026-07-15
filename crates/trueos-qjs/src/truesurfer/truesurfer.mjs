@@ -116,7 +116,6 @@ function publishLatestArtifacts() {
 function resolveSceneImageKind(url) {
   const value = safeString(url).trim();
   if (value.startsWith('data:')) {
-    if (/^data:image\/svg\+xml(?:;|,)/i.test(value)) return 'svg';
     if (/^data:image\/jpe?g(?:;|,)/i.test(value)) return 'jpeg';
     if (/^data:image\/png(?:;|,)/i.test(value)) return 'png';
     return '';
@@ -124,7 +123,6 @@ function resolveSceneImageKind(url) {
   const lower = value.toLowerCase();
   if (/\.png(?:$|[?#])/.test(lower)) return 'png';
   if (/\.jpe?g(?:$|[?#])/.test(lower)) return 'jpeg';
-  if (/\.svg(?:$|[?#])/.test(lower)) return 'svg';
   return '';
 }
 

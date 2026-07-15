@@ -116,7 +116,7 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
     let regs_ok = regs.iter().all(|r| r.accepted);
     if !regs_ok {
         crate::log!(
-            "intel/guc-ctb: setup accepted=0 stage=self-cfg g2h_desc=0x{:X} g2h=0x{:X} h2g_desc=0x{:X} h2g=0x{:X} responses=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] next=mmio-fallback\n",
+            "intel/guc-ctb: setup accepted=0 stage=self-cfg g2h_desc=0x{:X} g2h=0x{:X} h2g_desc=0x{:X} h2g=0x{:X} responses=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] next=submission-blocked\n",
             g2h_desc,
             g2h_buf,
             h2g_desc,

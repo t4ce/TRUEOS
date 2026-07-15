@@ -99,13 +99,6 @@ const MEDIA_WIDGET_DEFINITIONS = [
     layoutDefaults: { width: 240, height: 140, minWidth: 120, minHeight: 80 },
     attrs: ['src', 'alt', 'width', 'height'],
   }),
-  structureWidgetDefinition('svg', {
-    category: 'replaced',
-    leaf: true,
-    complexity: 'complex',
-    layoutDefaults: { width: 300, height: 150, minWidth: 120, minHeight: 80 },
-    attrs: ['width', 'height', 'viewBox'],
-  }),
   structureWidgetDefinition('canvas', {
     category: 'replaced',
     leaf: true,

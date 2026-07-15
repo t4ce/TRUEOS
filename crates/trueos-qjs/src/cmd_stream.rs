@@ -273,38 +273,6 @@ unsafe extern "C" fn qjs_cmd_stream_create_texture_jpeg_async(
     }
 }
 
-unsafe extern "C" fn qjs_cmd_stream_create_texture_svg(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: i32,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    unsafe {
-        cmd_stream_create_texture_from_encoded(
-            ctx,
-            argc,
-            argv,
-            qjs::platform::gfx::upload_texture_svg,
-        )
-    }
-}
-
-unsafe extern "C" fn qjs_cmd_stream_create_texture_svg_async(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: i32,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    unsafe {
-        cmd_stream_create_texture_from_encoded(
-            ctx,
-            argc,
-            argv,
-            qjs::platform::gfx::upload_texture_svg_async,
-        )
-    }
-}
-
 unsafe extern "C" fn qjs_cmd_stream_update_texture_rgba(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -373,22 +341,6 @@ unsafe extern "C" fn qjs_cmd_stream_update_texture_jpeg(
     }
 }
 
-unsafe extern "C" fn qjs_cmd_stream_update_texture_svg(
-    ctx: *mut qjs::JSContext,
-    _this_val: qjs::JSValueConst,
-    argc: i32,
-    argv: *const qjs::JSValueConst,
-) -> qjs::JSValue {
-    unsafe {
-        cmd_stream_update_texture_from_encoded(
-            ctx,
-            argc,
-            argv,
-            qjs::platform::gfx::upload_texture_svg,
-        )
-    }
-}
-
 unsafe extern "C" fn qjs_cmd_stream_destroy_texture(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
@@ -442,14 +394,11 @@ const CMD_STREAM_MODULE_EXPORTS: &[CmdStreamModuleExport] = &[
     (b"createTextureRgba\0", qjs_cmd_stream_create_texture_rgba, 3),
     (b"createTexturePng\0", qjs_cmd_stream_create_texture_png, 1),
     (b"createTextureJpeg\0", qjs_cmd_stream_create_texture_jpeg, 1),
-    (b"createTextureSvg\0", qjs_cmd_stream_create_texture_svg, 1),
     (b"createTexturePngAsync\0", qjs_cmd_stream_create_texture_png_async, 1),
     (b"createTextureJpegAsync\0", qjs_cmd_stream_create_texture_jpeg_async, 1),
-    (b"createTextureSvgAsync\0", qjs_cmd_stream_create_texture_svg_async, 1),
     (b"updateTextureRgba\0", qjs_cmd_stream_update_texture_rgba, 4),
     (b"updateTexturePng\0", qjs_cmd_stream_update_texture_png, 2),
     (b"updateTextureJpeg\0", qjs_cmd_stream_update_texture_jpeg, 2),
-    (b"updateTextureSvg\0", qjs_cmd_stream_update_texture_svg, 2),
     (b"getTextureStatus\0", qjs_cmd_stream_get_texture_status, 1),
     (b"destroyTexture\0", qjs_cmd_stream_destroy_texture, 1),
 ];

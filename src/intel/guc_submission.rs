@@ -131,12 +131,16 @@ pub(crate) fn submit_rcs_lrc(dev: crate::intel::Dev, hwlrca_lo: u32, hwlrca_hi: 
         );
     }
 
-    let (action, args): (u32, &[u32]) = if state.contexts[slot].enabled {
-        (INTEL_GUC_ACTION_SCHED_CONTEXT, &[context_id])
+    let action = if state.contexts[slot].enabled {
+        INTEL_GUC_ACTION_SCHED_CONTEXT
     } else {
-        (INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET, &[context_id, GUC_CONTEXT_ENABLE])
+        INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET
     };
-    let scheduled = crate::intel::guc_ctb::send_hxg_action(dev, action, args);
+    let scheduled = if state.contexts[slot].enabled {
+        crate::intel::guc_ctb::send_hxg_action(dev, action, &[context_id])
+    } else {
+        crate::intel::guc_ctb::send_hxg_action(dev, action, &[context_id, GUC_CONTEXT_ENABLE])
+    };
     if !scheduled.accepted {
         crate::log!(
             "intel/guc-submit: schedule accepted=0 engine=rcs0 context_id={} action=0x{:04X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",

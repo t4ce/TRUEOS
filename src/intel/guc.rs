@@ -4,7 +4,7 @@
 // GuC-owned context registration and scheduling live in `guc_submission` so
 // firmware authentication cannot accidentally be mistaken for submission.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const GUC_STATUS: usize = 0x0000_C000;
 const SOFT_SCRATCH_BASE: usize = 0x0000_C180;
@@ -66,7 +66,6 @@ const GUC_HXG_TYPE_NO_RESPONSE_RETRY: u32 = 5;
 const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
 const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
 const GUC_ACTION_HOST2GUC_CONTROL_CTB: u32 = 0x4509;
-const GUC_CTB_CONTROL_DISABLE: u32 = 0;
 const GUC_SEND_TRIGGER: u32 = 1 << 0;
 const GUC_MMIO_POLL_ITERS: usize = 100_000;
 const GUC_MAX_ENGINE_CLASSES: usize = 16;
@@ -87,10 +86,6 @@ const DOORBELLS_PER_SQIDI_MASK: u32 = 0x00FF_0000;
 const DOORBELLS_PER_SQIDI_SHIFT: u32 = 16;
 
 static READY: AtomicBool = AtomicBool::new(false);
-static H2G_MMIO_PROBED: AtomicBool = AtomicBool::new(false);
-static H2G_MMIO_ACCEPTED: AtomicBool = AtomicBool::new(false);
-static H2G_MMIO_RESPONSE: AtomicU32 = AtomicU32::new(0);
-static H2G_MMIO_ERROR: AtomicU32 = AtomicU32::new(0);
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -384,42 +379,6 @@ pub(crate) fn status(dev: crate::intel::Dev) -> u32 {
     crate::intel::mmio_read(dev, GUC_STATUS)
 }
 
-pub(crate) fn h2g_mmio_accepted() -> bool {
-    H2G_MMIO_ACCEPTED.load(Ordering::Acquire)
-}
-
-pub(crate) fn prove_h2g_mmio_once(dev: crate::intel::Dev, label: &'static str) -> bool {
-    if H2G_MMIO_PROBED.swap(true, Ordering::AcqRel) {
-        return H2G_MMIO_ACCEPTED.load(Ordering::Acquire);
-    }
-    if !ready() {
-        crate::log!("intel/guc: h2g-mmio-proof label={} accepted=0 reason=not-ready\n", label);
-        return false;
-    }
-
-    let request = [
-        hxg_request_header(GUC_ACTION_HOST2GUC_CONTROL_CTB),
-        GUC_CTB_CONTROL_DISABLE,
-    ];
-    let result = send_mmio_hxg(dev, &request);
-    H2G_MMIO_RESPONSE.store(result.response, Ordering::Release);
-    H2G_MMIO_ERROR.store(result.error, Ordering::Release);
-    H2G_MMIO_ACCEPTED.store(result.accepted, Ordering::Release);
-
-    crate::log!(
-        "intel/guc: h2g-mmio-proof label={} accepted={} action=HOST2GUC_CONTROL_CTB control=disable transport=gen11-soft-scratch notify=0x{:X} response=0x{:08X} response_type={} error={} poll_iters={} does_not_prove=ctb_enabled_or_guc_owned_render_submission_or_eu_execution\n",
-        label,
-        result.accepted as u8,
-        GEN11_GUC_HOST_INTERRUPT,
-        result.response,
-        result.response_type,
-        result.error,
-        result.poll_iters,
-    );
-
-    result.accepted
-}
-
 pub(crate) fn describe_status(s: u32) -> (&'static str, &'static str, u32) {
     let boot = match bootrom(s) {
         0x13 => "NO_KEY",
@@ -494,6 +453,7 @@ fn build_ads(dev: crate::intel::Dev, ads: crate::intel::Buf) {
         s + core::mem::offset_of!(GucGtSystemInfo, _masks) + GUC_RENDER_CLASS * 4,
         GUC_RCS0_LOGICAL_MASK,
     );
+    crate::intel::wr32(buf, s + core::mem::offset_of!(GucGtSystemInfo, generic_gt_sysinfo), 1);
     let doorbells = ((crate::intel::mmio_read(dev, DIST_DBS_POPULATED) & DOORBELLS_PER_SQIDI_MASK)
         >> DOORBELLS_PER_SQIDI_SHIFT)
         .saturating_add(1);

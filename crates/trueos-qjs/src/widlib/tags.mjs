@@ -87,7 +87,6 @@ export const BLOCK_TAGS = new Set(uniqueTags([
   'dialog',
   ...TABULAR_DATA_TAGS,
   ...EMBEDDED_CONTENT_TAGS,
-  'svg',
   'canvas',
   'iframe',
 ]));
@@ -107,4 +106,4 @@ export const TEXT_INPUT_TYPES = new Set([
 
 export const CHECKABLE_INPUT_TYPES = new Set(['checkbox', 'radio']);
 
-export const REPLACED_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
+export const REPLACED_TAGS = new Set(['img', 'canvas', 'iframe']);

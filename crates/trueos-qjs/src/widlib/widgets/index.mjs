@@ -72,7 +72,6 @@ export {
   normalizeSliderLabel,
   normalizeSliderState,
 } from './slider.mjs';
-export { SVG_WIDGET_DEFINITION, normalizeSvgProps } from './svgElement.mjs';
 export { TABLE_WIDGET_DEFINITIONS, normalizeCellProps, normalizeTableProps } from './table.mjs';
 export {
   TEMPORAL_LEGACY_WIDGET_DEFINITIONS,
@@ -116,7 +115,6 @@ import {
 } from './search.mjs';
 import { SELECT_WIDGET_DEFINITION } from './select.mjs';
 import { SLIDER_WIDGET_DEFINITIONS } from './slider.mjs';
-import { SVG_WIDGET_DEFINITION } from './svgElement.mjs';
 import { TABLE_WIDGET_DEFINITIONS } from './table.mjs';
 import { TEMPORAL_LEGACY_WIDGET_DEFINITIONS } from './temporal.mjs';
 import { TEXTAREA_WIDGET_DEFINITION } from './textarea.mjs';
@@ -141,7 +139,6 @@ export const INDIVIDUAL_WIDGET_DEFINITIONS = [
   SEARCH_BUTTON_WIDGET_DEFINITION,
   SELECT_WIDGET_DEFINITION,
   ...SLIDER_WIDGET_DEFINITIONS,
-  SVG_WIDGET_DEFINITION,
   ...TABLE_WIDGET_DEFINITIONS,
   ...TEMPORAL_LEGACY_WIDGET_DEFINITIONS,
   TEXTAREA_WIDGET_DEFINITION,

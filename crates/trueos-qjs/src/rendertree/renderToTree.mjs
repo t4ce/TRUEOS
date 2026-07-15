@@ -665,10 +665,7 @@ function attrsWithWidgetProps(node, tagName) {
   if (tagName === 'textarea' && props.value != null && attrs.value == null) {
     attrs.value = String(props.value);
   }
-  if (tagName === 'svg' && props.markup && attrs['data-svg'] == null) {
-    attrs['data-svg'] = String(props.markup);
-  }
-  if ((tagName === 'svg' || tagName === 'canvas' || tagName === 'iframe' || tagName === 'img') && props.dimensions) {
+  if ((tagName === 'canvas' || tagName === 'iframe' || tagName === 'img') && props.dimensions) {
     if (props.dimensions.width != null && attrs.width == null) attrs.width = String(props.dimensions.width);
     if (props.dimensions.height != null && attrs.height == null) attrs.height = String(props.dimensions.height);
   }

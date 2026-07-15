@@ -27,7 +27,6 @@ const CONTROL_TAGS = new Set([
 const LEAF_TAGS = new Set([
   ...CONTROL_TAGS,
   'img',
-  'svg',
   'canvas',
   'iframe',
   'hr',
@@ -35,7 +34,7 @@ const LEAF_TAGS = new Set([
   'searchbutton',
 ]);
 
-const REPLACED_DIMENSION_TAGS = new Set(['img', 'svg', 'canvas', 'iframe']);
+const REPLACED_DIMENSION_TAGS = new Set(['img', 'canvas', 'iframe']);
 const ROW_TAGS = new Set(['tr', 'barrow', 'searchrow']);
 const CHECKABLE_INPUT_LAYOUT_SIZE = 64;
 const UI3_ATLAS_LINE_HEIGHT_BY_TIER = Object.freeze({
@@ -253,7 +252,6 @@ function hasInlineChild(node) {
     return CONTROL_TAGS.has(tagName)
       || tagName === 'a'
       || tagName === 'img'
-      || tagName === 'svg'
       || tagName === 'canvas'
       || tagName === 'iframe';
   });

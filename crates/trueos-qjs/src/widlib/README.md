@@ -107,7 +107,6 @@ Special cases currently represented in `props`:
 
 - `textarea`: `{ value }`
 - `select`: `{ options, selectedIndex }`
-- `svg`: `{ markup }`
 - `progress` / `meter`: `{ fallbackText }`
 - `details`: `{ open }`
 - `summary`: `{ detailsKey }`
@@ -165,7 +164,7 @@ Complex or represent-only widgets:
 - `search`: represent as one composite; optional expansion later.
 - `details` / `summary`: keep open/toggle semantics; runtime decides collapse behavior.
 - `dialog`: descriptor only; dragging, z-order, and focus trapping are runtime work.
-- `img` / `svg`: descriptor plus source/markup; async texture/image loading is renderer work.
+- `img`: descriptor plus source metadata; async texture/image loading is renderer work.
 - `iframe`: descriptor plus `srcdoc`; nested parsing/root scene ownership stays outside this layer.
 - Temporal inputs: stay as `input[type=date|time|month|week|datetime-local]` with `currentStatus: "defer-special-ui"`.
 
@@ -187,7 +186,7 @@ The portable widget layer lives under `src/wid/widgets` and is split like this:
 
 - `widgets/forms.mjs`: `button`, `input`, `textarea`, `select`, `search`, `searchrow`, `searchbutton`
 - `widgets/values.mjs`: `progress`, `meter`, `slider`, `sliderlabel`, `barrow`, `number`, `color`, temporal descriptors
-- `widgets/structure.mjs`: root/text, structural tags, headings, `hr`, `details`, `summary`, `dialog`, tables, `img`, `svg`, `canvas`, `iframe`
+- `widgets/structure.mjs`: root/text, structural tags, headings, `hr`, `details`, `summary`, `dialog`, tables, `img`, `canvas`, `iframe`
 
 These files export descriptor arrays plus pure helpers such as `classifyInput`, `normalizeSelectState`, `normalizeSliderValue`, `normalizeNumberValue`, `normalizeColorRgba`, `parseTemporalValue`, `replacedDimensionsFromAttrs`, and `iframeSrcdocProps`.
 

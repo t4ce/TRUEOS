@@ -148,7 +148,7 @@ export function defaultDisplayForTag(tagName) {
   const tag = String(tagName || '').toLowerCase();
   if (!tag) return 'inline';
   if (tag === 'li') return 'list-item';
-  if (tag === 'img' || tag === 'svg' || tag === 'canvas' || tag === 'iframe') return 'inline-block';
+  if (tag === 'img' || tag === 'canvas' || tag === 'iframe') return 'inline-block';
   if (BLOCK_TAGS.has(tag)) return 'block';
   return 'inline';
 }
