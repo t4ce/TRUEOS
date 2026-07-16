@@ -143,6 +143,11 @@ static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_OUTPUT_SURFACE_PROBES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
+// Unlike the original fixed low-address page table, this root can accept a
+// leased UI4 SFC target before submission and remove it after retirement.
+// The root physical address remains stable for the lifetime of the VDBOX
+// context, so adding a target never requires replacing the context image.
+static MEDIA_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
 
 pub(crate) fn set_output_surface_probes_enabled(enabled: bool) -> bool {
     MEDIA_OUTPUT_SURFACE_PROBES_ENABLED.swap(enabled, Ordering::AcqRel)
@@ -193,7 +198,12 @@ pub(crate) struct MediaCapabilities {
     pub decode: bool,
     pub enhance: bool,
     pub huc_assist: bool,
+    /// The platform exposes an SFC associated with this media engine.
     pub sfc: bool,
+    /// TRUEOS can encode, bind, submit, and retire a complete VD-to-SFC job.
+    /// Keep this separate from physical capability so topology discovery can
+    /// never accidentally enable an incomplete command stream.
+    pub sfc_programmed: bool,
     pub relative_mmio_lrc: bool,
 }
 
@@ -222,6 +232,7 @@ impl MediaEngineDescriptor {
                 enhance: false,
                 huc_assist: false,
                 sfc: false,
+                sfc_programmed: false,
                 relative_mmio_lrc: false,
             },
             default_workload: MediaWorkloadKind::SessionSnapshot,
@@ -558,6 +569,7 @@ fn current_topology() -> MediaTopology {
             enhance: false,
             huc_assist: false,
             sfc: true,
+            sfc_programmed: false,
             relative_mmio_lrc: true,
         },
         default_workload: MediaWorkloadKind::DecodeFrame,
@@ -2156,53 +2168,47 @@ fn push_mi_nops(state: &mut [u32], idx: &mut usize, count: usize) {
     }
 }
 
-fn build_ppgtt_for_ranges(ranges: &[(u64, u64, usize)]) -> Option<u64> {
-    const PAGE: usize = 4096;
-    const ENTRIES: usize = 512;
-    const PTE_PRESENT_RW: u64 = 0x3;
-    const PDE_PRESENT_RW_UC: u64 = 0x3 | (1 << 3) | (1 << 4);
-    let mut pd_min = usize::MAX;
-    let mut pd_max = 0usize;
-    for &(gpu, _phys, size) in ranges {
-        if size == 0 {
-            continue;
-        }
-        let first_pd = (gpu as usize) >> 21;
-        let last_pd = (gpu as usize + size - 1) >> 21;
-        pd_min = pd_min.min(first_pd);
-        pd_max = pd_max.max(last_pd);
+fn install_media_ppgtt(ranges: &[crate::intel::ppgtt::PpgttRange]) -> Option<u64> {
+    let ppgtt = crate::intel::ppgtt::build_sparse_ppgtt_for_ranges(ranges)?;
+    let root = ppgtt.pml4_phys();
+    *MEDIA_PPGTT.lock() = Some(ppgtt);
+    Some(root)
+}
+
+/// Add an externally owned surface to the stable media address space. Callers
+/// must keep the allocation and its producer lease alive until the submitted
+/// job retires. The hardware activation path will additionally perform its
+/// VDBOX TLB/context synchronization immediately before first use.
+pub(super) fn map_media_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+    if gpu == 0
+        || phys == 0
+        || bytes == 0
+        || !gpu.is_multiple_of(crate::intel::WARM_ALIGN as u64)
+        || !phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
+        || !bytes.is_multiple_of(crate::intel::WARM_ALIGN)
+    {
+        return false;
     }
-    if pd_min > pd_max {
-        return None;
+    MEDIA_PPGTT
+        .lock()
+        .as_mut()
+        .and_then(|ppgtt| ppgtt.map_range(crate::intel::ppgtt::PpgttRange { gpu, phys, bytes }))
+        .is_some()
+}
+
+pub(super) fn unmap_media_ppgtt_range(gpu: u64, bytes: usize) -> bool {
+    if gpu == 0
+        || bytes == 0
+        || !gpu.is_multiple_of(crate::intel::WARM_ALIGN as u64)
+        || !bytes.is_multiple_of(crate::intel::WARM_ALIGN)
+    {
+        return false;
     }
-    let pt_count = pd_max - pd_min + 1;
-    let alloc_bytes = (3 + pt_count) * PAGE;
-    let (base_phys, base_virt) = crate::dma::alloc(alloc_bytes, PAGE)?;
-    let tables = unsafe { core::slice::from_raw_parts_mut(base_virt as *mut u64, alloc_bytes / 8) };
-    tables.fill(0);
-    let pml4_off = 0;
-    let pdp_off = ENTRIES;
-    let pd_off = 2 * ENTRIES;
-    let pt_base_off = 3 * ENTRIES;
-    tables[pml4_off] = (base_phys + PAGE as u64) | PDE_PRESENT_RW_UC;
-    tables[pdp_off] = (base_phys + 2 * PAGE as u64) | PDE_PRESENT_RW_UC;
-    for i in 0..pt_count {
-        tables[pd_off + pd_min + i] =
-            (base_phys + (3 + i) as u64 * PAGE as u64) | PDE_PRESENT_RW_UC;
-    }
-    for &(gpu, phys, size) in ranges {
-        let mut offset = 0usize;
-        while offset < size {
-            let va = gpu as usize + offset;
-            let pd_idx = va >> 21;
-            let pt_idx = (va >> 12) & 0x1FF;
-            let slot = pt_base_off + (pd_idx - pd_min) * ENTRIES + pt_idx;
-            tables[slot] = ((phys + offset as u64) & !0xFFF) | PTE_PRESENT_RW;
-            offset += PAGE;
-        }
-    }
-    crate::intel::dma_flush(base_virt, alloc_bytes);
-    Some(base_phys)
+    MEDIA_PPGTT
+        .lock()
+        .as_mut()
+        .and_then(|ppgtt| ppgtt.unmap_range(gpu, bytes))
+        .is_some()
 }
 
 pub(super) fn build_ring_batch_start_words(
@@ -2642,12 +2648,32 @@ pub(super) fn ensure_decode_backing(
         return None;
     }
     super::ggtt_invalidate(dev);
-    let ppgtt_pml4_phys = build_ppgtt_for_ranges(&[
-        (windows.batch_gpu_addr, batch_phys, MEDIA_DEFAULT_BATCH_BYTES),
-        (windows.bitstream_gpu_addr, bitstream_phys, MEDIA_DEFAULT_BITSTREAM_BYTES),
-        (windows.output_surface_gpu_addr, output_surface_phys, MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES),
-        (windows.avc_scratch_gpu_addr, avc_scratch_phys, MEDIA_DEFAULT_AVC_SCRATCH_BYTES),
-        (windows.result_gpu_addr, result_phys, MEDIA_DEFAULT_RESULT_BYTES),
+    let ppgtt_pml4_phys = install_media_ppgtt(&[
+        crate::intel::ppgtt::PpgttRange {
+            gpu: windows.batch_gpu_addr,
+            phys: batch_phys,
+            bytes: MEDIA_DEFAULT_BATCH_BYTES,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: windows.bitstream_gpu_addr,
+            phys: bitstream_phys,
+            bytes: MEDIA_DEFAULT_BITSTREAM_BYTES,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: windows.output_surface_gpu_addr,
+            phys: output_surface_phys,
+            bytes: MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: windows.avc_scratch_gpu_addr,
+            phys: avc_scratch_phys,
+            bytes: MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
+        },
+        crate::intel::ppgtt::PpgttRange {
+            gpu: windows.result_gpu_addr,
+            phys: result_phys,
+            bytes: MEDIA_DEFAULT_RESULT_BYTES,
+        },
     ])?;
     let backing = MediaBitstreamBacking {
         ring_phys,

@@ -69,7 +69,7 @@ define_started_flags!(
     UI4_INPUT_SERVICE_STARTED,
     DUMMY_UI4_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
-    HW_VID_PROBE_STARTED,
+    DUMMY_UI4_VIDEO_CONSUMER_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
@@ -509,8 +509,8 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
-fn spawn_hw_vid_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_vid_probe_task_spawn())
+fn spawn_dummy_ui4_video_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::intel::ui4_dummy_video_consumer_task_spawn())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
@@ -1377,11 +1377,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_hw_pic_service,
     ),
     TaskSpec::enabled_gated(
-        "hw_vid_probe_task",
-        0,
+        "dummy-ui4-video-consumer-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         intel_media_engine_gate,
-        &HW_VID_PROBE_STARTED,
-        spawn_hw_vid_probe_task,
+        &DUMMY_UI4_VIDEO_CONSUMER_STARTED,
+        spawn_dummy_ui4_video_consumer_service_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",

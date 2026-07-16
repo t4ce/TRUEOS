@@ -1,24 +1,25 @@
-//! UI4 ownership wrapper for the proven decoded-video presentation path.
+//! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder still produces Y-tiled NV12 and the established staging copy
-//! still produces linear NV12. The difference is ownership: the three staging
-//! buffers are now one Streaming UI4 frame with normal write/read leases and a
-//! window-broker identity before the linked display planes see a surface.
+//! The decoder remains a native Y-tiled NV12 producer. This boundary converts
+//! each decoded picture into one of three ordinary premultiplied-RGBA UI4
+//! buffers, so video participates in the same broker ordering and primary
+//! composition as every other window. The proven linked-NV12 presenter remains
+//! below this function as the caller's fallback when conversion cannot run.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId, ScanoutFormat,
-    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
-    acknowledge_window_frame, acquire_frame_buffer, acquire_published_frame, begin_window_session,
-    cancel_frame_buffer, create_window, destroy_frame, finish_window_session,
-    import_native_nv12_frame, publish_frame_buffer, publish_window_frame,
-    published_native_nv12_view, release_published_frame, writable_native_nv12_view,
+    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId, acquire_frame_buffer,
+    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
+    finish_window_session, publish_frame_buffer, publish_window_frame, writable_rgba_view,
 };
 
-const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(3);
+// Dummy UI4 app 2 owns the decoded-video frame. App 1 is the three-window
+// Mandelbrot carrier; there is deliberately no placeholder app in between.
+const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -35,6 +36,40 @@ pub(crate) struct DecodedNv12Source {
     pub(crate) uv_offset: usize,
 }
 
+/// Dimensions available before a decode submission.  The VD-to-SFC path will
+/// reserve a UI4 buffer from this description, bind it into the media PPGTT,
+/// and retain its write lease until the complete VDBOX+SFC job retires.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DecodedVideoFrameSpec {
+    pub(crate) coded_width: u32,
+    pub(crate) coded_height: u32,
+    pub(crate) visible_width: u32,
+    pub(crate) visible_height: u32,
+    pub(crate) progressive: bool,
+}
+
+impl DecodedVideoFrameSpec {
+    const fn from_nv12_source(source: DecodedNv12Source) -> Self {
+        Self {
+            coded_width: source.width,
+            coded_height: source.height,
+            visible_width: source.visible_width,
+            visible_height: source.visible_height,
+            // The current live AVC milestone rejects field and MBAFF input.
+            progressive: true,
+        }
+    }
+
+    const fn valid(self) -> bool {
+        self.coded_width != 0
+            && self.coded_height != 0
+            && self.visible_width != 0
+            && self.visible_height != 0
+            && self.visible_width <= self.coded_width
+            && self.visible_height <= self.coded_height
+    }
+}
+
 #[derive(Copy, Clone)]
 struct VideoStream {
     session: WindowSessionId,
@@ -42,51 +77,121 @@ struct VideoStream {
     window: WindowId,
     source_width: u32,
     source_height: u32,
-    scale: u32,
     frame_width: u32,
     frame_height: u32,
 }
 
+/// One unpublished UI4 video buffer with its GPU mapping and ownership token.
+/// This value is intentionally not `Copy`: exactly one commit or cancel must
+/// consume the target.
+pub(crate) struct DecodedRgbaWriteTarget {
+    stream: VideoStream,
+    write: super::FrameWriteLease,
+    surface: super::FrameRgbaView,
+}
+
+impl DecodedRgbaWriteTarget {
+    pub(crate) const fn frame(&self) -> FrameHandle {
+        self.stream.frame
+    }
+
+    pub(crate) const fn buffer_index(&self) -> u8 {
+        self.write.buffer_index
+    }
+
+    pub(crate) const fn rgba(&self) -> super::FrameRgbaView {
+        self.surface
+    }
+
+    pub(crate) const fn sfc_output_surface(
+        &self,
+    ) -> crate::intel::xelp_media_sfc::SfcRgbaOutputSurface {
+        crate::intel::xelp_media_sfc::SfcRgbaOutputSurface {
+            gpu_addr: self.surface.gpu,
+            phys_addr: self.surface.phys,
+            byte_len: self.surface.byte_len,
+            width: self.surface.width,
+            height: self.surface.height,
+            pitch_bytes: self.surface.pitch,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DecodedRgbaProducer {
+    CpuNv12Converter,
+    VdboxSfc,
+}
+
+impl DecodedRgbaProducer {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CpuNv12Converter => "cpu-nv12-converter",
+            Self::VdboxSfc => "vdbox-sfc",
+        }
+    }
+}
+
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
+static SFC_TARGET_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reason: &str) -> bool {
     if !valid_source(source) {
         return false;
     }
-    let scale = crate::intel::ui4_decoded_nv12_staging_scale(source.width, source.height).max(1);
-    let Some(frame_width) = source.width.checked_mul(scale) else {
-        return false;
+    let target = match acquire_decoded_rgba_stream_target(
+        DecodedVideoFrameSpec::from_nv12_source(source),
+        reason,
+    ) {
+        Some(target) => target,
+        None => return false,
     };
-    let Some(frame_height) = source.height.checked_mul(scale) else {
+    let destination = target.rgba();
+    if !convert_decoded_ytile_nv12_to_rgba(source, destination) {
+        cancel_decoded_rgba_stream_target(target, "cpu-conversion-failed");
         return false;
-    };
-    let Some(visible_width) = source.visible_width.checked_mul(scale) else {
-        return false;
-    };
-    let Some(visible_height) = source.visible_height.checked_mul(scale) else {
-        return false;
-    };
+    }
+    publish_decoded_rgba_stream_target(
+        target,
+        source,
+        DecodedRgbaProducer::CpuNv12Converter,
+        reason,
+    )
+}
+
+pub(crate) fn acquire_decoded_rgba_stream_target(
+    spec: DecodedVideoFrameSpec,
+    reason: &str,
+) -> Option<DecodedRgbaWriteTarget> {
+    if !spec.valid() {
+        return None;
+    }
+    let frame_width = spec.visible_width;
+    let frame_height = spec.visible_height;
 
     let current = *VIDEO_STREAM.lock();
     if current.is_some_and(|stream| {
-        stream.source_width != source.width
-            || stream.source_height != source.height
-            || stream.scale != scale
+        stream.source_width != spec.coded_width
+            || stream.source_height != spec.coded_height
             || stream.frame_width != frame_width
             || stream.frame_height != frame_height
     }) {
         let _ = stop_decoded_nv12_stream("ui4-video-format-change");
     }
 
-    let stream = match *VIDEO_STREAM.lock() {
+    // Do not match directly on the lock expression: the scrutinee temporary
+    // otherwise lives through the selected arm, and the `None` arm deadlocks
+    // when it installs the newly-created stream by taking this mutex again.
+    let existing = { *VIDEO_STREAM.lock() };
+    let stream = match existing {
         Some(stream) => stream,
-        None => match create_stream(source, scale, frame_width, frame_height) {
+        None => match create_stream(spec, frame_width, frame_height) {
             Some(stream) => {
                 *VIDEO_STREAM.lock() = Some(stream);
                 stream
             }
-            None => return false,
+            None => return None,
         },
     };
 
@@ -99,10 +204,10 @@ pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reaso
                 reason,
                 error
             );
-            return false;
+            return None;
         }
     };
-    let destination = match writable_native_nv12_view(write) {
+    let destination = match writable_rgba_view(write) {
         Ok(surface) => surface,
         Err(error) => {
             let _ = cancel_frame_buffer(write);
@@ -112,63 +217,123 @@ pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reaso
                 reason,
                 error
             );
-            return false;
+            return None;
         }
     };
-    if !crate::intel::ui4_copy_decoded_ytile_nv12_to_linear(source, destination, scale) {
-        let _ = cancel_frame_buffer(write);
-        return false;
+
+    let target = DecodedRgbaWriteTarget {
+        stream,
+        write,
+        surface: destination,
+    };
+    let sfc_input = crate::intel::xelp_media_sfc::SfcAvcInputFrame {
+        coded_width: spec.coded_width,
+        coded_height: spec.coded_height,
+        visible_width: spec.visible_width,
+        visible_height: spec.visible_height,
+        progressive: spec.progressive,
+    };
+    match crate::intel::xelp_media_sfc::plan_avc_ui4_same_size(
+        sfc_input,
+        target.sfc_output_surface(),
+    ) {
+        Ok(plan) => {
+            if !SFC_TARGET_READY_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::log_info!(
+                    target: "ui4";
+                    "ui4 video-frame sfc-target ready frame={} buffer={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pitch=0x{:X} commands={} scratch=0x{:X} mode=shadow-disabled reason={}\n",
+                    target.frame().raw(),
+                    target.buffer_index(),
+                    plan.output.gpu_addr,
+                    plan.output.phys_addr,
+                    plan.output.byte_len,
+                    plan.output.pitch_bytes,
+                    plan.command_dwords,
+                    plan.scratch.page_aligned_total_bytes,
+                    reason,
+                );
+            }
+        }
+        Err(error) => {
+            crate::log_warn!(
+                target: "ui4";
+                "ui4 video-frame sfc-target unavailable frame={} buffer={} error={:?} reason={} cpu_fallback=1\n",
+                target.frame().raw(),
+                target.buffer_index(),
+                error,
+                reason,
+            );
+        }
     }
+    Some(target)
+}
+
+pub(crate) fn publish_decoded_rgba_stream_target(
+    target: DecodedRgbaWriteTarget,
+    source: DecodedNv12Source,
+    producer: DecodedRgbaProducer,
+    reason: &str,
+) -> bool {
+    let destination = target.surface;
+    let stream = target.stream;
+    let write = target.write;
     let published = match publish_frame_buffer(write) {
         Ok(published) => published,
-        Err(_) => return false,
+        Err(error) => {
+            let _ = cancel_frame_buffer(write);
+            crate::log_warn!(
+                target: "ui4";
+                "ui4 video-frame publish failed frame={} buffer={} producer={} error={:?} reason={}\n",
+                stream.frame.raw(),
+                write.buffer_index,
+                producer.label(),
+                error,
+                reason,
+            );
+            return false;
+        }
     };
     let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
         Ok(serial) => serial,
         Err(_) => return false,
     };
 
-    let read = match acquire_published_frame(stream.frame) {
-        Ok(read) => read,
-        Err(_) => return false,
-    };
-    let presented = published_native_nv12_view(read).is_ok_and(|surface| {
-        crate::intel::ui4_present_linear_nv12_surface(
-            surface,
-            visible_width,
-            visible_height,
-            reason,
-        )
-    });
-    let _ = release_published_frame(read);
-    if !presented {
-        return false;
-    }
-    let _ = acknowledge_window_frame(stream.window, window_serial);
-
     let seq = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(120) {
         crate::log_info!(
             target: "ui4";
-            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} source=ytile-nv12 {}x{} visible={}x{} staging=linear-nv12 {}x{} scale={} gpu=0x{:X} source_gpu=0x{:X}\n",
+            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer={} source=ytile-nv12 {}x{} visible={}x{} output=rgba8-premultiplied {}x{} output_gpu=0x{:X} source_gpu=0x{:X}\n",
             seq,
             stream.frame.raw(),
             stream.window.raw(),
             published.buffer_index,
             published.publish_serial,
             window_serial,
+            producer.label(),
             source.width,
             source.height,
             source.visible_width,
             source.visible_height,
             destination.width,
             destination.height,
-            scale,
             destination.gpu,
             source.gpu,
         );
     }
     true
+}
+
+pub(crate) fn cancel_decoded_rgba_stream_target(target: DecodedRgbaWriteTarget, reason: &str) {
+    if let Err(error) = cancel_frame_buffer(target.write) {
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 video-frame cancel failed frame={} buffer={} error={:?} reason={}\n",
+            target.frame().raw(),
+            target.buffer_index(),
+            error,
+            reason,
+        );
+    }
 }
 
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
@@ -190,27 +355,19 @@ pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
 }
 
 fn create_stream(
-    source: DecodedNv12Source,
-    scale: u32,
+    spec: DecodedVideoFrameSpec,
     frame_width: u32,
     frame_height: u32,
 ) -> Option<VideoStream> {
-    let surfaces = crate::intel::ui4_decoded_nv12_linear_staging_set(
-        VIDEO_OUTPUT.slot(),
-        frame_width,
-        frame_height,
-    )?;
-    let frame = import_native_nv12_frame(
-        FrameSpec {
-            output: VIDEO_OUTPUT,
-            content: FrameContent::Video,
-            cadence: FrameCadence::Streaming,
-            format: ScanoutFormat::Nv12Linear,
-            width: frame_width,
-            height: frame_height,
-        },
-        surfaces,
-    )
+    let frame = create_frame(FrameSpec {
+        output: VIDEO_OUTPUT,
+        content: FrameContent::Video,
+        cadence: FrameCadence::Streaming,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width: frame_width,
+        height: frame_height,
+        base_color: None,
+    })
     .ok()?;
     let session = match begin_window_session(VIDEO_OWNER) {
         Ok(session) => session,
@@ -244,30 +401,113 @@ fn create_stream(
             return None;
         }
     };
+    // A prior fallback presentation may have left the linked NV12 pair live.
+    // Once the normal UI4 window exists, ensure slots 2+3 cannot continue to
+    // sit physically above the broker-composed primary scene.
+    let linked_planes_hidden =
+        crate::intel::hide_decoded_nv12_overlay_plane("ui4-video-rgba-stream-created");
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=nv12-linear source=ytile-nv12 source_size={}x{} frame_size={}x{} scale={} placement={},{}\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source=ytile-nv12 source_size={}x{} frame_size={}x{} placement={},{} z={} linked_planes_hidden={}\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
-        source.width,
-        source.height,
+        spec.coded_width,
+        spec.coded_height,
         frame_width,
         frame_height,
-        scale,
         placement.x,
         placement.y,
+        placement.z,
+        linked_planes_hidden as u8,
     );
     Some(VideoStream {
         session,
         frame,
         window,
-        source_width: source.width,
-        source_height: source.height,
-        scale,
+        source_width: spec.coded_width,
+        source_height: spec.coded_height,
         frame_width,
         frame_height,
     })
+}
+
+fn convert_decoded_ytile_nv12_to_rgba(
+    source: DecodedNv12Source,
+    destination: super::FrameRgbaView,
+) -> bool {
+    let width = source.visible_width as usize;
+    let height = source.visible_height as usize;
+    let pitch = destination.pitch as usize;
+    if destination.width != source.visible_width
+        || destination.height != source.visible_height
+        || pitch < width.saturating_mul(4)
+        || destination.byte_len < pitch.saturating_mul(height)
+    {
+        return false;
+    }
+    let tiles_per_row = source.pitch_bytes / 128;
+    let chroma_row = source.uv_offset / source.pitch_bytes;
+    let total_rows = match chroma_row.checked_add(source.height.div_ceil(2) as usize) {
+        Some(rows) => rows,
+        None => return false,
+    };
+    let required_source = match total_rows
+        .div_ceil(32)
+        .checked_mul(tiles_per_row)
+        .and_then(|tiles| tiles.checked_mul(4096))
+    {
+        Some(bytes) => bytes,
+        None => return false,
+    };
+    if tiles_per_row == 0 || source.byte_len < required_source {
+        return false;
+    }
+
+    for y in 0..height {
+        let destination_row = unsafe { destination.virt.add(y * pitch) };
+        for x in 0..width {
+            let y_offset = ytile_8bpp_offset(x, y, tiles_per_row);
+            let uv_x = (x / 2) * 2;
+            let uv_offset = ytile_8bpp_offset(uv_x, chroma_row + y / 2, tiles_per_row);
+            if y_offset >= source.byte_len || uv_offset.saturating_add(1) >= source.byte_len {
+                return false;
+            }
+            let luma =
+                unsafe { core::ptr::read_volatile((source.virt as *const u8).add(y_offset)) };
+            let u = unsafe { core::ptr::read_volatile((source.virt as *const u8).add(uv_offset)) };
+            let v =
+                unsafe { core::ptr::read_volatile((source.virt as *const u8).add(uv_offset + 1)) };
+            let [r, g, b] = nv12_to_rgb(luma, u, v);
+            let pixel = u32::from_le_bytes([r, g, b, u8::MAX]);
+            unsafe { core::ptr::write_volatile(destination_row.add(x * 4).cast::<u32>(), pixel) };
+        }
+    }
+    crate::intel::dma_flush(destination.virt, destination.byte_len);
+    true
+}
+
+#[inline(always)]
+fn ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+    let tile_col = byte_x / 128;
+    let tile_row = row_y / 32;
+    let in_x = byte_x % 128;
+    let in_y = row_y % 32;
+    let within_tile = (in_x / 16) * 512 + in_y * 16 + in_x % 16;
+    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+}
+
+#[inline(always)]
+fn nv12_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
+    let c = (i32::from(y) - 16).max(0);
+    let d = i32::from(u) - 128;
+    let e = i32::from(v) - 128;
+    let clamp = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u8;
+    [
+        clamp(298 * c + 409 * e),
+        clamp(298 * c - 100 * d - 208 * e),
+        clamp(298 * c + 516 * d),
+    ]
 }
 
 fn valid_source(source: DecodedNv12Source) -> bool {

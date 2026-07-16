@@ -3,7 +3,10 @@ use crate::graphics::primitives::{
 };
 use spin::Mutex;
 
-const MAX_UI_SURFACES: usize = 8;
+// App 1's 1/2/3-buffer Mandel frames consume six surfaces. A normal
+// triple-buffered app 2 video window raises the first real UI4 composition to
+// nine, so keep enough trusted producer slots for this baseline plus growth.
+const MAX_UI_SURFACES: usize = 16;
 const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
 const UI_SURFACE_GPU_STRIDE: u64 = 0x0200_0000;
 const UI_SURFACE_BYTES_PER_PIXEL: u32 = 4;
@@ -46,6 +49,8 @@ unsafe impl Sync for TrustedUiSurface {}
 
 #[derive(Clone, Copy)]
 pub(crate) struct UiSurfaceRgbaAccess {
+    pub phys: u64,
+    pub gpu: u64,
     pub virt: *mut u8,
     pub byte_len: usize,
     pub width: u32,
@@ -142,6 +147,8 @@ pub(crate) fn rgba_access(handle: UiSurfaceHandle) -> Option<UiSurfaceRgbaAccess
         return None;
     }
     Some(UiSurfaceRgbaAccess {
+        phys: surface.phys,
+        gpu: surface.desc.gpu,
         virt: surface.virt,
         byte_len: surface.byte_len,
         width: surface.desc.width,

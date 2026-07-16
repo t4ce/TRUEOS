@@ -1,18 +1,21 @@
 use alloc::{format, string::String, string::ToString, vec::Vec};
-use core::fmt::Write;
+use core::{
+    fmt::Write,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
 use serde_json::Value;
 
 const H264_BOOT_PROBE_ENABLED: bool = true;
-const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = false;
+const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
-    fps: 30,
+    fps: 60,
     reverse_after_forward: false,
     cache_mode: H264PlaybackCacheMode::Off,
     stripe_study: false,
     show_cache_fill: false,
-    diagnostics: true,
-    noreset_lite: false,
+    diagnostics: false,
+    noreset_lite: true,
     loop_playback: false,
 };
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
@@ -33,6 +36,27 @@ const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
 pub(crate) const H264_MEDIA_URL_PROBE_URL: &str =
     "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
+
+static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct H264PlaybackGuard;
+
+impl Drop for H264PlaybackGuard {
+    fn drop(&mut self) {
+        H264_PLAYBACK_ACTIVE.store(false, Ordering::Release);
+    }
+}
+
+fn h264_try_begin_playback(scope: &str) -> Result<H264PlaybackGuard, &'static str> {
+    if H264_PLAYBACK_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        crate::log!("intel/hw_vid: playback rejected scope={} reason=already-active\n", scope);
+        return Err("video playback already active");
+    }
+    Ok(H264PlaybackGuard)
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum H264PlaybackCacheMode {
@@ -309,28 +333,47 @@ pub(crate) const fn probe_enabled() -> bool {
 }
 
 #[embassy_executor::task]
-pub(crate) async fn hw_vid_probe_task() {
+pub(crate) async fn ui4_dummy_video_consumer_task() {
     if !H264_BOOT_PROBE_ENABLED {
-        crate::log!("intel/hw_vid: probe disabled reason=h264-boot-probe-disabled\n");
+        crate::log!("intel/hw_vid: ui4-dummy-app2 disabled reason=boot-playback-disabled\n");
         return;
     }
     if !crate::intel::has_media_decode_engine() {
-        crate::log!("intel/hw_vid: probe skipped reason=no-media-decode-engine\n");
+        crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=no-media-decode-engine\n");
         return;
     }
 
+    crate::intel::wait_hw_logo_sequence_done().await;
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
     if H264_BOOT_PROBE_PLAYBACK_ENABLED {
+        let Ok(_playback_guard) = h264_try_begin_playback("ui4-dummy-app2") else {
+            crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=playback-already-active\n");
+            return;
+        };
+        crate::log!(
+            "intel/hw_vid: ui4-dummy-app2 start owner=kernel-app-2 asset={} fps={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation=primary-compositor worker_slot={}\n",
+            H264_BOOT_PROBE_STREAM_PATH,
+            H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
+            crate::percpu::current_slot()
+        );
         if let Some(file) = h264_wait_for_playback_stream().await {
-            h264_i_p_playback_probe(
+            let report = h264_i_p_playback_probe(
                 file,
                 H264_BOOT_PROBE_STREAM_PATH,
                 H264_BOOT_PROBE_PLAYBACK_OPTIONS,
             )
             .await;
+            crate::log!(
+                "intel/hw_vid: ui4-dummy-app2 done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} final_frame_preserved=1\n",
+                report.submitted,
+                report.skipped_unsupported,
+                report.elapsed_ms,
+                report.effective_fps_x100 / 100,
+                report.effective_fps_x100 % 100
+            );
         } else {
             crate::log!(
-                "intel/hw_vid: h264-playback-probe skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
+                "intel/hw_vid: ui4-dummy-app2 skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
                 H264_BOOT_PROBE_STREAM_PATH
             );
         }
@@ -338,7 +381,7 @@ pub(crate) async fn hw_vid_probe_task() {
     }
 
     crate::log!(
-        "intel/hw_vid: probe skipped reason=playback-disabled-and-no-embedded-first-frame path={}\n",
+        "intel/hw_vid: ui4-dummy-app2 skipped reason=playback-disabled path={}\n",
         H264_BOOT_PROBE_STREAM_PATH
     );
 }
@@ -350,6 +393,7 @@ pub(crate) async fn run_shell_vid_playback(
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
+    let _playback_guard = h264_try_begin_playback("shell-trueosfs")?;
     let Some(file) = h264_open_playback_stream_once(path).await else {
         return Err("video asset missing from TRUEOSFS root");
     };
@@ -394,6 +438,7 @@ pub(crate) async fn run_shell_vid_playback(
 pub(crate) async fn run_online_vid_playback(
     options: H264PlaybackOptions,
 ) -> Result<H264PlaybackReport, &'static str> {
+    let _playback_guard = h264_try_begin_playback("shell-online")?;
     run_media_url_playback(H264_MEDIA_URL_PROBE_URL, options, "media-url-shell", "media-url-shell")
         .await
 }
@@ -438,6 +483,7 @@ pub(crate) async fn run_browser_media_playback(
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
+    let _playback_guard = h264_try_begin_playback("browser-media")?;
     let queued_before = crate::surfer::media_stream::candidate_count();
     crate::log!(
         "intel/hw_vid: browser-media candidate-wait begin queued={} timeout_ms={}\n",
@@ -3682,9 +3728,9 @@ fn h264_present_probe_output(
         {
             return true;
         }
-        // Keep the already-proven direct path as a migration fallback. It is
-        // reached only if UI4 could not allocate, lease, copy, publish or
-        // present its native triple-buffer frame.
+        // Keep the already-proven linked-plane path as a migration fallback.
+        // It is reached only if UI4 could not allocate, lease, convert or
+        // publish its normal triple-buffered RGBA window.
         let direct_presented = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
             reason.as_str(),
             output.gpu_addr,

@@ -28,6 +28,7 @@ mod uc_fw;
 
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
+pub(crate) use self::media::sfc_cmd as xelp_media_sfc;
 pub(crate) use self::media::xelp_media2_ngin;
 pub(crate) use self::media::xelp_media2_ngin_hw_pic;
 
@@ -759,9 +760,9 @@ pub(crate) fn hw_logo_present_task()
     self::display::hw_logo_present_task()
 }
 
-pub(crate) fn hw_vid_probe_task_spawn()
+pub(crate) fn ui4_dummy_video_consumer_task_spawn()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::media::hw_vid::hw_vid_probe_task()
+    self::media::hw_vid::ui4_dummy_video_consumer_task()
 }
 
 pub async fn run_media_source_warmup_async() {

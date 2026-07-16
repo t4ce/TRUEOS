@@ -22,7 +22,10 @@ pub(crate) use input_broker::{
     take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use video_frame::{
-    DecodedNv12Source, present_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
+    DecodedNv12Source, DecodedRgbaProducer, DecodedRgbaWriteTarget, DecodedVideoFrameSpec,
+    acquire_decoded_rgba_stream_target, cancel_decoded_rgba_stream_target,
+    present_decoded_nv12_stream_frame, publish_decoded_rgba_stream_target,
+    stop_decoded_nv12_stream,
 };
 
 pub(crate) use window_broker::{
@@ -211,6 +214,48 @@ pub(crate) enum PlaneAssignment {
     LinkedNv12 { uv_slot: u8, y_slot: u8 },
 }
 
+/// One color in UI4's native RGBA surface convention.
+///
+/// The stored RGB channels are already multiplied by alpha. Consumers should
+/// normally use [`Self::from_straight_rgba`] so the conversion happens once at
+/// the frame-contract boundary rather than in every compositor pass.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub(crate) struct PremultipliedRgba8 {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl PremultipliedRgba8 {
+    pub(crate) const TRANSPARENT: Self = Self {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 0,
+    };
+
+    /// Convert a conventional straight-alpha RGBA color to native UI4
+    /// premultiplied RGBA bytes, with round-to-nearest integer division.
+    pub(crate) const fn from_straight_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self {
+            r: premultiply_channel(r, a),
+            g: premultiply_channel(g, a),
+            b: premultiply_channel(b, a),
+            a,
+        }
+    }
+
+    pub(crate) const fn to_native_bytes(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
+
+const fn premultiply_channel(channel: u8, alpha: u8) -> u8 {
+    ((channel as u16 * alpha as u16 + 127) / 255) as u8
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FrameSpec {
     pub(crate) output: OutputId,
@@ -219,6 +264,10 @@ pub(crate) struct FrameSpec {
     pub(crate) format: ScanoutFormat,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// Optional initial color for every cadence-selected backing buffer.
+    /// This does not publish the frame; normal acquire/publish ownership still
+    /// applies. Currently valid only for premultiplied RGBA frames.
+    pub(crate) base_color: Option<PremultipliedRgba8>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -231,12 +280,14 @@ pub(crate) struct FramePlan {
     pub(crate) buffering: FrameBuffering,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) base_color: Option<PremultipliedRgba8>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FramePlanError {
     EmptyExtent,
-    VideoRequiresNv12,
+    BaseColorRequiresPremultipliedRgba,
+    VideoRequiresRgbaOrNv12,
     Nv12RequiresVideo,
 }
 
@@ -246,9 +297,20 @@ impl FramePlan {
         if spec.width == 0 || spec.height == 0 {
             return Err(FramePlanError::EmptyExtent);
         }
+        if spec.base_color.is_some() && !matches!(spec.format, ScanoutFormat::Rgba8888Premultiplied)
+        {
+            return Err(FramePlanError::BaseColorRequiresPremultipliedRgba);
+        }
         match (spec.content, spec.format) {
-            (FrameContent::Video, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) => {}
-            (FrameContent::Video, _) => return Err(FramePlanError::VideoRequiresNv12),
+            (
+                FrameContent::Video,
+                ScanoutFormat::Rgba8888Premultiplied
+                | ScanoutFormat::Nv12Linear
+                | ScanoutFormat::Nv12YTile,
+            ) => {}
+            (FrameContent::Video, _) => {
+                return Err(FramePlanError::VideoRequiresRgbaOrNv12);
+            }
             (_, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) => {
                 return Err(FramePlanError::Nv12RequiresVideo);
             }
@@ -263,6 +325,7 @@ impl FramePlan {
             buffering: spec.cadence.buffering(),
             width: spec.width,
             height: spec.height,
+            base_color: spec.base_color,
         })
     }
 }
@@ -286,4 +349,10 @@ const _: () = {
     assert!(ALPHA_OVERLAY_PLANE_SLOT == 1);
     assert!(NV12_UV_PLANE_SLOT == 2);
     assert!(NV12_Y_PLANE_SLOT == 3);
+    let transparent = PremultipliedRgba8::TRANSPARENT;
+    assert!(transparent.r == 0 && transparent.g == 0 && transparent.b == 0 && transparent.a == 0);
+    let half = PremultipliedRgba8::from_straight_rgba(255, 128, 1, 128);
+    assert!(half.r == 128 && half.g == 64 && half.b == 1 && half.a == 128);
+    let opaque = PremultipliedRgba8::from_straight_rgba(12, 34, 56, 255);
+    assert!(opaque.r == 12 && opaque.g == 34 && opaque.b == 56 && opaque.a == 255);
 };

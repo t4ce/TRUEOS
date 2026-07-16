@@ -13,7 +13,7 @@ use crate::r::ui_surface::{self, UiSurfaceHandle};
 
 use super::{
     FrameCadence, FrameContent, FrameHandle, FramePlan, FramePlanError, FrameSpec,
-    NativeNv12Surface, Nv12Layout, ScanoutFormat,
+    NativeNv12Surface, Nv12Layout, PremultipliedRgba8, ScanoutFormat,
 };
 
 const MAX_FRAMES: usize = 64;
@@ -45,6 +45,8 @@ pub(crate) struct FrameReadLease {
 
 #[derive(Copy, Clone)]
 pub(crate) struct FrameRgbaView {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
     pub(crate) virt: *mut u8,
     pub(crate) byte_len: usize,
     pub(crate) width: u32,
@@ -142,6 +144,7 @@ const EMPTY_PLAN: FramePlan = FramePlan {
     buffering: super::FrameBuffering::Single,
     width: 1,
     height: 1,
+    base_color: None,
 };
 
 struct FramePool {
@@ -190,6 +193,12 @@ pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolErro
                 return Err(map_surface_error(error));
             }
         }
+    }
+    if let Some(color) = plan.base_color
+        && !initialize_rgba_surfaces(surfaces, count, color)
+    {
+        destroy_surfaces(surfaces);
+        return Err(FramePoolError::UnsupportedFormat);
     }
 
     let mut pool = FRAME_POOL.lock();
@@ -340,6 +349,8 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
     };
     let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
     Ok(FrameRgbaView {
+        phys: access.phys,
+        gpu: access.gpu,
         virt: access.virt,
         byte_len: access.byte_len,
         width: access.width,
@@ -360,6 +371,8 @@ pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView
     };
     let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
     Ok(FrameRgbaView {
+        phys: access.phys,
+        gpu: access.gpu,
         virt: access.virt,
         byte_len: access.byte_len,
         width: access.width,
@@ -504,6 +517,40 @@ fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; 3]) {
     for surface in surfaces.into_iter().flatten() {
         let _ = ui_surface::destroy_surface(surface);
     }
+}
+
+/// Initialize the complete cadence-selected ring before its handle becomes
+/// visible. In particular, dirty/triple-buffer rotation can never expose a
+/// zeroed backing buffer when the consumer requested an opaque or translucent
+/// base color.
+fn initialize_rgba_surfaces(
+    surfaces: [Option<UiSurfaceHandle>; 3],
+    count: usize,
+    color: PremultipliedRgba8,
+) -> bool {
+    let pixel = u32::from_le_bytes(color.to_native_bytes());
+    let mut initialized = 0usize;
+    for surface in surfaces.into_iter().take(count) {
+        let Some(surface) = surface else {
+            return false;
+        };
+        let Some(access) = ui_surface::rgba_access(surface) else {
+            return false;
+        };
+        if access.virt.is_null() || access.byte_len % core::mem::size_of::<u32>() != 0 {
+            return false;
+        }
+        let words = access.byte_len / core::mem::size_of::<u32>();
+        let dst = access.virt.cast::<u32>();
+        for offset in 0..words {
+            unsafe {
+                core::ptr::write(dst.add(offset), pixel);
+            }
+        }
+        crate::intel::dma_flush(access.virt, access.byte_len);
+        initialized += 1;
+    }
+    initialized == count
 }
 
 fn map_surface_error(error: SurfaceError) -> FramePoolError {

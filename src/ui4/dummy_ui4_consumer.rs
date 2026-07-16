@@ -2,9 +2,12 @@
 //!
 //! Two trusted app identities deliberately mimic two future Blueprint
 //! consumers without defining any Blueprint transport or ABI:
-//! - one app owns three Mandelbrot windows with immutable/dirty/streaming
+//! - app 1 owns three Mandelbrot windows with immutable/dirty/streaming
 //!   cadence;
-//! - one app owns a separate immutable white CPU-authored window.
+//! - app 2 is the decoded-video consumer in `video_frame`, with one ordinary
+//!   streaming RGBA frame backed by three buffers.
+
+use alloc::vec::Vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
@@ -19,23 +22,23 @@ use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4ButtonPhase,
     Ui4InputEvent, Ui4PanPhase, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowSessionId, acquire_frame_buffer, acquire_published_frame,
-    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
-    finish_window_session, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer,
+    WindowPlacement, WindowSessionId, acknowledge_window_frame, acquire_frame_buffer,
+    acquire_published_frame, begin_window_session, cancel_frame_buffer, create_frame,
+    create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface, publish_frame_buffer,
     publish_window_frame, published_rgba_view, release_published_frame, set_window_placement,
-    software_cursor_visuals, take_owner_input_events, writable_rgba_view,
+    software_cursor_visuals, take_owner_input_events, visible_windows_for_output,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
-const WHITE_APP_OWNER: WindowOwner = WindowOwner::KernelApp(2);
+const VIDEO_APP_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const MANDEL_WIDTH: u32 = 768;
 const MANDEL_HEIGHT: u32 = 512;
-const WHITE_WIDTH: u32 = 512;
-const WHITE_HEIGHT: u32 = 512;
 const STATIC_PARAMETER: u32 = 128;
 const STREAM_PARAMETER_MAX: u32 = 128;
-const STREAM_PERIOD_MS: u64 = 33;
+const COMPOSITION_PERIOD_MS: u64 = 16;
+const MANDEL_STREAM_DIVISOR: u8 = 2;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
+const MAX_COMPOSITION_WINDOWS: usize = 8;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 
@@ -63,15 +66,6 @@ const STREAM_PLACEMENT: WindowPlacement = WindowPlacement {
     width: MANDEL_WIDTH,
     height: MANDEL_HEIGHT,
     z: 12,
-    opacity: u8::MAX,
-    visible: true,
-};
-const WHITE_PLACEMENT: WindowPlacement = WindowPlacement {
-    x: 1856,
-    y: 64,
-    width: WHITE_WIDTH,
-    height: WHITE_HEIGHT,
-    z: 13,
     opacity: u8::MAX,
     visible: true,
 };
@@ -117,19 +111,11 @@ struct MandelPlaceholderApp {
     stream_parameter: u32,
 }
 
-struct WhitePlaceholderApp {
-    owner: WindowOwner,
-    session: WindowSessionId,
-    frame: FrameHandle,
-    window: WindowId,
-    placement: WindowPlacement,
-}
-
 struct Runtime {
     mandel: MandelPlaceholderApp,
-    white: WhitePlaceholderApp,
     heartbeat_cursor: MouseControlCursor,
     heartbeat_rest_frames: u32,
+    mandel_stream_countdown: u8,
     composition: CompositionState,
     cursor_plane: CursorPlaneState,
 }
@@ -137,8 +123,15 @@ struct Runtime {
 #[derive(Copy, Clone)]
 struct CompositionState {
     initialized: bool,
-    frame_serials: [u64; 4],
-    placements: [WindowPlacement; 4],
+    windows: [Option<CompositionWindowStamp>; MAX_COMPOSITION_WINDOWS],
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct CompositionWindowStamp {
+    id: WindowId,
+    frame: FrameHandle,
+    publish_serial: u64,
+    placement: WindowPlacement,
 }
 
 #[derive(Copy, Clone)]
@@ -146,26 +139,6 @@ struct CursorPlaneState {
     previous_bounds: Option<crate::intel::CompositionDamageRect>,
     signature: u64,
     initialized: bool,
-}
-
-impl Runtime {
-    fn composition_frames(&self) -> [FrameHandle; 4] {
-        [
-            self.mandel.frames[0],
-            self.mandel.frames[1],
-            self.mandel.frames[2],
-            self.white.frame,
-        ]
-    }
-
-    fn composition_placements(&self) -> [WindowPlacement; 4] {
-        [
-            self.mandel.placements[0],
-            self.mandel.placements[1],
-            self.mandel.placements[2],
-            self.white.placement,
-        ]
-    }
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -191,16 +164,14 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live apps=2 windows=4 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} white_extent={}x{} white_buffers=1 cadence_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard heartbeat_vcursor_slot={}\n",
+        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video buffers=3 format=rgba8-premultiplied boot_playback=1 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,right-move,keyboard heartbeat_vcursor_slot={}\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
         runtime.mandel.dirty_parameter,
         runtime.mandel.stream_parameter,
         STREAM_PARAMETER_MAX,
-        WHITE_WIDTH,
-        WHITE_HEIGHT,
-        STREAM_PERIOD_MS,
+        COMPOSITION_PERIOD_MS,
         runtime.heartbeat_cursor.slot_id
     );
 
@@ -254,18 +225,23 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
             }
         }
 
-        runtime.mandel.stream_parameter = if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX
-        {
-            0
-        } else {
-            runtime.mandel.stream_parameter + 1
-        };
-        match render_and_publish_mandel(&runtime.mandel, 2, runtime.mandel.stream_parameter) {
-            Ok(_) => {}
-            Err(error) => {
-                fail_and_cleanup(runtime, error);
-                return;
+        if runtime.mandel_stream_countdown == 0 {
+            runtime.mandel.stream_parameter =
+                if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX {
+                    0
+                } else {
+                    runtime.mandel.stream_parameter + 1
+                };
+            match render_and_publish_mandel(&runtime.mandel, 2, runtime.mandel.stream_parameter) {
+                Ok(_) => {}
+                Err(error) => {
+                    fail_and_cleanup(runtime, error);
+                    return;
+                }
             }
+            runtime.mandel_stream_countdown = MANDEL_STREAM_DIVISOR.saturating_sub(1);
+        } else {
+            runtime.mandel_stream_countdown -= 1;
         }
 
         if let Err(error) = present_composition(&mut runtime) {
@@ -273,43 +249,29 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
             return;
         }
 
-        Timer::after(EmbassyDuration::from_millis(STREAM_PERIOD_MS)).await;
+        Timer::after(EmbassyDuration::from_millis(COMPOSITION_PERIOD_MS)).await;
     }
 }
 
 fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let mandel = initialize_mandel_app(output)?;
-    let white = match initialize_white_app(output) {
-        Ok(white) => white,
-        Err(error) => {
-            cleanup_mandel_app(mandel);
-            return Err(error);
-        }
-    };
     let heartbeat_cursor =
         match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
             Ok(cursor) => cursor,
             Err(error) => {
                 cleanup_mandel_app(mandel);
-                cleanup_white_app(white);
                 return Err(error.into());
             }
         };
     let mut runtime = Runtime {
         mandel,
-        white,
         heartbeat_cursor,
         heartbeat_rest_frames: 0,
+        mandel_stream_countdown: 0,
         composition: CompositionState {
             initialized: false,
-            frame_serials: [0; 4],
-            placements: [
-                STATIC_PLACEMENT,
-                DIRTY_PLACEMENT,
-                STREAM_PLACEMENT,
-                WHITE_PLACEMENT,
-            ],
+            windows: [None; MAX_COMPOSITION_WINDOWS],
         },
         cursor_plane: CursorPlaneState {
             previous_bounds: None,
@@ -385,6 +347,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
             format: ScanoutFormat::Rgba8888Premultiplied,
             width: MANDEL_WIDTH,
             height: MANDEL_HEIGHT,
+            base_color: None,
         }) {
             Ok(frame) => frames[slot] = Some(frame),
             Err(error) => {
@@ -453,76 +416,52 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
     })
 }
 
-fn initialize_white_app(output: OutputId) -> Result<WhitePlaceholderApp, DummyUi4ConsumerError> {
-    let frame = create_frame(FrameSpec {
-        output,
-        content: FrameContent::CpuBlit,
-        cadence: FrameCadence::Immutable,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width: WHITE_WIDTH,
-        height: WHITE_HEIGHT,
-    })?;
-    match render_white_frame(frame) {
-        Ok(_) => {}
-        Err(error) => {
-            let _ = destroy_frame(frame);
-            return Err(error);
-        }
-    };
-    let session = match begin_window_session(WHITE_APP_OWNER) {
-        Ok(session) => session,
-        Err(error) => {
-            let _ = destroy_frame(frame);
-            return Err(error.into());
-        }
-    };
-    let window = match create_window(WindowCreate {
-        owner: WHITE_APP_OWNER,
-        session,
-        frame,
-        output,
-        placement: WHITE_PLACEMENT,
-    })
-    .and_then(|window| {
-        publish_window_frame(WHITE_APP_OWNER, window, DamageRect::FULL)?;
-        Ok(window)
-    }) {
-        Ok(window) => window,
-        Err(error) => {
-            let _ = finish_window_session(WHITE_APP_OWNER, session);
-            let _ = destroy_frame(frame);
-            return Err(error.into());
-        }
-    };
-
-    Ok(WhitePlaceholderApp {
-        owner: WHITE_APP_OWNER,
-        session,
-        frame,
-        window,
-        placement: WHITE_PLACEMENT,
-    })
-}
-
 fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
-    let frames = runtime.composition_frames();
-    let placements = runtime.composition_placements();
-    let mut frame_serials = [0u64; 4];
-    let mut changed = [false; 4];
+    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let windows: Vec<_> = visible_windows_for_output(output)
+        .into_iter()
+        .filter(|window| matches!(window.owner, MANDEL_APP_OWNER | VIDEO_APP_OWNER))
+        .collect();
+    if windows.is_empty() || windows.len() > MAX_COMPOSITION_WINDOWS {
+        return Err(DummyUi4ConsumerError::PresentFailed);
+    }
+
+    let mut next_windows = [None; MAX_COMPOSITION_WINDOWS];
+    for (slot, window) in windows.iter().enumerate() {
+        next_windows[slot] = Some(CompositionWindowStamp {
+            id: window.id,
+            frame: window.frame,
+            publish_serial: window.publish_serial,
+            placement: window.placement,
+        });
+    }
+
+    let mut changed = [false; MAX_COMPOSITION_WINDOWS];
     let mut damage = None;
-    for slot in 0..frames.len() {
-        let snapshot = frame_snapshot(frames[slot])?;
-        frame_serials[slot] = snapshot.publish_serial;
-        changed[slot] = !runtime.composition.initialized
-            || snapshot.publish_serial != runtime.composition.frame_serials[slot];
+    for (slot, current) in next_windows.iter().flatten().enumerate() {
+        let previous = runtime
+            .composition
+            .windows
+            .iter()
+            .flatten()
+            .find(|previous| previous.id == current.id);
+        changed[slot] = !runtime.composition.initialized || previous != Some(current);
         if changed[slot] {
-            damage = union_damage(damage, placement_damage(placements[slot]));
+            damage = union_damage(damage, placement_damage(current.placement));
         }
-        if runtime.composition.initialized
-            && placements[slot] != runtime.composition.placements[slot]
+        if let Some(previous) = previous
+            && previous.placement != current.placement
         {
-            damage = union_damage(damage, placement_damage(runtime.composition.placements[slot]));
-            damage = union_damage(damage, placement_damage(placements[slot]));
+            damage = union_damage(damage, placement_damage(previous.placement));
+        }
+    }
+    for previous in runtime.composition.windows.iter().flatten() {
+        if !next_windows
+            .iter()
+            .flatten()
+            .any(|current| current.id == previous.id)
+        {
+            damage = union_damage(damage, placement_damage(previous.placement));
         }
     }
     if !runtime.composition.initialized {
@@ -531,54 +470,51 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
     }
 
     if let Some(damage) = damage {
-        let mut leases: [Option<FrameReadLease>; 4] = [None; 4];
-        for slot in 0..frames.len() {
-            match acquire_published_frame(frames[slot]) {
-                Ok(lease) => leases[slot] = Some(lease),
+        let mut leases = Vec::with_capacity(windows.len());
+        for window in &windows {
+            match acquire_published_frame(window.frame) {
+                Ok(lease) => leases.push(lease),
                 Err(error) => {
-                    release_leases(leases);
+                    release_leases(&leases);
                     return Err(error.into());
                 }
             }
         }
 
         let result = (|| {
-            let mut views: [Option<FrameRgbaView>; 4] = [None; 4];
-            for slot in 0..leases.len() {
-                views[slot] = Some(published_rgba_view(leases[slot].unwrap())?);
-            }
-            let views = [
-                views[0].unwrap(),
-                views[1].unwrap(),
-                views[2].unwrap(),
-                views[3].unwrap(),
-            ];
+            let views: Vec<FrameRgbaView> = leases
+                .iter()
+                .copied()
+                .map(published_rgba_view)
+                .collect::<Result<_, _>>()?;
             for (slot, view) in views.iter().enumerate() {
                 if changed[slot] {
                     crate::intel::dma_flush(view.virt, view.byte_len);
                 }
             }
-            let pixels = views.map(|view| unsafe {
-                core::slice::from_raw_parts(
-                    view.virt.cast_const(),
-                    (view.pitch as usize).saturating_mul(view.height as usize),
-                )
-            });
-            let tile = |slot: usize, placement: WindowPlacement| crate::intel::RgbaOverlayTile {
-                x: placement.x as u32,
-                y: placement.y as u32,
-                width: views[slot].width,
-                height: views[slot].height,
-                pitch_bytes: views[slot].pitch as usize,
-                pixels: pixels[slot],
-                expected_rgba: None,
-            };
-            let tiles = [
-                tile(0, placements[0]),
-                tile(1, placements[1]),
-                tile(2, placements[2]),
-                tile(3, placements[3]),
-            ];
+            let pixels: Vec<&[u8]> = views
+                .iter()
+                .map(|view| unsafe {
+                    core::slice::from_raw_parts(
+                        view.virt.cast_const(),
+                        (view.pitch as usize).saturating_mul(view.height as usize),
+                    )
+                })
+                .collect();
+            let tiles: Vec<_> = windows
+                .iter()
+                .zip(views.iter())
+                .zip(pixels.iter())
+                .map(|((window, view), pixels)| crate::intel::RgbaOverlayTile {
+                    x: window.placement.x.max(0) as u32,
+                    y: window.placement.y.max(0) as u32,
+                    width: view.width.min(window.placement.width),
+                    height: view.height.min(window.placement.height),
+                    pitch_bytes: view.pitch as usize,
+                    pixels,
+                    expected_rgba: None,
+                })
+                .collect();
             if !crate::intel::present_premultiplied_rgba_primary_tiles_damage(
                 &tiles,
                 damage,
@@ -588,11 +524,13 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
             }
             Ok(())
         })();
-        release_leases(leases);
+        release_leases(&leases);
         result?;
+        for window in &windows {
+            let _ = acknowledge_window_frame(window.id, window.publish_serial);
+        }
         runtime.composition.initialized = true;
-        runtime.composition.frame_serials = frame_serials;
-        runtime.composition.placements = placements;
+        runtime.composition.windows = next_windows;
     }
     present_software_cursor_plane(&mut runtime.cursor_plane)
 }
@@ -788,20 +726,21 @@ fn push_overlay_rect<const N: usize>(
     let _ = rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
 }
 
-fn release_leases(leases: [Option<FrameReadLease>; 4]) {
-    for lease in leases.into_iter().flatten() {
-        let _ = release_published_frame(lease);
+fn release_leases(leases: &[FrameReadLease]) {
+    for lease in leases {
+        let _ = release_published_frame(*lease);
     }
 }
 
-/// Consume only callbacks already routed to these two trusted application
-/// owners. UI4 owns hit-testing, per-cursor focus/capture and keyboard pairing.
+/// Consume callbacks routed to both temporary app identities. App 2's pixels
+/// are driven by the boot decoder, while its window still follows normal UI4
+/// focus and movement policy.
 fn dispatch_ui4_callbacks(
     runtime: &mut Runtime,
 ) -> Result<(u32, Option<(u32, u32)>), DummyUi4ConsumerError> {
     let mut dirty_clicks = 0u32;
     let mut last_dirty_click = None;
-    for owner in [runtime.mandel.owner, runtime.white.owner] {
+    for owner in [runtime.mandel.owner, VIDEO_APP_OWNER] {
         for event in take_owner_input_events(owner) {
             match event {
                 Ui4InputEvent::Pointer(event) => {
@@ -1024,23 +963,29 @@ fn handle_window_move_callback(
             next.x,
             next.y
         );
-    } else if owner == runtime.white.owner && window == runtime.white.window {
-        let (dx, dy) = clamp_pan_delta(&[runtime.white.placement], dx, dy, width, height);
+    } else if owner == VIDEO_APP_OWNER {
+        let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+        let Some(current) = visible_windows_for_output(output)
+            .into_iter()
+            .find(|candidate| candidate.owner == owner && candidate.id == window)
+        else {
+            return Ok(());
+        };
+        let (dx, dy) = clamp_pan_delta(&[current.placement], dx, dy, width, height);
         if dx == 0 && dy == 0 {
             return Ok(());
         }
-        let next = translated_placement(runtime.white.placement, dx, dy);
-        set_window_placement(runtime.white.owner, runtime.white.window, next)?;
-        runtime.white.placement = next;
+        let next = translated_placement(current.placement, dx, dy);
+        set_window_placement(owner, window, next)?;
         crate::log_info!(
             target: "ui4";
-            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot=white dx={} dy={} placement={},{}\n",
+            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot=video dx={} dy={} placement={},{}\n",
             owner,
             window.raw(),
             dx,
             dy,
-            runtime.white.placement.x,
-            runtime.white.placement.y
+            next.x,
+            next.y
         );
     }
     Ok(())
@@ -1126,22 +1071,6 @@ fn render_mandel_frame(
     publish_frame_buffer(lease).map_err(Into::into)
 }
 
-fn render_white_frame(frame: FrameHandle) -> Result<PublishedFrame, DummyUi4ConsumerError> {
-    let lease = acquire_frame_buffer(frame)?;
-    let view = match writable_rgba_view(lease) {
-        Ok(view) => view,
-        Err(error) => {
-            let _ = cancel_frame_buffer(lease);
-            return Err(error.into());
-        }
-    };
-    unsafe {
-        core::ptr::write_bytes(view.virt, u8::MAX, view.byte_len);
-    }
-    crate::intel::dma_flush(view.virt, view.byte_len);
-    publish_frame_buffer(lease).map_err(Into::into)
-}
-
 fn fail_and_cleanup(runtime: Runtime, error: DummyUi4ConsumerError) {
     crate::log_error!(
         target: "ui4";
@@ -1155,18 +1084,12 @@ fn fail_and_cleanup(runtime: Runtime, error: DummyUi4ConsumerError) {
 
 fn cleanup_runtime(runtime: Runtime) {
     let _ = release_cursor(MouseControlPrincipal::KernelApp(1), runtime.heartbeat_cursor.handle);
-    cleanup_white_app(runtime.white);
     cleanup_mandel_app(runtime.mandel);
 }
 
 fn cleanup_mandel_app(app: MandelPlaceholderApp) {
     let _ = finish_window_session(app.owner, app.session);
     destroy_frames(app.frames);
-}
-
-fn cleanup_white_app(app: WhitePlaceholderApp) {
-    let _ = finish_window_session(app.owner, app.session);
-    let _ = destroy_frame(app.frame);
 }
 
 fn destroy_optional_frames(frames: [Option<FrameHandle>; 3]) {

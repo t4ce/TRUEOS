@@ -3,6 +3,7 @@ pub(crate) mod h264_cmd;
 pub(crate) mod hw_pic;
 pub(crate) mod hw_vid;
 pub(crate) mod pic_backend;
+pub(crate) mod sfc_cmd;
 
 pub(crate) use self::engine as xelp_media2_ngin;
 pub(crate) use self::pic_backend as xelp_media2_ngin_hw_pic;
