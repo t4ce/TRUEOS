@@ -6,20 +6,16 @@
 //!   cadence;
 //! - one app owns a separate immutable white CPU-authored window.
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
-    FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, WindowBrokerError,
-    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId, acquire_frame_buffer,
-    acquire_published_frame, begin_window_session, cancel_frame_buffer, create_frame,
-    create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
+    FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4InputEvent,
+    WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
+    acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
+    create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
     publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    writable_rgba_view,
+    set_window_placement, take_owner_input_events, writable_rgba_view,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -31,10 +27,8 @@ const WHITE_HEIGHT: u32 = 512;
 const STATIC_PARAMETER: u32 = 128;
 const STREAM_PARAMETER_MAX: u32 = 256;
 const STREAM_PERIOD_MS: u64 = 33;
-
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-static STATUS: Mutex<DummyUi4ConsumerSnapshot> =
-    Mutex::new(DummyUi4ConsumerSnapshot::empty());
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
+const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 
 const STATIC_PLACEMENT: WindowPlacement = WindowPlacement {
     x: 64,
@@ -76,12 +70,6 @@ const MANDEL_PLACEMENTS: [WindowPlacement; 3] =
     [STATIC_PLACEMENT, DIRTY_PLACEMENT, STREAM_PLACEMENT];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DummyUi4ConsumerControlError {
-    AlreadyRunning,
-    TaskUnavailable,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DummyUi4ConsumerError {
     Frame(FramePoolError),
     Window(WindowBrokerError),
@@ -101,55 +89,12 @@ impl From<WindowBrokerError> for DummyUi4ConsumerError {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DummyUi4ConsumerSnapshot {
-    pub(crate) active: bool,
-    pub(crate) static_parameter: u32,
-    pub(crate) dirty_parameter: u32,
-    pub(crate) stream_parameter: u32,
-    pub(crate) static_frame: Option<FrameHandle>,
-    pub(crate) dirty_frame: Option<FrameHandle>,
-    pub(crate) stream_frame: Option<FrameHandle>,
-    pub(crate) white_frame: Option<FrameHandle>,
-    pub(crate) static_window: Option<WindowId>,
-    pub(crate) dirty_window: Option<WindowId>,
-    pub(crate) stream_window: Option<WindowId>,
-    pub(crate) white_window: Option<WindowId>,
-    pub(crate) static_publish_serial: u64,
-    pub(crate) dirty_publish_serial: u64,
-    pub(crate) stream_publish_serial: u64,
-    pub(crate) white_publish_serial: u64,
-}
-
-impl DummyUi4ConsumerSnapshot {
-    const fn empty() -> Self {
-        Self {
-            active: false,
-            static_parameter: STATIC_PARAMETER,
-            dirty_parameter: 0,
-            stream_parameter: 0,
-            static_frame: None,
-            dirty_frame: None,
-            stream_frame: None,
-            white_frame: None,
-            static_window: None,
-            dirty_window: None,
-            stream_window: None,
-            white_window: None,
-            static_publish_serial: 0,
-            dirty_publish_serial: 0,
-            stream_publish_serial: 0,
-            white_publish_serial: 0,
-        }
-    }
-}
-
 struct MandelPlaceholderApp {
     owner: WindowOwner,
     session: WindowSessionId,
     frames: [FrameHandle; 3],
     windows: [WindowId; 3],
-    publish_serials: [u64; 3],
+    placements: [WindowPlacement; 3],
     dirty_parameter: u32,
     stream_parameter: u32,
 }
@@ -159,7 +104,7 @@ struct WhitePlaceholderApp {
     session: WindowSessionId,
     frame: FrameHandle,
     window: WindowId,
-    publish_serial: u64,
+    placement: WindowPlacement,
 }
 
 struct Runtime {
@@ -176,43 +121,26 @@ impl Runtime {
             self.white.frame,
         ]
     }
-}
 
-pub(crate) fn start_dummy_ui4_consumer(
-    spawner: &Spawner,
-) -> Result<(), DummyUi4ConsumerControlError> {
-    if ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return Err(DummyUi4ConsumerControlError::AlreadyRunning);
+    fn composition_placements(&self) -> [WindowPlacement; 4] {
+        [
+            self.mandel.placements[0],
+            self.mandel.placements[1],
+            self.mandel.placements[2],
+            self.white.placement,
+        ]
     }
-    *STATUS.lock() = DummyUi4ConsumerSnapshot {
-        active: true,
-        ..DummyUi4ConsumerSnapshot::empty()
-    };
-
-    match dummy_ui4_consumer_service_task() {
-        Ok(token) => {
-            spawner.spawn(token);
-            Ok(())
-        }
-        Err(_) => {
-            ACTIVE.store(false, Ordering::Release);
-            *STATUS.lock() = DummyUi4ConsumerSnapshot::empty();
-            Err(DummyUi4ConsumerControlError::TaskUnavailable)
-        }
-    }
-}
-
-pub(crate) fn dummy_ui4_consumer_snapshot() -> DummyUi4ConsumerSnapshot {
-    let mut snapshot = *STATUS.lock();
-    snapshot.active = ACTIVE.load(Ordering::Acquire);
-    snapshot
 }
 
 #[embassy_executor::task(pool_size = 1)]
-pub(crate) async fn dummy_ui4_consumer_service_task() {
+pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
+    crate::log_info!(
+        target: "ui4";
+        "ui4 dummy-consumer carrier online placement=worker-ap2+ assigned_slot={} current_slot={}\n",
+        worker_slot,
+        crate::percpu::current_slot()
+    );
+    crate::intel::wait_hw_logo_sequence_done().await;
     let mut runtime = match initialize() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -221,16 +149,13 @@ pub(crate) async fn dummy_ui4_consumer_service_task() {
                 "ui4 dummy-consumer init failed error={:?}\n",
                 error
             );
-            ACTIVE.store(false, Ordering::Release);
-            *STATUS.lock() = DummyUi4ConsumerSnapshot::empty();
             return;
         }
     };
 
-    let mut left_down = drain_mouse_button_state();
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live apps=2 windows=4 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} white_extent={}x{} white_buffers=1 cadence_ms={} plane=primary-compositor input=physical-pointer\n",
+        "ui4 dummy-consumer live apps=2 windows=4 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} white_extent={}x{} white_buffers=1 cadence_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
@@ -243,57 +168,51 @@ pub(crate) async fn dummy_ui4_consumer_service_task() {
     );
 
     loop {
-        if let Some((x, y)) = dirty_window_click(&mut left_down) {
-            runtime.mandel.dirty_parameter = runtime.mandel.dirty_parameter.saturating_add(1);
-            match render_and_publish_mandel(
-                &runtime.mandel,
-                1,
-                runtime.mandel.dirty_parameter,
-            ) {
-                Ok(published) => {
-                    runtime.mandel.publish_serials[1] = published.publish_serial;
-                    let mut status = STATUS.lock();
-                    status.dirty_parameter = runtime.mandel.dirty_parameter;
-                    status.dirty_publish_serial = published.publish_serial;
-                }
+        let (dirty_clicks, last_dirty_click) = match dispatch_ui4_callbacks(&mut runtime) {
+            Ok(result) => result,
+            Err(error) => {
+                fail_and_cleanup(runtime, error);
+                return;
+            }
+        };
+        if dirty_clicks != 0 {
+            runtime.mandel.dirty_parameter =
+                runtime.mandel.dirty_parameter.saturating_add(dirty_clicks);
+            match render_and_publish_mandel(&runtime.mandel, 1, runtime.mandel.dirty_parameter) {
+                Ok(_) => {}
                 Err(error) => {
                     fail_and_cleanup(runtime, error);
                     return;
                 }
             }
+            let (x, y) = last_dirty_click.unwrap_or((0, 0));
             crate::log_info!(
                 target: "ui4";
-                "ui4 dummy-consumer mandel-dirty-click x={} y={} parameter={}\n",
+                "ui4 dummy-consumer mandel-dirty-click x={} y={} clicks={} parameter={}\n",
                 x,
                 y,
+                dirty_clicks,
                 runtime.mandel.dirty_parameter
             );
         }
 
-        runtime.mandel.stream_parameter =
-            if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX {
-                0
-            } else {
-                runtime.mandel.stream_parameter + 1
-            };
-        match render_and_publish_mandel(
-            &runtime.mandel,
-            2,
-            runtime.mandel.stream_parameter,
-        ) {
-            Ok(published) => {
-                runtime.mandel.publish_serials[2] = published.publish_serial;
-                let mut status = STATUS.lock();
-                status.stream_parameter = runtime.mandel.stream_parameter;
-                status.stream_publish_serial = published.publish_serial;
-            }
+        runtime.mandel.stream_parameter = if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX
+        {
+            0
+        } else {
+            runtime.mandel.stream_parameter + 1
+        };
+        match render_and_publish_mandel(&runtime.mandel, 2, runtime.mandel.stream_parameter) {
+            Ok(_) => {}
             Err(error) => {
                 fail_and_cleanup(runtime, error);
                 return;
             }
         }
 
-        if let Err(error) = present_composition(runtime.composition_frames()) {
+        if let Err(error) =
+            present_composition(runtime.composition_frames(), runtime.composition_placements())
+        {
             fail_and_cleanup(runtime, error);
             return;
         }
@@ -313,29 +232,13 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
         }
     };
     let runtime = Runtime { mandel, white };
-    if let Err(error) = present_composition(runtime.composition_frames()) {
+    if let Err(error) =
+        present_composition(runtime.composition_frames(), runtime.composition_placements())
+    {
         cleanup_runtime(runtime);
         return Err(error);
     }
 
-    *STATUS.lock() = DummyUi4ConsumerSnapshot {
-        active: true,
-        static_parameter: STATIC_PARAMETER,
-        dirty_parameter: runtime.mandel.dirty_parameter,
-        stream_parameter: runtime.mandel.stream_parameter,
-        static_frame: Some(runtime.mandel.frames[0]),
-        dirty_frame: Some(runtime.mandel.frames[1]),
-        stream_frame: Some(runtime.mandel.frames[2]),
-        white_frame: Some(runtime.white.frame),
-        static_window: Some(runtime.mandel.windows[0]),
-        dirty_window: Some(runtime.mandel.windows[1]),
-        stream_window: Some(runtime.mandel.windows[2]),
-        white_window: Some(runtime.white.window),
-        static_publish_serial: runtime.mandel.publish_serials[0],
-        dirty_publish_serial: runtime.mandel.publish_serials[1],
-        stream_publish_serial: runtime.mandel.publish_serials[2],
-        white_publish_serial: runtime.white.publish_serial,
-    };
     Ok(runtime)
 }
 
@@ -366,14 +269,9 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
     }
     let frames = [frames[0].unwrap(), frames[1].unwrap(), frames[2].unwrap()];
     let initial_parameters = [STATIC_PARAMETER, 0, 0];
-    let mut publications = [PublishedFrame {
-        frame: frames[0],
-        buffer_index: 0,
-        publish_serial: 0,
-    }; 3];
     for slot in 0..frames.len() {
         match render_mandel_frame(frames[slot], initial_parameters[slot]) {
-            Ok(published) => publications[slot] = published,
+            Ok(_) => {}
             Err(error) => {
                 destroy_frames(frames);
                 return Err(error);
@@ -420,7 +318,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
             windows[1].unwrap(),
             windows[2].unwrap(),
         ],
-        publish_serials: publications.map(|published| published.publish_serial),
+        placements: MANDEL_PLACEMENTS,
         dirty_parameter: 0,
         stream_parameter: 0,
     })
@@ -435,8 +333,8 @@ fn initialize_white_app(output: OutputId) -> Result<WhitePlaceholderApp, DummyUi
         width: WHITE_WIDTH,
         height: WHITE_HEIGHT,
     })?;
-    let published = match render_white_frame(frame) {
-        Ok(published) => published,
+    match render_white_frame(frame) {
+        Ok(_) => {}
         Err(error) => {
             let _ = destroy_frame(frame);
             return Err(error);
@@ -473,11 +371,14 @@ fn initialize_white_app(output: OutputId) -> Result<WhitePlaceholderApp, DummyUi
         session,
         frame,
         window,
-        publish_serial: published.publish_serial,
+        placement: WHITE_PLACEMENT,
     })
 }
 
-fn present_composition(frames: [FrameHandle; 4]) -> Result<(), DummyUi4ConsumerError> {
+fn present_composition(
+    frames: [FrameHandle; 4],
+    placements: [WindowPlacement; 4],
+) -> Result<(), DummyUi4ConsumerError> {
     let mut leases: [Option<FrameReadLease>; 4] = [None; 4];
     for slot in 0..frames.len() {
         match acquire_published_frame(frames[slot]) {
@@ -519,15 +420,12 @@ fn present_composition(frames: [FrameHandle; 4]) -> Result<(), DummyUi4ConsumerE
             expected_rgba: None,
         };
         let tiles = [
-            tile(0, STATIC_PLACEMENT),
-            tile(1, DIRTY_PLACEMENT),
-            tile(2, STREAM_PLACEMENT),
-            tile(3, WHITE_PLACEMENT),
+            tile(0, placements[0]),
+            tile(1, placements[1]),
+            tile(2, placements[2]),
+            tile(3, placements[3]),
         ];
-        if crate::intel::present_premultiplied_rgba_primary_tiles(
-            &tiles,
-            "ui4-dummy-consumer",
-        ) {
+        if crate::intel::present_premultiplied_rgba_primary_tiles(&tiles, "ui4-dummy-consumer") {
             Ok(())
         } else {
             Err(DummyUi4ConsumerError::PresentFailed)
@@ -543,45 +441,184 @@ fn release_leases(leases: [Option<FrameReadLease>; 4]) {
     }
 }
 
-fn current_left_button() -> bool {
-    crate::r::cursor::preferred_kernel_hw_cursor_snapshot_with_slot_buttons()
-        .is_some_and(|(_, _, _, buttons)| buttons & 1 != 0)
+/// Consume only callbacks already routed to these two trusted application
+/// owners. UI4 owns hit-testing, per-cursor focus/capture and keyboard pairing.
+fn dispatch_ui4_callbacks(
+    runtime: &mut Runtime,
+) -> Result<(u32, Option<(u32, u32)>), DummyUi4ConsumerError> {
+    let mut dirty_clicks = 0u32;
+    let mut last_dirty_click = None;
+    for owner in [runtime.mandel.owner, runtime.white.owner] {
+        for event in take_owner_input_events(owner) {
+            match event {
+                Ui4InputEvent::Pointer(event) => {
+                    if event.buttons_pressed & MIDDLE_BUTTON_MASK != 0 {
+                        crate::log_info!(
+                            target: "ui4";
+                            "ui4 dummy-consumer pan-callback phase=begin owner={:?} cursor={}:{}:{} kind={} vcursor={}\n",
+                            owner,
+                            event.source.controller_id,
+                            event.source.slot_id,
+                            event.source.ep_target,
+                            event.source.hid_kind,
+                            event.vcursor as u8
+                        );
+                    }
+                    if event.buttons_down & MIDDLE_BUTTON_MASK != 0
+                        && (event.dx != 0 || event.dy != 0)
+                    {
+                        handle_pan_callback(runtime, owner, event.dx, event.dy)?;
+                    }
+                    if event.buttons_released & MIDDLE_BUTTON_MASK != 0 {
+                        crate::log_info!(
+                            target: "ui4";
+                            "ui4 dummy-consumer pan-callback phase=end owner={:?} cursor={}:{}:{} kind={}\n",
+                            owner,
+                            event.source.controller_id,
+                            event.source.slot_id,
+                            event.source.ep_target,
+                            event.source.hid_kind
+                        );
+                    }
+                    if owner == runtime.mandel.owner
+                        && event.window == runtime.mandel.windows[1]
+                        && event.buttons_pressed & PRIMARY_BUTTON_MASK != 0
+                    {
+                        dirty_clicks = dirty_clicks.saturating_add(1);
+                        last_dirty_click = Some((event.x, event.y));
+                    }
+                }
+                Ui4InputEvent::Keyboard(event) => {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 dummy-consumer keyboard-callback owner={:?} window={} keyboard={}:{}:{} kind={} codepoint={} combo={} virtual={}\n",
+                        owner,
+                        event.window.raw(),
+                        event.event.controller_id,
+                        event.event.slot_id,
+                        event.event.ep_target,
+                        event.event.kind,
+                        event.event.codepoint,
+                        event.combo_id,
+                        event.virtual_keyboard as u8
+                    );
+                }
+                Ui4InputEvent::Focus(event) => {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 dummy-consumer focus-callback owner={:?} window={} focused={} cursor={}:{}:{} kind={} combo={} vcursor={}\n",
+                        owner,
+                        event.window.raw(),
+                        event.focused as u8,
+                        event.source.controller_id,
+                        event.source.slot_id,
+                        event.source.ep_target,
+                        event.source.hid_kind,
+                        event.combo_id,
+                        event.vcursor as u8
+                    );
+                }
+            }
+        }
+    }
+    Ok((dirty_clicks, last_dirty_click))
 }
 
-fn drain_mouse_button_state() -> bool {
-    let mut left_down = current_left_button();
-    while let Some(event) = crate::usb3::hid::input::pop_mouse_event() {
-        left_down = event.buttons & 1 != 0;
+fn handle_pan_callback(
+    runtime: &mut Runtime,
+    owner: WindowOwner,
+    dx: i32,
+    dy: i32,
+) -> Result<(), DummyUi4ConsumerError> {
+    let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
+        return Ok(());
+    };
+    if owner == runtime.mandel.owner {
+        let (dx, dy) = clamp_pan_delta(&runtime.mandel.placements, dx, dy, width, height);
+        if dx == 0 && dy == 0 {
+            return Ok(());
+        }
+        for slot in 0..runtime.mandel.windows.len() {
+            let next = translated_placement(runtime.mandel.placements[slot], dx, dy);
+            set_window_placement(runtime.mandel.owner, runtime.mandel.windows[slot], next)?;
+            runtime.mandel.placements[slot] = next;
+        }
+        crate::log_info!(
+            target: "ui4";
+            "ui4 dummy-consumer pan-callback phase=update owner={:?} dx={} dy={} anchor={},{}\n",
+            owner,
+            dx,
+            dy,
+            runtime.mandel.placements[0].x,
+            runtime.mandel.placements[0].y
+        );
+    } else if owner == runtime.white.owner {
+        let (dx, dy) = clamp_pan_delta(&[runtime.white.placement], dx, dy, width, height);
+        if dx == 0 && dy == 0 {
+            return Ok(());
+        }
+        let next = translated_placement(runtime.white.placement, dx, dy);
+        set_window_placement(runtime.white.owner, runtime.white.window, next)?;
+        runtime.white.placement = next;
+        crate::log_info!(
+            target: "ui4";
+            "ui4 dummy-consumer pan-callback phase=update owner={:?} dx={} dy={} anchor={},{}\n",
+            owner,
+            dx,
+            dy,
+            runtime.white.placement.x,
+            runtime.white.placement.y
+        );
     }
-    left_down
+    Ok(())
 }
 
-fn dirty_window_click(left_down: &mut bool) -> Option<(u32, u32)> {
-    let mut pressed = false;
-    let mut saw_event = false;
-    while let Some(event) = crate::usb3::hid::input::pop_mouse_event() {
-        saw_event = true;
-        let now_down = event.buttons & 1 != 0;
-        pressed |= now_down && !*left_down;
-        *left_down = now_down;
+fn clamp_pan_delta(
+    placements: &[WindowPlacement],
+    dx: i32,
+    dy: i32,
+    width: u32,
+    height: u32,
+) -> (i32, i32) {
+    let min_x = placements
+        .iter()
+        .map(|placement| placement.x)
+        .min()
+        .unwrap_or(0);
+    let min_y = placements
+        .iter()
+        .map(|placement| placement.y)
+        .min()
+        .unwrap_or(0);
+    let max_x = placements
+        .iter()
+        .map(|placement| i64::from(placement.x) + i64::from(placement.width))
+        .max()
+        .unwrap_or(0);
+    let max_y = placements
+        .iter()
+        .map(|placement| i64::from(placement.y) + i64::from(placement.height))
+        .max()
+        .unwrap_or(0);
+    let min_dx = -i64::from(min_x);
+    let min_dy = -i64::from(min_y);
+    let max_dx = i64::from(width).saturating_sub(max_x);
+    let max_dy = i64::from(height).saturating_sub(max_y);
+    (clamp_pan_axis(dx, min_dx, max_dx), clamp_pan_axis(dy, min_dy, max_dy))
+}
+
+fn clamp_pan_axis(value: i32, minimum: i64, maximum: i64) -> i32 {
+    if minimum > maximum {
+        0
+    } else {
+        i64::from(value).clamp(minimum, maximum) as i32
     }
-    let (_, nx, ny, buttons) =
-        crate::r::cursor::preferred_kernel_hw_cursor_snapshot_with_slot_buttons()?;
-    if !saw_event {
-        let now_down = buttons & 1 != 0;
-        pressed = now_down && !*left_down;
-        *left_down = now_down;
-    }
-    if !pressed {
-        return None;
-    }
-    let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()?;
-    let x = (nx.clamp(0.0, 1.0) * f64::from(scanout_width)) as u32;
-    let y = (ny.clamp(0.0, 1.0) * f64::from(scanout_height)) as u32;
-    let x1 = (DIRTY_PLACEMENT.x as u32).saturating_add(DIRTY_PLACEMENT.width);
-    let y1 = (DIRTY_PLACEMENT.y as u32).saturating_add(DIRTY_PLACEMENT.height);
-    (x >= DIRTY_PLACEMENT.x as u32 && x < x1 && y >= DIRTY_PLACEMENT.y as u32 && y < y1)
-        .then_some((x, y))
+}
+
+fn translated_placement(mut placement: WindowPlacement, dx: i32, dy: i32) -> WindowPlacement {
+    placement.x = placement.x.saturating_add(dx);
+    placement.y = placement.y.saturating_add(dy);
+    placement
 }
 
 fn render_and_publish_mandel(
@@ -640,8 +677,6 @@ fn fail_and_cleanup(runtime: Runtime, error: DummyUi4ConsumerError) {
         error
     );
     cleanup_runtime(runtime);
-    ACTIVE.store(false, Ordering::Release);
-    *STATUS.lock() = DummyUi4ConsumerSnapshot::empty();
 }
 
 fn cleanup_runtime(runtime: Runtime) {

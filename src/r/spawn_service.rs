@@ -65,6 +65,8 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
+    UI4_INPUT_SERVICE_STARTED,
+    DUMMY_UI4_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
     HW_VID_PROBE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
@@ -486,6 +488,16 @@ fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| intel_cursor_service_task())
 }
 
+fn spawn_ui4_input_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_input_service_task())
+}
+
+fn spawn_dummy_ui4_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        crate::ui4::dummy_ui4_consumer_service_task(worker_spawner.cpu_slot())
+    })
+}
+
 fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
@@ -543,15 +555,20 @@ fn intel_cursor_service_gate() -> bool {
 }
 
 #[inline]
+fn dummy_ui4_consumer_gate() -> bool {
+    crate::intel::has_claimed_device()
+        && crate::intel::active_scanout_dimensions().is_some()
+        && crate::workers::has_background_worker_slot()
+}
+
+#[inline]
 fn ap1_ui_core_ready_gate() -> bool {
     crate::workers::ap1_ui_core_spawner().is_some()
 }
 
 #[inline]
 fn i226_diagnostic_display_gate() -> bool {
-    crate::allcaps::probes::I226_DIAGNOSTIC_BOOT_PROBE
-        && crate::intel::has_claimed_device()
-        && crate::net::i226::has_primary_snapshot()
+    crate::intel::has_claimed_device() && crate::net::i226::has_primary_snapshot()
 }
 
 #[inline]
@@ -1138,7 +1155,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 55 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1323,6 +1340,20 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_cursor_service_gate,
         &INTEL_CURSOR_SERVICE_STARTED,
         spawn_intel_cursor_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "ui4-input-service",
+        0,
+        ap1_ui_core_ready_gate,
+        &UI4_INPUT_SERVICE_STARTED,
+        spawn_ui4_input_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "dummy-ui4-consumer-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        dummy_ui4_consumer_gate,
+        &DUMMY_UI4_CONSUMER_STARTED,
+        spawn_dummy_ui4_consumer_service_task,
     ),
     TaskSpec::enabled_gated(
         "hw_pic_service",

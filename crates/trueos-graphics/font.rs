@@ -7,7 +7,6 @@
 use alloc::{string::String, vec::Vec};
 use core::mem::size_of;
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
     instance::{LocationRef, Size},
@@ -37,8 +36,6 @@ const TRUEOSFS_FONT_NAME: &str = "noto-sans-sc";
 const TRUEOSFS_FONT_FILE: &str = "NotoSansSC[wght].ttf";
 const TRUEOSFS_FONT_PATH: &str = "fonts/NotoSansSC[wght].ttf";
 const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
-const FONT_WARM_YIELD_GLYPHS: u16 = 32;
-
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 
 #[derive(Clone, Copy)]
@@ -760,90 +757,6 @@ fn register_warmed_font(
     summary
 }
 
-async fn warm_embedded_font_once_cooperative(
-    index: usize,
-) -> Result<FontWarmSummary, skrifa::raw::ReadError> {
-    let spec = EMBEDDED_FONTS[index];
-    if let Some(summary) = font_summary(spec.name) {
-        return Ok(FontWarmSummary {
-            status: "warm-cache",
-            ..summary
-        });
-    }
-
-    warm_font_bytes_once_cooperative(spec.name, spec.file_name, FontBytes::Embedded(spec.bytes))
-        .await
-}
-
-async fn warm_font_bytes_once_cooperative(
-    name: &'static str,
-    file_name: &'static str,
-    bytes: FontBytes,
-) -> Result<FontWarmSummary, skrifa::raw::ReadError> {
-    if let Some(summary) = font_summary(name) {
-        return Ok(FontWarmSummary {
-            status: "warm-cache",
-            ..summary
-        });
-    }
-
-    let total_start = embassy_time_driver::now();
-    let parse_start = embassy_time_driver::now();
-    let font = FontRef::new(bytes.as_slice())?;
-    let head = font.head()?;
-    let maxp = font.maxp()?;
-    let parse_ms = elapsed_ms_since(parse_start);
-
-    let tables = font.table_directory().table_records().len();
-    let glyphs = maxp.num_glyphs();
-    let units_per_em = head.units_per_em();
-    let mut outline = FontOutlineCache::new(FONT_ENDSTATE_OUTLINE_COMMANDS, glyphs);
-    let outlines = font.outline_glyphs();
-    let outline_start = embassy_time_driver::now();
-    for glyph_index in 0..glyphs {
-        if glyph_index != 0 && glyph_index.is_multiple_of(FONT_WARM_YIELD_GLYPHS) {
-            Timer::after(EmbassyDuration::from_micros(0)).await;
-        }
-
-        let glyph_id = GlyphId::new(u32::from(glyph_index));
-        let Some(glyph) = outlines.get(glyph_id) else {
-            outline.outline_failures = outline.outline_failures.saturating_add(1);
-            continue;
-        };
-        outline.outline_glyphs = outline.outline_glyphs.saturating_add(1);
-        let start = outline.ops.len() as u32;
-        let mut pen = WarmOutlinePen::default();
-        let settings = DrawSettings::unhinted(Size::unscaled(), LocationRef::default());
-        match glyph.draw(settings, &mut pen) {
-            Ok(_) => {
-                if pen.ops.is_empty() {
-                    outline.empty_outlines = outline.empty_outlines.saturating_add(1);
-                } else {
-                    outline.outline_success = outline.outline_success.saturating_add(1);
-                }
-                outline.merge_pen(glyph_index, start, pen);
-            }
-            Err(_) => {
-                outline.outline_failures = outline.outline_failures.saturating_add(1);
-            }
-        }
-    }
-    let outline_ms = elapsed_ms_since(outline_start);
-    let total_ms = elapsed_ms_since(total_start);
-    Ok(register_warmed_font(
-        name,
-        file_name,
-        bytes,
-        tables,
-        glyphs,
-        units_per_em,
-        outline,
-        parse_ms,
-        outline_ms,
-        total_ms,
-    ))
-}
-
 #[embassy_executor::task]
 pub(crate) async fn font_warm_task() {
     for (index, spec) in EMBEDDED_FONTS.iter().enumerate() {
@@ -856,7 +769,7 @@ pub(crate) async fn font_warm_task() {
             EMBEDDED_FONTS.len(),
         );
 
-        match warm_embedded_font_once_cooperative(index).await {
+        match warm_embedded_font_once(index) {
             Ok(summary) => crate::log_info!(
                 target: "boot";
                 "graphics-font: status={} name={} file={} endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} warm_index={} warm_total={} warm_policy=eager-all\n",

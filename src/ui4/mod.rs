@@ -3,20 +3,19 @@
 //! This module describes what a producer needs from the display path. It does
 //! not expose a guest/userspace ABI and it does not own presentation yet.
 
-mod frame_pool;
 mod dummy_ui4_consumer;
+mod frame_pool;
+mod input_broker;
 mod window_broker;
 
+pub(crate) use dummy_ui4_consumer::dummy_ui4_consumer_service_task;
 pub(crate) use frame_pool::{
     FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     destroy_frame, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view,
     release_published_frame, writable_rgba_view,
 };
-pub(crate) use dummy_ui4_consumer::{
-    DummyUi4ConsumerControlError, DummyUi4ConsumerSnapshot, dummy_ui4_consumer_snapshot,
-    start_dummy_ui4_consumer,
-};
+pub(crate) use input_broker::{Ui4InputEvent, take_owner_input_events, ui4_input_service_task};
 
 pub(crate) use window_broker::{
     DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,

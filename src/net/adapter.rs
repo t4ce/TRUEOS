@@ -193,9 +193,7 @@ const RA_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 const DHCP6_DNS6_MAX: usize = crate::allcaps::net::DNS_SERVER_MAX;
 pub const MAX_NET_DEVICES: usize = crate::allcaps::net::MAX_NET_DEVICES;
 const STATIC_FALLBACK_PREFIX_LEN: u8 = 24;
-// Device indices are added to this host octet. The active physical NIC in the
-// current setup is dev=1, so its early NetShell fallback is 192.168.178.94.
-const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 93];
+const STATIC_FALLBACK_BASE_IPV4: [u8; 4] = [192, 168, 178, 111];
 const STATIC_FALLBACK_GATEWAY: [u8; 4] = [192, 168, 178, 1];
 
 const IPV6_LINK_LOCAL_PREFIX: [u8; 8] = [0xfe, 0x80, 0, 0, 0, 0, 0, 0];
@@ -4430,18 +4428,15 @@ impl NetService {
         self.poll_icmp();
         self.prune_icmp_inflight(timestamp);
 
-        // Optional bring-up observability only. Socket readiness deliberately
-        // does not depend on routers answering ICMP echo.
-        if crate::allcaps::probes::NET_GATEWAY_ICMP_BOOT_PROBE {
-            // Do this per-NIC, but only when that NIC is link-up to avoid noisy
-            // retries on unplugged interfaces.
-            let link_up = crate::net::link_state_at(self.device_index)
-                .map(|ls| ls.up)
-                .unwrap_or(false);
-            if link_up {
-                self.maybe_send_icmp_ping(timestamp);
-                self.maybe_send_icmp_ping_v6(timestamp);
-            }
+        // After polling, try a deterministic ICMP ping to prove RX/TX + IP stack.
+        // Do this per-NIC, but only when that NIC is link-up to avoid noisy
+        // retries on unplugged interfaces.
+        let link_up = crate::net::link_state_at(self.device_index)
+            .map(|ls| ls.up)
+            .unwrap_or(false);
+        if link_up {
+            self.maybe_send_icmp_ping(timestamp);
+            self.maybe_send_icmp_ping_v6(timestamp);
         }
 
         work_done

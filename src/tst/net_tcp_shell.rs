@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_executor::task;
@@ -69,15 +69,6 @@ fn looks_like_incomplete_terminal_size_report(data: &[u8]) -> bool {
         .all(|&b| b.is_ascii_digit() || b == b';')
 }
 
-fn net_shell_route_device() -> Option<usize> {
-    let primary = crate::net::primary_device_index();
-    if crate::net::adapter::ipv4_at(primary).is_some() {
-        return Some(primary);
-    }
-
-    (0..crate::net::device_count()).find(|&idx| crate::net::adapter::ipv4_at(idx).is_some())
-}
-
 /// TCP-backed shell I/O bridge.
 ///
 /// - Listens on `NET_SHELL_TCP_PORT`.
@@ -90,29 +81,31 @@ pub async fn net_shell_task() {
             return;
         }
 
-        let task_started_ms = Instant::now().as_millis();
-        if crate::allcaps::net::NET_SHELL_WAIT_FOR_DYNAMIC_CONFIG {
-            crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+
+        // Route the shell over a NIC that is actually usable.
+        // Historically this was pinned to dev0, but on real hardware dev0 is often the
+        // physically-unplugged port. Prefer the current primary, but fall back to any
+        // link-up NIC to keep the shell reachable whenever the network works.
+        let mut dev_idx = crate::net::primary_device_index();
+        let primary_up = crate::net::link_state_at(dev_idx)
+            .map(|ls| ls.up)
+            .unwrap_or(false);
+        if !primary_up {
+            for idx in 0..crate::net::device_count() {
+                if crate::net::link_state_at(idx)
+                    .map(|ls| ls.up)
+                    .unwrap_or(false)
+                {
+                    dev_idx = idx;
+                    break;
+                }
+            }
         }
 
-        // NetService installs a static IPv4 fallback before starting DHCP. A
-        // listener can safely bind to it while DHCP/RA continue in the
-        // background; unlike NET_ANY_CONFIGURED, this does not start unrelated
-        // network clients early. ipv4_at() also verifies that the link is up.
-        let dev_idx = loop {
-            if let Some(idx) = net_shell_route_device() {
-                break idx;
-            }
-            Timer::after(EmbassyDuration::from_millis(1)).await;
-        };
-
-        // Pin command routing to the device whose address made the early route
-        // ready. An unsuffixed owner routes to the boot-time primary even when
-        // the fallback scan above selected another link-up NIC.
-        let owner: &'static str = Box::leak(
-            alloc::format!("net-shell@{}", dev_idx)
-                .into_boxed_str(),
-        );
+        // Keep owner unsuffixed so command routing follows the current primary NIC
+        // instead of a one-time pre-readiness device snapshot.
+        let owner: &'static str = "net-shell";
 
         let ip = crate::net::adapter::ipv4_at(dev_idx);
         let ip_mode = match crate::net::adapter::dhcp_has_lease_at(dev_idx) {
@@ -124,7 +117,7 @@ pub async fn net_shell_task() {
         match ip {
             Some([a, b, c, d]) => {
                 crate::log!(
-                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{} mode={} gate={} wait_ms={} ms={}\n",
+                    "net-shell: routing dev={} {} owner={} ip={}.{}.{}.{} mode={} ms={}\n",
                     dev_idx,
                     name,
                     owner,
@@ -133,12 +126,6 @@ pub async fn net_shell_task() {
                     c,
                     d,
                     ip_mode,
-                    if crate::allcaps::net::NET_SHELL_WAIT_FOR_DYNAMIC_CONFIG {
-                        "dynamic-config"
-                    } else {
-                        "route-ready"
-                    },
-                    Instant::now().as_millis().saturating_sub(task_started_ms),
                     Instant::now().as_millis()
                 )
             }
@@ -215,14 +202,7 @@ pub async fn net_shell_task() {
                             resize_query_ticks = 0;
                         } else if schedule_initial_repaint {
                             net_shell_write_bytes(TERMINAL_SIZE_QUERY);
-                            if crate::allcaps::net::NET_SHELL_BLOCK_ON_INITIAL_SIZE_QUERY {
-                                initial_repaint_handle = Some(handle);
-                            } else {
-                                crate::shell2::repaint_backend_screen(
-                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                );
-                                initial_repaint_handle = None;
-                            }
+                            initial_repaint_handle = Some(handle);
                             initial_repaint_ticks = 0;
                             initial_rx_probe.clear();
                             resize_rx_probe.clear();

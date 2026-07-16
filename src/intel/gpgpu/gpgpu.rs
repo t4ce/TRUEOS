@@ -5207,39 +5207,6 @@ pub(crate) fn shell_copy_scanout_center_rgba8() -> Option<GpgpuShellScanoutCopyR
     })
 }
 
-pub(crate) fn shell_mandel64_worklist_scanout(
-    iterations: u32,
-) -> Option<GpgpuShellMandel64WorklistResult> {
-    let target = super::display::primary_surface_gpgpu_marker_target()?;
-    if target.virt.is_null()
-        || target.width < MANDEL64_WORKLIST_CELL_PIXELS
-        || target.height < MANDEL64_WORKLIST_CELL_PIXELS
-    {
-        return None;
-    }
-    let primary = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )?;
-    let mut result = mandel64_worklist_surface_full(primary, iterations)?;
-    let present_start_tick = direct_rcs_now_tick();
-    let presented = result.ok
-        && super::display::notify_primary_surface_external_write(
-            "gpgpu-mandel64-worklist",
-            0,
-            target.byte_len,
-        );
-    result.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
-    result.total_ms = result.total_ms.saturating_add(result.present_ms);
-    result.presented = presented;
-    result.ok &= presented;
-    Some(result)
-}
-
 /// Render a complete Mandelbrot image into an arbitrary trusted RGBA surface.
 /// Parameter zero is a real zero state: the GPU clears the frame to opaque
 /// black. Parameters 1..=512 use the existing Mandel worklist artifact.
