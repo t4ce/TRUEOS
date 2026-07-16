@@ -22,7 +22,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `fill_rect_worklist_rgba8.cl`: descriptor worklist RGBA8 fills; one walker consumes the descriptor slice serially
 - `gradient_rect_worklist_rgba8.cl`: descriptor worklist procedural RGBA8 gradients; each descriptor writes one horizontal or vertical rect from two endpoint colors
 - `fill_circle_rgba8.cl`: parameterized RGBA8 circle fill clipped by a rect
-- `alpha_blend_rgba8_over.cl`: source-over RGBA8 blend
+- `alpha_blend_rgba8_over.cl`: single-dispatch 2D source-over RGBA8 blend with straight/premultiplied source and opacity modes
 - `alpha_blend_worklist_rgba8.cl`: descriptor worklist RGBA8 composites; source/destination rects are unscaled and batched like the fill worklist
 - `glyph_mask_rgba8.cl`: 8-bit coverage mask blended with packed RGBA8 color
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
@@ -96,6 +96,14 @@ evo build. Its SHA-256 is:
 
 ```text
 74e2f00828973323f4bebb4b9c513ef249fc15080fddbd39a1b8a9e412b646a7
+```
+
+`artifacts/adls/alpha_blend_rgba8_over.bin` is the native two-dimensional
+SIMD16 blend used by the production UI3 compositor. Runtime overrides must
+match its ABI-bound SHA-256:
+
+```text
+4b0f97f4f42f18792a82fe3e560589051b27a2db4e3b8af488798b7f4f3c5248
 ```
 
 `artifacts/adls/present_rgba8_to_primary_xrgb_rect.bin` is the RGBA scene to

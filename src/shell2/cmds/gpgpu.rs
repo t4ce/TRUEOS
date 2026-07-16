@@ -1,7 +1,7 @@
 use alloc::string::String;
 use core::fmt::Write;
 use core::str::SplitWhitespace;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::AtomicU32;
 
 use embassy_executor::Spawner;
 
@@ -9,14 +9,14 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
     CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
-    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, GpgpuPoint,
+    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH,
     MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
     PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE, PIXEL_PLASMA_FLAG_RINGS,
     PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
-    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_chart_sine_scanout,
+    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_chart_sine_ui3_frame,
     shell_font_outline_probe, shell_mandel64_worklist_scanout, shell_pixel_plasma_scanout,
-    shell_twemoji_atlas_worklist_present_scanout, upload_chart_sine_rgba8_kernel,
-    upload_font_outline_mesh_kernel, upload_pixel_plasma_rgba8_kernel,
+    upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
+    upload_pixel_plasma_rgba8_kernel,
 };
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
@@ -303,23 +303,29 @@ fn run_chart_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'
     if !expect_no_more(io, args) {
         return;
     }
+    if let Err(error) = crate::ui3::compositor::activate_shell_chart_window() {
+        let message =
+            alloc::format!("gpgpu chart static: ok=0 stage=ui3-activate reason={}", error);
+        print_shell_line(io, message.as_str());
+        return;
+    }
     let flags = CHART_SINE_FLAG_GRID | CHART_SINE_FLAG_AXES | CHART_SINE_FLAG_BORDER;
-    let Some(result) = shell_chart_sine_scanout(phase, flags, true) else {
+    let Some(result) = shell_chart_sine_ui3_frame(phase, flags, true) else {
         print_shell_line(io, "gpgpu chart static: ok=0 stage=dispatch reason=no-result");
         return;
     };
     let message = alloc::format!(
-        "gpgpu chart static: ok={} stage=single-dispatch submitted={} presented={} size={}x{} pixels={} phase={:.4} flags=0x{:X} submit_us={} present_us={} total_us={} marker=0x{:08X}",
+        "gpgpu chart static: ok={} stage=ui3-frame-publish submitted={} present_queued={} size={}x{} pixels={} phase={:.4} flags=0x{:X} submit_us={} publish_us={} total_us={} marker=0x{:08X}",
         result.ok as u8,
         result.submitted as u8,
-        result.presented as u8,
+        result.present_queued as u8,
         result.width,
         result.height,
         result.pixels,
         result.phase,
         flags,
         result.submit_us,
-        result.present_us,
+        result.publish_us,
         result.total_us,
         result.marker,
     );
@@ -365,6 +371,11 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     if !expect_no_more(io, args) {
         return;
     }
+    if let Err(error) = crate::ui3::compositor::activate_shell_chart_window() {
+        let message = alloc::format!("gpgpu chart wave: ok=0 stage=ui3-activate reason={}", error);
+        print_shell_line(io, message.as_str());
+        return;
+    }
 
     let start_tick = now_ticks();
     let deadline_tick = start_tick.saturating_add(ticks_from_ms(duration_ms));
@@ -372,18 +383,20 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     let mut next_tick = start_tick;
     let mut frames = 0u64;
     let mut submitted = 0u64;
-    let mut presented = 0u64;
+    let mut present_queued = 0u64;
     let mut failures = 0u64;
     let mut missed_deadlines = 0u64;
+    let mut coalesced_frames = 0u64;
     let mut sum_submit_us = 0u64;
-    let mut sum_present_us = 0u64;
+    let mut sum_publish_us = 0u64;
     let mut max_submit_us = 0u64;
-    let mut max_present_us = 0u64;
+    let mut max_publish_us = 0u64;
     let mut max_total_us = 0u64;
     let mut width = 0u32;
     let mut height = 0u32;
     let mut pending_present = false;
     let mut last_phase = 0.0f32;
+    let mut closed = false;
     crate::log_info!(
         target: "gpgpu";
         "gpgpu chart wave begin duration_ms={} target_hz={} present_every={} flags=0x{:X}\n",
@@ -394,10 +407,25 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     );
 
     while now_ticks() < deadline_tick {
+        if !crate::ui3::compositor::shell_chart_window_visible() {
+            closed = true;
+            break;
+        }
         wait_until_tick(next_tick);
         let now = now_ticks();
         if now >= deadline_tick {
             break;
+        }
+        if crate::ui3::compositor::shell_chart_present_pending() {
+            let elapsed_slots = now
+                .saturating_sub(next_tick)
+                .checked_div(cadence_ticks)
+                .unwrap_or(0)
+                .saturating_add(1);
+            coalesced_frames = coalesced_frames.saturating_add(elapsed_slots);
+            next_tick = next_tick
+                .saturating_add(cadence_ticks.saturating_mul(elapsed_slots));
+            continue;
         }
         let mut missed_this_frame = 0u64;
         if now > next_tick.saturating_add(cadence_ticks) {
@@ -407,22 +435,26 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         let elapsed_us = elapsed_us_since(start_tick);
         last_phase = elapsed_us as f32 * (6.2831855f32 * 0.35f32 / 1_000_000.0f32);
         let should_present = frames % u64::from(present_every) == 0;
-        let Some(result) = shell_chart_sine_scanout(last_phase, CHART_ALL_FLAGS, should_present)
+        let Some(result) = shell_chart_sine_ui3_frame(last_phase, CHART_ALL_FLAGS, should_present)
         else {
-            failures = failures.saturating_add(1);
+            if crate::ui3::compositor::shell_chart_window_visible() {
+                failures = failures.saturating_add(1);
+            } else {
+                closed = true;
+            }
             break;
         };
         frames = frames.saturating_add(1);
         submitted = submitted.saturating_add(result.submitted as u64);
-        presented = presented.saturating_add(result.presented as u64);
+        present_queued = present_queued.saturating_add(result.present_queued as u64);
         failures = failures.saturating_add((!result.ok) as u64);
-        pending_present = result.submitted && !result.presented;
+        pending_present = result.submitted && !result.present_queued;
         width = result.width;
         height = result.height;
         sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
-        sum_present_us = sum_present_us.saturating_add(result.present_us);
+        sum_publish_us = sum_publish_us.saturating_add(result.publish_us);
         max_submit_us = max_submit_us.max(result.submit_us);
-        max_present_us = max_present_us.max(result.present_us);
+        max_publish_us = max_publish_us.max(result.publish_us);
         max_total_us = max_total_us.max(result.total_us);
         if !result.ok {
             break;
@@ -431,19 +463,9 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
             .saturating_add(cadence_ticks.saturating_mul(missed_this_frame.saturating_add(1)));
     }
 
-    let mut final_present = false;
-    if pending_present
-        && let Some(result) = shell_chart_sine_scanout(last_phase, CHART_ALL_FLAGS, true)
-    {
-        final_present = result.presented;
-        presented = presented.saturating_add(result.presented as u64);
-        failures = failures.saturating_add((!result.ok) as u64);
-        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
-        sum_present_us = sum_present_us.saturating_add(result.present_us);
-        max_submit_us = max_submit_us.max(result.submit_us);
-        max_present_us = max_present_us.max(result.present_us);
-        max_total_us = max_total_us.max(result.total_us);
-    }
+    let final_present_queued =
+        pending_present && !closed && crate::ui3::compositor::request_shell_chart_recompose();
+    present_queued = present_queued.saturating_add(final_present_queued as u64);
 
     let elapsed_us = elapsed_us_since(start_tick).max(1);
     let fps_milli = frames.saturating_mul(1_000_000_000) / elapsed_us;
@@ -452,19 +474,21 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     } else {
         sum_submit_us / frames
     };
-    let avg_present_us = if frames == 0 {
+    let avg_publish_us = if frames == 0 {
         0
     } else {
-        sum_present_us / frames
+        sum_publish_us / frames
     };
-    let ok = frames != 0 && failures == 0 && submitted == frames;
+    let ok = (frames != 0 || closed) && failures == 0 && submitted == frames;
     let message = alloc::format!(
-        "gpgpu chart wave: ok={} stage=cadence frames={} submitted={} presented={} failures={} duration_ms={} elapsed_us={} target_hz={} fps={}.{:03} missed_deadlines={} present_every={} final_present={} size={}x{} avg_submit_us={} max_submit_us={} avg_present_us={} max_present_us={} max_total_us={} phase={:.4}",
+        "gpgpu chart wave: ok={} stage=present-backpressured-cadence frames={} submitted={} present_queued={} coalesced={} failures={} closed={} duration_ms={} elapsed_us={} target_hz={} producer_fps={}.{:03} missed_deadlines={} present_every={} final_present_queued={} size={}x{} avg_submit_us={} max_submit_us={} avg_publish_us={} max_publish_us={} max_total_us={} phase={:.4}",
         ok as u8,
         frames,
         submitted,
-        presented,
+        present_queued,
+        coalesced_frames,
         failures,
+        closed as u8,
         duration_ms,
         elapsed_us,
         hz,
@@ -472,13 +496,13 @@ fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         fps_milli % 1000,
         missed_deadlines,
         present_every,
-        final_present as u8,
+        final_present_queued as u8,
         width,
         height,
         avg_submit_us,
         max_submit_us,
-        avg_present_us,
-        max_present_us,
+        avg_publish_us,
+        max_publish_us,
         max_total_us,
         last_phase,
     );

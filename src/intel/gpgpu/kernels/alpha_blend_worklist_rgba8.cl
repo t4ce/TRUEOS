@@ -9,8 +9,8 @@
 // - flags bit2 multiplies source RGB by color_rgba.rgb.
 // - flags bit3 multiplies source alpha by color_rgba.a.
 // - flags bit4 treats source RGB as premultiplied by source alpha.
-// - One SIMD16 walker consumes a descriptor slice:
-//   lane N draws descriptors desc_base + N, desc_base + N+16, ...
+// - One workgroup consumes one descriptor; its SIMD16 lanes split every row.
+// - One walker launches one workgroup for each descriptor in its slice.
 
 #define COMPOSITE_FLAG_COPY       (1u << 0)
 #define COMPOSITE_FLAG_SRC_OVER   (1u << 1)
@@ -143,45 +143,43 @@ __kernel void alpha_blend_worklist_rgba8(
     uint desc_base,
     uint desc_count)
 {
-    uint lane = get_global_id(0);
+    uint lane = get_local_id(0);
+    uint local_desc_id = get_group_id(0);
 
-    if (lane >= 16u) {
+    if (lane >= 16u || local_desc_id >= desc_count) {
         return;
     }
 
     uint src_pitch_pixels = src_pitch_bytes >> 2;
     uint dst_pitch_pixels = dst_pitch_bytes >> 2;
+    uint desc_index = (desc_base + local_desc_id) * 5u;
+    uint src_xy = descs[desc_index + 0u];
+    uint dst_xy = descs[desc_index + 1u];
+    uint size = descs[desc_index + 2u];
+    uint flags = descs[desc_index + 3u];
+    uint color_rgba = descs[desc_index + 4u];
+    uint src_x = src_xy & 0xFFFFu;
+    uint src_y = src_xy >> 16;
+    int dst_x = unpack_i16(dst_xy);
+    int dst_y = unpack_i16(dst_xy >> 16);
+    uint width = size & 0xFFFFu;
+    uint height = size >> 16;
 
-    for (uint local_desc_id = lane; local_desc_id < desc_count; local_desc_id += 16u) {
-        uint desc_index = (desc_base + local_desc_id) * 5u;
-        uint src_xy = descs[desc_index + 0u];
-        uint dst_xy = descs[desc_index + 1u];
-        uint size = descs[desc_index + 2u];
-        uint flags = descs[desc_index + 3u];
-        uint color_rgba = descs[desc_index + 4u];
-        uint src_x = src_xy & 0xFFFFu;
-        uint src_y = src_xy >> 16;
-        int dst_x = unpack_i16(dst_xy);
-        int dst_y = unpack_i16(dst_xy >> 16);
-        uint width = size & 0xFFFFu;
-        uint height = size >> 16;
+    for (uint y = 0; y < height; y++) {
+        int out_y = dst_y + (int)y;
+        if (out_y < 0) {
+            continue;
+        }
 
-        for (uint y = 0; y < height; y++) {
-            int out_y = dst_y + (int)y;
-            if (out_y < 0) {
+        for (uint x = lane; x < width; x += 16u) {
+            int out_x = dst_x + (int)x;
+            if (out_x < 0) {
                 continue;
             }
 
-            for (uint x = 0; x < width; x++) {
-                int out_x = dst_x + (int)x;
-                if (out_x < 0) {
-                    continue;
-                }
-
-                uint src = src_rgba[(src_y + y) * src_pitch_pixels + src_x + x];
-                uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
-                dst_rgba[dst_index] = composite(src, dst_rgba[dst_index], flags, color_rgba);
-            }
+            uint src = src_rgba[(src_y + y) * src_pitch_pixels + src_x + x];
+            uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
+            dst_rgba[dst_index] = composite(src, dst_rgba[dst_index], flags, color_rgba);
         }
     }
 }

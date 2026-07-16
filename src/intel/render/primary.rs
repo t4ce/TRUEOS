@@ -618,7 +618,7 @@ fn submit_resident_triangle_scene_frame_batched(
         }
 
         let scene_frame = crate::ui3::compositor::acquire_draw3d_scene_frame()?;
-        if scene_frame.format() != crate::ui3::compositor::Ui3FrameFormat::Bgra8Premultiplied {
+        if scene_frame.format() != crate::ui3::compositor::Ui3FrameFormat::Rgba8Premultiplied {
             return Err("ui3-frame-format");
         }
         let target = scene_frame.surface();
@@ -757,7 +757,7 @@ fn submit_resident_triangle_scene_frame_batched(
         {
             crate::log_info!(
                 target: "render";
-                "draw3d-frame-profile seq={} output={} source=ui3-logical-frame format=bgra8-premultiplied target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_compose_present_us={} ui3_clear_us={} ui3_draw3d_us={} ui3_proof_us={} ui3_commit_us={} ui3_layers={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={} direct_scanout_access=none cpu_pixel_path=none fallback=none\n",
+                "draw3d-frame-profile seq={} output={} source=ui3-logical-frame format=rgba8-premultiplied target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_compose_present_us={} ui3_clear_us={} ui3_draw3d_us={} ui3_proof_us={} ui3_commit_us={} ui3_layers={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={} direct_scanout_access=none cpu_pixel_path=none fallback=none\n",
                 profile_seq,
                 composition.map_or("D01", |result| result.output.name()),
                 target_width,

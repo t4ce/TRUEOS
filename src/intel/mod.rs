@@ -136,21 +136,19 @@ pub fn init_once() {
     let full_ui3_boot = full_ui3_boot_enabled_for_device(dev.device_id);
     let guc_admitted = full_ui3_boot && init_required_guc_transport(dev);
     if full_ui3_boot && guc_admitted {
+        // Keep BSP residency limited to the descriptor/worklist kernels used by
+        // the UI3 compositor and its current demos.  Other kernels remain
+        // available to explicit consumers, whose late upload is then visible
+        // in the log instead of being hidden by unconditional boot warmup.
         let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_gradient_rect_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_glyph_mask_rgba8_kernel();
-        let _ = self::gpgpu::upload_present_rgba8_to_primary_xrgb_rect_kernel();
         let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_sprite_quad_worklist_rgba8_kernel();
         let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_canvas3d_project_rgba8_kernel();
-        let _ = self::gpgpu::upload_canvas3d_transform_q16_kernel();
-        let _ = self::gpgpu::upload_canvas3d_clip_box_q16_kernel();
-        let _ = self::gpgpu::upload_canvas3d_plane_sample_rgba8_kernel();
-        let _ = self::gpgpu::upload_canvas3d_plane_fill_rgba8_kernel();
-        let _ = self::gpgpu::upload_canvas3d_plane_patch_fill_cut_rgba8_kernel();
-        let _ = self::gpgpu::upload_canvas3d_plane_patch_worklist_rgba8_kernel();
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: bsp-resident-kernels count=5 set=fill_rect_worklist_rgba8,alpha_blend_worklist_rgba8,sprite64_worklist_rgba8,sprite_quad_worklist_rgba8,mandel64_worklist_rgba8 late_uploads_expose_dependencies=1\n"
+        );
         let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
         crate::log_info!(
             target: "intel/opencl";
@@ -379,9 +377,7 @@ pub(crate) struct Ui3CompositorOutputTarget {
 pub(crate) struct Ui3CompositorOutputFrame {
     inner: self::display::DisplayOutputFrameGpgpu,
     pub(crate) surface: self::gpgpu::GpgpuRgba8Surface,
-    /// Diagnostic CPU mapping for one-time compositor correctness proofs.
-    /// Production composition and presentation never consume CPU pixels.
-    pub(crate) diagnostic_virt: *mut u8,
+    pub(crate) buffer_index: usize,
 }
 
 pub(crate) fn ui3_compositor_output_target(slot: usize) -> Option<Ui3CompositorOutputTarget> {
@@ -401,8 +397,8 @@ pub(crate) fn ui3_compositor_acquire_output(
     target: Ui3CompositorOutputTarget,
 ) -> Option<Ui3CompositorOutputFrame> {
     let inner = self::display::acquire_ui3_output_frame_composition_gpgpu(target.inner)?;
+    let buffer_index = self::display::ui3_output_frame_buffer_index(&inner)?;
     let display_surface = inner.surface;
-    let diagnostic_virt = display_surface.virt;
     let surface = self::gpgpu::GpgpuRgba8Surface::new(
         display_surface.phys,
         display_surface.gpu,
@@ -414,7 +410,7 @@ pub(crate) fn ui3_compositor_acquire_output(
     Some(Ui3CompositorOutputFrame {
         inner,
         surface,
-        diagnostic_virt,
+        buffer_index,
     })
 }
 

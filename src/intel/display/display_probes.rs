@@ -135,7 +135,9 @@ fn probe_zune_boot_logo_decode() -> bool {
     );
     let stamped = stored && stamp_horizon_logo_top_left_screen();
     let bgrt_stamped = stored && stamp_bgrt_logo_bottom_right_screen();
-    let plane_bars_stamped = stored && stamp_boot_native_plane_slot_bars_top_right();
+    let plane_bars_stamped = stored
+        && PRIMARY_BOOT_NATIVE_PLANE_SLOT_BARS_ENABLED
+        && stamp_boot_native_plane_slot_bars_top_right();
     crate::log!(
         "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} horizon_stamp={} bgrt_stamp={} plane_bars={} stored={}\n",
         decoded.width,
@@ -2058,7 +2060,7 @@ fn arm_rgb_plane_probe(
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
-    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before);
+    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before, OverlayAlphaMode::Opaque);
     let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
     let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque);

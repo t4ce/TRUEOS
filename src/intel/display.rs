@@ -73,17 +73,22 @@ const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
 }
 const JPG_CENTER_CROP: bool = true;
 const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
+// Hardware-gated migration back to a two-plane desktop:
+// 0 = production UI3 path, 1 = small opaque slot-1 proof over retained logo,
+// 2 = small premultiplied-alpha proof, 3 = full UI3 overlay production.
+const UI3_UPPER_PLANE_BOOT_STAGE: u8 = 1;
 // Universal plane role map for pipe-local planes.
 const UI_OVERLAY_PLANE_SLOT: usize = 1;
 const VIDEO_NV12_PLANE_SLOT: usize = 2;
 const VIDEO_NV12_Y_PLANE_SLOT: usize = 3;
 const OVERLAY_PLANE_SLOT: usize = UI_OVERLAY_PLANE_SLOT;
-const DEFAULT_OVERLAY_MARKER_ENABLED: bool = true;
+const DEFAULT_OVERLAY_MARKER_ENABLED: bool = false;
 const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
 const DEFAULT_OVERLAY_MARKER_COLOR: u32 = 0x0000_0000;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
 const NATIVE_PLANE_SLOT_BARS_ENABLED: bool = true;
+const PRIMARY_BOOT_NATIVE_PLANE_SLOT_BARS_ENABLED: bool = false;
 const NATIVE_PLANE_SLOT_BAR_MARGIN: u32 = 16;
 const NATIVE_PLANE_SLOT_BAR_GAP: u32 = 8;
 pub(super) const NATIVE_PLANE_SLOT_BAR_WIDTH: u32 = 64;
@@ -268,6 +273,10 @@ struct PrimarySurface {
 
 unsafe impl Send for PrimarySurface {}
 unsafe impl Sync for PrimarySurface {}
+
+pub(super) const fn ui3_upper_plane_boot_stage() -> u8 {
+    UI3_UPPER_PLANE_BOOT_STAGE
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PrimaryPlaneSourceFormat {
@@ -840,7 +849,10 @@ impl PrimarySwapSurfacePool {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum OverlayAlphaMode {
     Opaque,
+    /// CPU-authored premultiplied BGRA bytes.
     Straight,
+    /// GPU-authored premultiplied RGBA bytes (`AABBGGRR` as a u32).
+    PremultipliedRgba,
 }
 
 pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
@@ -1537,7 +1549,9 @@ pub(crate) async fn hw_logo_present_task() {
             false
         };
 
-        let plane_bars_stamped = stored && stamp_boot_native_plane_slot_bars_top_right();
+        let plane_bars_stamped = stored
+            && PRIMARY_BOOT_NATIVE_PLANE_SLOT_BARS_ENABLED
+            && stamp_boot_native_plane_slot_bars_top_right();
         crate::log!(
             "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} visible={}x{} target={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} plane_bars={} err={}\n",
             output.id,
@@ -2585,7 +2599,8 @@ pub(super) fn ui3_frame_surface_gpgpu() -> Option<DisplayRgba8GpgpuSurface> {
 
 /// Acquires the full-screen UI3 FRAME composition buffer without clearing it.
 /// The GPGPU producer owns every pixel and the display engine consumes the
-/// native premultiplied ARGB result directly on the UI overlay plane.
+/// native RGBA result directly on the primary plane. Alpha remains meaningful
+/// while composing the frame, but the completed desktop is opaque scanout.
 pub(super) fn ui3_frame_composition_gpgpu(
     target: DisplayPipelineTarget,
 ) -> Option<DisplayRgba8GpgpuSurface> {
@@ -2638,6 +2653,16 @@ pub(super) fn acquire_ui3_output_frame_composition_gpgpu(
         output_target: target,
         surface: acquire_ui3_frame_composition_gpgpu(target.pipeline_target)?,
     })
+}
+
+pub(super) fn ui3_output_frame_buffer_index(frame: &DisplayOutputFrameGpgpu) -> Option<usize> {
+    overlay_surface_for_gpu(
+        frame.surface.pipeline,
+        frame.surface.width,
+        frame.surface.height,
+        frame.surface.gpu,
+    )
+    .map(|surface| surface.buffer_index)
 }
 
 pub(super) fn commit_ui3_frame_composition_gpgpu(
@@ -2971,33 +2996,88 @@ fn commit_ui3_canvas_overlay_produced(
     if producer == DisplayFrameProducer::CpuCached {
         crate::intel::dma_flush(target.virt, target.byte_len);
     }
-    match overlay_plane_surface_flip_guard(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
-        Ok(()) => return flip_overlay_plane_surface(dev, surface, reason),
-        Err(guard_reason) => {
-            let seq = UI3_FRAME_REARM_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-            if seq <= 8 || seq.is_multiple_of(60) {
-                if guard_reason == "no-complete-front" {
-                    crate::log_info!(
-                        target: "intel/display";
-                        "intel/display: ui3-frame-rearm seq={} reason={} guard={} path=full-plane-program expected=first-complete-frame\n",
-                        seq,
-                        reason,
-                        guard_reason,
-                    );
-                } else {
-                    crate::log_warn!(
-                        target: "intel/display";
-                        "intel/display: ui3-frame surface-only guard rejected seq={} reason={} guard={} path=full-plane-program potential_reason=plane-contract-changed-or-other-display-owner\n",
-                        seq,
-                        reason,
-                        guard_reason,
-                    );
-                }
-            }
-        }
+    present_ui3_composition_on_primary(dev, surface, reason)
+}
+
+/// Present the compositor's completed native-size buffer without bringing up
+/// another universal plane. The boot logo already proved this primary-plane
+/// route and its firmware DBUF allocation. Keeping that contract avoids the
+/// wedging plane-2 alpha/DBUF transition while retaining a zero-copy GPU frame.
+fn present_ui3_composition_on_primary(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    reason: &str,
+) -> bool {
+    let Some(pipeline) = DisplayPipelineId::from_pipe(surface.pipe) else {
+        return false;
+    };
+    let primary_base = surface.pipe.primary_plane().base();
+    let overlay_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let surf_before = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURF_OFF);
+    let live_before = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURFLIVE_OFF);
+    let ctl_before = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_CTL_OFF);
+    let buf_cfg_before = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF);
+    let overlay_ctl_before = crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_CTL_OFF);
+    let overlay_surf_before = crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_SURF_OFF);
+
+    let ok = program_primary_plane_source_for_pipeline(
+        PrimaryPlaneSource {
+            phys: surface.phys,
+            gpu: surface.gpu,
+            byte_len: surface.byte_len,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch_bytes,
+            // GPGPU stores bytes R,G,B,A; the RGBX order bit selects that byte
+            // order and ignores A after all source-over work has completed.
+            format: PrimaryPlaneSourceFormat::Xbgr8888,
+            src_x: 0,
+            src_y: 0,
+            dst_x: 0,
+            dst_y: 0,
+            dst_w: surface.width,
+            dst_h: surface.height,
+        },
+        pipeline,
+        reason,
+        true,
+    );
+    if ok {
+        mark_overlay_surface_front(surface);
     }
-    program_three_plane_stack_resources(dev, surface.pipe, reason);
-    arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason)
+
+    let seq = UI3_FRAME_FLIP_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    let surf_after = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURF_OFF);
+    let live_after = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURFLIVE_OFF);
+    let ctl_after = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_CTL_OFF);
+    let buf_cfg_after = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF);
+    let overlay_ctl_after = crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_CTL_OFF);
+    let overlay_surf_after = crate::intel::mmio_read(dev, overlay_base + UNI_PLANE_SURF_OFF);
+    if seq <= 8 || seq.is_multiple_of(60) || !ok {
+        crate::log_info!(
+            target: "intel/display";
+            "intel/display: ui3-primary-flip seq={} reason={} ok={} path=primary-zero-copy pipe={} buffer={} gpu=0x{:08X} primary_ctl=0x{:08X}->0x{:08X} primary_surf=0x{:08X}->0x{:08X} primary_live=0x{:08X}->0x{:08X} primary_buf_cfg=0x{:08X}->0x{:08X} overlay_ctl=0x{:08X}->0x{:08X} overlay_surf=0x{:08X}->0x{:08X} overlay_programmed=0 dbuf_repartitioned=0\n",
+            seq,
+            reason,
+            ok as u8,
+            surface.pipe.name,
+            surface.buffer_index,
+            surface.gpu,
+            ctl_before,
+            ctl_after,
+            surf_before,
+            surf_after,
+            live_before,
+            live_after,
+            buf_cfg_before,
+            buf_cfg_after,
+            overlay_ctl_before,
+            overlay_ctl_after,
+            overlay_surf_before,
+            overlay_surf_after,
+        );
+    }
+    ok
 }
 
 fn log_ui3_frame_target_rejected(
@@ -3281,28 +3361,39 @@ fn program_primary_plane_source_for_pipeline(
     let ctl_enabled = primary_plane_ctl_enabled_for_format(ctl_before, source.format);
     let color_ctl_off = pipe.primary_plane().base() + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl = crate::intel::mmio_read(dev, color_ctl_off);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl, OverlayAlphaMode::Opaque);
+    let stride_before = crate::intel::mmio_read(dev, pipe.primary_plane().stride());
+    let pos_off = pipe.primary_plane().base() + UNI_PLANE_POS_OFF;
+    let size_off = pipe.primary_plane().base() + UNI_PLANE_SIZE_OFF;
+    let offset_off = pipe.primary_plane().base() + UNI_PLANE_OFFSET_OFF;
+    let pos_want = plane_pos_reg_value(source.dst_x, source.dst_y);
+    let size_want = plane_size_reg_value(dst_w, dst_h);
+    let offset_want = plane_pos_reg_value(source.src_x, source.src_y);
+    let contract_changed = ctl_before != ctl_enabled
+        || stride_before != stride_reg
+        || crate::intel::mmio_read(dev, pos_off) != pos_want
+        || crate::intel::mmio_read(dev, size_off) != size_want
+        || crate::intel::mmio_read(dev, offset_off) != offset_want
+        || color_ctl != color_ctl_enabled;
     let surf_live_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
+    if contract_changed {
+        // Plane format, stride and geometry are not surface-flip state. Do not
+        // mutate them under active scanout: detach the old logo/desktop front,
+        // wait for that latch, then install one complete new plane contract.
+        crate::intel::mmio_write(
+            dev,
+            pipe.primary_plane().ctl(),
+            ctl_before & !PLANE_CTL_ENABLE,
+        );
+        crate::intel::mmio_write(dev, pipe.primary_plane().surf(), 0);
+        let _ = wait_for_pipe_next_frame(dev, pipe);
+        let _ = wait_for_primary_plane_live(dev, pipe, 0, 200_000);
+    }
     crate::intel::mmio_write(dev, pipe.primary_plane().stride(), stride_reg);
-    crate::intel::mmio_write(
-        dev,
-        pipe.primary_plane().base() + UNI_PLANE_POS_OFF,
-        plane_pos_reg_value(source.dst_x, source.dst_y),
-    );
-    crate::intel::mmio_write(
-        dev,
-        pipe.primary_plane().base() + UNI_PLANE_SIZE_OFF,
-        plane_size_reg_value(dst_w, dst_h),
-    );
-    crate::intel::mmio_write(
-        dev,
-        pipe.primary_plane().base() + UNI_PLANE_OFFSET_OFF,
-        plane_pos_reg_value(source.src_x, source.src_y),
-    );
-    crate::intel::mmio_write(
-        dev,
-        color_ctl_off,
-        plane_color_ctl_alpha(color_ctl, OverlayAlphaMode::Opaque),
-    );
+    crate::intel::mmio_write(dev, pos_off, pos_want);
+    crate::intel::mmio_write(dev, size_off, size_want);
+    crate::intel::mmio_write(dev, offset_off, offset_want);
+    crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
     crate::intel::mmio_write(dev, pipe.primary_plane().ctl(), ctl_enabled);
     crate::intel::mmio_write(dev, pipe.primary_plane().surf(), surface_reg);
 
@@ -3310,12 +3401,13 @@ fn program_primary_plane_source_for_pipeline(
     let (surf_live_after, surf_live_iter) =
         wait_for_primary_plane_live(dev, pipe, surface_reg, 200_000);
     intel_display_verbose_log!(
-        "intel/display: primary-plane-source reason={} pipe={} ok={} live_ok={} mapped={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X} live=0x{:08X}=>0x{:08X} live_iter={}\n",
+        "intel/display: primary-plane-source reason={} pipe={} ok={} live_ok={} mapped={} contract_rearm={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X} live=0x{:08X}=>0x{:08X} live_iter={}\n",
         reason,
         pipe.name,
         (surf_after == surface_reg) as u8,
         (surf_live_after == surface_reg) as u8,
         mapped_now as u8,
+        contract_changed as u8,
         source.format,
         source.src_x,
         source.src_y,
@@ -5561,14 +5653,22 @@ fn primary_plane_ctl_enabled_for_format(ctl_before: u32, format: PrimaryPlaneSou
         | order_bits
 }
 
-fn overlay_plane_ctl_enabled(ctl_before: u32) -> u32 {
-    primary_plane_ctl_enabled(ctl_before)
+fn overlay_plane_ctl_enabled(ctl_before: u32, alpha: OverlayAlphaMode) -> u32 {
+    let ctl = primary_plane_ctl_enabled(ctl_before);
+    match alpha {
+        // The UI3 GPGPU kernels store bytes R,G,B,A. Gen12's RGBX order bit
+        // selects that byte order for the XRGB8888 plane format.
+        OverlayAlphaMode::PremultipliedRgba => ctl | PLANE_CTL_ORDER_RGBX,
+        OverlayAlphaMode::Opaque | OverlayAlphaMode::Straight => ctl & !PLANE_CTL_ORDER_RGBX,
+    }
 }
 
 fn plane_color_ctl_alpha(color_ctl: u32, alpha: OverlayAlphaMode) -> u32 {
     let alpha_bits = match alpha {
         OverlayAlphaMode::Opaque => PLANE_COLOR_ALPHA_DISABLE,
-        OverlayAlphaMode::Straight => PLANE_COLOR_ALPHA_SW_PREMULT,
+        OverlayAlphaMode::Straight | OverlayAlphaMode::PremultipliedRgba => {
+            PLANE_COLOR_ALPHA_SW_PREMULT
+        }
     };
     (color_ctl & !PLANE_COLOR_ALPHA_MASK) | PLANE_COLOR_PLANE_GAMMA_DISABLE | alpha_bits
 }
@@ -5677,6 +5777,14 @@ fn plane_buf_cfg_value(start: u16, end_inclusive: u16) -> u32 {
     ((u32::from(end_inclusive) & 0x1FFF) << 16) | (u32::from(start) & 0x1FFF)
 }
 
+const fn plane_buf_cfg_start(raw: u32) -> u16 {
+    (raw & 0x1FFF) as u16
+}
+
+const fn plane_buf_cfg_end(raw: u32) -> u16 {
+    ((raw >> 16) & 0x1FFF) as u16
+}
+
 fn program_plane_watermark_boot_safe(dev: crate::intel::Dev, plane_base: usize, enable: bool) {
     crate::intel::mmio_write(
         dev,
@@ -5723,6 +5831,108 @@ fn program_plane_buf_cfg(
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_BUF_CFG_OFF, after);
     }
     (before, crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF))
+}
+
+/// Assign only the DBUF space not owned by the live primary plane to slot 1.
+/// No primary, video-plane, or transcoder state is rewritten here. This is
+/// the conservative prerequisite for proving a second RGB plane over the
+/// retained boot logo.
+pub(super) fn program_ui_overlay_tail_resources(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    reason: &str,
+) -> bool {
+    const DBUF_LAST_BLOCK: u16 = PLANE_DBUF_VIDEO_NV12_Y_STACK_END;
+    const MIN_UI_BLOCKS: u16 = 64;
+
+    let primary_base = overlay_plane_base(pipe, 0);
+    let ui_base = overlay_plane_base(pipe, UI_OVERLAY_PLANE_SLOT);
+    let primary_buf_before = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF);
+    let primary_start = plane_buf_cfg_start(primary_buf_before);
+    let primary_end = plane_buf_cfg_end(primary_buf_before);
+    let Some(ui_start) = primary_end.checked_add(1) else {
+        return false;
+    };
+    let available_blocks = DBUF_LAST_BLOCK.saturating_sub(ui_start).saturating_add(1);
+    let ui_ctl_before = crate::intel::mmio_read(dev, ui_base + UNI_PLANE_CTL_OFF);
+    let ui_surf_before = crate::intel::mmio_read(dev, ui_base + UNI_PLANE_SURF_OFF);
+    let ui_live_before = crate::intel::mmio_read(dev, ui_base + UNI_PLANE_SURFLIVE_OFF);
+    let untouched_before = [
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT)),
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT)),
+    ];
+    if primary_start != 0
+        || primary_end >= DBUF_LAST_BLOCK
+        || available_blocks < MIN_UI_BLOCKS
+        || (ui_ctl_before & PLANE_CTL_ENABLE) != 0
+        || ui_surf_before != 0
+        || ui_live_before != 0
+    {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: ui-overlay-tail-resources rejected reason={} pipe={} primary_buf=0x{:08X} primary_blocks={}..{} ui_blocks={}..{} available={} ui_ctl=0x{:08X} ui_surf=0x{:08X} ui_live=0x{:08X} potential_reason=primary-tail-or-idle-plane-contract-not-met action=retain-logo-only\n",
+            reason,
+            pipe.name,
+            primary_buf_before,
+            primary_start,
+            primary_end,
+            ui_start,
+            DBUF_LAST_BLOCK,
+            available_blocks,
+            ui_ctl_before,
+            ui_surf_before,
+            ui_live_before,
+        );
+        return false;
+    }
+
+    program_plane_watermark_boot_safe(dev, ui_base, true);
+    let (ui_buf_before, ui_buf_after) =
+        program_plane_buf_cfg(dev, ui_base, ui_start, DBUF_LAST_BLOCK);
+    let _ = wait_for_pipe_next_frame(dev, pipe);
+
+    let primary_buf_after = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF);
+    let untouched_after = [
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT)),
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT)),
+    ];
+    let ui_wm0_after = crate::intel::mmio_read(dev, ui_base + UNI_PLANE_WM_0_OFF);
+    let ok = primary_buf_after == primary_buf_before
+        && ui_buf_after == plane_buf_cfg_value(ui_start, DBUF_LAST_BLOCK)
+        && ui_wm0_after == PLANE_WM_LEVEL0_BOOT_SAFE
+        && untouched_after == untouched_before;
+    crate::log_info!(
+        target: "intel/display";
+        "intel/display: ui-overlay-tail-resources reason={} pipe={} ok={} primary_buf=0x{:08X}->0x{:08X} primary_preserved={} primary_blocks={}..{} ui_slot={} ui_buf=0x{:08X}->0x{:08X} ui_blocks={}..{} available={} ui_wm0=0x{:08X} video_slots_untouched={} dbuf_scope=unused-tail-only\n",
+        reason,
+        pipe.name,
+        ok as u8,
+        primary_buf_before,
+        primary_buf_after,
+        (primary_buf_after == primary_buf_before) as u8,
+        primary_start,
+        primary_end,
+        UI_OVERLAY_PLANE_SLOT,
+        ui_buf_before,
+        ui_buf_after,
+        ui_start,
+        DBUF_LAST_BLOCK,
+        available_blocks,
+        ui_wm0_after,
+        (untouched_after == untouched_before) as u8,
+    );
+    ok
+}
+
+fn plane_resource_snapshot(dev: crate::intel::Dev, plane_base: usize) -> [u32; 6] {
+    [
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF),
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF),
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF),
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF),
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_TRANS_OFF),
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF),
+    ]
 }
 
 fn program_three_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
@@ -6920,6 +7130,9 @@ fn copy_rgba_into_overlay(
                 OverlayAlphaMode::Straight => {
                     u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a])
                 }
+                OverlayAlphaMode::PremultipliedRgba => {
+                    u32::from_le_bytes([premul_u8(r, a), premul_u8(g, a), premul_u8(b, a), a])
+                }
             };
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col_idx), pixel);
@@ -7132,7 +7345,9 @@ fn overlay_plane_needs_rearm(
     let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
     let want_color_ctl = plane_color_ctl_alpha(color_ctl, alpha);
 
+    let want_ctl = overlay_plane_ctl_enabled(ctl, alpha);
     (ctl & PLANE_CTL_ENABLE) == 0
+        || (ctl & PLANE_CTL_ORDER_RGBX) != (want_ctl & PLANE_CTL_ORDER_RGBX)
         || pos != want_pos
         || size != want_size
         || surf != want_surf
@@ -7194,7 +7409,7 @@ fn overlay_plane_surface_flip_guard(
     }) {
         return Err("dbuf-or-watermark-state");
     }
-    if ctl != overlay_plane_ctl_enabled(ctl) {
+    if ctl != overlay_plane_ctl_enabled(ctl, alpha) {
         return Err("plane-control");
     }
     if color_ctl != plane_color_ctl_alpha(color_ctl, alpha) {
@@ -7323,7 +7538,7 @@ fn arm_overlay_plane(
     };
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
-    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before);
+    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before, alpha);
     let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
     let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, alpha);

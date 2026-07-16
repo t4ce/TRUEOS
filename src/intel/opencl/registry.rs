@@ -61,6 +61,7 @@ const TEXT_OFFSET: u64 = 0x40;
 const COPY_CROSS_THREAD_BYTES: u32 = 96;
 const COPY_PER_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
+const FILL_RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 64;
 const RECT_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const SPRITE64_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const SPRITE64_WORKLIST_PER_THREAD_BYTES: u32 = 96;
@@ -283,11 +284,11 @@ const FILL_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
 };
 
 const FILL_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
-    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
-    ro_buf!(1, "descs", "__global const uint*", 1, 14),
-    u32_arg!(2, "dst_pitch_bytes", 16),
-    u32_arg!(3, "desc_base", 17),
-    u32_arg!(4, "desc_count", 18),
+    rw_buf!(0, "dst_rgba", "__global uint*", 0, 8),
+    ro_buf!(1, "descs", "__global const uint*", 1, 10),
+    u32_arg!(2, "dst_pitch_bytes", 12),
+    u32_arg!(3, "desc_base", 13),
+    u32_arg!(4, "desc_count", 14),
 ];
 const FILL_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
@@ -295,7 +296,7 @@ const FILL_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: RECT_WORKLIST_CROSS_THREAD_BYTES,
+    cross_thread_bytes: FILL_RECT_WORKLIST_CROSS_THREAD_BYTES,
     per_thread_bytes: RECT_WORKLIST_PER_THREAD_BYTES,
     binding_count: 2,
     args: FILL_RECT_WORKLIST_ARGS,
@@ -321,13 +322,13 @@ const GRADIENT_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract
 };
 
 const ALPHA_BLEND_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
-    ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
-    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
-    ro_buf!(2, "descs", "__global const uint*", 2, 16),
-    u32_arg!(3, "src_pitch_bytes", 18),
-    u32_arg!(4, "dst_pitch_bytes", 19),
-    u32_arg!(5, "desc_base", 20),
-    u32_arg!(6, "desc_count", 21),
+    ro_buf!(0, "src_rgba", "__global const uint*", 0, 8),
+    rw_buf!(1, "dst_rgba", "__global uint*", 1, 10),
+    ro_buf!(2, "descs", "__global const uint*", 2, 12),
+    u32_arg!(3, "src_pitch_bytes", 14),
+    u32_arg!(4, "dst_pitch_bytes", 15),
+    u32_arg!(5, "desc_base", 16),
+    u32_arg!(6, "desc_count", 17),
 ];
 const ALPHA_BLEND_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
