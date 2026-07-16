@@ -91,9 +91,6 @@ pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Resul
         return Err(Error::OutOfMemory);
     };
     let gpu = UI_SURFACE_GPU_BASE + (slot as u64) * UI_SURFACE_GPU_STRIDE;
-    let Some(dev) = crate::intel::claimed_device() else {
-        return Err(Error::Unsupported);
-    };
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
         return Err(Error::OutOfMemory);
     };
@@ -102,11 +99,11 @@ pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Resul
     }
     crate::intel::dma_flush(virt, byte_len);
 
-    if !crate::intel::map_ggtt(dev, phys, byte_len, gpu) {
-        crate::dma::dealloc(virt, byte_len);
-        return Err(Error::Unsupported);
-    }
-    crate::intel::ggtt_invalidate(dev);
+    // This is a producer address, not a display-plane slot. Render/compute
+    // submission maps the DMA allocation into its PPGTT before use. A future
+    // UI4 presenter must import the selected front buffer into a display-owned
+    // GGTT slot only while that plane owns it; eagerly mapping all offscreen
+    // surfaces here would overwrite current scanout reservations.
 
     surfaces[slot] = Some(TrustedUiSurface {
         desc: UiSurface {

@@ -549,7 +549,9 @@ fn ap1_ui_core_ready_gate() -> bool {
 
 #[inline]
 fn i226_diagnostic_display_gate() -> bool {
-    crate::intel::has_claimed_device() && crate::net::i226::has_primary_snapshot()
+    crate::allcaps::probes::I226_DIAGNOSTIC_BOOT_PROBE
+        && crate::intel::has_claimed_device()
+        && crate::net::i226::has_primary_snapshot()
 }
 
 #[inline]

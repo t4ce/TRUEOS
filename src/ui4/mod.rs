@@ -3,6 +3,28 @@
 //! This module describes what a producer needs from the display path. It does
 //! not expose a guest/userspace ABI and it does not own presentation yet.
 
+mod frame_pool;
+mod dummy_ui4_consumer;
+mod window_broker;
+
+pub(crate) use frame_pool::{
+    FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
+    acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
+    destroy_frame, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view,
+    release_published_frame, writable_rgba_view,
+};
+pub(crate) use dummy_ui4_consumer::{
+    DummyUi4ConsumerControlError, DummyUi4ConsumerSnapshot, dummy_ui4_consumer_snapshot,
+    start_dummy_ui4_consumer,
+};
+
+pub(crate) use window_broker::{
+    DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
+    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame, begin_window_session,
+    close_window, create_window, finish_window_session, publish_window_frame, replace_window_frame,
+    set_window_placement, visible_windows_for_output,
+};
+
 pub(crate) const OUTPUT_COUNT: usize = 4;
 pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
@@ -81,6 +103,22 @@ pub(crate) enum FrameBuffering {
 impl FrameBuffering {
     pub(crate) const fn count(self) -> usize {
         self as usize
+    }
+}
+
+/// Opaque reference to a frame-pool allocation. UI4 never treats it as an
+/// address, texture ID, or display-plane register value.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(transparent)]
+pub(crate) struct FrameHandle(u64);
+
+impl FrameHandle {
+    pub(crate) const fn from_raw(raw: u64) -> Option<Self> {
+        if raw == 0 { None } else { Some(Self(raw)) }
+    }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
     }
 }
 

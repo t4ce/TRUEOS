@@ -5217,17 +5217,70 @@ pub(crate) fn shell_mandel64_worklist_scanout(
     {
         return None;
     }
+    let primary = GpgpuRgba8Surface::new(
+        target.phys,
+        target.gpu,
+        target.byte_len,
+        target.width,
+        target.height,
+        target.pitch_bytes,
+    )?;
+    let mut result = mandel64_worklist_surface_full(primary, iterations)?;
+    let present_start_tick = direct_rcs_now_tick();
+    let presented = result.ok
+        && super::display::notify_primary_surface_external_write(
+            "gpgpu-mandel64-worklist",
+            0,
+            target.byte_len,
+        );
+    result.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+    result.total_ms = result.total_ms.saturating_add(result.present_ms);
+    result.presented = presented;
+    result.ok &= presented;
+    Some(result)
+}
 
-    let columns = target.width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
-    let render_height = target.height.div_ceil(2).max(1);
+/// Render a complete Mandelbrot image into an arbitrary trusted RGBA surface.
+/// Parameter zero is a real zero state: the GPU clears the frame to opaque
+/// black. Parameters 1..=512 use the existing Mandel worklist artifact.
+pub(crate) fn mandel64_worklist_surface_full(
+    dst: GpgpuRgba8Surface,
+    iterations: u32,
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    if !dst.is_valid()
+        || dst.width < MANDEL64_WORKLIST_CELL_PIXELS
+        || dst.height < MANDEL64_WORKLIST_CELL_PIXELS
+    {
+        return None;
+    }
+
+    if iterations == 0 {
+        let stats = fill_rect_rgba8_stats(dst, dst.bounds(), 0xFF00_0000);
+        let submitted = stats.submits != 0;
+        return Some(GpgpuShellMandel64WorklistResult {
+            ok: submitted,
+            submitted,
+            requested: 0,
+            descriptors: 0,
+            walkers: 0,
+            pixels: (dst.width as usize).saturating_mul(dst.height as usize),
+            submit_ms: stats.submit_ms,
+            total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
+            primary_width: dst.width,
+            primary_height: dst.height,
+            ..GpgpuShellMandel64WorklistResult::default()
+        });
+    }
+
+    let columns = dst.width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
+    let render_height = dst.height.div_ceil(2).max(1);
     let rows = render_height.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
     let count = columns.saturating_mul(rows) as usize;
     if count == 0 {
         return None;
     }
     let iterations = iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
-
-    let total_start_tick = direct_rcs_now_tick();
     let mut placements = Vec::new();
     let mut submitted = true;
     let mut descriptors = 0usize;
@@ -5248,7 +5301,7 @@ pub(crate) fn shell_mandel64_worklist_scanout(
             let tile_y = (tile_index as u32) / columns;
             let dst_x = tile_x.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS);
             let dst_y = tile_y.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS);
-            let width = target
+            let width = dst
                 .width
                 .saturating_sub(dst_x)
                 .min(MANDEL64_WORKLIST_CELL_PIXELS);
@@ -5262,12 +5315,12 @@ pub(crate) fn shell_mandel64_worklist_scanout(
                 dst_y: dst_y as i32,
                 width,
                 height,
-                mirror_height: target.height,
+                mirror_height: dst.height,
                 iterations,
             });
         }
 
-        let result = mandel64_worklist_primary(placements.as_slice(), false)?;
+        let result = mandel64_worklist_surface(dst, placements.as_slice())?;
         submitted &= result.submitted;
         submitted_tiles = submitted_tiles.saturating_add(result.requested);
         descriptors = descriptors.saturating_add(result.descriptors);
@@ -5283,32 +5336,22 @@ pub(crate) fn shell_mandel64_worklist_scanout(
         index = end;
     }
 
-    let present_start_tick = direct_rcs_now_tick();
-    let presented = submitted
-        && submitted_tiles == count
-        && super::display::notify_primary_surface_external_write(
-            "gpgpu-mandel64-worklist",
-            0,
-            target.byte_len,
-        );
-    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
-
     Some(GpgpuShellMandel64WorklistResult {
-        ok: submitted && submitted_tiles == count && presented,
+        ok: submitted && submitted_tiles == count,
         submitted,
         requested: count,
         descriptors,
         walkers,
         pixels,
         submit_ms,
-        present_ms,
         total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
         desc_gpu,
-        primary_width: target.width,
-        primary_height: target.height,
+        primary_width: dst.width,
+        primary_height: dst.height,
         last_src_xy,
         last_dst_xy,
-        presented,
+        presented: false,
+        ..GpgpuShellMandel64WorklistResult::default()
     })
 }
 
@@ -5316,13 +5359,8 @@ pub(crate) fn mandel64_worklist_primary(
     placements: &[GpgpuMandel64Placement],
     present: bool,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
-    let total_start_tick = direct_rcs_now_tick();
     let target = super::display::primary_surface_gpgpu_marker_target()?;
-    if target.virt.is_null()
-        || target.width < MANDEL64_WORKLIST_CELL_PIXELS
-        || target.height < MANDEL64_WORKLIST_CELL_PIXELS
-        || placements.is_empty()
-    {
+    if target.virt.is_null() {
         return None;
     }
     let primary = GpgpuRgba8Surface::new(
@@ -5333,6 +5371,34 @@ pub(crate) fn mandel64_worklist_primary(
         target.height,
         target.pitch_bytes,
     )?;
+    let mut result = mandel64_worklist_surface(primary, placements)?;
+    if present {
+        let present_start_tick = direct_rcs_now_tick();
+        result.presented = result.submitted
+            && super::display::notify_primary_surface_external_write(
+                "gpgpu-mandel64-worklist",
+                0,
+                target.byte_len,
+            );
+        result.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
+        result.total_ms = result.total_ms.saturating_add(result.present_ms);
+        result.ok &= result.presented;
+    }
+    Some(result)
+}
+
+pub(crate) fn mandel64_worklist_surface(
+    dst: GpgpuRgba8Surface,
+    placements: &[GpgpuMandel64Placement],
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    let total_start_tick = direct_rcs_now_tick();
+    if !dst.is_valid()
+        || dst.width < MANDEL64_WORKLIST_CELL_PIXELS
+        || dst.height < MANDEL64_WORKLIST_CELL_PIXELS
+        || placements.is_empty()
+    {
+        return None;
+    }
     let desc = mandel64_worklist_desc_buffer_once()?;
     let max_placements = MANDEL64_WORKLIST_MAX_DESCS / MANDEL64_WORKLIST_BANDS_PER_TILE;
     let count = placements.len().min(max_placements);
@@ -5351,12 +5417,10 @@ pub(crate) fn mandel64_worklist_primary(
         for placement in placements.iter().take(count) {
             let src_x = placement.src_x.clamp(i16::MIN as i32, i16::MAX as i32);
             let src_y = placement.src_y.clamp(i16::MIN as i32, i16::MAX as i32);
-            let dst_x = placement
-                .dst_x
-                .clamp(0, target.width.saturating_sub(1) as i32);
+            let dst_x = placement.dst_x.clamp(0, dst.width.saturating_sub(1) as i32);
             let dst_y = placement
                 .dst_y
-                .clamp(0, target.height.saturating_sub(1) as i32);
+                .clamp(0, dst.height.saturating_sub(1) as i32);
             let requested_width = if placement.width == 0 {
                 MANDEL64_WORKLIST_CELL_PIXELS
             } else {
@@ -5369,10 +5433,10 @@ pub(crate) fn mandel64_worklist_primary(
             };
             let width = requested_width
                 .min(MANDEL64_WORKLIST_CELL_PIXELS)
-                .min(target.width.saturating_sub(dst_x as u32));
+                .min(dst.width.saturating_sub(dst_x as u32));
             let height = requested_height
                 .min(MANDEL64_WORKLIST_CELL_PIXELS)
-                .min(target.height.saturating_sub(dst_y as u32));
+                .min(dst.height.saturating_sub(dst_y as u32));
             let iterations = placement
                 .iterations
                 .clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS);
@@ -5404,9 +5468,7 @@ pub(crate) fn mandel64_worklist_primary(
                     ),
                     dst_xy: pack_i16_pair_u32(
                         dst_x as i16,
-                        dst_y
-                            .saturating_add(band_y)
-                            .clamp(0, target.height as i32 - 1) as i16,
+                        dst_y.saturating_add(band_y).clamp(0, dst.height as i32 - 1) as i16,
                     ),
                     flags,
                     color_rgba: iteration_payload,
@@ -5431,45 +5493,34 @@ pub(crate) fn mandel64_worklist_primary(
     super::dma_flush(desc.virt, desc.bytes);
 
     let params = Mandel64WorklistRgba8Params {
-        dst_gpu: primary.gpu,
+        dst_gpu: dst.gpu,
         desc_gpu: desc.gpu,
-        dst_pitch_bytes: primary.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
         desc_base: 0,
         desc_count: desc_count as u32,
     };
     let walkers = mandel64_worklist_walker_count(desc_count);
 
     let submit_start_tick = direct_rcs_now_tick();
-    let submitted = submit_mandel64_worklist(primary, desc, params);
+    let submitted = submit_mandel64_worklist(dst, desc, params);
     let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
-    let present_start_tick = direct_rcs_now_tick();
-    let presented = if submitted && present {
-        super::display::notify_primary_surface_external_write(
-            "gpgpu-mandel64-worklist",
-            0,
-            target.byte_len,
-        )
-    } else {
-        false
-    };
-    let present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
 
     Some(GpgpuShellMandel64WorklistResult {
-        ok: submitted && (!present || presented),
+        ok: submitted,
         submitted,
         requested: count,
         descriptors: desc_count,
         walkers,
         pixels: drawn_pixels,
         submit_ms,
-        present_ms,
+        present_ms: 0,
         total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
         desc_gpu: desc.gpu,
-        primary_width: primary.width,
-        primary_height: primary.height,
+        primary_width: dst.width,
+        primary_height: dst.height,
         last_src_xy,
         last_dst_xy,
-        presented,
+        presented: false,
     })
 }
 

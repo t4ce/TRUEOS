@@ -9,12 +9,12 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
     CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
     CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
-    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH,
-    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE,
-    PIXEL_PLASMA_FLAG_RINGS, PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE,
-    PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT, reload_all_known_kernel_artifacts,
-    reload_known_kernel_artifact, shell_font_outline_probe, upload_chart_sine_rgba8_kernel,
-    upload_font_outline_mesh_kernel, upload_pixel_plasma_rgba8_kernel,
+    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, PIXEL_PLASMA_FLAG_ALPHA,
+    PIXEL_PLASMA_FLAG_FIELD_PALETTE, PIXEL_PLASMA_FLAG_RINGS, PIXEL_PLASMA_FLAG_SCANLINE,
+    PIXEL_PLASMA_FLAG_VIGNETTE, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_font_outline_probe,
+    upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
+    upload_pixel_plasma_rgba8_kernel,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -34,7 +34,7 @@ fn usage(io: &'static dyn ShellBackend2) {
         "gpgpu canvas2d sprite [duration_ms] [cadence_ms] [count] [present_every]",
     );
     print_shell_line(io, "gpgpu canvas2d sprites64");
-    print_shell_line(io, "gpgpu canvas2d mandel64 [iterations]");
+    print_shell_line(io, "gpgpu canvas2d mandel64 [start|status]");
     print_shell_line(io, "gpgpu canvas3d cube");
     print_shell_line(io, "gpgpu canvas3d ico");
     print_shell_line(io, "gpgpu canvas3d para");
@@ -130,7 +130,7 @@ fn wait_until_tick(deadline: u64) {
     }
 }
 
-fn run_canvas2d(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+fn run_canvas2d(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     let Some(kind) = args.next() else {
         usage(io);
         return;
@@ -141,19 +141,91 @@ fn run_canvas2d(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
             return;
         }
     } else if kind.eq_ignore_ascii_case("mandel64") {
-        run_canvas2d_mandel64(io, args);
+        run_canvas2d_mandel64(spawner, io, args);
     } else {
         usage(io);
     }
 }
 
-fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
-    let _ = args;
-    print_shell_line(
-        io,
-        "gpgpu canvas2d mandel64: presentation removed; UI4 baseline is logo-only",
-    );
-    true
+fn run_canvas2d_mandel64(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) -> bool {
+    let action = args.next().unwrap_or("start");
+    if !expect_no_more(io, args) {
+        return false;
+    }
+
+    if action.eq_ignore_ascii_case("start") {
+        match crate::ui4::start_dummy_ui4_consumer(spawner) {
+            Ok(()) => print_shell_line(
+                io,
+                "gpgpu canvas2d mandel64: dummy UI4 consumer queued apps=2 windows=4 mandel-buffers=1/2/3 white-buffers=1 dirty=physical-click+1",
+            ),
+            Err(error) => print_shell_line(
+                io,
+                alloc::format!("gpgpu canvas2d mandel64: start failed {error:?}").as_str(),
+            ),
+        }
+        return true;
+    }
+
+    if action.eq_ignore_ascii_case("status") {
+        let status = crate::ui4::dummy_ui4_consumer_snapshot();
+        print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu canvas2d mandel64: active={} apps=2 windows=4 parameters static={} dirty={} stream={} serials={}/{}/{}/{} input=physical-pointer",
+                status.active as u8,
+                status.static_parameter,
+                status.dirty_parameter,
+                status.stream_parameter,
+                status.static_publish_serial,
+                status.dirty_publish_serial,
+                status.stream_publish_serial,
+                status.white_publish_serial
+            )
+            .as_str(),
+        );
+        print_mandel_frame_status(io, "static", status.static_frame);
+        print_mandel_frame_status(io, "dirty", status.dirty_frame);
+        print_mandel_frame_status(io, "stream", status.stream_frame);
+        print_mandel_frame_status(io, "white", status.white_frame);
+        return true;
+    }
+
+    usage(io);
+    false
+}
+
+fn print_mandel_frame_status(
+    io: &'static dyn ShellBackend2,
+    name: &str,
+    handle: Option<crate::ui4::FrameHandle>,
+) {
+    let Some(handle) = handle else {
+        print_shell_line(io, alloc::format!("  {name}: frame=none").as_str());
+        return;
+    };
+    match crate::ui4::frame_snapshot(handle) {
+        Ok(frame) => print_shell_line(
+            io,
+            alloc::format!(
+                "  {name}: frame=0x{:016X} buffers={} front={:?} writer={} serial={}",
+                handle.raw(),
+                frame.buffer_count,
+                frame.front_buffer,
+                frame.writer_active as u8,
+                frame.publish_serial
+            )
+            .as_str(),
+        ),
+        Err(error) => print_shell_line(
+            io,
+            alloc::format!("  {name}: frame=0x{:016X} error={error:?}", handle.raw()).as_str(),
+        ),
+    }
 }
 
 fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
@@ -668,7 +740,7 @@ pub(crate) fn try_parse(
     };
 
     if cmd.eq_ignore_ascii_case("canvas2d") {
-        run_canvas2d(io, args);
+        run_canvas2d(spawner, io, args);
     } else if cmd.eq_ignore_ascii_case("canvas3d") {
         return run_canvas3d(spawner, io, args);
     } else if cmd.eq_ignore_ascii_case("artificial-pixel") {

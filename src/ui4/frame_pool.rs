@@ -1,0 +1,427 @@
+//! UI4-owned frame storage and producer/publisher hand-off.
+//!
+//! A logical frame owns exactly the number of physical buffers selected by
+//! its cadence. The trusted `ui_surface` allocator remains an implementation
+//! detail; producers receive a checked write lease and never a display-plane
+//! address.
+
+use alloc::vec::Vec;
+use spin::Mutex;
+
+use crate::graphics::primitives::{Error as SurfaceError, UiSurfaceFormat};
+use crate::r::ui_surface::{self, UiSurfaceHandle};
+
+use super::{FrameHandle, FramePlan, FramePlanError, FrameSpec, ScanoutFormat};
+
+const MAX_FRAMES: usize = 64;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FramePoolError {
+    InvalidPlan(FramePlanError),
+    InvalidHandle,
+    UnsupportedFormat,
+    OutOfMemory,
+    Busy,
+    ImmutablePublished,
+    NotPublished,
+    InvalidLease,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FrameWriteLease {
+    pub(crate) frame: FrameHandle,
+    pub(crate) buffer_index: u8,
+    token: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FrameReadLease {
+    pub(crate) frame: FrameHandle,
+    pub(crate) buffer_index: u8,
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct FrameRgbaView {
+    pub(crate) virt: *mut u8,
+    pub(crate) byte_len: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch: u32,
+}
+
+unsafe impl Send for FrameRgbaView {}
+unsafe impl Sync for FrameRgbaView {}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PublishedFrame {
+    pub(crate) frame: FrameHandle,
+    pub(crate) buffer_index: u8,
+    pub(crate) publish_serial: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FrameSnapshot {
+    pub(crate) frame: FrameHandle,
+    pub(crate) plan: FramePlan,
+    pub(crate) buffer_count: u8,
+    pub(crate) front_buffer: Option<u8>,
+    pub(crate) writer_active: bool,
+    pub(crate) publish_serial: u64,
+}
+
+#[derive(Copy, Clone)]
+struct AcquiredBuffer {
+    index: u8,
+    token: u64,
+}
+
+#[derive(Copy, Clone)]
+struct FrameRecord {
+    generation: u32,
+    active: bool,
+    plan: FramePlan,
+    surfaces: [Option<UiSurfaceHandle>; 3],
+    buffer_count: u8,
+    front_buffer: Option<u8>,
+    next_buffer: u8,
+    acquired: Option<AcquiredBuffer>,
+    readers: [u16; 3],
+    next_token: u64,
+    publish_serial: u64,
+}
+
+impl FrameRecord {
+    fn inactive(generation: u32) -> Self {
+        Self {
+            generation,
+            active: false,
+            plan: EMPTY_PLAN,
+            surfaces: [None; 3],
+            buffer_count: 0,
+            front_buffer: None,
+            next_buffer: 0,
+            acquired: None,
+            readers: [0; 3],
+            next_token: 0,
+            publish_serial: 0,
+        }
+    }
+
+    fn activate(&mut self, plan: FramePlan, surfaces: [Option<UiSurfaceHandle>; 3]) {
+        self.generation = next_generation(self.generation);
+        self.active = true;
+        self.plan = plan;
+        self.surfaces = surfaces;
+        self.buffer_count = plan.buffering.count() as u8;
+        self.front_buffer = None;
+        self.next_buffer = 0;
+        self.acquired = None;
+        self.readers = [0; 3];
+        self.next_token = 0;
+        self.publish_serial = 0;
+    }
+}
+
+const EMPTY_PLAN: FramePlan = FramePlan {
+    output: super::OutputId::from_slot(0).unwrap(),
+    content: super::FrameContent::Image,
+    format: ScanoutFormat::Xrgb8888,
+    alpha: super::AlphaContract::Opaque,
+    plane: super::PlaneAssignment::Primary { slot: 0 },
+    buffering: super::FrameBuffering::Single,
+    width: 1,
+    height: 1,
+};
+
+struct FramePool {
+    frames: Vec<FrameRecord>,
+}
+
+impl FramePool {
+    const fn new() -> Self {
+        Self { frames: Vec::new() }
+    }
+
+    fn checked(&self, handle: FrameHandle) -> Result<&FrameRecord, FramePoolError> {
+        let (slot, generation) = unpack_handle(handle)?;
+        let frame = self.frames.get(slot).ok_or(FramePoolError::InvalidHandle)?;
+        if !frame.active || frame.generation != generation {
+            return Err(FramePoolError::InvalidHandle);
+        }
+        Ok(frame)
+    }
+
+    fn checked_mut(&mut self, handle: FrameHandle) -> Result<&mut FrameRecord, FramePoolError> {
+        let (slot, generation) = unpack_handle(handle)?;
+        let frame = self
+            .frames
+            .get_mut(slot)
+            .ok_or(FramePoolError::InvalidHandle)?;
+        if !frame.active || frame.generation != generation {
+            return Err(FramePoolError::InvalidHandle);
+        }
+        Ok(frame)
+    }
+}
+
+static FRAME_POOL: Mutex<FramePool> = Mutex::new(FramePool::new());
+
+pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolError> {
+    let plan = FramePlan::from_spec(spec).map_err(FramePoolError::InvalidPlan)?;
+    let format = surface_format(plan.format).ok_or(FramePoolError::UnsupportedFormat)?;
+    let count = plan.buffering.count();
+    let mut surfaces = [None; 3];
+    for surface in surfaces.iter_mut().take(count) {
+        match ui_surface::create_surface(plan.width, plan.height, format) {
+            Ok(handle) => *surface = Some(handle),
+            Err(error) => {
+                destroy_surfaces(surfaces);
+                return Err(map_surface_error(error));
+            }
+        }
+    }
+
+    let mut pool = FRAME_POOL.lock();
+    let slot = if let Some(slot) = pool.frames.iter().position(|frame| !frame.active) {
+        slot
+    } else {
+        if pool.frames.len() >= MAX_FRAMES {
+            drop(pool);
+            destroy_surfaces(surfaces);
+            return Err(FramePoolError::OutOfMemory);
+        }
+        let slot = pool.frames.len();
+        pool.frames.push(FrameRecord::inactive(0));
+        slot
+    };
+    pool.frames[slot].activate(plan, surfaces);
+    let generation = pool.frames[slot].generation;
+    pack_handle(slot, generation)
+}
+
+pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
+    let surfaces = {
+        let mut pool = FRAME_POOL.lock();
+        let frame = pool.checked_mut(handle)?;
+        if frame.acquired.is_some() || frame.readers.iter().any(|readers| *readers != 0) {
+            return Err(FramePoolError::Busy);
+        }
+        frame.active = false;
+        frame.front_buffer = None;
+        frame.buffer_count = 0;
+        core::mem::replace(&mut frame.surfaces, [None; 3])
+    };
+    destroy_surfaces(surfaces);
+    Ok(())
+}
+
+pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLease, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(handle)?;
+    if frame.acquired.is_some() {
+        return Err(FramePoolError::Busy);
+    }
+    if frame.buffer_count == 1 && frame.front_buffer.is_some() {
+        return Err(FramePoolError::ImmutablePublished);
+    }
+
+    let count = frame.buffer_count;
+    let index = (0..count)
+        .map(|offset| (frame.next_buffer + offset) % count)
+        .find(|index| {
+            (count == 1 || frame.front_buffer != Some(*index))
+                && frame.readers[*index as usize] == 0
+                && frame.surfaces[*index as usize].is_some()
+        })
+        .ok_or(FramePoolError::Busy)?;
+
+    frame.next_buffer = (index + 1) % count;
+    frame.next_token = next_serial(frame.next_token);
+    let acquired = AcquiredBuffer {
+        index,
+        token: frame.next_token,
+    };
+    frame.acquired = Some(acquired);
+    Ok(FrameWriteLease {
+        frame: handle,
+        buffer_index: index,
+        token: acquired.token,
+    })
+}
+
+pub(crate) fn acquire_published_frame(
+    handle: FrameHandle,
+) -> Result<FrameReadLease, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(handle)?;
+    let index = frame.front_buffer.ok_or(FramePoolError::NotPublished)?;
+    let readers = &mut frame.readers[index as usize];
+    *readers = readers.checked_add(1).ok_or(FramePoolError::Busy)?;
+    Ok(FrameReadLease {
+        frame: handle,
+        buffer_index: index,
+    })
+}
+
+pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView, FramePoolError> {
+    let surface = {
+        let pool = FRAME_POOL.lock();
+        let frame = pool.checked(lease.frame)?;
+        if frame.readers[lease.buffer_index as usize] == 0 {
+            return Err(FramePoolError::InvalidLease);
+        }
+        if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
+            return Err(FramePoolError::UnsupportedFormat);
+        }
+        frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?
+    };
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    Ok(FrameRgbaView {
+        virt: access.virt,
+        byte_len: access.byte_len,
+        width: access.width,
+        height: access.height,
+        pitch: access.pitch,
+    })
+}
+
+pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView, FramePoolError> {
+    let surface = {
+        let pool = FRAME_POOL.lock();
+        let frame = pool.checked(lease.frame)?;
+        checked_lease(frame, lease)?;
+        if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
+            return Err(FramePoolError::UnsupportedFormat);
+        }
+        frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?
+    };
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    Ok(FrameRgbaView {
+        virt: access.virt,
+        byte_len: access.byte_len,
+        width: access.width,
+        height: access.height,
+        pitch: access.pitch,
+    })
+}
+
+pub(crate) fn release_published_frame(lease: FrameReadLease) -> Result<(), FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    let readers = &mut frame.readers[lease.buffer_index as usize];
+    if *readers == 0 {
+        return Err(FramePoolError::InvalidLease);
+    }
+    *readers -= 1;
+    Ok(())
+}
+
+pub(crate) fn cancel_frame_buffer(lease: FrameWriteLease) -> Result<(), FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    frame.acquired = None;
+    Ok(())
+}
+
+pub(crate) fn gpgpu_rgba_surface(
+    lease: FrameWriteLease,
+) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, FramePoolError> {
+    let surface = {
+        let pool = FRAME_POOL.lock();
+        let frame = pool.checked(lease.frame)?;
+        checked_lease(frame, lease)?;
+        if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
+            return Err(FramePoolError::UnsupportedFormat);
+        }
+        frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?
+    };
+    ui_surface::gpgpu_rgba_surface(surface).ok_or(FramePoolError::InvalidLease)
+}
+
+pub(crate) fn publish_frame_buffer(
+    lease: FrameWriteLease,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    frame.front_buffer = Some(lease.buffer_index);
+    frame.acquired = None;
+    frame.publish_serial = next_serial(frame.publish_serial);
+    Ok(PublishedFrame {
+        frame: lease.frame,
+        buffer_index: lease.buffer_index,
+        publish_serial: frame.publish_serial,
+    })
+}
+
+pub(crate) fn frame_snapshot(handle: FrameHandle) -> Result<FrameSnapshot, FramePoolError> {
+    let pool = FRAME_POOL.lock();
+    let frame = pool.checked(handle)?;
+    Ok(FrameSnapshot {
+        frame: handle,
+        plan: frame.plan,
+        buffer_count: frame.buffer_count,
+        front_buffer: frame.front_buffer,
+        writer_active: frame.acquired.is_some(),
+        publish_serial: frame.publish_serial,
+    })
+}
+
+fn checked_lease(frame: &FrameRecord, lease: FrameWriteLease) -> Result<(), FramePoolError> {
+    match frame.acquired {
+        Some(acquired) if acquired.index == lease.buffer_index && acquired.token == lease.token => {
+            Ok(())
+        }
+        _ => Err(FramePoolError::InvalidLease),
+    }
+}
+
+fn surface_format(format: ScanoutFormat) -> Option<UiSurfaceFormat> {
+    match format {
+        ScanoutFormat::Xrgb8888 => Some(UiSurfaceFormat::Xrgb8888),
+        ScanoutFormat::Xbgr8888 => Some(UiSurfaceFormat::Xbgr8888),
+        ScanoutFormat::Rgba8888Premultiplied => Some(UiSurfaceFormat::Rgba8888),
+        ScanoutFormat::Nv12YTile => None,
+    }
+}
+
+fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; 3]) {
+    for surface in surfaces.into_iter().flatten() {
+        let _ = ui_surface::destroy_surface(surface);
+    }
+}
+
+fn map_surface_error(error: SurfaceError) -> FramePoolError {
+    match error {
+        SurfaceError::OutOfMemory => FramePoolError::OutOfMemory,
+        SurfaceError::Unsupported => FramePoolError::UnsupportedFormat,
+        SurfaceError::Invalid | SurfaceError::NotFound => FramePoolError::InvalidHandle,
+    }
+}
+
+fn next_generation(generation: u32) -> u32 {
+    generation.wrapping_add(1).max(1)
+}
+
+fn next_serial(serial: u64) -> u64 {
+    serial.wrapping_add(1).max(1)
+}
+
+fn pack_handle(slot: usize, generation: u32) -> Result<FrameHandle, FramePoolError> {
+    let slot = u32::try_from(slot)
+        .ok()
+        .and_then(|slot| slot.checked_add(1))
+        .ok_or(FramePoolError::OutOfMemory)?;
+    Ok(FrameHandle((u64::from(generation) << 32) | u64::from(slot)))
+}
+
+fn unpack_handle(handle: FrameHandle) -> Result<(usize, u32), FramePoolError> {
+    let raw = handle.raw();
+    let generation = (raw >> 32) as u32;
+    let slot = raw as u32;
+    if generation == 0 || slot == 0 {
+        return Err(FramePoolError::InvalidHandle);
+    }
+    Ok(((slot - 1) as usize, generation))
+}

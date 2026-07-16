@@ -135,6 +135,7 @@ const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static PRIMARY_SOURCE_PROGRAM_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACES: [Mutex<Option<PrimarySurface>>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(None),
@@ -215,7 +216,7 @@ impl LiveOverlayRect {
     }
 }
 
-/// One RGBA8 image placed into a full-scanout overlay composition.
+/// One positioned RGBA8 image consumed by a display composition.
 pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) x: u32,
     pub(crate) y: u32,
@@ -2599,29 +2600,33 @@ fn program_primary_plane_source_for_pipeline(
 
     let surf_after = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
     let (surf_live_after, surf_live_iter) =
-        wait_for_primary_plane_live(dev, pipe, surface_reg, 200_000);
-    intel_display_verbose_log!(
-        "intel/display: primary-plane-source reason={} pipe={} ok={} live_ok={} mapped={} contract_rearm={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X} live=0x{:08X}=>0x{:08X} live_iter={}\n",
-        reason,
-        pipe.name,
-        (surf_after == surface_reg) as u8,
-        (surf_live_after == surface_reg) as u8,
-        mapped_now as u8,
-        contract_changed as u8,
-        source.format,
-        source.src_x,
-        source.src_y,
-        source.dst_x,
-        source.dst_y,
-        dst_w,
-        dst_h,
-        source.pitch_bytes,
-        surface_reg,
-        surf_after,
-        surf_live_before,
-        surf_live_after,
-        surf_live_iter
-    );
+        wait_for_plane_live_for(dev, pipe.primary_plane().base(), surface_reg, 25_000_000);
+    let program_seq = PRIMARY_SOURCE_PROGRAM_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if mapped_now || contract_changed || program_seq <= 8 || program_seq.is_multiple_of(60) {
+        intel_display_verbose_log!(
+            "intel/display: primary-plane-source seq={} reason={} pipe={} ok={} live_ok={} mapped={} contract_rearm={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} after=0x{:08X} live=0x{:08X}=>0x{:08X} live_iter={}\n",
+            program_seq,
+            reason,
+            pipe.name,
+            (surf_after == surface_reg) as u8,
+            (surf_live_after == surface_reg) as u8,
+            mapped_now as u8,
+            contract_changed as u8,
+            source.format,
+            source.src_x,
+            source.src_y,
+            source.dst_x,
+            source.dst_y,
+            dst_w,
+            dst_h,
+            source.pitch_bytes,
+            surface_reg,
+            surf_after,
+            surf_live_before,
+            surf_live_after,
+            surf_live_iter
+        );
+    }
     surf_after == surface_reg && surf_live_after == surface_reg
 }
 
@@ -3626,8 +3631,7 @@ pub(crate) fn present_rgba_overlay_tiles_with_background(
     let mut source_mismatches = 0u64;
     let mut storage_mismatches = 0u64;
     for tile in tiles {
-        let Some((pixels, source_errors, storage_errors)) =
-            copy_rgba_tile_into_overlay(surface, tile)
+        let Some((pixels, source_errors, storage_errors)) = copy_rgba_tile_into_overlay(surface, tile)
         else {
             return false;
         };
@@ -3898,6 +3902,91 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
         );
     }
 
+    true
+}
+
+/// Compose premultiplied RGBA client frames into one opaque, double-buffered
+/// primary scanout. This is the UI4 baseline compositor path: the display
+/// reads one plane and the firmware-proven primary DBUF allocation remains
+/// untouched.
+pub(crate) fn present_premultiplied_rgba_primary_tiles(
+    tiles: &[RgbaOverlayTile<'_>],
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(target) = active_display_pipeline_target() else {
+        return false;
+    };
+    let Some(pipe) = target.pipeline.pipe() else {
+        return false;
+    };
+    if target.width == 0 || target.height == 0 || tiles.is_empty() {
+        return false;
+    }
+    let Some(surface) =
+        ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
+    else {
+        return false;
+    };
+    if !copy_primary_composition_base(surface) {
+        return false;
+    }
+    for tile in tiles {
+        if !blend_premultiplied_rgba_tile_into_primary(surface, tile) {
+            return false;
+        }
+    }
+    crate::intel::dma_flush(surface.virt, surface.byte_len);
+
+    if display_pipeline_target_for_pipe(dev, pipe) != Some(target) {
+        return false;
+    }
+    if !program_primary_plane_source_for_pipeline(
+        PrimaryPlaneSource {
+            phys: surface.phys,
+            gpu: surface.gpu,
+            byte_len: surface.byte_len,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch_bytes,
+            format: PrimaryPlaneSourceFormat::Xrgb8888,
+            src_x: 0,
+            src_y: 0,
+            dst_x: 0,
+            dst_y: 0,
+            dst_w: surface.width,
+            dst_h: surface.height,
+        },
+        target.pipeline,
+        reason,
+        true,
+    ) {
+        return false;
+    }
+    mark_primary_swap_surface_front(surface);
+
+    let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        let primary_base = pipe.primary_plane().base();
+        crate::log!(
+            "intel/display: primary-tile-compositor-present seq={} reason={} pipeline={} pipe={} buffer={} tiles={} size={}x{} pitch=0x{:X} gpu=0x{:X} buf_cfg=0x{:08X} surf=0x{:08X} surf_live=0x{:08X}\n",
+            seq,
+            reason,
+            target.pipeline.name(),
+            pipe.name,
+            surface.buffer_index,
+            tiles.len(),
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+            surface.gpu,
+            crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF),
+            crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURF_OFF),
+            crate::intel::mmio_read(dev, primary_base + UNI_PLANE_SURFLIVE_OFF),
+        );
+    }
     true
 }
 
@@ -5913,6 +6002,100 @@ fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     true
 }
 
+fn copy_primary_composition_base(back: PrimarySwapSurface) -> bool {
+    if copy_primary_swap_front_into_back(back) {
+        return true;
+    }
+    let Some(primary) = primary_surface_for_pipe(back.pipe) else {
+        return false;
+    };
+    if primary.virt.is_null()
+        || back.virt.is_null()
+        || primary.width != back.width
+        || primary.height != back.height
+        || primary.pitch_bytes < primary.width.saturating_mul(4)
+        || back.pitch_bytes < back.width.saturating_mul(4)
+    {
+        return false;
+    }
+    crate::intel::dma_flush(primary.virt, primary.byte_len);
+    let row_bytes = primary.width as usize * 4;
+    for row in 0..primary.height as usize {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                primary.virt.add(row.saturating_mul(primary.pitch_bytes as usize)),
+                back.virt.add(row.saturating_mul(back.pitch_bytes as usize)),
+                row_bytes,
+            );
+        }
+    }
+    true
+}
+
+fn blend_premultiplied_rgba_tile_into_primary(
+    surface: PrimarySwapSurface,
+    tile: &RgbaOverlayTile<'_>,
+) -> bool {
+    if surface.virt.is_null()
+        || tile.width == 0
+        || tile.height == 0
+        || tile.pitch_bytes < tile.width as usize * 4
+        || tile.x >= surface.width
+        || tile.y >= surface.height
+    {
+        return false;
+    }
+    let copy_w = tile.width.min(surface.width.saturating_sub(tile.x)) as usize;
+    let copy_h = tile.height.min(surface.height.saturating_sub(tile.y)) as usize;
+    let Some(required) = tile
+        .pitch_bytes
+        .checked_mul(copy_h.saturating_sub(1))
+        .and_then(|bytes| bytes.checked_add(copy_w.saturating_mul(4)))
+    else {
+        return false;
+    };
+    if tile.pixels.len() < required {
+        return false;
+    }
+
+    for row in 0..copy_h {
+        let src_row = &tile.pixels[row * tile.pitch_bytes..];
+        let dst_row = unsafe {
+            surface
+                .virt
+                .add(
+                    (tile.y as usize + row)
+                        .saturating_mul(surface.pitch_bytes as usize)
+                        .saturating_add(tile.x as usize * 4),
+                )
+                .cast::<u32>()
+        };
+        for col in 0..copy_w {
+            let offset = col * 4;
+            let r = src_row[offset];
+            let g = src_row[offset + 1];
+            let b = src_row[offset + 2];
+            let a = src_row[offset + 3];
+            let dst = unsafe { core::ptr::read_volatile(dst_row.add(col)) }.to_le_bytes();
+            let inverse_alpha = u16::from(u8::MAX - a);
+            let blend = |src: u8, under: u8| -> u8 {
+                let under = (u16::from(under) * inverse_alpha + 127) / 255;
+                u16::from(src).saturating_add(under).min(255) as u8
+            };
+            let pixel = u32::from_le_bytes([
+                blend(b, dst[0]),
+                blend(g, dst[1]),
+                blend(r, dst[2]),
+                0,
+            ]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), pixel);
+            }
+        }
+    }
+    true
+}
+
 fn live_rect_covers_surface(rect: LiveOverlayRect, surface: OverlaySurface) -> bool {
     rect.x == 0 && rect.y == 0 && rect.width >= surface.width && rect.height >= surface.height
 }
@@ -6144,7 +6327,13 @@ fn ensure_primary_swap_surface_for_pipe(
     };
     let gpu = primary_swap_surface_gpu_for_index(pipe, buffer_index)?;
 
-    let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
+    // Preserve the already-live primary stride when the mode matches. That
+    // makes normal compositor presentation a SURF-only flip and avoids a
+    // disable/re-arm transition between the guarded boot surface and UI4.
+    let pitch_bytes = primary_surface_for_pipe(pipe)
+        .filter(|primary| primary.width == width && primary.height == height)
+        .map(|primary| primary.pitch_bytes)
+        .unwrap_or(aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?);
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
     if byte_len as u64 > PRIMARY_SWAP_GPU_STRIDE {
         crate::log_warn!(

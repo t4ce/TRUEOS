@@ -11,6 +11,10 @@ pub mod boot {
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
+    /// Passive I226 discovery is diagnostic-only: it has no RX/TX implementation.
+    pub const I226_DIAGNOSTIC_BOOT_PROBE: bool = false;
+    /// Gateway echo is observability, not a prerequisite for configured sockets.
+    pub const NET_GATEWAY_ICMP_BOOT_PROBE: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 }
 
@@ -61,6 +65,14 @@ pub mod net {
     pub const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
     pub const NET_POLL_SLEEP_US: u64 = 100;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
+
+    /// Preserve the old NetShell policy when true. The default permits the
+    /// listener to bind to the already-installed static fallback while DHCP/RA
+    /// continue in the background.
+    pub const NET_SHELL_WAIT_FOR_DYNAMIC_CONFIG: bool = false;
+    /// Holding normal input for an initial terminal-size reply adds up to 80 ms.
+    /// Keep the query, but process its reply opportunistically by default.
+    pub const NET_SHELL_BLOCK_ON_INITIAL_SIZE_QUERY: bool = false;
 
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;

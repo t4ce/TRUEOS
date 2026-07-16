@@ -279,7 +279,9 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
 
-pub(crate) use self::display::{LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat};
+pub(crate) use self::display::{
+    LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat, RgbaOverlayTile,
+};
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
     self::display::set_primary_plane_source(source, reason)
@@ -318,6 +320,13 @@ pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
     reason: &str,
 ) -> bool {
     self::display::present_rgba8_surface_to_primary_swap_xrgb(src, src_rect, dst_xy, reason)
+}
+
+pub(crate) fn present_premultiplied_rgba_primary_tiles(
+    tiles: &[RgbaOverlayTile<'_>],
+    reason: &str,
+) -> bool {
+    self::display::present_premultiplied_rgba_primary_tiles(tiles, reason)
 }
 
 pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
@@ -482,6 +491,10 @@ pub(crate) fn present_live_overlay_rects_preserving(
     reason: &str,
 ) -> bool {
     self::display::present_live_overlay_rects_preserving(rects, preserve, reason)
+}
+
+pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: &str) -> bool {
+    self::display::present_rgba_overlay_tiles(tiles, reason)
 }
 
 pub fn log_display_plane_ladder_probe(label: &str) {

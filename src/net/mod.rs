@@ -320,11 +320,13 @@ pub fn init() {
         added += 1;
     }
 
-    for adapter in I226Adapter::init_all() {
-        let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
-        let mut guard = DEVICES.lock();
-        guard.push(ActiveDevice::I226(NetCore::new(adapter, ring)));
-        added += 1;
+    if crate::allcaps::probes::I226_DIAGNOSTIC_BOOT_PROBE {
+        for adapter in I226Adapter::init_all() {
+            let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
+            let mut guard = DEVICES.lock();
+            guard.push(ActiveDevice::I226(NetCore::new(adapter, ring)));
+            added += 1;
+        }
     }
 
     if ENABLE_R8125 {
