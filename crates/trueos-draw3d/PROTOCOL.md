@@ -95,10 +95,13 @@ Applied replies contain affected count and current scene statistics. Stats conta
 instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
 the encoded image bytes through the end of the frame. After the first successful live scene frame,
-the service caches the exact straight-alpha 512x512 RGBA8 target handed to the display. A render
-request encodes the most recent presented scene target as RGBA PNG, including after the scene is
-stopped. A clear-only start also counts as a presented frame. Before any frame has been presented,
-or if PNG encoding fails, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
+the service permits an independent straight-alpha RGBA8 capture of the Draw3D scene camera. A
+render request produces a fresh off-screen capture, including while an ordinarily stopped scene is
+retained, or returns the last complete capture if a fresh attempt fails. It is deliberately not a
+readback of the composed UI3 output or the physical scanout; use UI3 lifecycle logs and a visual
+hardware check for final-compositor evidence. A clear-only start also establishes presentation
+eligibility. Before any frame has been presented, after permanent reset, or if no PNG has been
+captured successfully, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
 
 ## Experimental live renderer
 
@@ -128,6 +131,30 @@ blend overlapping meshes with each other, so partially transparent geometry shou
 other scene geometry yet. Triangles
 which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
 Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
+
+### UI3 presentation milestone test
+
+Keep `tools/baremetal-log-drain.sh` running against the deployed target, then exercise the
+Draw3D-to-UI3 boundary with:
+
+```sh
+python3 tools/test_ui3_draw3d_milestone.py boot
+python3 tools/test_ui3_draw3d_milestone.py ownership
+python3 tools/test_ui3_draw3d_milestone.py static
+python3 tools/test_ui3_draw3d_milestone.py animated --require-target-hz
+python3 tools/test_ui3_draw3d_milestone.py lifecycle
+```
+
+`boot` densely verifies every pixel of both the independent 512x512 proof source and its composed
+2560x1440 output before presentation, then proves that the result is presented without a TCP
+producer. `ownership` proves UI3 has claimed the UI overlay for service lifetime, the boot font
+proof was rejected at the legacy direct-present boundary, and no legacy overlay presentation was
+accepted after that claim. `static` requires exactly one Draw3D submission followed by persistent composition.
+`animated` requires all attempted frames to present and, with `--require-target-hz`, at least the
+default 55 Hz acceptance threshold. `lifecycle` requires permanent scene reset to remove only the
+Draw3D layer and leave the proof frame. The generated PNG validates the Draw3D source and camera
+dimensions separately; it does not claim to capture UI3 or scanout. Override `--expect-width` and
+`--expect-height` when the configured Draw3D source viewport is not 2560x1440.
 
 Camera projection uses the resident render target's width divided by its height as the default
 aspect ratio for both local presentation and screenshot capture. Protocol clients therefore specify

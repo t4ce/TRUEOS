@@ -34,6 +34,7 @@ const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to render."},"size":{"type":"integer","minimum":1,"maximum":100,"description":"Percentage of the centered aspect-fit scanout size."},"font":{"type":"integer","minimum":1,"maximum":2,"description":"GPU font face id."},"color":{"type":"string","description":"RGBA color encoded as RRGGBBAA."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["canvas2d","canvas3d","artificial-pixel","chart","pixel","font-tessel","artifacts","smoke"],"description":"GPGPU command to run."},"canvas2d":{"type":"string","enum":["sprite","sprites64","mandel64"],"description":"Optional canvas2d mode."},"canvas3d":{"type":"string","enum":["cube","ico","para"],"description":"Optional canvas3d mode."},"probe":{"type":"string","enum":["artifact","audit","flatten","mesh","all","static","wave","plasma"],"description":"Optional staged chart, pixel, or font-tessel probe."},"duration_ms":{"type":"integer","description":"Optional probe runtime in milliseconds."},"cadence_ms":{"type":"integer","description":"Optional minimum launch cadence in milliseconds."},"count":{"type":"integer","minimum":1,"maximum":256,"description":"Optional canvas2d sprite descriptors per batch."},"present_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Optional present interval."},"iterations":{"type":"integer","description":"Optional canvas2d mandel64 iteration count."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","font","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"paths":{"type":"array","items":{"type":"string"},"description":"Optional TRUEOSFS paths to list."},"long":{"type":"boolean","description":"Show file kind, ownership, byte size, and name."},"tree":{"type":"boolean","description":"Walk recursively from the path."},"table":{"type":"boolean","description":"Render the shell2 table view."},"archive7z":{"type":"boolean","description":"Inspect a .7z archive and print its entries without extracting."},"oneline":{"type":"boolean","description":"Show one entry per line."},"directory_only":{"type":"boolean","description":"List directories themselves instead of their contents."},"color":{"type":"string","enum":["always","auto","never"],"description":"Color output mode."},"size":{"type":"string","enum":["default","short","bytes"],"description":"Size display mode."},"permission":{"type":"string","enum":["rwx","octal","attributes","disable"],"description":"Permission display mode."},"sort":{"type":"string","enum":["name","size","extension","none"],"description":"Sort entries."},"reverse":{"type":"boolean","description":"Reverse the selected sort."},"group_dirs":{"type":"string","enum":["none","first","last"],"description":"Group directories before or after files."},"depth":{"type":"integer","minimum":0,"description":"Maximum recursive depth."},"header":{"type":"boolean","description":"Show long-output headers."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
@@ -171,6 +172,10 @@ fn dispatch_gpgpu(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
     super::cmds::gpgpu::try_parse(spawner, io, &mut args)
 }
 
+fn dispatch_vgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::vgpu::try_parse(io, rest)
+}
+
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     let mut args = rest.split_whitespace();
@@ -296,6 +301,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_gpgpu,
         tool_description: Some("Run Intel GPGPU clear/copy staging-surface commands."),
         tool_parameters_json: Some(TOOL_JSON_GPGPU),
+    },
+    BuiltinShell2CmdEntry {
+        name: "vgpu",
+        mode: "cmd",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
+        handler: dispatch_vgpu,
+        tool_description: Some("Inspect and validate the mediated virtual GPU boundary."),
+        tool_parameters_json: Some(TOOL_JSON_VGPU),
     },
     BuiltinShell2CmdEntry {
         name: "install",
@@ -534,7 +548,7 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
-        "tts", "stt", "fnt", "gpgpu", "vid", "acpi", "tlb", "smp", "etc",
+        "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

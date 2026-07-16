@@ -153,4 +153,3 @@ pub(crate) fn register_physical_device(device: &'static dyn PhysicalGpuDevice) -
 pub(crate) fn physical_device() -> Option<&'static dyn PhysicalGpuDevice> {
     *DEVICE.lock()
 }
-

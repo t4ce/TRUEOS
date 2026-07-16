@@ -306,6 +306,56 @@ unsafe extern "C" {
         out_next_cursor: *mut u64,
     ) -> isize;
 
+    pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
+    pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
+    pub fn trueos_cabi_vgpu_device_info(
+        device: u64,
+        out_info: *mut crate::vgpu::DeviceInfo,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_buffer_create(
+        device: u64,
+        bytes: usize,
+        usage: u32,
+        out_buffer: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_buffer_destroy(device: u64, buffer: u64) -> i32;
+    pub fn trueos_cabi_vgpu_buffer_write(
+        device: u64,
+        buffer: u64,
+        offset: usize,
+        data: *const u8,
+        data_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_vgpu_buffer_read(
+        device: u64,
+        buffer: u64,
+        offset: usize,
+        out: *mut u8,
+        out_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_vgpu_buffer_info(
+        device: u64,
+        buffer: u64,
+        out_info: *mut crate::vgpu::BufferInfo,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_queue_create(
+        device: u64,
+        class: u32,
+        out_queue: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_queue_destroy(device: u64, queue: u64) -> i32;
+    pub fn trueos_cabi_vgpu_submit_control_nop(
+        device: u64,
+        queue: u64,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_timeline(
+        device: u64,
+        queue: u64,
+        out_status: *mut crate::vgpu::TimelineStatus,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_wait(device: u64, queue: u64, value: u64) -> i32;
+
     pub fn trueos_cabi_input_pop_mouse(
         out_buttons: *mut u8,
         out_dx: *mut i8,

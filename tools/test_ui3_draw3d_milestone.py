@@ -99,11 +99,15 @@ def configure_triangle(client, speed):
     )
 
 
-def validate_capture(client, output):
+def validate_capture(client, output, expect_width, expect_height):
     output, image_format, width, height, image = client.render(output)
     stats = client.stats()
     require(image_format == 2, f"scene capture is not PNG: format={image_format}")
-    require((width, height) == (2560, 1440), f"unexpected capture size {width}x{height}")
+    require(
+        (width, height) == (expect_width, expect_height),
+        f"unexpected capture size {width}x{height}; "
+        f"expected {expect_width}x{expect_height}",
+    )
     require(stats[:3] == (1, 1, 3), f"unexpected scene counts: {stats}")
     require(stats[4] == 1, f"unexpected face count: {stats}")
     require(len(image) > 256, f"capture is implausibly small: {len(image)} bytes")
@@ -121,15 +125,66 @@ def verify_boot(watcher):
     boot_lines = [
         line for line in log.splitlines() if "ui3-compositor: bootstrap" in line
     ]
+    output_proof_lines = [
+        line for line in log.splitlines() if "ui3-compositor: proof output" in line
+    ]
+    owner_lines = [
+        line for line in log.splitlines() if "ui3-overlay-owner claimed=1" in line
+    ]
     require(proof_lines, "missing UI3 proof-source diagnostic")
+    require(output_proof_lines, "missing UI3 composed-output diagnostic")
     require(boot_lines, "missing independent UI3 bootstrap diagnostic")
+    require(owner_lines, "missing exclusive UI3 overlay-owner claim")
     proof = fields(proof_lines[-1])
+    output_proof = fields(output_proof_lines[-1])
     boot = fields(boot_lines[-1])
     require(proof.get("exact") == "1", f"proof source readback failed: {proof_lines[-1]}")
+    require(proof.get("mismatches") == "0", f"proof source is not dense-exact: {proof_lines[-1]}")
+    require(proof.get("verification") == "dense", "proof source still uses sparse verification")
+    require(
+        output_proof.get("exact") == "1" and output_proof.get("mismatches") == "0",
+        f"composed output readback failed: {output_proof_lines[-1]}",
+    )
+    require(
+        output_proof.get("stage") == "post-compose-pre-commit",
+        "composed output was not verified at the presentation boundary",
+    )
     require(boot.get("complete") == "1", f"UI3 bootstrap failed: {boot_lines[-1]}")
     require(boot.get("layers") == "1", f"boot is not proof-only: {boot_lines[-1]}")
     require(boot.get("tcp_dependency") == "none", "bootstrap still depends on TCP")
-    print("boot_proof=PASS source_exact=1 layers=1 tcp_dependency=none")
+    print(
+        "boot_proof=PASS source_dense_exact=1 output_dense_exact=1 "
+        "layers=1 tcp_dependency=none owner=ui3-compositor"
+    )
+
+
+def verify_ownership(watcher):
+    log = watcher.text()
+    claim = log.rfind("ui3-overlay-owner claimed=1")
+    require(claim >= 0, "missing UI3 overlay-owner claim")
+    owned_log = log[claim:]
+    rejection_lines = [
+        line
+        for line in owned_log.splitlines()
+        if "legacy-overlay-present rejected" in line
+    ]
+    require(
+        any("reason=font-tessel-render-target" in line for line in rejection_lines),
+        "font render proof did not exercise the legacy-present rejection guard",
+    )
+    forbidden = [
+        line
+        for line in owned_log.splitlines()
+        if "overlay-arm reason=font-tessel-render-target" in line
+        or "overlay-present seq=" in line
+        or "rgba-tile-overlay-present" in line
+        or "live-overlay-present" in line
+    ]
+    require(forbidden == [], f"legacy presenter bypassed UI3 ownership: {forbidden[-1]}")
+    print(
+        f"ownership=PASS owner=ui3-compositor legacy_rejections={len(rejection_lines)} "
+        "accepted_legacy_presents=0 lifetime=service"
+    )
 
 
 def parse_run_summary(line, expected_mode):
@@ -160,6 +215,8 @@ def run_scene(args, watcher, mode):
         validate_capture(
             client,
             args.output_dir / f"ui3-milestone-{mode}-scene.png",
+            args.expect_width,
+            args.expect_height,
         )
     finally:
         client.close()
@@ -206,11 +263,22 @@ def run_lifecycle(args, watcher):
             timeout=args.log_timeout,
         )
         proof_only = watcher.wait_line(mark, "layers=1", timeout=args.log_timeout)
+        _, image_format, width, height, _ = client.render(
+            args.output_dir / "ui3-milestone-after-permanent-reset.jpg"
+        )
     finally:
         client.close()
     require("complete=1" in reset, f"permanent reset failed: {reset}")
     require("ui3-compositor: output frame" in proof_only, f"not a UI3 output frame: {proof_only}")
-    print("lifecycle=PASS permanent_reset=complete scene_layer=removed remaining_layers=1")
+    require(
+        (image_format, width, height) == (1, 3840, 2160),
+        "permanent reset retained screenshot eligibility: "
+        f"format={image_format} size={width}x{height}",
+    )
+    print(
+        "lifecycle=PASS permanent_reset=complete scene_layer=removed "
+        "remaining_layers=1 screenshot=placeholder"
+    )
 
 
 def self_test():
@@ -230,7 +298,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "scenario",
-        choices=("self-test", "boot", "static", "animated", "lifecycle", "all"),
+        choices=(
+            "self-test",
+            "boot",
+            "ownership",
+            "static",
+            "animated",
+            "lifecycle",
+            "all",
+        ),
         nargs="?",
         default="all",
     )
@@ -252,6 +328,18 @@ def main():
     parser.add_argument("--log-timeout", type=float, default=10.0)
     parser.add_argument("--target-hz", type=float, default=55.0)
     parser.add_argument("--require-target-hz", action="store_true")
+    parser.add_argument(
+        "--expect-width",
+        type=int,
+        default=2560,
+        help="expected Draw3D source/capture width (not a UI3 scanout readback)",
+    )
+    parser.add_argument(
+        "--expect-height",
+        type=int,
+        default=1440,
+        help="expected Draw3D source/capture height (not a UI3 scanout readback)",
+    )
     args = parser.parse_args()
 
     if args.scenario == "self-test":
@@ -261,6 +349,8 @@ def main():
     watcher = LogWatcher(args.log)
     if args.scenario in ("boot", "all"):
         verify_boot(watcher)
+    if args.scenario in ("ownership", "all"):
+        verify_ownership(watcher)
     if args.scenario in ("static", "all"):
         run_scene(args, watcher, "static")
     if args.scenario in ("animated", "all"):

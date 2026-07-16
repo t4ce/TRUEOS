@@ -37,6 +37,10 @@ static SCENE_GEOMETRY_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_CAMERA_REVISION: AtomicU64 = AtomicU64::new(1);
 static LOCAL_DISPLAY_VIEW_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_PERMANENT_RESET_REVISION: AtomicU64 = AtomicU64::new(0);
+// Zero means no completed presentation. A presented frame publishes its
+// permanent-reset generation plus one, so stale in-flight completions cannot
+// authorize screenshots across a scene lifetime boundary.
+static SCENE_PRESENTED_LIFETIME: AtomicU64 = AtomicU64::new(0);
 static SCENE_CAMERA_EPOCH_NS: AtomicU64 = AtomicU64::new(0);
 static SCENE_RUNNING: AtomicBool = AtomicBool::new(false);
 static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -204,9 +208,10 @@ fn request_render_image() -> RenderImage {
     let request_started_ns = crate::chronos::monotonic_nanos();
     let captured = capture_screenshot_view();
     let capture_complete_ns = crate::chronos::monotonic_nanos();
-    let latest = captured
-        .then(|| LAST_SCREENSHOT_FRAME.lock().clone())
-        .flatten();
+    // A failed fresh capture must not discard the last complete screenshot.
+    // Permanent reset explicitly clears both this cache and presentation
+    // eligibility, so returning the cache here cannot cross scene lifetimes.
+    let latest = LAST_SCREENSHOT_FRAME.lock().clone();
     if let Some(frame) = latest {
         let stride = usize::try_from(frame.width)
             .ok()
@@ -221,10 +226,11 @@ fn request_render_image() -> RenderImage {
                 Ok(bytes) => {
                     crate::log_info!(
                         target: "draw3d";
-                        "draw3d: screenshot profile capture_us={} encode_us={} total_us={} fresh=1 format=png size={}x{} bytes={}\n",
+                        "draw3d: screenshot profile capture_us={} encode_us={} total_us={} fresh={} format=png size={}x{} bytes={}\n",
                         capture_complete_ns.saturating_sub(request_started_ns) / 1_000,
                         crate::chronos::monotonic_nanos().saturating_sub(capture_complete_ns) / 1_000,
                         crate::chronos::monotonic_nanos().saturating_sub(request_started_ns) / 1_000,
+                        captured as u8,
                         frame.width,
                         frame.height,
                         bytes.len(),
@@ -349,12 +355,18 @@ fn submit_local_scene_frame(
     if owner.is_none() {
         *owner = Some(crate::intel::render::ResidentSceneFrameOwner::new()?);
     }
-    crate::intel::render::submit_resident_triangle_scene_frame(
+    let scene_lifetime = SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
+    let result = crate::intel::render::submit_resident_triangle_scene_frame(
         owner.as_mut().ok_or("scene-frame-owner")?,
         draws,
         clear_rgba,
         diagnostic_logs,
-    )
+    )?;
+    if result.presented && SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire) == scene_lifetime
+    {
+        SCENE_PRESENTED_LIFETIME.store(scene_lifetime.wrapping_add(1), Ordering::Release);
+    }
+    Ok(result)
 }
 
 fn projected_scene_for_camera(camera: ViewCamera) -> Vec<ProjectedMesh> {
@@ -474,7 +486,12 @@ fn sync_render_jobs(
 }
 
 fn capture_screenshot_view() -> bool {
-    if !SCENE_RUNNING.load(Ordering::Acquire) {
+    // Screenshot rendering is deliberately independent of UI3 scanout and
+    // remains available while an ordinarily stopped scene is retained. Do
+    // not manufacture a PNG for a scene which has never reached presentation,
+    // or after permanent reset has ended that scene lifetime.
+    let scene_lifetime = SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
+    if SCENE_PRESENTED_LIFETIME.load(Ordering::Acquire) != scene_lifetime.wrapping_add(1) {
         return false;
     }
 

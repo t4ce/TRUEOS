@@ -294,10 +294,13 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     }
 
     let ctb_ready = self::guc_ctb::init_and_enable(dev);
+    let registered = ctb_ready
+        && crate::gpu::register_physical_device(&self::gpu_device::INTEL_PHYSICAL_GPU);
     crate::log!(
-        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} submission_owner=guc fallback=none next=context-register-on-first-submit\n",
+        "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
-        ctb_ready as u8
+        ctb_ready as u8,
+        registered as u8
     );
     ctb_ready
 }
@@ -376,6 +379,9 @@ pub(crate) struct Ui3CompositorOutputTarget {
 pub(crate) struct Ui3CompositorOutputFrame {
     inner: self::display::DisplayOutputFrameGpgpu,
     pub(crate) surface: self::gpgpu::GpgpuRgba8Surface,
+    /// Diagnostic CPU mapping for one-time compositor correctness proofs.
+    /// Production composition and presentation never consume CPU pixels.
+    pub(crate) diagnostic_virt: *mut u8,
 }
 
 pub(crate) fn ui3_compositor_output_target(slot: usize) -> Option<Ui3CompositorOutputTarget> {
@@ -396,6 +402,7 @@ pub(crate) fn ui3_compositor_acquire_output(
 ) -> Option<Ui3CompositorOutputFrame> {
     let inner = self::display::acquire_ui3_output_frame_composition_gpgpu(target.inner)?;
     let display_surface = inner.surface;
+    let diagnostic_virt = display_surface.virt;
     let surface = self::gpgpu::GpgpuRgba8Surface::new(
         display_surface.phys,
         display_surface.gpu,
@@ -404,7 +411,11 @@ pub(crate) fn ui3_compositor_acquire_output(
         display_surface.height,
         display_surface.pitch_bytes,
     )?;
-    Some(Ui3CompositorOutputFrame { inner, surface })
+    Some(Ui3CompositorOutputFrame {
+        inner,
+        surface,
+        diagnostic_virt,
+    })
 }
 
 pub(crate) fn ui3_compositor_commit_output(

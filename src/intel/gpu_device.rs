@@ -33,17 +33,18 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             device_id: dev.map(|dev| dev.device_id).unwrap_or(0),
             revision_id: dev.map(|dev| dev.revision_id).unwrap_or(0),
             render_compute: dev.is_some(),
-            copy: dev.is_some(),
-            guc_submission: crate::intel::guc_submission::ready(),
+            copy: false,
+            guc_submission: crate::intel::guc_submission::INTEL_GUC_SCHEDULER.ready(),
         }
     }
 
     fn ready(&self) -> bool {
-        crate::intel::claimed_device().is_some() && crate::intel::guc_submission::ready()
+        crate::intel::claimed_device().is_some()
+            && crate::intel::guc_submission::INTEL_GUC_SCHEDULER.ready()
     }
 
     fn scheduler_status(&self) -> PhysicalSchedulerStatus {
-        let status = crate::intel::guc_submission::scheduler_status();
+        let status = crate::intel::guc_submission::INTEL_GUC_SCHEDULER.status();
         PhysicalSchedulerStatus {
             context_capacity: status.capacity,
             registered_contexts: status.registered,
@@ -59,8 +60,7 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
         if !self.ready() {
             return Err(PhysicalGpuError::NotReady);
         }
-        let ppgtt = crate::intel::ppgtt::SparsePpgtt::new()
-            .ok_or(PhysicalGpuError::OutOfMemory)?;
+        let ppgtt = crate::intel::ppgtt::SparsePpgtt::new().ok_or(PhysicalGpuError::OutOfMemory)?;
         let mut slots = GPUVMS.lock();
         if let Some((slot, record)) = slots
             .iter_mut()
@@ -155,13 +155,10 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             return Err(PhysicalGpuError::InvalidGpuVm);
         }
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
-        crate::intel::guc_submission::register_rcs_context(
-            dev,
-            descriptor.hwlrca_lo,
-            descriptor.hwlrca_hi,
-        )
-        .map(|token| PhysicalContextHandle::from_raw(token.raw()))
-        .map_err(|_| PhysicalGpuError::RegisterFailed)
+        crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+            .register(dev, descriptor.hwlrca_lo, descriptor.hwlrca_hi)
+            .map(|token| PhysicalContextHandle::from_raw(token.raw()))
+            .map_err(|_| PhysicalGpuError::RegisterFailed)
     }
 
     fn submit_context(
@@ -169,24 +166,20 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
         context: PhysicalContextHandle,
     ) -> Result<PhysicalSubmission, PhysicalGpuError> {
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
-        crate::intel::guc_submission::submit_rcs_context(
-            dev,
-            crate::intel::guc_submission::GucContextToken::from_raw(context.raw()),
-        )
-        .map(|submission| PhysicalSubmission {
-            context,
-            serial: submission.serial,
-        })
-        .map_err(|_| PhysicalGpuError::SubmitFailed)
+        crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+            .submit(dev, crate::intel::guc_submission::GucContextToken::from_raw(context.raw()))
+            .map(|submission| PhysicalSubmission {
+                context,
+                serial: submission.serial,
+            })
+            .map_err(|_| PhysicalGpuError::SubmitFailed)
     }
 
     fn destroy_context(&self, context: PhysicalContextHandle) -> Result<(), PhysicalGpuError> {
         let dev = crate::intel::claimed_device().ok_or(PhysicalGpuError::NotReady)?;
-        crate::intel::guc_submission::destroy_rcs_context(
-            dev,
-            crate::intel::guc_submission::GucContextToken::from_raw(context.raw()),
-        )
-        .map_err(|_| PhysicalGpuError::DestroyFailed)
+        crate::intel::guc_submission::INTEL_GUC_SCHEDULER
+            .destroy(dev, crate::intel::guc_submission::GucContextToken::from_raw(context.raw()))
+            .map_err(|_| PhysicalGpuError::DestroyFailed)
     }
 }
 

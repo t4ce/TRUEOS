@@ -54,7 +54,21 @@ fn submit_warm_render_batch(
     log_lrc_ring_image(warm, submit_name);
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    if !crate::intel::guc_submission::submit_rcs_lrc(dev, context_desc_lo, context_desc_hi) {
+    let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
+        engine: crate::gpu::physical::EngineClass::RenderCompute,
+        hwlrca_lo: context_desc_lo,
+        hwlrca_hi: context_desc_hi,
+        gpuvm_root_phys: pml4_phys,
+    };
+    if let Err(error) = crate::gpu::vgpu::submit_kernel_context(
+        crate::gpu::vgpu::KernelClient::Render,
+        descriptor,
+    ) {
+        crate::log!(
+            "{} vgpu-submit-failed error={:?} submission_owner=vgpu/guc direct_elsp=0\n",
+            submit_name,
+            error
+        );
         return false;
     }
 
@@ -648,6 +662,10 @@ fn submit_warm_render_batch(
             submit_name
         );
     }
+    let _ = crate::gpu::vgpu::complete_kernel_submission(
+        crate::gpu::vgpu::KernelClient::Render,
+        completed,
+    );
     completed
 }
 

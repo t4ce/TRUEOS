@@ -12,13 +12,15 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 use super::physical::{
-    EngineClass, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice,
-    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSchedulerStatus, physical_device,
+    PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice, PhysicalGpuError,
+    PhysicalGpuVmHandle, PhysicalSchedulerStatus, physical_device,
 };
 
 const PAGE_BYTES: usize = 4096;
 const CLIENT_GPU_VA_BASE: u64 = 0x1_0000_0000;
 const CLIENT_GPU_VA_LIMIT: u64 = 0x0000_7FFF_0000_0000;
+pub(crate) const BUFFER_USAGE_MAP_READ: u32 = 1 << 0;
+pub(crate) const BUFFER_USAGE_MAP_WRITE: u32 = 1 << 1;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
@@ -32,9 +34,8 @@ impl Capabilities {
     pub(crate) const COPY: Self = Self(1 << 5);
     pub(crate) const PRESENT: Self = Self(1 << 6);
     pub(crate) const KERNEL_CONTEXT: Self = Self(1 << 63);
-    pub(crate) const CLIENT_BASE: Self = Self(
-        Self::BUFFER.0 | Self::QUEUE.0 | Self::TIMELINE.0 | Self::COMPUTE.0 | Self::RENDER.0,
-    );
+    pub(crate) const CLIENT_BASE: Self =
+        Self(Self::BUFFER.0 | Self::QUEUE.0 | Self::TIMELINE.0 | Self::COMPUTE.0 | Self::RENDER.0);
 
     pub(crate) const fn from_bits(bits: u64) -> Self {
         Self(bits)
@@ -409,6 +410,7 @@ pub(crate) struct BrokerSelfTestReport {
     pub(crate) cross_principal_rejected: bool,
     pub(crate) quota_rejected: bool,
     pub(crate) timeline_monotonic: bool,
+    pub(crate) device_loss_propagated: bool,
     pub(crate) stale_handle_rejected: bool,
     pub(crate) cleanup: bool,
 }
@@ -421,6 +423,7 @@ impl BrokerSelfTestReport {
             && self.cross_principal_rejected
             && self.quota_rejected
             && self.timeline_monotonic
+            && self.device_loss_propagated
             && self.stale_handle_rejected
             && self.cleanup
     }
@@ -462,7 +465,10 @@ pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), Vg
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
     let (slot, generation) = decode_handle(handle.raw())?;
-    let device_slot = broker.devices.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    let device_slot = broker
+        .devices
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
     if device_slot.generation != generation {
         return Err(VgpuError::InvalidHandle);
     }
@@ -490,8 +496,16 @@ pub(crate) fn device_info(
         epoch: device.epoch,
         memory_used: device.memory_used,
         memory_quota: device.quota.memory_bytes,
-        buffer_count: device.buffers.iter().filter(|slot| slot.record.is_some()).count(),
-        queue_count: device.queues.iter().filter(|slot| slot.record.is_some()).count(),
+        buffer_count: device
+            .buffers
+            .iter()
+            .filter(|slot| slot.record.is_some())
+            .count(),
+        queue_count: device
+            .queues
+            .iter()
+            .filter(|slot| slot.record.is_some())
+            .count(),
         lost: device.lost,
     })
 }
@@ -513,14 +527,20 @@ pub(crate) fn create_buffer(
     if !device.capabilities.contains(Capabilities::BUFFER) {
         return Err(VgpuError::PermissionDenied);
     }
-    let buffer_count = device.buffers.iter().filter(|slot| slot.record.is_some()).count();
+    let buffer_count = device
+        .buffers
+        .iter()
+        .filter(|slot| slot.record.is_some())
+        .count();
     if buffer_count >= device.quota.buffers
         || device.memory_used.saturating_add(alloc_bytes) > device.quota.memory_bytes
     {
         return Err(VgpuError::QuotaExceeded);
     }
     let gpu = align_up_u64(device.next_gpu_va, PAGE_BYTES as u64).ok_or(VgpuError::OutOfMemory)?;
-    let next = gpu.checked_add(alloc_bytes as u64).ok_or(VgpuError::OutOfMemory)?;
+    let next = gpu
+        .checked_add(alloc_bytes as u64)
+        .ok_or(VgpuError::OutOfMemory)?;
     if next > CLIENT_GPU_VA_LIMIT {
         return Err(VgpuError::QuotaExceeded);
     }
@@ -571,6 +591,64 @@ pub(crate) fn buffer_info(
     })
 }
 
+pub(crate) fn write_buffer(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    buffer_handle: BufferHandle,
+    offset: usize,
+    bytes: &[u8],
+) -> Result<usize, VgpuError> {
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let record = lookup_buffer(device, buffer_handle)?;
+    if record.usage & BUFFER_USAGE_MAP_WRITE == 0 {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let end = offset
+        .checked_add(bytes.len())
+        .ok_or(VgpuError::Unsupported)?;
+    if end > record.bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    if !bytes.is_empty() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), record.virt.add(offset), bytes.len());
+        }
+        crate::intel::dma_flush(unsafe { record.virt.add(offset) }, bytes.len());
+    }
+    Ok(bytes.len())
+}
+
+pub(crate) fn read_buffer(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    buffer_handle: BufferHandle,
+    offset: usize,
+    out: &mut [u8],
+) -> Result<usize, VgpuError> {
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let record = lookup_buffer(device, buffer_handle)?;
+    if record.usage & BUFFER_USAGE_MAP_READ == 0 {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let end = offset
+        .checked_add(out.len())
+        .ok_or(VgpuError::Unsupported)?;
+    if end > record.bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    if !out.is_empty() {
+        crate::intel::dma_flush(unsafe { record.virt.add(offset) }, out.len());
+        unsafe {
+            core::ptr::copy_nonoverlapping(record.virt.add(offset), out.as_mut_ptr(), out.len());
+        }
+    }
+    Ok(out.len())
+}
+
 pub(crate) fn destroy_buffer(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -581,11 +659,17 @@ pub(crate) fn destroy_buffer(
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     let (slot, generation) = decode_handle(buffer_handle.raw())?;
-    let buffer_slot = device.buffers.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    let buffer_slot = device
+        .buffers
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
     if buffer_slot.generation != generation {
         return Err(VgpuError::InvalidHandle);
     }
-    let record = buffer_slot.record.as_ref().ok_or(VgpuError::InvalidHandle)?;
+    let record = buffer_slot
+        .record
+        .as_ref()
+        .ok_or(VgpuError::InvalidHandle)?;
     let vm = match device.gpuvm {
         GpuVmBinding::Owned(vm) => vm,
         GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
@@ -610,7 +694,13 @@ pub(crate) fn create_queue(
     {
         return Err(VgpuError::PermissionDenied);
     }
-    if device.queues.iter().filter(|slot| slot.record.is_some()).count() >= device.quota.queues {
+    if device
+        .queues
+        .iter()
+        .filter(|slot| slot.record.is_some())
+        .count()
+        >= device.quota.queues
+    {
         return Err(VgpuError::QuotaExceeded);
     }
     Ok(insert_queue(
@@ -630,11 +720,18 @@ pub(crate) fn destroy_queue(
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
-    if device.contexts.iter().any(|binding| binding.queue == queue_handle) {
+    if device
+        .contexts
+        .iter()
+        .any(|binding| binding.queue == queue_handle)
+    {
         return Err(VgpuError::Busy);
     }
     let (slot, generation) = decode_handle(queue_handle.raw())?;
-    let queue_slot = device.queues.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    let queue_slot = device
+        .queues
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
     if queue_slot.generation != generation || queue_slot.record.is_none() {
         return Err(VgpuError::InvalidHandle);
     }
@@ -700,9 +797,11 @@ pub(crate) fn submit_kernel_context(
     ensure_live(device)?;
     let queue_handle = ensure_kernel_queue(device, client.queue_class())?;
 
-    let context = if let Some(binding) = device.contexts.iter().find(|binding| {
-        binding.queue == queue_handle && binding.descriptor == descriptor
-    }) {
+    let context = if let Some(binding) = device
+        .contexts
+        .iter()
+        .find(|binding| binding.queue == queue_handle && binding.descriptor == descriptor)
+    {
         binding.context
     } else {
         if device.contexts.len() >= device.quota.contexts {
@@ -766,11 +865,35 @@ pub(crate) fn kernel_timeline(client: KernelClient) -> Option<TimelineStatus> {
     lookup_queue(device, queue).ok().map(|queue| queue.timeline)
 }
 
+/// Reset/device-loss hook for the physical driver. All tenant handles remain
+/// queryable for diagnosis but reject further allocation and submission.
+pub(crate) fn notify_physical_device_lost() -> u64 {
+    let mut broker = BROKER.lock();
+    broker.epoch = broker.epoch.wrapping_add(1).max(1);
+    let epoch = broker.epoch;
+    for slot in &mut broker.devices {
+        let Some(device) = slot.record.as_mut() else {
+            continue;
+        };
+        device.epoch = epoch;
+        device.lost = true;
+        for queue in &mut device.queues {
+            let Some(queue) = queue.record.as_mut() else {
+                continue;
+            };
+            if queue.timeline.completed < queue.timeline.submitted {
+                queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+            }
+        }
+    }
+    epoch
+}
+
 pub(crate) fn broker_status() -> BrokerStatus {
     let physical = physical_device();
-    let info = physical.map(PhysicalGpuDevice::adapter_info);
+    let info = physical.map(|device| device.adapter_info());
     let scheduler = physical
-        .map(PhysicalGpuDevice::scheduler_status)
+        .map(|device| device.scheduler_status())
         .unwrap_or_default();
     let broker = BROKER.lock();
     let mut devices = Vec::new();
@@ -786,13 +909,21 @@ pub(crate) fn broker_status() -> BrokerStatus {
             lost: device.lost,
             memory_used: device.memory_used,
             memory_quota: device.quota.memory_bytes,
-            buffers: device.buffers.iter().filter(|slot| slot.record.is_some()).count(),
-            queues: device.queues.iter().filter(|slot| slot.record.is_some()).count(),
+            buffers: device
+                .buffers
+                .iter()
+                .filter(|slot| slot.record.is_some())
+                .count(),
+            queues: device
+                .queues
+                .iter()
+                .filter(|slot| slot.record.is_some())
+                .count(),
             contexts: device.contexts.len(),
         });
     }
     BrokerStatus {
-        physical_ready: physical.is_some_and(PhysicalGpuDevice::ready),
+        physical_ready: physical.is_some_and(|device| device.ready()),
         physical_name: info.map(|info| info.name).unwrap_or("none"),
         physical_device_id: info.map(|info| info.device_id).unwrap_or(0),
         physical_revision_id: info.map(|info| info.revision_id).unwrap_or(0),
@@ -820,11 +951,16 @@ pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {
         .zip(device_gpuvm_root(b, dev_b))
         .is_some_and(|(a_root, b_root)| a_root != 0 && b_root != 0 && a_root != b_root);
 
-    let buffer = create_buffer(a, dev_a, PAGE_BYTES, 0x1);
-    report.buffer_lifecycle = buffer
-        .and_then(|buffer| buffer_info(a, dev_a, buffer).map(|info| (buffer, info)))
-        .is_ok_and(|(_, info)| info.bytes == PAGE_BYTES);
-    if let Ok(buffer) = buffer {
+    if let Ok(buffer) =
+        create_buffer(a, dev_a, PAGE_BYTES, BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE)
+    {
+        report.buffer_lifecycle = buffer_info(a, dev_a, buffer)
+            .is_ok_and(|info| info.bytes == PAGE_BYTES)
+            && write_buffer(a, dev_a, buffer, 7, b"vgpu").is_ok()
+            && {
+                let mut out = [0u8; 4];
+                read_buffer(a, dev_a, buffer, 7, &mut out).is_ok() && out == *b"vgpu"
+            };
         report.cross_principal_rejected =
             buffer_info(b, dev_a, buffer) == Err(VgpuError::PermissionDenied);
         let oversized = quota_for(a).memory_bytes.saturating_add(PAGE_BYTES);
@@ -836,21 +972,38 @@ pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {
     if let Ok(queue) = create_queue(a, dev_a, QueueClass::Compute) {
         let first = submit_control_nop(a, dev_a, queue);
         let second = submit_control_nop(a, dev_a, queue);
-        report.timeline_monotonic = first
-            .zip(second)
-            .is_ok_and(|(first, second)| {
+        report.timeline_monotonic = match (first, second) {
+            (Ok(first), Ok(second)) => {
                 first.value == 1
                     && second.value == 2
                     && wait_timeline(a, dev_a, queue, second.value).is_ok()
-            });
+            }
+            _ => false,
+        };
         let _ = destroy_queue(a, dev_a, queue);
     }
+
+    report.device_loss_propagated = mark_one_device_lost_for_test(a, dev_a)
+        && create_queue(a, dev_a, QueueClass::Compute) == Err(VgpuError::DeviceLost)
+        && device_info(a, dev_a).is_ok_and(|info| info.lost);
 
     let close_a = close(a, dev_a).is_ok();
     report.stale_handle_rejected = device_info(a, dev_a) == Err(VgpuError::InvalidHandle);
     let close_b = close(b, dev_b).is_ok();
     report.cleanup = close_a && close_b;
     report
+}
+
+fn mark_one_device_lost_for_test(principal: Principal, handle: DeviceHandle) -> bool {
+    let mut broker = BROKER.lock();
+    let epoch = broker.epoch.wrapping_add(1).max(1);
+    broker.epoch = epoch;
+    let Ok(device) = lookup_device_mut(&mut broker, handle, principal) else {
+        return false;
+    };
+    device.epoch = epoch;
+    device.lost = true;
+    true
 }
 
 fn require_physical() -> Result<&'static dyn PhysicalGpuDevice, VgpuError> {
@@ -871,9 +1024,9 @@ fn allowed_capabilities(
         caps = caps.union(Capabilities::COPY);
     }
     match principal {
-        Principal::KernelRender | Principal::KernelGpgpu => {
-            caps.union(Capabilities::PRESENT).union(Capabilities::KERNEL_CONTEXT)
-        }
+        Principal::KernelRender | Principal::KernelGpgpu => caps
+            .union(Capabilities::PRESENT)
+            .union(Capabilities::KERNEL_CONTEXT),
         Principal::HostRuntime | Principal::HullGuest(_) | Principal::RuntimeTest(_) => caps,
     }
 }
@@ -908,7 +1061,6 @@ fn ensure_kernel_device(
         return Err(VgpuError::Physical(PhysicalGpuError::InvalidGpuVm));
     }
     let capabilities = Capabilities::CLIENT_BASE
-        .union(Capabilities::COPY)
         .union(Capabilities::PRESENT)
         .union(Capabilities::KERNEL_CONTEXT);
     let record = VirtualDevice {
@@ -934,7 +1086,13 @@ fn ensure_kernel_queue(
     if let Some(handle) = find_queue_by_class(device, class) {
         return Ok(handle);
     }
-    if device.queues.iter().filter(|slot| slot.record.is_some()).count() >= device.quota.queues {
+    if device
+        .queues
+        .iter()
+        .filter(|slot| slot.record.is_some())
+        .count()
+        >= device.quota.queues
+    {
         return Err(VgpuError::QuotaExceeded);
     }
     Ok(insert_queue(
@@ -1060,7 +1218,10 @@ fn lookup_device_mut<'a>(
     principal: Principal,
 ) -> Result<&'a mut VirtualDevice, VgpuError> {
     let (slot, generation) = decode_handle(handle.raw())?;
-    let entry = broker.devices.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    let entry = broker
+        .devices
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation {
         return Err(VgpuError::InvalidHandle);
     }
@@ -1077,10 +1238,8 @@ fn find_device_by_principal(
 ) -> Option<(DeviceHandle, &VirtualDevice)> {
     broker.devices.iter().enumerate().find_map(|(slot, entry)| {
         let device = entry.record.as_ref()?;
-        (device.principal == principal).then_some((
-            DeviceHandle(encode_handle(slot, entry.generation)),
-            device,
-        ))
+        (device.principal == principal)
+            .then_some((DeviceHandle(encode_handle(slot, entry.generation)), device))
     })
 }
 
@@ -1088,19 +1247,18 @@ fn find_device_mut_by_principal(
     broker: &mut Broker,
     principal: Principal,
 ) -> Option<(DeviceHandle, &mut VirtualDevice)> {
-    broker.devices.iter_mut().enumerate().find_map(|(slot, entry)| {
-        let device = entry.record.as_mut()?;
-        (device.principal == principal).then_some((
-            DeviceHandle(encode_handle(slot, entry.generation)),
-            device,
-        ))
-    })
+    broker
+        .devices
+        .iter_mut()
+        .enumerate()
+        .find_map(|(slot, entry)| {
+            let device = entry.record.as_mut()?;
+            (device.principal == principal)
+                .then_some((DeviceHandle(encode_handle(slot, entry.generation)), device))
+        })
 }
 
-fn lookup_buffer(
-    device: &VirtualDevice,
-    handle: BufferHandle,
-) -> Result<&BufferRecord, VgpuError> {
+fn lookup_buffer(device: &VirtualDevice, handle: BufferHandle) -> Result<&BufferRecord, VgpuError> {
     let (slot, generation) = decode_handle(handle.raw())?;
     let entry = device.buffers.get(slot).ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation {
@@ -1109,10 +1267,7 @@ fn lookup_buffer(
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
-fn lookup_queue(
-    device: &VirtualDevice,
-    handle: QueueHandle,
-) -> Result<&QueueRecord, VgpuError> {
+fn lookup_queue(device: &VirtualDevice, handle: QueueHandle) -> Result<&QueueRecord, VgpuError> {
     let (slot, generation) = decode_handle(handle.raw())?;
     let entry = device.queues.get(slot).ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation {
@@ -1126,7 +1281,10 @@ fn lookup_queue_mut(
     handle: QueueHandle,
 ) -> Result<&mut QueueRecord, VgpuError> {
     let (slot, generation) = decode_handle(handle.raw())?;
-    let entry = device.queues.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    let entry = device
+        .queues
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation {
         return Err(VgpuError::InvalidHandle);
     }
@@ -1160,10 +1318,14 @@ const fn decode_handle(raw: u64) -> Result<(usize, u32), VgpuError> {
     Ok(((one_based - 1) as usize, (raw >> 32) as u32))
 }
 
-const fn align_up(value: usize, align: usize) -> Option<usize> {
-    value.checked_add(align - 1).map(|value| value & !(align - 1))
+fn align_up(value: usize, align: usize) -> Option<usize> {
+    value
+        .checked_add(align - 1)
+        .map(|value| value & !(align - 1))
 }
 
-const fn align_up_u64(value: u64, align: u64) -> Option<u64> {
-    value.checked_add(align - 1).map(|value| value & !(align - 1))
+fn align_up_u64(value: u64, align: u64) -> Option<u64> {
+    value
+        .checked_add(align - 1)
+        .map(|value| value & !(align - 1))
 }

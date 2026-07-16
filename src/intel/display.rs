@@ -145,6 +145,8 @@ static PRIMARY_PLANE_SOURCE_BINDINGS: [Mutex<Option<PrimaryPlaneSourceBinding>>;
 static UI3_BASE_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static UI3_FRAME_SURFACE: Mutex<Option<DisplayRgba8Surface>> = Mutex::new(None);
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI3_COMPOSITOR_OVERLAY_OWNER: AtomicBool = AtomicBool::new(false);
+static UI3_LEGACY_OVERLAY_REJECT_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI3_FRAME_FLIP_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI3_FRAME_REARM_SEQ: AtomicU32 = AtomicU32::new(0);
 static UI3_FRAME_TARGET_REJECT_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -2477,6 +2479,7 @@ pub(super) fn acquire_ui3_frame_composition_gpgpu(
 pub(super) fn acquire_ui3_output_frame_composition_gpgpu(
     target: DisplayOutputTarget,
 ) -> Option<DisplayOutputFrameGpgpu> {
+    claim_ui3_compositor_overlay_owner();
     Some(DisplayOutputFrameGpgpu {
         output_target: target,
         surface: acquire_ui3_frame_composition_gpgpu(target.pipeline_target)?,
@@ -2691,6 +2694,9 @@ pub(super) fn reset_ui3_frame_composition_gpgpu(pipeline: DisplayPipelineId, rea
 }
 
 pub(super) fn ui3_canvas_overlay_gpgpu(rect: LiveOverlayRect) -> Option<DisplayRgba8GpgpuSurface> {
+    if reject_legacy_overlay_present("ui3-canvas-overlay-gpgpu", "legacy-gpgpu-acquire") {
+        return None;
+    }
     let dev = crate::intel::claimed_device()?;
     let target = active_display_pipeline_target()?;
     let pipe = target.pipeline.pipe()?;
@@ -2727,7 +2733,39 @@ pub(super) fn commit_ui3_canvas_overlay_gpgpu(
     target: DisplayRgba8GpgpuSurface,
     reason: &str,
 ) -> bool {
+    if reject_legacy_overlay_present(reason, "legacy-gpgpu-commit") {
+        return false;
+    }
     commit_ui3_canvas_overlay_produced(target, DisplayFrameProducer::CpuCached, reason)
+}
+
+fn claim_ui3_compositor_overlay_owner() {
+    if UI3_COMPOSITOR_OVERLAY_OWNER
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log_info!(
+            target: "intel/display";
+            "intel/display: ui3-overlay-owner claimed=1 owner=ui3-compositor plane=ui-overlay swapchain=per-pipeline-double-buffer lifetime=service legacy_direct_present=reject\n"
+        );
+    }
+}
+
+fn reject_legacy_overlay_present(reason: &str, entry: &str) -> bool {
+    if !UI3_COMPOSITOR_OVERLAY_OWNER.load(Ordering::Acquire) {
+        return false;
+    }
+    let seq = UI3_LEGACY_OVERLAY_REJECT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 16 || seq.is_power_of_two() {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: legacy-overlay-present rejected seq={} entry={} reason={} owner=ui3-compositor owner_lifetime=service action=publish-ui3-logical-frame potential_reason=direct-plane-bypass-would-resize-or-retire-ui3-swapchain\n",
+            seq,
+            entry,
+            reason,
+        );
+    }
+    true
 }
 
 fn commit_ui3_canvas_overlay_produced(
@@ -4114,6 +4152,9 @@ pub(crate) fn present_rgba_overlay_tiles_with_background(
     background: Option<Rgba8>,
     reason: &str,
 ) -> bool {
+    if reject_legacy_overlay_present(reason, "rgba-overlay-tiles") {
+        return false;
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -4193,6 +4234,9 @@ pub(crate) fn present_live_overlay_rects_preserving(
     preserve: Option<LiveOverlayRect>,
     reason: &str,
 ) -> bool {
+    if reject_legacy_overlay_present(reason, "live-overlay-rects") {
+        return false;
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -4259,6 +4303,9 @@ pub(crate) fn present_ui3_canvas_rgba(
     src_pitch_bytes: usize,
     reason: &str,
 ) -> bool {
+    if reject_legacy_overlay_present(reason, "legacy-ui3-canvas-rgba") {
+        return false;
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -4516,6 +4563,9 @@ fn present_rgba_overlay(
     preserve_alpha: bool,
     reason: &str,
 ) -> bool {
+    if reject_legacy_overlay_present(reason, "rgba-overlay") {
+        return false;
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };

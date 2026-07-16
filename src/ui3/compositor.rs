@@ -257,6 +257,13 @@ struct LayerCompositionTiming {
 #[derive(Copy, Clone, Debug)]
 struct ProofSourceReadback {
     exact: bool,
+    mismatches: u64,
+    first_x: i32,
+    first_y: i32,
+    first_expected: u32,
+    first_actual: u32,
+    expected_black_pixels: u64,
+    actual_black_pixels: u64,
     transparent: u32,
     box_first: u32,
     box_center: u32,
@@ -529,8 +536,15 @@ fn ensure_compositor_proof() -> Result<(), &'static str> {
     let source_proof = source_proof.ok_or("ui3-proof-source-readback")?;
     crate::log_info!(
         target: "ui3";
-        "ui3-compositor: proof source exact={} transparent=0x{:08X} box_first=0x{:08X} box_center=0x{:08X} box_last=0x{:08X} far_transparent=0x{:08X} expected_transparent=0x00000000 expected_box=0xFF000000 clear_us={} box_us={} verify_us={} cpu_readback=diagnostic-only cpu_pixel_path=none\n",
+        "ui3-compositor: proof source exact={} mismatches={} first={}x{} first_expected=0x{:08X} first_actual=0x{:08X} expected_black_pixels={} actual_black_pixels={} transparent=0x{:08X} box_first=0x{:08X} box_center=0x{:08X} box_last=0x{:08X} far_transparent=0x{:08X} expected_transparent=0x00000000 expected_box=0xFF000000 clear_us={} box_us={} verify_us={} verification=dense cpu_readback=diagnostic-only cpu_flush=diagnostic-only cpu_pixel_path=none\n",
         source_proof.exact as u8,
+        source_proof.mismatches,
+        source_proof.first_x,
+        source_proof.first_y,
+        source_proof.first_expected,
+        source_proof.first_actual,
+        source_proof.expected_black_pixels,
+        source_proof.actual_black_pixels,
         source_proof.transparent,
         source_proof.box_first,
         source_proof.box_center,
@@ -565,51 +579,137 @@ fn ensure_compositor_proof() -> Result<(), &'static str> {
 }
 
 fn verify_proof_source(surface: GpgpuRgba8Surface, virt: *mut u8) -> ProofSourceReadback {
+    verify_binary_proof_surface(
+        surface,
+        virt,
+        UI3_BLACK_BOX_OFFSET,
+        UI3_BLACK_BOX_OFFSET,
+        UI3_BLACK_BOX_SIZE,
+        UI3_BLACK_BOX_SIZE,
+    )
+}
+
+fn verify_binary_proof_surface(
+    surface: GpgpuRgba8Surface,
+    virt: *mut u8,
+    black_x: u32,
+    black_y: u32,
+    black_width: u32,
+    black_height: u32,
+) -> ProofSourceReadback {
     const INVALID: u32 = 0xDEAD_BEEF;
-    let sample = |x: u32, y: u32| -> u32 {
-        let Some(row) = (y as usize).checked_mul(surface.pitch_bytes as usize) else {
-            return INVALID;
+    const TRANSPARENT: u32 = 0x0000_0000;
+    const OPAQUE_BLACK: u32 = 0xFF00_0000;
+    let black_right = black_x.saturating_add(black_width);
+    let black_bottom = black_y.saturating_add(black_height);
+    let shape_valid = !virt.is_null()
+        && surface.width != 0
+        && surface.height != 0
+        && black_right <= surface.width
+        && black_bottom <= surface.height
+        && surface.pitch_bytes as usize >= surface.width as usize * 4
+        && surface.bytes >= surface.pitch_bytes as usize * surface.height as usize;
+    if !shape_valid {
+        return ProofSourceReadback {
+            exact: false,
+            mismatches: 1,
+            first_x: -1,
+            first_y: -1,
+            first_expected: TRANSPARENT,
+            first_actual: INVALID,
+            expected_black_pixels: u64::from(black_width) * u64::from(black_height),
+            actual_black_pixels: 0,
+            transparent: INVALID,
+            box_first: INVALID,
+            box_center: INVALID,
+            box_last: INVALID,
+            far_transparent: INVALID,
         };
-        let Some(column) = (x as usize).checked_mul(core::mem::size_of::<u32>()) else {
-            return INVALID;
-        };
-        let Some(offset) = row.checked_add(column) else {
-            return INVALID;
-        };
-        if x >= surface.width
-            || y >= surface.height
-            || offset.saturating_add(core::mem::size_of::<u32>()) > surface.bytes
-        {
-            return INVALID;
-        }
-        let pixel = unsafe { virt.add(offset) };
-        // The GPU submission has retired.  Invalidate this diagnostic cache
-        // line before CPU readback; presentation itself never consumes CPU
-        // pixels or depends on this result.
-        crate::intel::dma_flush(pixel, core::mem::size_of::<u32>());
-        unsafe { core::ptr::read_volatile(pixel.cast::<u32>()) }
-    };
-    let box_last = UI3_BLACK_BOX_OFFSET + UI3_BLACK_BOX_SIZE - 1;
-    let transparent = sample(0, 0);
-    let box_first = sample(UI3_BLACK_BOX_OFFSET, UI3_BLACK_BOX_OFFSET);
-    let box_center = sample(
-        UI3_BLACK_BOX_OFFSET + UI3_BLACK_BOX_SIZE / 2,
-        UI3_BLACK_BOX_OFFSET + UI3_BLACK_BOX_SIZE / 2,
-    );
-    let box_last = sample(box_last, box_last);
-    let far_transparent = sample(surface.width.saturating_sub(1), surface.height.saturating_sub(1));
-    ProofSourceReadback {
-        exact: transparent == 0x0000_0000
-            && box_first == 0xFF00_0000
-            && box_center == 0xFF00_0000
-            && box_last == 0xFF00_0000
-            && far_transparent == 0x0000_0000,
-        transparent,
-        box_first,
-        box_center,
-        box_last,
-        far_transparent,
     }
+
+    // The producer has retired. Invalidate the complete diagnostic view once
+    // so every pixel, rather than five favorable samples, participates in the
+    // proof. This is never part of ordinary frame composition.
+    crate::intel::dma_flush(virt, surface.bytes);
+    let pitch = surface.pitch_bytes as usize;
+    let mut mismatches = 0u64;
+    let mut first_x = -1i32;
+    let mut first_y = -1i32;
+    let mut first_expected = 0u32;
+    let mut first_actual = 0u32;
+    let mut actual_black_pixels = 0u64;
+    let read = |x: u32, y: u32| -> u32 {
+        let offset = y as usize * pitch + x as usize * 4;
+        unsafe { core::ptr::read_volatile(virt.add(offset).cast::<u32>()) }
+    };
+    for y in 0..surface.height {
+        for x in 0..surface.width {
+            let expected = if x >= black_x && x < black_right && y >= black_y && y < black_bottom {
+                OPAQUE_BLACK
+            } else {
+                TRANSPARENT
+            };
+            let actual = read(x, y);
+            actual_black_pixels =
+                actual_black_pixels.saturating_add((actual == OPAQUE_BLACK) as u64);
+            if actual != expected {
+                if mismatches == 0 {
+                    first_x = x as i32;
+                    first_y = y as i32;
+                    first_expected = expected;
+                    first_actual = actual;
+                }
+                mismatches = mismatches.saturating_add(1);
+            }
+        }
+    }
+    let box_last_x = black_right - 1;
+    let box_last_y = black_bottom - 1;
+    ProofSourceReadback {
+        exact: mismatches == 0,
+        mismatches,
+        first_x,
+        first_y,
+        first_expected,
+        first_actual,
+        expected_black_pixels: u64::from(black_width) * u64::from(black_height),
+        actual_black_pixels,
+        transparent: read(0, 0),
+        box_first: read(black_x, black_y),
+        box_center: read(black_x + black_width / 2, black_y + black_height / 2),
+        box_last: read(box_last_x, box_last_y),
+        far_transparent: read(surface.width - 1, surface.height - 1),
+    }
+}
+
+fn verify_proof_only_output(
+    layer: LayerSnapshot,
+    dst: GpgpuRgba8Surface,
+    virt: *mut u8,
+) -> Result<ProofSourceReadback, &'static str> {
+    if layer.id != Ui3FrameId::CompositorProof
+        || layer.placement.opacity != u8::MAX
+        || layer.placement.width != layer.surface.width
+        || layer.placement.height != layer.surface.height
+    {
+        return Err("ui3-proof-output-contract");
+    }
+    let x = u32::try_from(layer.placement.x).map_err(|_| "ui3-proof-output-position")?;
+    let y = u32::try_from(layer.placement.y).map_err(|_| "ui3-proof-output-position")?;
+    let black_x = x
+        .checked_add(UI3_BLACK_BOX_OFFSET)
+        .ok_or("ui3-proof-output-position")?;
+    let black_y = y
+        .checked_add(UI3_BLACK_BOX_OFFSET)
+        .ok_or("ui3-proof-output-position")?;
+    Ok(verify_binary_proof_surface(
+        dst,
+        virt,
+        black_x,
+        black_y,
+        UI3_BLACK_BOX_SIZE,
+        UI3_BLACK_BOX_SIZE,
+    ))
 }
 
 const fn elapsed_us(start_ns: u64, end_ns: u64) -> u64 {
@@ -667,14 +767,51 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
         }
     }
 
-    let sequence = COMPOSITION_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
     let layers_complete_ns = crate::chronos::monotonic_nanos();
+    if layers.len() == 1 && layers[0].id == Ui3FrameId::CompositorProof {
+        let verify_started_ns = crate::chronos::monotonic_nanos();
+        let proof = match verify_proof_only_output(layers[0], dst, output_frame.diagnostic_virt) {
+            Ok(proof) => proof,
+            Err(error) => {
+                let _ = crate::intel::ui3_compositor_discard_output(output_frame);
+                return Err(error);
+            }
+        };
+        crate::log_info!(
+            target: "ui3";
+            "ui3-compositor: proof output exact={} mismatches={} first={}x{} first_expected=0x{:08X} first_actual=0x{:08X} expected_black_pixels={} actual_black_pixels={} transparent=0x{:08X} box_first=0x{:08X} box_center=0x{:08X} box_last=0x{:08X} far_transparent=0x{:08X} size={}x{} pitch=0x{:X} verify_us={} verification=dense stage=post-compose-pre-commit cpu_readback=diagnostic-only cpu_flush=diagnostic-only cpu_pixel_path=none\n",
+            proof.exact as u8,
+            proof.mismatches,
+            proof.first_x,
+            proof.first_y,
+            proof.first_expected,
+            proof.first_actual,
+            proof.expected_black_pixels,
+            proof.actual_black_pixels,
+            proof.transparent,
+            proof.box_first,
+            proof.box_center,
+            proof.box_last,
+            proof.far_transparent,
+            dst.width,
+            dst.height,
+            dst.pitch_bytes,
+            elapsed_us(verify_started_ns, crate::chronos::monotonic_nanos()),
+        );
+        if !proof.exact {
+            let _ = crate::intel::ui3_compositor_discard_output(output_frame);
+            return Err("ui3-proof-output-mismatch");
+        }
+    }
+
+    let sequence = COMPOSITION_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
+    let commit_started_ns = crate::chronos::monotonic_nanos();
     let presented = crate::intel::ui3_compositor_commit_output(output_frame, "ui3-compositor");
     let commit_complete_ns = crate::chronos::monotonic_nanos();
     let acquire_us = elapsed_us(compose_started_ns, acquire_complete_ns);
     let clear_us = elapsed_us(acquire_complete_ns, clear_complete_ns);
     let layers_us = elapsed_us(clear_complete_ns, layers_complete_ns);
-    let commit_us = elapsed_us(layers_complete_ns, commit_complete_ns);
+    let commit_us = elapsed_us(commit_started_ns, commit_complete_ns);
     let total_us = elapsed_us(compose_started_ns, commit_complete_ns);
     let layer_count_changed =
         LAST_COMPOSE_LAYER_COUNT.swap(layers.len() as u64, Ordering::AcqRel) != layers.len() as u64;

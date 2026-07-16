@@ -56,6 +56,19 @@ pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK: u32 = 0x96; // arg0=id, arg1=off
 pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH: u32 = 0x97; // arg0=id -> rc
 pub const OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565: u32 = 0x98; // arg0=frame,arg1=id,payload=params -> rc
 pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
+pub const OP_BP_VGPU_OPEN: u32 = 0xA5; // arg0 requested caps -> opaque device/rc
+pub const OP_BP_VGPU_CLOSE: u32 = 0xA6; // arg0 device -> rc
+pub const OP_BP_VGPU_DEVICE_INFO: u32 = 0xA7; // arg0 device -> DeviceInfo payload
+pub const OP_BP_VGPU_BUFFER_CREATE: u32 = 0xA8; // arg0 device,arg1 bytes,payload usage -> buffer/rc
+pub const OP_BP_VGPU_BUFFER_DESTROY: u32 = 0xA9; // arg0 device,arg1 buffer -> rc
+pub const OP_BP_VGPU_BUFFER_INFO: u32 = 0xAA; // arg0 device,arg1 buffer -> BufferInfo payload
+pub const OP_BP_VGPU_QUEUE_CREATE: u32 = 0xAB; // arg0 device,arg1 class -> queue/rc
+pub const OP_BP_VGPU_QUEUE_DESTROY: u32 = 0xAC; // arg0 device,arg1 queue -> rc
+pub const OP_BP_VGPU_SUBMIT_CONTROL_NOP: u32 = 0xAD; // arg0 device,arg1 queue -> TimelinePoint
+pub const OP_BP_VGPU_TIMELINE: u32 = 0xAE; // arg0 device,arg1 queue -> TimelineStatus
+pub const OP_BP_VGPU_WAIT: u32 = 0xAF; // arg0 device,arg1 queue,payload value -> rc
+pub const OP_BP_VGPU_BUFFER_WRITE: u32 = 0xB0; // arg0 device,arg1 buffer,payload offset+bytes
+pub const OP_BP_VGPU_BUFFER_READ: u32 = 0xB1; // arg0 device,arg1 buffer,payload offset+len
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -278,6 +291,25 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
         // seq written last — guest may poll this as a completion flag
         core::ptr::write_volatile(&mut (*p).response_seq, seq);
     }
+}
+
+fn write_record_response<T: Copy>(vm_id: u8, seq: u32, data: u64, value: &T) {
+    let len = core::mem::size_of::<T>();
+    if len > PAYLOAD_CAP {
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return;
+    }
+    let Some(page) = host_ptr(vm_id) else {
+        return;
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (value as *const T).cast::<u8>(),
+            (*page).payload.as_mut_ptr(),
+            len,
+        );
+    }
+    write_response(vm_id, seq, STATUS_OK, data, len as u32);
 }
 
 fn request_payload(vm_id: u8, req_len: u32) -> Option<&'static [u8]> {
@@ -652,6 +684,162 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = crate::ui3::ui3_frame::render_skybox_rgb565(arg0 as u32, arg1 as u32, params);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_OPEN => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let data = crate::r::io::vgpu_cabi::broker_open(principal, arg0)
+                .unwrap_or_else(|rc| (rc as i64) as u64);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_CLOSE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_close(principal, arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_DEVICE_INFO => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_device_info(principal, arg0) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_BUFFER_CREATE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let usage = request_payload(vm_id, req_len)
+                .and_then(|payload| payload.get(..4))
+                .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+            let data = match usage {
+                Some(usage) => crate::r::io::vgpu_cabi::broker_buffer_create(
+                    principal,
+                    arg0,
+                    arg1 as usize,
+                    usage,
+                )
+                .unwrap_or_else(|rc| (rc as i64) as u64),
+                None => (-22i64) as u64,
+            };
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_BUFFER_DESTROY => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_buffer_destroy(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_BUFFER_WRITE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let request = request_payload(vm_id, req_len);
+            let result = request
+                .filter(|payload| payload.len() >= 8)
+                .map(|payload| {
+                    let offset = u64::from_le_bytes([
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
+                    ]) as usize;
+                    crate::r::io::vgpu_cabi::broker_buffer_write(
+                        principal,
+                        arg0,
+                        arg1,
+                        offset,
+                        &payload[8..],
+                    )
+                })
+                .unwrap_or(Err(-22));
+            let data = result
+                .map(|count| count as u64)
+                .unwrap_or_else(|rc| (rc as i64) as u64);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_BUFFER_READ => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let request = request_payload(vm_id, req_len);
+            let parsed = request.filter(|payload| payload.len() >= 16).map(|payload| {
+                let offset = u64::from_le_bytes([
+                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                    payload[6], payload[7],
+                ]) as usize;
+                let count = u64::from_le_bytes([
+                    payload[8], payload[9], payload[10], payload[11], payload[12], payload[13],
+                    payload[14], payload[15],
+                ]) as usize;
+                (offset, count.min(PAYLOAD_CAP))
+            });
+            let Some((offset, count)) = parsed else {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*page).payload)[..count] };
+            match crate::r::io::vgpu_cabi::broker_buffer_read(
+                principal, arg0, arg1, offset, out,
+            ) {
+                Ok(got) => write_response(vm_id, seq, STATUS_OK, got as u64, got as u32),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_BUFFER_INFO => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_buffer_info(principal, arg0, arg1) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_QUEUE_CREATE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let data = crate::r::io::vgpu_cabi::broker_queue_create(principal, arg0, arg1 as u32)
+                .unwrap_or_else(|rc| (rc as i64) as u64);
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_QUEUE_DESTROY => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_queue_destroy(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_SUBMIT_CONTROL_NOP => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_submit_control_nop(principal, arg0, arg1) {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_TIMELINE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_timeline(principal, arg0, arg1) {
+                Ok(status) => write_record_response(vm_id, seq, 0, &status),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_WAIT => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let value = request_payload(vm_id, req_len)
+                .and_then(|payload| payload.get(..8))
+                .map(|bytes| {
+                    u64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ])
+                });
+            let rc = value
+                .map(|value| {
+                    crate::r::io::vgpu_cabi::broker_wait(principal, arg0, arg1, value)
+                })
+                .unwrap_or(-22);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_YIELD => {

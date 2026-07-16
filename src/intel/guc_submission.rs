@@ -146,6 +146,50 @@ static RCS: Mutex<RcsSubmissionState> = Mutex::new(RcsSubmissionState {
     failures: 0,
 });
 
+/// Explicit physical scheduler owned by the Intel backend.
+pub(crate) struct IntelGucScheduler;
+
+pub(crate) static INTEL_GUC_SCHEDULER: IntelGucScheduler = IntelGucScheduler;
+
+impl IntelGucScheduler {
+    pub(crate) fn ready(&self) -> bool {
+        ready()
+    }
+
+    pub(crate) fn register(
+        &self,
+        dev: crate::intel::Dev,
+        hwlrca_lo: u32,
+        hwlrca_hi: u32,
+    ) -> Result<GucContextToken, GucSubmissionError> {
+        register_rcs_context(dev, hwlrca_lo, hwlrca_hi)
+    }
+
+    pub(crate) fn submit(
+        &self,
+        dev: crate::intel::Dev,
+        token: GucContextToken,
+    ) -> Result<GucPhysicalSubmission, GucSubmissionError> {
+        submit_rcs_context(dev, token)
+    }
+
+    pub(crate) fn destroy(
+        &self,
+        dev: crate::intel::Dev,
+        token: GucContextToken,
+    ) -> Result<(), GucSubmissionError> {
+        destroy_rcs_context(dev, token)
+    }
+
+    pub(crate) fn status(&self) -> GucSchedulerStatus {
+        scheduler_status()
+    }
+
+    pub(crate) fn contexts(&self) -> Vec<GucContextStatus> {
+        context_status()
+    }
+}
+
 pub(crate) fn ready() -> bool {
     crate::intel::guc::ready() && crate::intel::guc_ctb::enabled()
 }
@@ -162,13 +206,26 @@ pub(crate) fn register_rcs_context(
     }
 
     let mut state = RCS.lock();
-    if let Some((slot, context)) = state.contexts.iter().copied().enumerate().find(|(_, context)| {
-        context.registered && context.hwlrca_lo == hwlrca_lo && context.hwlrca_hi == hwlrca_hi
-    }) {
+    if let Some((slot, context)) =
+        state
+            .contexts
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, context)| {
+                context.registered
+                    && context.hwlrca_lo == hwlrca_lo
+                    && context.hwlrca_hi == hwlrca_hi
+            })
+    {
         return Ok(context.token(slot));
     }
 
-    let Some(slot) = state.contexts.iter().position(|context| !context.registered) else {
+    let Some(slot) = state
+        .contexts
+        .iter()
+        .position(|context| !context.registered)
+    else {
         state.failures = state.failures.saturating_add(1);
         return Err(GucSubmissionError::ContextRegistryFull);
     };
@@ -277,7 +334,10 @@ pub(crate) fn submit_rcs_context(
             serial,
             INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET
         );
-        return Ok(GucPhysicalSubmission { context: token, serial });
+        return Ok(GucPhysicalSubmission {
+            context: token,
+            serial,
+        });
     };
     let scheduled = crate::intel::guc_ctb::send_hxg_action(dev, action, args);
     if !scheduled.accepted {
@@ -297,7 +357,10 @@ pub(crate) fn submit_rcs_context(
         serial,
         action
     );
-    Ok(GucPhysicalSubmission { context: token, serial })
+    Ok(GucPhysicalSubmission {
+        context: token,
+        serial,
+    })
 }
 
 /// Disable and unregister one GuC context.  If either GuC action fails the
@@ -355,8 +418,16 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
     let state = RCS.lock();
     GucSchedulerStatus {
         capacity: MAX_GUC_RCS_CONTEXTS,
-        registered: state.contexts.iter().filter(|context| context.registered).count(),
-        enabled: state.contexts.iter().filter(|context| context.enabled).count(),
+        registered: state
+            .contexts
+            .iter()
+            .filter(|context| context.registered)
+            .count(),
+        enabled: state
+            .contexts
+            .iter()
+            .filter(|context| context.enabled)
+            .count(),
         submissions: state.serial,
         registrations: state.registrations,
         deregistrations: state.deregistrations,

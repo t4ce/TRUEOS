@@ -4029,8 +4029,7 @@ pub(crate) fn present_rgba8_to_primary_xrgb_rect_stats(
             src_rect.height,
         );
     }
-    let fallback =
-        submit_present_rgba8_to_primary_xrgb_spans_with_stats(src, dst, params, flavor);
+    let fallback = submit_present_rgba8_to_primary_xrgb_spans_with_stats(src, dst, params, flavor);
     if fallback.submits == 0 && log_fallback {
         crate::log_warn!(
             target: "intel-gpgpu";
@@ -15317,7 +15316,23 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     direct_rcs_write_lrc_ring_tail(state, ring_tail_bytes as u32);
     super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
-    super::guc_submission::submit_rcs_lrc(dev, context_desc_lo, context_desc_hi)
+    let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
+        engine: crate::gpu::physical::EngineClass::RenderCompute,
+        hwlrca_lo: context_desc_lo,
+        hwlrca_hi: context_desc_hi,
+        gpuvm_root_phys: state.ppgtt_phys,
+    };
+    match crate::gpu::vgpu::submit_kernel_context(crate::gpu::vgpu::KernelClient::Gpgpu, descriptor)
+    {
+        Ok(_) => true,
+        Err(error) => {
+            crate::log!(
+                "gpgpu/vgpu: submit failed error={:?} submission_owner=vgpu/guc direct_elsp=0\n",
+                error
+            );
+            false
+        }
+    }
 }
 
 fn direct_rcs_build_ring_batch_start(state: DirectRcsState, batch_gpu_addr: u64) -> usize {
@@ -15344,6 +15359,10 @@ fn direct_rcs_poll_result(state: DirectRcsState, expected: u32) -> u32 {
         }
         core::hint::spin_loop();
     }
+    let _ = crate::gpu::vgpu::complete_kernel_submission(
+        crate::gpu::vgpu::KernelClient::Gpgpu,
+        observed == expected,
+    );
     observed
 }
 
@@ -15356,6 +15375,10 @@ fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32
         }
         core::hint::spin_loop();
     }
+    let _ = crate::gpu::vgpu::complete_kernel_submission(
+        crate::gpu::vgpu::KernelClient::Gpgpu,
+        observed == expected,
+    );
     observed
 }
 
@@ -15377,6 +15400,10 @@ fn direct_rcs_poll_result_slot_timeout_ms(
         }
         core::hint::spin_loop();
     }
+    let _ = crate::gpu::vgpu::complete_kernel_submission(
+        crate::gpu::vgpu::KernelClient::Gpgpu,
+        observed == expected,
+    );
     observed
 }
 
