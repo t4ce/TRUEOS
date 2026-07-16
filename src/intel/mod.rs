@@ -336,6 +336,10 @@ pub(crate) fn full_ui3_boot_enabled() -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn ui3_upper_plane_boot_stage() -> u8 {
+    self::display::ui3_upper_plane_boot_stage()
+}
+
 pub(crate) fn display_device_name(device_id: u16) -> &'static str {
     match device_id {
         PCI_DEVICE_ALDER_LAKE_S_GT1 => "alder-lake-s-gt1",
@@ -377,6 +381,9 @@ pub(crate) struct Ui3CompositorOutputTarget {
 pub(crate) struct Ui3CompositorOutputFrame {
     inner: self::display::DisplayOutputFrameGpgpu,
     pub(crate) surface: self::gpgpu::GpgpuRgba8Surface,
+    /// CPU mapping retained only for compositor coherency diagnostics. Pixel
+    /// production remains GPU-only; callers must never write through it.
+    pub(crate) diagnostic_virt: *mut u8,
     pub(crate) buffer_index: usize,
 }
 
@@ -410,6 +417,7 @@ pub(crate) fn ui3_compositor_acquire_output(
     Some(Ui3CompositorOutputFrame {
         inner,
         surface,
+        diagnostic_virt: display_surface.virt,
         buffer_index,
     })
 }

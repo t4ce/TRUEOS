@@ -1019,6 +1019,8 @@ static SHELL_CHART_UI3_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SHELL_CHART_UI3_RESIZE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static SHELL_CHART_UI3_LAST_PHASE_BITS: AtomicU32 = AtomicU32::new(0);
 static SHELL_CHART_UI3_LAST_FLAGS: AtomicU32 = AtomicU32::new(0);
+static SHELL_CHART_UI3_SOURCE_PROOF_PASSES: AtomicU64 = AtomicU64::new(0);
+static SHELL_CHART_UI3_SOURCE_PROOF_FAILURES: AtomicU64 = AtomicU64::new(0);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -8653,6 +8655,7 @@ pub(crate) fn shell_chart_sine_ui3_frame(
         return None;
     }
     let dst = lease.surface();
+    let diagnostic_virt = lease.diagnostic_virt();
     let mut params = ChartSineRgba8Params::scope_defaults(phase, flags);
     params.dst_gpu = dst.gpu;
     params.dst_pitch_bytes = dst.pitch_bytes;
@@ -8664,7 +8667,9 @@ pub(crate) fn shell_chart_sine_ui3_frame(
     let submit_start_tick = direct_rcs_now_tick();
     let marker = submit_chart_sine_rgba8(dst, params).unwrap_or(0);
     let submit_us = direct_rcs_elapsed_us_since(submit_start_tick);
-    let submitted = marker == CHART_SINE_POST_MARKER;
+    let retired = marker == CHART_SINE_POST_MARKER;
+    let source_exact = retired && verify_chart_sine_rgba8_source(dst, diagnostic_virt);
+    let submitted = retired && source_exact;
     if submitted {
         SHELL_CHART_UI3_LAST_PHASE_BITS.store(phase.to_bits(), Ordering::Release);
         SHELL_CHART_UI3_LAST_FLAGS.store(flags, Ordering::Release);
@@ -8702,6 +8707,102 @@ pub(crate) fn shell_chart_sine_ui3_frame(
         total_us: direct_rcs_elapsed_us_since(total_start_tick),
         marker,
     })
+}
+
+/// Dense, read-only retirement proof for the chart producer. The chart kernel
+/// owns every client pixel and always emits opaque RGBA8, so any non-opaque
+/// pixel proves incomplete SIMD coverage before UI3 is allowed to publish it.
+fn verify_chart_sine_rgba8_source(dst: GpgpuRgba8Surface, virt: *mut u8) -> bool {
+    let shape_valid = !virt.is_null()
+        && dst.width != 0
+        && dst.height != 0
+        && dst.pitch_bytes as usize >= dst.width as usize * 4
+        && dst.bytes >= dst.pitch_bytes as usize * dst.height as usize;
+    if !shape_valid {
+        let failures = SHELL_CHART_UI3_SOURCE_PROOF_FAILURES
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: chart-sine-rgba8 source-proof exact=0 reason=invalid-shape failures={} gpu=0x{:X} virt=0x{:X} size={}x{} pitch=0x{:X} bytes=0x{:X}\n",
+            failures,
+            dst.gpu,
+            virt as usize,
+            dst.width,
+            dst.height,
+            dst.pitch_bytes,
+            dst.bytes,
+        );
+        return false;
+    }
+
+    crate::intel::dma_flush(virt, dst.bytes);
+    let mut mismatches = 0u64;
+    let mut first_x = -1i32;
+    let mut first_y = -1i32;
+    let mut first_actual = 0u32;
+    let mut corner = 0u32;
+    let mut center = 0u32;
+    let mut last = 0u32;
+    for y in 0..dst.height {
+        for x in 0..dst.width {
+            let offset = y as usize * dst.pitch_bytes as usize + x as usize * 4;
+            let actual = unsafe { core::ptr::read_volatile(virt.add(offset) as *const u32) };
+            if x == 0 && y == 0 {
+                corner = actual;
+            }
+            if x == dst.width / 2 && y == dst.height / 2 {
+                center = actual;
+            }
+            if x + 1 == dst.width && y + 1 == dst.height {
+                last = actual;
+            }
+            if actual & 0xFF00_0000 != 0xFF00_0000 {
+                if mismatches == 0 {
+                    first_x = x as i32;
+                    first_y = y as i32;
+                    first_actual = actual;
+                }
+                mismatches = mismatches.saturating_add(1);
+            }
+        }
+    }
+
+    let pixels = u64::from(dst.width) * u64::from(dst.height);
+    if mismatches != 0 {
+        let failures = SHELL_CHART_UI3_SOURCE_PROOF_FAILURES
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: chart-sine-rgba8 source-proof exact=0 pixels={} alpha_mismatches={} first={}+{} actual=0x{:08X} gpu=0x{:X} failures={}\n",
+            pixels,
+            mismatches,
+            first_x,
+            first_y,
+            first_actual,
+            dst.gpu,
+            failures,
+        );
+        return false;
+    }
+
+    let passes = SHELL_CHART_UI3_SOURCE_PROOF_PASSES
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    if passes <= 2 || passes.is_multiple_of(256) {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: chart-sine-rgba8 source-proof exact=1 pixels={} alpha_mismatches=0 gpu=0x{:X} samples=0x{:08X}/0x{:08X}/0x{:08X} passes={}\n",
+            pixels,
+            dst.gpu,
+            corner,
+            center,
+            last,
+            passes,
+        );
+    }
+    true
 }
 
 fn submit_chart_sine_rgba8(
@@ -13101,12 +13202,11 @@ fn direct_rcs_encode_chart_sine_rgba8_batch(
     let mut ok = true;
     let group_x = params.rect_width.div_ceil(16).max(1);
     let group_y = params.rect_height.max(1);
-    let last_group_pixels = ((params.rect_width - 1) % 16) + 1;
-    let right_mask = if last_group_pixels >= 16 {
-        GPGPU_WALKER_SIMD16_MASK
-    } else {
-        (1u32 << last_group_pixels) - 1
-    };
+    // RightExecutionMask describes the SIMD lanes in every hardware thread,
+    // not merely the final X workgroup. Each group here is one full SIMD16
+    // thread; the shader's x >= rect_width guard safely rejects padded lanes
+    // in the final group.
+    let right_mask = GPGPU_WALKER_SIMD16_MASK;
 
     ok &= direct_rcs_push_pipe_control_full(
         batch,

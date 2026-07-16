@@ -393,13 +393,25 @@ struct WindowDrag {
     cursor_slot: u32,
     grab_x: i32,
     grab_y: i32,
+    pending_x: i32,
+    pending_y: i32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum WindowInputEvent {
     None,
-    DragStarted { id: u8, label: &'static str },
-    DragFinished { id: u8, label: &'static str },
+    DragStarted {
+        id: u8,
+        label: &'static str,
+        x: i32,
+        y: i32,
+    },
+    DragFinished {
+        id: u8,
+        label: &'static str,
+        x: i32,
+        y: i32,
+    },
     Closed { id: u8, label: &'static str },
 }
 
@@ -446,6 +458,24 @@ struct WindowCompositionStats {
     paint_ops: usize,
     fill_descs: usize,
     submits: usize,
+    proof_pixels: u64,
+    proof_mismatches: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct WindowChromeProof {
+    pixels: u64,
+    mismatches: u64,
+    first_x: i32,
+    first_y: i32,
+    first_expected: u32,
+    first_actual: u32,
+}
+
+impl WindowChromeProof {
+    const fn exact(self) -> bool {
+        self.mismatches == 0
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -476,10 +506,10 @@ impl WindowManager {
                     Some(SurfaceId::SHELL_CHART),
                     1,
                     0xFFEB_6325,
-                    0xFFF0_E8E2,
+                    0xFFEB_6325,
                 ),
-                ManagedWindow::new(2, "frame-two", None, 2, 0xFF81_9428, 0xFFF0_E8E2),
-                ManagedWindow::new(3, "frame-three", None, 3, 0xFF75_3FA7, 0xFFF0_E8E2),
+                ManagedWindow::new(2, "frame-two", None, 2, 0xFF81_9428, 0xFF81_9428),
+                ManagedWindow::new(3, "frame-three", None, 3, 0xFF75_3FA7, 0xFF75_3FA7),
             ],
             drag: None,
             last_buttons_down: 0,
@@ -547,20 +577,24 @@ impl WindowManager {
     ) -> WindowInputUpdate {
         self.ensure_layout(width, height);
         let Some(cursor) = cursor else {
-            let event = self
-                .drag
-                .take()
-                .map(|drag| WindowInputEvent::DragFinished {
-                    id: self.windows[drag.window_index].id,
-                    label: self.windows[drag.window_index].label,
-                })
-                .unwrap_or(WindowInputEvent::None);
+            let mut update = WindowInputUpdate::NONE;
+            if let Some(drag) = self.drag.take() {
+                let window = &mut self.windows[drag.window_index];
+                let moved = (window.x, window.y) != (drag.pending_x, drag.pending_y);
+                window.x = drag.pending_x;
+                window.y = drag.pending_y;
+                let (id, label, x, y) = (window.id, window.label, window.x, window.y);
+                if moved {
+                    self.touch();
+                }
+                update = WindowInputUpdate {
+                    changed: moved,
+                    event: WindowInputEvent::DragFinished { id, label, x, y },
+                };
+            }
             self.last_buttons_down = 0;
             self.last_cursor_slot = 0;
-            return WindowInputUpdate {
-                changed: false,
-                event,
-            };
+            return update;
         };
 
         let left_down = (cursor.buttons_down & crate::ui3::ui3_hid::UI3_CURSOR_BUTTON_LEFT) != 0;
@@ -592,10 +626,14 @@ impl WindowManager {
                             cursor_slot: cursor.slot_id,
                             grab_x: cursor_x.saturating_sub(self.windows[index].x),
                             grab_y: cursor_y.saturating_sub(self.windows[index].y),
+                            pending_x: self.windows[index].x,
+                            pending_y: self.windows[index].y,
                         });
                         update.event = WindowInputEvent::DragStarted {
                             id: self.windows[index].id,
                             label: self.windows[index].label,
+                            x: self.windows[index].x,
+                            y: self.windows[index].y,
                         };
                     }
                 }
@@ -606,20 +644,31 @@ impl WindowManager {
             if let Some(drag) = self.drag.filter(|drag| drag.cursor_slot == cursor.slot_id) {
                 let cursor_x = i32::try_from(cursor.x_px).unwrap_or(i32::MAX);
                 let cursor_y = i32::try_from(cursor.y_px).unwrap_or(i32::MAX);
-                let window = &mut self.windows[drag.window_index];
-                let old_position = (window.x, window.y);
-                window.x = cursor_x.saturating_sub(drag.grab_x);
-                window.y = cursor_y.saturating_sub(drag.grab_y);
-                clamp_window_to_output(window, width, height);
-                if old_position != (window.x, window.y) {
-                    self.touch();
-                    update.changed = true;
-                }
+                let mut pending = self.windows[drag.window_index];
+                pending.x = cursor_x.saturating_sub(drag.grab_x);
+                pending.y = cursor_y.saturating_sub(drag.grab_y);
+                clamp_window_to_output(&mut pending, width, height);
+                self.drag = Some(WindowDrag {
+                    pending_x: pending.x,
+                    pending_y: pending.y,
+                    ..drag
+                });
             }
         } else if let Some(drag) = self.drag.take() {
+            let window = &mut self.windows[drag.window_index];
+            let moved = (window.x, window.y) != (drag.pending_x, drag.pending_y);
+            window.x = drag.pending_x;
+            window.y = drag.pending_y;
+            let (id, label, x, y) = (window.id, window.label, window.x, window.y);
+            if moved {
+                self.touch();
+            }
+            update.changed |= moved;
             update.event = WindowInputEvent::DragFinished {
-                id: self.windows[drag.window_index].id,
-                label: self.windows[drag.window_index].label,
+                id,
+                label,
+                x,
+                y,
             };
         }
 
@@ -934,6 +983,7 @@ pub(crate) struct Ui3FrameWriteLease {
     buffer: usize,
     generation: u64,
     surface: GpgpuRgba8Surface,
+    diagnostic_virt: *mut u8,
     format: Ui3FrameFormat,
     active: bool,
 }
@@ -945,6 +995,12 @@ impl Ui3FrameWriteLease {
 
     pub(crate) const fn format(&self) -> Ui3FrameFormat {
         self.format
+    }
+
+    /// Read-only CPU alias for producer retirement diagnostics. Producers must
+    /// never use this as a render/upload path; the owned surface remains GPU-only.
+    pub(crate) const fn diagnostic_virt(&self) -> *mut u8 {
+        self.diagnostic_virt
     }
 }
 
@@ -1037,15 +1093,21 @@ impl Drop for ComposeGuard {
 }
 
 /// Bring the production UI3 compositor online independently of every frame
-/// producer. The worklist proof remains off-screen; D01's first presented
-/// frame is one complete opaque desktop with all three compositor frames.
+/// producer. The worklist proof remains off-screen. Both D01 swapchain
+/// buffers are initialized and presented once: the first commit arms the
+/// transparent upper plane, and the second proves its steady surface-only
+/// flip. Thereafter the compositor remains static until scene damage.
 pub(crate) fn bootstrap_primary_output() -> Result<Ui3CompositionResult, &'static str> {
     ensure_compositor_proof()?;
-    let result = compose_output(Ui3OutputId::PRIMARY)?;
-    if !result.presented {
-        return Err("ui3-bootstrap-present");
+    let first = compose_output(Ui3OutputId::PRIMARY)?;
+    if !first.presented {
+        return Err("ui3-bootstrap-first-present");
     }
-    Ok(result)
+    let steady = compose_output(Ui3OutputId::PRIMARY)?;
+    if !steady.presented {
+        return Err("ui3-bootstrap-steady-present");
+    }
+    Ok(steady)
 }
 
 /// Independent UI3 service and minimal window-manager loop. The task is gated
@@ -1054,6 +1116,17 @@ pub(crate) fn bootstrap_primary_output() -> Result<Ui3CompositionResult, &'stati
 #[embassy_executor::task]
 pub(crate) async fn ui3_compositor_task() {
     const RETRY_MS: u64 = 250;
+    let upper_plane_stage = crate::intel::ui3_upper_plane_boot_stage();
+    if upper_plane_stage == 1 || upper_plane_stage == 2 {
+        crate::log_info!(
+            target: "ui3";
+            "ui3-compositor: production present held upper_plane_stage={} reason=hardware-gated-slot1-proof primary_logo_retained=1 action=idle-until-next-boot-stage\n",
+            upper_plane_stage,
+        );
+        loop {
+            Timer::after(EmbassyDuration::from_secs(1)).await;
+        }
+    }
     let mut attempt = 0u64;
     let initial = loop {
         attempt = attempt.saturating_add(1);
@@ -1061,7 +1134,7 @@ pub(crate) async fn ui3_compositor_task() {
             Ok(result) => {
                 crate::log_info!(
                     target: "ui3";
-                    "ui3-compositor: bootstrap complete=1 attempt={} output={} size={}x{} layers={} presented=1 producer_dependency=none tcp_dependency=none milestone=static-frame-wm windows={} input=kernel-cursor-snapshot\n",
+                    "ui3-compositor: bootstrap complete=1 attempt={} output={} size={}x{} layers={} presented=2 swapchain=initialized-both-buffers steady_flip=surface-only static_until_damage=1 producer_dependency=none tcp_dependency=none milestone=static-frame-wm windows={} input=kernel-cursor-snapshot\n",
                     attempt,
                     result.output.name(),
                     result.width,
@@ -1105,19 +1178,23 @@ pub(crate) async fn ui3_compositor_task() {
         };
         match update.event {
             WindowInputEvent::None => {}
-            WindowInputEvent::DragStarted { id, label } => crate::log_info!(
+            WindowInputEvent::DragStarted { id, label, x, y } => crate::log_info!(
                 target: "ui3";
-                "ui3-wm: drag start window={} label={} output={} pointer=primary-button action=raise-and-move\n",
+                "ui3-wm: drag start window={} label={} output={} pos={}x{} pointer=primary-button action=track-only retain-last-complete-frame=1\n",
                 id,
                 label,
                 Ui3OutputId::PRIMARY.name(),
+                x,
+                y,
             ),
-            WindowInputEvent::DragFinished { id, label } => crate::log_info!(
+            WindowInputEvent::DragFinished { id, label, x, y } => crate::log_info!(
                 target: "ui3";
-                "ui3-wm: drag finish window={} label={} output={} pointer=primary-button\n",
+                "ui3-wm: drag finish window={} label={} output={} pos={}x{} pointer=primary-button action=atomic-move-on-drop\n",
                 id,
                 label,
                 Ui3OutputId::PRIMARY.name(),
+                x,
+                y,
             ),
             WindowInputEvent::Closed { id, label } => crate::log_info!(
                 target: "ui3";
@@ -1179,9 +1256,7 @@ pub(crate) fn acquire_draw3d_scene_frame() -> Result<Ui3FrameWriteLease, &'stati
         Some(front) => (front + 1) % UI3_SURFACE_BUFFER_COUNT,
         None => 0,
     };
-    let storage = surface.buffers[buffer]
-        .ok_or("ui3-scene-frame-buffer-unavailable")?
-        .surface;
+    let storage = surface.buffers[buffer].ok_or("ui3-scene-frame-buffer-unavailable")?;
     surface.next_generation = surface.next_generation.wrapping_add(1).max(1);
     let generation = surface.next_generation;
     surface.acquired = Some((buffer, generation));
@@ -1189,7 +1264,8 @@ pub(crate) fn acquire_draw3d_scene_frame() -> Result<Ui3FrameWriteLease, &'stati
         surface_id: SurfaceId::DRAW3D_SCENE,
         buffer,
         generation,
-        surface: storage,
+        surface: storage.surface,
+        diagnostic_virt: storage.virt,
         format: surface.format,
         active: true,
     })
@@ -1245,9 +1321,7 @@ pub(crate) fn acquire_shell_chart_frame() -> Result<Ui3FrameWriteLease, &'static
         Some(front) => (front + 1) % UI3_SURFACE_BUFFER_COUNT,
         None => 0,
     };
-    let storage = surface.buffers[buffer]
-        .ok_or("ui3-chart-frame-buffer-unavailable")?
-        .surface;
+    let storage = surface.buffers[buffer].ok_or("ui3-chart-frame-buffer-unavailable")?;
     surface.next_generation = surface.next_generation.wrapping_add(1).max(1);
     let generation = surface.next_generation;
     surface.acquired = Some((buffer, generation));
@@ -1255,7 +1329,8 @@ pub(crate) fn acquire_shell_chart_frame() -> Result<Ui3FrameWriteLease, &'static
         surface_id: SurfaceId::SHELL_CHART,
         buffer,
         generation,
-        surface: storage,
+        surface: storage.surface,
+        diagnostic_virt: storage.virt,
         format: surface.format,
         active: true,
     })
@@ -1735,8 +1810,21 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
     let previous_scene = STATE.lock().presented_buffers[output.slot()]
         [output_buffer_index]
         .take();
-    let damage = output_scene_damage(previous_scene, current_scene)
-        .unwrap_or_else(|| DamageRect::full(target.width, target.height));
+    // A window move changes transparent coverage as well as painted chrome.
+    // Until the compositor carries an explicit multi-rectangle damage history
+    // for each swapchain image, rebuild the complete upper-plane image for
+    // chrome/layout changes. This is GPU-only and occurs only on interaction;
+    // a static desktop still performs no work at all. Client-only updates keep
+    // their per-buffer bounded damage path below.
+    let window_scene_changed = previous_scene
+        .map(|previous| previous.windows != current_scene.windows)
+        .unwrap_or(true);
+    let damage = if window_scene_changed {
+        DamageRect::full(target.width, target.height)
+    } else {
+        output_scene_damage(previous_scene, current_scene)
+            .unwrap_or_else(|| DamageRect::full(target.width, target.height))
+    };
     let damage_rect = damage.as_gpgpu_rect().ok_or("ui3-output-damage-shape")?;
     let full_redraw = damage.left == 0
         && damage.top == 0
@@ -1745,10 +1833,12 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
     let opaque_damage_overwrite =
         opaque_chart_fully_overwrites_damage(previous_scene, current_scene, damage);
 
-    // This buffer is the primary plane, not a translucent overlay. Alpha is
-    // an internal layer-composition property; the completed desktop itself
-    // must provide an opaque base for every pixel it scans out.
-    let clear_ok = opaque_damage_overwrite || parallel_fill_rect(dst, damage_rect, 0xFF00_0000);
+    let upper_plane = crate::intel::ui3_upper_plane_boot_stage() == 3;
+    // Stage 3 is a true upper plane: untouched desktop pixels must be
+    // transparent so the retained logo remains visible. The legacy
+    // single-primary fallback still requires an opaque completed desktop.
+    let clear_color = if upper_plane { 0x0000_0000 } else { 0xFF00_0000 };
+    let clear_ok = opaque_damage_overwrite || parallel_fill_rect(dst, damage_rect, clear_color);
     let clear_complete_ns = crate::chronos::monotonic_nanos();
     if !clear_ok {
         let _ = crate::intel::ui3_compositor_discard_output(output_frame);
@@ -1797,7 +1887,13 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
     let layers_complete_ns = crate::chronos::monotonic_nanos();
     let window_started_ns = crate::chronos::monotonic_nanos();
     let window_stats = match window_scene {
-        Some(scene) => match compose_window_scene(scene, dst, damage) {
+        Some(scene) => match compose_window_scene(
+            scene,
+            dst,
+            output_frame.diagnostic_virt,
+            output_buffer_index,
+            damage,
+        ) {
             Ok(stats) => stats,
             Err(error) => {
                 let _ = crate::intel::ui3_compositor_discard_output(output_frame);
@@ -1867,7 +1963,7 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
     {
         crate::log_info!(
             target: "ui3";
-            "ui3-compositor: output frame seq={} output={} backend_output={} pipeline={} size={}x{} buffer={} layers={} windows={} last_complete_seq={} redraw={} damage={}x{}+{}+{} clear={} composition=gpu-premul-worklist wm=gpu-rect-worklist desktop=opaque-primary wm_paints={} wm_fill_descs={} wm_submits={} present={} acquire_us={} clear_us={} layers_us={} draw3d_us={} proof_us={} chart_us={} scratch_clear_us={} scale_us={} blend_us={} wm_us={} commit_us={} total_us={} budget_us=16667 over_budget={} cpu_pixel_path=none resize_fallback=per-surface-contract\n",
+            "ui3-compositor: output frame seq={} output={} backend_output={} pipeline={} size={}x{} buffer={} layers={} windows={} last_complete_seq={} redraw={} damage={}x{}+{}+{} clear={} composition=gpu-premul-worklist wm=gpu-rect-worklist scanout={} wm_paints={} wm_fill_descs={} wm_submits={} wm_proof_pixels={} wm_proof_mismatches={} present={} acquire_us={} clear_us={} layers_us={} draw3d_us={} proof_us={} chart_us={} scratch_clear_us={} scale_us={} blend_us={} wm_us={} commit_us={} total_us={} budget_us=16667 over_budget={} cpu_pixel_path=diagnostic-read-only resize_fallback=per-surface-contract\n",
             logical_frame.sequence,
             output.name(),
             target.name,
@@ -1878,7 +1974,13 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
             logical_frame.layer_count,
             window_stats.windows,
             last_complete.map(|frame| frame.sequence).unwrap_or(0),
-            if full_redraw { "full" } else { "damage" },
+            if window_scene_changed {
+                "full-window-change"
+            } else if full_redraw {
+                "full"
+            } else {
+                "damage"
+            },
             damage_rect.width,
             damage_rect.height,
             damage_rect.x,
@@ -1888,9 +1990,16 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
             } else {
                 "gpu-fill-worklist"
             },
+            if upper_plane {
+                "transparent-upper-plane"
+            } else {
+                "opaque-primary"
+            },
             window_stats.paint_ops,
             window_stats.fill_descs,
             window_stats.submits,
+            window_stats.proof_pixels,
+            window_stats.proof_mismatches,
             presented as u8,
             acquire_us,
             clear_us,
@@ -2187,6 +2296,8 @@ fn opaque_chart_fully_overwrites_damage(
 fn compose_window_scene(
     scene: WindowSceneSnapshot,
     dst: GpgpuRgba8Surface,
+    diagnostic_virt: *mut u8,
+    buffer_index: usize,
     damage: DamageRect,
 ) -> Result<WindowCompositionStats, &'static str> {
     let mut windows = scene.windows;
@@ -2210,12 +2321,111 @@ fn compose_window_scene(
     let paint_ops = paints.len();
     let descs = resolve_window_paints(paints.as_slice());
     let fill = submit_window_fills(dst, descs.as_slice())?;
+    let proof = if descs.is_empty() {
+        WindowChromeProof {
+            pixels: 0,
+            mismatches: 0,
+            first_x: -1,
+            first_y: -1,
+            first_expected: 0,
+            first_actual: 0,
+        }
+    } else {
+        verify_window_chrome_preflip(dst, diagnostic_virt, descs.as_slice())
+    };
+    if !descs.is_empty() || !proof.exact() {
+        crate::log_info!(
+            target: "ui3";
+            "ui3-compositor: chrome-preflip-proof buffer={} gpu=0x{:X} exact={} pixels={} mismatches={} first={}x{} expected=0x{:08X} actual=0x{:08X} cache_action=clflush-read-only commit_gate={}\n",
+            buffer_index,
+            dst.gpu,
+            proof.exact() as u8,
+            proof.pixels,
+            proof.mismatches,
+            proof.first_x,
+            proof.first_y,
+            proof.first_expected,
+            proof.first_actual,
+            proof.exact() as u8,
+        );
+    }
+    if !proof.exact() {
+        return Err("ui3-window-preflip-readback");
+    }
     Ok(WindowCompositionStats {
         windows: visible,
         paint_ops,
         fill_descs: fill.descs,
         submits: fill.submits,
+        proof_pixels: proof.pixels,
+        proof_mismatches: proof.mismatches,
     })
+}
+
+/// Read-only dense proof of exactly the non-overlapping rectangles submitted
+/// for final chrome. The GPU completion marker has retired before this point.
+/// Invalidating the WB CPU alias lets us distinguish broken render bytes from
+/// a display-engine fetch/coherency failure before changing the plane SURF.
+fn verify_window_chrome_preflip(
+    dst: GpgpuRgba8Surface,
+    diagnostic_virt: *mut u8,
+    descs: &[FillRectWorklistRgba8Desc],
+) -> WindowChromeProof {
+    let mut proof = WindowChromeProof {
+        pixels: 0,
+        mismatches: 0,
+        first_x: -1,
+        first_y: -1,
+        first_expected: 0,
+        first_actual: 0,
+    };
+    if diagnostic_virt.is_null() || dst.pitch_bytes < 4 || dst.bytes == 0 {
+        proof.mismatches = 1;
+        return proof;
+    }
+    crate::intel::dma_flush(diagnostic_virt, dst.bytes);
+    for desc in descs {
+        let x0 = i32::from(desc.dst_xy as u16 as i16);
+        let y0 = i32::from((desc.dst_xy >> 16) as u16 as i16);
+        let width = desc.size & 0xFFFF;
+        let height = desc.size >> 16;
+        for y in 0..height {
+            let py = y0.saturating_add(y as i32);
+            for x in 0..width {
+                let px = x0.saturating_add(x as i32);
+                proof.pixels = proof.pixels.saturating_add(1);
+                if px < 0 || py < 0 || px as u32 >= dst.width || py as u32 >= dst.height {
+                    proof.mismatches = proof.mismatches.saturating_add(1);
+                    if proof.first_x < 0 {
+                        proof.first_x = px;
+                        proof.first_y = py;
+                        proof.first_expected = desc.color_rgba;
+                    }
+                    continue;
+                }
+                let offset = (py as usize)
+                    .saturating_mul(dst.pitch_bytes as usize)
+                    .saturating_add((px as usize).saturating_mul(4));
+                if offset.saturating_add(4) > dst.bytes {
+                    proof.mismatches = proof.mismatches.saturating_add(1);
+                    continue;
+                }
+                let actual = unsafe {
+                    core::ptr::read_volatile(diagnostic_virt.add(offset) as *const u32)
+                };
+                if actual != desc.color_rgba {
+                    if proof.mismatches == 0 {
+                        proof.first_x = px;
+                        proof.first_y = py;
+                        proof.first_expected = desc.color_rgba;
+                        proof.first_actual = actual;
+                    }
+                    proof.mismatches = proof.mismatches.saturating_add(1);
+                }
+            }
+        }
+    }
+    proof
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

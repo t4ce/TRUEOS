@@ -2044,6 +2044,7 @@ fn rgb_plane_probe_needs_rearm(dev: crate::intel::Dev, surface: RgbPlaneProbeSur
 fn arm_rgb_plane_probe(
     dev: crate::intel::Dev,
     surface: RgbPlaneProbeSurface,
+    alpha: OverlayAlphaMode,
     reason: &str,
 ) -> bool {
     let Some((_slot, _width, _height, x, y, _color, name)) =
@@ -2060,10 +2061,10 @@ fn arm_rgb_plane_probe(
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let ctl_disabled = ctl_before & !PLANE_CTL_ENABLE;
-    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before, OverlayAlphaMode::Opaque);
+    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before, alpha);
     let color_ctl_off = plane_base + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl_before = crate::intel::mmio_read(dev, color_ctl_off);
-    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, OverlayAlphaMode::Opaque);
+    let color_ctl_enabled = plane_color_ctl_alpha(color_ctl_before, alpha);
     let surf_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let live_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
 
@@ -2080,14 +2081,24 @@ fn arm_rgb_plane_probe(
         plane_base + UNI_PLANE_SIZE_OFF,
         plane_size_reg_value(surface.width, surface.height),
     );
+    // PLANE_KEYMAX[31:24] is the global plane-alpha value even when the
+    // per-pixel blend mode is disabled. The reset value is zero, which leaves
+    // an otherwise live upper plane completely invisible.
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYVAL_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, 0xFF00_0000);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, plane_pos_reg_value(0, 0));
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_DIST_OFF, 0);
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF, 0);
     crate::intel::mmio_write(dev, color_ctl_off, color_ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_enabled);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
-    let (live_after, live_iters) = wait_for_plane_live(dev, plane_base, surface_reg, 20_000);
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, surface.pipe);
+    let (live_after, live_iters) =
+        wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
     crate::log!(
-        "intel/display: rgb-plane-probe-arm reason={} pipe={} slot={} name={} pos={}x{} size={}x{} color=0x{:08X} stride=0x{:X} surf_before=0x{:08X} surf_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} live_iters={}\n",
+        "intel/display: rgb-plane-probe-arm reason={} pipe={} slot={} name={} pos={}x{} size={}x{} color=0x{:08X} alpha={:?} stride=0x{:X} surf_before=0x{:08X} surf_after=0x{:08X} live_before=0x{:08X} live_after=0x{:08X} ctl_before=0x{:08X} ctl_enabled=0x{:08X} color_ctl=0x{:08X}=>0x{:08X} global_alpha=0x{:02X} frame={}=>{} frame_wait={} live_iters={} timeout_us=25000\n",
         reason,
         surface.pipe.name,
         surface.plane_slot,
@@ -2097,6 +2108,7 @@ fn arm_rgb_plane_probe(
         surface.width,
         surface.height,
         surface.color,
+        alpha,
         stride_reg,
         surf_before,
         crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF),
@@ -2106,10 +2118,21 @@ fn arm_rgb_plane_probe(
         ctl_enabled,
         color_ctl_before,
         color_ctl_enabled,
+        (crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF) >> 24) & 0xFF,
+        frame_before,
+        frame_after,
+        frame_wait,
         live_iters
     );
 
-    live_after == surface_reg
+    let live = live_after == surface_reg;
+    if !live {
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_CTL_OFF, ctl_disabled);
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, 0);
+        let _ = wait_for_pipe_next_frame(dev, surface.pipe);
+        let _ = wait_for_plane_live_for(dev, plane_base, 0, 25_000_000);
+    }
+    live
 }
 
 pub(super) fn arm_rgb_plane_probe_planes(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
@@ -2136,9 +2159,79 @@ pub(super) fn arm_rgb_plane_probe_planes(dev: crate::intel::Dev, pipe: PipeInfo,
             continue;
         };
         if rgb_plane_probe_needs_rearm(dev, surface) {
-            let _ = arm_rgb_plane_probe(dev, surface, reason);
+            let _ = arm_rgb_plane_probe(dev, surface, OverlayAlphaMode::Opaque, reason);
         }
     }
+}
+
+pub(super) fn arm_ui_overlay_boot_proof(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    premultiplied_alpha: bool,
+    reason: &str,
+) -> bool {
+    let primary_base = pipe.primary_plane().base();
+    let primary_before = plane_resource_snapshot(dev, primary_base);
+    let video_before = [
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT)),
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT)),
+    ];
+    if !program_ui_overlay_tail_resources(dev, pipe, reason) {
+        return false;
+    }
+    let Some(surface) = ensure_rgb_plane_probe_surface(dev, pipe, 0) else {
+        return false;
+    };
+    let (alpha, color, proof_name) = if premultiplied_alpha {
+        // BGRA bytes: B=0, G=0, premultiplied R=128, A=128.
+        (OverlayAlphaMode::Straight, 0x8080_0000, "premul-alpha")
+    } else {
+        (OverlayAlphaMode::Opaque, surface.color, "opaque")
+    };
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        color,
+    );
+    let surface = RgbPlaneProbeSurface { color, ..surface };
+    let armed = arm_rgb_plane_probe(dev, surface, alpha, reason);
+    let primary_after = plane_resource_snapshot(dev, primary_base);
+    let video_after = [
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT)),
+        plane_resource_snapshot(dev, overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT)),
+    ];
+    let primary_preserved = primary_after == primary_before;
+    let video_preserved = video_after == video_before;
+    let ok = armed && primary_preserved && video_preserved;
+    crate::log_info!(
+        target: "intel/display";
+        "intel/display: ui-overlay-boot-proof reason={} pipe={} ok={} proof={} slot={} size={}x{} pos=0x0 alpha={:?} color=0x{:08X} primary_preserved={} primary_surf=0x{:08X}->0x{:08X} primary_live=0x{:08X}->0x{:08X} primary_buf=0x{:08X}->0x{:08X} video_slots_untouched={} next={}\n",
+        reason,
+        pipe.name,
+        ok as u8,
+        proof_name,
+        surface.plane_slot,
+        surface.width,
+        surface.height,
+        alpha,
+        color,
+        primary_preserved as u8,
+        primary_before[1],
+        primary_after[1],
+        primary_before[2],
+        primary_after[2],
+        primary_before[5],
+        primary_after[5],
+        video_preserved as u8,
+        if premultiplied_alpha {
+            "visual-proof-before-full-ui3"
+        } else {
+            "visual-proof-before-alpha"
+        },
+    );
+    ok
 }
 
 pub(super) fn primary_format_probe_name() -> &'static str {

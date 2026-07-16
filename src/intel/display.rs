@@ -40,9 +40,9 @@ pub(crate) use self::display_probes::{
     log_display_plane_ladder_probe,
 };
 use self::display_probes::{
-    arm_rgb_plane_probe_planes, log_pipe_scanout_probe, log_primary_dimensions_probe,
-    log_primary_plane_probe, primary_format_probe_name, probe_boot_logo_decode,
-    probe_primary_present_psr,
+    arm_rgb_plane_probe_planes, arm_ui_overlay_boot_proof, log_pipe_scanout_probe,
+    log_primary_dimensions_probe, log_primary_plane_probe, primary_format_probe_name,
+    probe_boot_logo_decode, probe_primary_present_psr,
 };
 
 // PIPE_BOTTOM_COLOR is not A/R/G/B bytes. PRM layout is:
@@ -76,7 +76,7 @@ const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
 // Hardware-gated migration back to a two-plane desktop:
 // 0 = production UI3 path, 1 = small opaque slot-1 proof over retained logo,
 // 2 = small premultiplied-alpha proof, 3 = full UI3 overlay production.
-const UI3_UPPER_PLANE_BOOT_STAGE: u8 = 1;
+const UI3_UPPER_PLANE_BOOT_STAGE: u8 = 3;
 // Universal plane role map for pipe-local planes.
 const UI_OVERLAY_PLANE_SLOT: usize = 1;
 const VIDEO_NV12_PLANE_SLOT: usize = 2;
@@ -986,15 +986,6 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     *primary_surface_owner(pipe).lock() = Some(primary_surface);
     let default_overlay_marker_ok = init_default_overlay_marker(dev, primary_surface);
     let ui3_boot = crate::intel::full_ui3_boot_enabled();
-    if ok && ui3_boot {
-        crate::r::readiness::set(crate::r::readiness::UI3_INTEL_PRESENT_READY);
-    } else if ok {
-        crate::log!(
-            "intel/display: ui3-ready held device=0x{:04X} name={} reason=logo-only-bringup\n",
-            dev.device_id,
-            crate::intel::display_device_name(dev.device_id)
-        );
-    }
     let ui3_base_ok = false;
     let ui3_frame_ok = false;
     log_primary_scanout_pte_window(dev, "after-primary-init", primary_gpu, byte_len);
@@ -1018,9 +1009,36 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     if !logo_ok {
         mark_hw_logo_sequence_done("not-started");
     }
+    let upper_plane_proof_ok = if ok && matches!(UI3_UPPER_PLANE_BOOT_STAGE, 1 | 2) {
+        arm_ui_overlay_boot_proof(
+            dev,
+            pipe,
+            UI3_UPPER_PLANE_BOOT_STAGE == 2,
+            if UI3_UPPER_PLANE_BOOT_STAGE == 1 {
+                "ui3-upper-plane-stage1"
+            } else {
+                "ui3-upper-plane-stage2"
+            },
+        )
+    } else {
+        false
+    };
+    if ok && ui3_boot {
+        // UI3 stage 3 retains this primary surface as its background. Do not
+        // release the compositor before logo production and any gated plane
+        // proof are complete, otherwise the upper plane can race an
+        // unfinished background.
+        crate::r::readiness::set(crate::r::readiness::UI3_INTEL_PRESENT_READY);
+    } else if ok {
+        crate::log!(
+            "intel/display: ui3-ready held device=0x{:04X} name={} reason=logo-only-bringup\n",
+            dev.device_id,
+            crate::intel::display_device_name(dev.device_id)
+        );
+    }
 
     crate::log!(
-        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui3_ready={} default_overlay_marker={} ui3_base={} ui3_frame={}\n",
+        "intel/display: primary-boot-surface pipe={} size={}x{} backing={}x{} pitch=0x{:X} bytes=0x{:X} guard={} gpu=0x{:X} phys=0x{:X} plane_enabled={} ctl_before=0x{:08X} ctl_after=0x{:08X} surf_before=0x{:08X} surf=0x{:08X} surf_live=0x{:08X} ok={} logo={} ui3_ready={} default_overlay_marker={} ui3_base={} ui3_frame={} upper_plane_stage={} upper_plane_proof={}\n",
         pipe.name,
         width,
         height,
@@ -1042,7 +1060,9 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         (ok && ui3_boot) as u8,
         default_overlay_marker_ok as u8,
         ui3_base_ok as u8,
-        ui3_frame_ok as u8
+        ui3_frame_ok as u8,
+        UI3_UPPER_PLANE_BOOT_STAGE,
+        upper_plane_proof_ok as u8,
     );
     log_display_pipeline_topology(dev, "after-primary-init");
 }
@@ -2995,6 +3015,37 @@ fn commit_ui3_canvas_overlay_produced(
 
     if producer == DisplayFrameProducer::CpuCached {
         crate::intel::dma_flush(target.virt, target.byte_len);
+    }
+    if UI3_UPPER_PLANE_BOOT_STAGE == 3 {
+        match overlay_plane_surface_flip_guard(
+            dev,
+            surface,
+            0,
+            0,
+            OverlayAlphaMode::PremultipliedRgba,
+        ) {
+            Ok(()) => return flip_overlay_plane_surface(dev, surface, reason),
+            Err("no-complete-front") => {}
+            Err(guard_reason) => {
+                crate::log_warn!(
+                    target: "intel/display";
+                    "intel/display: ui3-upper-plane guard rejected reason={} guard={} action=retain-logo-and-rearm-upper-plane\n",
+                    reason,
+                    guard_reason,
+                );
+            }
+        }
+        if !program_ui_overlay_tail_resources(dev, surface.pipe, reason) {
+            return false;
+        }
+        return arm_overlay_plane(
+            dev,
+            surface,
+            0,
+            0,
+            OverlayAlphaMode::PremultipliedRgba,
+            reason,
+        );
     }
     present_ui3_composition_on_primary(dev, surface, reason)
 }
@@ -7380,34 +7431,40 @@ fn overlay_plane_surface_flip_guard(
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
     let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
-    let resources = [
-        (
-            overlay_plane_base(surface.pipe, 0),
-            PLANE_DBUF_PRIMARY_STACK_START,
-            PLANE_DBUF_PRIMARY_STACK_END,
-        ),
-        (
-            overlay_plane_base(surface.pipe, UI_OVERLAY_PLANE_SLOT),
-            PLANE_DBUF_UI_OVERLAY_STACK_START,
-            PLANE_DBUF_UI_OVERLAY_STACK_END,
-        ),
-        (
-            overlay_plane_base(surface.pipe, VIDEO_NV12_PLANE_SLOT),
-            PLANE_DBUF_VIDEO_NV12_UV_STACK_START,
-            PLANE_DBUF_VIDEO_NV12_UV_STACK_END,
-        ),
-        (
-            overlay_plane_base(surface.pipe, VIDEO_NV12_Y_PLANE_SLOT),
-            PLANE_DBUF_VIDEO_NV12_Y_STACK_START,
-            PLANE_DBUF_VIDEO_NV12_Y_STACK_END,
-        ),
-    ];
-    if !resources.iter().all(|(base, start, end)| {
-        plane_watermarks_are_boot_safe(dev, *base)
-            && crate::intel::mmio_read(dev, *base + UNI_PLANE_BUF_CFG_OFF)
-                == plane_buf_cfg_value(*start, *end)
-    }) {
-        return Err("dbuf-or-watermark-state");
+    if UI3_UPPER_PLANE_BOOT_STAGE == 3 {
+        if !ui_overlay_tail_resources_are_live(dev, surface.pipe) {
+            return Err("upper-plane-tail-dbuf-or-watermark-state");
+        }
+    } else {
+        let resources = [
+            (
+                overlay_plane_base(surface.pipe, 0),
+                PLANE_DBUF_PRIMARY_STACK_START,
+                PLANE_DBUF_PRIMARY_STACK_END,
+            ),
+            (
+                overlay_plane_base(surface.pipe, UI_OVERLAY_PLANE_SLOT),
+                PLANE_DBUF_UI_OVERLAY_STACK_START,
+                PLANE_DBUF_UI_OVERLAY_STACK_END,
+            ),
+            (
+                overlay_plane_base(surface.pipe, VIDEO_NV12_PLANE_SLOT),
+                PLANE_DBUF_VIDEO_NV12_UV_STACK_START,
+                PLANE_DBUF_VIDEO_NV12_UV_STACK_END,
+            ),
+            (
+                overlay_plane_base(surface.pipe, VIDEO_NV12_Y_PLANE_SLOT),
+                PLANE_DBUF_VIDEO_NV12_Y_STACK_START,
+                PLANE_DBUF_VIDEO_NV12_Y_STACK_END,
+            ),
+        ];
+        if !resources.iter().all(|(base, start, end)| {
+            plane_watermarks_are_boot_safe(dev, *base)
+                && crate::intel::mmio_read(dev, *base + UNI_PLANE_BUF_CFG_OFF)
+                    == plane_buf_cfg_value(*start, *end)
+        }) {
+            return Err("dbuf-or-watermark-state");
+        }
     }
     if ctl != overlay_plane_ctl_enabled(ctl, alpha) {
         return Err("plane-control");
@@ -7448,6 +7505,22 @@ fn overlay_plane_surface_flip_guard(
         return Err("front-ownership");
     }
     Ok(())
+}
+
+fn ui_overlay_tail_resources_are_live(dev: crate::intel::Dev, pipe: PipeInfo) -> bool {
+    let primary_base = overlay_plane_base(pipe, 0);
+    let ui_base = overlay_plane_base(pipe, UI_OVERLAY_PLANE_SLOT);
+    let primary_buf = crate::intel::mmio_read(dev, primary_base + UNI_PLANE_BUF_CFG_OFF);
+    let primary_start = plane_buf_cfg_start(primary_buf);
+    let primary_end = plane_buf_cfg_end(primary_buf);
+    let Some(ui_start) = primary_end.checked_add(1) else {
+        return false;
+    };
+    primary_start == 0
+        && primary_end < PLANE_DBUF_VIDEO_NV12_Y_STACK_END
+        && crate::intel::mmio_read(dev, ui_base + UNI_PLANE_BUF_CFG_OFF)
+            == plane_buf_cfg_value(ui_start, PLANE_DBUF_VIDEO_NV12_Y_STACK_END)
+        && plane_watermarks_are_boot_safe(dev, ui_base)
 }
 
 /// Steady-state FRAME presentation changes only the surface address. Plane
@@ -7569,7 +7642,10 @@ fn arm_overlay_plane(
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
 
     let (frame_before, frame_after, frame_iters) = wait_for_pipe_next_frame(dev, surface.pipe);
-    let (live_after, live_iters) = wait_for_plane_live(dev, plane_base, surface_reg, 20_000);
+    // Match the proven boot-probe latch contract. A CPU iteration budget is
+    // not a time budget and can expire well before a 60 Hz frame boundary.
+    let (live_after, live_iters) =
+        wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
     let keyval_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYVAL_OFF);
     let keymsk_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF);
     let keymax_after = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF);
