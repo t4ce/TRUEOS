@@ -16,9 +16,9 @@ use crate::intel::gpu_font::{
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowSessionId, acquire_frame_buffer, begin_window_session,
-    cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
-    publish_frame_buffer, publish_window_frame, writable_rgba_view,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer,
+    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
+    finish_window_session, publish_frame_buffer, publish_window_frame, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -178,6 +178,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         session,
         frame,
         output,
+        plane: WindowPlane::Universal(super::RGB_OVERLAY_PLANE_SLOT_2 as u8),
         placement: WindowPlacement {
             x,
             y,
@@ -220,7 +221,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         height,
         write_lease: None,
     });
-    crate::log_info!(target: "ui4/solara-text"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 text_path=opaque-glyph-mask\n", owner, window.raw(), width, height);
+    crate::log_info!(target: "ui4/solara-text"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 plane=slot2 text_path=opaque-glyph-mask\n", owner, window.raw(), width, height);
     window.raw()
 }
 

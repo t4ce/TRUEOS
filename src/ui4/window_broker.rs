@@ -56,6 +56,30 @@ pub(crate) enum WindowState {
     Closed,
 }
 
+/// Fixed hardware-composition target selected when a broker window is
+/// created. Runtime migration is deliberately not part of this contract yet.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WindowPlane {
+    Primary,
+    Universal(u8),
+}
+
+impl WindowPlane {
+    pub(crate) const fn slot(self) -> usize {
+        match self {
+            Self::Primary => super::PRIMARY_PLANE_SLOT,
+            Self::Universal(slot) => slot as usize,
+        }
+    }
+
+    const fn valid(self) -> bool {
+        match self {
+            Self::Primary => true,
+            Self::Universal(slot) => slot > 0 && (slot as usize) < super::UNIVERSAL_PLANE_COUNT,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowPlacement {
     pub(crate) x: i32,
@@ -122,6 +146,7 @@ pub(crate) struct WindowCreate {
     pub(crate) session: WindowSessionId,
     pub(crate) frame: FrameHandle,
     pub(crate) output: OutputId,
+    pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
 }
 
@@ -132,6 +157,7 @@ pub(crate) struct WindowSnapshot {
     pub(crate) session: WindowSessionId,
     pub(crate) frame: FrameHandle,
     pub(crate) output: OutputId,
+    pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
@@ -146,6 +172,7 @@ pub(crate) enum WindowBrokerError {
     SessionClosed,
     EmptyExtent,
     EmptyDamage,
+    InvalidPlane,
     Capacity,
     Closed,
 }
@@ -157,6 +184,7 @@ struct WindowRecord {
     session: WindowSessionId,
     frame: FrameHandle,
     output: OutputId,
+    plane: WindowPlane,
     placement: WindowPlacement,
     state: WindowState,
     revision: u64,
@@ -247,6 +275,9 @@ impl WindowBroker {
         self.checked_session(request.owner, request.session)?;
         if !request.placement.valid() {
             return Err(WindowBrokerError::EmptyExtent);
+        }
+        if !request.plane.valid() {
+            return Err(WindowBrokerError::InvalidPlane);
         }
         let count = self
             .windows
@@ -361,6 +392,7 @@ impl WindowRecord {
             session: request.session,
             frame: request.frame,
             output: request.output,
+            plane: request.plane,
             placement: request.placement,
             state: WindowState::Pending,
             revision: 1,
@@ -376,6 +408,7 @@ impl WindowRecord {
             session: self.session,
             frame: self.frame,
             output: self.output,
+            plane: self.plane,
             placement: self.placement,
             state: self.state,
             revision: self.revision,

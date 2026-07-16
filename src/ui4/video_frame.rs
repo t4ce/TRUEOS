@@ -394,6 +394,7 @@ fn create_stream(
         session,
         frame,
         output: VIDEO_OUTPUT,
+        plane: super::WindowPlane::Primary,
         placement,
     }) {
         Ok(window) => window,

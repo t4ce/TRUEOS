@@ -553,6 +553,14 @@ pub(crate) fn present_rgba_overlay_tiles(tiles: &[RgbaOverlayTile<'_>], reason: 
     self::display::present_rgba_overlay_tiles(tiles, reason)
 }
 
+pub(crate) fn present_rgba_overlay_tiles_on_slot(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    reason: &str,
+) -> bool {
+    self::display::present_rgba_overlay_tiles_on_slot(plane_slot, tiles, reason)
+}
+
 pub fn log_display_plane_ladder_probe(label: &str) {
     self::display::log_display_plane_ladder_probe(label)
 }

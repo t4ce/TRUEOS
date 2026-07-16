@@ -31,16 +31,21 @@ pub(crate) use video_frame::{
 
 pub(crate) use window_broker::{
     DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame, begin_window_session,
-    close_window, create_window, finish_window_session, publish_window_frame, replace_window_frame,
-    set_window_placement, visible_windows_for_output,
+    WindowPlane, WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
+    begin_window_session, close_window, create_window, finish_window_session, publish_window_frame,
+    replace_window_frame, set_window_placement, visible_windows_for_output,
 };
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
+pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 4;
 pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
-pub(crate) const NV12_UV_PLANE_SLOT: usize = 2;
-pub(crate) const NV12_Y_PLANE_SLOT: usize = 3;
+pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;
+pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
+// Compatibility aliases for the parked legacy direct-NV12 experiment. Normal
+// UI4 video is converted into RGBA and does not reserve these plane roles.
+pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
+pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
 
 /// Stable logical display identity. Routing to pipe A-D is display-driver state.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

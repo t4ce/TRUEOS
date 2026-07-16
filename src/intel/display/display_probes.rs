@@ -1611,7 +1611,7 @@ fn arm_nv12_video_plane_probe_surface(
         false,
     );
 
-    program_three_plane_stack_resources(dev, pipe, reason);
+    program_four_rgb_plane_stack_resources(dev, pipe, reason);
 
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let stride_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
@@ -1819,7 +1819,7 @@ fn arm_nv12_linked_video_plane_probe_surface(
         true,
     );
 
-    program_three_plane_stack_resources(dev, pipe, reason);
+    program_four_rgb_plane_stack_resources(dev, pipe, reason);
 
     let uv_ctl_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
     let uv_stride_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_STRIDE_OFF);

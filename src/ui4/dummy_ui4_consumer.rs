@@ -24,11 +24,12 @@ use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4ButtonPhase,
     Ui4InputEvent, Ui4PanPhase, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowSessionId, acknowledge_window_frame, acquire_frame_buffer,
-    acquire_published_frame, begin_window_session, cancel_frame_buffer, create_frame,
-    create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface, publish_frame_buffer,
-    publish_window_frame, published_rgba_view, release_published_frame, set_window_placement,
-    software_cursor_visuals, take_owner_input_events, visible_windows_for_output,
+    WindowPlacement, WindowPlane, WindowSessionId, WindowSnapshot, acknowledge_window_frame,
+    acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
+    create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
+    publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
+    set_window_placement, software_cursor_visuals, take_owner_input_events,
+    visible_windows_for_output,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -124,8 +125,20 @@ struct Runtime {
 
 #[derive(Copy, Clone)]
 struct CompositionState {
+    primary: PlaneCompositionState,
+    solara: PlaneCompositionState,
+}
+
+#[derive(Copy, Clone)]
+struct PlaneCompositionState {
     initialized: bool,
     windows: [Option<CompositionWindowStamp>; MAX_COMPOSITION_WINDOWS],
+}
+
+#[derive(Copy, Clone)]
+enum CompositionTarget {
+    Primary,
+    Overlay(usize),
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -272,8 +285,14 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
         heartbeat_rest_frames: 0,
         mandel_stream_countdown: 0,
         composition: CompositionState {
-            initialized: false,
-            windows: [None; MAX_COMPOSITION_WINDOWS],
+            primary: PlaneCompositionState {
+                initialized: false,
+                windows: [None; MAX_COMPOSITION_WINDOWS],
+            },
+            solara: PlaneCompositionState {
+                initialized: false,
+                windows: [None; MAX_COMPOSITION_WINDOWS],
+            },
         },
         cursor_plane: CursorPlaneState {
             previous_bounds: None,
@@ -385,6 +404,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
             session,
             frame: frames[slot],
             output,
+            plane: WindowPlane::Primary,
             placement: MANDEL_PLACEMENTS[slot],
         })
         .and_then(|window| {
@@ -421,8 +441,48 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
 fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let windows = visible_windows_for_output(output);
-    if windows.is_empty() || windows.len() > MAX_COMPOSITION_WINDOWS {
+    if windows.is_empty()
+        || windows.len() > MAX_COMPOSITION_WINDOWS
+        || windows.iter().any(|window| {
+            let slot = window.plane.slot();
+            slot != super::PRIMARY_PLANE_SLOT && slot != super::RGB_OVERLAY_PLANE_SLOT_2
+        })
+    {
         return Err(DummyUi4ConsumerError::PresentFailed);
+    }
+
+    present_plane_composition(
+        &mut runtime.composition.primary,
+        &windows,
+        CompositionTarget::Primary,
+    )?;
+    present_plane_composition(
+        &mut runtime.composition.solara,
+        &windows,
+        CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
+    )?;
+    present_software_cursor_plane(&mut runtime.cursor_plane)
+}
+
+fn present_plane_composition(
+    state: &mut PlaneCompositionState,
+    all_windows: &[WindowSnapshot],
+    target: CompositionTarget,
+) -> Result<(), DummyUi4ConsumerError> {
+    let plane_slot = match target {
+        CompositionTarget::Primary => super::PRIMARY_PLANE_SLOT,
+        CompositionTarget::Overlay(slot) => slot,
+    };
+    let windows: Vec<WindowSnapshot> = all_windows
+        .iter()
+        .copied()
+        .filter(|window| window.plane.slot() == plane_slot)
+        .collect();
+    if windows.len() > MAX_COMPOSITION_WINDOWS {
+        return Err(DummyUi4ConsumerError::PresentFailed);
+    }
+    if windows.is_empty() && !state.initialized {
+        return Ok(());
     }
 
     let mut next_windows = [None; MAX_COMPOSITION_WINDOWS];
@@ -438,13 +498,12 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
     let mut changed = [false; MAX_COMPOSITION_WINDOWS];
     let mut damage = None;
     for (slot, current) in next_windows.iter().flatten().enumerate() {
-        let previous = runtime
-            .composition
+        let previous = state
             .windows
             .iter()
             .flatten()
             .find(|previous| previous.id == current.id);
-        changed[slot] = !runtime.composition.initialized || previous != Some(current);
+        changed[slot] = !state.initialized || previous != Some(current);
         if changed[slot] {
             damage = union_damage(damage, placement_damage(current.placement));
         }
@@ -454,7 +513,7 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
             damage = union_damage(damage, placement_damage(previous.placement));
         }
     }
-    for previous in runtime.composition.windows.iter().flatten() {
+    for previous in state.windows.iter().flatten() {
         if !next_windows
             .iter()
             .flatten()
@@ -463,7 +522,7 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
             damage = union_damage(damage, placement_damage(previous.placement));
         }
     }
-    if !runtime.composition.initialized {
+    if !state.initialized {
         let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
         damage = Some(crate::intel::CompositionDamageRect::new(0, 0, width, height));
     }
@@ -514,11 +573,23 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
                     expected_rgba: None,
                 })
                 .collect();
-            if !crate::intel::present_premultiplied_rgba_primary_tiles_damage(
-                &tiles,
-                damage,
-                "ui4-dummy-consumer",
-            ) {
+            let presented = match target {
+                CompositionTarget::Primary => {
+                    crate::intel::present_premultiplied_rgba_primary_tiles_damage(
+                        &tiles,
+                        damage,
+                        "ui4-dummy-consumer-primary",
+                    )
+                }
+                CompositionTarget::Overlay(slot) => {
+                    crate::intel::present_rgba_overlay_tiles_on_slot(
+                        slot,
+                        &tiles,
+                        "ui4-solara-slot2",
+                    )
+                }
+            };
+            if !presented {
                 return Err(DummyUi4ConsumerError::PresentFailed);
             }
             Ok(())
@@ -528,10 +599,10 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
         for window in &windows {
             let _ = acknowledge_window_frame(window.id, window.publish_serial);
         }
-        runtime.composition.initialized = true;
-        runtime.composition.windows = next_windows;
+        state.initialized = true;
+        state.windows = next_windows;
     }
-    present_software_cursor_plane(&mut runtime.cursor_plane)
+    Ok(())
 }
 
 fn present_software_cursor_plane(

@@ -98,14 +98,31 @@ pub(in crate::intel) const PLANE_CUS_VPHASE_0_25: u32 = 1 << 12;
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
 pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2 << 14) | 160;
-pub(in crate::intel) const PLANE_DBUF_PRIMARY_STACK_START: u16 = 0;
-pub(in crate::intel) const PLANE_DBUF_PRIMARY_STACK_END: u16 = 511;
-pub(in crate::intel) const PLANE_DBUF_UI_OVERLAY_STACK_START: u16 = 512;
-pub(in crate::intel) const PLANE_DBUF_UI_OVERLAY_STACK_END: u16 = 767;
-pub(in crate::intel) const PLANE_DBUF_VIDEO_NV12_UV_STACK_START: u16 = 768;
-pub(in crate::intel) const PLANE_DBUF_VIDEO_NV12_UV_STACK_END: u16 = 895;
-pub(in crate::intel) const PLANE_DBUF_VIDEO_NV12_Y_STACK_START: u16 = 896;
-pub(in crate::intel) const PLANE_DBUF_VIDEO_NV12_Y_STACK_END: u16 = 1023;
+// Pipe-local DBUF policy for the four universal planes. UI4 converts decoded
+// video into its normal RGBA frame contract, so slots 2 and 3 no longer need
+// the asymmetric 128+128 linked-NV12 reservation. Keep every plane equally
+// provisioned and independently usable as a linear RGB8 plane.
+pub(in crate::intel) const PLANE_DBUF_BLOCKS_PER_SLOT: u16 = 256;
+pub(in crate::intel) const PLANE_DBUF_SLOT_0_START: u16 = 0;
+pub(in crate::intel) const PLANE_DBUF_SLOT_0_END: u16 = 255;
+pub(in crate::intel) const PLANE_DBUF_SLOT_1_START: u16 = 256;
+pub(in crate::intel) const PLANE_DBUF_SLOT_1_END: u16 = 511;
+pub(in crate::intel) const PLANE_DBUF_SLOT_2_START: u16 = 512;
+pub(in crate::intel) const PLANE_DBUF_SLOT_2_END: u16 = 767;
+pub(in crate::intel) const PLANE_DBUF_SLOT_3_START: u16 = 768;
+pub(in crate::intel) const PLANE_DBUF_SLOT_3_END: u16 = 1023;
+const _: () =
+    assert!(PLANE_DBUF_SLOT_0_END - PLANE_DBUF_SLOT_0_START + 1 == PLANE_DBUF_BLOCKS_PER_SLOT);
+const _: () =
+    assert!(PLANE_DBUF_SLOT_1_END - PLANE_DBUF_SLOT_1_START + 1 == PLANE_DBUF_BLOCKS_PER_SLOT);
+const _: () =
+    assert!(PLANE_DBUF_SLOT_2_END - PLANE_DBUF_SLOT_2_START + 1 == PLANE_DBUF_BLOCKS_PER_SLOT);
+const _: () =
+    assert!(PLANE_DBUF_SLOT_3_END - PLANE_DBUF_SLOT_3_START + 1 == PLANE_DBUF_BLOCKS_PER_SLOT);
+const _: () = assert!(PLANE_DBUF_SLOT_0_END + 1 == PLANE_DBUF_SLOT_1_START);
+const _: () = assert!(PLANE_DBUF_SLOT_1_END + 1 == PLANE_DBUF_SLOT_2_START);
+const _: () = assert!(PLANE_DBUF_SLOT_2_END + 1 == PLANE_DBUF_SLOT_3_START);
+const _: () = assert!(PLANE_DBUF_SLOT_3_END + 1 == PLANE_DBUF_BLOCKS_PER_SLOT * 4);
 
 #[derive(Copy, Clone)]
 pub(in crate::intel) struct PipeInfo {
