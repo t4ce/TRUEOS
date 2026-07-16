@@ -1524,5 +1524,4 @@ fn draw_kernel_cursor_surface(surface: KernelCursorSurface, rect_dim: u32, press
             }
         }
     }
-
 }
