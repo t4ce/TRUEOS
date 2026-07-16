@@ -3663,6 +3663,28 @@ fn h264_present_probe_output(
             "h264-decoded-nv12:{}:frame{}:idr{}:id{}",
             phase, playback_frame, stream_idr_index, output.id
         );
+        let source = crate::ui4::DecodedNv12Source {
+            gpu: output.gpu_addr,
+            phys: output.phys_addr,
+            virt: output.virt_addr,
+            byte_len: output.byte_len,
+            width: output.width,
+            height: output.height,
+            visible_width: output.visible_width,
+            visible_height: output.visible_height,
+            pitch_bytes: output.pitch_bytes,
+            uv_offset: output.uv_offset,
+        };
+        let direct_presented =
+            crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str());
+        if direct_presented
+            && crate::intel::display::decoded_nv12_overlay_plane_probe_replaces_cpu_present()
+        {
+            return true;
+        }
+        // Keep the already-proven direct path as a migration fallback. It is
+        // reached only if UI4 could not allocate, lease, copy, publish or
+        // present its native triple-buffer frame.
         let direct_presented = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
             reason.as_str(),
             output.gpu_addr,

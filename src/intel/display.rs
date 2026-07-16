@@ -37,7 +37,9 @@ macro_rules! intel_display_verbose_log {
 mod display_probes;
 pub(crate) use self::display_probes::{
     arm_decoded_nv12_overlay_plane_probe, decoded_nv12_overlay_plane_probe_replaces_cpu_present,
-    log_display_plane_ladder_probe,
+    log_display_plane_ladder_probe, ui4_copy_decoded_ytile_nv12_to_linear,
+    ui4_decoded_nv12_linear_staging_set, ui4_decoded_nv12_staging_scale,
+    ui4_present_linear_nv12_surface,
 };
 use self::display_probes::{
     arm_rgb_plane_probe_planes, log_pipe_scanout_probe, log_primary_dimensions_probe,

@@ -32,7 +32,7 @@ static RGB_PLANE_PROBE_SURFACES: Mutex<[Option<RgbPlaneProbeSurface>; RGB_PLANE_
     Mutex::new([None; RGB_PLANE_PROBE_SLOT_COUNT]);
 static DIRECT_NV12_LINEAR_PATTERN_SURFACE: Mutex<Option<Nv12PlaneProbeSurface>> = Mutex::new(None);
 static DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES: Mutex<
-    [Option<Nv12PlaneProbeSurface>; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT],
+    [Option<crate::ui4::NativeNv12Surface>; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT],
 > = Mutex::new([None; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT]);
 static DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT: AtomicU32 = AtomicU32::new(0);
 
@@ -742,9 +742,23 @@ fn ensure_decoded_linear_nv12_staging_surface(
     pipe: PipeInfo,
     width: u32,
     height: u32,
-) -> Option<(Nv12PlaneProbeSurface, usize)> {
+) -> Option<(crate::ui4::NativeNv12Surface, usize)> {
     let slot = (DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT.fetch_add(1, Ordering::AcqRel) as usize)
         % DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT;
+    ensure_decoded_linear_nv12_staging_surface_at(dev, pipe, width, height, slot)
+        .map(|surface| (surface, slot))
+}
+
+fn ensure_decoded_linear_nv12_staging_surface_at(
+    dev: crate::intel::Dev,
+    pipe: PipeInfo,
+    width: u32,
+    height: u32,
+    slot: usize,
+) -> Option<crate::ui4::NativeNv12Surface> {
+    if slot >= DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT {
+        return None;
+    }
     let gpu = DIRECT_NV12_DECODED_LINEAR_STAGING_GPU
         .checked_add((slot as u64).checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE)?)?;
     {
@@ -752,10 +766,20 @@ fn ensure_decoded_linear_nv12_staging_surface(
         if let Some(surface) = state[slot]
             && surface.width == width
             && surface.height == height
-            && surface.pipe.slot == pipe.slot
+            && surface.pipeline_slot == pipe.slot
             && surface.gpu == gpu
         {
-            return Some((surface, slot));
+            return Some(surface);
+        }
+    }
+    let old = DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock()[slot];
+    if let Some(old) = old {
+        if !retire_decoded_linear_nv12_staging_surface(dev, old, slot) {
+            return None;
+        }
+        let mut state = DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock();
+        if state[slot] == Some(old) {
+            state[slot] = None;
         }
     }
 
@@ -785,20 +809,23 @@ fn ensure_decoded_linear_nv12_staging_surface(
             gpu,
             phys
         );
+        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, gpu);
+        crate::dma::dealloc(virt, byte_len);
         return None;
     }
     crate::intel::ggtt_invalidate(dev);
 
-    let surface = Nv12PlaneProbeSurface {
+    let surface = crate::ui4::NativeNv12Surface {
         width,
         height,
         pitch_bytes,
         uv_offset,
         byte_len,
         phys,
-        virt,
-        pipe,
+        virt: virt as usize,
         gpu,
+        layout: crate::ui4::Nv12Layout::Linear,
+        pipeline_slot: pipe.slot,
     };
     DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock()[slot] = Some(surface);
     crate::log!(
@@ -814,7 +841,52 @@ fn ensure_decoded_linear_nv12_staging_surface(
         phys,
         virt as usize
     );
-    Some((surface, slot))
+    Some(surface)
+}
+
+fn retire_decoded_linear_nv12_staging_surface(
+    dev: crate::intel::Dev,
+    surface: crate::ui4::NativeNv12Surface,
+    slot: usize,
+) -> bool {
+    let Some(pipe) = PIPES.get(surface.pipeline_slot).copied() else {
+        return false;
+    };
+    let uv_base = overlay_plane_base(pipe, DIRECT_NV12_PLANE_PROBE_SLOT);
+    let y_base = overlay_plane_base(pipe, DIRECT_NV12_Y_PLANE_PROBE_SLOT);
+    let uv_live = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_SURFLIVE_OFF);
+    let y_live = crate::intel::mmio_read(dev, y_base + UNI_PLANE_SURFLIVE_OFF);
+    let y_reg = u32::try_from(surface.gpu).unwrap_or(0);
+    let uv_reg = u32::try_from(surface.gpu.saturating_add(surface.uv_offset as u64)).unwrap_or(0);
+    if y_live == y_reg || uv_live == uv_reg {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: decoded-nv12-linear-staging retire deferred pipe={} stage_slot={} y_live=0x{:08X} uv_live=0x{:08X} y_gpu=0x{:08X} uv_gpu=0x{:08X} potential_reason=surface-still-scanned-out\n",
+            pipe.name,
+            slot,
+            y_live,
+            uv_live,
+            y_reg,
+            uv_reg,
+        );
+        return false;
+    }
+    if !crate::intel::unmap_display_scanout_ggtt(dev, surface.byte_len, surface.gpu) {
+        return false;
+    }
+    crate::intel::ggtt_invalidate(dev);
+    crate::dma::dealloc(surface.virt as *mut u8, surface.byte_len);
+    crate::log_info!(
+        target: "intel/display";
+        "intel/display: decoded-nv12-linear-staging retired pipe={} stage_slot={} size={}x{} gpu=0x{:X} bytes=0x{:X}\n",
+        pipe.name,
+        slot,
+        surface.width,
+        surface.height,
+        surface.gpu,
+        surface.byte_len,
+    );
+    true
 }
 
 #[inline(always)]
@@ -1042,7 +1114,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
     src_height: u32,
     src_pitch_bytes: usize,
     src_uv_offset: usize,
-    dst: Nv12PlaneProbeSurface,
+    dst: crate::ui4::NativeNv12Surface,
     scale: u32,
 ) -> bool {
     let scale = scale.max(1) as usize;
@@ -1054,7 +1126,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
         || !src_pitch_bytes.is_multiple_of(128)
         || src_uv_offset < src_pitch_bytes.saturating_mul(src_height as usize)
         || !src_uv_offset.is_multiple_of(src_pitch_bytes)
-        || dst.virt.is_null()
+        || dst.virt == 0
         || dst.width as usize != (src_width as usize).saturating_mul(scale)
         || dst.height as usize != (src_height as usize).saturating_mul(scale)
     {
@@ -1081,8 +1153,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
             let dst_x0 = col.saturating_mul(scale);
             for dy in 0..scale {
                 let dst_row = unsafe {
-                    dst.virt
-                        .add(dst_y0.saturating_add(dy).saturating_mul(dst_pitch))
+                    (dst.virt as *mut u8).add(dst_y0.saturating_add(dy).saturating_mul(dst_pitch))
                 };
                 for dx in 0..scale {
                     unsafe {
@@ -1107,7 +1178,7 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
             let dst_chroma_x0 = (col / 2).saturating_mul(scale);
             for dy in 0..scale {
                 let dst_row = unsafe {
-                    dst.virt.add(
+                    (dst.virt as *mut u8).add(
                         dst.uv_offset
                             .saturating_add(dst_uv_y0.saturating_add(dy).saturating_mul(dst_pitch)),
                     )
@@ -1123,19 +1194,122 @@ fn copy_decoded_ytile_nv12_to_linear_staging(
         }
     }
 
-    crate::intel::dma_flush(dst.virt, dst.byte_len);
+    crate::intel::dma_flush(dst.virt as *mut u8, dst.byte_len);
     true
+}
+
+pub(crate) fn ui4_decoded_nv12_staging_scale(coded_width: u32, coded_height: u32) -> u32 {
+    let (scanout_w, scanout_h) = active_scanout_dimensions().unwrap_or((coded_width, coded_height));
+    if DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE > 1
+        && coded_width
+            .checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE)
+            .is_some_and(|width| width <= scanout_w)
+        && coded_height
+            .checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE)
+            .is_some_and(|height| height <= scanout_h)
+    {
+        DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE
+    } else {
+        1
+    }
+}
+
+pub(crate) fn ui4_decoded_nv12_linear_staging_set(
+    output_slot: usize,
+    width: u32,
+    height: u32,
+) -> Option<[crate::ui4::NativeNv12Surface; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT]> {
+    let dev = crate::intel::claimed_device()?;
+    let output = DisplayOutputId::from_slot(output_slot)?;
+    let pipe = display_output_target(output)?
+        .pipeline_target
+        .pipeline
+        .pipe()?;
+    let mut surfaces = [None; DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT];
+    for (slot, surface) in surfaces.iter_mut().enumerate() {
+        *surface = ensure_decoded_linear_nv12_staging_surface_at(dev, pipe, width, height, slot);
+    }
+    Some([surfaces[0]?, surfaces[1]?, surfaces[2]?])
+}
+
+pub(crate) fn ui4_copy_decoded_ytile_nv12_to_linear(
+    src_virt: usize,
+    src_byte_len: usize,
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: usize,
+    src_uv_offset: usize,
+    dst: crate::ui4::NativeNv12Surface,
+    scale: u32,
+) -> bool {
+    copy_decoded_ytile_nv12_to_linear_staging(
+        src_virt,
+        src_byte_len,
+        src_width,
+        src_height,
+        src_pitch_bytes,
+        src_uv_offset,
+        dst,
+        scale,
+    )
+}
+
+pub(crate) fn ui4_present_linear_nv12_surface(
+    surface: crate::ui4::NativeNv12Surface,
+    visible_width: u32,
+    visible_height: u32,
+    reason: &str,
+) -> bool {
+    if surface.layout != crate::ui4::Nv12Layout::Linear || surface.pipeline_slot >= PIPES.len() {
+        return false;
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let pipe = PIPES[surface.pipeline_slot];
+    if display_pipeline_target_for_pipe(dev, pipe).is_none() {
+        return false;
+    }
+    let presented = arm_nv12_video_plane_probe_surface(
+        "ui4-nv12-linear",
+        "ui4-video-frame",
+        reason,
+        surface.gpu,
+        surface.phys,
+        surface.virt,
+        surface.width,
+        surface.height,
+        visible_width.min(surface.width),
+        visible_height.min(surface.height),
+        surface.pitch_bytes as usize,
+        surface.uv_offset,
+        surface.byte_len,
+        DirectNv12PlaneTiling::Linear,
+    );
+    if presented {
+        let offset = surface
+            .gpu
+            .saturating_sub(DIRECT_NV12_DECODED_LINEAR_STAGING_GPU);
+        let slot = (offset / DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE) as usize;
+        if slot < DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT {
+            DIRECT_NV12_DECODED_LINEAR_STAGING_NEXT.store(
+                ((slot + 1) % DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT) as u32,
+                Ordering::Release,
+            );
+        }
+    }
+    presented
 }
 
 fn log_linear_nv12_green_probe(
     reason: &str,
     pipe: PipeInfo,
     stage_slot: usize,
-    surface: Nv12PlaneProbeSurface,
+    surface: crate::ui4::NativeNv12Surface,
     visible_width: u32,
     visible_height: u32,
 ) {
-    if surface.virt.is_null()
+    if surface.virt == 0
         || surface.pitch_bytes == 0
         || surface.uv_offset >= surface.byte_len
         || visible_width < 2
@@ -1175,9 +1349,12 @@ fn log_linear_nv12_green_probe(
             if y_off >= surface.byte_len || uv_off.saturating_add(1) >= surface.byte_len {
                 continue;
             }
-            let y_value = unsafe { core::ptr::read_volatile(surface.virt.add(y_off)) };
-            let u_value = unsafe { core::ptr::read_volatile(surface.virt.add(uv_off)) };
-            let v_value = unsafe { core::ptr::read_volatile(surface.virt.add(uv_off + 1)) };
+            let y_value =
+                unsafe { core::ptr::read_volatile((surface.virt as *const u8).add(y_off)) };
+            let u_value =
+                unsafe { core::ptr::read_volatile((surface.virt as *const u8).add(uv_off)) };
+            let v_value =
+                unsafe { core::ptr::read_volatile((surface.virt as *const u8).add(uv_off + 1)) };
             samples += 1;
             y_sum = y_sum.saturating_add(y_value as usize);
             u_sum = u_sum.saturating_add(u_value as usize);

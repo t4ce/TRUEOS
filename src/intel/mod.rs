@@ -346,6 +346,44 @@ pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> b
     self::display::set_decoded_nv12_overlay_plane_alpha(alpha, reason)
 }
 
+pub(crate) fn ui4_decoded_nv12_staging_scale(coded_width: u32, coded_height: u32) -> u32 {
+    self::display::ui4_decoded_nv12_staging_scale(coded_width, coded_height)
+}
+
+pub(crate) fn ui4_decoded_nv12_linear_staging_set(
+    output_slot: usize,
+    width: u32,
+    height: u32,
+) -> Option<[crate::ui4::NativeNv12Surface; 3]> {
+    self::display::ui4_decoded_nv12_linear_staging_set(output_slot, width, height)
+}
+
+pub(crate) fn ui4_copy_decoded_ytile_nv12_to_linear(
+    source: crate::ui4::DecodedNv12Source,
+    destination: crate::ui4::NativeNv12Surface,
+    scale: u32,
+) -> bool {
+    self::display::ui4_copy_decoded_ytile_nv12_to_linear(
+        source.virt,
+        source.byte_len,
+        source.width,
+        source.height,
+        source.pitch_bytes,
+        source.uv_offset,
+        destination,
+        scale,
+    )
+}
+
+pub(crate) fn ui4_present_linear_nv12_surface(
+    surface: crate::ui4::NativeNv12Surface,
+    visible_width: u32,
+    visible_height: u32,
+    reason: &str,
+) -> bool {
+    self::display::ui4_present_linear_nv12_surface(surface, visible_width, visible_height, reason)
+}
+
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
 }

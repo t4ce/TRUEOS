@@ -6,25 +6,30 @@
 mod dummy_ui4_consumer;
 mod frame_pool;
 mod input_broker;
+mod video_frame;
 mod window_broker;
 
 pub(crate) use dummy_ui4_consumer::dummy_ui4_consumer_service_task;
 pub(crate) use frame_pool::{
+    FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
-    destroy_frame, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view,
-    release_published_frame, writable_rgba_view, FramePoolError, FrameReadLease, FrameRgbaView,
-    FrameSnapshot, FrameWriteLease, PublishedFrame,
+    destroy_frame, frame_snapshot, gpgpu_rgba_surface, import_native_nv12_frame,
+    publish_frame_buffer, published_native_nv12_view, published_rgba_view, release_published_frame,
+    writable_native_nv12_view, writable_rgba_view,
 };
 pub(crate) use input_broker::{
-    software_cursor_visuals, take_owner_input_events, ui4_input_service_task, Ui4ButtonPhase,
-    Ui4InputEvent, Ui4PanPhase, Ui4VisualRect,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4PanPhase, Ui4VisualRect, software_cursor_visuals,
+    take_owner_input_events, ui4_input_service_task,
+};
+pub(crate) use video_frame::{
+    DecodedNv12Source, present_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
 };
 
 pub(crate) use window_broker::{
-    acknowledge_window_frame, begin_window_session, close_window, create_window,
-    finish_window_session, publish_window_frame, replace_window_frame, set_window_placement,
-    visible_windows_for_output, DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowSessionId, WindowSnapshot, WindowState,
+    DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
+    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame, begin_window_session,
+    close_window, create_window, finish_window_session, publish_window_frame, replace_window_frame,
+    set_window_placement, visible_windows_for_output,
 };
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
@@ -137,8 +142,32 @@ pub(crate) enum ScanoutFormat {
     Xbgr8888,
     /// Per-pixel alpha overlay storage; RGB is already multiplied by alpha.
     Rgba8888Premultiplied,
+    /// Linear two-plane NV12 used by the currently proven video staging ring.
+    Nv12Linear,
     /// Current hardware-decoder Y-tiled NV12 surface.
     Nv12YTile,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Nv12Layout {
+    Linear,
+    YTiled,
+}
+
+/// One trusted native NV12 buffer imported into a UI4 frame. The display
+/// allocator retains the backing allocation; UI4 owns producer/read leases.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeNv12Surface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) virt: usize,
+    pub(crate) byte_len: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+    pub(crate) uv_offset: usize,
+    pub(crate) layout: Nv12Layout,
+    pub(crate) pipeline_slot: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -154,7 +183,7 @@ impl ScanoutFormat {
         match self {
             Self::Xrgb8888 | Self::Xbgr8888 => AlphaContract::Opaque,
             Self::Rgba8888Premultiplied => AlphaContract::PerPixelPremultiplied,
-            Self::Nv12YTile => AlphaContract::PlaneConstant,
+            Self::Nv12Linear | Self::Nv12YTile => AlphaContract::PlaneConstant,
         }
     }
 
@@ -166,7 +195,7 @@ impl ScanoutFormat {
             Self::Rgba8888Premultiplied => PlaneAssignment::AlphaOverlay {
                 slot: ALPHA_OVERLAY_PLANE_SLOT as u8,
             },
-            Self::Nv12YTile => PlaneAssignment::LinkedNv12 {
+            Self::Nv12Linear | Self::Nv12YTile => PlaneAssignment::LinkedNv12 {
                 uv_slot: NV12_UV_PLANE_SLOT as u8,
                 y_slot: NV12_Y_PLANE_SLOT as u8,
             },
@@ -218,9 +247,11 @@ impl FramePlan {
             return Err(FramePlanError::EmptyExtent);
         }
         match (spec.content, spec.format) {
-            (FrameContent::Video, ScanoutFormat::Nv12YTile) => {}
+            (FrameContent::Video, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) => {}
             (FrameContent::Video, _) => return Err(FramePlanError::VideoRequiresNv12),
-            (_, ScanoutFormat::Nv12YTile) => return Err(FramePlanError::Nv12RequiresVideo),
+            (_, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) => {
+                return Err(FramePlanError::Nv12RequiresVideo);
+            }
             _ => {}
         }
         Ok(Self {

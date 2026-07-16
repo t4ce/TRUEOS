@@ -372,7 +372,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             break;
         }
     }
-    let hidden = crate::intel::hide_decoded_nv12_overlay_plane("shell2-vid-done");
+    let hidden = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
     print_matrix_target_line(
         &target,
         alloc::format!("vid: video-plane hidden={}", hidden as u8).as_str(),
