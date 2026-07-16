@@ -27,35 +27,59 @@ resource, mapping, retirement, and fallback chain is present.
 
 ## Landed foundation
 
-1. `sfc_cmd` defines the fixed packet sizes and headers, the upstream command
-   recipe, the narrow progressive same-size AVC-to-UI4 plan, and Intel's
-   single-pipe scratch sizing. It does not submit hardware work.
+1. `sfc_cmd` defines the fixed packet sizes and headers, exact non-submitting
+   `SFC_LOCK`, `SFC_STATE`, `SFC_AVS_STATE`, CPU-oracle `SFC_IEF_STATE`, and
+   `SFC_FRAME_START` encoders, the narrow progressive AVC-to-UI4 plan, and
+   Intel's single-pipe scratch sizing. State encoding rejects missing, short,
+   overlapping, unaligned, or out-of-range GPU bindings.
 2. UI4 video output is split into acquire, publish, and cancel operations. An
    acquired target carries one non-copyable write lease plus its virtual,
    physical, and GPU addresses. The current CPU converter uses this seam.
 3. The media context now owns a stable sparse PPGTT root. External UI4 targets
    can be mapped before a submit and unmapped after retirement without replacing
    the VDBOX context root.
-4. A valid boot-video target logs `sfc-target ready ... mode=shadow-disabled`.
-   This proves allocation, pitch, alignment, command budget, and scratch budget
-   without enabling SFC.
+4. A valid boot-video target logs `sfc-target planned ...
+   mode=shadow-disabled`. This proves allocation, pitch, alignment, command
+   budget, and scratch budget without enabling SFC.
+
+The 2026-07-16 boot test retired and published frames through all three UI4
+buffers after the sparse media PPGTT change. It also exposed a useful boundary:
+the clip is coded as `1920x1088` and displayed as `1920x1080`. Intel's VD mode
+requires source-region state to use the coded extent, so those eight padding
+rows make this a scaling command stream, not the provisional 93-DWORD
+same-size stream. The corrected plan is 287 DWORDs and requires both AVS
+coefficient-table packets. An exact coded-size output remains 93 DWORDs.
+
+The automatic dummy-UI4 boot demo now uses an `ui4-probe-required`
+presentation policy. Decode frames must pass through the UI4 RGBA target seam;
+if acquire, conversion, or publish fails, the frame is reported and dropped
+instead of silently falling back to linked NV12 planes or direct-primary CPU
+presentation. Manual playback retains those legacy fallbacks while the SFC
+producer remains non-submitting.
 
 ## Next implementation gates
 
 ### Gate A: complete offline packet encoding
 
-Mechanically port and validate the remaining dwords for:
+The complete 61-DWORD `SFC_STATE` packet is now encoded for one VDBOX pipe,
+progressive NV12 input, linear uncompressed UI4 `A8B8G8R8` output, opaque
+alpha, CSC, no histogram/MMC, and checked AVS/SFD scratch bindings. UI4's
+little-endian `[R,G,B,A]` bytes match this hardware format without channel
+swap.
 
-- `SFC_STATE` for one VDBOX pipe, progressive NV12 input, linear uncompressed
-  UI4 RGBA output, opaque alpha, and no histogram/MMC;
-- `SFC_IEF_STATE` with the same limited-range CSC currently used by the CPU
-  oracle;
+`SFC_IEF_STATE` is also encoded with IEF sharpening disabled and the same
+limited-range integer BT.601 coefficients used by the current CPU oracle.
+Compile-time fixtures check the command headers, channel format, CSC matrix,
+offsets, scaling flags, pitch, and representative addresses.
 
-`SFC_LOCK`, one-to-one `SFC_AVS_STATE`, and `SFC_FRAME_START` already have fixed
-encoders and compile-time shape checks.
+The remaining Gate A work is the 5x5 polyphase luma and chroma coefficient
+generation/packing required by the real boot clip's `1088 -> 1080` vertical
+conversion. The scaled AVS state already selects NV12 left/center chroma
+siting, but no scaling stream is eligible for submission until both tables are
+encoded and fixture-checked.
 
-The first packet stream is 93 dwords. It deliberately excludes AVS coefficient
-tables because scaling is disabled.
+An exact coded-size stream is 93 DWORDs. A stream with scaling is 287 DWORDs:
+the same five fixed commands plus 129-DWORD luma and 65-DWORD chroma tables.
 
 ### Gate B: resource backing and mapping
 

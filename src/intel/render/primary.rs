@@ -45,6 +45,21 @@ pub(crate) const fn font_native_scale_supported(native_scale: u32) -> bool {
     native_scale > 0 && native_scale <= FONT_STAMP_MAX_NATIVE_SCALE
 }
 
+pub(crate) const fn font_native_scale_count() -> u32 {
+    FONT_STAMP_MAX_NATIVE_SCALE
+}
+
+/// Return the square render-target extent selected by one supported native
+/// font scale. Consumers use this instead of duplicating the render backend's
+/// scale-to-pixel mapping.
+pub(crate) const fn font_native_scale_target_pixels(native_scale: u32) -> Option<u32> {
+    if font_native_scale_supported(native_scale) {
+        Some(FONT_STAMP_BASE_SIZE as u32 * native_scale)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn transient_font_mesh_upload_bytes(
     vertex_count: usize,
     index_count: usize,

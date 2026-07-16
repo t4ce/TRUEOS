@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::super::{ShellBackend2, ecma48, line_width_for_backend, print_shell_line};
 use crate::disc::block::{self, DeviceHandle};
 
 const CELL_SEPARATOR: &str = " | ";
@@ -300,24 +300,118 @@ fn push_cell(out: &mut String, text: &str, width: usize) {
         return;
     }
 
-    let text_chars = text.chars().count();
-    if text_chars <= width {
+    let text_width = ecma48::visible_width(text);
+    if text_width <= width {
         out.push_str(text);
-        for _ in 0..width - text_chars {
+        for _ in 0..width - text_width {
             out.push(' ');
         }
         return;
     }
 
     if width <= 3 {
-        for ch in text.chars().take(width) {
-            out.push(ch);
-        }
+        push_visible_prefix(out, text, width);
         return;
     }
 
-    for ch in text.chars().take(width - 3) {
-        out.push(ch);
-    }
+    push_visible_prefix(out, text, width - 3);
     out.push_str("...");
+}
+
+fn push_visible_prefix(out: &mut String, text: &str, width: usize) {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    let mut used = 0usize;
+    let mut accepting_text = true;
+
+    while index < bytes.len() {
+        if bytes[index] == 0x1b {
+            let end = control_sequence_end(text, index);
+            out.push_str(&text[index..end]);
+            index = end;
+            continue;
+        }
+
+        let Some(ch) = text[index..].chars().next() else {
+            break;
+        };
+        let end = index + ch.len_utf8();
+        if accepting_text {
+            let char_width = ecma48::visible_width(&text[index..end]);
+            if used.saturating_add(char_width) <= width {
+                out.push(ch);
+                used = used.saturating_add(char_width);
+            } else {
+                accepting_text = false;
+            }
+        }
+        index = end;
+    }
+}
+
+fn control_sequence_end(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    if start + 1 >= bytes.len() {
+        return bytes.len();
+    }
+
+    match bytes[start + 1] {
+        b'[' => {
+            let mut index = start + 2;
+            while index < bytes.len() {
+                let byte = bytes[index];
+                index += 1;
+                if (0x40..=0x7e).contains(&byte) {
+                    break;
+                }
+            }
+            index
+        }
+        b']' => {
+            let mut index = start + 2;
+            while index < bytes.len() {
+                if bytes[index] == 0x07 {
+                    return index + 1;
+                }
+                if bytes[index] == 0x1b && index + 1 < bytes.len() && bytes[index + 1] == b'\\' {
+                    return index + 2;
+                }
+                index += 1;
+            }
+            index
+        }
+        _ => {
+            let scalar_len = text[start + 1..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(0);
+            start + 1 + scalar_len
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+
+    use super::{ecma48, push_cell};
+
+    #[test]
+    fn cell_width_ignores_terminal_control_sequences() {
+        let mut out = String::new();
+        push_cell(&mut out, "\x1b[31mred\x1b[0m", 5);
+
+        assert_eq!(ecma48::visible_width(out.as_str()), 5);
+        assert_eq!(out, "\x1b[31mred\x1b[0m  ");
+    }
+
+    #[test]
+    fn truncated_osc8_cell_keeps_the_hyperlink_closed() {
+        let mut out = String::new();
+        push_cell(&mut out, "\x1b]8;;file:///docs/long-name\x1b\\long-name\x1b]8;;\x1b\\", 6);
+
+        assert_eq!(ecma48::visible_width(out.as_str()), 6);
+        assert_eq!(out, "\x1b]8;;file:///docs/long-name\x1b\\lon\x1b]8;;\x1b\\...");
+    }
 }

@@ -1550,6 +1550,40 @@ pub(crate) fn render_font_job_once(job: GpuFontJob<'_>) -> Result<GpuFontJobRend
     })
 }
 
+/// Build one positioned text-row job and return its transparent native-size
+/// render target to a kernel compositor instead of presenting it directly.
+///
+/// The outline registry remains warm and size-independent. Invocation-specific
+/// geometry is dropped after the synchronous submission; the returned pixel
+/// allocation can be recycled with [`recycle_font_job_readback`].
+pub(crate) fn render_font_job_readback_once(
+    job: GpuFontJob<'_>,
+) -> Result<crate::intel::render::FontRenderTargetReadback, &'static str> {
+    let target_pixels = crate::intel::render::font_native_scale_target_pixels(job.native_scale)
+        .ok_or("font-native-scale-range")?;
+    let built = build_font_job_mesh(job.entries, job.font)?;
+    let reusable_pixels = core::mem::take(&mut *TRANSIENT_FONT_STAMP_READBACK.lock());
+    let (render, readback) =
+        crate::intel::render::submit_font_mesh_readback_once_at_extent_reusing(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            built.bounds,
+            target_pixels,
+            target_pixels,
+            target_pixels / 20,
+            reusable_pixels,
+        )?;
+    if !render.completed {
+        recycle_transient_font_readback(readback.pixels);
+        return Err("font-render-incomplete");
+    }
+    Ok(readback)
+}
+
+pub(crate) fn recycle_font_job_readback(readback: crate::intel::render::FontRenderTargetReadback) {
+    recycle_transient_font_readback(readback.pixels);
+}
+
 fn build_font_job_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,

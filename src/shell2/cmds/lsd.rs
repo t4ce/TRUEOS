@@ -216,7 +216,8 @@ fn first_path_arg(args: &[String]) -> Option<String> {
             continue;
         }
         match arg.as_str() {
-            "--color" | "--size" | "--permission" | "--sort" | "--group-dirs" | "--depth" => {
+            "--color" | "--size" | "--permission" | "--sort" | "--group-dirs" | "--depth"
+            | "--hyperlink" | "--ignore-glob" | "-I" => {
                 skip_next = true;
             }
             raw if raw.starts_with('-') => {}

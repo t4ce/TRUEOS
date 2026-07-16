@@ -17,6 +17,7 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
     diagnostics: false,
     noreset_lite: true,
     loop_playback: false,
+    presentation: H264PresentationPolicy::Ui4ProbeRequired,
 };
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
@@ -85,6 +86,26 @@ pub(crate) struct H264PlaybackOptions {
     diagnostics: bool,
     noreset_lite: bool,
     loop_playback: bool,
+    presentation: H264PresentationPolicy,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum H264PresentationPolicy {
+    /// The boot demo must exercise the ordinary UI4 triple-buffered RGBA path.
+    /// A failed acquire/convert/publish is a failed probe, not permission to
+    /// consume linked display planes or write the primary surface directly.
+    Ui4ProbeRequired,
+    /// Interactive/manual playback retains the proven migration fallback.
+    Ui4WithLegacyFallback,
+}
+
+impl H264PresentationPolicy {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Ui4ProbeRequired => "ui4-probe-required",
+            Self::Ui4WithLegacyFallback => "ui4-with-legacy-fallback",
+        }
+    }
 }
 
 impl H264PlaybackOptions {
@@ -107,6 +128,7 @@ impl H264PlaybackOptions {
             diagnostics,
             noreset_lite,
             loop_playback,
+            presentation: H264PresentationPolicy::Ui4WithLegacyFallback,
         }
     }
 
@@ -158,6 +180,10 @@ impl H264PlaybackOptions {
 
     pub(crate) const fn loop_playback(self) -> bool {
         self.loop_playback
+    }
+
+    const fn presentation(self) -> H264PresentationPolicy {
+        self.presentation
     }
 }
 
@@ -351,9 +377,10 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-dummy-app2 start owner=kernel-app-2 asset={} fps={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation=primary-compositor worker_slot={}\n",
+            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} legacy_fallback=0 worker_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
+            H264_BOOT_PROBE_PLAYBACK_OPTIONS.presentation().name(),
             crate::percpu::current_slot()
         );
         if let Some(file) = h264_wait_for_playback_stream().await {
@@ -2548,7 +2575,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} presentation={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
@@ -2557,6 +2584,7 @@ async fn h264_i_p_playback_probe_with_reader(
         path,
         H264_BOOT_PROBE_STREAM_CHUNK_BYTES,
         mode.name(),
+        mode.presentation().name(),
         mode.cache_mode().name(),
         mode.stripe_study() as u8,
         mode.show_cache_fill() as u8,
@@ -2698,6 +2726,7 @@ async fn h264_i_p_playback_probe_with_reader(
             true,
             capture_forward_output,
             mode.diagnostics(),
+            mode.presentation(),
             Some(&mut playback_timing),
         )
         .await;
@@ -2808,6 +2837,7 @@ async fn h264_submit_wait_probe_frame(
     present_output: bool,
     capture_output: bool,
     diagnostics: bool,
+    presentation: H264PresentationPolicy,
     mut timing: Option<&mut H264PlaybackTiming>,
 ) -> Option<H264DecodedFrame> {
     if diagnostics {
@@ -2862,7 +2892,7 @@ async fn h264_submit_wait_probe_frame(
     }
     let present_start = EmbassyInstant::now();
     let stored = if present_output {
-        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output)
+        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output, presentation)
     } else {
         false
     };
@@ -3098,6 +3128,7 @@ async fn h264_reverse_playback_probe(
                     mode.show_cache_fill(),
                     true,
                     mode.diagnostics(),
+                    mode.presentation(),
                     None,
                 )
                 .await
@@ -3672,6 +3703,7 @@ fn h264_present_probe_output(
     playback_frame: usize,
     stream_idr_index: usize,
     output: &super::hw_pic::HwPicOutput,
+    presentation: H264PresentationPolicy,
 ) -> bool {
     if output.error_code != 0 {
         crate::log!(
@@ -3721,9 +3753,20 @@ fn h264_present_probe_output(
             pitch_bytes: output.pitch_bytes,
             uv_offset: output.uv_offset,
         };
-        let direct_presented =
-            crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str());
-        if direct_presented
+        let ui4_presented = crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str());
+        if presentation == H264PresentationPolicy::Ui4ProbeRequired {
+            if !ui4_presented {
+                crate::log!(
+                    "intel/hw_vid: h264-present ui4-probe failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame legacy_fallback=0\n",
+                    phase,
+                    playback_frame,
+                    stream_idr_index,
+                    output.id
+                );
+            }
+            return ui4_presented;
+        }
+        if ui4_presented
             && crate::intel::display::decoded_nv12_overlay_plane_probe_replaces_cpu_present()
         {
             return true;

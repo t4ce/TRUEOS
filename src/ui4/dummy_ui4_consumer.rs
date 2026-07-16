@@ -4,8 +4,10 @@
 //! consumers without defining any Blueprint transport or ABI:
 //! - app 1 owns three Mandelbrot windows with immutable/dirty/streaming
 //!   cadence;
-//! - app 2 is the decoded-video consumer in `video_frame`, with one ordinary
-//!   streaming RGBA frame backed by three buffers.
+//! - app 2 is the decoded-video/SFC probe consumer in `video_frame`, with one
+//!   ordinary streaming RGBA frame backed by three buffers. The boot demo is
+//!   required to reach this UI4 path and cannot escape to linked display
+//!   planes or direct-primary CPU presentation.
 
 use alloc::vec::Vec;
 
@@ -164,7 +166,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video buffers=3 format=rgba8-premultiplied boot_playback=1 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,right-move,keyboard heartbeat_vcursor_slot={}\n",
+        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=ui4-probe-required legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,right-move,keyboard heartbeat_vcursor_slot={}\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
@@ -418,10 +420,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
 
 fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let windows: Vec<_> = visible_windows_for_output(output)
-        .into_iter()
-        .filter(|window| matches!(window.owner, MANDEL_APP_OWNER | VIDEO_APP_OWNER))
-        .collect();
+    let windows = visible_windows_for_output(output);
     if windows.is_empty() || windows.len() > MAX_COMPOSITION_WINDOWS {
         return Err(DummyUi4ConsumerError::PresentFailed);
     }

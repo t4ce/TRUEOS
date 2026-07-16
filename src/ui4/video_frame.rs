@@ -233,23 +233,25 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
         visible_height: spec.visible_height,
         progressive: spec.progressive,
     };
-    match crate::intel::xelp_media_sfc::plan_avc_ui4_same_size(
+    match crate::intel::xelp_media_sfc::plan_avc_ui4_visible_output(
         sfc_input,
         target.sfc_output_surface(),
     ) {
         Ok(plan) => {
             if !SFC_TARGET_READY_LOGGED.swap(true, Ordering::AcqRel) {
                 crate::log_info!(
-                    target: "ui4";
-                    "ui4 video-frame sfc-target ready frame={} buffer={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pitch=0x{:X} commands={} scratch=0x{:X} mode=shadow-disabled reason={}\n",
-                    target.frame().raw(),
-                    target.buffer_index(),
-                    plan.output.gpu_addr,
-                    plan.output.phys_addr,
-                    plan.output.byte_len,
-                    plan.output.pitch_bytes,
+                        target: "ui4";
+                    "ui4 video-frame sfc-target planned frame={} buffer={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pitch=0x{:X} commands={} scratch=0x{:X} scaling={} avs_coefficients={} mode=shadow-disabled reason={}\n",
+                        target.frame().raw(),
+                        target.buffer_index(),
+                        plan.output.gpu_addr,
+                        plan.output.phys_addr,
+                        plan.output.byte_len,
+                        plan.output.pitch_bytes,
                     plan.command_dwords,
                     plan.scratch.page_aligned_total_bytes,
+                    plan.scaling_enabled as u8,
+                    plan.avs_coefficients_required as u8,
                     reason,
                 );
             }

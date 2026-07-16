@@ -3,6 +3,7 @@
 //! This module describes what a producer needs from the display path. It does
 //! not expose a guest/userspace ABI and it does not own presentation yet.
 
+pub(crate) mod blueprint_text;
 mod dummy_ui4_consumer;
 mod frame_pool;
 mod input_broker;

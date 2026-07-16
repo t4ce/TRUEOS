@@ -11,7 +11,48 @@ pub struct TrueosCabiHeapStats {
     pub source: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4SolaraFontSize {
+    pub native_scale: u32,
+    pub target_pixels: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4SolaraTextRow {
+    pub text_ptr: *const u8,
+    pub text_len: usize,
+    pub x: f32,
+    pub y: f32,
+}
+
 unsafe extern "C" {
+    pub fn trueos_cabi_ui4_solara_font_sizes(
+        out: *mut TrueosUi4SolaraFontSize,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_ui4_solara_frame_open(x: i32, y: i32, width: u32, height: u32) -> u32;
+    pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub fn trueos_cabi_ui4_solara_text_rows(
+        window_id: u32,
+        font_id: u32,
+        native_scale: u32,
+        dst_x: i32,
+        dst_y: i32,
+        rgba: u32,
+        rows: *const TrueosUi4SolaraTextRow,
+        row_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_solara_frame_publish(
+        window_id: u32,
+        damage_x: u32,
+        damage_y: u32,
+        damage_width: u32,
+        damage_height: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
+
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);
     pub fn trueos_cabi_thread_current_id() -> usize;

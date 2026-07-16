@@ -1,0 +1,52 @@
+# Copy this file to the TRUEOSFS path `trueos/lsdconf.xdg`.
+#
+# The file is read once, on the first lsd command after boot. Later edits take
+# effect after reboot. Command-line flags override these settings, and
+# `lsd --ignore-config` bypasses them for one invocation.
+
+classic: false
+
+color:
+  # always, auto, never
+  when: auto
+
+# all, almost-all, directory-only
+display: all
+
+# Patterns are matched against each path component. Repeating --ignore-glob on
+# the command line replaces this list for that invocation.
+ignore-globs:
+  - .git
+  - "*.tmp"
+  - "*.bak"
+
+indicators: false
+
+# grid, tree, oneline
+layout: grid
+
+recursion:
+  enabled: false
+  # depth: 3
+
+# default, short, bytes
+size: default
+
+# rwx, octal, attributes, disable
+permission: rwx
+
+sorting:
+  # name, size, extension, none
+  column: name
+  reverse: false
+  # none, first, last
+  dir-grouping: none
+
+# always, auto, never. `auto` enables OSC-8 links in the attached TRUEOS shell.
+hyperlink: never
+
+header: false
+
+# Upstream keys that depend on features not yet present in the compiled TRUEOS
+# adapter (icons, themes, dates, total-size, symlinks, Git and security context)
+# are safely ignored.

@@ -2,6 +2,9 @@
 
 extern crate alloc;
 
+mod glob;
+mod runtime_config;
+
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -16,7 +19,7 @@ const MAX_ENTRIES: usize = 1024;
 const DEFAULT_GRID_WIDTH: usize = 96;
 const MIN_CELL_WIDTH: usize = 18;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Options {
     long: bool,
     tree: bool,
@@ -32,6 +35,8 @@ struct Options {
     sort: SortColumn,
     reverse: bool,
     group_dirs: DirGrouping,
+    hyperlink: HyperlinkStyle,
+    ignore_globs: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +69,13 @@ enum DirGrouping {
     Last,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HyperlinkStyle {
+    Always,
+    Auto,
+    Never,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Entry {
     id: u64,
@@ -93,8 +105,8 @@ pub struct TableRow {
 }
 
 impl Options {
-    const fn new() -> Self {
-        Self {
+    fn new(config: Option<&runtime_config::RuntimeConfig>) -> Self {
+        let mut options = Self {
             long: false,
             tree: false,
             oneline: false,
@@ -109,7 +121,117 @@ impl Options {
             sort: SortColumn::Name,
             reverse: false,
             group_dirs: DirGrouping::None,
+            hyperlink: HyperlinkStyle::Never,
+            ignore_globs: Vec::new(),
+        };
+
+        if let Some(config) = config {
+            options.apply_config(config);
         }
+        options
+    }
+
+    fn apply_config(&mut self, config: &runtime_config::RuntimeConfig) {
+        if let Some(value) = config
+            .scalar("color.when")
+            .or_else(|| config.scalar("color"))
+        {
+            match value {
+                "always" | "auto" => self.color = true,
+                "never" => self.color = false,
+                _ => {}
+            }
+        }
+        if let Some(value) = config.scalar("display")
+            && value == "directory-only"
+        {
+            self.directory_only = true;
+        }
+        if let Some(value) = config.scalar("indicators").and_then(parse_bool) {
+            self.classify = value;
+        }
+        if let Some(value) = config.scalar("header").and_then(parse_bool) {
+            self.header = value;
+        }
+        if let Some(value) = config.scalar("layout") {
+            match value {
+                "tree" => self.select_tree(),
+                "oneline" | "one-line" => self.select_oneline(),
+                "grid" => {
+                    self.tree = false;
+                    self.oneline = false;
+                }
+                _ => {}
+            }
+        }
+        if config.scalar("recursion.enabled").and_then(parse_bool) == Some(true) {
+            self.select_tree();
+        }
+        if let Some(depth) = config
+            .scalar("recursion.depth")
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            self.depth = Some(depth);
+            self.select_tree();
+        }
+        if let Some(value) = config.scalar("size")
+            && let Ok(size) = parse_size(value)
+        {
+            self.size = size;
+        }
+        if let Some(value) = config.scalar("permission")
+            && let Ok(permission) = parse_permission(value)
+        {
+            self.permission = permission;
+        }
+        if let Some(value) = config.scalar("sorting.column")
+            && let Ok(sort) = parse_sort(value)
+        {
+            self.sort = sort;
+        }
+        if let Some(value) = config.scalar("sorting.reverse").and_then(parse_bool) {
+            self.reverse = value;
+        }
+        if let Some(value) = config.scalar("sorting.dir-grouping")
+            && let Ok(group_dirs) = parse_group_dirs(value)
+        {
+            self.group_dirs = group_dirs;
+        }
+        if let Some(value) = config.scalar("hyperlink")
+            && let Ok(hyperlink) = parse_hyperlink(value)
+        {
+            self.hyperlink = hyperlink;
+        }
+        if let Some(patterns) = config.list("ignore-globs") {
+            self.ignore_globs.extend(patterns.iter().cloned());
+        }
+        if config.scalar("classic").and_then(parse_bool) == Some(true) {
+            self.apply_classic();
+        }
+    }
+
+    fn apply_classic(&mut self) {
+        self.color = false;
+        self.group_dirs = DirGrouping::None;
+        self.hyperlink = HyperlinkStyle::Never;
+    }
+
+    fn select_tree(&mut self) {
+        self.tree = true;
+        self.oneline = false;
+    }
+
+    fn select_oneline(&mut self) {
+        self.oneline = true;
+        self.tree = false;
+    }
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -310,7 +432,7 @@ fn tree_entries(prefix: &str) -> io::Result<Vec<Entry>> {
     Ok(entries)
 }
 
-fn colorize(text: &str, kind: kfs::FsEntryKind, options: Options) -> String {
+fn colorize(text: &str, kind: kfs::FsEntryKind, options: &Options) -> String {
     if !options.color {
         return text.to_string();
     }
@@ -322,13 +444,38 @@ fn colorize(text: &str, kind: kfs::FsEntryKind, options: Options) -> String {
     }
 }
 
-fn display_name(entry: &Entry, options: Options) -> String {
+fn display_name(entry: &Entry, options: &Options) -> String {
     let suffix = if options.classify || matches!(entry.kind, kfs::FsEntryKind::Dir) {
         "/"
     } else {
         ""
     };
     format!("{}{suffix}", entry.name)
+}
+
+fn hyperlink_name(entry: &Entry, options: &Options) -> String {
+    let name = display_name(entry, options);
+    if matches!(options.hyperlink, HyperlinkStyle::Never) {
+        return name;
+    }
+
+    let uri = trueosfs_file_uri(entry.path.as_str());
+    format!("\x1b]8;;{uri}\x1b\\{name}\x1b]8;;\x1b\\")
+}
+
+fn trueosfs_file_uri(path: &str) -> String {
+    let mut uri = String::from("file:///");
+    for byte in path.as_bytes().iter().copied() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            uri.push(byte as char);
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            uri.push('%');
+            uri.push(HEX[(byte >> 4) as usize] as char);
+            uri.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    uri
 }
 
 fn pad_visible(mut text: String, visible_width: usize, target_width: usize) -> String {
@@ -420,7 +567,7 @@ fn entry_id(entry: &Entry) -> String {
     }
 }
 
-fn table_row(entry: &Entry, base_depth: usize, options: Options) -> TableRow {
+fn table_row(entry: &Entry, base_depth: usize, options: &Options) -> TableRow {
     let (owner, group) = authority(entry.path.as_str());
     let is_dir = matches!(entry.kind, kfs::FsEntryKind::Dir);
     let depth = if options.tree {
@@ -436,17 +583,17 @@ fn table_row(entry: &Entry, base_depth: usize, options: Options) -> TableRow {
         size: human_size(entry.len, is_dir, options.size),
         date: "-",
         kind: kind_text(entry.kind),
-        name: format!("{}{}", "  ".repeat(depth), display_name(entry, options)),
+        name: format!("{}{}", "  ".repeat(depth), hyperlink_name(entry, options)),
     }
 }
 
-fn render_grid_entry(entry: &Entry, cell_width: usize, options: Options) -> String {
-    let label = format!("{} {}", entry_id(entry), display_name(entry, options));
-    let visible = label.len();
+fn render_grid_entry(entry: &Entry, cell_width: usize, options: &Options) -> String {
+    let visible = entry_id(entry).len() + 1 + display_name(entry, options).len();
+    let label = format!("{} {}", entry_id(entry), hyperlink_name(entry, options));
     pad_visible(colorize(label.as_str(), entry.kind, options), visible, cell_width)
 }
 
-fn render_grid<W>(entries: &[Entry], options: Options, write_line: &mut W)
+fn render_grid<W>(entries: &[Entry], options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -467,12 +614,12 @@ where
     }
 }
 
-fn render_oneline<W>(entries: &[Entry], options: Options, write_line: &mut W)
+fn render_oneline<W>(entries: &[Entry], options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
     for entry in entries {
-        let label = format!("{} {}", entry_id(entry), display_name(entry, options));
+        let label = format!("{} {}", entry_id(entry), hyperlink_name(entry, options));
         write_line(colorize(label.as_str(), entry.kind, options).as_str());
     }
 }
@@ -484,7 +631,7 @@ where
     write_line("FileID   Mode       Owner   Group      Size       Date Name");
 }
 
-fn render_long<W>(entries: &[Entry], options: Options, write_line: &mut W)
+fn render_long<W>(entries: &[Entry], options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -496,14 +643,14 @@ where
     }
 }
 
-fn render_long_entry<W>(entry: &Entry, name_prefix: String, options: Options, write_line: &mut W)
+fn render_long_entry<W>(entry: &Entry, name_prefix: String, options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
     let (owner, group) = authority(entry.path.as_str());
     let size = human_size(entry.len, matches!(entry.kind, kfs::FsEntryKind::Dir), options.size);
     let name = colorize(
-        format!("{name_prefix}{}", display_name(entry, options)).as_str(),
+        format!("{name_prefix}{}", hyperlink_name(entry, options)).as_str(),
         entry.kind,
         options,
     );
@@ -522,7 +669,7 @@ where
     );
 }
 
-fn render_tree<W>(entries: &[Entry], base_depth: usize, options: Options, write_line: &mut W)
+fn render_tree<W>(entries: &[Entry], base_depth: usize, options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -530,7 +677,7 @@ where
         let depth = entry.depth.saturating_sub(base_depth.saturating_add(1));
         let indent = "  ".repeat(depth);
         let name = colorize(
-            format!("{} {}", entry_id(entry), display_name(entry, options)).as_str(),
+            format!("{} {}", entry_id(entry), hyperlink_name(entry, options)).as_str(),
             entry.kind,
             options,
         );
@@ -538,7 +685,7 @@ where
     }
 }
 
-fn render_long_tree<W>(entries: &[Entry], base_depth: usize, options: Options, write_line: &mut W)
+fn render_long_tree<W>(entries: &[Entry], base_depth: usize, options: &Options, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -562,7 +709,7 @@ fn extension(name: &str) -> &str {
         .unwrap_or("")
 }
 
-fn sort_entries(entries: &mut [Entry], options: Options) {
+fn sort_entries(entries: &mut [Entry], options: &Options) {
     entries.sort_by(|a, b| {
         let a_dir = matches!(a.kind, kfs::FsEntryKind::Dir);
         let b_dir = matches!(b.kind, kfs::FsEntryKind::Dir);
@@ -595,7 +742,28 @@ fn sort_entries(entries: &mut [Entry], options: Options) {
     });
 }
 
-fn apply_listing_options(entries: &mut Vec<Entry>, base_depth: usize, options: Options) {
+fn entry_is_ignored(entry: &Entry, base_depth: usize, options: &Options) -> bool {
+    if options.ignore_globs.is_empty() {
+        return false;
+    }
+
+    entry
+        .path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .skip(base_depth)
+        .any(|segment| {
+            options
+                .ignore_globs
+                .iter()
+                .any(|pattern| glob::matches(pattern.as_str(), segment))
+        })
+}
+
+fn apply_listing_options(entries: &mut Vec<Entry>, base_depth: usize, options: &Options) {
+    if !options.ignore_globs.is_empty() {
+        entries.retain(|entry| !entry_is_ignored(entry, base_depth, options));
+    }
     if let Some(max_depth) = options.depth {
         entries.retain(|entry| relative_depth(entry, base_depth) <= max_depth);
     }
@@ -607,7 +775,7 @@ fn apply_listing_options(entries: &mut Vec<Entry>, base_depth: usize, options: O
     }
 }
 
-fn render_entries<W>(entries: &[Entry], options: Options, base_depth: usize, write_line: &mut W)
+fn render_entries<W>(entries: &[Entry], options: &Options, base_depth: usize, write_line: &mut W)
 where
     W: FnMut(&str),
 {
@@ -653,7 +821,7 @@ fn more_entry(prefix: &str) -> Entry {
     }
 }
 
-fn list_one<W>(path: &str, options: Options, write_line: &mut W) -> io::Result<()>
+fn list_one<W>(path: &str, options: &Options, write_line: &mut W) -> io::Result<()>
 where
     W: FnMut(&str),
 {
@@ -713,17 +881,22 @@ where
         "            --permission rwx|octal|attributes|disable  --sort name|size|extension|none",
     );
     write_line(
-        "            --reverse  --group-dirs first|last|none  --depth N  --header  --version  help",
+        "            --reverse  --group-dirs first|last|none  --depth N  --header  --classic",
     );
+    write_line(
+        "            -I/--ignore-glob PATTERN  --hyperlink always|auto|never  --ignore-config",
+    );
+    write_line("            --version  help");
     write_line("     paths: / and . both mean the TRUEOSFS root");
+    write_line("     config: trueos/lsdconf.xdg (latched on first lsd command; reboot to reload)");
 }
 
 fn apply_short_flags(flags: &str, options: &mut Options) -> bool {
     for ch in flags.chars() {
         match ch {
             'l' => options.long = true,
-            'R' => options.tree = true,
-            '1' => options.oneline = true,
+            'R' => options.select_tree(),
+            '1' => options.select_oneline(),
             'd' => options.directory_only = true,
             'F' => options.classify = true,
             'N' | 'a' | 'A' | 'i' => {}
@@ -786,6 +959,15 @@ fn parse_group_dirs(value: &str) -> io::Result<DirGrouping> {
     }
 }
 
+fn parse_hyperlink(value: &str) -> io::Result<HyperlinkStyle> {
+    match value {
+        "always" => Ok(HyperlinkStyle::Always),
+        "auto" => Ok(HyperlinkStyle::Auto),
+        "never" => Ok(HyperlinkStyle::Never),
+        _ => Err(io::Error::new(ErrorKind::InvalidInput, "unsupported lsd hyperlink")),
+    }
+}
+
 fn parse_value_arg(args: &[String], idx: &mut usize, inline: Option<&str>) -> io::Result<String> {
     if let Some(value) = inline {
         return Ok(String::from(value));
@@ -797,10 +979,21 @@ fn parse_value_arg(args: &[String], idx: &mut usize, inline: Option<&str>) -> io
 }
 
 fn parse_args(args: &[String], width: usize) -> io::Result<(Options, Vec<String>, ParseAction)> {
-    let mut options = Options::new();
+    parse_args_with_config(args, width, runtime_config::latched())
+}
+
+fn parse_args_with_config(
+    args: &[String],
+    width: usize,
+    config: &runtime_config::RuntimeConfig,
+) -> io::Result<(Options, Vec<String>, ParseAction)> {
+    let ignore_config = args.iter().skip(1).any(|arg| arg == "--ignore-config");
+    let mut options = Options::new((!ignore_config).then_some(config));
     options.width = width;
     let mut paths = Vec::new();
     let mut idx = 1usize;
+    let mut cli_ignore_globs = false;
+    let mut cli_classic = false;
 
     while idx < args.len() {
         let arg = args[idx].as_str();
@@ -808,12 +1001,14 @@ fn parse_args(args: &[String], width: usize) -> io::Result<(Options, Vec<String>
             "help" | "-help" | "--help" | "-h" => return Ok((options, paths, ParseAction::Help)),
             "--version" => return Ok((options, paths, ParseAction::Version)),
             "-l" | "--long" => options.long = true,
-            "-R" | "--tree" | "--recursive" => options.tree = true,
+            "-R" | "--tree" | "--recursive" => options.select_tree(),
             "-T" | "--table" => options.long = true,
-            "-1" | "--oneline" => options.oneline = true,
+            "-1" | "--oneline" => options.select_oneline(),
             "-d" | "--directory-only" => options.directory_only = true,
             "-F" | "--classify" => options.classify = true,
             "-N" | "--literal" | "-a" | "--all" | "-A" | "--almost-all" | "-i" | "--inode" => {}
+            "--ignore-config" => {}
+            "--classic" => cli_classic = true,
             "-r" | "--reverse" => options.reverse = true,
             "-S" | "--sizesort" => options.sort = SortColumn::Size,
             "-X" | "--extensionsort" => options.sort = SortColumn::Extension,
@@ -851,7 +1046,26 @@ fn parse_args(args: &[String], width: usize) -> io::Result<(Options, Vec<String>
             raw if raw == "--depth" || raw.starts_with("--depth=") => {
                 let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--depth="))?;
                 options.depth = Some(parse_usize(value.as_str())?);
-                options.tree = true;
+                options.select_tree();
+            }
+            raw if raw == "--hyperlink" || raw.starts_with("--hyperlink=") => {
+                let value = parse_value_arg(args, &mut idx, raw.strip_prefix("--hyperlink="))?;
+                options.hyperlink = parse_hyperlink(value.as_str())?;
+            }
+            raw if raw == "-I"
+                || raw == "--ignore-glob"
+                || raw.starts_with("--ignore-glob=")
+                || (raw.starts_with("-I") && raw.len() > 2) =>
+            {
+                let inline = raw
+                    .strip_prefix("--ignore-glob=")
+                    .or_else(|| raw.strip_prefix("-I").filter(|value| !value.is_empty()));
+                let value = parse_value_arg(args, &mut idx, inline)?;
+                if !cli_ignore_globs {
+                    options.ignore_globs.clear();
+                    cli_ignore_globs = true;
+                }
+                options.ignore_globs.push(value);
             }
             raw if raw.starts_with('-') && apply_short_flags(&raw[1..], &mut options) => {}
             raw if raw.starts_with('-') => {
@@ -860,6 +1074,10 @@ fn parse_args(args: &[String], width: usize) -> io::Result<(Options, Vec<String>
             path => paths.push(String::from(path)),
         }
         idx += 1;
+    }
+
+    if cli_classic {
+        options.apply_classic();
     }
 
     Ok((options, paths, ParseAction::Run))
@@ -906,7 +1124,7 @@ where
             }
             write_line(format!("{}:", path).as_str());
         }
-        list_one(path.as_str(), options, &mut write_line)?;
+        list_one(path.as_str(), &options, &mut write_line)?;
     }
 
     Ok(())
@@ -974,10 +1192,10 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
         }
 
         let base_depth = path_depth(normalized.as_str());
-        apply_listing_options(&mut entries, base_depth, options);
+        apply_listing_options(&mut entries, base_depth, &options);
         let rows = entries
             .iter()
-            .map(|entry| table_row(entry, base_depth, options))
+            .map(|entry| table_row(entry, base_depth, &options))
             .collect();
         listings.push(TableListing { path, rows });
     }
@@ -987,4 +1205,115 @@ pub fn table_listings(args: &[String]) -> io::Result<Vec<TableListing>> {
 
 pub fn run(args: &[String]) -> io::Result<()> {
     run_with_writer(args, attached_line)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use super::{
+        DEFAULT_GRID_WIDTH, Entry, HyperlinkStyle, Options, SortColumn, entry_is_ignored,
+        hyperlink_name, parse_args_with_config, runtime_config,
+    };
+    use v::vio::kfs;
+
+    fn argv(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| String::from(*value)).collect()
+    }
+
+    #[test]
+    fn command_line_ignore_globs_replace_config_globs() {
+        let config = runtime_config::RuntimeConfig::parse(
+            r#"
+ignore-globs:
+  - .git
+hyperlink: auto
+"#,
+        );
+        let args = argv(&[
+            "lsd",
+            "--ignore-glob",
+            "*.tmp",
+            "-I*.bak",
+            "--hyperlink=always",
+        ]);
+        let (options, _, _) = parse_args_with_config(&args, DEFAULT_GRID_WIDTH, &config).unwrap();
+
+        assert_eq!(options.ignore_globs, vec![String::from("*.tmp"), String::from("*.bak")]);
+        assert_eq!(options.hyperlink, HyperlinkStyle::Always);
+    }
+
+    #[test]
+    fn ignore_config_bypasses_latched_values() {
+        let config = runtime_config::RuntimeConfig::parse(
+            r#"
+sorting:
+  column: extension
+ignore-globs: [.git]
+hyperlink: always
+"#,
+        );
+        let args = argv(&["lsd", "--ignore-config"]);
+        let (options, _, _) = parse_args_with_config(&args, DEFAULT_GRID_WIDTH, &config).unwrap();
+
+        assert_eq!(options.sort, SortColumn::Name);
+        assert!(options.ignore_globs.is_empty());
+        assert_eq!(options.hyperlink, HyperlinkStyle::Never);
+    }
+
+    #[test]
+    fn command_line_layout_overrides_config_layout() {
+        let config = runtime_config::RuntimeConfig::parse("layout: tree");
+        let args = argv(&["lsd", "--oneline"]);
+        let (options, _, _) = parse_args_with_config(&args, DEFAULT_GRID_WIDTH, &config).unwrap();
+
+        assert!(options.oneline);
+        assert!(!options.tree);
+    }
+
+    #[test]
+    fn ignored_tree_component_prunes_descendants() {
+        let config = runtime_config::RuntimeConfig::parse("ignore-globs: [.git, '*.tmp']");
+        let options = Options::new(Some(&config));
+        let git_entry = Entry {
+            id: 1,
+            path: String::from("apps/demo/.git/objects/one"),
+            name: String::from("one"),
+            kind: kfs::FsEntryKind::File,
+            depth: 5,
+            len: Some(1),
+        };
+        let tmp_entry = Entry {
+            id: 2,
+            path: String::from("apps/demo/scratch.tmp"),
+            name: String::from("scratch.tmp"),
+            kind: kfs::FsEntryKind::File,
+            depth: 3,
+            len: Some(1),
+        };
+
+        assert!(entry_is_ignored(&git_entry, 2, &options));
+        assert!(entry_is_ignored(&tmp_entry, 2, &options));
+    }
+
+    #[test]
+    fn hyperlink_uses_percent_encoded_trueosfs_file_uri() {
+        let config = runtime_config::RuntimeConfig::parse("hyperlink: always");
+        let options = Options::new(Some(&config));
+        let entry = Entry {
+            id: 1,
+            path: String::from("docs/my notes#1.txt"),
+            name: String::from("my notes#1.txt"),
+            kind: kfs::FsEntryKind::File,
+            depth: 2,
+            len: Some(1),
+        };
+
+        assert_eq!(
+            hyperlink_name(&entry, &options),
+            "\x1b]8;;file:///docs/my%20notes%231.txt\x1b\\my notes#1.txt\x1b]8;;\x1b\\"
+        );
+    }
 }
