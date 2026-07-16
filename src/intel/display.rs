@@ -177,7 +177,8 @@ static HW_LOGO_SEQUENCE_DONE: AtomicBool = AtomicBool::new(false);
 static HW_LOGO_SEQUENCE_DONE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 
 /// Stable display-engine identity. Universal slots retain their identity when
-/// their SDR/HDR/UI/video role changes; Intel's cursor plane is separate.
+/// their SDR/HDR/UI/video role changes. The cursor keeps its existing sprite
+/// and is deliberately excluded from this diagnostic.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(super) enum NativePlaneId {
@@ -185,7 +186,6 @@ pub(super) enum NativePlaneId {
     Universal1 = 1,
     Universal2 = 2,
     Universal3 = 3,
-    Cursor = 4,
 }
 
 impl NativePlaneId {
@@ -199,7 +199,6 @@ impl NativePlaneId {
             Self::Universal1 => "P1",
             Self::Universal2 => "P2",
             Self::Universal3 => "P3",
-            Self::Cursor => "C",
         }
     }
 }

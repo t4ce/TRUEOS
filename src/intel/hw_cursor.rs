@@ -4,7 +4,7 @@ use spin::Mutex;
 
 use super::display::{
     PIPES, PipeInfo, active_pipe, aligned_pitch_bytes, decode_pipe_src, fill_surface_color,
-    framebuffer_hint, native_plane_id_marker_screen_position, plane_buf_cfg_for_pipe_slot,
+    framebuffer_hint, plane_buf_cfg_for_pipe_slot,
 };
 
 const CURSOR_A_BASE: usize = 0x70080;
@@ -56,7 +56,6 @@ const KERNEL_CURSOR_DBUF_BLOCKS_ONE_PIPE: u32 = 32;
 const PLANE_CTL_ENABLE: u32 = 1 << 31;
 
 static KERNEL_CURSOR_DDB_MAP_LOGGED: AtomicBool = AtomicBool::new(false);
-static KERNEL_CURSOR_PLANE_ID_LOGGED: AtomicBool = AtomicBool::new(false);
 static KERNEL_CURSOR_STATE: Mutex<KernelCursorState> = Mutex::new(KernelCursorState::new());
 
 #[derive(Copy, Clone)]
@@ -197,20 +196,6 @@ pub(crate) fn update_kernel_hw_cursor() -> Option<u32> {
     let mut y_px = normalized_cursor_to_px(ny, scanout_h, KERNEL_CURSOR_HOTSPOT_Y);
     if KERNEL_CURSOR_PROBE_ONLY && KERNEL_CURSOR_PROBE_KIND.forces_visible_probe_position() {
         (x_px, y_px) = clamp_cursor_probe_position(x_px, y_px, scanout_w, scanout_h, rect_dim);
-    }
-    if centered_fallback
-        && crate::intel::gpu_font::cached_native_plane_id_marker(
-            crate::intel::gpu_font::NativePlaneId::Cursor,
-        )
-        .is_some()
-    {
-        let (marker_x, marker_y) = native_plane_id_marker_screen_position(
-            crate::intel::gpu_font::NativePlaneId::Cursor,
-            scanout_w,
-            scanout_h,
-        );
-        x_px = marker_x as i32;
-        y_px = marker_y as i32;
     }
     let pressed = buttons_down != 0;
     let texture_variant = pressed as u32;
@@ -1540,49 +1525,4 @@ fn draw_kernel_cursor_surface(surface: KernelCursorSurface, rect_dim: u32, press
         }
     }
 
-    let Some(marker) = crate::intel::gpu_font::cached_native_plane_id_marker(
-        crate::intel::gpu_font::NativePlaneId::Cursor,
-    ) else {
-        return;
-    };
-    let copy_width = marker.width.min(surface.width) as usize;
-    let copy_height = marker.height.min(surface.height) as usize;
-    let dst_x = (width.saturating_sub(copy_width)) / 2;
-    let dst_y = (height.saturating_sub(copy_height)) / 2;
-    for y in 0..copy_height {
-        let dst_row = unsafe {
-            (surface.virt as *mut u32).add(dst_y.saturating_add(y).saturating_mul(pitch_pixels))
-        };
-        for x in 0..copy_width {
-            let src_off = y
-                .saturating_mul(marker.pitch_bytes)
-                .saturating_add(x.saturating_mul(4));
-            let alpha = marker.pixels.get(src_off + 3).copied().unwrap_or(0);
-            if alpha == 0 {
-                continue;
-            }
-            let red = marker.pixels.get(src_off).copied().unwrap_or(0);
-            let green = marker.pixels.get(src_off + 1).copied().unwrap_or(0);
-            let blue = marker.pixels.get(src_off + 2).copied().unwrap_or(0);
-            unsafe {
-                core::ptr::write_volatile(
-                    dst_row.add(dst_x.saturating_add(x)),
-                    pack_bgra8888(red, green, blue, alpha),
-                );
-            }
-        }
-    }
-    if !KERNEL_CURSOR_PLANE_ID_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log!(
-            "intel/display: native-plane-id cursor stamped=1 id={} label={} surface={}x{} marker={}x{} dst={},{} source=kernel-gpu-font-cache\n",
-            marker.id.cache_index(),
-            marker.id.label(),
-            surface.width,
-            surface.height,
-            copy_width,
-            copy_height,
-            dst_x,
-            dst_y,
-        );
-    }
 }
