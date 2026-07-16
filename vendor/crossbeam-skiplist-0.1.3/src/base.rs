@@ -1420,9 +1420,11 @@ where
 
     /// Returns the next entry in the skip list.
     pub fn next(&self) -> Option<Entry<'a, 'g, K, V>> {
-        let n =
-            self.parent
-                .next_node(&self.node.tower, Bound::Excluded(&self.node.key), self.guard)?;
+        let n = self.parent.next_node(
+            &self.node.tower,
+            Bound::Excluded(&self.node.key),
+            self.guard,
+        )?;
         Some(Entry {
             parent: self.parent,
             node: n,

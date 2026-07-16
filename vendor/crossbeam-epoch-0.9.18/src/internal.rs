@@ -206,10 +206,10 @@ impl Global {
         };
 
         for _ in 0..steps {
-            match self
-                .queue
-                .try_pop_if(&|sealed_bag: &SealedBag| sealed_bag.is_expired(global_epoch), guard)
-            {
+            match self.queue.try_pop_if(
+                &|sealed_bag: &SealedBag| sealed_bag.is_expired(global_epoch),
+                guard,
+            ) {
                 None => break,
                 Some(sealed_bag) => drop(sealed_bag),
             }
@@ -391,7 +391,10 @@ impl Local {
             // Now we must store `new_epoch` into `self.epoch` and execute a `SeqCst` fence.
             // The fence makes sure that any future loads from `Atomic`s will not happen before
             // this store.
-            if cfg!(all(any(target_arch = "x86", target_arch = "x86_64"), not(miri))) {
+            if cfg!(all(
+                any(target_arch = "x86", target_arch = "x86_64"),
+                not(miri)
+            )) {
                 // HACK(stjepang): On x86 architectures there are two different ways of executing
                 // a `SeqCst` fence.
                 //

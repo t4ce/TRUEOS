@@ -633,7 +633,10 @@ fn iter() {
         s.insert(x, x * 10);
     }
 
-    assert_eq!(s.iter().map(|e| *e.key()).collect::<Vec<_>>(), &[2, 4, 5, 7, 8, 11, 12]);
+    assert_eq!(
+        s.iter().map(|e| *e.key()).collect::<Vec<_>>(),
+        &[2, 4, 5, 7, 8, 11, 12]
+    );
 
     let mut it = s.iter();
     s.remove(&2);

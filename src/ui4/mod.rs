@@ -10,21 +10,21 @@ mod window_broker;
 
 pub(crate) use dummy_ui4_consumer::dummy_ui4_consumer_service_task;
 pub(crate) use frame_pool::{
-    FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
     destroy_frame, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view,
-    release_published_frame, writable_rgba_view,
+    release_published_frame, writable_rgba_view, FramePoolError, FrameReadLease, FrameRgbaView,
+    FrameSnapshot, FrameWriteLease, PublishedFrame,
 };
 pub(crate) use input_broker::{
-    Ui4InputEvent, Ui4SoftwareCursorVisual, Ui4VisualRect, software_cursor_visuals,
-    take_owner_input_events, ui4_input_service_task,
+    software_cursor_visuals, take_owner_input_events, ui4_input_service_task, Ui4ButtonPhase,
+    Ui4InputEvent, Ui4PanPhase, Ui4VisualRect,
 };
 
 pub(crate) use window_broker::{
-    DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame, begin_window_session,
-    close_window, create_window, finish_window_session, publish_window_frame, replace_window_frame,
-    set_window_placement, visible_windows_for_output,
+    acknowledge_window_frame, begin_window_session, close_window, create_window,
+    finish_window_session, publish_window_frame, replace_window_frame, set_window_placement,
+    visible_windows_for_output, DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
+    WindowPlacement, WindowSessionId, WindowSnapshot, WindowState,
 };
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
@@ -116,7 +116,11 @@ pub(crate) struct FrameHandle(u64);
 
 impl FrameHandle {
     pub(crate) const fn from_raw(raw: u64) -> Option<Self> {
-        if raw == 0 { None } else { Some(Self(raw)) }
+        if raw == 0 {
+            None
+        } else {
+            Some(Self(raw))
+        }
     }
 
     pub(crate) const fn raw(self) -> u64 {

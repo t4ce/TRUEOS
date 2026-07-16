@@ -3631,8 +3631,7 @@ pub(crate) fn present_rgba_overlay_tiles_with_background(
     let mut source_mismatches = 0u64;
     let mut storage_mismatches = 0u64;
     for tile in tiles {
-        let Some((pixels, source_errors, storage_errors)) =
-            copy_rgba_tile_into_overlay(surface, tile)
+        let Some((pixels, source_errors, storage_errors)) = copy_rgba_tile_into_overlay(surface, tile)
         else {
             return false;
         };
@@ -6024,9 +6023,7 @@ fn copy_primary_composition_base(back: PrimarySwapSurface) -> bool {
     for row in 0..primary.height as usize {
         unsafe {
             core::ptr::copy_nonoverlapping(
-                primary
-                    .virt
-                    .add(row.saturating_mul(primary.pitch_bytes as usize)),
+                primary.virt.add(row.saturating_mul(primary.pitch_bytes as usize)),
                 back.virt.add(row.saturating_mul(back.pitch_bytes as usize)),
                 row_bytes,
             );
@@ -6085,8 +6082,12 @@ fn blend_premultiplied_rgba_tile_into_primary(
                 let under = (u16::from(under) * inverse_alpha + 127) / 255;
                 u16::from(src).saturating_add(under).min(255) as u8
             };
-            let pixel =
-                u32::from_le_bytes([blend(b, dst[0]), blend(g, dst[1]), blend(r, dst[2]), 0]);
+            let pixel = u32::from_le_bytes([
+                blend(b, dst[0]),
+                blend(g, dst[1]),
+                blend(r, dst[2]),
+                0,
+            ]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), pixel);
             }

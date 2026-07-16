@@ -27,7 +27,11 @@ pub(crate) struct WindowId(u32);
 
 impl WindowId {
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
-        if raw == 0 { None } else { Some(Self(raw)) }
+        if raw == 0 {
+            None
+        } else {
+            Some(Self(raw))
+        }
     }
 
     pub(crate) const fn raw(self) -> u32 {
@@ -41,7 +45,11 @@ pub(crate) struct WindowSessionId(u32);
 
 impl WindowSessionId {
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
-        if raw == 0 { None } else { Some(Self(raw)) }
+        if raw == 0 {
+            None
+        } else {
+            Some(Self(raw))
+        }
     }
 
     pub(crate) const fn raw(self) -> u32 {
@@ -429,9 +437,21 @@ pub(crate) fn set_window_placement(
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    let previous = window.placement;
     if window.placement != placement {
         window.placement = placement;
         window.revision = next_serial(window.revision);
+    }
+    drop(broker);
+    if previous.width != placement.width || previous.height != placement.height {
+        super::input_broker::enqueue_window_resize(
+            owner,
+            id,
+            previous.width,
+            previous.height,
+            placement.width,
+            placement.height,
+        );
     }
     Ok(())
 }

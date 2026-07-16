@@ -9,20 +9,21 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::mouse_motion_service::{
-    MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
-    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlError,
-    MouseControlPrincipal, cursor_is_idle, release_cursor, request_cursor, submit_program,
+    cursor_is_idle, release_cursor, request_cursor, submit_program, MouseControlCommand,
+    MouseControlCursor, MouseControlError, MouseControlPrincipal, MOUSE_CONTROL_EASING_FAST_LINEAR,
+    MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE, MOUSE_CONTROL_OPCODE_STROKE,
+    MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC, MOUSE_CONTROL_PATH_LINE,
 };
 
 use super::{
-    DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
-    FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4InputEvent,
-    WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
     acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
     create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
     publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
     set_window_placement, software_cursor_visuals, take_owner_input_events, writable_rgba_view,
+    DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
+    FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4ButtonPhase,
+    Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
+    WindowSessionId,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -36,7 +37,7 @@ const STREAM_PARAMETER_MAX: u32 = 256;
 const STREAM_PERIOD_MS: u64 = 33;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
-const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
+const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 
 const STATIC_PLACEMENT: WindowPlacement = WindowPlacement {
     x: 64,
@@ -587,6 +588,9 @@ fn present_software_cursor_plane() -> Result<(), DummyUi4ConsumerError> {
     // Every source becomes visible only after its first real movement. The
     // color remains bound to the full HID source identity, not to focus.
     for visual in &visuals {
+        if !visual.draw_cursor {
+            continue;
+        }
         let x = visual.x;
         let y = visual.y;
         let color = visual.color;
@@ -668,41 +672,73 @@ fn dispatch_ui4_callbacks(
         for event in take_owner_input_events(owner) {
             match event {
                 Ui4InputEvent::Pointer(event) => {
-                    if event.buttons_pressed & MIDDLE_BUTTON_MASK != 0 {
-                        crate::log_info!(
-                            target: "ui4";
-                            "ui4 dummy-consumer pan-callback phase=begin owner={:?} cursor={}:{}:{} kind={} vcursor={}\n",
-                            owner,
-                            event.source.controller_id,
-                            event.source.slot_id,
-                            event.source.ep_target,
-                            event.source.hid_kind,
-                            event.vcursor as u8
-                        );
-                    }
-                    if event.buttons_down & MIDDLE_BUTTON_MASK != 0
+                    if event.buttons_down & SECONDARY_BUTTON_MASK != 0
                         && (event.dx != 0 || event.dy != 0)
                     {
-                        handle_pan_callback(runtime, owner, event.dx, event.dy)?;
-                    }
-                    if event.buttons_released & MIDDLE_BUTTON_MASK != 0 {
-                        crate::log_info!(
-                            target: "ui4";
-                            "ui4 dummy-consumer pan-callback phase=end owner={:?} cursor={}:{}:{} kind={}\n",
+                        handle_window_move_callback(
+                            runtime,
                             owner,
-                            event.source.controller_id,
-                            event.source.slot_id,
-                            event.source.ep_target,
-                            event.source.hid_kind
-                        );
+                            event.window,
+                            event.dx,
+                            event.dy,
+                        )?;
                     }
+                }
+                Ui4InputEvent::Button(event) => {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 dummy-consumer button-callback owner={:?} window={} phase={:?} changed=0x{:X} down=0x{:X} local={},{} cursor={}:{}:{} kind={}\n",
+                        owner,
+                        event.window.raw(),
+                        event.phase,
+                        event.changed_buttons,
+                        event.buttons_down,
+                        event.local_x,
+                        event.local_y,
+                        event.source.controller_id,
+                        event.source.slot_id,
+                        event.source.ep_target,
+                        event.source.hid_kind
+                    );
                     if owner == runtime.mandel.owner
                         && event.window == runtime.mandel.windows[1]
-                        && event.buttons_pressed & PRIMARY_BUTTON_MASK != 0
+                        && event.phase == Ui4ButtonPhase::Down
+                        && event.changed_buttons & PRIMARY_BUTTON_MASK != 0
                     {
                         dirty_clicks = dirty_clicks.saturating_add(1);
                         last_dirty_click = Some((event.x, event.y));
                     }
+                }
+                Ui4InputEvent::Pan(event) => {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 dummy-consumer pan-callback owner={:?} window={} phase={:?} dx={} dy={} local={},{} cursor={}:{}:{} kind={} combo={} vcursor={}\n",
+                        owner,
+                        event.window.raw(),
+                        event.phase,
+                        event.dx,
+                        event.dy,
+                        event.local_x,
+                        event.local_y,
+                        event.source.controller_id,
+                        event.source.slot_id,
+                        event.source.ep_target,
+                        event.source.hid_kind,
+                        event.combo_id,
+                        event.vcursor as u8
+                    );
+                }
+                Ui4InputEvent::Resize(event) => {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 dummy-consumer resize-callback owner={:?} window={} old={}x{} new={}x{}\n",
+                        owner,
+                        event.window.raw(),
+                        event.old_width,
+                        event.old_height,
+                        event.width,
+                        event.height
+                    );
                 }
                 Ui4InputEvent::Keyboard(event) => {
                     crate::log_info!(
@@ -740,9 +776,10 @@ fn dispatch_ui4_callbacks(
     Ok((dirty_clicks, last_dirty_click))
 }
 
-fn handle_pan_callback(
+fn handle_window_move_callback(
     runtime: &mut Runtime,
     owner: WindowOwner,
+    window: WindowId,
     dx: i32,
     dy: i32,
 ) -> Result<(), DummyUi4ConsumerError> {
@@ -750,25 +787,33 @@ fn handle_pan_callback(
         return Ok(());
     };
     if owner == runtime.mandel.owner {
-        let (dx, dy) = clamp_pan_delta(&runtime.mandel.placements, dx, dy, width, height);
+        let Some(slot) = runtime
+            .mandel
+            .windows
+            .iter()
+            .position(|candidate| *candidate == window)
+        else {
+            return Ok(());
+        };
+        let (dx, dy) = clamp_pan_delta(&[runtime.mandel.placements[slot]], dx, dy, width, height);
         if dx == 0 && dy == 0 {
             return Ok(());
         }
-        for slot in 0..runtime.mandel.windows.len() {
-            let next = translated_placement(runtime.mandel.placements[slot], dx, dy);
-            set_window_placement(runtime.mandel.owner, runtime.mandel.windows[slot], next)?;
-            runtime.mandel.placements[slot] = next;
-        }
+        let next = translated_placement(runtime.mandel.placements[slot], dx, dy);
+        set_window_placement(runtime.mandel.owner, window, next)?;
+        runtime.mandel.placements[slot] = next;
         crate::log_info!(
             target: "ui4";
-            "ui4 dummy-consumer pan-callback phase=update owner={:?} dx={} dy={} anchor={},{}\n",
+            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot={} dx={} dy={} placement={},{}\n",
             owner,
+            window.raw(),
+            slot,
             dx,
             dy,
-            runtime.mandel.placements[0].x,
-            runtime.mandel.placements[0].y
+            next.x,
+            next.y
         );
-    } else if owner == runtime.white.owner {
+    } else if owner == runtime.white.owner && window == runtime.white.window {
         let (dx, dy) = clamp_pan_delta(&[runtime.white.placement], dx, dy, width, height);
         if dx == 0 && dy == 0 {
             return Ok(());
@@ -778,8 +823,9 @@ fn handle_pan_callback(
         runtime.white.placement = next;
         crate::log_info!(
             target: "ui4";
-            "ui4 dummy-consumer pan-callback phase=update owner={:?} dx={} dy={} anchor={},{}\n",
+            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot=white dx={} dy={} placement={},{}\n",
             owner,
+            window.raw(),
             dx,
             dy,
             runtime.white.placement.x,

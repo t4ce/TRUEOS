@@ -296,7 +296,14 @@ impl DeviceRegistry {
     }
 
     pub fn upsert_heartbeat_v4(&mut self, addr: [u8; 4], service_port: u16, now_ms: u64) -> bool {
-        self.upsert_device_v4(DeviceClass::EspUploader, addr, service_port, 0, 0, now_ms)
+        self.upsert_device_v4(
+            DeviceClass::EspUploader,
+            addr,
+            service_port,
+            0,
+            0,
+            now_ms,
+        )
     }
 
     pub fn upsert_trueos_host_v4(
@@ -307,7 +314,14 @@ impl DeviceRegistry {
         caps: u32,
         now_ms: u64,
     ) -> bool {
-        self.upsert_device_v4(DeviceClass::TrueOsHost, addr, peer_tcp_port, node_id, caps, now_ms)
+        self.upsert_device_v4(
+            DeviceClass::TrueOsHost,
+            addr,
+            peer_tcp_port,
+            node_id,
+            caps,
+            now_ms,
+        )
     }
 
     fn upsert_device_v4(
@@ -503,12 +517,14 @@ mod tests {
 
         assert_eq!(
             step,
-            GateAction::Signal(GateSignal::TrueOsHostDiscovered(TrueOsHostAdvertisement {
-                from,
-                peer_tcp_port: TRUEOS_PEER_TCP_PORT,
-                node_id: 0x1234,
-                caps: device_caps::REGISTRY | device_caps::STATUS | device_caps::FS,
-            },))
+            GateAction::Signal(GateSignal::TrueOsHostDiscovered(
+                TrueOsHostAdvertisement {
+                    from,
+                    peer_tcp_port: TRUEOS_PEER_TCP_PORT,
+                    node_id: 0x1234,
+                    caps: device_caps::REGISTRY | device_caps::STATUS | device_caps::FS,
+                },
+            ))
         );
     }
 
@@ -618,21 +634,15 @@ mod tests {
         ));
 
         assert_eq!(registry.trueos_host_len(), 2);
-        assert!(
-            registry
-                .snapshot_for(trueos_host_handle_v4([10, 0, 0, 1], 1))
-                .is_none()
-        );
-        assert!(
-            registry
-                .snapshot_for(trueos_host_handle_v4([10, 0, 0, 2], 2))
-                .is_some()
-        );
-        assert!(
-            registry
-                .snapshot_for(trueos_host_handle_v4([10, 0, 0, 3], 3))
-                .is_some()
-        );
+        assert!(registry
+            .snapshot_for(trueos_host_handle_v4([10, 0, 0, 1], 1))
+            .is_none());
+        assert!(registry
+            .snapshot_for(trueos_host_handle_v4([10, 0, 0, 2], 2))
+            .is_some());
+        assert!(registry
+            .snapshot_for(trueos_host_handle_v4([10, 0, 0, 3], 3))
+            .is_some());
     }
 
     #[test]

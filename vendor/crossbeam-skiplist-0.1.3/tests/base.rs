@@ -283,26 +283,71 @@ fn lower_bound() {
 
     assert_eq!(*s.lower_bound(Bound::Unbounded, guard).unwrap().value(), 1);
 
-    assert_eq!(*s.lower_bound(Bound::Included(&10), guard).unwrap().value(), 1);
-    assert_eq!(*s.lower_bound(Bound::Included(&20), guard).unwrap().value(), 2);
-    assert_eq!(*s.lower_bound(Bound::Included(&30), guard).unwrap().value(), 3);
-    assert_eq!(*s.lower_bound(Bound::Included(&40), guard).unwrap().value(), 4);
-    assert_eq!(*s.lower_bound(Bound::Included(&50), guard).unwrap().value(), 5);
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&10), guard).unwrap().value(),
+        1
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&20), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&30), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&40), guard).unwrap().value(),
+        4
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&50), guard).unwrap().value(),
+        5
+    );
 
-    assert_eq!(*s.lower_bound(Bound::Included(&7), guard).unwrap().value(), 1);
-    assert_eq!(*s.lower_bound(Bound::Included(&27), guard).unwrap().value(), 3);
-    assert_eq!(*s.lower_bound(Bound::Included(&31), guard).unwrap().value(), 4);
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&7), guard).unwrap().value(),
+        1
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&27), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Included(&31), guard).unwrap().value(),
+        4
+    );
     assert!(s.lower_bound(Bound::Included(&97), guard).is_none());
 
-    assert_eq!(*s.lower_bound(Bound::Excluded(&10), guard).unwrap().value(), 2);
-    assert_eq!(*s.lower_bound(Bound::Excluded(&20), guard).unwrap().value(), 3);
-    assert_eq!(*s.lower_bound(Bound::Excluded(&30), guard).unwrap().value(), 4);
-    assert_eq!(*s.lower_bound(Bound::Excluded(&40), guard).unwrap().value(), 5);
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&10), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&20), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&30), guard).unwrap().value(),
+        4
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&40), guard).unwrap().value(),
+        5
+    );
     assert!(s.lower_bound(Bound::Excluded(&50), guard).is_none());
 
-    assert_eq!(*s.lower_bound(Bound::Excluded(&7), guard).unwrap().value(), 1);
-    assert_eq!(*s.lower_bound(Bound::Excluded(&27), guard).unwrap().value(), 3);
-    assert_eq!(*s.lower_bound(Bound::Excluded(&31), guard).unwrap().value(), 4);
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&7), guard).unwrap().value(),
+        1
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&27), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.lower_bound(Bound::Excluded(&31), guard).unwrap().value(),
+        4
+    );
     assert!(s.lower_bound(Bound::Excluded(&97), guard).is_none());
 }
 
@@ -318,27 +363,72 @@ fn upper_bound() {
 
     assert_eq!(*s.upper_bound(Bound::Unbounded, guard).unwrap().value(), 5);
 
-    assert_eq!(*s.upper_bound(Bound::Included(&10), guard).unwrap().value(), 1);
-    assert_eq!(*s.upper_bound(Bound::Included(&20), guard).unwrap().value(), 2);
-    assert_eq!(*s.upper_bound(Bound::Included(&30), guard).unwrap().value(), 3);
-    assert_eq!(*s.upper_bound(Bound::Included(&40), guard).unwrap().value(), 4);
-    assert_eq!(*s.upper_bound(Bound::Included(&50), guard).unwrap().value(), 5);
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&10), guard).unwrap().value(),
+        1
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&20), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&30), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&40), guard).unwrap().value(),
+        4
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&50), guard).unwrap().value(),
+        5
+    );
 
     assert!(s.upper_bound(Bound::Included(&7), guard).is_none());
-    assert_eq!(*s.upper_bound(Bound::Included(&27), guard).unwrap().value(), 2);
-    assert_eq!(*s.upper_bound(Bound::Included(&31), guard).unwrap().value(), 3);
-    assert_eq!(*s.upper_bound(Bound::Included(&97), guard).unwrap().value(), 5);
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&27), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&31), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Included(&97), guard).unwrap().value(),
+        5
+    );
 
     assert!(s.upper_bound(Bound::Excluded(&10), guard).is_none());
-    assert_eq!(*s.upper_bound(Bound::Excluded(&20), guard).unwrap().value(), 1);
-    assert_eq!(*s.upper_bound(Bound::Excluded(&30), guard).unwrap().value(), 2);
-    assert_eq!(*s.upper_bound(Bound::Excluded(&40), guard).unwrap().value(), 3);
-    assert_eq!(*s.upper_bound(Bound::Excluded(&50), guard).unwrap().value(), 4);
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&20), guard).unwrap().value(),
+        1
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&30), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&40), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&50), guard).unwrap().value(),
+        4
+    );
 
     assert!(s.upper_bound(Bound::Excluded(&7), guard).is_none());
-    assert_eq!(*s.upper_bound(Bound::Excluded(&27), guard).unwrap().value(), 2);
-    assert_eq!(*s.upper_bound(Bound::Excluded(&31), guard).unwrap().value(), 3);
-    assert_eq!(*s.upper_bound(Bound::Excluded(&97), guard).unwrap().value(), 5);
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&27), guard).unwrap().value(),
+        2
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&31), guard).unwrap().value(),
+        3
+    );
+    assert_eq!(
+        *s.upper_bound(Bound::Excluded(&97), guard).unwrap().value(),
+        5
+    );
 }
 
 #[test]
@@ -487,7 +577,10 @@ fn iter() {
         s.insert(x, x * 10, guard).release(guard);
     }
 
-    assert_eq!(s.iter(guard).map(|e| *e.key()).collect::<Vec<_>>(), &[2, 4, 5, 7, 8, 11, 12]);
+    assert_eq!(
+        s.iter(guard).map(|e| *e.key()).collect::<Vec<_>>(),
+        &[2, 4, 5, 7, 8, 11, 12]
+    );
 
     let mut it = s.iter(guard);
     s.remove(&2, guard).unwrap().release(guard);
