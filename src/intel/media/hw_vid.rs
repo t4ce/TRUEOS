@@ -20,6 +20,7 @@ const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
 const H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
 const H264_BOOT_PROBE_STREAM_LOAD_POLL_MS: u64 = 250;
 const H264_BOOT_PROBE_STREAM_CHUNK_BYTES: usize = 64 * 1024;
+const H264_TRUEOSFS_MP4_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
 const H264_BOOT_PROBE_DELAY_MS: u64 = 2_000;
 const H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
@@ -141,6 +142,7 @@ pub(crate) struct H264PlaybackReport {
     pub(crate) target_fps: u16,
     pub(crate) target_frame_ms: u64,
     pub(crate) submitted: usize,
+    pub(crate) skipped_unsupported: usize,
     pub(crate) elapsed_ms: u64,
     pub(crate) effective_fps_x100: u64,
     pub(crate) waited_frames: usize,
@@ -247,6 +249,7 @@ impl H264PlaybackTiming {
         self,
         mode: H264PlaybackOptions,
         submitted: usize,
+        skipped_unsupported: usize,
         playback_start: EmbassyInstant,
     ) -> H264PlaybackReport {
         let elapsed_ms = playback_start.elapsed().as_millis();
@@ -264,6 +267,7 @@ impl H264PlaybackTiming {
             target_fps: mode.fps(),
             target_frame_ms: mode.frame_ms(),
             submitted,
+            skipped_unsupported,
             elapsed_ms,
             effective_fps_x100,
             waited_frames: self.waited_frames,
@@ -318,7 +322,12 @@ pub(crate) async fn hw_vid_probe_task() {
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
     if H264_BOOT_PROBE_PLAYBACK_ENABLED {
         if let Some(file) = h264_wait_for_playback_stream().await {
-            h264_i_p_playback_probe(file, H264_BOOT_PROBE_PLAYBACK_OPTIONS).await;
+            h264_i_p_playback_probe(
+                file,
+                H264_BOOT_PROBE_STREAM_PATH,
+                H264_BOOT_PROBE_PLAYBACK_OPTIONS,
+            )
+            .await;
         } else {
             crate::log!(
                 "intel/hw_vid: h264-playback-probe skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
@@ -335,13 +344,33 @@ pub(crate) async fn hw_vid_probe_task() {
 }
 
 pub(crate) async fn run_shell_vid_playback(
+    path: &str,
     options: H264PlaybackOptions,
 ) -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
-    let Some(file) = h264_open_playback_stream_once().await else {
+    let Some(file) = h264_open_playback_stream_once(path).await else {
         return Err("video asset missing from TRUEOSFS root");
+    };
+    let annexb = if h264_path_is_mp4(path) || h264_file_has_mp4_header(file, path).await {
+        let file_bytes = usize::try_from(file.data_len()).map_err(|_| "video asset too large")?;
+        if file_bytes > H264_TRUEOSFS_MP4_MAX_BYTES {
+            return Err("TRUEOSFS MP4 exceeds playback size limit");
+        }
+        let mp4_bytes = h264_read_stream_range(file, path, 0, file_bytes)
+            .await
+            .ok_or("failed to read TRUEOSFS MP4")?;
+        let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
+        crate::log!(
+            "intel/hw_vid: trueosfs demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} path={}\n",
+            mp4_bytes.len(),
+            annexb.len(),
+            path
+        );
+        Some(annexb)
+    } else {
+        None
     };
     let old_hw_pic_logging =
         crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
@@ -349,7 +378,13 @@ pub(crate) async fn run_shell_vid_playback(
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let report = h264_i_p_playback_probe(file, options).await;
+    let report = match annexb {
+        Some(bytes) => {
+            h264_i_p_playback_probe_annexb_bytes(bytes, "trueosfs-root-mp4-avc1", path, options)
+                .await
+        }
+        None => h264_i_p_playback_probe(file, path, options).await,
+    };
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
@@ -2044,7 +2079,7 @@ struct H264StripeStudyCandidate {
 
 struct H264RangeNalReader {
     file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &'static str,
+    path: String,
     file_size: u64,
     file_offset: u64,
     buffer_base: u64,
@@ -2054,19 +2089,15 @@ struct H264RangeNalReader {
 }
 
 struct H264MemoryNalReader {
-    buffer_base: u64,
     scan_offset: usize,
     buffer: Vec<u8>,
-    eof: bool,
 }
 
 impl H264MemoryNalReader {
     fn new(buffer: Vec<u8>) -> Self {
         Self {
-            buffer_base: 0,
             scan_offset: 0,
             buffer,
-            eof: true,
         }
     }
 
@@ -2080,7 +2111,7 @@ impl H264MemoryNalReader {
             {
                 Some(found) => found,
                 None => {
-                    self.discard_start_code_search_prefix();
+                    self.scan_offset = self.buffer.len();
                     return None;
                 }
             };
@@ -2088,11 +2119,8 @@ impl H264MemoryNalReader {
             let next = h264_find_start_code(&self.buffer, payload_start);
             let end = if let Some((next_start, _)) = next {
                 next_start
-            } else if self.eof {
-                self.buffer.len()
             } else {
-                self.scan_offset = start;
-                return None;
+                self.buffer.len()
             };
 
             self.scan_offset = end;
@@ -2100,11 +2128,9 @@ impl H264MemoryNalReader {
                 let mut bytes = Vec::with_capacity(end - start);
                 bytes.extend_from_slice(&self.buffer[start..end]);
                 let nal_type = self.buffer[payload_start] & 0x1f;
-                let stream_offset = self.buffer_base.saturating_add(start as u64);
-                self.drain_before(end);
                 return Some(H264BufferedNal {
                     meta: H264StreamNal {
-                        stream_offset,
+                        stream_offset: start as u64,
                         bytes: end - start,
                         nal_type,
                     },
@@ -2113,29 +2139,11 @@ impl H264MemoryNalReader {
             }
 
             if end > start {
-                self.drain_before(end);
+                self.scan_offset = end;
             } else {
                 self.scan_offset = self.scan_offset.saturating_add(1);
             }
         }
-    }
-
-    fn discard_start_code_search_prefix(&mut self) {
-        if self.buffer.len() > 3 {
-            let keep = 3usize;
-            let drain = self.buffer.len() - keep;
-            self.drain_before(drain);
-        }
-    }
-
-    fn drain_before(&mut self, end: usize) {
-        let drain = end.min(self.buffer.len());
-        if drain == 0 {
-            return;
-        }
-        self.buffer.drain(0..drain);
-        self.buffer_base = self.buffer_base.saturating_add(drain as u64);
-        self.scan_offset = self.scan_offset.saturating_sub(drain);
     }
 }
 
@@ -2154,14 +2162,10 @@ impl H264NalReader {
 }
 
 impl H264RangeNalReader {
-    fn new(
-        file: crate::r::fs::trueosfs::FileReadHandle,
-        path: &'static str,
-        file_size: u64,
-    ) -> Self {
+    fn new(file: crate::r::fs::trueosfs::FileReadHandle, path: &str, file_size: u64) -> Self {
         Self {
             file,
-            path,
+            path: String::from(path),
             file_size,
             file_offset: 0,
             buffer_base: 0,
@@ -2205,7 +2209,7 @@ impl H264RangeNalReader {
             Err(err) => {
                 crate::log!(
                     "intel/hw_vid: h264-playback-probe stream-read failed path={} offset=0x{:X} want=0x{:X} err={:?}\n",
-                    self.path,
+                    self.path.as_str(),
                     self.file_offset,
                     want,
                     err
@@ -2341,19 +2345,21 @@ async fn h264_wait_for_playback_stream() -> Option<crate::r::fs::trueosfs::FileR
     }
 }
 
-async fn h264_open_playback_stream_once() -> Option<crate::r::fs::trueosfs::FileReadHandle> {
+async fn h264_open_playback_stream_once(
+    path: &str,
+) -> Option<crate::r::fs::trueosfs::FileReadHandle> {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         crate::log!(
             "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=no-trueosfs-root mode=shell\n",
-            H264_BOOT_PROBE_STREAM_PATH
+            path
         );
         return None;
     };
-    match crate::r::fs::trueosfs::file_read_open_async(disk, H264_BOOT_PROBE_STREAM_PATH).await {
+    match crate::r::fs::trueosfs::file_read_open_async(disk, path).await {
         Ok(Some(file)) => {
             crate::log!(
                 "intel/hw_vid: h264-playback-probe stream-open accepted=1 path={} bytes={} data_lba={} source=trueosfs-root mode=shell-open-handle-range-stream\n",
-                H264_BOOT_PROBE_STREAM_PATH,
+                path,
                 file.data_len(),
                 file.data_lba()
             );
@@ -2362,17 +2368,42 @@ async fn h264_open_playback_stream_once() -> Option<crate::r::fs::trueosfs::File
         Ok(None) => {
             crate::log!(
                 "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=file-missing mode=shell\n",
-                H264_BOOT_PROBE_STREAM_PATH
+                path
             );
             None
         }
         Err(err) => {
             crate::log!(
                 "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=read-error err={:?} mode=shell\n",
-                H264_BOOT_PROBE_STREAM_PATH,
+                path,
                 err
             );
             None
+        }
+    }
+}
+
+fn h264_path_is_mp4(path: &str) -> bool {
+    path.rsplit_once('.')
+        .map(|(_, extension)| extension.eq_ignore_ascii_case("mp4"))
+        .unwrap_or(false)
+}
+
+async fn h264_file_has_mp4_header(
+    file: crate::r::fs::trueosfs::FileReadHandle,
+    path: &str,
+) -> bool {
+    let mut header = [0u8; 12];
+    match crate::r::fs::trueosfs::file_read_handle_range_async(file, 0, &mut header).await {
+        Ok(Some(read)) => read >= 8 && &header[4..8] == b"ftyp",
+        Ok(None) => false,
+        Err(err) => {
+            crate::log!(
+                "intel/hw_vid: h264-playback-probe header-read failed path={} err={:?}\n",
+                path,
+                err
+            );
+            false
         }
     }
 }
@@ -2410,19 +2441,16 @@ async fn h264_wait_until_next_frame(
 
 async fn h264_i_p_playback_probe(
     file: crate::r::fs::trueosfs::FileReadHandle,
+    path: &str,
     mode: H264PlaybackOptions,
 ) -> H264PlaybackReport {
     let stream_bytes = file.data_len();
-    let reader = H264NalReader::Range(H264RangeNalReader::new(
-        file,
-        H264_BOOT_PROBE_STREAM_PATH,
-        stream_bytes,
-    ));
+    let reader = H264NalReader::Range(H264RangeNalReader::new(file, path, stream_bytes));
     h264_i_p_playback_probe_with_reader(
         reader,
         stream_bytes,
         "trueosfs-root",
-        H264_BOOT_PROBE_STREAM_PATH,
+        path,
         mode,
         Some(file),
     )
@@ -2432,7 +2460,7 @@ async fn h264_i_p_playback_probe(
 async fn h264_i_p_playback_probe_annexb_bytes(
     bytes: Vec<u8>,
     source: &'static str,
-    path: &'static str,
+    path: &str,
     mode: H264PlaybackOptions,
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
@@ -2444,7 +2472,7 @@ async fn h264_i_p_playback_probe_with_reader(
     mut reader: H264NalReader,
     stream_bytes: u64,
     source: &'static str,
-    path: &'static str,
+    path: &str,
     mode: H264PlaybackOptions,
     reverse_file: Option<crate::r::fs::trueosfs::FileReadHandle>,
 ) -> H264PlaybackReport {
@@ -2452,6 +2480,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut idr_seen = 0usize;
     let mut p_seen = 0usize;
     let mut submitted = 0usize;
+    let mut skipped_unsupported_frames = 0usize;
     let mut skipped_missing_headers = 0usize;
     let mut last_sps: Option<Vec<u8>> = None;
     let mut last_pps: Option<Vec<u8>> = None;
@@ -2587,6 +2616,7 @@ async fn h264_i_p_playback_probe_with_reader(
                 err
             })
             .ok();
+        let decodable = detail.is_some();
         indexed_frames.push(H264IndexedFrame {
             stream_offset: unit.stream_offset,
             bytes: unit.bytes,
@@ -2599,6 +2629,17 @@ async fn h264_i_p_playback_probe_with_reader(
         });
         if mode.diagnostics() {
             h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
+        }
+
+        if !decodable {
+            skipped_unsupported_frames = skipped_unsupported_frames.saturating_add(1);
+            h264_wait_until_next_frame(
+                &mut next_frame_deadline,
+                frame_period,
+                &mut playback_timing,
+            )
+            .await;
+            continue;
         }
 
         submitted += 1;
@@ -2637,14 +2678,16 @@ async fn h264_i_p_playback_probe_with_reader(
     let forward_tail_cache_frames = forward_tail_cache.len();
     let forward_tail_cache_bytes = h264_decoded_frames_total_bytes(forward_tail_cache.as_slice());
     h264_log_keyframe_summary(indexed_frames.as_slice(), stream_bytes);
-    let playback_report = playback_timing.report(mode, submitted, playback_start);
+    let playback_report =
+        playback_timing.report(mode, submitted, skipped_unsupported_frames, playback_start);
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} forward_tail_cache_bytes=0x{:X} reason={}\n",
+        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} forward_tail_cache_bytes=0x{:X} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
         submitted,
+        skipped_unsupported_frames,
         indexed_frames.len(),
         skipped_missing_headers,
         stopped_at,
@@ -2698,7 +2741,8 @@ async fn h264_i_p_playback_probe_with_reader(
             None
         };
         if let Some(file) = reverse_file {
-            h264_reverse_playback_probe(file, indexed_frames.as_slice(), forward_cache, mode).await;
+            h264_reverse_playback_probe(file, path, indexed_frames.as_slice(), forward_cache, mode)
+                .await;
         } else {
             crate::log!(
                 "intel/hw_vid: h264-reverse-probe skipped reason=source-not-seekable source={} path={}\n",
@@ -2823,6 +2867,7 @@ async fn h264_submit_wait_probe_frame(
 
 async fn h264_reverse_playback_probe(
     file: crate::r::fs::trueosfs::FileReadHandle,
+    path: &str,
     frames: &[H264IndexedFrame],
     forward_cache: Option<H264ForwardCache>,
     mode: H264PlaybackOptions,
@@ -2870,7 +2915,7 @@ async fn h264_reverse_playback_probe(
             .map(|tail| tail.frames.len())
             .unwrap_or(0),
         mode.show_cache_fill() as u8,
-        H264_BOOT_PROBE_STREAM_PATH
+        path
     );
 
     if let Some(cache) = forward_full_cache {
@@ -2984,7 +3029,7 @@ async fn h264_reverse_playback_probe(
 
         if cached.is_empty() {
             let Some(gop_bytes) =
-                h264_read_indexed_frame_span(file, &frames[gop_start..gop_end]).await
+                h264_read_indexed_frame_span(file, path, &frames[gop_start..gop_end]).await
             else {
                 read_failures += 1;
                 gop_end = gop_start;
@@ -3499,6 +3544,7 @@ fn h264_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> 
 
 async fn h264_read_indexed_frame_span(
     file: crate::r::fs::trueosfs::FileReadHandle,
+    path: &str,
     frames: &[H264IndexedFrame],
 ) -> Option<H264IndexedSpan> {
     let first = frames.first()?;
@@ -3506,7 +3552,7 @@ async fn h264_read_indexed_frame_span(
     let span_end = last.stream_offset.saturating_add(last.bytes as u64);
     let span_len_u64 = span_end.checked_sub(first.stream_offset)?;
     let span_len = usize::try_from(span_len_u64).ok()?;
-    let bytes = h264_read_stream_range(file, first.stream_offset, span_len).await?;
+    let bytes = h264_read_stream_range(file, path, first.stream_offset, span_len).await?;
     Some(H264IndexedSpan {
         stream_offset: first.stream_offset,
         bytes,
@@ -3539,6 +3585,7 @@ fn h264_build_indexed_frame_packet_from_span(
 
 async fn h264_read_stream_range(
     file: crate::r::fs::trueosfs::FileReadHandle,
+    path: &str,
     offset: u64,
     bytes: usize,
 ) -> Option<Vec<u8>> {
@@ -3557,8 +3604,8 @@ async fn h264_read_stream_range(
             Ok(None) => 0,
             Err(err) => {
                 crate::log!(
-                    "intel/hw_vid: h264-reverse-probe stream-read failed path={} offset=0x{:X} want=0x{:X} err={:?}\n",
-                    H264_BOOT_PROBE_STREAM_PATH,
+                    "intel/hw_vid: h264-playback-probe stream-read failed path={} offset=0x{:X} want=0x{:X} err={:?}\n",
+                    path,
                     offset.saturating_add(done as u64),
                     bytes.saturating_sub(done),
                     err

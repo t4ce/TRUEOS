@@ -135,13 +135,15 @@ fn probe_zune_boot_logo_decode() -> bool {
     );
     let stamped = stored && stamp_horizon_logo_top_left_screen();
     let bgrt_stamped = stored && stamp_bgrt_logo_bottom_right_screen();
+    let plane_ids_stamped = stored && stamp_boot_native_plane_ids_top_right();
     crate::log!(
-        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} horizon_stamp={} bgrt_stamp={} stored={}\n",
+        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} horizon_stamp={} bgrt_stamp={} plane_ids={} stored={}\n",
         decoded.width,
         decoded.height,
         decoded.rgba.len(),
         stamped as u8,
         bgrt_stamped as u8,
+        plane_ids_stamped as u8,
         stored as u8
     );
     if stored {
@@ -828,6 +830,238 @@ fn decoded_nv12_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: us
     (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
 }
 
+fn native_plane_id_nv12_offset(
+    tiling: DirectNv12PlaneTiling,
+    pitch_bytes: usize,
+    uv_offset: usize,
+    byte_x: usize,
+    row_y: usize,
+    uv: bool,
+) -> Option<usize> {
+    match tiling {
+        DirectNv12PlaneTiling::Linear => {
+            let base = if uv { uv_offset } else { 0 };
+            base.checked_add(row_y.checked_mul(pitch_bytes)?)?
+                .checked_add(byte_x)
+        }
+        DirectNv12PlaneTiling::Y => {
+            if !pitch_bytes.is_multiple_of(128) || !uv_offset.is_multiple_of(pitch_bytes) {
+                return None;
+            }
+            let logical_row = if uv {
+                (uv_offset / pitch_bytes).checked_add(row_y)?
+            } else {
+                row_y
+            };
+            Some(decoded_nv12_ytile_8bpp_offset(byte_x, logical_row, pitch_bytes / 128))
+        }
+        // The diagnostic has no verified Yf address transform yet. Refuse to
+        // write instead of treating it as legacy Y tiling and corrupting a
+        // decoder-owned surface.
+        DirectNv12PlaneTiling::Yf => None,
+    }
+}
+
+fn native_plane_id_barcode_source_position(
+    id: NativePlaneId,
+    plane_x: u32,
+    plane_y: u32,
+    plane_width: u32,
+    plane_height: u32,
+    scanout_width: u32,
+    scanout_height: u32,
+) -> (u32, u32) {
+    let (screen_x, screen_y) =
+        native_plane_id_barcode_screen_position(id, scanout_width, scanout_height);
+    let max_x = plane_width.saturating_sub(NATIVE_PLANE_ID_BARCODE_WIDTH);
+    let max_y = plane_height.saturating_sub(NATIVE_PLANE_ID_BARCODE_HEIGHT);
+    let source_x = if screen_x >= plane_x
+        && screen_x.saturating_add(NATIVE_PLANE_ID_BARCODE_WIDTH)
+            <= plane_x.saturating_add(plane_width)
+    {
+        screen_x - plane_x
+    } else {
+        max_x.saturating_sub(NATIVE_PLANE_ID_MARKER_MARGIN.min(max_x))
+    };
+    let source_y = if screen_y >= plane_y
+        && screen_y.saturating_add(NATIVE_PLANE_ID_BARCODE_HEIGHT)
+            <= plane_y.saturating_add(plane_height)
+    {
+        screen_y - plane_y
+    } else {
+        let local_ordinal = id.ordinal().saturating_sub(NativePlaneId::Universal2.ordinal());
+        NATIVE_PLANE_ID_MARKER_MARGIN
+            .saturating_add(
+                local_ordinal
+                    .saturating_mul(
+                        NATIVE_PLANE_ID_BARCODE_HEIGHT
+                            .saturating_add(NATIVE_PLANE_ID_MARKER_GAP),
+                    ),
+            )
+            .min(max_y)
+    };
+    (source_x.min(max_x), source_y.min(max_y))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stamp_native_plane_ids_nv12_surface(
+    virt_addr: usize,
+    coded_width: u32,
+    coded_height: u32,
+    visible_width: u32,
+    visible_height: u32,
+    pitch_bytes: usize,
+    uv_offset: usize,
+    byte_len: usize,
+    tiling: DirectNv12PlaneTiling,
+    plane_x: u32,
+    plane_y: u32,
+    scanout_width: u32,
+    scanout_height: u32,
+    stamp_uv: bool,
+    stamp_y: bool,
+) -> bool {
+    if !NATIVE_PLANE_ID_MARKERS_ENABLED
+        || virt_addr == 0
+        || byte_len == 0
+        || coded_width == 0
+        || coded_height == 0
+        || pitch_bytes < coded_width as usize
+        || uv_offset >= byte_len
+        || matches!(tiling, DirectNv12PlaneTiling::Yf)
+    {
+        return false;
+    }
+    let width = visible_width.min(coded_width).max(1);
+    let height = visible_height.min(coded_height).max(1);
+    let surface = virt_addr as *mut u8;
+    let mut uv_writes = 0usize;
+    let mut y_writes = 0usize;
+
+    if stamp_y {
+        let id = NativePlaneId::Universal3;
+        let (barcode_x, barcode_y) = native_plane_id_barcode_source_position(
+            id,
+            plane_x,
+            plane_y,
+            width,
+            height,
+            scanout_width,
+            scanout_height,
+        );
+        let copy_width = NATIVE_PLANE_ID_BARCODE_WIDTH.min(width.saturating_sub(barcode_x));
+        let copy_height = NATIVE_PLANE_ID_BARCODE_HEIGHT.min(height.saturating_sub(barcode_y));
+        for y in 0..copy_height {
+            for x in 0..copy_width {
+                let Some(dst_off) = native_plane_id_nv12_offset(
+                    tiling,
+                    pitch_bytes,
+                    uv_offset,
+                    barcode_x.saturating_add(x) as usize,
+                    barcode_y.saturating_add(y) as usize,
+                    false,
+                ) else {
+                    continue;
+                };
+                if dst_off >= byte_len {
+                    continue;
+                }
+                unsafe {
+                    core::ptr::write_volatile(
+                        surface.add(dst_off),
+                        if native_plane_id_barcode_is_bar(id, x) {
+                            16
+                        } else {
+                            235
+                        },
+                    );
+                }
+                y_writes = y_writes.saturating_add(1);
+            }
+        }
+    }
+
+    if stamp_uv {
+        let id = NativePlaneId::Universal2;
+        let (barcode_x, barcode_y) = native_plane_id_barcode_source_position(
+            id,
+            plane_x,
+            plane_y,
+            width,
+            height,
+            scanout_width,
+            scanout_height,
+        );
+        let copy_width = NATIVE_PLANE_ID_BARCODE_WIDTH.min(width.saturating_sub(barcode_x));
+        let copy_height = NATIVE_PLANE_ID_BARCODE_HEIGHT.min(height.saturating_sub(barcode_y));
+        for y in (0..copy_height).step_by(2) {
+            for x in (0..copy_width).step_by(2) {
+                let dst_x = barcode_x.saturating_add(x) & !1;
+                let dst_y = barcode_y.saturating_add(y) / 2;
+                let Some(u_off) = native_plane_id_nv12_offset(
+                    tiling,
+                    pitch_bytes,
+                    uv_offset,
+                    dst_x as usize,
+                    dst_y as usize,
+                    true,
+                ) else {
+                    continue;
+                };
+                let Some(v_off) = native_plane_id_nv12_offset(
+                    tiling,
+                    pitch_bytes,
+                    uv_offset,
+                    dst_x.saturating_add(1) as usize,
+                    dst_y as usize,
+                    true,
+                ) else {
+                    continue;
+                };
+                if u_off >= byte_len || v_off >= byte_len {
+                    continue;
+                }
+                let (target_u, target_v) = if native_plane_id_barcode_is_bar(id, x) {
+                    (240, 16)
+                } else {
+                    (16, 240)
+                };
+                unsafe {
+                    core::ptr::write_volatile(surface.add(u_off), target_u);
+                    core::ptr::write_volatile(surface.add(v_off), target_v);
+                }
+                uv_writes = uv_writes.saturating_add(2);
+            }
+        }
+    }
+
+    let stamped = uv_writes != 0 || y_writes != 0;
+    if stamped {
+        crate::intel::dma_flush(surface, byte_len);
+    }
+    crate::log!(
+        "intel/display: native-plane-id-barcode nv12 stamped={} generator=cpu-inline render_submits=0 tiling={} coded={}x{} visible={}x{} marker={}x{} plane_pos={}x{} uv_slot={} uv_code=0x{:08X} uv_writes={} y_slot={} y_code=0x{:08X} y_writes={} bytes=0x{:X}\n",
+        stamped as u8,
+        tiling.name(),
+        coded_width,
+        coded_height,
+        width,
+        height,
+        NATIVE_PLANE_ID_BARCODE_WIDTH,
+        NATIVE_PLANE_ID_BARCODE_HEIGHT,
+        plane_x,
+        plane_y,
+        DIRECT_NV12_PLANE_PROBE_SLOT,
+        native_plane_id_barcode_modules(NativePlaneId::Universal2),
+        uv_writes,
+        DIRECT_NV12_Y_PLANE_PROBE_SLOT,
+        native_plane_id_barcode_modules(NativePlaneId::Universal3),
+        y_writes,
+        byte_len,
+    );
+    stamped
+}
+
 fn copy_decoded_ytile_nv12_to_linear_staging(
     src_virt: usize,
     src_byte_len: usize,
@@ -1209,6 +1443,24 @@ fn arm_nv12_video_plane_probe_surface(
         return false;
     };
 
+    let _ = stamp_native_plane_ids_nv12_surface(
+        virt_addr,
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        tiling,
+        pos_x,
+        pos_y,
+        scanout_w,
+        scanout_h,
+        true,
+        false,
+    );
+
     program_three_plane_stack_resources(dev, pipe, reason);
 
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
@@ -1398,6 +1650,24 @@ fn arm_nv12_linked_video_plane_probe_surface(
     let uv_base = overlay_plane_base(pipe, DIRECT_NV12_PLANE_PROBE_SLOT);
     let y_base = overlay_plane_base(pipe, DIRECT_NV12_Y_PLANE_PROBE_SLOT);
     let seq = DIRECT_NV12_PLANE_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+
+    let _ = stamp_native_plane_ids_nv12_surface(
+        virt_addr,
+        coded_width,
+        coded_height,
+        visible_width,
+        visible_height,
+        pitch_bytes,
+        uv_offset,
+        byte_len,
+        tiling,
+        pos_x,
+        pos_y,
+        scanout_w,
+        scanout_h,
+        true,
+        true,
+    );
 
     program_three_plane_stack_resources(dev, pipe, reason);
 

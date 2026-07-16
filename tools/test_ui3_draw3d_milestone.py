@@ -168,10 +168,13 @@ def verify_ownership(watcher):
         for line in owned_log.splitlines()
         if "legacy-overlay-present rejected" in line
     ]
-    require(
-        any("reason=font-tessel-render-target" in line for line in rejection_lines),
-        "font render proof did not exercise the legacy-present rejection guard",
-    )
+    obsolete_probe_lines = [
+        line
+        for line in log.splitlines()
+        if "font-boot-tessel" in line or "font-tessel-3d-once" in line
+    ]
+    if obsolete_probe_lines:
+        raise TestFailure(f"obsolete font boot probe still ran: {obsolete_probe_lines[-1]}")
     forbidden = [
         line
         for line in owned_log.splitlines()
@@ -180,10 +183,11 @@ def verify_ownership(watcher):
         or "rgba-tile-overlay-present" in line
         or "live-overlay-present" in line
     ]
-    require(forbidden == [], f"legacy presenter bypassed UI3 ownership: {forbidden[-1]}")
+    if forbidden:
+        raise TestFailure(f"legacy presenter bypassed UI3 ownership: {forbidden[-1]}")
     print(
         f"ownership=PASS owner=ui3-compositor legacy_rejections={len(rejection_lines)} "
-        "accepted_legacy_presents=0 lifetime=service"
+        "accepted_legacy_presents=0 obsolete_boot_probes=0 lifetime=service"
     )
 
 
@@ -212,6 +216,12 @@ def run_scene(args, watcher, mode):
         time.sleep(duration)
         client.stop()
         summary_line = watcher.wait_line(mark, "draw3d-run-summary", timeout=args.log_timeout)
+        stopped_line = watcher.wait_line(mark, "draw3d: scene stopped", timeout=args.log_timeout)
+        stopped = fields(stopped_line)
+        require(
+            stopped.get("overlay_cleared") == "1",
+            f"scene stop did not reach the retained-frame boundary: {stopped_line}",
+        )
         validate_capture(
             client,
             args.output_dir / f"ui3-milestone-{mode}-scene.png",
@@ -282,6 +292,13 @@ def run_lifecycle(args, watcher):
 
 
 def self_test():
+    class StaticWatcher:
+        def __init__(self, log):
+            self.log = log
+
+        def text(self):
+            return self.log
+
     sample = (
         "draw3d-run-summary revision=4 mode=animated elapsed_ms=5000 attempted=31 "
         "presented=31 present_hz=6.20 avg_frame_us=158000 max_frame_us=180000 "
@@ -291,7 +308,23 @@ def self_test():
     require(parsed["mode"] == "animated", "field parser lost mode")
     require(float(parsed["present_hz"]) == 6.20, "field parser lost decimal cadence")
     require(int(parsed["attempted"]) == 31, "field parser lost integer count")
-    print("self_test=PASS parser=key-value cadence=decimal")
+    verify_ownership(
+        StaticWatcher(
+            "intel/display: ui3-overlay-owner claimed=1 owner=ui3-compositor\n"
+        )
+    )
+    try:
+        verify_ownership(
+            StaticWatcher(
+                "intel/display: ui3-overlay-owner claimed=1 owner=ui3-compositor\n"
+                "font-boot-tessel: begin delay_s=10\n"
+            )
+        )
+    except TestFailure:
+        pass
+    else:
+        raise TestFailure("ownership self-test accepted the obsolete font boot probe")
+    print("self_test=PASS parser=key-value cadence=decimal ownership=clean-boot")
 
 
 def main():

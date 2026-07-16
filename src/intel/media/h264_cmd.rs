@@ -1259,9 +1259,9 @@ pub(crate) fn validate_long_format_single_idr(
     if !plan.slice.class.is_i_only() {
         return Err(AvcMilestoneBlocker::UnsupportedSliceClass);
     }
-    if plan.picture.weighted_pred || plan.picture.weighted_bipred_idc != 0 {
-        return Err(AvcMilestoneBlocker::WeightedPrediction);
-    }
+    // PPS weighted-prediction flags govern inter slices. They may be set for a
+    // stream whose current picture is intra-only, where no weight table is
+    // consumed and no weight-offset command is required.
     let slice_qp = 26 + plan.picture.pic_init_qp_minus26 as i32 + plan.slice.slice_qp_delta as i32;
     if !(0..=51).contains(&slice_qp)
         || plan.slice.disable_deblocking_filter_idc > 2
@@ -1363,14 +1363,16 @@ pub(crate) fn validate_long_format_single_i_or_p(
             AvcMilestoneBlocker::UnsupportedChromaFormat,
         ));
     }
+    let mut has_p_slice = false;
     for idx in 0..plan.slice_count {
         if !matches!(plan.slices[idx].class, AvcSliceClass::I | AvcSliceClass::P) {
             return Err(AvcCommandStreamBlocker::Milestone(
                 AvcMilestoneBlocker::UnsupportedSliceClass,
             ));
         }
+        has_p_slice |= plan.slices[idx].class == AvcSliceClass::P;
     }
-    if plan.picture.weighted_pred || plan.picture.weighted_bipred_idc != 0 {
+    if has_p_slice && plan.picture.weighted_pred {
         return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::WeightedPrediction));
     }
     if plan.picture.num_slice_groups_minus1 != 0 {

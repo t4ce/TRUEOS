@@ -34,6 +34,7 @@ const KOKORO_VOICES_PATH: &str = "models/kokoro/voices-v1.0.bin";
 const MODEL_READ_CHUNK_BYTES: usize = 256 * 1024;
 const MODEL_READ_YIELD_MS: u64 = 1;
 const MODEL_RETRY_MS: u64 = 2_000;
+const MODEL_MISSING_RETRY_MS: u64 = 60_000;
 const WORKER_IDLE_POLL_MS: u64 = 25;
 const WORKER_SLICE_YIELD_MS: u64 = 1;
 const MODEL_FILE_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -463,6 +464,7 @@ impl ModelLoadError {
                 error: crate::disc::block::Error::NotReady,
                 ..
             } => 250,
+            Self::Missing(_) => MODEL_MISSING_RETRY_MS,
             _ => MODEL_RETRY_MS,
         }
     }

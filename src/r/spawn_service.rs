@@ -82,7 +82,6 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
-    FONT_TESSEL_BOOT_PROBE_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
     SILK_SERVICE_STARTED,
@@ -295,72 +294,6 @@ fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ram_probe::boot_factory_ram_probe_task())
-}
-
-#[embassy_executor::task]
-async fn font_tessel_boot_probe_task() {
-    Timer::after(EmbassyDuration::from_secs(10)).await;
-    crate::log!("font-boot-tessel: begin delay_s=10\n");
-
-    let warm = match crate::intel::gpu_font::warm_default_font_once() {
-        Ok(warm) => warm,
-        Err(reason) => {
-            crate::log!("font-boot-tessel: status=failed reason={}\n", reason);
-            return;
-        }
-    };
-    let Some(tessel) = crate::intel::gpu_font::cached_default_font_summary() else {
-        crate::log!("font-boot-tessel: status=failed reason=cache-missing-after-warm\n");
-        return;
-    };
-    crate::log!(
-        "font-boot-tessel: status={} reason={} cache_hit={} generation={} text=\"{}\" font={} file={} px={} vertices={} indices={} triangles={} total_ms={}\n",
-        tessel.status,
-        tessel.reason,
-        warm.cache_hit as u8,
-        warm.generation,
-        tessel.text,
-        tessel.font_name,
-        tessel.font_file,
-        tessel.px_size as u32,
-        tessel.vertices,
-        tessel.indices,
-        tessel.triangles,
-        tessel.total_ms
-    );
-
-    match crate::intel::gpu_font::render_default_font(
-        crate::intel::render::FONT_STAMP_DEFAULT_NATIVE_SCALE,
-    ) {
-        Ok(render) => crate::log!(
-            "font-boot-tessel-render: submit={} target={} completed={} vs={} ps_state={} raster={} clip={} ps={}\n",
-            render.submit_name,
-            render.target,
-            render.completed as u8,
-            render.vs_counter as u8,
-            render.ps_state_marker as u8,
-            render.raster_packet as u8,
-            render.clip_counter as u8,
-            render.ps_observed as u8,
-        ),
-        Err(reason) => crate::log!("font-boot-tessel-render: status=skipped reason={}\n", reason),
-    }
-    let cache = crate::intel::gpu_font::cache_status();
-    crate::log!(
-        "font-boot-cache: ready={} generation={} requests={} hits={} misses={} failures={} invalidations={} geometry_bytes={}\n",
-        cache.ready as u8,
-        cache.generation,
-        cache.warm_requests,
-        cache.cache_hits,
-        cache.cache_misses,
-        cache.build_failures,
-        cache.invalidations,
-        cache.geometry_bytes,
-    );
-}
-
-fn spawn_font_tessel_boot_probe(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| font_tessel_boot_probe_task())
 }
 
 fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
@@ -1218,7 +1151,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 57 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1249,12 +1182,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_codec_service,
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
-    TaskSpec::enabled(
-        "font-tessel-boot-probe",
-        0,
-        &FONT_TESSEL_BOOT_PROBE_STARTED,
-        spawn_font_tessel_boot_probe,
-    ),
     TaskSpec::enabled(
         "qjs-async-fs-service",
         0,

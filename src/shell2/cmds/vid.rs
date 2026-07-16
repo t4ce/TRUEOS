@@ -1,3 +1,4 @@
+use alloc::string::String;
 use core::str::SplitWhitespace;
 
 use embassy_executor::Spawner;
@@ -22,29 +23,29 @@ const DEFAULT_NORESET_LITE: bool = true;
 const DEFAULT_LOOP: bool = false;
 const DEFAULT_VIDEO_ALPHA: u8 = 0xFF;
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 enum VidSource {
-    TrueosFs,
+    TrueosFs(String),
     Online,
 }
 
 impl VidSource {
-    const fn name(self) -> &'static str {
+    const fn name(&self) -> &'static str {
         match self {
-            Self::TrueosFs => "trueosfs",
+            Self::TrueosFs(_) => "trueosfs",
             Self::Online => "online",
         }
     }
 
-    const fn asset(self) -> &'static str {
+    fn asset(&self) -> &str {
         match self {
-            Self::TrueosFs => H264_BOOT_PROBE_STREAM_PATH,
+            Self::TrueosFs(path) => path.as_str(),
             Self::Online => H264_MEDIA_URL_PROBE_URL,
         }
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 struct VidCommand {
     source: VidSource,
     options: H264PlaybackOptions,
@@ -65,7 +66,7 @@ pub(crate) fn try_parse(
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, VID_SLOT);
     set_matrix_target_active(&target, true);
-    match vid_task(target.clone(), command) {
+    match vid_task(target.clone(), command.clone()) {
         Ok(token) => {
             spawner.spawn(token);
             print_matrix_target_line(
@@ -123,7 +124,9 @@ fn parse_options(
     let mut noreset_lite = DEFAULT_NORESET_LITE;
     let mut loop_playback = DEFAULT_LOOP;
     let mut plane_alpha = DEFAULT_VIDEO_ALPHA;
-    let mut source = VidSource::TrueosFs;
+    let mut online = false;
+    let mut path = String::from(H264_BOOT_PROBE_STREAM_PATH);
+    let mut path_set = false;
 
     for arg in args {
         if arg.eq_ignore_ascii_case("reverse") || arg.eq_ignore_ascii_case("rev") {
@@ -169,12 +172,27 @@ fn parse_options(
             || arg.eq_ignore_ascii_case("trueosfs")
             || arg.eq_ignore_ascii_case("local")
         {
-            source = VidSource::TrueosFs;
+            online = false;
         } else if arg.eq_ignore_ascii_case("online")
             || arg.eq_ignore_ascii_case("net")
             || arg.eq_ignore_ascii_case("url")
         {
-            source = VidSource::Online;
+            if path_set {
+                usage(io);
+                return None;
+            }
+            online = true;
+        } else if let Some(raw) = arg.strip_prefix("path=") {
+            if online || path_set {
+                usage(io);
+                return None;
+            }
+            let Some(normalized) = normalize_path(raw) else {
+                usage(io);
+                return None;
+            };
+            path = normalized;
+            path_set = true;
         } else if let Some(raw) = arg.strip_prefix("cache=") {
             cache = parse_cache(raw)?;
             cache_set = true;
@@ -194,8 +212,16 @@ fn parse_options(
             cache = H264PlaybackCacheMode::Off;
             cache_set = true;
         } else {
-            usage(io);
-            return None;
+            if online || path_set {
+                usage(io);
+                return None;
+            }
+            let Some(normalized) = normalize_path(arg) else {
+                usage(io);
+                return None;
+            };
+            path = normalized;
+            path_set = true;
         }
     }
 
@@ -205,7 +231,11 @@ fn parse_options(
     }
 
     Some(VidCommand {
-        source,
+        source: if online {
+            VidSource::Online
+        } else {
+            VidSource::TrueosFs(path)
+        },
         plane_alpha,
         options: H264PlaybackOptions::new(
             fps,
@@ -218,6 +248,12 @@ fn parse_options(
             loop_playback,
         ),
     })
+}
+
+fn normalize_path(path: &str) -> Option<String> {
+    crate::r::path::FsPath::parse(path, false)
+        .ok()
+        .map(|path| path.to_relative_string())
 }
 
 fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
@@ -247,11 +283,11 @@ fn parse_alpha(raw: &str) -> Option<u8> {
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid <fps 1..144> [trueosfs|online] [loop|once] [reverse|forward] [cache=full|tail|off] [alpha=0..255|half|opaque|off] [study] [fill] [quiet|debug] [warm|cold]`",
+        "vid: usage `vid <fps 1..144> [<TRUEOSFS path>|path=<path>|online] [loop|once] [reverse|forward] [cache=full|tail|off] [alpha=0..255|half|opaque|off] [study] [fill] [quiet|debug] [warm|cold]`",
     );
     print_shell_line(
         io,
-        "vid: examples `vid 60`, `vid 60 alpha=128`, `vid 60 alpha=0`, `vid 60 online`, `vid 15 reverse`",
+        "vid: examples `vid 60`, `vid 60 video.mp4 alpha=128`, `vid 60 path=video.mp4 alpha=0`, `vid 60 online`, `vid 15 reverse`",
     );
 }
 
@@ -286,9 +322,9 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);
-        let result = match command.source {
-            VidSource::TrueosFs => {
-                crate::intel::media::hw_vid::run_shell_vid_playback(options).await
+        let result = match &command.source {
+            VidSource::TrueosFs(path) => {
+                crate::intel::media::hw_vid::run_shell_vid_playback(path.as_str(), options).await
             }
             VidSource::Online => {
                 crate::intel::media::hw_vid::run_online_vid_playback(options).await
@@ -298,9 +334,10 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} submitted={} target_fps={} elapsed_ms={} effective_fps={}.{:02} waited={} late={} wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} avg_post_us={} avg_present_us={}",
+                    "vid: done lap={} submitted={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} waited={} late={} wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} avg_post_us={} avg_present_us={}",
                     lap,
                     report.submitted,
+                    report.skipped_unsupported,
                     report.target_fps,
                     report.elapsed_ms,
                     report.effective_fps_x100 / 100,

@@ -147,9 +147,9 @@ python3 tools/test_ui3_draw3d_milestone.py lifecycle
 
 `boot` densely verifies every pixel of both the independent 512x512 proof source and its composed
 2560x1440 output before presentation, then proves that the result is presented without a TCP
-producer. `ownership` proves UI3 has claimed the UI overlay for service lifetime, the boot font
-proof was rejected at the legacy direct-present boundary, and no legacy overlay presentation was
-accepted after that claim. `static` requires exactly one Draw3D submission followed by persistent composition.
+producer. `ownership` proves UI3 has claimed the UI overlay for service lifetime, no obsolete font
+boot probe ran, and no legacy overlay presentation was accepted after that claim. `static` requires
+exactly one Draw3D submission followed by persistent composition.
 `animated` requires all attempted frames to present and, with `--require-target-hz`, at least the
 default 55 Hz acceptance threshold. `lifecycle` requires permanent scene reset to remove only the
 Draw3D layer and leave the proof frame. The generated PNG validates the Draw3D source and camera
