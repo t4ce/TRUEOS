@@ -2528,7 +2528,30 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
     let _constraint_flags = br.read_bits(8)?;
     let _level_idc = br.read_bits(8)?;
     let seq_parameter_set_id = br.read_ue()?;
-    if !matches!(profile_idc, 66 | 77 | 88) {
+    if profile_idc == 100 {
+        // High-profile SPS syntax inserts format and bit-depth fields before the
+        // common sequence fields below. The media path and surface layout are
+        // currently 8-bit 4:2:0 only, so accept exactly that safe subset.
+        let chroma_format_idc = br.read_ue()?;
+        if chroma_format_idc == 3 {
+            let separate_colour_plane = br.read_bool()?;
+            if separate_colour_plane {
+                return Err(AvcAnnexBPlanError::UnsupportedSps);
+            }
+        }
+        let bit_depth_luma_minus8 = br.read_ue()?;
+        let bit_depth_chroma_minus8 = br.read_ue()?;
+        let qpprime_y_zero_transform_bypass = br.read_bool()?;
+        let seq_scaling_matrix_present = br.read_bool()?;
+        if chroma_format_idc != 1
+            || bit_depth_luma_minus8 != 0
+            || bit_depth_chroma_minus8 != 0
+            || qpprime_y_zero_transform_bypass
+            || seq_scaling_matrix_present
+        {
+            return Err(AvcAnnexBPlanError::UnsupportedSps);
+        }
+    } else if !matches!(profile_idc, 66 | 77 | 88) {
         return Err(AvcAnnexBPlanError::UnsupportedSps);
     }
     let log2_max_frame_num_minus4 = checked_u8(br.read_ue()?, AvcAnnexBPlanError::UnsupportedSps)?;

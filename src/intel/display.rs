@@ -83,11 +83,12 @@ const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
 const DEFAULT_OVERLAY_MARKER_COLOR: u32 = 0x0000_0000;
 const OVERLAY_MARGIN_X: u32 = 0;
 const OVERLAY_MARGIN_Y: u32 = 0;
-const NATIVE_PLANE_ID_MARKERS_ENABLED: bool = true;
-const NATIVE_PLANE_ID_MARKER_MARGIN: u32 = 16;
-const NATIVE_PLANE_ID_MARKER_GAP: u32 = 8;
-pub(super) const NATIVE_PLANE_ID_BARCODE_WIDTH: u32 = 64;
-pub(super) const NATIVE_PLANE_ID_BARCODE_HEIGHT: u32 = 128;
+const NATIVE_PLANE_SLOT_BARS_ENABLED: bool = true;
+const NATIVE_PLANE_SLOT_BAR_MARGIN: u32 = 16;
+const NATIVE_PLANE_SLOT_BAR_GAP: u32 = 8;
+pub(super) const NATIVE_PLANE_SLOT_BAR_WIDTH: u32 = 64;
+pub(super) const NATIVE_PLANE_SLOT_BAR_HEIGHT: u32 = 128;
+const NATIVE_PLANE_SLOT_BAR_XRGB: u32 = 0x0000_0000;
 const OVERLAY_COMPOSITION_PROOF_MARKER_ENABLED: bool = true;
 const OVERLAY_COMPOSITION_PROOF_MARKER_SIZE: u32 = 96;
 const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
@@ -175,49 +176,6 @@ static HW_LOGO_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static HW_LOGO_NEXT_STAGE: AtomicU32 = AtomicU32::new(0);
 static HW_LOGO_SEQUENCE_DONE: AtomicBool = AtomicBool::new(false);
 static HW_LOGO_SEQUENCE_DONE_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-
-/// Stable display-engine identity. Universal slots retain their identity when
-/// their SDR/HDR/UI/video role changes. The cursor keeps its existing sprite
-/// and is deliberately excluded from this diagnostic.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub(super) enum NativePlaneId {
-    Universal0 = 0,
-    Universal1 = 1,
-    Universal2 = 2,
-    Universal3 = 3,
-}
-
-impl NativePlaneId {
-    pub(super) const fn ordinal(self) -> u32 {
-        self as u32
-    }
-
-    pub(super) const fn label(self) -> &'static str {
-        match self {
-            Self::Universal0 => "P0",
-            Self::Universal1 => "P1",
-            Self::Universal2 => "P2",
-            Self::Universal3 => "P3",
-        }
-    }
-}
-
-/// 32 two-pixel modules across 64 pixels. Each identity is encoded as four
-/// repetitions of a 3-bit value and its complement, framed by fixed guards.
-pub(super) const fn native_plane_id_barcode_modules(id: NativePlaneId) -> u32 {
-    let symbol = (id.ordinal() + 1) & 0x7;
-    let pair = symbol | ((symbol ^ 0x7) << 3);
-    0b1011 | (pair << 4) | (pair << 10) | (pair << 16) | (pair << 22) | (0b1101 << 28)
-}
-
-pub(super) const fn native_plane_id_barcode_is_bar(id: NativePlaneId, x: u32) -> bool {
-    if x >= NATIVE_PLANE_ID_BARCODE_WIDTH {
-        return false;
-    }
-    let module = x / 2;
-    (native_plane_id_barcode_modules(id) & (1 << module)) != 0
-}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum PrimaryBootLogoDecodeMode {
@@ -1265,73 +1223,89 @@ fn stamp_bgrt_logo_bottom_right_screen() -> bool {
     stamped
 }
 
-pub(super) fn native_plane_id_barcode_screen_position(
-    id: NativePlaneId,
+/// Place one solid bar per universal-plane slot. Slots fill downward first,
+/// then continue in columns toward the left. If the scanout cannot fit a full
+/// additional bar, return `None` rather than overlap an existing slot marker.
+pub(super) fn native_plane_slot_bar_screen_position(
+    slot: usize,
     scanout_width: u32,
     scanout_height: u32,
-) -> (u32, u32) {
-    let x = scanout_width
-        .saturating_sub(NATIVE_PLANE_ID_BARCODE_WIDTH)
-        .saturating_sub(NATIVE_PLANE_ID_MARKER_MARGIN);
-    let requested_y = NATIVE_PLANE_ID_MARKER_MARGIN.saturating_add(
-        id.ordinal().saturating_mul(
-            NATIVE_PLANE_ID_BARCODE_HEIGHT.saturating_add(NATIVE_PLANE_ID_MARKER_GAP),
-        ),
-    );
-    let y = requested_y.min(scanout_height.saturating_sub(NATIVE_PLANE_ID_BARCODE_HEIGHT));
-    (x, y)
-}
-
-fn native_plane_id_barcode_xrgb(id: NativePlaneId, x: u32) -> u32 {
-    if native_plane_id_barcode_is_bar(id, x) {
-        0x0000_0000
-    } else {
-        0x00FF_FFFF
+) -> Option<(u32, u32)> {
+    let usable_width = scanout_width.checked_sub(NATIVE_PLANE_SLOT_BAR_MARGIN.checked_mul(2)?)?;
+    let usable_height = scanout_height.checked_sub(NATIVE_PLANE_SLOT_BAR_MARGIN.checked_mul(2)?)?;
+    if usable_width < NATIVE_PLANE_SLOT_BAR_WIDTH || usable_height < NATIVE_PLANE_SLOT_BAR_HEIGHT {
+        return None;
     }
+
+    let row_stride = NATIVE_PLANE_SLOT_BAR_HEIGHT.checked_add(NATIVE_PLANE_SLOT_BAR_GAP)?;
+    let column_stride = NATIVE_PLANE_SLOT_BAR_WIDTH.checked_add(NATIVE_PLANE_SLOT_BAR_GAP)?;
+    let rows_per_column = 1 + usable_height
+        .saturating_sub(NATIVE_PLANE_SLOT_BAR_HEIGHT)
+        .checked_div(row_stride)?;
+    let slot = u32::try_from(slot).ok()?;
+    let row = slot % rows_per_column;
+    let column = slot / rows_per_column;
+    let column_offset = column.checked_mul(column_stride)?;
+    if column_offset.checked_add(NATIVE_PLANE_SLOT_BAR_WIDTH)? > usable_width {
+        return None;
+    }
+
+    let x = scanout_width
+        .checked_sub(NATIVE_PLANE_SLOT_BAR_MARGIN)?
+        .checked_sub(NATIVE_PLANE_SLOT_BAR_WIDTH)?
+        .checked_sub(column_offset)?;
+    let y = NATIVE_PLANE_SLOT_BAR_MARGIN.checked_add(row.checked_mul(row_stride)?)?;
+    Some((x, y))
 }
 
-fn stamp_primary_plane_id_barcode(surface: PrimarySurface, id: NativePlaneId) -> bool {
+fn stamp_primary_plane_slot_bar(surface: PrimarySurface, slot: usize) -> bool {
     if surface.virt.is_null() || surface.width == 0 || surface.height == 0 {
         return false;
     }
     let (scanout_width, scanout_height) =
         active_scanout_dimensions().unwrap_or((surface.width, surface.height));
-    let (dst_x, dst_y) =
-        native_plane_id_barcode_screen_position(id, scanout_width, scanout_height);
-    let copy_width = NATIVE_PLANE_ID_BARCODE_WIDTH.min(surface.width.saturating_sub(dst_x));
-    let copy_height = NATIVE_PLANE_ID_BARCODE_HEIGHT.min(surface.height.saturating_sub(dst_y));
+    let Some((dst_x, dst_y)) =
+        native_plane_slot_bar_screen_position(slot, scanout_width, scanout_height)
+    else {
+        return false;
+    };
+    let copy_width = NATIVE_PLANE_SLOT_BAR_WIDTH.min(surface.width.saturating_sub(dst_x));
+    let copy_height = NATIVE_PLANE_SLOT_BAR_HEIGHT.min(surface.height.saturating_sub(dst_y));
     if copy_width == 0 || copy_height == 0 {
         return false;
     }
     let pitch_pixels = surface.pitch_bytes as usize / 4;
     for y in 0..copy_height {
         let row = unsafe {
-            (surface.virt as *mut u32).add(
-                dst_y.saturating_add(y) as usize * pitch_pixels + dst_x as usize,
-            )
+            (surface.virt as *mut u32)
+                .add(dst_y.saturating_add(y) as usize * pitch_pixels + dst_x as usize)
         };
         for x in 0..copy_width {
             unsafe {
-                core::ptr::write_volatile(row.add(x as usize), native_plane_id_barcode_xrgb(id, x));
+                core::ptr::write_volatile(row.add(x as usize), NATIVE_PLANE_SLOT_BAR_XRGB);
             }
         }
     }
     let flush_offset = dst_y as usize * surface.pitch_bytes as usize + dst_x as usize * 4;
     let flush_bytes = copy_height.saturating_sub(1) as usize * surface.pitch_bytes as usize
         + copy_width as usize * 4;
-    notify_primary_surface_external_write("boot-native-plane-id-barcode-p0", flush_offset, flush_bytes)
+    notify_primary_surface_external_write(
+        "boot-native-plane-slot-bar-p0",
+        flush_offset,
+        flush_bytes,
+    )
 }
 
-fn stamp_overlay_plane_id_barcode(
+fn stamp_overlay_plane_slot_bar(
     dev: crate::intel::Dev,
     primary: PrimarySurface,
-    id: NativePlaneId,
+    slot: usize,
 ) -> bool {
     let Some(surface) = ensure_overlay_surface_for_pipe(
         dev,
         primary.pipe,
-        NATIVE_PLANE_ID_BARCODE_WIDTH,
-        NATIVE_PLANE_ID_BARCODE_HEIGHT,
+        NATIVE_PLANE_SLOT_BAR_WIDTH,
+        NATIVE_PLANE_SLOT_BAR_HEIGHT,
     ) else {
         return false;
     };
@@ -1340,16 +1314,19 @@ fn stamp_overlay_plane_id_barcode(
         let row = unsafe { (surface.virt as *mut u32).add(y as usize * pitch_pixels) };
         for x in 0..surface.width {
             unsafe {
-                core::ptr::write_volatile(row.add(x as usize), native_plane_id_barcode_xrgb(id, x));
+                core::ptr::write_volatile(row.add(x as usize), NATIVE_PLANE_SLOT_BAR_XRGB);
             }
         }
     }
     crate::intel::dma_flush(surface.virt, surface.byte_len);
     let (scanout_width, scanout_height) =
         active_scanout_dimensions().unwrap_or((primary.width, primary.height));
-    let (pos_x, pos_y) =
-        native_plane_id_barcode_screen_position(id, scanout_width, scanout_height);
-    let reason = "boot-native-plane-id-barcode-p1";
+    let Some((pos_x, pos_y)) =
+        native_plane_slot_bar_screen_position(slot, scanout_width, scanout_height)
+    else {
+        return false;
+    };
+    let reason = "boot-native-plane-slot-bar-p1";
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque) {
         program_three_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
@@ -1362,8 +1339,8 @@ fn stamp_overlay_plane_id_barcode(
 /// P0 is written into the primary backing and P1 into the exact surface armed
 /// on universal plane 1. No allocation, font tessellation, or render-engine
 /// submission is involved in generating either identity.
-fn stamp_boot_native_plane_ids_top_right() -> bool {
-    if !NATIVE_PLANE_ID_MARKERS_ENABLED {
+fn stamp_boot_native_plane_slot_bars_top_right() -> bool {
+    if !NATIVE_PLANE_SLOT_BARS_ENABLED {
         return false;
     }
     let Some(primary) = active_primary_surface() else {
@@ -1374,23 +1351,20 @@ fn stamp_boot_native_plane_ids_top_right() -> bool {
     };
     let (scanout_width, scanout_height) =
         active_scanout_dimensions().unwrap_or((primary.width, primary.height));
-    let primary_id = NativePlaneId::Universal0;
-    let overlay_id = NativePlaneId::Universal1;
-    let primary_stamped = stamp_primary_plane_id_barcode(primary, primary_id);
-    let overlay_stamped = stamp_overlay_plane_id_barcode(dev, primary, overlay_id);
+    let primary_stamped = stamp_primary_plane_slot_bar(primary, 0);
+    let overlay_stamped = stamp_overlay_plane_slot_bar(dev, primary, UI_OVERLAY_PLANE_SLOT);
     crate::log!(
-        "intel/display: native-plane-id-barcode boot generator=cpu-inline render_submits=0 pipe={} scanout={}x{} marker={}x{} p0={} p0_code=0x{:08X} p1={} p1_code=0x{:08X} placement=top-right-staggered margin={} gap={}\n",
+        "intel/display: native-plane-slot-bars boot generator=cpu-inline render_submits=0 pipe={} scanout={}x{} bar={}x{} p0={} p1={} universal_slots={} cursor=excluded placement=top-right-nonoverlap margin={} gap={}\n",
         primary.pipe.name,
         scanout_width,
         scanout_height,
-        NATIVE_PLANE_ID_BARCODE_WIDTH,
-        NATIVE_PLANE_ID_BARCODE_HEIGHT,
+        NATIVE_PLANE_SLOT_BAR_WIDTH,
+        NATIVE_PLANE_SLOT_BAR_HEIGHT,
         primary_stamped as u8,
-        native_plane_id_barcode_modules(primary_id),
         overlay_stamped as u8,
-        native_plane_id_barcode_modules(overlay_id),
-        NATIVE_PLANE_ID_MARKER_MARGIN,
-        NATIVE_PLANE_ID_MARKER_GAP,
+        UNIVERSAL_PLANE_SLOTS,
+        NATIVE_PLANE_SLOT_BAR_MARGIN,
+        NATIVE_PLANE_SLOT_BAR_GAP,
     );
     primary_stamped && overlay_stamped
 }
@@ -1563,9 +1537,9 @@ pub(crate) async fn hw_logo_present_task() {
             false
         };
 
-        let plane_ids_stamped = stored && stamp_boot_native_plane_ids_top_right();
+        let plane_bars_stamped = stored && stamp_boot_native_plane_slot_bars_top_right();
         crate::log!(
-            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} visible={}x{} target={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} plane_ids={} err={}\n",
+            "intel/display: hw-logo output id={} status={:?} fmt={:?} decoded={}x{} visible={}x{} target={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} plane_bars={} err={}\n",
             output.id,
             output.status,
             output.format,
@@ -1581,7 +1555,7 @@ pub(crate) async fn hw_logo_present_task() {
             output.gpu_addr,
             output.phys_addr,
             stored as u8,
-            plane_ids_stamped as u8,
+            plane_bars_stamped as u8,
             output.error_code,
         );
 

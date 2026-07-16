@@ -14,8 +14,8 @@ use spin::Mutex;
 use crate::intel::gpgpu::{
     AlphaBlendWorklistRgba8Desc, COMPOSITE_WORKLIST_FLAG_PREMUL_SRC,
     COMPOSITE_WORKLIST_FLAG_SRC_OVER, COMPOSITE_WORKLIST_FLAG_TINT_ALPHA,
-    COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA, FillRectWorklistRgba8Desc, GpgpuPoint, GpgpuRect,
-    GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
+    COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA, GpgpuPoint, GpgpuRect, GpgpuRgba8Surface,
+    GpgpuSpriteQuadWorklistDesc,
 };
 
 pub(crate) const UI3_OUTPUT_COUNT: usize = 4;
@@ -818,7 +818,7 @@ fn compose_output(output: Ui3OutputId) -> Result<Ui3CompositionResult, &'static 
     if sequence <= 8 || sequence.is_multiple_of(60) || layer_count_changed || !presented {
         crate::log_info!(
             target: "ui3";
-            "ui3-compositor: output frame seq={} output={} backend_output={} pipeline={} size={}x{} layers={} clear=gpu-worklist composition=gpu-premul present={} acquire_us={} clear_us={} layers_us={} draw3d_us={} proof_us={} scratch_clear_us={} scale_us={} blend_us={} commit_us={} total_us={} budget_us=16667 over_budget={} cpu_pixel_path=none fallback=none\n",
+            "ui3-compositor: output frame seq={} output={} backend_output={} pipeline={} size={}x{} layers={} clear=gpu-2d-walker composition=gpu-premul present={} acquire_us={} clear_us={} layers_us={} draw3d_us={} proof_us={} scratch_clear_us={} scale_us={} blend_us={} commit_us={} total_us={} budget_us=16667 over_budget={} cpu_pixel_path=none fallback=none\n",
             sequence,
             output.name(),
             target.name,
@@ -973,17 +973,14 @@ fn blend_premultiplied_layer(
     Ok(parallel_blend_rect(src, src_rect, dst, dst_xy, flags, color))
 }
 
-/// Split a rectangle into at most 16x16 non-overlapping descriptors.  The
-/// shipped worklist kernel assigns descriptors across lanes/walkers; a single
-/// full-screen descriptor would otherwise serialize millions of pixels on
-/// one lane.
+/// Clear the complete rectangle with one native 2D GPU walker.  The fill
+/// kernel assigns one pixel per work item, so this keeps a full output clear
+/// in one submission without serial worklist descriptors.
 fn parallel_fill_rect(dst: GpgpuRgba8Surface, rect: GpgpuRect, color: u32) -> bool {
     let right = i64::from(rect.x) + i64::from(rect.width);
     let bottom = i64::from(rect.y) + i64::from(rect.height);
     if rect.x < 0
         || rect.y < 0
-        || rect.x > i16::MAX as i32
-        || rect.y > i16::MAX as i32
         || rect.width == 0
         || rect.height == 0
         || right > i64::from(dst.width)
@@ -991,23 +988,11 @@ fn parallel_fill_rect(dst: GpgpuRgba8Surface, rect: GpgpuRect, color: u32) -> bo
     {
         return false;
     }
-    let mut descs = Vec::with_capacity(256);
-    for_each_tile(rect.width, rect.height, |x, y, width, height| {
-        let Some(dst_x) = rect.x.checked_add(x as i32) else {
-            return;
-        };
-        let Some(dst_y) = rect.y.checked_add(y as i32) else {
-            return;
-        };
-        if let Some(desc) = fill_desc(dst_x, dst_y, width, height, color) {
-            descs.push(desc);
-        }
-    });
-    if descs.is_empty() {
-        return false;
-    }
-    let stats = crate::intel::gpgpu::fill_rect_worklist_rgba8_stats(dst, &descs);
-    stats.descs == descs.len() && stats.submits == 1
+    let stats = crate::intel::gpgpu::fill_rect_rgba8_stats(dst, rect, color);
+    let expected_spans = (rect.width as usize)
+        .div_ceil(16)
+        .saturating_mul(rect.height as usize);
+    stats.spans == expected_spans && stats.submits == 1
 }
 
 fn parallel_blend_rect(
@@ -1094,20 +1079,6 @@ fn for_each_tile(width: u32, height: u32, mut f: impl FnMut(u32, u32, u32, u32))
             }
         }
     }
-}
-
-fn fill_desc(
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    color: u32,
-) -> Option<FillRectWorklistRgba8Desc> {
-    Some(FillRectWorklistRgba8Desc {
-        dst_xy: pack_i16_pair(i16::try_from(x).ok()?, i16::try_from(y).ok()?),
-        size: pack_u16_pair(u16::try_from(width).ok()?, u16::try_from(height).ok()?),
-        color_rgba: color,
-    })
 }
 
 const fn pack_u16_pair(x: u16, y: u16) -> u32 {
