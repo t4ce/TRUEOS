@@ -27,7 +27,13 @@ static HULL_RODATA_ANCHOR: [u8; 16] = *b"TRUEOS_VM_HULL\0\0";
 pub extern "C" fn trueos_vm_guest_run() {
     if unsafe { trueos_hv_guest_blueprint_launch_active() } {
         let _ = unsafe { trueos_hv_guest_blueprint_run() };
-        unsafe { trueos_hv_guest_container_shell_run() }
+        // A shell-launched Blueprint app has one invocation lifecycle. Its TUI
+        // borrows the outer shell view; after it returns, stop the hull instead
+        // of silently replacing shell2 with the VM minishell.
+        crate::vmcall::preserve();
+        loop {
+            core::hint::spin_loop();
+        }
     }
 
     crate::demo::start();

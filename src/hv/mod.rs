@@ -1724,8 +1724,12 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
         (context.console_target.clone(), was_direct)
     };
 
+    // A Blueprint launched by shell2 only borrows the selected view while its
+    // terminal UI is active. Returning from that UI must give the view and
+    // its input back to shell2; attaching the VM minishell here leaves the
+    // outer shell painted but unable to consume input.
     if let Some(target) = target.as_ref() {
-        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+        crate::shell2::unbind_matrix_target_vm(target, vm_id);
     }
     if was_direct {
         crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
@@ -1733,7 +1737,7 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
     crate::log_os::blueprint_line(
         log::Level::Info,
         format_args!(
-            "apps: vm{} console handoff terminal->cli target={}\n",
+            "apps: vm{} console handoff terminal->shell2 target={}\n",
             vm_id,
             target.is_some() as u8
         ),

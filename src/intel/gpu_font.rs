@@ -1,6 +1,6 @@
 //! Kernel-owned cache for reusable GPU font geometry.
 //!
-//! The graphics font registry owns embedded bytes and size-independent Skrifa
+//! The graphics font registry owns resident bytes and size-independent Skrifa
 //! outlines. This service owns the reusable default mesh, one-shot arbitrary
 //! text jobs, and explicitly tagged persistent jobs. A persistent-job lease
 //! transfers its prepared geometry from CPU-build authority to a dedicated
@@ -1977,10 +1977,17 @@ fn tessellate_text_request_with_tolerance(
         return Err("text-too-long");
     }
     let rows = row_lengths.len();
+    let registry_name = if font == GpuFontFace::NotoSansSc
+        && crate::graphics::font::font_summary(font.registry_name()).is_none()
+    {
+        GpuFontFace::Default.registry_name()
+    } else {
+        font.registry_name()
+    };
     let mesh = match (layout, tolerance) {
         (GpuFontTextLayout::SingleLine, Some(tolerance)) => {
             crate::graphics::font::tessellate_text_mesh_with_tolerance(
-                font.registry_name(),
+                registry_name,
                 normalized.as_str(),
                 crate::graphics::font::FONT_TESSEL_BASE_PX,
                 tolerance,
@@ -1988,7 +1995,7 @@ fn tessellate_text_request_with_tolerance(
         }
         (GpuFontTextLayout::Rows, Some(tolerance)) => {
             crate::graphics::font::tessellate_text_rows_mesh_with_tolerance(
-                font.registry_name(),
+                registry_name,
                 normalized.as_str(),
                 crate::graphics::font::FONT_TESSEL_BASE_PX,
                 row_lengths.as_slice(),
@@ -1996,12 +2003,12 @@ fn tessellate_text_request_with_tolerance(
             )
         }
         (GpuFontTextLayout::SingleLine, None) => crate::graphics::font::tessellate_text_mesh(
-            font.registry_name(),
+            registry_name,
             normalized.as_str(),
             crate::graphics::font::FONT_TESSEL_BASE_PX,
         ),
         (GpuFontTextLayout::Rows, None) => crate::graphics::font::tessellate_text_rows_mesh(
-            font.registry_name(),
+            registry_name,
             normalized.as_str(),
             crate::graphics::font::FONT_TESSEL_BASE_PX,
             row_lengths.as_slice(),

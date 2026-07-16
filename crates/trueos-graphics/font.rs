@@ -1,7 +1,7 @@
 //! Font assets and warmed vector outline state.
 //!
-//! This module owns the real-font doorway for graphics. It keeps embedded font
-//! bytes plus size-independent outline commands resident, while leaving
+//! This module owns the real-font doorway for graphics. It keeps font bytes
+//! plus size-independent outline commands resident, while leaving
 //! tessellation, raster masks, and GPU coverage as later consumers.
 
 use alloc::{string::String, vec::Vec};
@@ -27,18 +27,15 @@ pub(crate) const FONT_GPU_OUTLINE_OP_WORDS: usize = 8;
 // labels. Keep the original full-field vertex count at the graphics boundary.
 pub(crate) const FONT_CLIP_FIELD_VERTICES: usize = 6 * 3 * 3;
 
-const EMBEDDED_FONTS: [EmbeddedFontSpec; 2] = [
-    EmbeddedFontSpec {
-        name: "font",
-        file_name: "L_10646.TTF",
-        bytes: include_bytes!("../../tools/L_10646.TTF"),
-    },
-    EmbeddedFontSpec {
-        name: "noto-sans-sc",
-        file_name: "NotoSansSC[wght].ttf",
-        bytes: include_bytes!("../../tools/NotoSansSC[wght].ttf"),
-    },
-];
+const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
+    name: "font",
+    file_name: "L_10646.TTF",
+    bytes: include_bytes!("../../tools/L_10646.TTF"),
+}];
+const TRUEOSFS_FONT_NAME: &str = "noto-sans-sc";
+const TRUEOSFS_FONT_FILE: &str = "NotoSansSC[wght].ttf";
+const TRUEOSFS_FONT_PATH: &str = "fonts/NotoSansSC[wght].ttf";
+const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
 
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 
@@ -178,7 +175,7 @@ fn gpu_outline_for_text(
     let FontWarmEndState::Outline(outline) = font_record
         .outline_endstate()
         .ok_or("outline-cache-missing")?;
-    let font = FontRef::new(font_record.bytes).map_err(|_| "font-parse-failed")?;
+    let font = FontRef::new(font_record.bytes.as_slice()).map_err(|_| "font-parse-failed")?;
     let charmap = font.charmap();
     let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
     let fallback_advance = font_record.units_per_em as f32 * 0.35;
@@ -426,7 +423,7 @@ fn tessellate_text_mesh_grouped(
             total_start,
         );
     };
-    let Ok(font) = FontRef::new(font_record.bytes) else {
+    let Ok(font) = FontRef::new(font_record.bytes.as_slice()) else {
         return FontTesselMesh::failed(
             "font-parse-failed",
             font_record.name,
@@ -641,10 +638,16 @@ pub(crate) fn warm_embedded_fonts_once() -> Result<Vec<FontWarmSummary>, skrifa:
 fn warm_embedded_font_by_name(
     name: &str,
 ) -> Result<Option<FontWarmSummary>, skrifa::raw::ReadError> {
-    let Some(index) = EMBEDDED_FONTS.iter().position(|spec| spec.name == name) else {
-        return Ok(None);
-    };
-    warm_embedded_font_once(index).map(Some)
+    if let Some(index) = EMBEDDED_FONTS.iter().position(|spec| spec.name == name) {
+        return warm_embedded_font_once(index).map(Some);
+    }
+    if name == TRUEOSFS_FONT_NAME {
+        return Ok(font_summary(name).map(|summary| FontWarmSummary {
+            status: "warm-cache",
+            ..summary
+        }));
+    }
+    Ok(None)
 }
 
 fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw::ReadError> {
@@ -656,22 +659,31 @@ fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw:
         });
     }
 
+    warm_font_bytes_once(spec.name, spec.file_name, FontBytes::Embedded(spec.bytes))
+}
+
+fn warm_font_bytes_once(
+    name: &'static str,
+    file_name: &'static str,
+    bytes: FontBytes,
+) -> Result<FontWarmSummary, skrifa::raw::ReadError> {
+    if let Some(summary) = font_summary(name) {
+        return Ok(FontWarmSummary {
+            status: "warm-cache",
+            ..summary
+        });
+    }
+
     let total_start = embassy_time_driver::now();
     let parse_start = embassy_time_driver::now();
-    let font = FontRef::new(spec.bytes)?;
+    let font = FontRef::new(bytes.as_slice())?;
     let head = font.head()?;
     let maxp = font.maxp()?;
     let parse_ms = elapsed_ms_since(parse_start);
 
-    let mut prepared = RegisteredFont::new(
-        spec.name,
-        spec.file_name,
-        spec.bytes,
-        font.table_directory().table_records().len(),
-        maxp.num_glyphs(),
-        head.units_per_em(),
-    );
-
+    let tables = font.table_directory().table_records().len();
+    let glyphs = maxp.num_glyphs();
+    let units_per_em = head.units_per_em();
     let mut outline = FontOutlineCache::new(FONT_ENDSTATE_OUTLINE_COMMANDS, maxp.num_glyphs());
     let outlines = font.outline_glyphs();
     let outline_start = embassy_time_driver::now();
@@ -701,6 +713,7 @@ fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw:
     }
     let outline_ms = elapsed_ms_since(outline_start);
     let total_ms = elapsed_ms_since(total_start);
+    let mut prepared = RegisteredFont::new(name, file_name, bytes, tables, glyphs, units_per_em);
     prepared.endstates.push(FontWarmEndState::Outline(outline));
 
     let summary = prepared
@@ -709,7 +722,7 @@ fn warm_embedded_font_once(index: usize) -> Result<FontWarmSummary, skrifa::raw:
         .unwrap_or_else(|| prepared.empty_summary("cold-built", parse_ms, outline_ms, total_ms));
 
     let mut registry = FONT_REGISTRY.lock();
-    if let Some(existing) = registry.font_by_name(spec.name)
+    if let Some(existing) = registry.font_by_name(name)
         && let Some(endstate) = existing.outline_endstate()
     {
         return Ok(endstate.summary(existing, "warm-cache", 0, 0, 0));
@@ -761,6 +774,102 @@ pub(crate) async fn font_warm_task() {
             ),
         }
     }
+
+    let mut heartbeat = 0u64;
+    loop {
+        heartbeat = heartbeat.saturating_add(1);
+        if font_summary(TRUEOSFS_FONT_NAME).is_some() {
+            return;
+        }
+
+        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+            crate::log_info!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-mounted heartbeat={} retry_secs={}\n",
+                TRUEOSFS_FONT_NAME,
+                TRUEOSFS_FONT_PATH,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+            );
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+            ))
+            .await;
+            continue;
+        };
+
+        match crate::r::fs::trueosfs::file_out_async(disk, TRUEOSFS_FONT_PATH).await {
+            Ok(Some(bytes)) => {
+                crate::log_info!(
+                    target: "boot";
+                    "graphics-font: status=warming name={} file={} path=trueosfs:/{} source=trueosfs resident_input_bytes={} heartbeat={}\n",
+                    TRUEOSFS_FONT_NAME,
+                    TRUEOSFS_FONT_FILE,
+                    TRUEOSFS_FONT_PATH,
+                    bytes.len(),
+                    heartbeat,
+                );
+                match warm_font_bytes_once(
+                    TRUEOSFS_FONT_NAME,
+                    TRUEOSFS_FONT_FILE,
+                    FontBytes::TrueosFs(bytes),
+                ) {
+                    Ok(summary) => {
+                        crate::log_info!(
+                            target: "boot";
+                            "graphics-font: status={} name={} file={} path=trueosfs:/{} source=trueosfs endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} heartbeat={}\n",
+                            summary.status,
+                            summary.name,
+                            summary.file_name,
+                            TRUEOSFS_FONT_PATH,
+                            summary.endstate,
+                            summary.resident_bytes,
+                            summary.cache_bytes,
+                            summary.glyphs,
+                            summary.outline_success,
+                            summary.empty_outlines,
+                            summary.outline_failures,
+                            summary.commands,
+                            summary.outline_ms,
+                            summary.total_ms,
+                            heartbeat,
+                        );
+                        return;
+                    }
+                    Err(err) => crate::log_warn!(
+                        target: "boot";
+                        "graphics-font: status=invalid name={} file={} path=trueosfs:/{} source=trueosfs heartbeat={} retry_secs={} err={:?}\n",
+                        TRUEOSFS_FONT_NAME,
+                        TRUEOSFS_FONT_FILE,
+                        TRUEOSFS_FONT_PATH,
+                        heartbeat,
+                        TRUEOSFS_FONT_HEARTBEAT_SECS,
+                        err,
+                    ),
+                }
+            }
+            Ok(None) => crate::log_info!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-not-present heartbeat={} retry_secs={}\n",
+                TRUEOSFS_FONT_NAME,
+                TRUEOSFS_FONT_PATH,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+            ),
+            Err(err) => crate::log_warn!(
+                target: "boot";
+                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-read-failed heartbeat={} retry_secs={} err={:?}\n",
+                TRUEOSFS_FONT_NAME,
+                TRUEOSFS_FONT_PATH,
+                heartbeat,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                err,
+            ),
+        }
+
+        embassy_time::Timer::after(embassy_time::Duration::from_secs(TRUEOSFS_FONT_HEARTBEAT_SECS))
+            .await;
+    }
 }
 
 struct FontRegistry {
@@ -780,7 +889,7 @@ impl FontRegistry {
 struct RegisteredFont {
     name: &'static str,
     file_name: &'static str,
-    bytes: &'static [u8],
+    bytes: FontBytes,
     tables: usize,
     glyphs: u16,
     units_per_em: u16,
@@ -791,7 +900,7 @@ impl RegisteredFont {
     fn new(
         name: &'static str,
         file_name: &'static str,
-        bytes: &'static [u8],
+        bytes: FontBytes,
         tables: usize,
         glyphs: u16,
         units_per_em: u16,
@@ -854,6 +963,24 @@ impl RegisteredFont {
             outline_ms,
             total_ms,
         }
+    }
+}
+
+enum FontBytes {
+    Embedded(&'static [u8]),
+    TrueosFs(Vec<u8>),
+}
+
+impl FontBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Embedded(bytes) => bytes,
+            Self::TrueosFs(bytes) => bytes.as_slice(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
     }
 }
 

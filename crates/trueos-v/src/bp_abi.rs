@@ -424,6 +424,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;
     pub fn trueos_cabi_shell_attached_retarget_slot(slot_ptr: *const u8, slot_len: usize) -> i32;
     pub fn trueos_cabi_shell2_raw_write(data_ptr: *const u8, data_len: usize) -> usize;
+    pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
+    pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
+    pub fn trueos_cabi_blueprint_return_to_cli() -> i32;
+    pub fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32;
     pub fn trueos_cabi_konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32;
     pub fn trueos_cabi_konsole_write_row(
         row: u32,
