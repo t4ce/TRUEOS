@@ -5214,10 +5214,21 @@ pub(crate) fn mandel64_worklist_surface_full(
     dst: GpgpuRgba8Surface,
     iterations: u32,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
+    mandel64_worklist_surface_view(dst, dst.bounds(), iterations)
+}
+
+/// Render a Mandelbrot view whose signed x/y origin selects the complex-plane
+/// sample interval and whose width/height select the destination extent.
+pub(crate) fn mandel64_worklist_surface_view(
+    dst: GpgpuRgba8Surface,
+    view: GpgpuRect,
+    iterations: u32,
+) -> Option<GpgpuShellMandel64WorklistResult> {
     let total_start_tick = direct_rcs_now_tick();
     if !dst.is_valid()
         || dst.width < MANDEL64_WORKLIST_CELL_PIXELS
         || dst.height < MANDEL64_WORKLIST_CELL_PIXELS
+        || view.is_empty()
     {
         return None;
     }
@@ -5240,8 +5251,10 @@ pub(crate) fn mandel64_worklist_surface_full(
         });
     }
 
-    let columns = dst.width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
-    let render_height = dst.height.div_ceil(2).max(1);
+    let render_width = view.width.min(dst.width);
+    let view_height = view.height.min(dst.height);
+    let columns = render_width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
+    let render_height = view_height.div_ceil(2).max(1);
     let rows = render_height.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
     let count = columns.saturating_mul(rows) as usize;
     if count == 0 {
@@ -5268,21 +5281,20 @@ pub(crate) fn mandel64_worklist_surface_full(
             let tile_y = (tile_index as u32) / columns;
             let dst_x = tile_x.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS);
             let dst_y = tile_y.saturating_mul(MANDEL64_WORKLIST_CELL_PIXELS);
-            let width = dst
-                .width
+            let width = render_width
                 .saturating_sub(dst_x)
                 .min(MANDEL64_WORKLIST_CELL_PIXELS);
             let height = render_height
                 .saturating_sub(dst_y)
                 .min(MANDEL64_WORKLIST_CELL_PIXELS);
             placements.push(GpgpuMandel64Placement {
-                src_x: dst_x as i32,
-                src_y: dst_y as i32,
+                src_x: view.x.saturating_add(dst_x as i32),
+                src_y: view.y.saturating_add(dst_y as i32),
                 dst_x: dst_x as i32,
                 dst_y: dst_y as i32,
                 width,
                 height,
-                mirror_height: dst.height,
+                mirror_height: view_height,
                 iterations,
             });
         }

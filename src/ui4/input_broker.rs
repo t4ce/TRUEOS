@@ -19,7 +19,6 @@ const MAX_OWNER_EVENTS: usize = 256;
 const CURSOR_BATCH: usize = 64;
 const KEYBOARD_BATCH: usize = 64;
 const INPUT_PUMP_PERIOD_MS: u64 = 4;
-const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 
@@ -158,7 +157,6 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
     pub(crate) draw_cursor: bool,
-    pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) context_menu: Option<(u32, u32)>,
 }
 
@@ -188,8 +186,6 @@ struct CursorRoute {
     focus_serial: u64,
     visible_after_motion: bool,
     color: crate::graphics::primitives::Rgba8,
-    selection_anchor: Option<(u32, u32)>,
-    selection: Option<Ui4VisualRect>,
     secondary_anchor: Option<(u32, u32)>,
     secondary_dragged: bool,
     context_menu: Option<(u32, u32)>,
@@ -207,8 +203,6 @@ impl CursorRoute {
             focus_serial: 0,
             visible_after_motion: false,
             color: software_cursor_color(source),
-            selection_anchor: None,
-            selection: None,
             secondary_anchor: None,
             secondary_dragged: false,
             context_menu: None,
@@ -316,26 +310,7 @@ impl InputBroker {
         if dx != 0 || dy != 0 {
             self.cursors[index].visible_after_motion = true;
         }
-        if pressed & PRIMARY_BUTTON_MASK != 0 {
-            self.cursors[index].selection_anchor = Some((x, y));
-            self.cursors[index].selection = None;
-            self.cursors[index].context_menu = None;
-        }
-        if event.buttons_down & PRIMARY_BUTTON_MASK != 0 {
-            if let Some(anchor) = self.cursors[index].selection_anchor {
-                self.cursors[index].selection = Some(visual_rect_between(anchor, (x, y)));
-            }
-        }
-        if released & PRIMARY_BUTTON_MASK != 0 {
-            if let Some(anchor) = self.cursors[index].selection_anchor.take() {
-                let rect = visual_rect_between(anchor, (x, y));
-                self.cursors[index].selection =
-                    (rect.width >= 4 && rect.height >= 4).then_some(rect);
-            }
-        }
         if pressed & SECONDARY_BUTTON_MASK != 0 {
-            self.cursors[index].selection_anchor = None;
-            self.cursors[index].selection = None;
             self.cursors[index].secondary_anchor = Some((x, y));
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].context_menu = None;
@@ -577,7 +552,6 @@ impl InputBroker {
                 y: route.y,
                 color: route.color,
                 draw_cursor: hardware_cursor_slot != Some(route.source.slot_id),
-                selection: route.selection,
                 context_menu: route.context_menu,
             });
         }
@@ -717,17 +691,6 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
     i64::from(pixel)
         .saturating_sub(i64::from(origin))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
-}
-
-fn visual_rect_between(a: (u32, u32), b: (u32, u32)) -> Ui4VisualRect {
-    let x = a.0.min(b.0);
-    let y = a.1.min(b.1);
-    Ui4VisualRect {
-        x,
-        y,
-        width: a.0.max(b.0).saturating_sub(x).saturating_add(1),
-        height: a.1.max(b.1).saturating_sub(y).saturating_add(1),
-    }
 }
 
 fn software_cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {

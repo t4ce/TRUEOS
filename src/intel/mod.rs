@@ -280,7 +280,8 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
 }
 
 pub(crate) use self::display::{
-    LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat, RgbaOverlayTile,
+    CompositionDamageRect, LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat,
+    RgbaOverlayTile,
 };
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
@@ -327,6 +328,14 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles(
     reason: &str,
 ) -> bool {
     self::display::present_premultiplied_rgba_primary_tiles(tiles, reason)
+}
+
+pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
+    self::display::present_premultiplied_rgba_primary_tiles_damage(tiles, damage, reason)
 }
 
 pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
@@ -483,6 +492,14 @@ pub fn present_rgba_overlay_at(
 
 pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str) -> bool {
     self::display::present_live_overlay_rects(rects, reason)
+}
+
+pub(crate) fn present_live_overlay_rects_damage(
+    rects: &[LiveOverlayRect],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
+    self::display::present_live_overlay_rects_damage(rects, damage, reason)
 }
 
 pub(crate) fn present_live_overlay_rects_preserving(

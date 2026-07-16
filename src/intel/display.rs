@@ -227,6 +227,40 @@ pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) expected_rgba: Option<Rgba8>,
 }
 
+/// One output-space region which must be reconstructed by the compositor.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CompositionDamageRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl CompositionDamageRect {
+    pub(crate) const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = self
+            .x
+            .saturating_add(self.width)
+            .max(other.x.saturating_add(other.width));
+        let bottom = self
+            .y
+            .saturating_add(self.height)
+            .max(other.y.saturating_add(other.height));
+        Self::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+    }
+}
+
 impl PrimarySurfaceSampleSet {
     pub(crate) fn any_changed_since(self, before: Self) -> bool {
         self.tl != before.tl
@@ -695,6 +729,7 @@ struct OverlaySurfacePool {
     pipe_slot: usize,
     front_index: Option<usize>,
     surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
+    damage_debt: [Option<CompositionDamageRect>; OVERLAY_SWAP_BUFFER_COUNT],
     /// Previous-size surface retained only until the replacement is proven
     /// live. It is not a render target and must be reclaimed after the latch.
     retiring_front: Option<OverlaySurface>,
@@ -723,6 +758,7 @@ struct PrimarySwapSurfacePool {
     pipe_slot: usize,
     front_index: Option<usize>,
     surfaces: [Option<PrimarySwapSurface>; PRIMARY_SWAP_BUFFER_COUNT],
+    damage_debt: [Option<CompositionDamageRect>; PRIMARY_SWAP_BUFFER_COUNT],
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -746,6 +782,7 @@ impl OverlaySurfacePool {
             pipe_slot: usize::MAX,
             front_index: None,
             surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+            damage_debt: [None; OVERLAY_SWAP_BUFFER_COUNT],
             retiring_front: None,
         }
     }
@@ -763,6 +800,7 @@ impl PrimarySwapSurfacePool {
             pipe_slot: usize::MAX,
             front_index: None,
             surfaces: [None; PRIMARY_SWAP_BUFFER_COUNT],
+            damage_debt: [None; PRIMARY_SWAP_BUFFER_COUNT],
         }
     }
 
@@ -3590,6 +3628,97 @@ pub(crate) fn present_live_overlay_rects(rects: &[LiveOverlayRect], reason: &str
     present_live_overlay_rects_preserving(rects, None, reason)
 }
 
+/// Update only the cursor/menu damage on the double-buffered alpha plane.
+/// Per-buffer damage debt keeps a buffer coherent even when it was last used
+/// two or more cursor updates ago.
+pub(crate) fn present_live_overlay_rects_damage(
+    rects: &[LiveOverlayRect],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
+        .unwrap_or((0, 0));
+    let Some(change) = clip_composition_damage(damage, width, height) else {
+        return true;
+    };
+    let Some(surface) = ensure_overlay_surface(dev, width, height) else {
+        return false;
+    };
+    let effective = {
+        let pool = overlay_surface_pool(surface.pipe).lock();
+        pool.damage_debt[surface.buffer_index]
+            .map(|debt| debt.union(change))
+            .unwrap_or(change)
+    };
+
+    fill_overlay_rect(surface, effective.x, effective.y, effective.width, effective.height, 0);
+    for rect in rects {
+        fill_overlay_rect_rgba_clipped(surface, *rect, effective);
+    }
+    dma_flush_overlay_rect(surface, effective);
+
+    let (presented, path) =
+        if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+            if flip_overlay_plane_surface(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
+                (true, "surf-only")
+            } else {
+                program_three_plane_stack_resources(dev, surface.pipe, reason);
+                (
+                    arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason),
+                    "contract-arm",
+                )
+            }
+        } else {
+            mark_overlay_surface_front(surface);
+            (true, "already-live")
+        };
+    if !presented {
+        return false;
+    }
+
+    let mut pool = overlay_surface_pool(surface.pipe).lock();
+    if pool.matches(surface.width, surface.height, surface.pipe) {
+        for index in 0..OVERLAY_SWAP_BUFFER_COUNT {
+            if index == surface.buffer_index {
+                pool.damage_debt[index] = None;
+            } else {
+                pool.damage_debt[index] = Some(
+                    pool.damage_debt[index]
+                        .map(|debt| debt.union(change))
+                        .unwrap_or(change),
+                );
+            }
+        }
+    }
+    drop(pool);
+    let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(120) {
+        crate::log!(
+            "intel/display: live-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} rects={} damage={}x{}@{},{} effective={}x{}@{},{}\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            surface.buffer_index,
+            path,
+            rects.len(),
+            change.width,
+            change.height,
+            change.x,
+            change.y,
+            effective.width,
+            effective.height,
+            effective.x,
+            effective.y,
+        );
+    }
+    true
+}
+
 /// Compose positioned RGBA tiles into one full-scanout transparent surface and
 /// commit the hardware overlay once. Intel exposes one usable UI overlay plane
 /// here, so independently rendered font demos cannot be presented as nine
@@ -3631,7 +3760,8 @@ pub(crate) fn present_rgba_overlay_tiles_with_background(
     let mut source_mismatches = 0u64;
     let mut storage_mismatches = 0u64;
     for tile in tiles {
-        let Some((pixels, source_errors, storage_errors)) = copy_rgba_tile_into_overlay(surface, tile)
+        let Some((pixels, source_errors, storage_errors)) =
+            copy_rgba_tile_into_overlay(surface, tile)
         else {
             return false;
         };
@@ -3913,6 +4043,19 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles(
     tiles: &[RgbaOverlayTile<'_>],
     reason: &str,
 ) -> bool {
+    let (width, height) = active_scanout_dimensions().unwrap_or((0, 0));
+    present_premultiplied_rgba_primary_tiles_damage(
+        tiles,
+        CompositionDamageRect::new(0, 0, width, height),
+        reason,
+    )
+}
+
+pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -3925,20 +4068,32 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles(
     if target.width == 0 || target.height == 0 || tiles.is_empty() {
         return false;
     }
+    let Some(damage) = clip_composition_damage(damage, target.width, target.height) else {
+        return true;
+    };
     let Some(surface) =
         ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
     else {
         return false;
     };
-    if !copy_primary_composition_base(surface) {
+    let effective = {
+        let pool = primary_swap_surface_pool(surface.pipe).lock();
+        pool.damage_debt[surface.buffer_index]
+            .map(|debt| debt.union(damage))
+            .unwrap_or(damage)
+    };
+    // Reconstruct damaged pixels from the original opaque primary, then apply
+    // the current scene exactly once. Reusing the previous composite as an
+    // alpha source would accumulate translucent content every presentation.
+    if !restore_primary_composition_base_rect(surface, effective) {
         return false;
     }
     for tile in tiles {
-        if !blend_premultiplied_rgba_tile_into_primary(surface, tile) {
+        if !blend_premultiplied_rgba_tile_into_primary_clipped(surface, tile, effective) {
             return false;
         }
     }
-    crate::intel::dma_flush(surface.virt, surface.byte_len);
+    dma_flush_primary_swap_rect(surface, effective);
 
     if display_pipeline_target_for_pipe(dev, pipe) != Some(target) {
         return false;
@@ -3965,19 +4120,27 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles(
     ) {
         return false;
     }
-    mark_primary_swap_surface_front(surface);
+    mark_primary_composition_surface_front(surface, damage);
 
     let seq = PRIMARY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if seq <= 8 || seq.is_multiple_of(60) {
         let primary_base = pipe.primary_plane().base();
         crate::log!(
-            "intel/display: primary-tile-compositor-present seq={} reason={} pipeline={} pipe={} buffer={} tiles={} size={}x{} pitch=0x{:X} gpu=0x{:X} buf_cfg=0x{:08X} surf=0x{:08X} surf_live=0x{:08X}\n",
+            "intel/display: primary-tile-compositor-present seq={} reason={} pipeline={} pipe={} buffer={} tiles={} damage={}x{}@{},{} effective={}x{}@{},{} size={}x{} pitch=0x{:X} gpu=0x{:X} buf_cfg=0x{:08X} surf=0x{:08X} surf_live=0x{:08X}\n",
             seq,
             reason,
             target.pipeline.name(),
             pipe.name,
             surface.buffer_index,
             tiles.len(),
+            damage.width,
+            damage.height,
+            damage.x,
+            damage.y,
+            effective.width,
+            effective.height,
+            effective.x,
+            effective.y,
             surface.width,
             surface.height,
             surface.pitch_bytes,
@@ -5920,6 +6083,32 @@ fn mark_primary_swap_surface_front(surface: PrimarySwapSurface) {
     let mut pool = primary_swap_surface_pool(surface.pipe).lock();
     if pool.matches(surface.width, surface.height, surface.pipe) {
         pool.front_index = Some(surface.buffer_index);
+        let full = CompositionDamageRect::new(0, 0, surface.width, surface.height);
+        for index in 0..PRIMARY_SWAP_BUFFER_COUNT {
+            pool.damage_debt[index] = (index != surface.buffer_index).then_some(full);
+        }
+    }
+}
+
+fn mark_primary_composition_surface_front(
+    surface: PrimarySwapSurface,
+    change: CompositionDamageRect,
+) {
+    let mut pool = primary_swap_surface_pool(surface.pipe).lock();
+    if !pool.matches(surface.width, surface.height, surface.pipe) {
+        return;
+    }
+    pool.front_index = Some(surface.buffer_index);
+    for index in 0..PRIMARY_SWAP_BUFFER_COUNT {
+        if index == surface.buffer_index {
+            pool.damage_debt[index] = None;
+        } else {
+            pool.damage_debt[index] = Some(
+                pool.damage_debt[index]
+                    .map(|debt| debt.union(change))
+                    .unwrap_or(change),
+            );
+        }
     }
 }
 
@@ -6002,10 +6191,10 @@ fn copy_primary_swap_front_into_back(back: PrimarySwapSurface) -> bool {
     true
 }
 
-fn copy_primary_composition_base(back: PrimarySwapSurface) -> bool {
-    if copy_primary_swap_front_into_back(back) {
-        return true;
-    }
+fn restore_primary_composition_base_rect(
+    back: PrimarySwapSurface,
+    damage: CompositionDamageRect,
+) -> bool {
     let Some(primary) = primary_surface_for_pipe(back.pipe) else {
         return false;
     };
@@ -6018,13 +6207,18 @@ fn copy_primary_composition_base(back: PrimarySwapSurface) -> bool {
     {
         return false;
     }
-    crate::intel::dma_flush(primary.virt, primary.byte_len);
-    let row_bytes = primary.width as usize * 4;
-    for row in 0..primary.height as usize {
+    let row_bytes = damage.width as usize * 4;
+    for row in 0..damage.height as usize {
+        let src_offset = (damage.y as usize + row)
+            .saturating_mul(primary.pitch_bytes as usize)
+            .saturating_add(damage.x as usize * 4);
+        let dst_offset = (damage.y as usize + row)
+            .saturating_mul(back.pitch_bytes as usize)
+            .saturating_add(damage.x as usize * 4);
         unsafe {
             core::ptr::copy_nonoverlapping(
-                primary.virt.add(row.saturating_mul(primary.pitch_bytes as usize)),
-                back.virt.add(row.saturating_mul(back.pitch_bytes as usize)),
+                primary.virt.add(src_offset),
+                back.virt.add(dst_offset),
                 row_bytes,
             );
         }
@@ -6032,25 +6226,34 @@ fn copy_primary_composition_base(back: PrimarySwapSurface) -> bool {
     true
 }
 
-fn blend_premultiplied_rgba_tile_into_primary(
+fn dma_flush_primary_swap_rect(surface: PrimarySwapSurface, damage: CompositionDamageRect) {
+    let row_bytes = damage.width as usize * 4;
+    for row in 0..damage.height as usize {
+        let offset = (damage.y as usize + row)
+            .saturating_mul(surface.pitch_bytes as usize)
+            .saturating_add(damage.x as usize * 4);
+        unsafe {
+            crate::intel::dma_flush(surface.virt.add(offset), row_bytes);
+        }
+    }
+}
+
+fn blend_premultiplied_rgba_tile_into_primary_clipped(
     surface: PrimarySwapSurface,
     tile: &RgbaOverlayTile<'_>,
+    damage: CompositionDamageRect,
 ) -> bool {
     if surface.virt.is_null()
         || tile.width == 0
         || tile.height == 0
         || tile.pitch_bytes < tile.width as usize * 4
-        || tile.x >= surface.width
-        || tile.y >= surface.height
     {
         return false;
     }
-    let copy_w = tile.width.min(surface.width.saturating_sub(tile.x)) as usize;
-    let copy_h = tile.height.min(surface.height.saturating_sub(tile.y)) as usize;
     let Some(required) = tile
         .pitch_bytes
-        .checked_mul(copy_h.saturating_sub(1))
-        .and_then(|bytes| bytes.checked_add(copy_w.saturating_mul(4)))
+        .checked_mul(tile.height as usize - 1)
+        .and_then(|bytes| bytes.checked_add(tile.width as usize * 4))
     else {
         return false;
     };
@@ -6058,15 +6261,26 @@ fn blend_premultiplied_rgba_tile_into_primary(
         return false;
     }
 
+    let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
+    let Some(draw) = intersect_composition_damage(tile_rect, damage)
+        .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
+    else {
+        return true;
+    };
+    let copy_w = draw.width as usize;
+    let copy_h = draw.height as usize;
+    let src_x = draw.x.saturating_sub(tile.x) as usize;
+    let src_y = draw.y.saturating_sub(tile.y) as usize;
+
     for row in 0..copy_h {
-        let src_row = &tile.pixels[row * tile.pitch_bytes..];
+        let src_row = &tile.pixels[(src_y + row) * tile.pitch_bytes + src_x * 4..];
         let dst_row = unsafe {
             surface
                 .virt
                 .add(
-                    (tile.y as usize + row)
+                    (draw.y as usize + row)
                         .saturating_mul(surface.pitch_bytes as usize)
-                        .saturating_add(tile.x as usize * 4),
+                        .saturating_add(draw.x as usize * 4),
                 )
                 .cast::<u32>()
         };
@@ -6082,12 +6296,8 @@ fn blend_premultiplied_rgba_tile_into_primary(
                 let under = (u16::from(under) * inverse_alpha + 127) / 255;
                 u16::from(src).saturating_add(under).min(255) as u8
             };
-            let pixel = u32::from_le_bytes([
-                blend(b, dst[0]),
-                blend(g, dst[1]),
-                blend(r, dst[2]),
-                0,
-            ]);
+            let pixel =
+                u32::from_le_bytes([blend(b, dst[0]), blend(g, dst[1]), blend(r, dst[2]), 0]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), pixel);
             }
@@ -6274,6 +6484,7 @@ fn ensure_overlay_surface_for_pipe(
                 // slot remains live until this resized back buffer commits.
                 front_index: None,
                 surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
+                damage_debt: [None; OVERLAY_SWAP_BUFFER_COUNT],
                 retiring_front: resize_guard.map(|(_, _, _, _, surface)| surface),
             };
         }
@@ -6388,6 +6599,8 @@ fn ensure_primary_swap_surface_for_pipe(
                 pipe_slot: pipe.slot,
                 front_index: None,
                 surfaces: [None; PRIMARY_SWAP_BUFFER_COUNT],
+                damage_debt: [Some(CompositionDamageRect::new(0, 0, width, height));
+                    PRIMARY_SWAP_BUFFER_COUNT],
             };
         }
         pool.surfaces[buffer_index] = Some(surface);
@@ -6615,6 +6828,61 @@ fn fill_overlay_rect_rgba(surface: OverlaySurface, rect: LiveOverlayRect) {
     );
 }
 
+fn fill_overlay_rect_rgba_clipped(
+    surface: OverlaySurface,
+    rect: LiveOverlayRect,
+    clip: CompositionDamageRect,
+) {
+    if rect.width == 0 || rect.height == 0 || rect.color.a == 0 {
+        return;
+    }
+    let rect_damage = CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height);
+    let Some(draw) = intersect_composition_damage(rect_damage, clip) else {
+        return;
+    };
+    fill_overlay_rect(
+        surface,
+        draw.x,
+        draw.y,
+        draw.width,
+        draw.height,
+        overlay_scanout_pixel_bgra_premul(rect.color.r, rect.color.g, rect.color.b, rect.color.a),
+    );
+}
+
+fn dma_flush_overlay_rect(surface: OverlaySurface, rect: CompositionDamageRect) {
+    let row_bytes = rect.width as usize * 4;
+    for row in 0..rect.height as usize {
+        let offset = (rect.y as usize + row)
+            .saturating_mul(surface.pitch_bytes as usize)
+            .saturating_add(rect.x as usize * 4);
+        unsafe {
+            crate::intel::dma_flush(surface.virt.add(offset), row_bytes);
+        }
+    }
+}
+
+fn clip_composition_damage(
+    rect: CompositionDamageRect,
+    width: u32,
+    height: u32,
+) -> Option<CompositionDamageRect> {
+    intersect_composition_damage(rect, CompositionDamageRect::new(0, 0, width, height))
+}
+
+fn intersect_composition_damage(
+    a: CompositionDamageRect,
+    b: CompositionDamageRect,
+) -> Option<CompositionDamageRect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = a.x.saturating_add(a.width).min(b.x.saturating_add(b.width));
+    let bottom =
+        a.y.saturating_add(a.height)
+            .min(b.y.saturating_add(b.height));
+    (right > x && bottom > y).then(|| CompositionDamageRect::new(x, y, right - x, bottom - y))
+}
+
 fn sample_overlay_surface_pixel(surface: OverlaySurface, x: u32, y: u32) -> u32 {
     if surface.virt.is_null()
         || x >= surface.width
@@ -6757,6 +7025,53 @@ fn overlay_plane_surface_flip_guard(
         return Err("front-ownership");
     }
     Ok(())
+}
+
+/// Fast path for a stable plane contract. Only the surface address changes;
+/// DBUF, watermarks, format, alpha, stride and geometry remain untouched.
+fn flip_overlay_plane_surface(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    pos_x: u32,
+    pos_y: u32,
+    alpha: OverlayAlphaMode,
+    reason: &str,
+) -> bool {
+    if let Err(cause) = overlay_plane_surface_flip_guard(dev, surface, pos_x, pos_y, alpha) {
+        intel_display_verbose_log!(
+            "intel/display: overlay-surf-only rejected reason={} pipe={} buffer={} cause={}\n",
+            reason,
+            surface.pipe.name,
+            surface.buffer_index,
+            cause,
+        );
+        return false;
+    }
+    let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
+        return false;
+    };
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
+    let (live, live_iters) = wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
+    if live != surface_reg {
+        return false;
+    }
+    mark_overlay_surface_front(surface);
+    let seq = OVERLAY_PRESENT_SEQ.load(Ordering::Relaxed).wrapping_add(1);
+    if seq <= 8 || seq.is_multiple_of(120) {
+        crate::log!(
+            "intel/display: overlay-surf-only seq={} reason={} pipe={} slot={} buffer={} surf=0x{:08X} live=0x{:08X} live_iters={} contract=preserved\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            surface.buffer_index,
+            surface_reg,
+            live,
+            live_iters,
+        );
+    }
+    true
 }
 
 fn ui_overlay_tail_resources_are_live(dev: crate::intel::Dev, pipe: PipeInfo) -> bool {

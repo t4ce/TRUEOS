@@ -9,21 +9,21 @@
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::mouse_motion_service::{
-    cursor_is_idle, release_cursor, request_cursor, submit_program, MouseControlCommand,
-    MouseControlCursor, MouseControlError, MouseControlPrincipal, MOUSE_CONTROL_EASING_FAST_LINEAR,
-    MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE, MOUSE_CONTROL_OPCODE_STROKE,
-    MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC, MOUSE_CONTROL_PATH_LINE,
+    MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
+    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlError,
+    MouseControlPrincipal, cursor_is_idle, release_cursor, request_cursor, submit_program,
 };
 
 use super::{
-    acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
-    create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    set_window_placement, software_cursor_visuals, take_owner_input_events, writable_rgba_view,
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4ButtonPhase,
-    Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowSessionId,
+    Ui4InputEvent, Ui4PanPhase, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
+    WindowPlacement, WindowSessionId, acquire_frame_buffer, acquire_published_frame,
+    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
+    finish_window_session, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer,
+    publish_window_frame, published_rgba_view, release_published_frame, set_window_placement,
+    software_cursor_visuals, take_owner_input_events, writable_rgba_view,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -33,7 +33,7 @@ const MANDEL_HEIGHT: u32 = 512;
 const WHITE_WIDTH: u32 = 512;
 const WHITE_HEIGHT: u32 = 512;
 const STATIC_PARAMETER: u32 = 128;
-const STREAM_PARAMETER_MAX: u32 = 256;
+const STREAM_PARAMETER_MAX: u32 = 128;
 const STREAM_PERIOD_MS: u64 = 33;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
@@ -111,6 +111,8 @@ struct MandelPlaceholderApp {
     frames: [FrameHandle; 3],
     windows: [WindowId; 3],
     placements: [WindowPlacement; 3],
+    views: [crate::intel::gpgpu::GpgpuRect; 3],
+    pending_pans: [(i32, i32); 3],
     dirty_parameter: u32,
     stream_parameter: u32,
 }
@@ -128,6 +130,22 @@ struct Runtime {
     white: WhitePlaceholderApp,
     heartbeat_cursor: MouseControlCursor,
     heartbeat_rest_frames: u32,
+    composition: CompositionState,
+    cursor_plane: CursorPlaneState,
+}
+
+#[derive(Copy, Clone)]
+struct CompositionState {
+    initialized: bool,
+    frame_serials: [u64; 4],
+    placements: [WindowPlacement; 4],
+}
+
+#[derive(Copy, Clone)]
+struct CursorPlaneState {
+    previous_bounds: Option<crate::intel::CompositionDamageRect>,
+    signature: u64,
+    initialized: bool,
 }
 
 impl Runtime {
@@ -250,9 +268,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
             }
         }
 
-        if let Err(error) =
-            present_composition(runtime.composition_frames(), runtime.composition_placements())
-        {
+        if let Err(error) = present_composition(&mut runtime) {
             fail_and_cleanup(runtime, error);
             return;
         }
@@ -280,15 +296,28 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
                 return Err(error.into());
             }
         };
-    let runtime = Runtime {
+    let mut runtime = Runtime {
         mandel,
         white,
         heartbeat_cursor,
         heartbeat_rest_frames: 0,
+        composition: CompositionState {
+            initialized: false,
+            frame_serials: [0; 4],
+            placements: [
+                STATIC_PLACEMENT,
+                DIRTY_PLACEMENT,
+                STREAM_PLACEMENT,
+                WHITE_PLACEMENT,
+            ],
+        },
+        cursor_plane: CursorPlaneState {
+            previous_bounds: None,
+            signature: 0,
+            initialized: false,
+        },
     };
-    if let Err(error) =
-        present_composition(runtime.composition_frames(), runtime.composition_placements())
-    {
+    if let Err(error) = present_composition(&mut runtime) {
         cleanup_runtime(runtime);
         return Err(error);
     }
@@ -365,9 +394,10 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
         }
     }
     let frames = [frames[0].unwrap(), frames[1].unwrap(), frames[2].unwrap()];
+    let views = [crate::intel::gpgpu::GpgpuRect::new(0, 0, MANDEL_WIDTH, MANDEL_HEIGHT); 3];
     let initial_parameters = [STATIC_PARAMETER, 0, 0];
     for slot in 0..frames.len() {
-        match render_mandel_frame(frames[slot], initial_parameters[slot]) {
+        match render_mandel_frame(frames[slot], views[slot], initial_parameters[slot]) {
             Ok(_) => {}
             Err(error) => {
                 destroy_frames(frames);
@@ -416,6 +446,8 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
             windows[2].unwrap(),
         ],
         placements: MANDEL_PLACEMENTS,
+        views,
+        pending_pans: [(0, 0); 3],
         dirty_parameter: 0,
         stream_parameter: 0,
     })
@@ -472,88 +504,106 @@ fn initialize_white_app(output: OutputId) -> Result<WhitePlaceholderApp, DummyUi
     })
 }
 
-fn present_composition(
-    frames: [FrameHandle; 4],
-    placements: [WindowPlacement; 4],
-) -> Result<(), DummyUi4ConsumerError> {
-    let mut leases: [Option<FrameReadLease>; 4] = [None; 4];
+fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
+    let frames = runtime.composition_frames();
+    let placements = runtime.composition_placements();
+    let mut frame_serials = [0u64; 4];
+    let mut changed = [false; 4];
+    let mut damage = None;
     for slot in 0..frames.len() {
-        match acquire_published_frame(frames[slot]) {
-            Ok(lease) => leases[slot] = Some(lease),
-            Err(error) => {
-                release_leases(leases);
-                return Err(error.into());
-            }
+        let snapshot = frame_snapshot(frames[slot])?;
+        frame_serials[slot] = snapshot.publish_serial;
+        changed[slot] = !runtime.composition.initialized
+            || snapshot.publish_serial != runtime.composition.frame_serials[slot];
+        if changed[slot] {
+            damage = union_damage(damage, placement_damage(placements[slot]));
+        }
+        if runtime.composition.initialized
+            && placements[slot] != runtime.composition.placements[slot]
+        {
+            damage = union_damage(damage, placement_damage(runtime.composition.placements[slot]));
+            damage = union_damage(damage, placement_damage(placements[slot]));
         }
     }
+    if !runtime.composition.initialized {
+        let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+        damage = Some(crate::intel::CompositionDamageRect::new(0, 0, width, height));
+    }
 
-    let result = (|| {
-        let mut views: [Option<FrameRgbaView>; 4] = [None; 4];
-        for slot in 0..leases.len() {
-            views[slot] = Some(published_rgba_view(leases[slot].unwrap())?);
+    if let Some(damage) = damage {
+        let mut leases: [Option<FrameReadLease>; 4] = [None; 4];
+        for slot in 0..frames.len() {
+            match acquire_published_frame(frames[slot]) {
+                Ok(lease) => leases[slot] = Some(lease),
+                Err(error) => {
+                    release_leases(leases);
+                    return Err(error.into());
+                }
+            }
         }
-        let views = [
-            views[0].unwrap(),
-            views[1].unwrap(),
-            views[2].unwrap(),
-            views[3].unwrap(),
-        ];
-        for view in views {
-            crate::intel::dma_flush(view.virt, view.byte_len);
-        }
-        let pixels = views.map(|view| unsafe {
-            core::slice::from_raw_parts(
-                view.virt.cast_const(),
-                (view.pitch as usize).saturating_mul(view.height as usize),
-            )
-        });
-        let tile = |slot: usize, placement: WindowPlacement| crate::intel::RgbaOverlayTile {
-            x: placement.x as u32,
-            y: placement.y as u32,
-            width: views[slot].width,
-            height: views[slot].height,
-            pitch_bytes: views[slot].pitch as usize,
-            pixels: pixels[slot],
-            expected_rgba: None,
-        };
-        let tiles = [
-            tile(0, placements[0]),
-            tile(1, placements[1]),
-            tile(2, placements[2]),
-            tile(3, placements[3]),
-        ];
-        if !crate::intel::present_premultiplied_rgba_primary_tiles(&tiles, "ui4-dummy-consumer") {
-            return Err(DummyUi4ConsumerError::PresentFailed);
-        }
-        present_software_cursor_plane()
-    })();
-    release_leases(leases);
-    result
+
+        let result = (|| {
+            let mut views: [Option<FrameRgbaView>; 4] = [None; 4];
+            for slot in 0..leases.len() {
+                views[slot] = Some(published_rgba_view(leases[slot].unwrap())?);
+            }
+            let views = [
+                views[0].unwrap(),
+                views[1].unwrap(),
+                views[2].unwrap(),
+                views[3].unwrap(),
+            ];
+            for (slot, view) in views.iter().enumerate() {
+                if changed[slot] {
+                    crate::intel::dma_flush(view.virt, view.byte_len);
+                }
+            }
+            let pixels = views.map(|view| unsafe {
+                core::slice::from_raw_parts(
+                    view.virt.cast_const(),
+                    (view.pitch as usize).saturating_mul(view.height as usize),
+                )
+            });
+            let tile = |slot: usize, placement: WindowPlacement| crate::intel::RgbaOverlayTile {
+                x: placement.x as u32,
+                y: placement.y as u32,
+                width: views[slot].width,
+                height: views[slot].height,
+                pitch_bytes: views[slot].pitch as usize,
+                pixels: pixels[slot],
+                expected_rgba: None,
+            };
+            let tiles = [
+                tile(0, placements[0]),
+                tile(1, placements[1]),
+                tile(2, placements[2]),
+                tile(3, placements[3]),
+            ];
+            if !crate::intel::present_premultiplied_rgba_primary_tiles_damage(
+                &tiles,
+                damage,
+                "ui4-dummy-consumer",
+            ) {
+                return Err(DummyUi4ConsumerError::PresentFailed);
+            }
+            Ok(())
+        })();
+        release_leases(leases);
+        result?;
+        runtime.composition.initialized = true;
+        runtime.composition.frame_serials = frame_serials;
+        runtime.composition.placements = placements;
+    }
+    present_software_cursor_plane(&mut runtime.cursor_plane)
 }
 
-fn present_software_cursor_plane() -> Result<(), DummyUi4ConsumerError> {
+fn present_software_cursor_plane(
+    state: &mut CursorPlaneState,
+) -> Result<(), DummyUi4ConsumerError> {
     use crate::graphics::primitives::Rgba8;
 
     let visuals = software_cursor_visuals();
     let mut rects: heapless::Vec<crate::intel::LiveOverlayRect, 512> = heapless::Vec::new();
-
-    // Persistent gestures sit below menus and cursor glyphs.
-    for visual in &visuals {
-        let Some(selection) = visual.selection else {
-            continue;
-        };
-        let fill = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 42);
-        let border = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 220);
-        push_overlay_rect(
-            &mut rects,
-            selection.x,
-            selection.y,
-            selection.width,
-            selection.height,
-            fill,
-        );
-        push_rect_border(&mut rects, selection, 2, border);
-    }
 
     for visual in &visuals {
         let Some((x, y)) = visual.context_menu else {
@@ -607,11 +657,94 @@ fn present_software_cursor_plane() -> Result<(), DummyUi4ConsumerError> {
         push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(2), 5, 5, color);
     }
 
-    if crate::intel::present_live_overlay_rects(&rects, "ui4-software-cursors") {
+    let current_bounds = overlay_rect_bounds(&rects);
+    let signature = overlay_rect_signature(&rects);
+    if state.initialized && signature == state.signature && current_bounds == state.previous_bounds
+    {
+        return Ok(());
+    }
+    let damage = match (state.previous_bounds, current_bounds) {
+        (Some(previous), Some(current)) => damage_union(previous, current),
+        (Some(previous), None) => previous,
+        (None, Some(current)) => current,
+        (None, None) => return Ok(()),
+    };
+    if crate::intel::present_live_overlay_rects_damage(&rects, damage, "ui4-software-cursors") {
+        state.previous_bounds = current_bounds;
+        state.signature = signature;
+        state.initialized = true;
         Ok(())
     } else {
         Err(DummyUi4ConsumerError::PresentFailed)
     }
+}
+
+fn damage_union(
+    a: crate::intel::CompositionDamageRect,
+    b: crate::intel::CompositionDamageRect,
+) -> crate::intel::CompositionDamageRect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = a.x.saturating_add(a.width).max(b.x.saturating_add(b.width));
+    let bottom =
+        a.y.saturating_add(a.height)
+            .max(b.y.saturating_add(b.height));
+    crate::intel::CompositionDamageRect::new(
+        x,
+        y,
+        right.saturating_sub(x),
+        bottom.saturating_sub(y),
+    )
+}
+
+fn union_damage(
+    current: Option<crate::intel::CompositionDamageRect>,
+    next: crate::intel::CompositionDamageRect,
+) -> Option<crate::intel::CompositionDamageRect> {
+    Some(
+        current
+            .map(|current| damage_union(current, next))
+            .unwrap_or(next),
+    )
+}
+
+fn placement_damage(placement: WindowPlacement) -> crate::intel::CompositionDamageRect {
+    crate::intel::CompositionDamageRect::new(
+        placement.x.max(0) as u32,
+        placement.y.max(0) as u32,
+        placement.width,
+        placement.height,
+    )
+}
+
+fn overlay_rect_bounds<const N: usize>(
+    rects: &heapless::Vec<crate::intel::LiveOverlayRect, N>,
+) -> Option<crate::intel::CompositionDamageRect> {
+    rects.iter().fold(None, |bounds, rect| {
+        union_damage(
+            bounds,
+            crate::intel::CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height),
+        )
+    })
+}
+
+fn overlay_rect_signature<const N: usize>(
+    rects: &heapless::Vec<crate::intel::LiveOverlayRect, N>,
+) -> u64 {
+    let mut hash = 0xCBF2_9CE4_8422_2325u64;
+    for rect in rects {
+        for value in [
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            u32::from_le_bytes([rect.color.r, rect.color.g, rect.color.b, rect.color.a]),
+        ] {
+            hash ^= u64::from(value);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    }
+    hash ^ rects.len() as u64
 }
 
 fn push_rect_border<const N: usize>(
@@ -727,6 +860,14 @@ fn dispatch_ui4_callbacks(
                         event.combo_id,
                         event.vcursor as u8
                     );
+                    handle_mandel_pan_callback(
+                        runtime,
+                        owner,
+                        event.window,
+                        event.phase,
+                        event.dx,
+                        event.dy,
+                    )?;
                 }
                 Ui4InputEvent::Resize(event) => {
                     crate::log_info!(
@@ -774,6 +915,76 @@ fn dispatch_ui4_callbacks(
         }
     }
     Ok((dirty_clicks, last_dirty_click))
+}
+
+fn handle_mandel_pan_callback(
+    runtime: &mut Runtime,
+    owner: WindowOwner,
+    window: WindowId,
+    phase: Ui4PanPhase,
+    dx: i32,
+    dy: i32,
+) -> Result<(), DummyUi4ConsumerError> {
+    if owner != runtime.mandel.owner {
+        return Ok(());
+    }
+    let Some(slot) = runtime
+        .mandel
+        .windows
+        .iter()
+        .position(|candidate| *candidate == window)
+    else {
+        return Ok(());
+    };
+    // The immutable frame deliberately remains static.
+    if slot == 0 {
+        return Ok(());
+    }
+
+    match phase {
+        Ui4PanPhase::Begin => runtime.mandel.pending_pans[slot] = (0, 0),
+        Ui4PanPhase::Update => {
+            let pending = &mut runtime.mandel.pending_pans[slot];
+            pending.0 = pending.0.saturating_add(dx);
+            pending.1 = pending.1.saturating_add(dy);
+        }
+        Ui4PanPhase::End => {
+            let (pan_x, pan_y) = runtime.mandel.pending_pans[slot];
+            runtime.mandel.pending_pans[slot] = (0, 0);
+            if pan_x == 0 && pan_y == 0 {
+                return Ok(());
+            }
+
+            // Dragging the canvas right/down moves the sampled complex-plane
+            // interval left/up so the rendered grid follows the pointer.
+            let view = {
+                let view = &mut runtime.mandel.views[slot];
+                view.x = view.x.saturating_sub(pan_x);
+                view.y = view.y.saturating_sub(pan_y);
+                *view
+            };
+            let parameter = if slot == 1 {
+                runtime.mandel.dirty_parameter
+            } else {
+                runtime.mandel.stream_parameter
+            };
+            render_and_publish_mandel(&runtime.mandel, slot, parameter)?;
+            crate::log_info!(
+                target: "ui4";
+                "ui4 dummy-consumer mandel-pan-applied window={} slot={} drag={},{} view={},{},{}x{} iterations={}\n",
+                window.raw(),
+                slot,
+                pan_x,
+                pan_y,
+                view.x,
+                view.y,
+                view.width,
+                view.height,
+                parameter
+            );
+        }
+    }
+    Ok(())
 }
 
 fn handle_window_move_callback(
@@ -888,13 +1099,14 @@ fn render_and_publish_mandel(
     slot: usize,
     parameter: u32,
 ) -> Result<PublishedFrame, DummyUi4ConsumerError> {
-    let published = render_mandel_frame(app.frames[slot], parameter)?;
+    let published = render_mandel_frame(app.frames[slot], app.views[slot], parameter)?;
     publish_window_frame(app.owner, app.windows[slot], DamageRect::FULL)?;
     Ok(published)
 }
 
 fn render_mandel_frame(
     frame: FrameHandle,
+    view: crate::intel::gpgpu::GpgpuRect,
     parameter: u32,
 ) -> Result<PublishedFrame, DummyUi4ConsumerError> {
     let lease = acquire_frame_buffer(frame)?;
@@ -905,7 +1117,7 @@ fn render_mandel_frame(
             return Err(error.into());
         }
     };
-    let rendered = crate::intel::gpgpu::mandel64_worklist_surface_full(surface, parameter)
+    let rendered = crate::intel::gpgpu::mandel64_worklist_surface_view(surface, view, parameter)
         .is_some_and(|result| result.ok);
     if !rendered {
         let _ = cancel_frame_buffer(lease);
