@@ -337,6 +337,19 @@ unsafe extern "C" {
         wheel: i32,
         flags: u32,
     ) -> i32;
+    pub fn trueos_cabi_mouse_motion_cursor_request(
+        label_ptr: *const u8,
+        label_len: usize,
+        out_cursor: *mut MouseMotionCursorInfo,
+    ) -> i32;
+    pub fn trueos_cabi_mouse_motion_cursor_release(handle: u64) -> i32;
+    pub fn trueos_cabi_mouse_motion_submit(handle: u64, command: *const MouseMotionCommand) -> i32;
+    pub fn trueos_cabi_mouse_motion_submit_json(
+        handle: u64,
+        json_ptr: *const u8,
+        json_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32;
     pub fn trueos_cabi_hid_keyboard_read(
         controller_id: u32,
         slot_id: u32,
@@ -454,6 +467,34 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_ntp_current_unix_seconds() -> u64;
     pub fn trueos_cabi_ntp_kernel_date_day_month_year(out_ptr: *mut u8, out_cap: usize) -> usize;
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct MouseMotionCursorInfo {
+    pub handle: u64,
+    pub slot_id: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct MouseMotionCommand {
+    pub opcode: u8,
+    pub path: u8,
+    pub easing: u8,
+    pub flags: u8,
+    pub duration_ms: u32,
+    pub x: i32,
+    pub y: i32,
+    pub control1_x: i32,
+    pub control1_y: i32,
+    pub control2_x: i32,
+    pub control2_y: i32,
+    pub buttons_set: u32,
+    pub buttons_clear: u32,
+    pub wheel: i16,
+    pub reserved: u16,
 }
 
 #[repr(C)]

@@ -1,8 +1,9 @@
 extern crate alloc;
 
-use core::sync::atomic::{AtomicU32, Ordering};
-
-static VM_CURSOR_WRITE_REJECT_COUNT: AtomicU32 = AtomicU32::new(0);
+use crate::r::mouse_motion_service::{
+    MouseControlPrincipal, legacy_write_cursor, release_cursor, request_cursor, submit_command,
+    submit_json,
+};
 
 unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
     if out_buttons_down.is_null() || cursor_id == 0 {
@@ -232,37 +233,22 @@ fn input_write_cursor_event(
     if slot_id == 0 {
         return -1;
     }
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        let count = VM_CURSOR_WRITE_REJECT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        if count <= 8 || count.is_multiple_of(64) {
-            crate::log!(
-                "WARNING input-cursor: rejected vm cursor write vm={} slot={} x={} y={} buttons=0x{:X} wheel={} flags=0x{:X} count={}\n",
-                vm_id,
-                slot_id,
-                x_px,
-                y_px,
-                buttons_down,
-                wheel,
-                flags,
-                count
-            );
-        }
-        return -1;
+    legacy_write_cursor(mouse_motion_principal(), slot_id, x_px, y_px, buttons_down, wheel, flags)
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+fn mouse_motion_principal() -> MouseControlPrincipal {
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(MouseControlPrincipal::Vm)
+        .unwrap_or(MouseControlPrincipal::Kernel)
+}
+
+unsafe fn checked_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, i32> {
+    if ptr.is_null() || len == 0 || len > 16 * 1024 {
+        return Err(-1);
     }
-
-    let (w, h) = cursor_viewport_dimensions();
-    let max_x = w.saturating_sub(1) as i32;
-    let max_y = h.saturating_sub(1) as i32;
-    let clamped_x = x_px.clamp(0, max_x.max(0));
-    let clamped_y = y_px.clamp(0, max_y.max(0));
-    let w1 = (w.saturating_sub(1)).max(1) as f64;
-    let h1 = (h.saturating_sub(1)).max(1) as f64;
-    let nx = (clamped_x as f64) / w1;
-    let ny = (clamped_y as f64) / h1;
-    let wheel_i16 = wheel.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-
-    crate::usb2::hid::inject_virtual_cursor_event(slot_id, nx, ny, buttons_down, wheel_i16, flags);
-    0
+    core::str::from_utf8(unsafe { core::slice::from_raw_parts(ptr, len) }).map_err(|_| -1)
 }
 
 #[unsafe(no_mangle)]
@@ -341,4 +327,74 @@ pub unsafe extern "C" fn trueos_cabi_input_write_cursor(
     flags: u32,
 ) -> i32 {
     input_write_cursor_event(slot_id, x, y, buttons_down, wheel, flags)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_mouse_motion_cursor_request(
+    label_ptr: *const u8,
+    label_len: usize,
+    out_cursor: *mut v::vinput::MouseMotionCursorInfo,
+) -> i32 {
+    if out_cursor.is_null() {
+        return -1;
+    }
+    let label = match unsafe { checked_utf8(label_ptr, label_len) } {
+        Ok(label) => label,
+        Err(error) => return error,
+    };
+    match request_cursor(mouse_motion_principal(), label) {
+        Ok(cursor) => {
+            unsafe {
+                *out_cursor = v::vinput::MouseMotionCursorInfo {
+                    handle: cursor.handle,
+                    slot_id: cursor.slot_id,
+                    reserved: 0,
+                };
+            }
+            0
+        }
+        Err(error) => error.code(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_mouse_motion_cursor_release(handle: u64) -> i32 {
+    release_cursor(mouse_motion_principal(), handle)
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit(
+    handle: u64,
+    command: *const v::vinput::MouseMotionCommand,
+) -> i32 {
+    if command.is_null() {
+        return -1;
+    }
+    submit_command(mouse_motion_principal(), handle, unsafe { *command }.into())
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_mouse_motion_submit_json(
+    handle: u64,
+    json_ptr: *const u8,
+    json_len: usize,
+) -> i32 {
+    if json_ptr.is_null() || json_len == 0 || json_len > 16 * 1024 {
+        return -1;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    submit_json(mouse_motion_principal(), handle, bytes)
+        .map(|count| count.min(i32::MAX as usize) as i32)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32 {
+    crate::r::mouse_motion_service::cursor_is_idle(mouse_motion_principal(), handle)
+        .map(i32::from)
+        .unwrap_or_else(|error| error.code())
 }

@@ -30,11 +30,11 @@ impl KernelHwCursorSourceKind {
 
     pub const fn kernel_hw_cursor_priority(self) -> u8 {
         // Contract for kernel-hw-cursor source promotion:
-        // service/virtual provides only a fallback authority,
-        // physical pointing devices supersede virtual app cursors,
+        // Virtual app cursors are composed by UI4's software-cursor plane;
+        // physical pointing devices retain the dedicated hardware cursor,
         // and eyetracker is reserved as the final/highest-priority source.
         match self {
-            Self::VirtualService => 1,
+            Self::VirtualService => 0,
             Self::Tablet => 2,
             Self::Mouse => 3,
             Self::EyeTracker => 4,

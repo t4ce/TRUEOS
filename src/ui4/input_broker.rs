@@ -19,6 +19,8 @@ const MAX_OWNER_EVENTS: usize = 256;
 const CURSOR_BATCH: usize = 64;
 const KEYBOARD_BATCH: usize = 64;
 const INPUT_PUMP_PERIOD_MS: u64 = 4;
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
+const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 
@@ -84,6 +86,24 @@ pub(crate) enum Ui4InputEvent {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4VisualRect {
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4SoftwareCursorVisual {
+    pub(crate) source: Ui4CursorSource,
+    pub(crate) x: u32,
+    pub(crate) y: u32,
+    pub(crate) color: crate::graphics::primitives::Rgba8,
+    pub(crate) selection: Option<Ui4VisualRect>,
+    pub(crate) context_menu: Option<(u32, u32)>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct WindowTarget {
     owner: WindowOwner,
     window: WindowId,
@@ -107,6 +127,11 @@ struct CursorRoute {
     focus: Option<WindowTarget>,
     capture: Option<WindowTarget>,
     focus_serial: u64,
+    visible_after_motion: bool,
+    color: crate::graphics::primitives::Rgba8,
+    selection_anchor: Option<(u32, u32)>,
+    selection: Option<Ui4VisualRect>,
+    context_menu: Option<(u32, u32)>,
 }
 
 impl CursorRoute {
@@ -119,6 +144,11 @@ impl CursorRoute {
             focus: None,
             capture: None,
             focus_serial: 0,
+            visible_after_motion: false,
+            color: software_cursor_color(source),
+            selection_anchor: None,
+            selection: None,
+            context_menu: None,
         }
     }
 }
@@ -219,6 +249,32 @@ impl InputBroker {
         let dx = signed_delta(x, self.cursors[index].x);
         let dy = signed_delta(y, self.cursors[index].y);
         let hit = topmost_window_at(x, y);
+
+        if dx != 0 || dy != 0 {
+            self.cursors[index].visible_after_motion = true;
+        }
+        if pressed & PRIMARY_BUTTON_MASK != 0 {
+            self.cursors[index].selection_anchor = Some((x, y));
+            self.cursors[index].selection = None;
+            self.cursors[index].context_menu = None;
+        }
+        if event.buttons_down & PRIMARY_BUTTON_MASK != 0 {
+            if let Some(anchor) = self.cursors[index].selection_anchor {
+                self.cursors[index].selection = Some(visual_rect_between(anchor, (x, y)));
+            }
+        }
+        if released & PRIMARY_BUTTON_MASK != 0 {
+            if let Some(anchor) = self.cursors[index].selection_anchor.take() {
+                let rect = visual_rect_between(anchor, (x, y));
+                self.cursors[index].selection =
+                    (rect.width >= 4 && rect.height >= 4).then_some(rect);
+            }
+        }
+        if pressed & SECONDARY_BUTTON_MASK != 0 {
+            self.cursors[index].selection_anchor = None;
+            self.cursors[index].selection = None;
+            self.cursors[index].context_menu = Some((x, y));
+        }
 
         if previous_buttons == 0 && pressed != 0 {
             let focus = hit.map(WindowTarget::from);
@@ -346,6 +402,24 @@ impl InputBroker {
             }
         }
     }
+
+    fn software_cursor_visuals(&self) -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
+        let mut visuals = Vec::new();
+        for route in &self.cursors {
+            if !route.visible_after_motion {
+                continue;
+            }
+            let _ = visuals.push(Ui4SoftwareCursorVisual {
+                source: route.source,
+                x: route.x,
+                y: route.y,
+                color: route.color,
+                selection: route.selection,
+                context_menu: route.context_menu,
+            });
+        }
+        visuals
+    }
 }
 
 static INPUT_BROKER: Mutex<InputBroker> = Mutex::new(InputBroker::new());
@@ -370,6 +444,10 @@ pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, 
     let mut out = Vec::new();
     core::mem::swap(&mut out, &mut queue.events);
     out
+}
+
+pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
+    INPUT_BROKER.lock().software_cursor_visuals()
 }
 
 fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
@@ -424,6 +502,45 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
     i64::from(pixel)
         .saturating_sub(i64::from(origin))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn visual_rect_between(a: (u32, u32), b: (u32, u32)) -> Ui4VisualRect {
+    let x = a.0.min(b.0);
+    let y = a.1.min(b.1);
+    Ui4VisualRect {
+        x,
+        y,
+        width: a.0.max(b.0).saturating_sub(x).saturating_add(1),
+        height: a.1.max(b.1).saturating_sub(y).saturating_add(1),
+    }
+}
+
+fn software_cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
+    use crate::graphics::primitives::Rgba8;
+
+    const COLORS: [Rgba8; 16] = [
+        Rgba8::new(255, 64, 64, 255),
+        Rgba8::new(32, 168, 255, 255),
+        Rgba8::new(32, 224, 128, 255),
+        Rgba8::new(255, 190, 32, 255),
+        Rgba8::new(220, 80, 255, 255),
+        Rgba8::new(255, 112, 32, 255),
+        Rgba8::new(32, 224, 224, 255),
+        Rgba8::new(152, 112, 255, 255),
+        Rgba8::new(192, 240, 48, 255),
+        Rgba8::new(255, 64, 176, 255),
+        Rgba8::new(64, 112, 255, 255),
+        Rgba8::new(48, 192, 96, 255),
+        Rgba8::new(255, 224, 64, 255),
+        Rgba8::new(176, 80, 224, 255),
+        Rgba8::new(255, 128, 160, 255),
+        Rgba8::new(96, 224, 255, 255),
+    ];
+    let hash = source.controller_id.wrapping_mul(0x9E37_79B9)
+        ^ source.slot_id.rotate_left(11)
+        ^ source.ep_target.rotate_left(19)
+        ^ u32::from(source.hid_kind);
+    COLORS[(hash as usize) % COLORS.len()]
 }
 
 fn placement_contains(placement: WindowPlacement, x: u32, y: u32) -> bool {

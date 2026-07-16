@@ -8,6 +8,7 @@ pub mod hid_udp_srv;
 pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;
+pub mod mouse_motion_service;
 pub mod net;
 pub mod pat;
 pub mod path;

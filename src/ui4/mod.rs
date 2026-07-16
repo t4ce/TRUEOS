@@ -15,7 +15,10 @@ pub(crate) use frame_pool::{
     destroy_frame, frame_snapshot, gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view,
     release_published_frame, writable_rgba_view,
 };
-pub(crate) use input_broker::{Ui4InputEvent, take_owner_input_events, ui4_input_service_task};
+pub(crate) use input_broker::{
+    Ui4InputEvent, Ui4SoftwareCursorVisual, Ui4VisualRect, software_cursor_visuals,
+    take_owner_input_events, ui4_input_service_task,
+};
 
 pub(crate) use window_broker::{
     DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,

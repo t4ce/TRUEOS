@@ -8,6 +8,13 @@
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
+use crate::r::mouse_motion_service::{
+    MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
+    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlError,
+    MouseControlPrincipal, cursor_is_idle, release_cursor, request_cursor, submit_program,
+};
+
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4InputEvent,
@@ -15,7 +22,7 @@ use super::{
     acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
     create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
     publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    set_window_placement, take_owner_input_events, writable_rgba_view,
+    set_window_placement, software_cursor_visuals, take_owner_input_events, writable_rgba_view,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -27,6 +34,7 @@ const WHITE_HEIGHT: u32 = 512;
 const STATIC_PARAMETER: u32 = 128;
 const STREAM_PARAMETER_MAX: u32 = 256;
 const STREAM_PERIOD_MS: u64 = 33;
+const HEARTBEAT_REST_FRAMES: u32 = 50;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 
@@ -75,6 +83,7 @@ enum DummyUi4ConsumerError {
     Window(WindowBrokerError),
     RenderFailed,
     PresentFailed,
+    MouseMotion(MouseControlError),
 }
 
 impl From<FramePoolError> for DummyUi4ConsumerError {
@@ -86,6 +95,12 @@ impl From<FramePoolError> for DummyUi4ConsumerError {
 impl From<WindowBrokerError> for DummyUi4ConsumerError {
     fn from(error: WindowBrokerError) -> Self {
         Self::Window(error)
+    }
+}
+
+impl From<MouseControlError> for DummyUi4ConsumerError {
+    fn from(error: MouseControlError) -> Self {
+        Self::MouseMotion(error)
     }
 }
 
@@ -110,6 +125,8 @@ struct WhitePlaceholderApp {
 struct Runtime {
     mandel: MandelPlaceholderApp,
     white: WhitePlaceholderApp,
+    heartbeat_cursor: MouseControlCursor,
+    heartbeat_rest_frames: u32,
 }
 
 impl Runtime {
@@ -155,7 +172,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live apps=2 windows=4 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} white_extent={}x{} white_buffers=1 cadence_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard\n",
+        "ui4 dummy-consumer live apps=2 windows=4 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} white_extent={}x{} white_buffers=1 cadence_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard heartbeat_vcursor_slot={}\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
@@ -164,7 +181,8 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
         STREAM_PARAMETER_MAX,
         WHITE_WIDTH,
         WHITE_HEIGHT,
-        STREAM_PERIOD_MS
+        STREAM_PERIOD_MS,
+        runtime.heartbeat_cursor.slot_id
     );
 
     loop {
@@ -194,6 +212,27 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
                 dirty_clicks,
                 runtime.mandel.dirty_parameter
             );
+        }
+        if runtime.heartbeat_rest_frames != 0 {
+            runtime.heartbeat_rest_frames -= 1;
+        } else {
+            let idle = match cursor_is_idle(
+                MouseControlPrincipal::KernelApp(1),
+                runtime.heartbeat_cursor.handle,
+            ) {
+                Ok(idle) => idle,
+                Err(error) => {
+                    fail_and_cleanup(runtime, error.into());
+                    return;
+                }
+            };
+            if idle {
+                if let Err(error) = submit_heartbeat_program(runtime.heartbeat_cursor) {
+                    fail_and_cleanup(runtime, error);
+                    return;
+                }
+                runtime.heartbeat_rest_frames = HEARTBEAT_REST_FRAMES;
+            }
         }
 
         runtime.mandel.stream_parameter = if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX
@@ -231,7 +270,21 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
             return Err(error);
         }
     };
-    let runtime = Runtime { mandel, white };
+    let heartbeat_cursor =
+        match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                cleanup_mandel_app(mandel);
+                cleanup_white_app(white);
+                return Err(error.into());
+            }
+        };
+    let runtime = Runtime {
+        mandel,
+        white,
+        heartbeat_cursor,
+        heartbeat_rest_frames: 0,
+    };
     if let Err(error) =
         present_composition(runtime.composition_frames(), runtime.composition_placements())
     {
@@ -240,6 +293,49 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
     }
 
     Ok(runtime)
+}
+
+fn submit_heartbeat_program(cursor: MouseControlCursor) -> Result<(), DummyUi4ConsumerError> {
+    let teleport = MouseControlCommand {
+        opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
+        flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+        x: 1380,
+        y: 1220,
+        ..MouseControlCommand::default()
+    };
+    let line = |x, y, duration_ms| MouseControlCommand {
+        opcode: MOUSE_CONTROL_OPCODE_STROKE,
+        path: MOUSE_CONTROL_PATH_LINE,
+        easing: MOUSE_CONTROL_EASING_FAST_LINEAR,
+        duration_ms,
+        x,
+        y,
+        ..MouseControlCommand::default()
+    };
+    let accent = |x, y, c1x, c1y, c2x, c2y, duration_ms| MouseControlCommand {
+        opcode: MOUSE_CONTROL_OPCODE_STROKE,
+        path: MOUSE_CONTROL_PATH_CUBIC,
+        easing: MOUSE_CONTROL_EASING_NATURAL,
+        duration_ms,
+        x,
+        y,
+        control1_x: c1x,
+        control1_y: c1y,
+        control2_x: c2x,
+        control2_y: c2y,
+        ..MouseControlCommand::default()
+    };
+    let program = [
+        teleport,
+        line(1430, 1220, 120),
+        accent(1470, 1192, 1440, 1220, 1456, 1192, 100),
+        accent(1500, 1268, 1480, 1192, 1490, 1268, 110),
+        accent(1535, 1130, 1510, 1268, 1520, 1130, 125),
+        accent(1570, 1220, 1545, 1130, 1555, 1220, 120),
+        line(1640, 1220, 150),
+    ];
+    submit_program(MouseControlPrincipal::KernelApp(1), cursor.handle, &program)?;
+    Ok(())
 }
 
 fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, DummyUi4ConsumerError> {
@@ -425,14 +521,134 @@ fn present_composition(
             tile(2, placements[2]),
             tile(3, placements[3]),
         ];
-        if crate::intel::present_premultiplied_rgba_primary_tiles(&tiles, "ui4-dummy-consumer") {
-            Ok(())
-        } else {
-            Err(DummyUi4ConsumerError::PresentFailed)
+        if !crate::intel::present_premultiplied_rgba_primary_tiles(&tiles, "ui4-dummy-consumer") {
+            return Err(DummyUi4ConsumerError::PresentFailed);
         }
+        present_software_cursor_plane()
     })();
     release_leases(leases);
     result
+}
+
+fn present_software_cursor_plane() -> Result<(), DummyUi4ConsumerError> {
+    use crate::graphics::primitives::Rgba8;
+
+    let visuals = software_cursor_visuals();
+    let mut rects: heapless::Vec<crate::intel::LiveOverlayRect, 512> = heapless::Vec::new();
+
+    // Persistent gestures sit below menus and cursor glyphs.
+    for visual in &visuals {
+        let Some(selection) = visual.selection else {
+            continue;
+        };
+        let fill = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 42);
+        let border = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 220);
+        push_overlay_rect(
+            &mut rects,
+            selection.x,
+            selection.y,
+            selection.width,
+            selection.height,
+            fill,
+        );
+        push_rect_border(&mut rects, selection, 2, border);
+    }
+
+    for visual in &visuals {
+        let Some((x, y)) = visual.context_menu else {
+            continue;
+        };
+        let (screen_w, screen_h) =
+            crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+        let menu_w = 196u32;
+        let menu_h = 116u32;
+        let menu_x = x.saturating_add(14).min(screen_w.saturating_sub(menu_w));
+        let menu_y = y.saturating_add(14).min(screen_h.saturating_sub(menu_h));
+        let menu_rect = super::Ui4VisualRect {
+            x: menu_x,
+            y: menu_y,
+            width: menu_w,
+            height: menu_h,
+        };
+        push_overlay_rect(&mut rects, menu_x, menu_y, menu_w, menu_h, Rgba8::new(22, 25, 33, 235));
+        push_rect_border(&mut rects, menu_rect, 2, visual.color);
+        for row in 1..4u32 {
+            push_overlay_rect(
+                &mut rects,
+                menu_x.saturating_add(12),
+                menu_y.saturating_add(row * 27),
+                menu_w.saturating_sub(24),
+                1,
+                Rgba8::new(180, 188, 204, 150),
+            );
+        }
+    }
+
+    // Every source becomes visible only after its first real movement. The
+    // color remains bound to the full HID source identity, not to focus.
+    for visual in &visuals {
+        let x = visual.x;
+        let y = visual.y;
+        let color = visual.color;
+        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(13), 5, 27, color);
+        push_overlay_rect(&mut rects, x.saturating_sub(13), y.saturating_sub(2), 27, 5, color);
+        push_overlay_rect(
+            &mut rects,
+            x.saturating_sub(4),
+            y.saturating_sub(4),
+            9,
+            9,
+            Rgba8::new(255, 255, 255, 240),
+        );
+        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(2), 5, 5, color);
+    }
+
+    if crate::intel::present_live_overlay_rects(&rects, "ui4-software-cursors") {
+        Ok(())
+    } else {
+        Err(DummyUi4ConsumerError::PresentFailed)
+    }
+}
+
+fn push_rect_border<const N: usize>(
+    rects: &mut heapless::Vec<crate::intel::LiveOverlayRect, N>,
+    rect: super::Ui4VisualRect,
+    thickness: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    let thickness = thickness.min(rect.width).min(rect.height);
+    push_overlay_rect(rects, rect.x, rect.y, rect.width, thickness, color);
+    push_overlay_rect(
+        rects,
+        rect.x,
+        rect.y.saturating_add(rect.height.saturating_sub(thickness)),
+        rect.width,
+        thickness,
+        color,
+    );
+    push_overlay_rect(rects, rect.x, rect.y, thickness, rect.height, color);
+    push_overlay_rect(
+        rects,
+        rect.x.saturating_add(rect.width.saturating_sub(thickness)),
+        rect.y,
+        thickness,
+        rect.height,
+        color,
+    );
+}
+
+fn push_overlay_rect<const N: usize>(
+    rects: &mut heapless::Vec<crate::intel::LiveOverlayRect, N>,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let _ = rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
 }
 
 fn release_leases(leases: [Option<FrameReadLease>; 4]) {
@@ -680,6 +896,7 @@ fn fail_and_cleanup(runtime: Runtime, error: DummyUi4ConsumerError) {
 }
 
 fn cleanup_runtime(runtime: Runtime) {
+    let _ = release_cursor(MouseControlPrincipal::KernelApp(1), runtime.heartbeat_cursor.handle);
     cleanup_white_app(runtime.white);
     cleanup_mandel_app(runtime.mandel);
 }

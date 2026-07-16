@@ -5,10 +5,116 @@ use alloc::vec::Vec;
 
 use crate::vcabi;
 pub use crate::vcabi::{
-    TrueosHidCursorEvent, TrueosHidHutCombo, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
-    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
-    TrueosMouseState, TrueosTabletEvent,
+    MouseMotionCommand, MouseMotionCursorInfo, TrueosHidCursorEvent, TrueosHidHutCombo,
+    TrueosHidHutKeyboardState, TrueosHidHutMouseState, TrueosHidHutTabletState,
+    TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample, TrueosMouseState,
+    TrueosTabletEvent,
 };
+
+pub const MOUSE_MOTION_OPCODE_TELEPORT: u8 = 1;
+pub const MOUSE_MOTION_OPCODE_STROKE: u8 = 2;
+pub const MOUSE_MOTION_OPCODE_BUTTONS: u8 = 3;
+pub const MOUSE_MOTION_OPCODE_WHEEL: u8 = 4;
+pub const MOUSE_MOTION_PATH_LINE: u8 = 0;
+pub const MOUSE_MOTION_PATH_QUADRATIC: u8 = 1;
+pub const MOUSE_MOTION_PATH_CUBIC: u8 = 2;
+pub const MOUSE_MOTION_EASING_LINEAR: u8 = 0;
+pub const MOUSE_MOTION_EASING_FAST_LINEAR: u8 = 1;
+pub const MOUSE_MOTION_EASING_NATURAL: u8 = 2;
+pub const MOUSE_MOTION_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
+
+/// Capability-backed virtual cursor. Motion is accepted and clocked by the
+/// kernel mouse-motion service; this object cannot inject a HID event directly.
+#[derive(Debug)]
+pub struct VCursor {
+    info: MouseMotionCursorInfo,
+    open: bool,
+}
+
+impl VCursor {
+    pub fn request(label: &str) -> Result<Self, i32> {
+        let mut info = MouseMotionCursorInfo::default();
+        let rc = unsafe {
+            vcabi::trueos_cabi_mouse_motion_cursor_request(label.as_ptr(), label.len(), &mut info)
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        Ok(Self { info, open: true })
+    }
+
+    pub const fn handle(&self) -> u64 {
+        self.info.handle
+    }
+
+    pub const fn slot_id(&self) -> u32 {
+        self.info.slot_id
+    }
+
+    pub fn submit(&self, command: MouseMotionCommand) -> Result<(), i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        let rc = unsafe { vcabi::trueos_cabi_mouse_motion_submit(self.info.handle, &command) };
+        if rc == 0 { Ok(()) } else { Err(rc) }
+    }
+
+    pub fn submit_json(&self, json: &str) -> Result<(), i32> {
+        if !self.open || json.is_empty() {
+            return Err(-1);
+        }
+        let rc = unsafe {
+            vcabi::trueos_cabi_mouse_motion_submit_json(self.info.handle, json.as_ptr(), json.len())
+        };
+        if rc < 0 { Err(rc) } else { Ok(()) }
+    }
+
+    pub fn teleport(&self, x: i32, y: i32) -> Result<(), i32> {
+        self.submit(MouseMotionCommand {
+            opcode: MOUSE_MOTION_OPCODE_TELEPORT,
+            flags: MOUSE_MOTION_FLAG_CLEAR_QUEUE,
+            x,
+            y,
+            ..MouseMotionCommand::default()
+        })
+    }
+
+    pub fn idle(&self) -> Result<bool, i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        match unsafe { vcabi::trueos_cabi_mouse_motion_cursor_idle(self.info.handle) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            rc => Err(rc),
+        }
+    }
+
+    pub fn close(mut self) -> Result<(), i32> {
+        let result = self.close_inner();
+        self.open = false;
+        result
+    }
+
+    fn close_inner(&mut self) -> Result<(), i32> {
+        if !self.open {
+            return Ok(());
+        }
+        let rc = unsafe { vcabi::trueos_cabi_mouse_motion_cursor_release(self.info.handle) };
+        if rc == 0 {
+            self.open = false;
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+}
+
+impl Drop for VCursor {
+    fn drop(&mut self) {
+        let _ = self.close_inner();
+    }
+}
 
 #[inline]
 pub fn mouse_poll() -> Option<TrueosMouseState> {
@@ -100,6 +206,8 @@ pub fn write_cursor(
     wheel: i32,
     flags: u32,
 ) -> Result<(), i32> {
+    // Compatibility endpoint. `slot_id` must belong to a VCursor allocated by
+    // the mouse-motion service; arbitrary direct injection is rejected.
     let rc =
         unsafe { vcabi::trueos_cabi_input_write_cursor(slot_id, x, y, buttons_down, wheel, flags) };
     if rc != 0 {
