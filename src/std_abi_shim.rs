@@ -1817,6 +1817,19 @@ pub unsafe extern "C" fn sys_panic(msg_ptr: *const u8, len: usize) -> ! {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sys_halt() -> ! {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // A Rust Blueprint binary terminates through the `exit`/`_exit` ABI, so its
+        // entry point never returns to the guest runner's post-invoke cleanup.
+        // Release the borrowed terminal before the final VMCALL stops the VM;
+        // otherwise shell2 is merely revealed with its input still attached
+        // to a guest that is spinning here.
+        let _ = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_RETURN_TO_CLI,
+            0,
+            0,
+        );
+        trueos_vm::vmcall::preserve();
+    }
     loop {
         core::hint::spin_loop();
     }

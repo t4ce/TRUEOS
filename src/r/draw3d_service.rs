@@ -76,6 +76,76 @@ struct SceneRenderJob {
     resident: crate::intel::render::ResidentTriangleMesh,
 }
 
+#[derive(Default)]
+struct SceneRunMetrics {
+    started_ns: u64,
+    attempted: u64,
+    presented: u64,
+    over_budget: u64,
+    frame_us_total: u64,
+    frame_us_max: u64,
+    ui3_us_total: u64,
+    ui3_us_max: u64,
+}
+
+impl SceneRunMetrics {
+    fn start(&mut self) {
+        *self = Self {
+            started_ns: crate::chronos::monotonic_nanos(),
+            ..Self::default()
+        };
+    }
+
+    fn record(&mut self, result: &crate::intel::render::ResidentSceneFrameResult) {
+        self.attempted = self.attempted.saturating_add(1);
+        self.presented = self.presented.saturating_add(result.presented as u64);
+        self.over_budget = self
+            .over_budget
+            .saturating_add((result.frame_us > FRAME_PERIOD_US) as u64);
+        self.frame_us_total = self.frame_us_total.saturating_add(result.frame_us);
+        self.frame_us_max = self.frame_us_max.max(result.frame_us);
+        self.ui3_us_total = self.ui3_us_total.saturating_add(result.ui3_compose_us);
+        self.ui3_us_max = self.ui3_us_max.max(result.ui3_compose_us);
+    }
+
+    fn finish_and_log(&mut self, revision: u64, orbit_moving: bool) {
+        let elapsed_ns = crate::chronos::monotonic_nanos()
+            .saturating_sub(self.started_ns)
+            .max(1);
+        let elapsed_ms = elapsed_ns / 1_000_000;
+        let hz_x100 = self
+            .presented
+            .saturating_mul(100)
+            .saturating_mul(1_000_000_000)
+            / elapsed_ns;
+        let avg_frame_us = self.frame_us_total.checked_div(self.attempted).unwrap_or(0);
+        let avg_ui3_us = self.ui3_us_total.checked_div(self.attempted).unwrap_or(0);
+        crate::log_info!(
+            target: "draw3d";
+            "draw3d-run-summary revision={} mode={} elapsed_ms={} attempted={} presented={} present_hz={}.{:02} avg_frame_us={} max_frame_us={} avg_ui3_us={} max_ui3_us={} over_budget={} frame_budget_us={} static_contract={}\n",
+            revision,
+            if orbit_moving { "animated" } else { "static" },
+            elapsed_ms,
+            self.attempted,
+            self.presented,
+            hz_x100 / 100,
+            hz_x100 % 100,
+            avg_frame_us,
+            self.frame_us_max,
+            avg_ui3_us,
+            self.ui3_us_max,
+            self.over_budget,
+            FRAME_PERIOD_US,
+            if orbit_moving {
+                "continuous-up-to-60hz"
+            } else {
+                "revision-driven-one-frame"
+            },
+        );
+        *self = Self::default();
+    }
+}
+
 fn projected_draw_pressure(source: &ProjectedMesh) -> (usize, f32) {
     let mut coverage = 0.0f32;
     let mut triangles = 0usize;
@@ -134,7 +204,9 @@ fn request_render_image() -> RenderImage {
     let request_started_ns = crate::chronos::monotonic_nanos();
     let captured = capture_screenshot_view();
     let capture_complete_ns = crate::chronos::monotonic_nanos();
-    let latest = captured.then(|| LAST_SCREENSHOT_FRAME.lock().clone()).flatten();
+    let latest = captured
+        .then(|| LAST_SCREENSHOT_FRAME.lock().clone())
+        .flatten();
     if let Some(frame) = latest {
         let stride = usize::try_from(frame.width)
             .ok()
@@ -506,6 +578,7 @@ pub async fn draw3d_render_task() {
     let mut was_running = false;
     let mut clear_rgba = None;
     let mut scene_prepare_seq = 0u64;
+    let mut run_metrics = SceneRunMetrics::default();
     let mut observed_permanent_reset_revision =
         SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
 
@@ -525,20 +598,19 @@ pub async fn draw3d_render_task() {
         let permanent_reset_revision = SCENE_PERMANENT_RESET_REVISION.load(Ordering::Acquire);
         let permanent_reset = permanent_reset_revision != observed_permanent_reset_revision;
         if permanent_reset {
-            let reset = crate::intel::render::reset_resident_triangle_scene_frame_owner(
-                &mut frame_owner,
-            );
+            let reset =
+                crate::intel::render::reset_resident_triangle_scene_frame_owner(&mut frame_owner);
             if reset {
                 observed_permanent_reset_revision = permanent_reset_revision;
                 crate::log_info!(
                     target: "draw3d";
-                    "draw3d: permanent scene-frame reset revision={} complete=1 action=release-overlay-and-render-state\n",
+                    "draw3d: permanent scene-frame reset revision={} complete=1 action=remove-ui3-scene-layer-and-release-render-state compositor_lifetime=service\n",
                     permanent_reset_revision,
                 );
             } else {
                 crate::log_warn!(
                     target: "draw3d";
-                    "draw3d: permanent scene-frame reset revision={} complete=0 potential_reason=scanout-or-render-mapping-still-live action=retry-next-frame\n",
+                    "draw3d: permanent scene-frame reset revision={} complete=0 potential_reason=ui3-recomposition-or-render-mapping-not-complete action=retry-next-frame\n",
                     permanent_reset_revision,
                 );
             }
@@ -586,10 +658,7 @@ pub async fn draw3d_render_task() {
             let (sync_result, projection_complete_ns) = if rebuild_geometry {
                 let projected = projected_scene_for_camera(frame_camera);
                 let projection_complete_ns = crate::chronos::monotonic_nanos();
-                (
-                    sync_render_jobs(&mut jobs, projected, true),
-                    projection_complete_ns,
-                )
+                (sync_render_jobs(&mut jobs, projected, true), projection_complete_ns)
             } else {
                 refresh_render_job_colors(&mut jobs);
                 (Ok(()), prepare_started_ns)
@@ -628,12 +697,7 @@ pub async fn draw3d_render_task() {
                     );
                     if running && had_jobs && jobs.is_empty() {
                         if let Ok(result) =
-                            submit_local_scene_frame(
-                                &mut frame_owner,
-                                &[],
-                                clear_rgba,
-                                false,
-                            )
+                            submit_local_scene_frame(&mut frame_owner, &[], clear_rgba, false)
                             && result.presented
                         {
                             rendered_revision = resident_revision;
@@ -658,6 +722,7 @@ pub async fn draw3d_render_task() {
         }
 
         if was_running && !running {
+            run_metrics.finish_and_log(resident_revision, orbit_moving);
             let cleared = if permanent_reset {
                 true
             } else {
@@ -674,17 +739,17 @@ pub async fn draw3d_render_task() {
                 permanent_reset as u8,
             );
         } else if !was_running && running {
-            if jobs.is_empty()
-                && let Ok(result) = submit_local_scene_frame(
-                    &mut frame_owner,
-                    &[],
-                    clear_rgba,
-                    false,
-                )
-                && result.presented
-            {
-                rendered_revision = resident_revision;
-                rendered_view_key = resident_view_key;
+            run_metrics.start();
+            if jobs.is_empty() {
+                if let Ok(result) =
+                    submit_local_scene_frame(&mut frame_owner, &[], clear_rgba, false)
+                {
+                    run_metrics.record(&result);
+                    if result.presented {
+                        rendered_revision = resident_revision;
+                        rendered_view_key = resident_view_key;
+                    }
+                }
             }
             crate::log_info!(
                 target: "draw3d";
@@ -716,13 +781,10 @@ pub async fn draw3d_render_task() {
                 })
                 .collect::<Vec<_>>();
             let diagnostic_submit = render_retry_count == RENDER_STALL_WARN_ATTEMPTS;
-            match submit_local_scene_frame(
-                &mut frame_owner,
-                &draws,
-                clear_rgba,
-                diagnostic_submit,
-            ) {
+            match submit_local_scene_frame(&mut frame_owner, &draws, clear_rgba, diagnostic_submit)
+            {
                 Ok(result) => {
+                    run_metrics.record(&result);
                     let complete = result.completed_draws == result.requested_draws;
                     if complete && result.presented {
                         rendered_revision = resident_revision;
@@ -760,10 +822,8 @@ pub async fn draw3d_render_task() {
                             let total_triangles = jobs
                                 .iter()
                                 .fold(0usize, |sum, job| sum.saturating_add(job.triangle_count));
-                            let total_screen_equivalents = jobs
-                                .iter()
-                                .map(|job| job.projected_coverage)
-                                .sum::<f32>();
+                            let total_screen_equivalents =
+                                jobs.iter().map(|job| job.projected_coverage).sum::<f32>();
                             crate::log_warn!(
                                 target: "draw3d";
                                 "draw3d: frame stalled revision={} attempts={} draws={}/{} triangles={} screen_equivalents={:.2} submission=one-scene-batch potential_reason={} action=retain-last-complete-frame-and-retry diagnostics=next-attempt\n",

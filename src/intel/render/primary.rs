@@ -278,15 +278,11 @@ pub(crate) struct ResidentSceneFrameOwner {
     state_phys: u64,
     state_virt: *mut u8,
     state_mapped: bool,
-    target_mappings: [
-        Option<ResidentSceneTargetMapping>;
-        crate::intel::display::DISPLAY_FRAME_TARGET_CAPACITY
-    ],
+    target_mappings: [Option<ResidentSceneTargetMapping>; 2],
 }
 
 #[derive(Copy, Clone)]
 struct ResidentSceneTargetMapping {
-    pipeline: crate::intel::display::DisplayPipelineId,
     gpu: u64,
     phys: u64,
     bytes: usize,
@@ -326,19 +322,15 @@ impl ResidentSceneFrameOwner {
             state_phys,
             state_virt,
             state_mapped: true,
-            target_mappings: [None; crate::intel::display::DISPLAY_FRAME_TARGET_CAPACITY],
+            target_mappings: [None; 2],
         })
     }
 
-    fn ensure_target_mapped(
-        &mut self,
-        target: crate::intel::display::DisplayRgba8GpgpuSurface,
-    ) -> bool {
+    fn ensure_target_mapped(&mut self, target: crate::intel::gpgpu::GpgpuRgba8Surface) -> bool {
         if self.target_mappings.iter().flatten().any(|mapping| {
-            mapping.pipeline == target.pipeline
-                && mapping.gpu == target.gpu
+            mapping.gpu == target.gpu
                 && mapping.phys == target.phys
-                && mapping.bytes == target.byte_len
+                && mapping.bytes == target.bytes
         }) {
             return true;
         }
@@ -352,25 +344,27 @@ impl ResidentSceneFrameOwner {
             if !unmap_render_ppgtt_range(old.gpu, old.bytes) {
                 crate::log_warn!(
                     target: "draw3d";
-                    "draw3d-frame-owner: stale target mapping not present during replacement pipeline={} gpu=0x{:X} bytes=0x{:X} potential_reason=display-owner-retired-previous-mode-surface action=attempt-current-target-map\n",
-                    old.pipeline.name(),
+                    "draw3d-frame-owner: stale target mapping not present during replacement gpu=0x{:X} bytes=0x{:X} potential_reason=ui3-logical-frame-backing-replaced action=attempt-current-target-map\n",
                     old.gpu,
                     old.bytes,
                 );
             }
         }
-        if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
+        if !map_render_ppgtt_range(target.gpu, target.phys, target.bytes) {
             return false;
         }
-        let Some(slot) = self.target_mappings.iter_mut().find(|mapping| mapping.is_none()) else {
-            let _ = unmap_render_ppgtt_range(target.gpu, target.byte_len);
+        let Some(slot) = self
+            .target_mappings
+            .iter_mut()
+            .find(|mapping| mapping.is_none())
+        else {
+            let _ = unmap_render_ppgtt_range(target.gpu, target.bytes);
             return false;
         };
         *slot = Some(ResidentSceneTargetMapping {
-            pipeline: target.pipeline,
             gpu: target.gpu,
             phys: target.phys,
-            bytes: target.byte_len,
+            bytes: target.bytes,
         });
         true
     }
@@ -400,10 +394,22 @@ impl ResidentSceneFrameOwner {
         if !self.state_mapped {
             return true;
         }
-        if !unmap_render_ppgtt_range(
-            GPU_VA_DRAW3D_SCENE_STATE_BASE,
-            DRAW3D_SCENE_STATE_BYTES,
-        ) {
+        for slot in &mut self.target_mappings {
+            let Some(mapping) = *slot else {
+                continue;
+            };
+            if !unmap_render_ppgtt_range(mapping.gpu, mapping.bytes) {
+                crate::log_warn!(
+                    target: "draw3d";
+                    "draw3d-frame-owner: reset deferred target_gpu=0x{:X} bytes=0x{:X} potential_reason=render-ppgtt-logical-frame-still-mapped\n",
+                    mapping.gpu,
+                    mapping.bytes,
+                );
+                return false;
+            }
+            *slot = None;
+        }
+        if !unmap_render_ppgtt_range(GPU_VA_DRAW3D_SCENE_STATE_BASE, DRAW3D_SCENE_STATE_BYTES) {
             crate::log_warn!(
                 target: "draw3d";
                 "draw3d-frame-owner: reset deferred state_gpu=0x{:X} bytes=0x{:X} potential_reason=render-ppgtt-still-mapped\n",
@@ -430,41 +436,6 @@ impl Drop for ResidentSceneFrameOwner {
 pub(crate) fn reset_resident_triangle_scene_frame_owner(
     owner: &mut Option<ResidentSceneFrameOwner>,
 ) -> bool {
-    let mut pipelines = [None; crate::intel::display::DISPLAY_PIPELINE_COUNT];
-    if let Some(owner) = owner.as_ref() {
-        for mapping in owner.target_mappings.iter().flatten() {
-            if pipelines
-                .iter()
-                .flatten()
-                .all(|pipeline| *pipeline != mapping.pipeline)
-            {
-                if let Some(slot) = pipelines.iter_mut().find(|slot| slot.is_none()) {
-                    *slot = Some(mapping.pipeline);
-                }
-            }
-        }
-    }
-    if let Some(active) = crate::intel::display::active_display_pipeline_target() {
-        if pipelines
-            .iter()
-            .flatten()
-            .all(|pipeline| *pipeline != active.pipeline)
-        {
-            if let Some(slot) = pipelines.iter_mut().find(|slot| slot.is_none()) {
-                *slot = Some(active.pipeline);
-            }
-        }
-    }
-    let mut display_reset = true;
-    for pipeline in pipelines.into_iter().flatten() {
-        display_reset &= crate::intel::display::reset_ui3_frame_composition_gpgpu(
-            pipeline,
-            "draw3d-permanent-stop",
-        );
-    }
-    if !display_reset {
-        return false;
-    }
     let state_reset = match owner.as_mut() {
         Some(owner) => owner.release(),
         None => true,
@@ -472,7 +443,7 @@ pub(crate) fn reset_resident_triangle_scene_frame_owner(
     if state_reset {
         *owner = None;
     }
-    state_reset
+    state_reset && crate::ui3::compositor::reset_draw3d_scene_frame()
 }
 
 #[derive(Debug)]
@@ -483,13 +454,9 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) presented: bool,
     pub(crate) width: u32,
     pub(crate) height: u32,
+    pub(crate) frame_us: u64,
+    pub(crate) ui3_compose_us: u64,
     pub(crate) rgba: Option<Vec<u8>>,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum ResidentSceneFrameDestination {
-    LocalDisplay,
-    Capture,
 }
 
 pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
@@ -622,8 +589,7 @@ fn submit_resident_triangle_scene_frame_batched(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    const CLEAR_TRIANGLE: [[f32; 3]; 3] =
-        [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+    const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
     if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
     }
@@ -651,11 +617,13 @@ fn submit_resident_triangle_scene_frame_batched(
             return Err("render-map");
         }
 
-        let display_output_target =
-            crate::intel::display::primary_display_output_target().ok_or("ui3-frame-display")?;
-        let display_target = display_output_target.pipeline_target;
-        let target_width = display_target.width as usize;
-        let target_height = display_target.height as usize;
+        let scene_frame = crate::ui3::compositor::acquire_draw3d_scene_frame()?;
+        if scene_frame.format() != crate::ui3::compositor::Ui3FrameFormat::Bgra8Premultiplied {
+            return Err("ui3-frame-format");
+        }
+        let target = scene_frame.surface();
+        let target_width = target.width as usize;
+        let target_height = target.height as usize;
         if target_width == 0
             || target_height == 0
             || target_width > DRAW3D_SCENE_TARGET_WIDTH
@@ -663,24 +631,13 @@ fn submit_resident_triangle_scene_frame_batched(
         {
             return Err("ui3-frame-display-shape");
         }
-        let target_pitch = target_width * core::mem::size_of::<u32>();
+        let target_pitch = target.pitch_bytes as usize;
         let target_bytes = target_pitch * target_height;
-        let output_frame = crate::intel::display::acquire_ui3_output_frame_composition_gpgpu(
-            display_output_target,
-        )
-        .ok_or("ui3-frame-target")?;
-        let target = output_frame.surface;
-        if target.width as usize != target_width
-            || target.height as usize != target_height
-            || target.pitch_bytes as usize != target_pitch
-            || target.byte_len < target_bytes
-            || target.virt.is_null()
+        if target_pitch < target_width * core::mem::size_of::<u32>() || target.bytes < target_bytes
         {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("ui3-frame-target-shape");
         }
         if !owner.ensure_target_mapped(target) {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("ui3-frame-target-map");
         }
         let acquire_complete_ns = crate::chronos::monotonic_nanos();
@@ -694,7 +651,6 @@ fn submit_resident_triangle_scene_frame_batched(
             )
             .ok_or("scene-frame-batch-capacity")?;
         if used_batch_bytes > warm.batch_len {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("scene-frame-batch-capacity");
         }
 
@@ -718,7 +674,6 @@ fn submit_resident_triangle_scene_frame_batched(
             "draw3d-fullscreen-clear",
             &CLEAR_TRIANGLE,
         ) else {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
             return Err("target-clear-resources");
         };
         stage_resident_scene_secondary(
@@ -742,8 +697,6 @@ fn submit_resident_triangle_scene_frame_batched(
                 target_height,
                 scene_draw.mesh,
             ) else {
-                let _ =
-                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
                 return Err("scene-frame-resident-draw");
             };
             let target_rgba = [
@@ -775,20 +728,25 @@ fn submit_resident_triangle_scene_frame_batched(
             "draw3d-scene",
         );
         let submit_complete_ns = crate::chronos::monotonic_nanos();
-        let presented = if completed {
-            crate::intel::display::commit_ui3_output_frame_composition_produced(
-                output_frame,
-                crate::intel::display::DisplayFrameProducer::GpuCoherent,
-                "draw3d-ui3-frame",
-            )
+        let composition = if completed {
+            match crate::ui3::compositor::commit_draw3d_scene_frame(scene_frame) {
+                Ok(composition) => Some(composition),
+                Err(error) => {
+                    crate::log_warn!(
+                        target: "render";
+                        "draw3d-frame-profile: UI3 composition retained previous front potential_reason={} action=retry-next-scene-tick\n",
+                        error,
+                    );
+                    None
+                }
+            }
         } else {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-            false
+            let _ = crate::ui3::compositor::discard_draw3d_scene_frame(scene_frame);
+            None
         };
-        if completed && !presented {
-            let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-        }
+        let presented = composition.is_some_and(|result| result.presented);
         let commit_complete_ns = crate::chronos::monotonic_nanos();
+        let total_us = commit_complete_ns.saturating_sub(frame_started_ns) / 1_000;
         let (gpu_poll_us, poll_iters) = draw3d_last_gpu_poll_profile();
         let profile_seq = DRAW3D_FRAME_PROFILE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
         if profile_seq <= 8
@@ -797,17 +755,11 @@ fn submit_resident_triangle_scene_frame_batched(
             || !completed
             || !presented
         {
-            let total_us = commit_complete_ns.saturating_sub(frame_started_ns) / 1_000;
             crate::log_info!(
                 target: "render";
-                "draw3d-frame-profile seq={} output={} pipeline={} state={} ddi={} link_mode={} bpc={} source=direct-render-to-overlay copy_path=none target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_commit_us={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={}\n",
+                "draw3d-frame-profile seq={} output={} source=ui3-logical-frame format=bgra8-premultiplied target={}x{} draws={} secondaries={} batch_bytes=0x{:X} acquire_map_us={} stage_us={} submit_call_us={} gpu_poll_us={} poll_iters={} ui3_compose_present_us={} ui3_clear_us={} ui3_draw3d_us={} ui3_proof_us={} ui3_commit_us={} ui3_layers={} total_us={} frame_budget_us=16667 over_budget={} completed={} presented={} direct_scanout_access=none cpu_pixel_path=none fallback=none\n",
                 profile_seq,
-                display_output_target.output.name(),
-                display_target.pipeline.name(),
-                display_target.activity.name(),
-                display_target.route.ddi.name(),
-                display_target.route.mode_name(),
-                display_target.route.bits_per_color(),
+                composition.map_or("D01", |result| result.output.name()),
                 target_width,
                 target_height,
                 draws.len(),
@@ -819,6 +771,11 @@ fn submit_resident_triangle_scene_frame_batched(
                 gpu_poll_us,
                 poll_iters,
                 commit_complete_ns.saturating_sub(submit_complete_ns) / 1_000,
+                composition.map_or(0, |result| result.clear_us),
+                composition.map_or(0, |result| result.draw3d_us),
+                composition.map_or(0, |result| result.proof_us),
+                composition.map_or(0, |result| result.commit_us),
+                composition.map_or(0, |result| result.layers),
                 total_us,
                 (total_us > 16_667) as u8,
                 completed as u8,
@@ -832,6 +789,8 @@ fn submit_resident_triangle_scene_frame_batched(
             presented,
             width: target_width as u32,
             height: target_height as u32,
+            frame_us: total_us,
+            ui3_compose_us: composition.map_or(0, |result| result.total_us),
             rgba: None,
         })
     })();
@@ -845,31 +804,16 @@ pub(crate) fn capture_resident_triangle_scene_frame(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_frame_to(
-        draws,
-        clear_rgba,
-        diagnostic_logs,
-        ResidentSceneFrameDestination::Capture,
-    )
+    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs)
 }
 
-fn submit_resident_triangle_scene_frame_to(
+fn submit_resident_triangle_scene_capture(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
-    destination: ResidentSceneFrameDestination,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
-    let local_display_target = if destination == ResidentSceneFrameDestination::LocalDisplay {
-        Some(crate::intel::display::primary_display_output_target().ok_or("ui3-frame-display")?)
-    } else {
-        None
-    };
-    let (target_width, target_height) = local_display_target
-        .map(|target| {
-            (target.pipeline_target.width as usize, target.pipeline_target.height as usize)
-        })
-        .unwrap_or_else(resident_scene_target_dimensions);
+    let (target_width, target_height) = resident_scene_target_dimensions();
     if target_width == 0
         || target_height == 0
         || target_width > DRAW3D_SCENE_TARGET_WIDTH
@@ -889,9 +833,6 @@ fn submit_resident_triangle_scene_frame_to(
         {
             break;
         }
-        if destination == ResidentSceneFrameDestination::LocalDisplay {
-            return Err("in-flight");
-        }
         // Screenshot rendering is intentionally independent, but it shares
         // the one physical render context. Give the active local frame one
         // bounded opportunity to retire instead of immediately returning an
@@ -904,7 +845,7 @@ fn submit_resident_triangle_scene_frame_to(
         core::hint::spin_loop();
         lock_spins += 1;
     }
-    if destination == ResidentSceneFrameDestination::Capture && lock_spins != 0 {
+    if lock_spins != 0 {
         crate::log_info!(
             target: "render";
             "draw3d-screenshot-lock wait_us={} spins={} acquired=1\n",
@@ -933,44 +874,12 @@ fn submit_resident_triangle_scene_frame_to(
             return Err("render-map");
         }
 
-        let local_target = if destination == ResidentSceneFrameDestination::LocalDisplay {
-            let display_target = local_display_target.ok_or("ui3-frame-display")?;
-            let output_frame =
-                crate::intel::display::acquire_ui3_output_frame_composition_gpgpu(display_target)
-                    .ok_or("ui3-frame-target")?;
-            let target = output_frame.surface;
-            if target.width as usize != target_width
-                || target.height as usize != target_height
-                || target.pitch_bytes as usize != target_pitch
-                || target.byte_len < target_bytes
-                || target.virt.is_null()
-            {
-                let _ =
-                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-                return Err("ui3-frame-target-shape");
-            }
-            if !map_render_ppgtt_range(target.gpu, target.phys, target.byte_len) {
-                let _ =
-                    crate::intel::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-                return Err("ui3-frame-target-map");
-            }
-            Some(output_frame)
-        } else {
-            None
-        };
-        let target_gpu = local_target.map_or(GPU_VA_STREAMOUT_BASE, |frame| frame.surface.gpu);
-        let target_virt = local_target.map_or(warm.streamout_virt, |frame| frame.surface.virt);
-
         // Draw3D uses straight-alpha blending.  The GPU must see the real
         // clear color as its destination for the first translucent draw;
         // using the old readback sentinel here would blend the first shape
         // against 0xDEAD_BEEF.  Readback below compares against this same
         // clear word to retain changed-pixel accounting.
         let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
-        let target_clear = match destination {
-            ResidentSceneFrameDestination::LocalDisplay => [clear[2], clear[1], clear[0], clear[3]],
-            ResidentSceneFrameDestination::Capture => clear,
-        };
         // Clear through the same 3D context as the scene. An oversized clip-
         // space triangle covers the target with blending disabled, including
         // transparent clear colors, without a full-frame CPU write/flush or a
@@ -980,7 +889,7 @@ fn submit_resident_triangle_scene_frame_to(
         let clear_completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             dev,
             warm,
-            target_gpu,
+            GPU_VA_STREAMOUT_BASE,
             target_pitch,
             target_width,
             target_height,
@@ -989,7 +898,7 @@ fn submit_resident_triangle_scene_frame_to(
             None,
             None,
             None,
-            Some(target_clear),
+            Some(clear),
             "draw3d-fullscreen-clear",
             SUBMIT_NAME,
             TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1005,16 +914,10 @@ fn submit_resident_triangle_scene_frame_to(
 
         let mut completed_draws = 0usize;
         for draw in draws {
-            let target_rgba = match destination {
-                ResidentSceneFrameDestination::LocalDisplay => {
-                    [draw.rgba[2], draw.rgba[1], draw.rgba[0], draw.rgba[3]]
-                }
-                ResidentSceneFrameDestination::Capture => draw.rgba,
-            };
             let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 dev,
                 warm,
-                target_gpu,
+                GPU_VA_STREAMOUT_BASE,
                 target_pitch,
                 target_width,
                 target_height,
@@ -1023,7 +926,7 @@ fn submit_resident_triangle_scene_frame_to(
                 None,
                 None,
                 Some(draw.mesh),
-                Some(target_rgba),
+                Some(draw.rgba),
                 "draw3d-resident-instance",
                 SUBMIT_NAME,
                 TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1039,9 +942,7 @@ fn submit_resident_triangle_scene_frame_to(
             completed_draws += 1;
         }
 
-        if destination == ResidentSceneFrameDestination::Capture {
-            crate::intel::dma_flush(target_virt, target_bytes);
-        }
+        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
         let mut changed_pixels = 0usize;
         // A scene is one atomic visual result.  A timed-out draw leaves the
         // shared target partially updated, so never expose it to either the
@@ -1049,65 +950,45 @@ fn submit_resident_triangle_scene_frame_to(
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let frame_complete = completed_draws == draws.len();
-        let mut presented = false;
         let mut rgba = None;
         if frame_complete {
-            match destination {
-                ResidentSceneFrameDestination::LocalDisplay => {
-                    let frame = local_target.ok_or("ui3-frame-target")?;
-                    presented = crate::intel::display::commit_ui3_output_frame_composition_gpgpu(
-                        frame,
-                        "draw3d-ui3-frame",
-                    );
+            let pixels = unsafe {
+                core::slice::from_raw_parts(
+                    warm.streamout_virt as *const u32,
+                    target_width * target_height,
+                )
+            };
+            let mut visible_rgba = Vec::with_capacity(target_bytes);
+            for pixel in pixels {
+                let raw = pixel.to_le_bytes();
+                if raw != clear {
+                    changed_pixels += 1;
                 }
-                ResidentSceneFrameDestination::Capture => {
-                    let pixels = unsafe {
-                        core::slice::from_raw_parts(
-                            target_virt as *const u32,
-                            target_width * target_height,
-                        )
-                    };
-                    let mut visible_rgba = Vec::with_capacity(target_bytes);
-                    for pixel in pixels {
-                        let raw = pixel.to_le_bytes();
-                        if raw != clear {
-                            changed_pixels += 1;
-                        }
-                        // Fixed-function over blending produces premultiplied
-                        // RGB. Screenshots expose straight RGBA, so restore
-                        // straight channels only on this capture path.
-                        let [mut r, mut g, mut b, a] = raw;
-                        if a != 0 && a != u8::MAX {
-                            r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                                / u16::from(a))
-                            .min(u16::from(u8::MAX)) as u8;
-                            g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                                / u16::from(a))
-                            .min(u16::from(u8::MAX)) as u8;
-                            b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2)
-                                / u16::from(a))
-                            .min(u16::from(u8::MAX)) as u8;
-                        }
-                        visible_rgba.extend_from_slice(&[r, g, b, a]);
-                    }
-                    rgba = Some(visible_rgba);
+                // Fixed-function over blending produces premultiplied RGB.
+                // Screenshots expose straight RGBA, so restore straight
+                // channels only on this capture path.
+                let [mut r, mut g, mut b, a] = raw;
+                if a != 0 && a != u8::MAX {
+                    r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
+                        .min(u16::from(u8::MAX)) as u8;
+                    g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
+                        .min(u16::from(u8::MAX)) as u8;
+                    b = (((u16::from(b) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
+                        .min(u16::from(u8::MAX)) as u8;
                 }
+                visible_rgba.extend_from_slice(&[r, g, b, a]);
             }
-        }
-        if destination == ResidentSceneFrameDestination::LocalDisplay
-            && (!frame_complete || !presented)
-        {
-            if let Some(frame) = local_target {
-                let _ = crate::intel::display::discard_ui3_output_frame_composition_gpgpu(frame);
-            }
+            rgba = Some(visible_rgba);
         }
         Ok(ResidentSceneFrameResult {
             completed_draws,
             requested_draws: draws.len(),
             changed_pixels,
-            presented,
+            presented: false,
             width: target_width as u32,
             height: target_height as u32,
+            frame_us: 0,
+            ui3_compose_us: 0,
             rgba,
         })
     })();
@@ -5683,23 +5564,19 @@ fn submit_triangle_vf_draw_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(
-        warm,
-        draw,
-        shader_layout,
-        blend_mode,
-        backend_probe_mode,
-    ) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "{} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "{} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -6793,23 +6670,19 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(
-        warm,
-        draw,
-        shader_layout,
-        blend_mode,
-        backend_probe_mode,
-    ) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "{} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "{} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -7275,23 +7148,19 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state = match write_triangle_probe_state(
-        warm,
-        draw,
-        shader_layout,
-        blend_mode,
-        backend_probe_mode,
-    ) {
-        Ok(layout) => layout,
-        Err(reason) => {
-            crate::log!(
-                "{} staging skipped reason=probe-state-error detail={}\n",
-                submit_name,
-                reason
-            );
-            return false;
-        }
-    };
+    let probe_state =
+        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
+        {
+            Ok(layout) => layout,
+            Err(reason) => {
+                crate::log!(
+                    "{} staging skipped reason=probe-state-error detail={}\n",
+                    submit_name,
+                    reason
+                );
+                return false;
+            }
+        };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);

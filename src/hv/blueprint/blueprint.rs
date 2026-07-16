@@ -1389,7 +1389,7 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "sys_cycle_count" => Some(crate::std_abi_shim::sys_cycle_count as *const () as usize),
         "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
-        "exit" => Some(crate::std_abi_shim::exit as *const () as usize),
+        "exit" | "_exit" => Some(crate::std_abi_shim::exit as *const () as usize),
         "abort" => Some(trueos_qjs::trueos_shims::abort as *const () as usize),
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)

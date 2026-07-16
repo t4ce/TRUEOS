@@ -36,6 +36,7 @@ mod executor_cache;
 mod gb_demo;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
+mod gpu;
 #[cfg(target_arch = "x86_64")]
 mod hv;
 #[cfg(not(target_arch = "x86_64"))]

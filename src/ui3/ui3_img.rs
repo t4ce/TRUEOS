@@ -5,6 +5,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 
 const UI3_TEXTURE_GPU_BASE: u64 = 0x2400_0000;
+// Direct-RCS PPGTT ownership boundary.  Production compositor source frames
+// begin at 0x2900_0000; texture allocation must never grow into that arena.
+const UI3_TEXTURE_GPU_LIMIT: u64 = 0x2900_0000;
 const UI3_TEXTURE_GPU_ALIGN: u64 = 0x1000;
 const UI3_IMG_STATUS_UNKNOWN: i32 = 0;
 const UI3_IMG_STATUS_PENDING: i32 = 1;
@@ -92,8 +95,28 @@ fn aligned_rgb565_pitch(width: u32) -> Option<u32> {
 
 fn reserve_texture_gpu(bytes: usize) -> Option<u64> {
     let bytes = crate::intel::align_up(bytes, UI3_TEXTURE_GPU_ALIGN as usize)? as u64;
-    let offset = UI3_TEXTURE_GPU_NEXT.fetch_add(bytes, Ordering::Relaxed);
-    Some(UI3_TEXTURE_GPU_BASE.checked_add(offset)?)
+    loop {
+        let offset = UI3_TEXTURE_GPU_NEXT.load(Ordering::Acquire);
+        let next = offset.checked_add(bytes)?;
+        let gpu = UI3_TEXTURE_GPU_BASE.checked_add(offset)?;
+        let end = UI3_TEXTURE_GPU_BASE.checked_add(next)?;
+        if end > UI3_TEXTURE_GPU_LIMIT {
+            crate::log_warn!(
+                target: "ui3";
+                "ui3-img: gpu texture allocation rejected bytes=0x{:X} next=0x{:X} limit=0x{:X} potential_reason=production-compositor-va-reservation\n",
+                bytes,
+                end,
+                UI3_TEXTURE_GPU_LIMIT,
+            );
+            return None;
+        }
+        if UI3_TEXTURE_GPU_NEXT
+            .compare_exchange(offset, next, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(gpu);
+        }
+    }
 }
 
 fn create_gpu_image(width: u32, height: u32, rgba: &[u8]) -> Option<Ui3GpuImage> {

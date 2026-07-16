@@ -1,0 +1,156 @@
+//! Transport-independent physical GPU contract.
+//!
+//! Virtual devices use this interface without learning Intel MMIO addresses,
+//! GuC CTB details, physical pages, or native context identifiers.
+
+use spin::Mutex;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum EngineClass {
+    RenderCompute,
+    Copy,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalAdapterInfo {
+    pub(crate) name: &'static str,
+    pub(crate) vendor_id: u16,
+    pub(crate) device_id: u16,
+    pub(crate) revision_id: u8,
+    pub(crate) render_compute: bool,
+    pub(crate) copy: bool,
+    pub(crate) guc_submission: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(transparent)]
+pub(crate) struct PhysicalGpuVmHandle(u64);
+
+impl PhysicalGpuVmHandle {
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[repr(transparent)]
+pub(crate) struct PhysicalContextHandle(u64);
+
+impl PhysicalContextHandle {
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalContextDescriptor {
+    pub(crate) engine: EngineClass,
+    pub(crate) hwlrca_lo: u32,
+    pub(crate) hwlrca_hi: u32,
+    pub(crate) gpuvm_root_phys: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PhysicalSubmission {
+    pub(crate) context: PhysicalContextHandle,
+    pub(crate) serial: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PhysicalSchedulerStatus {
+    pub(crate) context_capacity: usize,
+    pub(crate) registered_contexts: usize,
+    pub(crate) enabled_contexts: usize,
+    pub(crate) submissions: u64,
+    pub(crate) registrations: u64,
+    pub(crate) deregistrations: u64,
+    pub(crate) failures: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PhysicalGpuError {
+    NotReady,
+    Unsupported,
+    OutOfMemory,
+    InvalidGpuVm,
+    InvalidContext,
+    MapFailed,
+    UnmapFailed,
+    RegisterFailed,
+    SubmitFailed,
+    DestroyFailed,
+}
+
+impl PhysicalGpuError {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::NotReady => "not-ready",
+            Self::Unsupported => "unsupported",
+            Self::OutOfMemory => "out-of-memory",
+            Self::InvalidGpuVm => "invalid-gpuvm",
+            Self::InvalidContext => "invalid-context",
+            Self::MapFailed => "map-failed",
+            Self::UnmapFailed => "unmap-failed",
+            Self::RegisterFailed => "register-failed",
+            Self::SubmitFailed => "submit-failed",
+            Self::DestroyFailed => "destroy-failed",
+        }
+    }
+}
+
+pub(crate) trait PhysicalGpuDevice: Sync {
+    fn adapter_info(&self) -> PhysicalAdapterInfo;
+    fn ready(&self) -> bool;
+    fn scheduler_status(&self) -> PhysicalSchedulerStatus;
+
+    fn create_gpuvm(&self) -> Result<PhysicalGpuVmHandle, PhysicalGpuError>;
+    fn gpuvm_root_phys(&self, vm: PhysicalGpuVmHandle) -> Result<u64, PhysicalGpuError>;
+    fn map_gpuvm(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        phys: u64,
+        bytes: usize,
+    ) -> Result<(), PhysicalGpuError>;
+    fn unmap_gpuvm(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        bytes: usize,
+    ) -> Result<(), PhysicalGpuError>;
+    fn destroy_gpuvm(&self, vm: PhysicalGpuVmHandle) -> Result<(), PhysicalGpuError>;
+
+    fn register_context(
+        &self,
+        descriptor: PhysicalContextDescriptor,
+    ) -> Result<PhysicalContextHandle, PhysicalGpuError>;
+    fn submit_context(
+        &self,
+        context: PhysicalContextHandle,
+    ) -> Result<PhysicalSubmission, PhysicalGpuError>;
+    fn destroy_context(&self, context: PhysicalContextHandle) -> Result<(), PhysicalGpuError>;
+}
+
+static DEVICE: Mutex<Option<&'static dyn PhysicalGpuDevice>> = Mutex::new(None);
+
+pub(crate) fn register_physical_device(device: &'static dyn PhysicalGpuDevice) -> bool {
+    let mut slot = DEVICE.lock();
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(device);
+    true
+}
+
+pub(crate) fn physical_device() -> Option<&'static dyn PhysicalGpuDevice> {
+    *DEVICE.lock()
+}
+

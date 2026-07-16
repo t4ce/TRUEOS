@@ -35,6 +35,14 @@ unsafe impl Send for SparsePpgtt {}
 unsafe impl Sync for SparsePpgtt {}
 
 impl SparsePpgtt {
+    pub(crate) fn new() -> Option<Self> {
+        let pml4 = alloc_table_page()?;
+        Some(Self {
+            pml4,
+            pages: alloc::vec![pml4],
+        })
+    }
+
     pub(crate) fn pml4_phys(&self) -> u64 {
         self.pml4.phys
     }
@@ -62,13 +70,16 @@ impl SparsePpgtt {
     }
 }
 
+impl Drop for SparsePpgtt {
+    fn drop(&mut self) {
+        for page in self.pages.drain(..) {
+            crate::dma::dealloc(page.virt as *mut u8, PAGE_BYTES);
+        }
+    }
+}
+
 pub(crate) fn build_sparse_ppgtt_for_ranges(ranges: &[PpgttRange]) -> Option<SparsePpgtt> {
-    let pml4 = alloc_table_page()?;
-    let mut ppgtt = SparsePpgtt {
-        pml4,
-        pages: Vec::new(),
-    };
-    ppgtt.pages.push(pml4);
+    let mut ppgtt = SparsePpgtt::new()?;
 
     for range in ranges {
         map_range(&mut ppgtt, *range)?;

@@ -12,6 +12,7 @@ mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
 pub(crate) mod gpu_font;
+mod gpu_device;
 #[path = "sound/hda.rs"]
 pub mod hda;
 mod hw_cursor;
@@ -353,6 +354,76 @@ fn media_decode_enabled_for_device(device_id: u16) -> bool {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+/// Opaque route lease used only by the production UI3 compositor.
+///
+/// Logical UI3 frames never receive this hardware object.  They publish a
+/// completed source surface to UI3; UI3 resolves the current output route and
+/// is the sole owner of the acquire/compose/commit transaction below.
+#[derive(Copy, Clone)]
+pub(crate) struct Ui3CompositorOutputTarget {
+    inner: self::display::DisplayOutputTarget,
+    pub(crate) slot: usize,
+    pub(crate) name: &'static str,
+    pub(crate) pipeline_name: &'static str,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// Non-copyable output back-buffer lease.  Keeping the display token private
+/// prevents a logical frame producer from committing a scanout surface.
+pub(crate) struct Ui3CompositorOutputFrame {
+    inner: self::display::DisplayOutputFrameGpgpu,
+    pub(crate) surface: self::gpgpu::GpgpuRgba8Surface,
+}
+
+pub(crate) fn ui3_compositor_output_target(slot: usize) -> Option<Ui3CompositorOutputTarget> {
+    let output = self::display::DisplayOutputId::from_slot(slot)?;
+    let inner = self::display::display_output_target(output)?;
+    Some(Ui3CompositorOutputTarget {
+        slot,
+        name: inner.output.name(),
+        pipeline_name: inner.pipeline_target.pipeline.name(),
+        width: inner.pipeline_target.width,
+        height: inner.pipeline_target.height,
+        inner,
+    })
+}
+
+pub(crate) fn ui3_compositor_acquire_output(
+    target: Ui3CompositorOutputTarget,
+) -> Option<Ui3CompositorOutputFrame> {
+    let inner = self::display::acquire_ui3_output_frame_composition_gpgpu(target.inner)?;
+    let display_surface = inner.surface;
+    let surface = self::gpgpu::GpgpuRgba8Surface::new(
+        display_surface.phys,
+        display_surface.gpu,
+        display_surface.byte_len,
+        display_surface.width,
+        display_surface.height,
+        display_surface.pitch_bytes,
+    )?;
+    Some(Ui3CompositorOutputFrame { inner, surface })
+}
+
+pub(crate) fn ui3_compositor_commit_output(
+    frame: Ui3CompositorOutputFrame,
+    reason: &str,
+) -> bool {
+    let committed = self::display::commit_ui3_output_frame_composition_produced(
+        frame.inner,
+        self::display::DisplayFrameProducer::GpuCoherent,
+        reason,
+    );
+    if !committed {
+        let _ = self::display::discard_ui3_output_frame_composition_gpgpu(frame.inner);
+    }
+    committed
+}
+
+pub(crate) fn ui3_compositor_discard_output(frame: Ui3CompositorOutputFrame) -> bool {
+    self::display::discard_ui3_output_frame_composition_gpgpu(frame.inner)
 }
 
 pub(crate) use self::display::{LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat};
