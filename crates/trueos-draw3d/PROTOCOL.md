@@ -82,8 +82,8 @@ separate option tag. Repeating start while running is idempotent unless it suppl
 clear color; stopping and then starting empty restores the transparent background.
 
 The stop-scene payload is empty for the original resumable pause, or one boolean byte. Omitting the
-byte or sending `0` stops presentation while retaining the complete scene and its resident GPU
-jobs. Sending `1` permanently stops and discards meshes and instances, resets camera/orbit/clear
+byte or sending `0` records the stopped state while retaining the complete scene. Sending `1`
+permanently stops and discards meshes and instances, resets camera/orbit/clear
 state, and invalidates the cached scene screenshot. A later start creates a fresh empty run; the
 permanent option does not lock out future scenes.
 
@@ -94,80 +94,28 @@ The second success byte selects the body: applied=`0`, stats=`1`, pong=`2`, rend
 Applied replies contain affected count and current scene statistics. Stats contain mesh and
 instance counts, vertex/edge/face totals, and estimated mesh bytes. Pong contains the original
 nonce. A render image contains format (`1` JPEG, `2` PNG), width (`u32`), height (`u32`), then
-the encoded image bytes through the end of the frame. After the first successful live scene frame,
-the service permits an independent straight-alpha RGBA8 capture of the Draw3D scene camera. A
+the encoded image bytes through the end of the frame. The service provides a straight-alpha RGBA8
+capture of the Draw3D scene camera. A
 render request produces a fresh off-screen capture, including while an ordinarily stopped scene is
 retained, or returns the last complete capture if a fresh attempt fails. It is deliberately not a
-readback of the composed UI3 output or the physical scanout; use UI3 lifecycle logs and a visual
-hardware check for final-compositor evidence. A clear-only start also establishes presentation
-eligibility. Before any frame has been presented, after permanent reset, or if no PNG has been
+readback of a composed UI output or the physical scanout. Before any frame has been captured,
+after permanent reset, or if no PNG has been
 captured successfully, the response falls back to the kernel's embedded 3840x2160 `logo.jpg`.
 
-## Experimental live renderer
+## Off-screen renderer
 
-The service owns the Intel triangle engine for this experiment. A scene starts in the stopped
-state. `start scene` enables frame submission; an ordinary `stop scene` clears the live overlay and
-suspends submission while retaining all meshes, instances, camera state, and resident GPU
-allocations. A permanent stop additionally tears down the retained scene and releases its resident
-jobs. The event-driven TCP protocol task remains on the BSP executor, while the 60 Hz scene
-projection and GPU-submission task is pinned to CPU slot 1, the dedicated AP1 UI executor. It never
-uses the BSP or the AP2+ background-worker pool.
-Both lifecycle commands are idempotent: applied `affected` is one for a transition or a changed
-clear color and zero when the requested running state and color are already active. Each placed
-instance is projected
-through the configured camera and fan-triangulated into a persistent indexed GPU job. Geometry is
-uploaded on creation, updated in place after geometry/camera/transform changes, and reused on steady
-frames. A camera orbit with nonzero speed reprojects and presents at that same scene cadence; absent
-or zero-speed orbits remain revision-driven and static. RGBA is volatile shader state, so `set color`
-does not upload geometry. Jobs are ordered back-to-front into the resident render target. TCP
-changes are coalesced on the 60 Hz local-view cadence; unchanged static scenes retain their overlay
-without redundant GPU submission. A target is presented and cached only after
-every mesh draw completes. Incomplete
-frames retain the last complete presentation and are retried on the next tick. When start supplies
-a clear color, the full-scanout overlay is cleared to that RGBA value and the same color backs
-untouched pixels in render-image captures. Mesh alpha is preserved through the render target,
-PNG response, and final display-plane composition. The experimental triangle target does not yet
-blend overlapping meshes with each other, so partially transparent geometry should not overlap
-other scene geometry yet. Triangles
-which cross the near or far plane are currently suppressed; X/Y clipping remains GPU-owned.
-Deleted jobs unmap their pages and return their persistent GPU virtual-address range for reuse.
+The service retains the TCP scene model but owns no UI plane and never changes scanout. A render
+request projects the current camera, creates temporary resident Intel triangle jobs, captures the
+result into a straight-alpha RGBA8 surface, and releases those jobs after readback. UI4 therefore
+has no implicit Draw3D producer.
 
-### UI3 presentation milestone test
+`start scene` and ordinary `stop scene` keep their wire-compatible scene-state semantics; neither
+starts or stops a presentation loop. A permanent stop discards meshes, instances, camera/orbit
+state, clear color, and the cached capture. Orbit is sampled when a render request is handled.
 
-Keep `tools/baremetal-log-drain.sh` running against the deployed target, then exercise the
-Draw3D-to-UI3 boundary with:
-
-```sh
-python3 tools/test_ui3_draw3d_milestone.py boot
-python3 tools/test_ui3_draw3d_milestone.py ownership
-python3 tools/test_ui3_draw3d_milestone.py static
-python3 tools/test_ui3_draw3d_milestone.py animated --require-target-hz
-python3 tools/test_ui3_draw3d_milestone.py lifecycle
-```
-
-`boot` densely verifies every pixel of both the independent 512x512 proof source and its composed
-2560x1440 output before presentation, then proves that the result is presented without a TCP
-producer. `ownership` proves UI3 has claimed the UI overlay for service lifetime, no obsolete font
-boot probe ran, and no legacy overlay presentation was accepted after that claim. `static` requires
-exactly one Draw3D submission followed by persistent composition.
-`animated` requires all attempted frames to present and, with `--require-target-hz`, at least the
-default 55 Hz acceptance threshold. `lifecycle` requires permanent scene reset to remove only the
-Draw3D layer and leave the proof frame. The generated PNG validates the Draw3D source and camera
-dimensions separately; it does not claim to capture UI3 or scanout. Override `--expect-width` and
-`--expect-height` when the configured Draw3D source viewport is not 2560x1440.
-
-Camera projection uses the resident render target's width divided by its height as the default
-aspect ratio for both local presentation and screenshot capture. Protocol clients therefore specify
-one camera without compensating geometry for a particular scanout shape.
-
-The live renderer also estimates projected coverage per resident draw. A draw above 1.75
-screen-equivalents emits an advisory warning with its instance and mesh IDs because combining many
-broad, overlapping room surfaces into one GPU submission can exceed the current per-submit
-completion window even while all protocol mesh limits remain satisfied. This is not a wire-level
-rejection: split that mesh into smaller retained draws when the warning accompanies a stall. Stall
-warnings identify the first unretired instance/mesh and distinguish likely high-overdraw pressure
-from a generic GPU timeout or front-end stall. Local overlay resizing preserves the currently
-scanned-out buffer slot until the first complete frame at the new size commits.
+The capture target's width divided by height supplies the default camera aspect ratio. The
+experimental target does not yet blend overlapping transparent meshes with each other, and
+triangles crossing the near or far plane are suppressed; X/Y clipping remains GPU-owned.
 
 The active scene budget is 100 stored meshes, 100 placed instances, 1,000 vertices per mesh,
 3,000 edges per mesh, and 2,000 triangles per mesh after polygon fan triangulation. These are

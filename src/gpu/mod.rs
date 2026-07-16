@@ -7,4 +7,3 @@ pub(crate) mod physical;
 pub(crate) mod vgpu;
 
 pub(crate) use physical::register_physical_device;
-

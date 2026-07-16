@@ -46,7 +46,7 @@ const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
 pub(crate) const OUTPUT_NET_TCP_MASK: u8 = 1 << 0;
-pub(crate) const OUTPUT_UI3_MASK: u8 = 1 << 1;
+pub(crate) const OUTPUT_LOCAL_MASK: u8 = 1 << 1;
 pub(crate) const OUTPUT_CONTAINER_MASK: u8 = 1 << 2;
 const SECTION_STATUS_TEXT: &str = "t4ce is with you";
 const SECTION_STATUS_HOLD_MS: u64 = 1000;
@@ -58,9 +58,9 @@ const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
 const TERMINAL_SIZE_QUERY: &str = "\x1b[18t";
 const TERMINAL_SIZE_QUERY_IDLE_TICKS: u16 = 100;
-pub(crate) const UI3_ESCAPE_KEY_BYTE: u8 = 0x1d;
-pub(crate) const UI3_F1_KEY_BYTE: u8 = 0x1c;
-pub(crate) const UI3_UNMAPPED_KEY_BYTE: u8 = 0x1e;
+pub(crate) const LOCAL_ESCAPE_KEY_BYTE: u8 = 0x1d;
+pub(crate) const LOCAL_F1_KEY_BYTE: u8 = 0x1c;
+pub(crate) const LOCAL_UNMAPPED_KEY_BYTE: u8 = 0x1e;
 
 static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 static NET_TCP_TERMINAL_ROWS: AtomicUsize =
@@ -1050,7 +1050,7 @@ pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> us
         &NET_TCP_SHELL_BACKEND
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         &CONTAINER_SHELL_BACKEND
-    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+    } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
         return 0;
     } else {
         return bytes.len();
@@ -1093,7 +1093,7 @@ pub(crate) fn read_matrix_target_byte(target: &MatrixTarget) -> Option<u8> {
         NET_TCP_SHELL_BACKEND.read_byte()
     } else if (target.output_mask & OUTPUT_CONTAINER_MASK) != 0 {
         CONTAINER_SHELL_BACKEND.read_byte()
-    } else if (target.output_mask & OUTPUT_UI3_MASK) != 0 {
+    } else if (target.output_mask & OUTPUT_LOCAL_MASK) != 0 {
         None
     } else {
         None
@@ -1508,9 +1508,6 @@ fn handle_command_session_input(
                 spawner, io, &target, submitted, disc_id,
             )
         }
-        shell2_cmd::CommandSessionKind::GpuCanvasRunning(session_id) => {
-            crate::ui3::ui3_canvas::handle_session_input(session_id, &target, submitted)
-        }
         shell2_cmd::CommandSessionKind::RemoveSure(session_id) => {
             crate::shell2::cmds::rm::handle_session_input(&target, submitted, session_id)
         }
@@ -1746,7 +1743,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         surf_prefix,
         cmd_status_text.as_deref(),
     );
-    if (output_mask & (OUTPUT_UI3_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
+    if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
         out.io.raw_write_str(TERMINAL_SIZE_QUERY);
     }
 
@@ -1809,7 +1806,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
 
         if let Some(b) = io.read_byte() {
-            if b == UI3_ESCAPE_KEY_BYTE {
+            if b == LOCAL_ESCAPE_KEY_BYTE {
                 esc = EscState::None;
                 text_decode.reset();
                 live_history_cursor = None;
@@ -1841,7 +1838,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 continue;
             }
-            if b == UI3_F1_KEY_BYTE && !active_matrix_slot_is_vmx(output_mask) {
+            if b == LOCAL_F1_KEY_BYTE && !active_matrix_slot_is_vmx(output_mask) {
                 esc = EscState::None;
                 text_decode.reset();
                 live_history_cursor = None;
@@ -1861,7 +1858,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 );
                 continue;
             }
-            if b == UI3_UNMAPPED_KEY_BYTE {
+            if b == LOCAL_UNMAPPED_KEY_BYTE {
                 if active_terminal_hotkey_mode(output_mask) {
                     show_hotkey_notice(&out, output_mask, "unmapped key");
                 }
@@ -2398,7 +2395,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             }
         } else {
-            if (output_mask & (OUTPUT_UI3_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
+            if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
                 if terminal_size_query_idle_ticks == 0 {
                     out.io.raw_write_str(TERMINAL_SIZE_QUERY);
                     terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;

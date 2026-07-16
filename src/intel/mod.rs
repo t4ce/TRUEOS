@@ -8,11 +8,11 @@ mod display;
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]
 pub(crate) mod gpgpu;
+mod gpu_device;
+pub(crate) mod gpu_font;
 mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
-pub(crate) mod gpu_font;
-mod gpu_device;
 #[path = "sound/hda.rs"]
 pub mod hda;
 mod hw_cursor;
@@ -47,12 +47,7 @@ pub(crate) const GPU_VA_GUC_CTB_BASE: u64 = 0x07F0_0000;
 pub(crate) const GPU_VA_GUC_RUNTIME_LIMIT: u64 = 0x0800_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
-pub(crate) const GPU_VA_DISPLAY_UI3_BASE_BASE: u64 = 0x0400_0000;
-pub(crate) const GPU_VA_DISPLAY_UI3_FRAME_BASE: u64 = 0x0500_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
-pub(crate) const GPU_VA_DISPLAY_UI3_TEXT_BASE: u64 = 0x1000_0000;
-pub(crate) const GPU_VA_DISPLAY_UI3_CANVAS_BASE: u64 = 0x1100_0000;
-pub(crate) const GPU_VA_DISPLAY_UI3_SCENE_BASE: u64 = 0x1400_0000;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -120,8 +115,9 @@ pub fn init_once() {
         crate::log!("intel: no Intel display-class PCI device claimed\n");
         return;
     };
+    let guc_boot = guc_boot_enabled_for_device(dev.device_id);
     crate::log!(
-        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} ui3_boot={} media_decode={}\n",
+        "intel: claimed {:02X}:{:02X}.{} device=0x{:04X} name={} rev=0x{:02X} mmio_len=0x{:X} guc_boot={} media_decode={}\n",
         dev.bus,
         dev.slot,
         dev.function,
@@ -129,87 +125,15 @@ pub fn init_once() {
         display_device_name(dev.device_id),
         dev.revision_id,
         dev.mmio_len,
-        full_ui3_boot_enabled_for_device(dev.device_id) as u8,
+        guc_boot as u8,
         media_decode_enabled_for_device(dev.device_id) as u8
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
-    let full_ui3_boot = full_ui3_boot_enabled_for_device(dev.device_id);
-    let guc_admitted = full_ui3_boot && init_required_guc_transport(dev);
-    if full_ui3_boot && guc_admitted {
-        // Keep BSP residency limited to the descriptor/worklist kernels used by
-        // the UI3 compositor and its current demos.  Other kernels remain
-        // available to explicit consumers, whose late upload is then visible
-        // in the log instead of being hidden by unconditional boot warmup.
-        let _ = self::gpgpu::upload_fill_rect_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_alpha_blend_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_sprite64_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_sprite_quad_worklist_rgba8_kernel();
-        let _ = self::gpgpu::upload_mandel64_worklist_rgba8_kernel();
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: bsp-resident-kernels count=5 set=fill_rect_worklist_rgba8,alpha_blend_worklist_rgba8,sprite64_worklist_rgba8,sprite_quad_worklist_rgba8,mandel64_worklist_rgba8 late_uploads_expose_dependencies=1\n"
-        );
-        let opencl_smoke = self::opencl::trueos_cl_source_build_smoke();
-        crate::log_info!(
-            target: "intel/opencl";
-            "intel/opencl: source-build-smoke source_compile={} build_err={} registry_kernels={} registry_ok={} queue_completed={} fill_rect_uploaded={} queue_err={} note=known-source-igc-aot-artifact-path-active\n",
-            opencl_smoke.source_compile_cap as u8,
-            opencl_smoke
-                .source_build_error
-                .map(|err| err.code())
-                .unwrap_or(0),
-            opencl_smoke.registry_kernels,
-            opencl_smoke.registry_passed as u8,
-            opencl_smoke.queue_completed_commands,
-            opencl_smoke.fill_rect_uploaded as u8,
-            opencl_smoke.queue_error.map(|err| err.code()).unwrap_or(0),
-        );
-        if crate::allcaps::probes::INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS {
-            let _ = self::gpgpu::submit_direct_rcs_smoke_once();
-            let _ = self::gpgpu::submit_fill_rect_worklist_rgba8_probe_once();
-            let _ = self::gpgpu::submit_gradient_rect_worklist_rgba8_probe_once();
-            let _ = self::gpgpu::submit_alpha_blend_worklist_rgba8_probe_once();
-            let _ = self::gpgpu::submit_sprite_quad_worklist_rgba8_probe_once();
-            crate::log_info!(
-                target: "gpgpu";
-                "intel/gpgpu: rect-worklist-probes fill_ran={} fill_ok={} gradient_ran={} gradient_ok={} alpha_ran={} alpha_ok={} ready={}\n",
-                self::gpgpu::fill_rect_worklist_probe_ran() as u8,
-                self::gpgpu::fill_rect_worklist_probe_ok() as u8,
-                self::gpgpu::gradient_rect_worklist_probe_ran() as u8,
-                self::gpgpu::gradient_rect_worklist_probe_ok() as u8,
-                self::gpgpu::alpha_blend_worklist_probe_ran() as u8,
-                self::gpgpu::alpha_blend_worklist_probe_ok() as u8,
-                self::gpgpu::rect_worklist_probe_ready() as u8
-            );
-            let _ = self::gpgpu::submit_canvas3d_project_once();
-            let _ = self::gpgpu::submit_canvas3d_transform_smoke_once();
-            let _ = self::gpgpu::submit_canvas3d_clip_box_q16_once();
-            let _ = self::gpgpu::submit_canvas3d_plane_sample_rgba8_once();
-            let _ = self::gpgpu::submit_canvas3d_plane_fill_rgba8_once();
-            let _ = self::gpgpu::submit_canvas3d_plane_patch_fill_cut_rgba8_once();
-            let _ = self::gpgpu::submit_canvas3d_plane_patch_worklist_rgba8_once();
-        } else {
-            crate::log_info!(
-                target: "gpgpu";
-                "intel/gpgpu: artifact boot smoketests skipped allcaps=0\n"
-            );
-        }
-    } else if full_ui3_boot {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: upload and boot probes blocked reason=guc-admission-failed submission_fallback=none display_continues=1\n"
-        );
+    if guc_boot {
+        let _ = init_required_guc_transport(dev);
     } else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: upload and boot probes skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
-            dev.device_id,
-            display_device_name(dev.device_id)
-        );
-    }
-    if !full_ui3_boot {
         crate::log!(
-            "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=logo-only-bringup\n",
+            "intel/uc-fw: firmware bring-up skipped device=0x{:04X} name={} reason=unsupported-device-policy\n",
             dev.device_id,
             display_device_name(dev.device_id)
         );
@@ -260,9 +184,7 @@ fn init_required_guc_transport(dev: Dev) -> bool {
         );
         return false;
     }
-    if !map_ggtt(dev, fw.phys, fw.len, fw.gpu)
-        || !map_ggtt(dev, ads.phys, ads.len, ads.gpu)
-    {
+    if !map_ggtt(dev, fw.phys, fw.len, fw.gpu) || !map_ggtt(dev, ads.phys, ads.len, ads.gpu) {
         crate::log!(
             "intel/guc: admission accepted=0 reason=ggtt-map-failed fw_len=0x{:X} ads_len=0x{:X} submission_fallback=none display_continues=1\n",
             fw.len,
@@ -292,8 +214,8 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     }
 
     let ctb_ready = self::guc_ctb::init_and_enable(dev);
-    let registered = ctb_ready
-        && crate::gpu::register_physical_device(&self::gpu_device::INTEL_PHYSICAL_GPU);
+    let registered =
+        ctb_ready && crate::gpu::register_physical_device(&self::gpu_device::INTEL_PHYSICAL_GPU);
     crate::log!(
         "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
@@ -330,14 +252,10 @@ pub(crate) fn claimed_device() -> Option<Dev> {
     *CLAIMED_DEVICE.lock()
 }
 
-pub(crate) fn full_ui3_boot_enabled() -> bool {
+pub(crate) fn guc_boot_enabled() -> bool {
     claimed_device()
-        .map(|dev| full_ui3_boot_enabled_for_device(dev.device_id))
+        .map(|dev| guc_boot_enabled_for_device(dev.device_id))
         .unwrap_or(false)
-}
-
-pub(crate) fn ui3_upper_plane_boot_stage() -> u8 {
-    self::display::ui3_upper_plane_boot_stage()
 }
 
 pub(crate) fn display_device_name(device_id: u16) -> &'static str {
@@ -349,7 +267,7 @@ pub(crate) fn display_device_name(device_id: u16) -> &'static str {
     }
 }
 
-fn full_ui3_boot_enabled_for_device(device_id: u16) -> bool {
+fn guc_boot_enabled_for_device(device_id: u16) -> bool {
     !matches!(device_id, PCI_DEVICE_ALDER_LAKE_N_N100_UHD)
 }
 
@@ -359,86 +277,6 @@ fn media_decode_enabled_for_device(device_id: u16) -> bool {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
-}
-
-/// Opaque route lease used only by the production UI3 compositor.
-///
-/// Logical UI3 frames never receive this hardware object.  They publish a
-/// completed source surface to UI3; UI3 resolves the current output route and
-/// is the sole owner of the acquire/compose/commit transaction below.
-#[derive(Copy, Clone)]
-pub(crate) struct Ui3CompositorOutputTarget {
-    inner: self::display::DisplayOutputTarget,
-    pub(crate) slot: usize,
-    pub(crate) name: &'static str,
-    pub(crate) pipeline_name: &'static str,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-/// Non-copyable output back-buffer lease.  Keeping the display token private
-/// prevents a logical frame producer from committing a scanout surface.
-pub(crate) struct Ui3CompositorOutputFrame {
-    inner: self::display::DisplayOutputFrameGpgpu,
-    pub(crate) surface: self::gpgpu::GpgpuRgba8Surface,
-    /// CPU mapping retained only for compositor coherency diagnostics. Pixel
-    /// production remains GPU-only; callers must never write through it.
-    pub(crate) diagnostic_virt: *mut u8,
-    pub(crate) buffer_index: usize,
-}
-
-pub(crate) fn ui3_compositor_output_target(slot: usize) -> Option<Ui3CompositorOutputTarget> {
-    let output = self::display::DisplayOutputId::from_slot(slot)?;
-    let inner = self::display::display_output_target(output)?;
-    Some(Ui3CompositorOutputTarget {
-        slot,
-        name: inner.output.name(),
-        pipeline_name: inner.pipeline_target.pipeline.name(),
-        width: inner.pipeline_target.width,
-        height: inner.pipeline_target.height,
-        inner,
-    })
-}
-
-pub(crate) fn ui3_compositor_acquire_output(
-    target: Ui3CompositorOutputTarget,
-) -> Option<Ui3CompositorOutputFrame> {
-    let inner = self::display::acquire_ui3_output_frame_composition_gpgpu(target.inner)?;
-    let buffer_index = self::display::ui3_output_frame_buffer_index(&inner)?;
-    let display_surface = inner.surface;
-    let surface = self::gpgpu::GpgpuRgba8Surface::new(
-        display_surface.phys,
-        display_surface.gpu,
-        display_surface.byte_len,
-        display_surface.width,
-        display_surface.height,
-        display_surface.pitch_bytes,
-    )?;
-    Some(Ui3CompositorOutputFrame {
-        inner,
-        surface,
-        diagnostic_virt: display_surface.virt,
-        buffer_index,
-    })
-}
-
-pub(crate) fn ui3_compositor_commit_output(
-    frame: Ui3CompositorOutputFrame,
-    reason: &str,
-) -> bool {
-    let committed = self::display::commit_ui3_output_frame_composition_produced(
-        frame.inner,
-        self::display::DisplayFrameProducer::GpuCoherent,
-        reason,
-    );
-    if !committed {
-        let _ = self::display::discard_ui3_output_frame_composition_gpgpu(frame.inner);
-    }
-    committed
-}
-
-pub(crate) fn ui3_compositor_discard_output(frame: Ui3CompositorOutputFrame) -> bool {
-    self::display::discard_ui3_output_frame_composition_gpgpu(frame.inner)
 }
 
 pub(crate) use self::display::{LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat};
@@ -644,15 +482,6 @@ pub(crate) fn present_live_overlay_rects_preserving(
     reason: &str,
 ) -> bool {
     self::display::present_live_overlay_rects_preserving(rects, preserve, reason)
-}
-
-pub(crate) fn present_ui3_canvas_rgba(
-    rect: LiveOverlayRect,
-    src: *mut u8,
-    src_pitch_bytes: usize,
-    reason: &str,
-) -> bool {
-    self::display::present_ui3_canvas_rgba(rect, src, src_pitch_bytes, reason)
 }
 
 pub fn log_display_plane_ladder_probe(label: &str) {
@@ -987,10 +816,7 @@ pub(crate) fn unmap_display_scanout_ggtt(dev: Dev, len: usize, gpu: u64) -> bool
             return false;
         };
         unsafe {
-            core::ptr::write_volatile(
-                dev.mmio.add(GGTT_ALIAS_BASE_OFF + index) as *mut u64,
-                0,
-            );
+            core::ptr::write_volatile(dev.mmio.add(GGTT_ALIAS_BASE_OFF + index) as *mut u64, 0);
         }
     }
     ggtt_invalidate(dev);

@@ -10,15 +10,13 @@ use crate::intel::gpgpu::{
     CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
     CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
     FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH,
-    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, MANDEL64_WORKLIST_MAX_ITERATIONS,
-    PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE, PIXEL_PLASMA_FLAG_RINGS,
-    PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
-    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_chart_sine_ui3_frame,
-    shell_font_outline_probe, shell_mandel64_worklist_scanout, shell_pixel_plasma_scanout,
-    upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
-    upload_pixel_plasma_rgba8_kernel,
+    MANDEL64_WORKLIST_DEFAULT_ITERATIONS, PIXEL_PLASMA_FLAG_ALPHA, PIXEL_PLASMA_FLAG_FIELD_PALETTE,
+    PIXEL_PLASMA_FLAG_RINGS, PIXEL_PLASMA_FLAG_SCANLINE, PIXEL_PLASMA_FLAG_VIGNETTE,
+    PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT, reload_all_known_kernel_artifacts,
+    reload_known_kernel_artifact, shell_font_outline_probe, upload_chart_sine_rgba8_kernel,
+    upload_font_outline_mesh_kernel, upload_pixel_plasma_rgba8_kernel,
 };
-use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
+use crate::shell2::shell2_cmd::ParseOutcome;
 
 const CANVAS2D_SPRITE_DEFAULT_DURATION_MS: u64 = 5_000;
 const CANVAS2D_SPRITE_DEFAULT_CADENCE_MS: u64 = 0;
@@ -27,23 +25,6 @@ const CANVAS2D_SPRITE_DEFAULT_PRESENT_EVERY: u32 = 1;
 const CANVAS2D_SPRITE_MAX_COUNT: u32 = 256;
 const CANVAS2D_SPRITE_MAX_PRESENT_EVERY: u32 = 1024;
 const CANVAS2D_SPRITES64_COUNT: u32 = 16;
-const CHART_WAVE_DEFAULT_DURATION_MS: u64 = 10_000;
-const CHART_WAVE_DEFAULT_HZ: u32 = 60;
-const CHART_WAVE_DEFAULT_PRESENT_EVERY: u32 = 1;
-const CHART_WAVE_MAX_DURATION_MS: u64 = 120_000;
-const CHART_WAVE_MAX_HZ: u32 = 240;
-const CHART_ALL_FLAGS: u32 =
-    CHART_SINE_FLAG_GRID | CHART_SINE_FLAG_AXES | CHART_SINE_FLAG_GLOW | CHART_SINE_FLAG_BORDER;
-const PIXEL_PLASMA_DEFAULT_DURATION_MS: u64 = 10_000;
-const PIXEL_PLASMA_DEFAULT_HZ: u32 = 60;
-const PIXEL_PLASMA_DEFAULT_PRESENT_EVERY: u32 = 1;
-const PIXEL_PLASMA_MAX_DURATION_MS: u64 = 120_000;
-const PIXEL_PLASMA_MAX_HZ: u32 = 240;
-const PIXEL_PLASMA_ALL_FLAGS: u32 = PIXEL_PLASMA_FLAG_VIGNETTE
-    | PIXEL_PLASMA_FLAG_RINGS
-    | PIXEL_PLASMA_FLAG_SCANLINE
-    | PIXEL_PLASMA_FLAG_FIELD_PALETTE
-    | PIXEL_PLASMA_FLAG_ALPHA;
 
 static CANVAS2D_SPRITE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 
@@ -167,49 +148,12 @@ fn run_canvas2d(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) 
 }
 
 fn run_canvas2d_mandel64(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
-    let iterations = match args.next() {
-        Some(value) => match value.parse::<u32>() {
-            Ok(iterations) => iterations.clamp(1, MANDEL64_WORKLIST_MAX_ITERATIONS),
-            Err(_) => {
-                usage(io);
-                return false;
-            }
-        },
-        None => MANDEL64_WORKLIST_DEFAULT_ITERATIONS,
-    };
-    if !expect_no_more(io, args) {
-        return false;
-    }
-
-    let Some(result) = shell_mandel64_worklist_scanout(iterations) else {
-        print_shell_line(
-            io,
-            "gpgpu canvas2d mandel64: no result (check primary surface, iGPU claim, and mandel artifact)",
-        );
-        return false;
-    };
-    let msg = alloc::format!(
-        "gpgpu canvas2d mandel64: mode=mandel64-worklist ok={} iterations={} requested={} desc={} walkers={} pixels={} submit_ms={} present_ms={} total_ms={} last_src={},{} last_dst={},{} primary={}x{} desc_gpu=0x{:X} presented={}",
-        result.ok as u8,
-        iterations,
-        result.requested,
-        result.descriptors,
-        result.walkers,
-        result.pixels,
-        result.submit_ms,
-        result.present_ms,
-        result.total_ms,
-        result.last_src_xy.x,
-        result.last_src_xy.y,
-        result.last_dst_xy.x,
-        result.last_dst_xy.y,
-        result.primary_width,
-        result.primary_height,
-        result.desc_gpu,
-        result.presented as u8
+    let _ = args;
+    print_shell_line(
+        io,
+        "gpgpu canvas2d mandel64: presentation removed; UI4 baseline is logo-only",
     );
-    print_shell_line(io, msg.as_str());
-    result.ok
+    true
 }
 
 fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
@@ -290,228 +234,13 @@ fn run_chart_artifact(io: &'static dyn ShellBackend2) {
 }
 
 fn run_chart_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let phase = match args.next() {
-        Some(raw) => match raw.parse::<f32>() {
-            Ok(value) if value.is_finite() => value,
-            _ => {
-                usage(io);
-                return;
-            }
-        },
-        None => 0.0,
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-    if let Err(error) = crate::ui3::compositor::activate_shell_chart_window() {
-        let message =
-            alloc::format!("gpgpu chart static: ok=0 stage=ui3-activate reason={}", error);
-        print_shell_line(io, message.as_str());
-        return;
-    }
-    let flags = CHART_SINE_FLAG_GRID | CHART_SINE_FLAG_AXES | CHART_SINE_FLAG_BORDER;
-    let Some(result) = shell_chart_sine_ui3_frame(phase, flags, true) else {
-        print_shell_line(io, "gpgpu chart static: ok=0 stage=dispatch reason=no-result");
-        return;
-    };
-    let message = alloc::format!(
-        "gpgpu chart static: ok={} stage=ui3-frame-publish submitted={} present_queued={} size={}x{} pixels={} phase={:.4} flags=0x{:X} submit_us={} publish_us={} total_us={} marker=0x{:08X}",
-        result.ok as u8,
-        result.submitted as u8,
-        result.present_queued as u8,
-        result.width,
-        result.height,
-        result.pixels,
-        result.phase,
-        flags,
-        result.submit_us,
-        result.publish_us,
-        result.total_us,
-        result.marker,
-    );
-    print_shell_line(io, message.as_str());
-    if result.ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
-    }
+    let _ = args;
+    print_shell_line(io, "gpgpu chart static: presentation removed; UI4 baseline is logo-only");
 }
 
 fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let duration_ms = match args.next() {
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(value) => value.clamp(100, CHART_WAVE_MAX_DURATION_MS),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => CHART_WAVE_DEFAULT_DURATION_MS,
-    };
-    let hz = match args.next() {
-        Some(raw) => match raw.parse::<u32>() {
-            Ok(value) => value.clamp(1, CHART_WAVE_MAX_HZ),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => CHART_WAVE_DEFAULT_HZ,
-    };
-    let present_every = match args.next() {
-        Some(raw) => match raw.parse::<u32>() {
-            Ok(value) => value.clamp(1, 1024),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => CHART_WAVE_DEFAULT_PRESENT_EVERY,
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-    if let Err(error) = crate::ui3::compositor::activate_shell_chart_window() {
-        let message = alloc::format!("gpgpu chart wave: ok=0 stage=ui3-activate reason={}", error);
-        print_shell_line(io, message.as_str());
-        return;
-    }
-
-    let start_tick = now_ticks();
-    let deadline_tick = start_tick.saturating_add(ticks_from_ms(duration_ms));
-    let cadence_ticks = ticks_for_hz(hz);
-    let mut next_tick = start_tick;
-    let mut frames = 0u64;
-    let mut submitted = 0u64;
-    let mut present_queued = 0u64;
-    let mut failures = 0u64;
-    let mut missed_deadlines = 0u64;
-    let mut coalesced_frames = 0u64;
-    let mut sum_submit_us = 0u64;
-    let mut sum_publish_us = 0u64;
-    let mut max_submit_us = 0u64;
-    let mut max_publish_us = 0u64;
-    let mut max_total_us = 0u64;
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut pending_present = false;
-    let mut last_phase = 0.0f32;
-    let mut closed = false;
-    crate::log_info!(
-        target: "gpgpu";
-        "gpgpu chart wave begin duration_ms={} target_hz={} present_every={} flags=0x{:X}\n",
-        duration_ms,
-        hz,
-        present_every,
-        CHART_ALL_FLAGS
-    );
-
-    while now_ticks() < deadline_tick {
-        if !crate::ui3::compositor::shell_chart_window_visible() {
-            closed = true;
-            break;
-        }
-        wait_until_tick(next_tick);
-        let now = now_ticks();
-        if now >= deadline_tick {
-            break;
-        }
-        if crate::ui3::compositor::shell_chart_present_pending() {
-            let elapsed_slots = now
-                .saturating_sub(next_tick)
-                .checked_div(cadence_ticks)
-                .unwrap_or(0)
-                .saturating_add(1);
-            coalesced_frames = coalesced_frames.saturating_add(elapsed_slots);
-            next_tick = next_tick
-                .saturating_add(cadence_ticks.saturating_mul(elapsed_slots));
-            continue;
-        }
-        let mut missed_this_frame = 0u64;
-        if now > next_tick.saturating_add(cadence_ticks) {
-            missed_this_frame = now.saturating_sub(next_tick) / cadence_ticks;
-            missed_deadlines = missed_deadlines.saturating_add(missed_this_frame);
-        }
-        let elapsed_us = elapsed_us_since(start_tick);
-        last_phase = elapsed_us as f32 * (6.2831855f32 * 0.35f32 / 1_000_000.0f32);
-        let should_present = frames % u64::from(present_every) == 0;
-        let Some(result) = shell_chart_sine_ui3_frame(last_phase, CHART_ALL_FLAGS, should_present)
-        else {
-            if crate::ui3::compositor::shell_chart_window_visible() {
-                failures = failures.saturating_add(1);
-            } else {
-                closed = true;
-            }
-            break;
-        };
-        frames = frames.saturating_add(1);
-        submitted = submitted.saturating_add(result.submitted as u64);
-        present_queued = present_queued.saturating_add(result.present_queued as u64);
-        failures = failures.saturating_add((!result.ok) as u64);
-        pending_present = result.submitted && !result.present_queued;
-        width = result.width;
-        height = result.height;
-        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
-        sum_publish_us = sum_publish_us.saturating_add(result.publish_us);
-        max_submit_us = max_submit_us.max(result.submit_us);
-        max_publish_us = max_publish_us.max(result.publish_us);
-        max_total_us = max_total_us.max(result.total_us);
-        if !result.ok {
-            break;
-        }
-        next_tick = next_tick
-            .saturating_add(cadence_ticks.saturating_mul(missed_this_frame.saturating_add(1)));
-    }
-
-    let final_present_queued =
-        pending_present && !closed && crate::ui3::compositor::request_shell_chart_recompose();
-    present_queued = present_queued.saturating_add(final_present_queued as u64);
-
-    let elapsed_us = elapsed_us_since(start_tick).max(1);
-    let fps_milli = frames.saturating_mul(1_000_000_000) / elapsed_us;
-    let avg_submit_us = if frames == 0 {
-        0
-    } else {
-        sum_submit_us / frames
-    };
-    let avg_publish_us = if frames == 0 {
-        0
-    } else {
-        sum_publish_us / frames
-    };
-    let ok = (frames != 0 || closed) && failures == 0 && submitted == frames;
-    let message = alloc::format!(
-        "gpgpu chart wave: ok={} stage=present-backpressured-cadence frames={} submitted={} present_queued={} coalesced={} failures={} closed={} duration_ms={} elapsed_us={} target_hz={} producer_fps={}.{:03} missed_deadlines={} present_every={} final_present_queued={} size={}x{} avg_submit_us={} max_submit_us={} avg_publish_us={} max_publish_us={} max_total_us={} phase={:.4}",
-        ok as u8,
-        frames,
-        submitted,
-        present_queued,
-        coalesced_frames,
-        failures,
-        closed as u8,
-        duration_ms,
-        elapsed_us,
-        hz,
-        fps_milli / 1000,
-        fps_milli % 1000,
-        missed_deadlines,
-        present_every,
-        final_present_queued as u8,
-        width,
-        height,
-        avg_submit_us,
-        max_submit_us,
-        avg_publish_us,
-        max_publish_us,
-        max_total_us,
-        last_phase,
-    );
-    print_shell_line(io, message.as_str());
-    if ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
-    }
+    let _ = args;
+    print_shell_line(io, "gpgpu chart wave: presentation removed; UI4 baseline is logo-only");
 }
 
 fn run_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
@@ -593,262 +322,28 @@ fn run_pixel_artifact(io: &'static dyn ShellBackend2) {
 }
 
 fn run_pixel_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let time = match args.next() {
-        Some(raw) => match raw.parse::<f32>() {
-            Ok(value) if value.is_finite() => value,
-            _ => {
-                usage(io);
-                return;
-            }
-        },
-        None => 0.0,
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-    let flags = PIXEL_PLASMA_FLAG_VIGNETTE;
-    let Some(result) = shell_pixel_plasma_scanout(time, flags, true) else {
-        print_shell_line(io, "gpgpu pixel static: ok=0 stage=dispatch reason=no-result");
-        return;
-    };
-    let message = alloc::format!(
-        "gpgpu pixel static: ok={} stage=single-dispatch shader=plasma surface=ui3-frame plane=overlay-alpha submitted={} presented={} size={}x{} pixels={} time={:.4} flags=0x{:X} submit_us={} present_us={} total_us={} marker=0x{:08X}",
-        result.ok as u8,
-        result.submitted as u8,
-        result.presented as u8,
-        result.width,
-        result.height,
-        result.pixels,
-        result.time,
-        flags,
-        result.submit_us,
-        result.present_us,
-        result.total_us,
-        result.marker,
-    );
-    print_shell_line(io, message.as_str());
-    if result.ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
-    }
+    let _ = args;
+    print_shell_line(io, "gpgpu pixel static: presentation removed; UI4 baseline is logo-only");
 }
 
 fn run_pixel_plasma(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let duration_ms = match args.next() {
-        Some(raw) => match raw.parse::<u64>() {
-            Ok(value) => value.clamp(100, PIXEL_PLASMA_MAX_DURATION_MS),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => PIXEL_PLASMA_DEFAULT_DURATION_MS,
-    };
-    let hz = match args.next() {
-        Some(raw) => match raw.parse::<u32>() {
-            Ok(value) => value.clamp(1, PIXEL_PLASMA_MAX_HZ),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => PIXEL_PLASMA_DEFAULT_HZ,
-    };
-    let present_every = match args.next() {
-        Some(raw) => match raw.parse::<u32>() {
-            Ok(value) => value.clamp(1, 1024),
-            Err(_) => {
-                usage(io);
-                return;
-            }
-        },
-        None => PIXEL_PLASMA_DEFAULT_PRESENT_EVERY,
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-
-    let start_tick = now_ticks();
-    let deadline_tick = start_tick.saturating_add(ticks_from_ms(duration_ms));
-    let cadence_ticks = ticks_for_hz(hz);
-    let mut next_tick = start_tick;
-    let mut frames = 0u64;
-    let mut submitted = 0u64;
-    let mut presented = 0u64;
-    let mut failures = 0u64;
-    let mut missed_deadlines = 0u64;
-    let mut sum_submit_us = 0u64;
-    let mut sum_present_us = 0u64;
-    let mut max_submit_us = 0u64;
-    let mut max_present_us = 0u64;
-    let mut max_total_us = 0u64;
-    let mut width = 0u32;
-    let mut height = 0u32;
-    let mut pending_present = false;
-    let mut last_time = 0.0f32;
-    crate::log_info!(
-        target: "gpgpu";
-        "gpgpu pixel plasma begin surface=ui3-frame plane=overlay-alpha duration_ms={} target_hz={} present_every={} flags=0x{:X}\n",
-        duration_ms,
-        hz,
-        present_every,
-        PIXEL_PLASMA_ALL_FLAGS
-    );
-
-    while now_ticks() < deadline_tick {
-        wait_until_tick(next_tick);
-        let now = now_ticks();
-        if now >= deadline_tick {
-            break;
-        }
-        let mut missed_this_frame = 0u64;
-        if now > next_tick.saturating_add(cadence_ticks) {
-            missed_this_frame = now.saturating_sub(next_tick) / cadence_ticks;
-            missed_deadlines = missed_deadlines.saturating_add(missed_this_frame);
-        }
-        let frame_elapsed_us = elapsed_us_since(start_tick);
-        last_time = frame_elapsed_us as f32 / 1_000_000.0f32;
-        let should_present = frames % u64::from(present_every) == 0;
-        let Some(result) =
-            shell_pixel_plasma_scanout(last_time, PIXEL_PLASMA_ALL_FLAGS, should_present)
-        else {
-            failures = failures.saturating_add(1);
-            break;
-        };
-        frames = frames.saturating_add(1);
-        submitted = submitted.saturating_add(result.submitted as u64);
-        presented = presented.saturating_add(result.presented as u64);
-        failures = failures.saturating_add((!result.ok) as u64);
-        pending_present = result.submitted && !result.presented;
-        width = result.width;
-        height = result.height;
-        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
-        sum_present_us = sum_present_us.saturating_add(result.present_us);
-        max_submit_us = max_submit_us.max(result.submit_us);
-        max_present_us = max_present_us.max(result.present_us);
-        max_total_us = max_total_us.max(result.total_us);
-        if !result.ok {
-            break;
-        }
-        next_tick = next_tick
-            .saturating_add(cadence_ticks.saturating_mul(missed_this_frame.saturating_add(1)));
-    }
-
-    let mut final_present = false;
-    if pending_present
-        && let Some(result) = shell_pixel_plasma_scanout(last_time, PIXEL_PLASMA_ALL_FLAGS, true)
-    {
-        final_present = result.presented;
-        presented = presented.saturating_add(result.presented as u64);
-        failures = failures.saturating_add((!result.ok) as u64);
-        sum_submit_us = sum_submit_us.saturating_add(result.submit_us);
-        sum_present_us = sum_present_us.saturating_add(result.present_us);
-        max_submit_us = max_submit_us.max(result.submit_us);
-        max_present_us = max_present_us.max(result.present_us);
-        max_total_us = max_total_us.max(result.total_us);
-    }
-
-    let elapsed_us = elapsed_us_since(start_tick).max(1);
-    let fps_milli = frames.saturating_mul(1_000_000_000) / elapsed_us;
-    let avg_submit_us = if frames == 0 {
-        0
-    } else {
-        sum_submit_us / frames
-    };
-    let avg_present_us = if frames == 0 {
-        0
-    } else {
-        sum_present_us / frames
-    };
-    let ok = frames != 0 && failures == 0 && submitted == frames;
-    let message = alloc::format!(
-        "gpgpu pixel plasma: ok={} stage=cadence shader=plasma surface=ui3-frame plane=overlay-alpha frames={} submitted={} presented={} failures={} duration_ms={} elapsed_us={} target_hz={} fps={}.{:03} missed_deadlines={} present_every={} final_present={} size={}x{} avg_submit_us={} max_submit_us={} avg_present_us={} max_present_us={} max_total_us={} time={:.4}",
-        ok as u8,
-        frames,
-        submitted,
-        presented,
-        failures,
-        duration_ms,
-        elapsed_us,
-        hz,
-        fps_milli / 1000,
-        fps_milli % 1000,
-        missed_deadlines,
-        present_every,
-        final_present as u8,
-        width,
-        height,
-        avg_submit_us,
-        max_submit_us,
-        avg_present_us,
-        max_present_us,
-        max_total_us,
-        last_time,
-    );
-    print_shell_line(io, message.as_str());
-    if ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
-    }
+    let _ = args;
+    print_shell_line(io, "gpgpu pixel plasma: presentation removed; UI4 baseline is logo-only");
 }
 
 fn run_canvas3d(
-    spawner: &Spawner,
+    _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
-    let Some(kind) = args.next() else {
-        usage(io);
-        return ParseOutcome::Handled;
-    };
-    if !expect_no_more(io, args) {
-        return ParseOutcome::Handled;
-    }
-
-    let session_id = if kind.eq_ignore_ascii_case("cube") {
-        crate::ui3::ui3_canvas::submit_canvas3d_cube(spawner, io)
-    } else if kind.eq_ignore_ascii_case("ico") {
-        crate::ui3::ui3_canvas::submit_canvas3d_ico(spawner, io)
-    } else if kind.eq_ignore_ascii_case("para") {
-        crate::ui3::ui3_canvas::submit_canvas3d_para(spawner, io)
-    } else {
-        usage(io);
-        return ParseOutcome::Handled;
-    };
-
-    match session_id {
-        Some(session_id) => {
-            ParseOutcome::StartSession(CommandSessionKind::GpuCanvasRunning(session_id))
-        }
-        None => ParseOutcome::Handled,
-    }
+    let _ = args;
+    print_shell_line(io, "gpgpu canvas3d: presentation removed; UI4 baseline is logo-only");
+    ParseOutcome::Handled
 }
 
 fn run_artificial_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    if !expect_no_more(io, args) {
-        return;
-    }
-
-    let Some(result) = shell_mandel64_worklist_scanout(MANDEL64_WORKLIST_DEFAULT_ITERATIONS) else {
-        print_shell_line(
-            io,
-            "gpgpu artificial-pixel: no result (check primary surface, iGPU claim, and mandel artifact)",
-        );
-        return;
-    };
-    let msg = alloc::format!(
-        "gpgpu artificial-pixel: mode=mandel64-worklist ok={} desc={} walkers={} pixels={} submit_ms={} present_ms={} presented={} meaning=compute-driven-pixels-not-wm",
-        result.ok as u8,
-        result.descriptors,
-        result.walkers,
-        result.pixels,
-        result.submit_ms,
-        result.present_ms,
-        result.presented as u8
-    );
-    print_shell_line(io, msg.as_str());
+    let _ = args;
+    print_shell_line(io, "gpgpu artificial-pixel: presentation removed; UI4 baseline is logo-only");
 }
 
 fn outline_checksum(ops: &[[u32; 8]]) -> u32 {

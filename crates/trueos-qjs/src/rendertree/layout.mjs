@@ -37,7 +37,7 @@ const LEAF_TAGS = new Set([
 const REPLACED_DIMENSION_TAGS = new Set(['img', 'canvas', 'iframe']);
 const ROW_TAGS = new Set(['tr', 'barrow', 'searchrow']);
 const CHECKABLE_INPUT_LAYOUT_SIZE = 64;
-const UI3_ATLAS_LINE_HEIGHT_BY_TIER = Object.freeze({
+const ATLAS_LINE_HEIGHT_BY_TIER = Object.freeze({
   third: 21,
   half: 32,
   '1x': 64,
@@ -175,7 +175,7 @@ function renderFontTierForTier(tier) {
 
 function atlasLineHeightForStyle(style) {
   const tier = renderFontTierForTier(String(style?.fontTier ?? fontTierForPx(style?.fontSizePx)));
-  return UI3_ATLAS_LINE_HEIGHT_BY_TIER[tier] ?? 0;
+  return ATLAS_LINE_HEIGHT_BY_TIER[tier] ?? 0;
 }
 
 function snappedTextStyle(style) {

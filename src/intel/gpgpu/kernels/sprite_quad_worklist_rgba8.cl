@@ -1,14 +1,14 @@
-// TRUEOS Gen12/Alder Lake UI3 sprite quad worklist kernel.
+// TRUEOS Gen12/Alder Lake sprite-quad worklist kernel.
 //
 // Contract:
 // - Source and destination are linear RGBA8 buffers packed as AABBGGRR in a u32.
-// - Each descriptor mirrors the UI3 SpriteQuad CABI: four corners with x/y/u/v,
+// - Each descriptor describes four corners with x/y/u/v,
 //   plus packed tint color and flags.
 // - The rasterizer matches the CPU fallback's parallelogram path: c0/c1/c3
 //   define the UV basis, all four corners define the clipped bounds, UV sampling
 //   is nearest with clamp-to-edge, and output is straight source-over.
 // - Each SIMD16 workgroup consumes one descriptor. Lanes cooperate on that
-//   descriptor's pixels, which keeps large UI3 quads parallel without forcing
+//   descriptor's pixels, which keeps large quads parallel without forcing
 //   the whole source run through one serial descriptor loop.
 
 #define SPRITE_QUAD_DESC_DWORDS 18u

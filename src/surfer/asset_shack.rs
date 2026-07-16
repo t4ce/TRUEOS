@@ -541,7 +541,6 @@ pub async fn asset_batch_monitor_task() {
                 signal.failed,
                 ASSET_BATCH_TIMEOUT_MS
             );
-            crate::surfer::signal_ui3_asset_batch_ready(signal.browser_instance_id);
         }
         Timer::after(EmbassyDuration::from_millis(ASSET_BATCH_MONITOR_MS)).await;
     }

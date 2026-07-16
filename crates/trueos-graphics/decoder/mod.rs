@@ -1,7 +1,7 @@
 //! Image decoder front door for TRUEOS graphics.
 //!
 //! These modules keep the current decoding behavior intact while giving PNG
-//! and JPEG a non-UI3 home.
+//! and JPEG a shared graphics home.
 
 pub(crate) mod jpeg;
 pub(crate) mod jpeg_layout;

@@ -7,18 +7,15 @@ use v::{vio, vsys};
 
 const HULL_PROBE_PATH: &[u8] = b"/vm/hull_probe.txt";
 const HULL_FETCH_URL: &[u8] = b"https://example.com/";
-static HULL_WINDOW_ID: AtomicU32 = AtomicU32::new(0);
 static HULL_PROBE_FLAGS: AtomicU32 = AtomicU32::new(0);
 
 const PROBE_FS_OK: u32 = 1 << 0;
 const PROBE_NET_OK: u32 = 1 << 1;
-const PROBE_UI_OK: u32 = 1 << 2;
 
 #[derive(Clone, Copy)]
 struct ProbeSummary {
     fs_ok: bool,
     net_ok: bool,
-    ui_ok: bool,
 }
 
 pub fn start() {
@@ -32,16 +29,13 @@ pub fn start() {
 }
 
 pub fn hull_bss_anchor() -> u64 {
-    core::ptr::addr_of!(HULL_WINDOW_ID) as u64
+    core::ptr::addr_of!(HULL_PROBE_FLAGS) as u64
 }
 
 pub fn hull_bss_anchor_range() -> (u64, u64) {
-    let window = hull_bss_anchor();
-    let flags = core::ptr::addr_of!(HULL_PROBE_FLAGS) as u64;
     let atom = core::mem::size_of::<AtomicU32>() as u64;
-    let start = window.min(flags);
-    let end = window.max(flags).saturating_add(atom);
-    (start, end)
+    let start = hull_bss_anchor();
+    (start, start.saturating_add(atom))
 }
 
 pub fn idle() -> ! {
@@ -55,7 +49,6 @@ pub fn idle() -> ! {
         if minute != 0 && minute != last_logged_minute {
             vpanic::set_stage(0x1101);
             net_line_num("VMHULL: unix time: ", now);
-            refresh_probe_window_title(now);
             last_logged_minute = minute;
         }
         core::hint::spin_loop();
@@ -75,7 +68,6 @@ fn log_time_sample(prefix: &str) {
 fn run_vlayer_probes() -> ProbeSummary {
     let fs_ok = run_fs_probe();
     let net_ok = run_net_probe();
-    let ui_ok = false;
     let mut flags = 0u32;
     if fs_ok {
         flags |= PROBE_FS_OK;
@@ -83,15 +75,8 @@ fn run_vlayer_probes() -> ProbeSummary {
     if net_ok {
         flags |= PROBE_NET_OK;
     }
-    if ui_ok {
-        flags |= PROBE_UI_OK;
-    }
     HULL_PROBE_FLAGS.store(flags, Ordering::Release);
-    ProbeSummary {
-        fs_ok,
-        net_ok,
-        ui_ok,
-    }
+    ProbeSummary { fs_ok, net_ok }
 }
 
 fn run_fs_probe() -> bool {
@@ -175,8 +160,6 @@ fn log_probe_summary(summary: ProbeSummary) {
     net_line(as_str(&line[..len]));
 }
 
-fn refresh_probe_window_title(_now: u64) {}
-
 fn bool_mark(ok: bool) -> &'static str {
     if ok { "ok" } else { "no" }
 }
@@ -250,8 +233,7 @@ fn build_probe_summary(buf: &mut [u8; 64], summary: ProbeSummary) -> usize {
     n = push_bytes(buf, n, bool_mark(summary.fs_ok).as_bytes());
     n = push_bytes(buf, n, b" net=");
     n = push_bytes(buf, n, bool_mark(summary.net_ok).as_bytes());
-    n = push_bytes(buf, n, b" ui3=");
-    push_bytes(buf, n, bool_mark(summary.ui_ok).as_bytes())
+    n
 }
 
 fn push_bytes(dst: &mut [u8], at: usize, src: &[u8]) -> usize {

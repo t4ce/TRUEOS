@@ -1011,16 +1011,10 @@ static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
-static PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+static PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
 static FILL_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static ALPHA_BLEND_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
-static SHELL_CHART_UI3_ACTIVE: AtomicBool = AtomicBool::new(false);
-static SHELL_CHART_UI3_RESIZE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-static SHELL_CHART_UI3_LAST_PHASE_BITS: AtomicU32 = AtomicU32::new(0);
-static SHELL_CHART_UI3_LAST_FLAGS: AtomicU32 = AtomicU32::new(0);
-static SHELL_CHART_UI3_SOURCE_PROOF_PASSES: AtomicU64 = AtomicU64::new(0);
-static SHELL_CHART_UI3_SOURCE_PROOF_FAILURES: AtomicU64 = AtomicU64::new(0);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -1482,21 +1476,6 @@ impl ChartSineRgba8Params {
             flags,
         }
     }
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuShellChartResult {
-    pub(crate) ok: bool,
-    pub(crate) submitted: bool,
-    pub(crate) present_queued: bool,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) phase: f32,
-    pub(crate) pixels: usize,
-    pub(crate) submit_us: u64,
-    pub(crate) publish_us: u64,
-    pub(crate) total_us: u64,
-    pub(crate) marker: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -4822,19 +4801,6 @@ pub(crate) fn copy_rects_rgba8_stats(copies: &[GpgpuCopyRect]) -> GpgpuSubmitSta
     copy_rects_rgba8_stats_with_explicit_flavor(copies, flavor)
 }
 
-fn display_rgba8_surface_from_target(
-    target: super::display::DisplayRgba8GpgpuSurface,
-) -> Option<GpgpuRgba8Surface> {
-    GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )
-}
-
 fn clear_rgba8_surface_white_stats(dst: GpgpuRgba8Surface) -> GpgpuSubmitStats {
     let Some(rect) = clip_gpgpu_rect_to_surface(
         GpgpuRect::new(0, 0, dst.width, dst.height),
@@ -4888,13 +4854,6 @@ fn clear_rgba8_surface_white_stats(dst: GpgpuRgba8Surface) -> GpgpuSubmitStats {
     }
 }
 
-pub(crate) fn clear_ui3_frame_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
-    let target = super::display::ui3_frame_surface_gpgpu()?;
-    let frame = display_rgba8_surface_from_target(target)?;
-    let stats = clear_rgba8_surface_white_stats(frame);
-    (stats.submits > 0).then_some(stats)
-}
-
 pub(crate) fn clear_primary_rgba8_white_stats() -> Option<GpgpuSubmitStats> {
     clear_primary_rgba8_white_for_redraw_stats(true, "gpgpu-primary-white-clear")
 }
@@ -4925,55 +4884,6 @@ pub(crate) fn clear_primary_rgba8_white_for_redraw_stats(
 
     let present_start_tick = direct_rcs_now_tick();
     super::display::notify_primary_surface_external_write(reason, 0, target.byte_len).then(|| {
-        stats.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
-        stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
-        stats
-    })
-}
-
-pub(crate) fn copy_ui3_base_to_primary_rgba8() -> Option<GpgpuSubmitStats> {
-    let total_start_tick = direct_rcs_now_tick();
-    let src_target = super::display::ui3_base_surface_gpgpu()?;
-    let primary_target = super::display::primary_surface_gpgpu_marker_target()?;
-    let src = GpgpuRgba8Surface::new(
-        src_target.phys,
-        src_target.gpu,
-        src_target.byte_len,
-        src_target.width,
-        src_target.height,
-        src_target.pitch_bytes,
-    )?;
-    let primary = GpgpuRgba8Surface::new(
-        primary_target.phys,
-        primary_target.gpu,
-        primary_target.byte_len,
-        primary_target.width,
-        primary_target.height,
-        primary_target.pitch_bytes,
-    )?;
-    let width = src.width.min(primary.width);
-    let height = src.height.min(primary.height);
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let copy = GpgpuCopyRect {
-        src,
-        src_rect: GpgpuRect::new(0, 0, width, height),
-        dst: primary,
-        dst_xy: GpgpuPoint::new(0, 0),
-    };
-    let mut stats = copy_rects_rgba8_stats(core::slice::from_ref(&copy));
-    if stats.spans == 0 || stats.submits == 0 {
-        return None;
-    }
-    let present_start_tick = direct_rcs_now_tick();
-    super::display::notify_primary_surface_external_write(
-        "gpgpu-ui3-base-copy",
-        0,
-        primary_target.byte_len,
-    )
-    .then(|| {
         stats.present_ms = direct_rcs_elapsed_ms_since(present_start_tick);
         stats.total_ms = direct_rcs_elapsed_ms_since(total_start_tick);
         stats
@@ -7904,7 +7814,7 @@ fn log_present_rgba8_to_primary_stats(
     primary: GpgpuRgba8Surface,
     stats: GpgpuSubmitStats,
 ) {
-    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     if seq > 8 && seq % 60 != 0 {
         return;
     }
@@ -8447,7 +8357,7 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     params.rect_width = params.rect_width.min(dst.width - params.rect_x);
     params.rect_height = params.rect_height.min(dst.height - params.rect_y);
 
-    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_UI3_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let trace = seq <= 8 || seq % 120 == 0;
     if trace {
         crate::log_info!(
@@ -8561,250 +8471,6 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     ok
 }
 
-pub(crate) fn shell_chart_ui3_resize_after_presented(
-    event: crate::ui3::compositor::Ui3FrameResizeEvent,
-) {
-    if !SHELL_CHART_UI3_ACTIVE.load(Ordering::Acquire) {
-        return;
-    }
-    if event.presented_buffer_width == event.new_width
-        && event.presented_buffer_height == event.new_height
-    {
-        crate::log_info!(
-            target: "gpgpu";
-            "gpgpu chart resize: surface={} output={} seq={} old={}x{} new={}x{} presented_buffer={}x{} handler=noop reason=producer-already-sized\n",
-            event.label,
-            event.output.name(),
-            event.output_sequence,
-            event.old_width,
-            event.old_height,
-            event.new_width,
-            event.new_height,
-            event.presented_buffer_width,
-            event.presented_buffer_height,
-        );
-        return;
-    }
-    if SHELL_CHART_UI3_RESIZE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log_warn!(
-            target: "gpgpu";
-            "gpgpu chart resize: surface={} output={} seq={} handler=deferred reason=resize-handler-in-flight\n",
-            event.label,
-            event.output.name(),
-            event.output_sequence,
-        );
-        return;
-    }
-
-    let phase = f32::from_bits(SHELL_CHART_UI3_LAST_PHASE_BITS.load(Ordering::Acquire));
-    let flags = SHELL_CHART_UI3_LAST_FLAGS.load(Ordering::Acquire);
-    let resize = crate::ui3::compositor::resize_shell_chart_frame_buffers_after_presented(
-        event.new_width,
-        event.new_height,
-    );
-    let regenerated = resize.is_ok()
-        && shell_chart_sine_ui3_frame(phase, flags, false)
-            .is_some_and(|result| result.ok && result.submitted);
-    // A stale event or an acquired producer lease is transient. Queue another
-    // compatibility frame so the post-present contract retries instead of
-    // losing the resize notification permanently.
-    let recompose_queued =
-        (regenerated || resize.is_err()) && crate::ui3::compositor::request_shell_chart_recompose();
-    SHELL_CHART_UI3_RESIZE_IN_FLIGHT.store(false, Ordering::Release);
-    crate::log_info!(
-        target: "gpgpu";
-        "gpgpu chart resize: surface={} output={} seq={} old={}x{} new={}x{} presented_buffer={}x{} handler=regenerate-after-present resize={} resize_reason={} regenerated={} recompose_queued={}\n",
-        event.label,
-        event.output.name(),
-        event.output_sequence,
-        event.old_width,
-        event.old_height,
-        event.new_width,
-        event.new_height,
-        event.presented_buffer_width,
-        event.presented_buffer_height,
-        resize.is_ok() as u8,
-        resize.err().unwrap_or("none"),
-        regenerated as u8,
-        recompose_queued as u8,
-    );
-}
-
-pub(crate) fn shell_chart_sine_ui3_frame(
-    phase: f32,
-    flags: u32,
-    request_present: bool,
-) -> Option<GpgpuShellChartResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let lease = match crate::ui3::compositor::acquire_shell_chart_frame() {
-        Ok(lease) => lease,
-        Err(error) => {
-            crate::log_warn!(
-                target: "gpgpu";
-                "intel/gpgpu: chart-sine-rgba8 UI3 acquire rejected potential_reason={}\n",
-                error,
-            );
-            return None;
-        }
-    };
-    if lease.format() != crate::ui3::compositor::Ui3FrameFormat::Rgba8Premultiplied {
-        let _ = crate::ui3::compositor::discard_shell_chart_frame(lease);
-        return None;
-    }
-    let dst = lease.surface();
-    let diagnostic_virt = lease.diagnostic_virt();
-    let mut params = ChartSineRgba8Params::scope_defaults(phase, flags);
-    params.dst_gpu = dst.gpu;
-    params.dst_pitch_bytes = dst.pitch_bytes;
-    params.dst_width = dst.width;
-    params.dst_height = dst.height;
-    params.rect_width = dst.width;
-    params.rect_height = dst.height;
-
-    let submit_start_tick = direct_rcs_now_tick();
-    let marker = submit_chart_sine_rgba8(dst, params).unwrap_or(0);
-    let submit_us = direct_rcs_elapsed_us_since(submit_start_tick);
-    let retired = marker == CHART_SINE_POST_MARKER;
-    let source_exact = retired && verify_chart_sine_rgba8_source(dst, diagnostic_virt);
-    let submitted = retired && source_exact;
-    if submitted {
-        SHELL_CHART_UI3_LAST_PHASE_BITS.store(phase.to_bits(), Ordering::Release);
-        SHELL_CHART_UI3_LAST_FLAGS.store(flags, Ordering::Release);
-        SHELL_CHART_UI3_ACTIVE.store(true, Ordering::Release);
-    }
-    let publish_start_tick = direct_rcs_now_tick();
-    let (published, present_queued) = if submitted {
-        match crate::ui3::compositor::publish_shell_chart_frame(lease, request_present) {
-            Ok(present_queued) => (true, present_queued),
-            Err(error) => {
-                crate::log_warn!(
-                    target: "gpgpu";
-                    "intel/gpgpu: chart-sine-rgba8 UI3 publish rejected potential_reason={} request_present={}\n",
-                    error,
-                    request_present as u8,
-                );
-                (false, false)
-            }
-        }
-    } else {
-        let _ = crate::ui3::compositor::discard_shell_chart_frame(lease);
-        (false, false)
-    };
-    let publish_us = direct_rcs_elapsed_us_since(publish_start_tick);
-    Some(GpgpuShellChartResult {
-        ok: submitted && published,
-        submitted,
-        present_queued,
-        width: dst.width,
-        height: dst.height,
-        phase,
-        pixels: (dst.width as usize).saturating_mul(dst.height as usize),
-        submit_us,
-        publish_us,
-        total_us: direct_rcs_elapsed_us_since(total_start_tick),
-        marker,
-    })
-}
-
-/// Dense, read-only retirement proof for the chart producer. The chart kernel
-/// owns every client pixel and always emits opaque RGBA8, so any non-opaque
-/// pixel proves incomplete SIMD coverage before UI3 is allowed to publish it.
-fn verify_chart_sine_rgba8_source(dst: GpgpuRgba8Surface, virt: *mut u8) -> bool {
-    let shape_valid = !virt.is_null()
-        && dst.width != 0
-        && dst.height != 0
-        && dst.pitch_bytes as usize >= dst.width as usize * 4
-        && dst.bytes >= dst.pitch_bytes as usize * dst.height as usize;
-    if !shape_valid {
-        let failures = SHELL_CHART_UI3_SOURCE_PROOF_FAILURES
-            .fetch_add(1, Ordering::AcqRel)
-            .saturating_add(1);
-        crate::log_error!(
-            target: "gpgpu";
-            "intel/gpgpu: chart-sine-rgba8 source-proof exact=0 reason=invalid-shape failures={} gpu=0x{:X} virt=0x{:X} size={}x{} pitch=0x{:X} bytes=0x{:X}\n",
-            failures,
-            dst.gpu,
-            virt as usize,
-            dst.width,
-            dst.height,
-            dst.pitch_bytes,
-            dst.bytes,
-        );
-        return false;
-    }
-
-    crate::intel::dma_flush(virt, dst.bytes);
-    let mut mismatches = 0u64;
-    let mut first_x = -1i32;
-    let mut first_y = -1i32;
-    let mut first_actual = 0u32;
-    let mut corner = 0u32;
-    let mut center = 0u32;
-    let mut last = 0u32;
-    for y in 0..dst.height {
-        for x in 0..dst.width {
-            let offset = y as usize * dst.pitch_bytes as usize + x as usize * 4;
-            let actual = unsafe { core::ptr::read_volatile(virt.add(offset) as *const u32) };
-            if x == 0 && y == 0 {
-                corner = actual;
-            }
-            if x == dst.width / 2 && y == dst.height / 2 {
-                center = actual;
-            }
-            if x + 1 == dst.width && y + 1 == dst.height {
-                last = actual;
-            }
-            if actual & 0xFF00_0000 != 0xFF00_0000 {
-                if mismatches == 0 {
-                    first_x = x as i32;
-                    first_y = y as i32;
-                    first_actual = actual;
-                }
-                mismatches = mismatches.saturating_add(1);
-            }
-        }
-    }
-
-    let pixels = u64::from(dst.width) * u64::from(dst.height);
-    if mismatches != 0 {
-        let failures = SHELL_CHART_UI3_SOURCE_PROOF_FAILURES
-            .fetch_add(1, Ordering::AcqRel)
-            .saturating_add(1);
-        crate::log_error!(
-            target: "gpgpu";
-            "intel/gpgpu: chart-sine-rgba8 source-proof exact=0 pixels={} alpha_mismatches={} first={}+{} actual=0x{:08X} gpu=0x{:X} failures={}\n",
-            pixels,
-            mismatches,
-            first_x,
-            first_y,
-            first_actual,
-            dst.gpu,
-            failures,
-        );
-        return false;
-    }
-
-    let passes = SHELL_CHART_UI3_SOURCE_PROOF_PASSES
-        .fetch_add(1, Ordering::AcqRel)
-        .saturating_add(1);
-    if passes <= 2 || passes.is_multiple_of(256) {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: chart-sine-rgba8 source-proof exact=1 pixels={} alpha_mismatches=0 gpu=0x{:X} samples=0x{:08X}/0x{:08X}/0x{:08X} passes={}\n",
-            pixels,
-            dst.gpu,
-            corner,
-            center,
-            last,
-            passes,
-        );
-    }
-    true
-}
-
 fn submit_chart_sine_rgba8(
     dst: GpgpuRgba8Surface,
     mut params: ChartSineRgba8Params,
@@ -8832,9 +8498,7 @@ fn submit_chart_sine_rgba8(
     params.amplitude = params.amplitude.clamp(0.0, 0.48);
     params.line_width_px = params.line_width_px.clamp(0.75, 8.0);
 
-    // UI3 and the chart producer share RCS0. Back-pressure the producer behind
-    // an in-flight compositor dispatch instead of turning normal contention
-    // into a dropped application frame and terminating the wave command.
+    // Chart work shares RCS0. Back-pressure behind an in-flight dispatch.
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         crate::log_warn!(
@@ -8887,64 +8551,6 @@ fn submit_chart_sine_rgba8(
         return None;
     }
     Some(observed)
-}
-
-pub(crate) fn shell_pixel_plasma_scanout(
-    time: f32,
-    flags: u32,
-    present: bool,
-) -> Option<GpgpuShellPixelResult> {
-    let total_start_tick = direct_rcs_now_tick();
-    let display_target = super::display::primary_display_output_target()?;
-    let output_frame = super::display::acquire_ui3_output_frame_composition_gpgpu(display_target)?;
-    let target = output_frame.surface;
-    let dst = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )?;
-    let mut params = PixelPlasmaRgba8Params::demo_defaults(time, flags);
-    params.dst_gpu = dst.gpu;
-    params.dst_pitch_bytes = dst.pitch_bytes;
-    params.dst_width = dst.width;
-    params.dst_height = dst.height;
-    params.rect_width = dst.width;
-    params.rect_height = dst.height;
-
-    let submit_start_tick = direct_rcs_now_tick();
-    let marker = submit_pixel_plasma_rgba8(dst, params).unwrap_or(0);
-    let submit_us = direct_rcs_elapsed_us_since(submit_start_tick);
-    let submitted = marker == PIXEL_PLASMA_POST_MARKER;
-    let present_start_tick = direct_rcs_now_tick();
-    let presented = if submitted && present {
-        super::display::commit_ui3_output_frame_composition_gpgpu(
-            output_frame,
-            "gpgpu-pixel-plasma-frame",
-        )
-    } else {
-        let _ = super::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-        false
-    };
-    if submitted && present && !presented {
-        let _ = super::display::discard_ui3_output_frame_composition_gpgpu(output_frame);
-    }
-    let present_us = direct_rcs_elapsed_us_since(present_start_tick);
-    Some(GpgpuShellPixelResult {
-        ok: submitted && (!present || presented),
-        submitted,
-        presented,
-        width: dst.width,
-        height: dst.height,
-        time,
-        pixels: (dst.width as usize).saturating_mul(dst.height as usize),
-        submit_us,
-        present_us,
-        total_us: direct_rcs_elapsed_us_since(total_start_tick),
-        marker,
-    })
 }
 
 fn submit_pixel_plasma_rgba8(

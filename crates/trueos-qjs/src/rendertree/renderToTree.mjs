@@ -51,7 +51,7 @@ function publicEmbeddedScene(scene) {
   if (scene.parentBox) out.parentBox = scene.parentBox;
   if (scene.viewport) out.viewport = scene.viewport;
   if (scene.layout) out.layout = scene.layout;
-  if (scene.ui3PaintPlan) out.ui3PaintPlan = scene.ui3PaintPlan;
+  if (scene.paintPlan) out.paintPlan = scene.paintPlan;
   if (scene.error) out.error = String(scene.error);
   return out;
 }
@@ -103,7 +103,7 @@ function buildEmbeddedSceneLayouts(scenes, rootLayout, options = {}) {
       parentBox: parentSummary,
       viewport,
       layout,
-      ui3PaintPlan: layout ? createUi3PaintPlan(layout) : null,
+      paintPlan: layout ? createPaintPlan(layout) : null,
       layoutHash,
     }));
   }
@@ -458,7 +458,7 @@ function hitBoxActivation(node, tagName, role, options = {}) {
   return null;
 }
 
-function createUi3PaintPlan(layout, options = {}) {
+function createPaintPlan(layout, options = {}) {
   const paintedBoxes = [];
   const textRuns = [];
   const summaryIcons = [];
@@ -1030,7 +1030,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
 
   if (options.includeLayout === true) {
     const layout = buildWidgetTreeLayout(widgetTree, renderNodes, { ...options, viewport });
-    const ui3PaintPlan = createUi3PaintPlan(layout, options);
+    const paintPlan = createPaintPlan(layout, options);
     const embeddedLayoutScenes = buildEmbeddedSceneLayouts(
       renderContext.embeddedScenes,
       layout,
@@ -1050,7 +1050,7 @@ export function createRenderTreeTrace(widgetTree, options = {}) {
       layoutHash,
       renderNodes,
       layout,
-      ui3PaintPlan,
+      paintPlan,
     };
     if (embeddedLayoutScenes.length > 0) traceBody.embeddedScenes = embeddedLayoutScenes;
     artifact.layoutTrace = {

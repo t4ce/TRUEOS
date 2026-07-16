@@ -55,10 +55,10 @@ pub(crate) struct LiveUserInputEntry {
 struct MatrixState {
     slots: Vec<MatrixSlot>,
     net_active: MatrixSlotId,
-    ui3_active: MatrixSlotId,
+    local_active: MatrixSlotId,
     container_active: MatrixSlotId,
     net_view_revision: u64,
-    ui3_view_revision: u64,
+    local_view_revision: u64,
     container_view_revision: u64,
     user_input_record: VecDeque<AllocString>,
     live_user_input_record: VecDeque<LiveUserInputEntry>,
@@ -73,10 +73,10 @@ fn state() -> &'static spin::Mutex<MatrixState> {
         let mut initial = MatrixState {
             slots: Vec::new(),
             net_active: default_slot_id(),
-            ui3_active: default_slot_id(),
+            local_active: default_slot_id(),
             container_active: default_slot_id(),
             net_view_revision: 1,
-            ui3_view_revision: 1,
+            local_view_revision: 1,
             container_view_revision: 1,
             user_input_record: VecDeque::new(),
             live_user_input_record: VecDeque::new(),
@@ -148,8 +148,8 @@ fn bump_slot_revision(state: &mut MatrixState, idx: usize) {
 fn active_view_revision_ref(state: &MatrixState, output_mask: u8) -> &u64 {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &state.net_view_revision
-    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
-        &state.ui3_view_revision
+    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
+        &state.local_view_revision
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &state.container_view_revision
     } else {
@@ -160,8 +160,8 @@ fn active_view_revision_ref(state: &MatrixState, output_mask: u8) -> &u64 {
 fn active_view_revision_mut(state: &mut MatrixState, output_mask: u8) -> &mut u64 {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &mut state.net_view_revision
-    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
-        &mut state.ui3_view_revision
+    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
+        &mut state.local_view_revision
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &mut state.container_view_revision
     } else {
@@ -178,8 +178,8 @@ fn bump_active_view_revision(state: &mut MatrixState, output_mask: u8) {
 fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &state.net_active
-    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
-        &state.ui3_active
+    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
+        &state.local_active
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &state.container_active
     } else {
@@ -190,8 +190,8 @@ fn active_slot_id_ref(state: &MatrixState, output_mask: u8) -> &MatrixSlotId {
 fn active_slot_id_mut(state: &mut MatrixState, output_mask: u8) -> &mut MatrixSlotId {
     if (output_mask & super::OUTPUT_NET_TCP_MASK) != 0 {
         &mut state.net_active
-    } else if (output_mask & super::OUTPUT_UI3_MASK) != 0 {
-        &mut state.ui3_active
+    } else if (output_mask & super::OUTPUT_LOCAL_MASK) != 0 {
+        &mut state.local_active
     } else if (output_mask & super::OUTPUT_CONTAINER_MASK) != 0 {
         &mut state.container_active
     } else {
@@ -397,9 +397,9 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             guard.net_active = default_id.clone();
             bump_active_view_revision(&mut guard, super::OUTPUT_NET_TCP_MASK);
         }
-        if guard.ui3_active == freed_id {
-            guard.ui3_active = default_id.clone();
-            bump_active_view_revision(&mut guard, super::OUTPUT_UI3_MASK);
+        if guard.local_active == freed_id {
+            guard.local_active = default_id.clone();
+            bump_active_view_revision(&mut guard, super::OUTPUT_LOCAL_MASK);
         }
         if guard.container_active == freed_id {
             guard.container_active = default_id.clone();

@@ -34,9 +34,9 @@ mod exceptions;
 mod exceptions;
 mod executor_cache;
 mod gb_demo;
+mod gpu;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
-mod gpu;
 #[cfg(target_arch = "x86_64")]
 mod hv;
 #[cfg(not(target_arch = "x86_64"))]
@@ -94,7 +94,7 @@ mod turbo;
 mod tyche;
 #[cfg(target_arch = "x86_64")]
 mod uart1_com1;
-mod ui3;
+mod ui4;
 mod unix_abi_shim;
 mod unix_compat;
 mod unix_fd_probe;

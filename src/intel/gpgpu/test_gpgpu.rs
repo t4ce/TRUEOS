@@ -3208,33 +3208,6 @@ pub(crate) fn shell_cube6_plane_project_frame(
     Some(result)
 }
 
-pub(crate) fn shell_cube6_plane_project_overlay_frame(
-    frame: u32,
-    half_q16: i32,
-    rect: crate::intel::LiveOverlayRect,
-) -> Option<GpgpuShellCube20ProjectResult> {
-    let target = intel::display::ui3_canvas_overlay_gpgpu(rect)?;
-    let surface = GpgpuRgba8Surface::new(
-        target.phys,
-        target.gpu,
-        target.byte_len,
-        target.width,
-        target.height,
-        target.pitch_bytes,
-    )?;
-    let half = half_q16.clamp(1, CANVAS3D_PROJECT_Q16_ONE * 4);
-    let mut result =
-        canvas3d_plane_patch_render_surface_frame_in_rect(frame, surface, half, rect, None)?;
-    let flush_bytes = (target.pitch_bytes as usize).saturating_mul(target.height as usize);
-    intel::dma_flush(target.virt, flush_bytes);
-    let presented = intel::display::commit_ui3_canvas_overlay_gpgpu(target, "gpgpu-cube6-overlay");
-    result.presented = presented as u32;
-    result.ok = result.ok && presented && flush_bytes != 0;
-    result.primary_width = target.width;
-    result.primary_height = target.height;
-    Some(result)
-}
-
 pub(crate) fn shell_cube6_plane_project_surface_frame(
     frame: u32,
     half_q16: i32,

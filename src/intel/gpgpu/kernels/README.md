@@ -28,7 +28,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `present_rgba8_to_primary_xrgb_rect.cl`: RGBA8 scene rect to primary XRGB rect with optional source Y flip
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
-- `sprite_quad_worklist_rgba8.cl`: arbitrary UI3 SpriteQuad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
+- `sprite_quad_worklist_rgba8.cl`: arbitrary sprite-quad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; used by the three-stage `gpgpu chart` hardware probe
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; used by `gpgpu pixel artifact|static|plasma`
@@ -99,7 +99,7 @@ evo build. Its SHA-256 is:
 ```
 
 `artifacts/adls/alpha_blend_rgba8_over.bin` is the native two-dimensional
-SIMD16 blend used by the production UI3 compositor. Runtime overrides must
+SIMD16 blend used by graphics consumers. Runtime overrides must
 match its ABI-bound SHA-256:
 
 ```text
@@ -120,7 +120,7 @@ build. Its SHA-256 is:
 7942acab497d8fd3b7d406679f1b2a614f3f4eef78df2e667b9f404e34a822fb
 ```
 
-`artifacts/adls/sprite_quad_worklist_rgba8.bin` is the arbitrary UI3 sprite
+`artifacts/adls/sprite_quad_worklist_rgba8.bin` is the arbitrary sprite
 quad worklist build. Its SHA-256 is:
 
 ```text
@@ -148,7 +148,7 @@ matches this embedded value:
 build. Its analytical field is intentionally buffer-free for bring-up; a later
 FluidX3D field consumer can replace that scalar source while retaining the
 palette, scanout, contract, and cadence path. It writes native premultiplied
-ARGB8888 into the double-buffered UI3 `FRAME` composition surface, which the
+ARGB8888 into a caller-owned composition surface, which the
 display overlay plane consumes without a CPU format conversion. Runtime
 overrides must match:
 

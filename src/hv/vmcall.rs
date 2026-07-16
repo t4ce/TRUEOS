@@ -12,7 +12,7 @@
 use crate::hv::memory::kernel_va_to_pa;
 use crate::hv::{hvlogf, hvwarnf};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 const BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY: u32 = 1_000;
 
@@ -32,29 +32,10 @@ pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
 pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
 pub const OP_MONOTONIC_NANOS: u32 = 0x08; // response_data = host monotonic nanos
-pub const OP_BP_UI3_FRAME_CREATE: u32 = 0x82; // arg0=x/y, arg1=w/h -> frame id
-pub const OP_BP_UI3_FRAME_CLOSE: u32 = 0x83; // arg0=frame_id -> rc
-pub const OP_BP_UI3_FRAME_REQUEST_REPAINT: u32 = 0x84; // arg0=frame_id -> rc
-pub const OP_BP_UI3_FRAME_SET_POSITION: u32 = 0x85; // arg0=frame_id, arg1=x/y -> rc
-pub const OP_BP_UI3_FRAME_SET_SIZE: u32 = 0x86; // arg0=frame_id, arg1=w/h -> rc
-pub const OP_BP_UI3_FRAME_BEGIN: u32 = 0x87; // arg0=frame_id, arg1=clear/flags -> rc
-pub const OP_BP_UI3_FRAME_END: u32 = 0x88; // arg0=frame_id -> rc
-pub const OP_BP_UI3_FRAME_SET_RENDER_TARGET: u32 = 0x89; // arg0=frame_id, arg1=tex_id -> rc
-pub const OP_BP_UI3_FRAME_DRAW_SOLID_BATCH: u32 = 0x8A; // arg0=frame_id -> rc
-pub const OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH: u32 = 0x8B; // arg0=frame_id,arg1=tex_id -> rc
-pub const OP_BP_UI3_TEXTURE_UPLOAD_BEGIN: u32 = 0x8C; // arg0=tex_id, arg1=w/h, data=total_len -> rc
-pub const OP_BP_UI3_TEXTURE_UPLOAD_CHUNK: u32 = 0x8D; // arg0=tex_id, arg1=offset, payload=rgba -> rc
-pub const OP_BP_UI3_TEXTURE_UPLOAD_FINISH: u32 = 0x8E; // arg0=tex_id -> rc
-pub const OP_BP_UI3_TEXTURE_STATUS: u32 = 0x8F; // arg0=tex_id -> status
-pub const OP_BP_UI3_TEXTURE_DIMENSIONS: u32 = 0x90; // arg0=tex_id -> status + packed w/h
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
 pub const OP_BP_THERMAL_SNAPSHOT_READ: u32 = 0x94; // arg0 offset, arg1 cap -> latest thermal snapshot text
-pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN: u32 = 0x95; // arg0=id, arg1=w/h, data=total_len -> rc
-pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK: u32 = 0x96; // arg0=id, arg1=offset, payload=rgb565 -> rc
-pub const OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH: u32 = 0x97; // arg0=id -> rc
-pub const OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565: u32 = 0x98; // arg0=frame,arg1=id,payload=params -> rc
 pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
 pub const OP_BP_VGPU_OPEN: u32 = 0xA5; // arg0 requested caps -> opaque device/rc
 pub const OP_BP_VGPU_CLOSE: u32 = 0xA6; // arg0 device -> rc
@@ -198,16 +179,6 @@ pub enum DispatchOutcome {
 }
 
 static GUEST_CABI_SEQ: AtomicU32 = AtomicU32::new(1);
-static UI3_VMCALL_COUNT: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_BYTES: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_NS: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_MAX_NS: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_DRAW_SPRITE_COUNT: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_DRAW_SPRITE_NS: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_DRAW_SOLID_COUNT: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_DRAW_SOLID_NS: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_UPLOAD_CHUNK_COUNT: AtomicU64 = AtomicU64::new(0);
-static UI3_VMCALL_UPLOAD_CHUNK_NS: AtomicU64 = AtomicU64::new(0);
 
 /// Static backing pages for CommPage.
 #[repr(C, align(4096))]
@@ -446,7 +417,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         hvwarnf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
-    let dispatch_start_ns = crate::chronos::monotonic_nanos();
     match op {
         OP_PRESERVE => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
@@ -469,221 +439,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_MONOTONIC_NANOS => {
             let t = crate::chronos::monotonic_nanos();
             write_response(vm_id, seq, STATUS_OK, t, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_CREATE => {
-            let (x, y) = unpack_i32_pair(arg0);
-            let (width, height) = unpack_u32_pair(arg1);
-            let tex_id = request_payload(vm_id, req_len)
-                .and_then(|payload| payload.get(..4))
-                .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-                .unwrap_or(0);
-            let frame_id = crate::ui3::ui3_frame::create_frame(x, y, width, height, tex_id);
-            if frame_id == 0 {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, frame_id as u64, 0);
-            }
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_CLOSE => {
-            let ok = crate::ui3::ui3_frame::close_frame(arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_REQUEST_REPAINT => {
-            let ok = crate::ui3::ui3_frame::request_repaint(arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_SET_POSITION => {
-            let (x, y) = unpack_i32_pair(arg1);
-            let ok = crate::ui3::ui3_frame::set_position(arg0 as u32, x, y);
-            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_SET_SIZE => {
-            let (width, height) = unpack_u32_pair(arg1);
-            let ok = crate::ui3::ui3_frame::set_size(arg0 as u32, width, height);
-            write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-1i64) as u64 }, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_BEGIN => {
-            let clear_rgb = arg1 as u32;
-            let flags = (arg1 >> 32) as u32;
-            let preserve_contents = (flags & 1) != 0;
-            let allow_present = (flags & 2) != 0;
-            let rc = crate::ui3::ui3_frame::begin_frame(
-                arg0 as u32,
-                clear_rgb,
-                preserve_contents,
-                allow_present,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_END => {
-            let rc = crate::ui3::ui3_frame::end_frame(arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_SET_RENDER_TARGET => {
-            let rc = crate::ui3::ui3_frame::set_render_target(arg0 as u32, arg1 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_DRAW_SOLID_BATCH => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::ui3::ui3_frame::draw_solid_batch(arg0 as u32, payload);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::ui3::ui3_frame::draw_sprite_batch(arg0 as u32, arg1 as u32, payload);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_TEXTURE_UPLOAD_BEGIN => {
-            let (width, height) = unpack_u32_pair(arg1);
-            let total_len = request_payload(vm_id, req_len)
-                .and_then(|payload| payload.get(..8))
-                .map(|bytes| {
-                    u64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]) as usize
-                })
-                .unwrap_or(0);
-            let rc = crate::ui3::ui3_img::begin_rgba_upload(
-                vm_id,
-                arg0 as u32,
-                width,
-                height,
-                total_len,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_TEXTURE_UPLOAD_CHUNK => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::ui3::ui3_img::write_rgba_upload_chunk(
-                vm_id,
-                arg0 as u32,
-                arg1 as usize,
-                payload,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_TEXTURE_UPLOAD_FINISH => {
-            let rc = crate::ui3::ui3_img::finish_rgba_upload(vm_id, arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_TEXTURE_STATUS => {
-            let status = crate::ui3::ui3_img::image_status(arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (status as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_TEXTURE_DIMENSIONS => {
-            if let Some((width, height)) = crate::ui3::ui3_img::image_dimensions(arg0 as u32) {
-                write_response(vm_id, seq, STATUS_OK, pack_u32_pair(width, height), 0);
-            } else {
-                write_response(vm_id, seq, STATUS_OK, 0, 0);
-            }
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_BEGIN => {
-            let (width, height) = unpack_u32_pair(arg1);
-            let total_len = request_payload(vm_id, req_len)
-                .and_then(|payload| payload.get(..8))
-                .map(|bytes| {
-                    u64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]) as usize
-                })
-                .unwrap_or(0);
-            let rc = crate::ui3::ui3_img::begin_skybox_rgb565_upload(
-                vm_id,
-                arg0 as u32,
-                width,
-                height,
-                total_len,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_CHUNK => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            };
-            let rc = crate::ui3::ui3_img::write_skybox_rgb565_upload_chunk(
-                vm_id,
-                arg0 as u32,
-                arg1 as usize,
-                payload,
-            );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_SKYBOX_RGB565_UPLOAD_FINISH => {
-            let rc = crate::ui3::ui3_img::finish_skybox_rgb565_upload(vm_id, arg0 as u32);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI3_FRAME_RENDER_SKYBOX_RGB565 => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            };
-            if payload.len() != core::mem::size_of::<crate::intel::gpgpu::SkyboxRenderParamsAbi>() {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
-                return DispatchOutcome::Resume;
-            }
-            let params = unsafe {
-                core::ptr::read_unaligned(
-                    payload.as_ptr() as *const crate::intel::gpgpu::SkyboxRenderParamsAbi
-                )
-            };
-            let rc = crate::ui3::ui3_frame::render_skybox_rgb565(arg0 as u32, arg1 as u32, params);
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            record_ui3_vmcall_timing(op, req_len, dispatch_start_ns);
             DispatchOutcome::Resume
         }
         OP_BP_VGPU_OPEN => {
@@ -759,17 +514,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VGPU_BUFFER_READ => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let request = request_payload(vm_id, req_len);
-            let parsed = request.filter(|payload| payload.len() >= 16).map(|payload| {
-                let offset = u64::from_le_bytes([
-                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
-                    payload[6], payload[7],
-                ]) as usize;
-                let count = u64::from_le_bytes([
-                    payload[8], payload[9], payload[10], payload[11], payload[12], payload[13],
-                    payload[14], payload[15],
-                ]) as usize;
-                (offset, count.min(PAYLOAD_CAP))
-            });
+            let parsed = request
+                .filter(|payload| payload.len() >= 16)
+                .map(|payload| {
+                    let offset = u64::from_le_bytes([
+                        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                        payload[6], payload[7],
+                    ]) as usize;
+                    let count = u64::from_le_bytes([
+                        payload[8],
+                        payload[9],
+                        payload[10],
+                        payload[11],
+                        payload[12],
+                        payload[13],
+                        payload[14],
+                        payload[15],
+                    ]) as usize;
+                    (offset, count.min(PAYLOAD_CAP))
+                });
             let Some((offset, count)) = parsed else {
                 write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
                 return DispatchOutcome::Resume;
@@ -779,9 +542,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*page).payload)[..count] };
-            match crate::r::io::vgpu_cabi::broker_buffer_read(
-                principal, arg0, arg1, offset, out,
-            ) {
+            match crate::r::io::vgpu_cabi::broker_buffer_read(principal, arg0, arg1, offset, out) {
                 Ok(got) => write_response(vm_id, seq, STATUS_OK, got as u64, got as u32),
                 Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
@@ -835,9 +596,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     ])
                 });
             let rc = value
-                .map(|value| {
-                    crate::r::io::vgpu_cabi::broker_wait(principal, arg0, arg1, value)
-                })
+                .map(|value| crate::r::io::vgpu_cabi::broker_wait(principal, arg0, arg1, value))
                 .unwrap_or(-22);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
@@ -2157,73 +1916,5 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_UNKNOWN_OP, 0, 0);
             DispatchOutcome::Resume
         }
-    }
-}
-
-fn record_ui3_vmcall_timing(op: u32, req_len: u32, start_ns: u64) {
-    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(start_ns);
-    let count = UI3_VMCALL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    UI3_VMCALL_BYTES.fetch_add(req_len as u64, Ordering::Relaxed);
-    UI3_VMCALL_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
-    UI3_VMCALL_MAX_NS.fetch_max(elapsed_ns, Ordering::Relaxed);
-
-    match op {
-        OP_BP_UI3_FRAME_DRAW_SPRITE_BATCH => {
-            UI3_VMCALL_DRAW_SPRITE_COUNT.fetch_add(1, Ordering::Relaxed);
-            UI3_VMCALL_DRAW_SPRITE_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
-        }
-        OP_BP_UI3_FRAME_DRAW_SOLID_BATCH => {
-            UI3_VMCALL_DRAW_SOLID_COUNT.fetch_add(1, Ordering::Relaxed);
-            UI3_VMCALL_DRAW_SOLID_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
-        }
-        OP_BP_UI3_TEXTURE_UPLOAD_CHUNK => {
-            UI3_VMCALL_UPLOAD_CHUNK_COUNT.fetch_add(1, Ordering::Relaxed);
-            UI3_VMCALL_UPLOAD_CHUNK_NS.fetch_add(elapsed_ns, Ordering::Relaxed);
-        }
-        _ => {}
-    }
-
-    if count <= 16 || count % 512 == 0 {
-        let total_ns = UI3_VMCALL_NS.load(Ordering::Relaxed);
-        let bytes = UI3_VMCALL_BYTES.load(Ordering::Relaxed);
-        let draw_sprite_count = UI3_VMCALL_DRAW_SPRITE_COUNT.load(Ordering::Relaxed);
-        let draw_solid_count = UI3_VMCALL_DRAW_SOLID_COUNT.load(Ordering::Relaxed);
-        let upload_count = UI3_VMCALL_UPLOAD_CHUNK_COUNT.load(Ordering::Relaxed);
-        crate::log!(
-            "ui3/vmcall: calls={} bytes={} total_ms={} avg_us={} max_us={} sprite_calls={} sprite_avg_us={} solid_calls={} solid_avg_us={} upload_chunks={} upload_avg_us={} last_op=0x{:02X} last_len={} last_us={}\n",
-            count,
-            bytes,
-            ns_to_ms(total_ns),
-            avg_ns_to_us(total_ns, count),
-            ns_to_us(UI3_VMCALL_MAX_NS.load(Ordering::Relaxed)),
-            draw_sprite_count,
-            avg_ns_to_us(UI3_VMCALL_DRAW_SPRITE_NS.load(Ordering::Relaxed), draw_sprite_count),
-            draw_solid_count,
-            avg_ns_to_us(UI3_VMCALL_DRAW_SOLID_NS.load(Ordering::Relaxed), draw_solid_count),
-            upload_count,
-            avg_ns_to_us(UI3_VMCALL_UPLOAD_CHUNK_NS.load(Ordering::Relaxed), upload_count),
-            op,
-            req_len,
-            ns_to_us(elapsed_ns)
-        );
-    }
-}
-
-#[inline]
-fn ns_to_us(ns: u64) -> u64 {
-    ns / 1_000
-}
-
-#[inline]
-fn ns_to_ms(ns: u64) -> u64 {
-    ns / 1_000_000
-}
-
-#[inline]
-fn avg_ns_to_us(total_ns: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        total_ns / count / 1_000
     }
 }

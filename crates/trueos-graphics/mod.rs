@@ -1,8 +1,8 @@
 //! TRUEOS graphics boundary.
 //!
 //! This module is the home for pure-ish image/vector/font graphics code that
-//! should not conceptually belong to UI3. Some implementations still live in
-//! their historical files during the migration; UI3 re-exports these modules
+//! should not conceptually belong to any user-interface generation. Some implementations still
+//! live in their historical files during migration; consumers re-export these modules
 //! for compatibility, while new call sites should prefer `crate::graphics`.
 pub(crate) mod decoder;
 pub(crate) mod encoder;

@@ -76,17 +76,11 @@ const TRUESURFER_RESULT_STYLE_BYTES_PROP: &[u8] = b"styleBytes\0";
 const TRUESURFER_RESULT_SCRIPT_COUNT_PROP: &[u8] = b"scriptCount\0";
 const TRUESURFER_RESULT_SCRIPT_BYTES_PROP: &[u8] = b"scriptBytes\0";
 const TRUESURFER_RESULT_ERROR_PROP: &[u8] = b"error\0";
-const TRUESURFER_RESULT_RENDER_HASH_PROP: &[u8] = b"renderHash\0";
-const TRUESURFER_RESULT_LAYOUT_HASH_PROP: &[u8] = b"layoutHash\0";
-const TRUESURFER_RESULT_RENDER_TREE_JSON_PROP: &[u8] = b"renderTreeJson\0";
-const TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP: &[u8] = b"layoutTraceJson\0";
 const TRUESURFER_HTML_QUEUE_DEPTH: usize = 2;
 const TRUESURFER_HTML_QUEUE_WAIT_MS: u64 = 2;
 const TRUESURFER_BUSY_PUMP_BUDGET: usize = 512;
 const TRUESURFER_BUSY_SLEEP_MS: u64 = 1;
 const TRUESURFER_RESULT_TEXT_MAX_BYTES: usize = 4 * 1024;
-const TRUESURFER_RESULT_HASH_MAX_BYTES: usize = 128;
-const TRUESURFER_RESULT_JSON_MAX_BYTES: usize = 1024 * 1024;
 const HOSTED_BROWSER_DIRTY_CONTENT: u32 = 1 << 0;
 const HOSTED_BROWSER_DIRTY_INTERACTIVE: u32 = 1 << 1;
 
@@ -149,17 +143,6 @@ pub struct ParseResult {
     pub error: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Ui3RenderTreeFrame {
-    pub browser_instance_id: u32,
-    pub seq: u32,
-    pub url: String,
-    pub render_hash: String,
-    pub layout_hash: String,
-    pub render_tree_json: String,
-    pub layout_trace_json: String,
-}
-
 #[derive(Clone, Debug)]
 struct PendingHtml {
     html: String,
@@ -186,8 +169,6 @@ struct BrowserInstanceState {
     render_tex_id: u32,
     surface_seq: u32,
     interactive_seq: u32,
-    ui3_render_tree_seq: u32,
-    pending_ui3_render_tree_frame: Option<Ui3RenderTreeFrame>,
     surface_state: HostedBrowserSurfaceState,
 }
 
@@ -299,13 +280,6 @@ pub fn default_browser_started() -> bool {
 
 pub fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<ParseResult> {
     with_browser_state(browser_instance_id, |state| state.last_parse_result.clone()).flatten()
-}
-
-pub fn take_ui3_render_tree_frame_for_browser(
-    browser_instance_id: u32,
-) -> Option<Ui3RenderTreeFrame> {
-    with_browser_state_mut(browser_instance_id, |state| state.pending_ui3_render_tree_frame.take())
-        .flatten()
 }
 
 pub async fn queue_set_html_with_url_for_browser(
@@ -454,35 +428,6 @@ pub fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u32 {
         .unwrap_or_else(|| default_render_tex_id(browser_instance_id))
 }
 
-fn publish_ui3_render_tree_frame_for_browser(
-    browser_instance_id: u32,
-    url: String,
-    render_hash: String,
-    layout_hash: String,
-    render_tree_json: String,
-    layout_trace_json: String,
-) -> Option<u32> {
-    if render_tree_json.is_empty() && layout_trace_json.is_empty() {
-        return None;
-    }
-    let seq = with_browser_state_mut(browser_instance_id, |state| {
-        state.ui3_render_tree_seq = state.ui3_render_tree_seq.wrapping_add(1).max(1);
-        let seq = state.ui3_render_tree_seq;
-        state.pending_ui3_render_tree_frame = Some(Ui3RenderTreeFrame {
-            browser_instance_id,
-            seq,
-            url,
-            render_hash,
-            layout_hash,
-            render_tree_json,
-            layout_trace_json,
-        });
-        seq
-    })?;
-    signal_hosted_browser_dirty(browser_instance_id, HOSTED_BROWSER_DIRTY_CONTENT);
-    Some(seq)
-}
-
 pub fn queue_hosted_keyboard_events(
     browser_window_id: u32,
     events: &[HostedKeyboardEvent],
@@ -542,12 +487,7 @@ unsafe fn read_global_string(ctx: *mut qjs::JSContext, key: &[u8]) -> String {
         qjs::js_free_value(ctx, global);
         return String::new();
     }
-    let out = js_value_to_string(
-        ctx,
-        value,
-        "global",
-        TRUESURFER_RESULT_TEXT_MAX_BYTES,
-    );
+    let out = js_value_to_string(ctx, value, "global", TRUESURFER_RESULT_TEXT_MAX_BYTES);
     qjs::js_free_value(ctx, value);
     qjs::js_free_value(ctx, global);
     strip_trueos_host_markers(out.as_str())
@@ -878,36 +818,6 @@ unsafe fn dispatch_html(
         parse_result.favicon_url.len(),
         parse_result.error.len()
     ));
-    let ui3_render_hash = read_result_string(
-        ctx,
-        result,
-        TRUESURFER_RESULT_RENDER_HASH_PROP,
-        "renderHash",
-        TRUESURFER_RESULT_HASH_MAX_BYTES,
-    );
-    let ui3_layout_hash = read_result_string(
-        ctx,
-        result,
-        TRUESURFER_RESULT_LAYOUT_HASH_PROP,
-        "layoutHash",
-        TRUESURFER_RESULT_HASH_MAX_BYTES,
-    );
-    let ui3_render_tree_json =
-        read_result_string(
-            ctx,
-            result,
-            TRUESURFER_RESULT_RENDER_TREE_JSON_PROP,
-            "renderTreeJson",
-            TRUESURFER_RESULT_JSON_MAX_BYTES,
-        );
-    let ui3_layout_trace_json =
-        read_result_string(
-            ctx,
-            result,
-            TRUESURFER_RESULT_LAYOUT_TRACE_JSON_PROP,
-            "layoutTraceJson",
-            TRUESURFER_RESULT_JSON_MAX_BYTES,
-        );
     log_line(format!(
         "qjs-truesurfer[{}]: result read done ok={} bytes={} body_bytes={} styles={} scripts={}\n",
         browser_instance_id,
@@ -917,24 +827,6 @@ unsafe fn dispatch_html(
         parse_result.style_count,
         parse_result.script_count
     ));
-    let ui3_seq = if parse_result.ok {
-        publish_ui3_render_tree_frame_for_browser(
-            browser_instance_id,
-            parse_result.url.clone(),
-            ui3_render_hash,
-            ui3_layout_hash,
-            ui3_render_tree_json,
-            ui3_layout_trace_json,
-        )
-        .unwrap_or(0)
-    } else {
-        0
-    };
-    log_line(format!(
-        "qjs-truesurfer[{}]: widget inspect done; ui3 handoff seq={}\n",
-        browser_instance_id, ui3_seq
-    ));
-
     let _ = with_browser_state_mut(browser_instance_id, |state| {
         let parse_changed = state
             .last_parse_result
@@ -1023,11 +915,6 @@ pub async fn truesurfer_task(browser_instance_id: u32) {
         let rt = vm.rt_ptr();
 
         set_global_i32(ctx, TRUESURFER_ID_PROP, browser_instance_id as i32);
-
-        log_line(format!(
-            "qjs-truesurfer[{}]: renderer handoff mode=ui3-render-tree widget_inspect=1\n",
-            browser_instance_id
-        ));
 
         let boot = qjs::js_eval_bytes(
             ctx,

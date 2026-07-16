@@ -104,43 +104,6 @@ unsafe extern "C" {
         data_len: usize,
     ) -> i32;
 
-    pub fn trueos_cabi_ui3_frame_create(
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        tex_id: u32,
-    ) -> u32;
-    pub fn trueos_cabi_ui3_frame_close(frame_id: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_request_repaint(frame_id: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_set_position(frame_id: u32, x: i32, y: i32) -> i32;
-    pub fn trueos_cabi_ui3_frame_set_size(frame_id: u32, width: u32, height: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_begin(
-        frame_id: u32,
-        clear_rgb: u32,
-        preserve_contents: u32,
-        allow_present: u32,
-    ) -> i32;
-    pub fn trueos_cabi_ui3_frame_end(frame_id: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_set_render_target(frame_id: u32, tex_id: u32) -> i32;
-    pub fn trueos_cabi_ui3_frame_draw_solid_batch(
-        frame_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    pub fn trueos_cabi_ui3_frame_draw_sprite_batch(
-        frame_id: u32,
-        tex_id: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
-    pub fn trueos_cabi_ui3_frame_render_skybox_rgb565(
-        frame_id: u32,
-        skybox_id: u32,
-        params_ptr: *const u8,
-        params_len: usize,
-    ) -> i32;
-
     pub fn trueos_cabi_net_fetch_start(
         url_ptr: *const u8,
         url_len: usize,
@@ -308,10 +271,8 @@ unsafe extern "C" {
 
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
-    pub fn trueos_cabi_vgpu_device_info(
-        device: u64,
-        out_info: *mut crate::vgpu::DeviceInfo,
-    ) -> i32;
+    pub fn trueos_cabi_vgpu_device_info(device: u64, out_info: *mut crate::vgpu::DeviceInfo)
+    -> i32;
     pub fn trueos_cabi_vgpu_buffer_create(
         device: u64,
         bytes: usize,
@@ -338,11 +299,7 @@ unsafe extern "C" {
         buffer: u64,
         out_info: *mut crate::vgpu::BufferInfo,
     ) -> i32;
-    pub fn trueos_cabi_vgpu_queue_create(
-        device: u64,
-        class: u32,
-        out_queue: *mut u64,
-    ) -> i32;
+    pub fn trueos_cabi_vgpu_queue_create(device: u64, class: u32, out_queue: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_queue_destroy(device: u64, queue: u64) -> i32;
     pub fn trueos_cabi_vgpu_submit_control_nop(
         device: u64,

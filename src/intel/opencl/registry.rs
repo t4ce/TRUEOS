@@ -85,20 +85,20 @@ const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
 const RECT_WORKLIST_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
     "shell2:gpgpu smoke",
-    "ui3::ui3_font rect/gradient loops",
+    "font service rect/gradient loops",
     "gpgpu rect worklist probes",
 ];
-const UI3_TEXT_CONSUMERS: &[&str] = &[
+const TEXT_RENDER_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
     "shell2:gpgpu canvas2d sprites64",
-    "ui3::ui3_font text loop",
+    "font service text loop",
 ];
-const UI3_CANVAS_CONSUMERS: &[&str] = &[
+const CANVAS_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
     "shell2:gpgpu canvas3d cube",
     "shell2:gpgpu canvas3d ico",
     "shell2:gpgpu canvas3d para",
-    "ui3::ui3_canvas worker",
+    "explicit canvas worker",
     "gpgpu canvas3d probes",
 ];
 
@@ -370,7 +370,7 @@ const GLYPH_MASK_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: GLYPH_MASK_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: UI3_TEXT_CONSUMERS,
+    consumers: TEXT_RENDER_CONSUMERS,
 };
 
 const PRESENT_ARGS: &[KernelCallArg<'_>] = &[
@@ -425,7 +425,7 @@ const SPRITE64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: SPRITE64_ARGS,
     descriptor_layouts: SPRITE64_DESCS,
     launch: KernelLaunchContract::descriptor_worklist(16),
-    consumers: UI3_TEXT_CONSUMERS,
+    consumers: TEXT_RENDER_CONSUMERS,
 };
 
 const SPRITE_QUAD_ARGS: &[KernelCallArg<'_>] = &[
@@ -453,7 +453,7 @@ const SPRITE_QUAD_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: SPRITE_QUAD_ARGS,
     descriptor_layouts: SPRITE_QUAD_DESCS,
     launch: KernelLaunchContract::descriptor_worklist(16),
-    consumers: &["intel::init_once upload", "ui3::ui3_frame sprite batches"],
+    consumers: &["intel::init_once upload", "explicit sprite batches"],
 };
 
 const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
@@ -497,7 +497,7 @@ const CANVAS3D_PROJECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CANVAS3D_PROJECT_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_TRANSFORM_ARGS: &[KernelCallArg<'_>] = &[
@@ -522,7 +522,7 @@ const CANVAS3D_TRANSFORM_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CANVAS3D_TRANSFORM_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_CLIP_BOX_ARGS: &[KernelCallArg<'_>] = &[
@@ -546,7 +546,7 @@ const CANVAS3D_CLIP_BOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CANVAS3D_CLIP_BOX_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_PLANE_SAMPLE_ARGS: &[KernelCallArg<'_>] = &[
@@ -580,7 +580,7 @@ const CANVAS3D_PLANE_SAMPLE_CONTRACT: GpuKernelContract<'_> = GpuKernelContract 
     args: CANVAS3D_PLANE_SAMPLE_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_PLANE_FILL_ARGS: &[KernelCallArg<'_>] = &[
@@ -617,7 +617,7 @@ const CANVAS3D_PLANE_FILL_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CANVAS3D_PLANE_FILL_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_PLANE_PATCH_FILL_CUT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
@@ -632,7 +632,7 @@ const CANVAS3D_PLANE_PATCH_FILL_CUT_CONTRACT: GpuKernelContract<'_> = GpuKernelC
     args: CANVAS3D_PLANE_FILL_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const CANVAS3D_PLANE_PATCH_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
@@ -655,7 +655,7 @@ const CANVAS3D_PLANE_PATCH_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelC
     args: CANVAS3D_PLANE_PATCH_WORKLIST_ARGS,
     descriptor_layouts: PATCH_DESCS,
     launch: KernelLaunchContract::tiled_descriptor_worklist(16, 8, 16),
-    consumers: UI3_CANVAS_CONSUMERS,
+    consumers: CANVAS_CONSUMERS,
 };
 
 const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
@@ -695,7 +695,7 @@ const SKYBOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: SKYBOX_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["ui3::ui3_frame skybox", "blueprint:skybox"],
+    consumers: &["explicit skybox renderer", "blueprint:skybox"],
 };
 
 const CHART_ARGS: &[KernelCallArg<'_>] = &[

@@ -13,7 +13,6 @@ pub(crate) type HostedSurfaceState = trueos_qjs::browser_task::HostedBrowserSurf
 pub(crate) type HostedInteractiveState = trueos_qjs::browser_task::HostedBrowserInteractiveState;
 pub(crate) type HostedKeyboardEvent = trueos_qjs::browser_task::HostedKeyboardEvent;
 pub(crate) type ParseResult = trueos_qjs::browser_task::ParseResult;
-pub(crate) type Ui3RenderTreeFrame = trueos_qjs::browser_task::Ui3RenderTreeFrame;
 
 pub(crate) const MAX_BROWSER_INSTANCE_ID: u32 = trueos_qjs::browser_task::MAX_BROWSER_INSTANCE_ID;
 pub(crate) const HOSTED_KEYBOARD_MOD_SHIFT: u8 =
@@ -102,7 +101,6 @@ static HOSTED_BROWSER_PARSE_POOL_SIGNAL: Mutex<HostedBrowserParsePoolSignalState
     });
 static HOSTED_BROWSER_DIRTY_CONTENT_MASK: AtomicU64 = AtomicU64::new(0);
 static HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK: AtomicU64 = AtomicU64::new(0);
-static UI3_ASSET_BATCH_READY_MASK: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) const fn browser_parse_pool_boot_count() -> u32 {
     if BROWSER_PARSE_POOL_BOOT_COUNT > BROWSER_PARSE_HOST_LIMIT {
@@ -141,17 +139,6 @@ pub(crate) fn take_hosted_browser_dirty_mask() -> HostedBrowserDirtyMask {
         content: HOSTED_BROWSER_DIRTY_CONTENT_MASK.swap(0, Ordering::AcqRel),
         interactive: HOSTED_BROWSER_DIRTY_INTERACTIVE_MASK.swap(0, Ordering::AcqRel),
     }
-}
-
-pub(crate) fn signal_ui3_asset_batch_ready(browser_instance_id: u32) {
-    let Some(bit) = hosted_browser_bit(browser_instance_id) else {
-        return;
-    };
-    UI3_ASSET_BATCH_READY_MASK.fetch_or(bit, Ordering::Release);
-}
-
-pub(crate) fn take_ui3_asset_batch_ready_mask() -> u64 {
-    UI3_ASSET_BATCH_READY_MASK.swap(0, Ordering::AcqRel)
 }
 
 pub(crate) fn signal_hosted_browser_parse_pool_mask(mask: u64) {
@@ -241,12 +228,6 @@ pub(crate) fn render_tex_id_for_browser_instance(browser_instance_id: u32) -> u3
 
 pub(crate) fn latest_parse_result_for_browser(browser_instance_id: u32) -> Option<ParseResult> {
     trueos_qjs::browser_task::latest_parse_result_for_browser(browser_instance_id)
-}
-
-pub(crate) fn take_ui3_render_tree_frame_for_browser(
-    browser_instance_id: u32,
-) -> Option<Ui3RenderTreeFrame> {
-    trueos_qjs::browser_task::take_ui3_render_tree_frame_for_browser(browser_instance_id)
 }
 
 pub(crate) fn queue_browser_navigation(browser_instance_id: u32, url: &str) -> bool {
