@@ -333,8 +333,8 @@ pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x41, 0x86, 0x9F, 0x91, 0x2E, 0x56, 0x61, 0x0C, 0x0D, 0xFA, 0x50, 0x99, 0xBD, 0xCB, 0xDD, 0xD7,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x79, 0xC7, 0xD4, 0x17, 0x05, 0x40, 0x65, 0x04, 0x17, 0x48, 0x9A, 0x88, 0x2E, 0x52, 0xC5, 0x2B,
-    0x1A, 0x47, 0xF8, 0x51, 0x82, 0x79, 0x0D, 0xFC, 0x1C, 0x3A, 0x22, 0xAD, 0x64, 0xA6, 0x24, 0x8D,
+    0x8B, 0x17, 0x46, 0x98, 0x4F, 0x74, 0x15, 0x6C, 0xCD, 0xBE, 0xB9, 0x43, 0x1D, 0xF9, 0xD2, 0x50,
+    0x61, 0x28, 0x56, 0x55, 0x06, 0x7D, 0xE8, 0xEB, 0xD5, 0x28, 0x3B, 0x08, 0xDE, 0x00, 0xD9, 0x1F,
 ];
 pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0xDA, 0xF0, 0x15, 0xA0, 0xB9, 0x8A, 0x45, 0xF7, 0x02, 0xD5, 0xD7, 0x87, 0xCA, 0x19, 0x59, 0xBA,
@@ -633,9 +633,10 @@ const MANDEL64_WORKLIST_MAX_DESCS: usize = 512;
 const MANDEL64_WORKLIST_DESCS_PER_WALKER: usize = RECT_WORKLIST_DESCS_PER_WALKER;
 const MANDEL64_WORKLIST_MAX_WALKERS: usize =
     MANDEL64_WORKLIST_MAX_DESCS / MANDEL64_WORKLIST_DESCS_PER_WALKER;
-const MANDEL64_WORKLIST_FLAG_ROWS_MASK: u32 = 0x0000_00FF;
+const MANDEL64_WORKLIST_FLAG_ROWS_MASK: u32 = 0x0000_007F;
+const MANDEL64_WORKLIST_FLAG_NO_MIRROR: u32 = 1 << 7;
 const MANDEL64_WORKLIST_FLAG_COLS_SHIFT: u32 = 8;
-const MANDEL64_WORKLIST_FLAG_MIRROR_HEIGHT_SHIFT: u32 = 16;
+const MANDEL64_WORKLIST_FLAG_VIEW_HEIGHT_SHIFT: u32 = 16;
 pub(crate) const MANDEL64_WORKLIST_DEFAULT_ITERATIONS: u32 = 32;
 pub(crate) const MANDEL64_WORKLIST_MAX_ITERATIONS: u32 = 512;
 const CANVAS3D_PROJECT_IDD_OFFSET_BYTES: usize = 0x2000;
@@ -2327,7 +2328,8 @@ pub(crate) struct GpgpuMandel64Placement {
     pub(crate) dst_y: i32,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) mirror_height: u32,
+    pub(crate) view_height: u32,
+    pub(crate) mirror_at_center: bool,
     pub(crate) iterations: u32,
 }
 
@@ -5214,15 +5216,25 @@ pub(crate) fn mandel64_worklist_surface_full(
     dst: GpgpuRgba8Surface,
     iterations: u32,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
-    mandel64_worklist_surface_view(dst, dst.bounds(), iterations)
+    mandel64_worklist_surface_view_mode(dst, dst.bounds(), iterations, true)
 }
 
 /// Render a Mandelbrot view whose signed x/y origin selects the complex-plane
-/// sample interval and whose width/height select the destination extent.
+/// sample interval and whose width/height select the destination extent. Every
+/// output row is computed so arbitrary vertical pans remain correct.
 pub(crate) fn mandel64_worklist_surface_view(
     dst: GpgpuRgba8Surface,
     view: GpgpuRect,
     iterations: u32,
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    mandel64_worklist_surface_view_mode(dst, view, iterations, false)
+}
+
+fn mandel64_worklist_surface_view_mode(
+    dst: GpgpuRgba8Surface,
+    view: GpgpuRect,
+    iterations: u32,
+    mirror_at_center: bool,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
     let total_start_tick = direct_rcs_now_tick();
     if !dst.is_valid()
@@ -5254,7 +5266,12 @@ pub(crate) fn mandel64_worklist_surface_view(
     let render_width = view.width.min(dst.width);
     let view_height = view.height.min(dst.height);
     let columns = render_width.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
-    let render_height = view_height.div_ceil(2).max(1);
+    let render_height = if mirror_at_center {
+        view_height.div_ceil(2)
+    } else {
+        view_height
+    }
+    .max(1);
     let rows = render_height.div_ceil(MANDEL64_WORKLIST_CELL_PIXELS).max(1);
     let count = columns.saturating_mul(rows) as usize;
     if count == 0 {
@@ -5294,7 +5311,8 @@ pub(crate) fn mandel64_worklist_surface_view(
                 dst_y: dst_y as i32,
                 width,
                 height,
-                mirror_height: view_height,
+                view_height,
+                mirror_at_center,
                 iterations,
             });
         }
@@ -5435,9 +5453,14 @@ pub(crate) fn mandel64_worklist_surface(
                     .saturating_sub(band.saturating_mul(MANDEL64_WORKLIST_BAND_ROWS))
                     .min(MANDEL64_WORKLIST_BAND_ROWS);
                 let flags = (band_rows & MANDEL64_WORKLIST_FLAG_ROWS_MASK)
+                    | if placement.mirror_at_center {
+                        0
+                    } else {
+                        MANDEL64_WORKLIST_FLAG_NO_MIRROR
+                    }
                     | (width << MANDEL64_WORKLIST_FLAG_COLS_SHIFT)
-                    | (placement.mirror_height.min(u16::MAX as u32)
-                        << MANDEL64_WORKLIST_FLAG_MIRROR_HEIGHT_SHIFT);
+                    | (placement.view_height.min(u16::MAX as u32)
+                        << MANDEL64_WORKLIST_FLAG_VIEW_HEIGHT_SHIFT);
                 let desc_value = Mandel64WorklistRgba8Desc {
                     src_xy: pack_i16_pair_u32(
                         src_x as i16,
@@ -5456,7 +5479,7 @@ pub(crate) fn mandel64_worklist_surface(
                 desc_count = desc_count.saturating_add(1);
             }
             let computed_pixels = (width as usize).saturating_mul(height as usize);
-            let output_pixels = if placement.mirror_height == 0 {
+            let output_pixels = if !placement.mirror_at_center || placement.view_height == 0 {
                 computed_pixels
             } else {
                 computed_pixels.saturating_mul(2)

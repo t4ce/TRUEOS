@@ -7,14 +7,16 @@
 // - desc.dst_xy is a signed 16-bit destination pixel coordinate.
 // - One SIMD16 walker consumes a descriptor slice:
 //   lane N draws descriptors desc_base + N, desc_base + N+16, ...
+// - desc.flags bit 7 disables the center mirror while retaining view height.
 // - desc.color_rgba packs the per-pixel iteration cap and grayscale scale.
 
 #define MANDEL64_BAND_ROWS 4u
 #define MANDEL64_BAND_COLS 64u
-#define MANDEL64_FLAG_ROWS_MASK 0x000000FFu
+#define MANDEL64_FLAG_ROWS_MASK 0x0000007Fu
+#define MANDEL64_FLAG_NO_MIRROR 0x00000080u
 #define MANDEL64_FLAG_COLS_SHIFT 8u
 #define MANDEL64_FLAG_COLS_MASK 0x0000FF00u
-#define MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT 16u
+#define MANDEL64_FLAG_VIEW_HEIGHT_SHIFT 16u
 #define MANDEL64_DEFAULT_ITER 32u
 #define MANDEL64_MAX_ITER 512u
 #define MANDEL64_DEFAULT_GRAY_SCALE 2040u
@@ -100,8 +102,13 @@ __kernel void mandel64_worklist_rgba8(
         int dst_y = unpack_i16(desc.dst_xy >> 16);
         uint band_rows = desc.flags & MANDEL64_FLAG_ROWS_MASK;
         uint band_cols = (desc.flags & MANDEL64_FLAG_COLS_MASK) >> MANDEL64_FLAG_COLS_SHIFT;
-        uint mirror_height = desc.flags >> MANDEL64_FLAG_MIRROR_HEIGHT_SHIFT;
-        uint view_height = mirror_height == 0u ? 1440u : mirror_height;
+        uint view_height = desc.flags >> MANDEL64_FLAG_VIEW_HEIGHT_SHIFT;
+        uint mirror_height = (desc.flags & MANDEL64_FLAG_NO_MIRROR) == 0u
+            ? view_height
+            : 0u;
+        if (view_height == 0u) {
+            view_height = 1440u;
+        }
         uint max_iter = desc.color_rgba & 0xFFFFu;
         uint gray_scale = desc.color_rgba >> 16;
         if (band_rows == 0u || band_rows > MANDEL64_BAND_ROWS) {

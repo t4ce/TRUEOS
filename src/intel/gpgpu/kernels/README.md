@@ -29,7 +29,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `stamp_mandel_rgba8.cl`: ten-iteration Mandelbrot stamp using destination x/y as both stamp origin and view offset
 - `sprite64_worklist_rgba8.cl`: fixed 64x64 sprite descriptors copied/blended from atlas to destination; shell path batches descriptor slices as multiple walkers in one command buffer
 - `sprite_quad_worklist_rgba8.cl`: arbitrary sprite-quad descriptors sampled from RGBA8 source surfaces and source-over blended into RGBA8 destinations
-- `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; shell scanout computes the top half and mirrors it across the real axis
+- `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; used by the three-stage `gpgpu chart` hardware probe
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; used by `gpgpu pixel artifact|static|plasma`
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
@@ -129,11 +129,11 @@ quad worklist build. Its SHA-256 is:
 
 `artifacts/adls/mandel64_worklist_rgba8.bin` is the descriptor Mandelbrot
 tile worklist build with clipped 64x4 row-band descriptors, mirrored half-scanout,
-32-bit Q12 arithmetic, and descriptor-controlled iteration cap plus grayscale
-scale. Its SHA-256 is:
+optional full-height viewport work, 32-bit Q12 arithmetic, and
+descriptor-controlled iteration cap plus grayscale scale. Its SHA-256 is:
 
 ```text
-79c7d4170540650417489a882e52c52b1a47f85182790dfc1c3a22ad64a6248d
+8b1746984f74156ccdbeb9431df9d25061285655067de8ebd5283b08de00d91f
 ```
 
 `artifacts/adls/chart_sine_rgba8.bin` is the allowlisted analytical chart build.

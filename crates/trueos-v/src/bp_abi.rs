@@ -27,6 +27,16 @@ pub struct TrueosUi4SolaraTextRow {
     pub y: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct TrueosUi4SolaraSceneTextRow {
+    pub text_ptr: *const u8,
+    pub text_len: usize,
+    pub x: f32,
+    pub y: f32,
+    pub font_pixels: f32,
+}
+
 unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_font_sizes(
         out: *mut TrueosUi4SolaraFontSize,
@@ -42,6 +52,15 @@ unsafe extern "C" {
         dst_y: i32,
         rgba: u32,
         rows: *const TrueosUi4SolaraTextRow,
+        row_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_solara_text_scene(
+        window_id: u32,
+        font_id: u32,
+        viewport_width: u32,
+        viewport_height: u32,
+        rgba: u32,
+        rows: *const TrueosUi4SolaraSceneTextRow,
         row_count: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_publish(

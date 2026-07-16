@@ -362,7 +362,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
     let views = [crate::intel::gpgpu::GpgpuRect::new(0, 0, MANDEL_WIDTH, MANDEL_HEIGHT); 3];
     let initial_parameters = [STATIC_PARAMETER, 0, 0];
     for slot in 0..frames.len() {
-        match render_mandel_frame(frames[slot], views[slot], initial_parameters[slot]) {
+        match render_mandel_frame(frames[slot], views[slot], initial_parameters[slot], slot != 1) {
             Ok(_) => {}
             Err(error) => {
                 destroy_frames(frames);
@@ -874,8 +874,9 @@ fn handle_mandel_pan_callback(
     else {
         return Ok(());
     };
-    // The immutable frame deliberately remains static.
-    if slot == 0 {
+    // Only the dirty frame accepts complex-plane pan. The immutable frame is
+    // static, while the streaming frame retains the mirrored half-render.
+    if slot != 1 {
         return Ok(());
     }
 
@@ -901,11 +902,7 @@ fn handle_mandel_pan_callback(
                 view.y = view.y.saturating_sub(pan_y);
                 *view
             };
-            let parameter = if slot == 1 {
-                runtime.mandel.dirty_parameter
-            } else {
-                runtime.mandel.stream_parameter
-            };
+            let parameter = runtime.mandel.dirty_parameter;
             render_and_publish_mandel(&runtime.mandel, slot, parameter)?;
             crate::log_info!(
                 target: "ui4";
@@ -1043,7 +1040,7 @@ fn render_and_publish_mandel(
     slot: usize,
     parameter: u32,
 ) -> Result<PublishedFrame, DummyUi4ConsumerError> {
-    let published = render_mandel_frame(app.frames[slot], app.views[slot], parameter)?;
+    let published = render_mandel_frame(app.frames[slot], app.views[slot], parameter, slot != 1)?;
     publish_window_frame(app.owner, app.windows[slot], DamageRect::FULL)?;
     Ok(published)
 }
@@ -1052,6 +1049,7 @@ fn render_mandel_frame(
     frame: FrameHandle,
     view: crate::intel::gpgpu::GpgpuRect,
     parameter: u32,
+    mirror_at_center: bool,
 ) -> Result<PublishedFrame, DummyUi4ConsumerError> {
     let lease = acquire_frame_buffer(frame)?;
     let surface = match gpgpu_rgba_surface(lease) {
@@ -1061,8 +1059,12 @@ fn render_mandel_frame(
             return Err(error.into());
         }
     };
-    let rendered = crate::intel::gpgpu::mandel64_worklist_surface_view(surface, view, parameter)
-        .is_some_and(|result| result.ok);
+    let rendered = if mirror_at_center {
+        crate::intel::gpgpu::mandel64_worklist_surface_full(surface, parameter)
+    } else {
+        crate::intel::gpgpu::mandel64_worklist_surface_view(surface, view, parameter)
+    }
+    .is_some_and(|result| result.ok);
     if !rendered {
         let _ = cancel_frame_buffer(lease);
         return Err(DummyUi4ConsumerError::RenderFailed);

@@ -225,6 +225,16 @@ impl GpuFontFace {
     }
 }
 
+/// Resolve the requested face at the kernel font-service boundary.
+/// Embedded fonts warm lazily here if the boot task has not reached them yet.
+pub(crate) fn ensure_font_face_available(font: GpuFontFace) -> Result<(), &'static str> {
+    match crate::graphics::font::ensure_font_available(font.registry_name()) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("font-not-registered"),
+        Err(_) => Err("font-warm-failed"),
+    }
+}
+
 impl GpuFontTextLayout {
     pub(crate) const fn name(self) -> &'static str {
         match self {
@@ -242,13 +252,15 @@ pub(crate) enum GpuFontTextRequest<'a> {
 
 /// One positioned text group in a font job.
 ///
-/// Positions are expressed in the shared base-font coordinate space: +X is
-/// right and +Y is down. The complete job bounds are fitted to the native
-/// target once, so relative placement is preserved across every entry.
+/// Positions and `font_pixels` share one +X-right/+Y-down coordinate space.
+/// Callers choose whether the complete job bounds are stamp-fitted or mapped
+/// directly into an explicit scene viewport at submission time.
 #[derive(Clone, Copy)]
 pub(crate) struct GpuFontJobEntry<'a> {
     pub(crate) text: GpuFontTextRequest<'a>,
     pub(crate) position: [f32; 2],
+    /// Requested glyph em size in the same pixel coordinate space as position.
+    pub(crate) font_pixels: f32,
 }
 
 pub(crate) struct GpuFontJob<'a> {
@@ -1184,6 +1196,7 @@ pub(crate) fn render_text_once_with_font(
     let entry = GpuFontJobEntry {
         text: request,
         position: [0.0, 0.0],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
     };
     let job = render_font_job_once(GpuFontJob {
         entries: core::slice::from_ref(&entry),
@@ -1245,6 +1258,7 @@ pub(crate) fn stamp_text_once_with_font_centered(
     let entry = GpuFontJobEntry {
         text: request,
         position: [0.0, 0.0],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
     };
     let mut built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
     let mesh_width = libm::ceilf((built.bounds.2 - built.bounds.0).max(1.0)) as u32;
@@ -1580,6 +1594,55 @@ pub(crate) fn render_font_job_readback_once(
     Ok(readback)
 }
 
+/// Render positioned text directly in a UI scene's pixel coordinate space.
+/// Unlike the stamp path, the complete mesh is not normalized to its own
+/// bounds: `(0, 0)..(width, height)` maps one-to-one onto the target.
+pub(crate) fn render_font_scene_readback_once(
+    job: GpuFontJob<'_>,
+    width: u32,
+    height: u32,
+) -> Result<crate::intel::render::FontRenderTargetReadback, &'static str> {
+    if width == 0 || height == 0 {
+        return Err("font-scene-empty");
+    }
+    let built = build_font_job_mesh(job.entries, job.font)?;
+    let upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
+        built.vertices.len(),
+        built.indices.len(),
+    )
+    .ok_or("font-mesh-staging-overflow")?;
+    let upload_capacity = crate::intel::render::transient_font_mesh_upload_capacity_bytes();
+    if upload_bytes > upload_capacity {
+        crate::log_info!(
+            target: "render";
+            "intel/gpu-font: scene mesh split required entries={} text_chars={} vertices={} indices={} upload_bytes={} capacity_bytes={}\n",
+            built.entries,
+            built.text_chars,
+            built.vertices.len(),
+            built.indices.len(),
+            upload_bytes,
+            upload_capacity,
+        );
+        return Err("font-mesh-staging-capacity");
+    }
+    let reusable_pixels = core::mem::take(&mut *TRANSIENT_FONT_STAMP_READBACK.lock());
+    let (render, readback) =
+        crate::intel::render::submit_font_mesh_readback_once_at_extent_reusing(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            (0.0, 0.0, width as f32, height as f32),
+            width,
+            height,
+            0,
+            reusable_pixels,
+        )?;
+    if !render.completed {
+        recycle_transient_font_readback(readback.pixels);
+        return Err("font-render-incomplete");
+    }
+    Ok(readback)
+}
+
 pub(crate) fn recycle_font_job_readback(readback: crate::intel::render::FontRenderTargetReadback) {
     recycle_transient_font_readback(readback.pixels);
 }
@@ -1616,7 +1679,12 @@ fn build_font_job_mesh_inner(
     let mut glyphs = 0usize;
 
     for entry in entries {
-        if !entry.position[0].is_finite() || !entry.position[1].is_finite() {
+        if !entry.position[0].is_finite()
+            || !entry.position[1].is_finite()
+            || !entry.font_pixels.is_finite()
+            || entry.font_pixels <= 0.0
+            || entry.font_pixels > 256.0
+        {
             return Err("font-job-position");
         }
         let (mesh, entry_chars, entry_rows) =
@@ -1632,9 +1700,13 @@ fn build_font_job_mesh_inner(
         if next_vertex_len > u32::MAX as usize {
             return Err("font-job-vertex-range");
         }
+        let entry_scale = entry.font_pixels / crate::graphics::font::FONT_TESSEL_BASE_PX;
         vertices.reserve(mesh.vertices.len());
         for vertex in &mesh.vertices {
-            vertices.push([vertex[0] + entry.position[0], vertex[1] + entry.position[1]]);
+            vertices.push([
+                vertex[0] * entry_scale + entry.position[0],
+                vertex[1] * entry_scale + entry.position[1],
+            ]);
         }
         indices.reserve(mesh.indices.len());
         for index in &mesh.indices {
@@ -1646,10 +1718,10 @@ fn build_font_job_mesh_inner(
         }
 
         let entry_bounds = (
-            mesh.summary.min_x + entry.position[0],
-            mesh.summary.min_y + entry.position[1],
-            mesh.summary.max_x + entry.position[0],
-            mesh.summary.max_y + entry.position[1],
+            mesh.summary.min_x * entry_scale + entry.position[0],
+            mesh.summary.min_y * entry_scale + entry.position[1],
+            mesh.summary.max_x * entry_scale + entry.position[0],
+            mesh.summary.max_y * entry_scale + entry.position[1],
         );
         bounds = Some(match bounds {
             Some((min_x, min_y, max_x, max_y)) => (

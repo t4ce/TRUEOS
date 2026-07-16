@@ -125,11 +125,7 @@ pub(crate) struct FrameHandle(u64);
 
 impl FrameHandle {
     pub(crate) const fn from_raw(raw: u64) -> Option<Self> {
-        if raw == 0 {
-            None
-        } else {
-            Some(Self(raw))
-        }
+        if raw == 0 { None } else { Some(Self(raw)) }
     }
 
     pub(crate) const fn raw(self) -> u64 {

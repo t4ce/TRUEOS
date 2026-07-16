@@ -27,11 +27,7 @@ pub(crate) struct WindowId(u32);
 
 impl WindowId {
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
-        if raw == 0 {
-            None
-        } else {
-            Some(Self(raw))
-        }
+        if raw == 0 { None } else { Some(Self(raw)) }
     }
 
     pub(crate) const fn raw(self) -> u32 {
@@ -45,11 +41,7 @@ pub(crate) struct WindowSessionId(u32);
 
 impl WindowSessionId {
     pub(crate) const fn from_raw(raw: u32) -> Option<Self> {
-        if raw == 0 {
-            None
-        } else {
-            Some(Self(raw))
-        }
+        if raw == 0 { None } else { Some(Self(raw)) }
     }
 
     pub(crate) const fn raw(self) -> u32 {

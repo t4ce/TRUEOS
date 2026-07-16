@@ -634,6 +634,14 @@ pub(crate) fn warm_embedded_fonts_once() -> Result<Vec<FontWarmSummary>, skrifa:
     Ok(summaries)
 }
 
+/// Ensure that a named font has a resident, size-independent outline cache.
+///
+/// Embedded faces are warmed synchronously on first use. Filesystem-backed
+/// faces report unavailable until the background loader has registered them.
+pub(crate) fn ensure_font_available(name: &str) -> Result<bool, skrifa::raw::ReadError> {
+    Ok(warm_embedded_font_by_name(name)?.is_some())
+}
+
 fn warm_embedded_font_by_name(
     name: &str,
 ) -> Result<Option<FontWarmSummary>, skrifa::raw::ReadError> {
