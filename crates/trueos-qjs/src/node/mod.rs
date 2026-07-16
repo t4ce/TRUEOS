@@ -1150,25 +1150,20 @@ unsafe fn describe_console_arg<'a>(
         return qjs::jsbind::JsStringRef::new(ctx, value);
     }
 
-    let describe = qjs::JS_GetPropertyStr(
-        ctx,
-        global,
-        b"__trueosConsoleDescribe\0".as_ptr() as *const c_char,
-    );
+    let describe =
+        qjs::JS_GetPropertyStr(ctx, global, b"__trueosConsoleDescribe\0".as_ptr() as *const c_char);
     qjs::js_free_value(ctx, global);
-    if describe.is_exception() || describe.tag == qjs::JS_TAG_UNDEFINED || describe.tag == qjs::JS_TAG_NULL {
+    if describe.is_exception()
+        || describe.tag == qjs::JS_TAG_UNDEFINED
+        || describe.tag == qjs::JS_TAG_NULL
+    {
         qjs::js_free_value(ctx, describe);
         return qjs::jsbind::JsStringRef::new(ctx, value);
     }
 
     let arg = qjs::js_dup_value(ctx, value);
-    let described = qjs::JS_Call(
-        ctx,
-        describe,
-        qjs::JSValue::undefined(),
-        1,
-        &arg as *const qjs::JSValueConst,
-    );
+    let described =
+        qjs::JS_Call(ctx, describe, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValueConst);
     qjs::js_free_value(ctx, arg);
     qjs::js_free_value(ctx, describe);
     if described.is_exception() {

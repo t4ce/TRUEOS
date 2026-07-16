@@ -125,13 +125,7 @@ unsafe fn load_native_module(
         return workers_mod;
     }
 
-    let lightningcss_mod =
-        unsafe { crate::lightningcss_native::try_create_native_module(ctx, module_name) };
-    if !lightningcss_mod.is_null() {
-        return lightningcss_mod;
-    }
-
-    unsafe { crate::cmd_stream::try_create_native_module(ctx, module_name) }
+    unsafe { crate::lightningcss_native::try_create_native_module(ctx, module_name) }
 }
 
 fn path_is_relative(spec: &[u8]) -> bool {
@@ -571,8 +565,6 @@ pub(crate) unsafe fn normalize_with_mode(
             || spec == b"trueos:browser_context"
             || spec == b"trueos:browser_navigator"
             || spec == b"trueos:browser_webgpu"
-            || spec == b"cmd_stream"
-            || spec == b"trueos:cmd_stream"
             || spec == b"worker_threads"
             || spec == b"process"
             || spec == b"node:process"

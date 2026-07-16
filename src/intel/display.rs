@@ -74,9 +74,9 @@ const fn pipe_bottom_color_u0_10(red: u32, green: u32, blue: u32) -> u32 {
 const JPG_CENTER_CROP: bool = true;
 const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
 // Universal plane role map for pipe-local planes.
-const UI_OVERLAY_PLANE_SLOT: usize = 1;
-const VIDEO_NV12_PLANE_SLOT: usize = 2;
-const VIDEO_NV12_Y_PLANE_SLOT: usize = 3;
+const UI_OVERLAY_PLANE_SLOT: usize = crate::ui4::ALPHA_OVERLAY_PLANE_SLOT;
+const VIDEO_NV12_PLANE_SLOT: usize = crate::ui4::NV12_UV_PLANE_SLOT;
+const VIDEO_NV12_Y_PLANE_SLOT: usize = crate::ui4::NV12_Y_PLANE_SLOT;
 const OVERLAY_PLANE_SLOT: usize = UI_OVERLAY_PLANE_SLOT;
 const DEFAULT_OVERLAY_MARKER_ENABLED: bool = false;
 const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
@@ -95,9 +95,9 @@ const OVERLAY_COMPOSITION_PROOF_MARKER_SIZE: u32 = 96;
 const OVERLAY_COMPOSITION_PROOF_MARKER_GAP: u32 = 16;
 const OVERLAY_COMPOSITION_PROOF_MARKER_X: u32 = 48;
 const OVERLAY_COMPOSITION_PROOF_MARKER_Y: u32 = 48;
-const OVERLAY_SWAP_BUFFER_COUNT: usize = 2;
+const OVERLAY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
 pub(super) const DISPLAY_PIPELINE_COUNT: usize = PIPES.len();
-pub(super) const DISPLAY_OUTPUT_COUNT: usize = 4;
+pub(super) const DISPLAY_OUTPUT_COUNT: usize = crate::ui4::OUTPUT_COUNT;
 const _: () = assert!(DISPLAY_OUTPUT_COUNT == DISPLAY_PIPELINE_COUNT);
 // Both display GGTT and the legacy direct-RCS PPGTT consume these addresses.
 // The latter currently covers only the low 1 GiB, so keep all four pipelines'
@@ -107,7 +107,7 @@ const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
 const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
-const PRIMARY_SWAP_BUFFER_COUNT: usize = 2;
+const PRIMARY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
 const PRIMARY_SWAP_GPU_BASE: u64 = 0x3100_0000;
 const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
 const PRIMARY_SWAP_PIPE_GPU_STRIDE: u64 = 0x0200_0000;

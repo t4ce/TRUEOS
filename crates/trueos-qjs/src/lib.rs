@@ -24,9 +24,6 @@ pub mod truesurfer_qjs_vm_task;
 pub use truesurfer_qjs_vm_task as browser_task;
 
 #[cfg(feature = "trueos")]
-pub mod cmd_stream;
-
-#[cfg(feature = "trueos")]
 pub mod timers;
 
 #[cfg(feature = "trueos")]

@@ -4,6 +4,10 @@
 //! not expose a guest/userspace ABI and it does not own presentation yet.
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
+pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
+pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
+pub(crate) const NV12_UV_PLANE_SLOT: usize = 2;
+pub(crate) const NV12_Y_PLANE_SLOT: usize = 3;
 
 /// Stable logical display identity. Routing to pipe A-D is display-driver state.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -112,11 +116,15 @@ impl ScanoutFormat {
 
     pub(crate) const fn plane(self) -> PlaneAssignment {
         match self {
-            Self::Xrgb8888 | Self::Xbgr8888 => PlaneAssignment::Primary { slot: 0 },
-            Self::Rgba8888Premultiplied => PlaneAssignment::AlphaOverlay { slot: 1 },
+            Self::Xrgb8888 | Self::Xbgr8888 => PlaneAssignment::Primary {
+                slot: PRIMARY_PLANE_SLOT as u8,
+            },
+            Self::Rgba8888Premultiplied => PlaneAssignment::AlphaOverlay {
+                slot: ALPHA_OVERLAY_PLANE_SLOT as u8,
+            },
             Self::Nv12YTile => PlaneAssignment::LinkedNv12 {
-                uv_slot: 2,
-                y_slot: 3,
+                uv_slot: NV12_UV_PLANE_SLOT as u8,
+                y_slot: NV12_Y_PLANE_SLOT as u8,
             },
         }
     }
@@ -199,4 +207,8 @@ const _: () = {
             y_slot: 3
         }
     ));
+    assert!(PRIMARY_PLANE_SLOT == 0);
+    assert!(ALPHA_OVERLAY_PLANE_SLOT == 1);
+    assert!(NV12_UV_PLANE_SLOT == 2);
+    assert!(NV12_Y_PLANE_SLOT == 3);
 };
