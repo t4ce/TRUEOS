@@ -39,6 +39,8 @@ static REPLY_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 const PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS: f32 = 1.75;
 const UI4_FRAME_PERIOD_US: u64 = 16_667;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(3);
+const UI4_PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_3;
+const _: () = assert!(UI4_PLANE_SLOT == 3);
 const UI4_WAITING_TEXT: &str = "Draw3D TCP ready - waiting for StartScene";
 const UI4_WAITING_STAMP_WIDTH: u32 = 640;
 const UI4_WAITING_STAMP_HEIGHT: u32 = 112;
@@ -117,7 +119,7 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
         session,
         frame,
         output,
-        plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
+        plane: crate::ui4::WindowPlane::Universal(UI4_PLANE_SLOT as u8),
         placement: crate::ui4::WindowPlacement {
             x: (scanout_width.saturating_sub(width) / 2) as i32,
             y: (scanout_height.saturating_sub(height) / 2) as i32,
@@ -732,7 +734,7 @@ pub async fn draw3d_ui4_render_task() {
         surface.session.raw(),
         surface.frame.raw(),
         surface.window.raw(),
-        crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
+        UI4_PLANE_SLOT,
         buffers,
         surface.width,
         surface.height,
@@ -906,7 +908,7 @@ pub async fn draw3d_ui4_render_task() {
                                             result.width,
                                             result.height,
                                             result.frame_us,
-                                            crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
+                                            UI4_PLANE_SLOT,
                                         );
                                     }
                                 }

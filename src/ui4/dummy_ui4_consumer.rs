@@ -626,6 +626,15 @@ fn software_cursor_rects() -> heapless::Vec<crate::intel::LiveOverlayRect, 512> 
     let visuals = software_cursor_visuals();
     let mut rects: heapless::Vec<crate::intel::LiveOverlayRect, 512> = heapless::Vec::new();
 
+    // Keep selection deliberately trim: four one-pixel edges on the same
+    // topmost interaction plane as its owning cursor, with no filled area to
+    // obscure application content.
+    for visual in &visuals {
+        if let Some(selection) = visual.selection {
+            push_rect_border(&mut rects, selection, 1, visual.color);
+        }
+    }
+
     for visual in &visuals {
         let Some((x, y)) = visual.context_menu else {
             continue;
@@ -697,7 +706,12 @@ fn present_software_cursor_plane(
         (None, Some(current)) => current,
         (None, None) => return Ok(()),
     };
-    if crate::intel::present_live_overlay_rects_damage(rects, damage, "ui4-software-cursors") {
+    if crate::intel::present_live_overlay_rects_on_slot_damage(
+        super::INTERACTION_OVERLAY_PLANE_SLOT,
+        rects,
+        damage,
+        "ui4-interaction-slot4",
+    ) {
         state.previous_bounds = current_bounds;
         state.signature = signature;
         state.initialized = true;

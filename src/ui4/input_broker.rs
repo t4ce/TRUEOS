@@ -19,6 +19,7 @@ const MAX_OWNER_EVENTS: usize = 256;
 const CURSOR_BATCH: usize = 64;
 const KEYBOARD_BATCH: usize = 64;
 const INPUT_PUMP_PERIOD_MS: u64 = 4;
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
@@ -162,6 +163,7 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) color: crate::graphics::primitives::Rgba8,
     pub(crate) draw_cursor: bool,
     pub(crate) context_menu: Option<(u32, u32)>,
+    pub(crate) selection: Option<Ui4VisualRect>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -195,6 +197,7 @@ struct CursorRoute {
     secondary_dragged: bool,
     maximize_rearm_origin: Option<(u32, u32)>,
     context_menu: Option<(u32, u32)>,
+    selection_anchor: Option<(u32, u32)>,
 }
 
 impl CursorRoute {
@@ -214,6 +217,7 @@ impl CursorRoute {
             secondary_dragged: false,
             maximize_rearm_origin: None,
             context_menu: None,
+            selection_anchor: None,
         }
     }
 }
@@ -334,6 +338,12 @@ impl InputBroker {
             })
         {
             self.cursors[index].maximize_rearm_origin = None;
+        }
+        if pressed & PRIMARY_BUTTON_MASK != 0 {
+            self.cursors[index].selection_anchor = Some((x, y));
+        }
+        if released & PRIMARY_BUTTON_MASK != 0 {
+            self.cursors[index].selection_anchor = None;
         }
         if pressed & SECONDARY_BUTTON_MASK != 0 {
             self.cursors[index].secondary_anchor = Some((x, y));
@@ -704,6 +714,10 @@ impl InputBroker {
                 color: route.color,
                 draw_cursor: hardware_cursor_slot != Some(route.source.slot_id),
                 context_menu: route.context_menu,
+                selection: route.selection_anchor.and_then(|anchor| {
+                    (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
+                        .then(|| selection_rect_between(anchor, (route.x, route.y)))
+                }),
             });
         }
         visuals
@@ -716,7 +730,7 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
+        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px selection=primary-button/active-outline screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
     );
     loop {
         INPUT_BROKER.lock().pump();
@@ -842,6 +856,15 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
     i64::from(pixel)
         .saturating_sub(i64::from(origin))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn selection_rect_between(anchor: (u32, u32), point: (u32, u32)) -> Ui4VisualRect {
+    Ui4VisualRect {
+        x: anchor.0.min(point.0),
+        y: anchor.1.min(point.1),
+        width: anchor.0.abs_diff(point.0).saturating_add(1),
+        height: anchor.1.abs_diff(point.1).saturating_add(1),
+    }
 }
 
 fn point_travel_reached(origin: (u32, u32), point: (u32, u32), threshold: u32) -> bool {

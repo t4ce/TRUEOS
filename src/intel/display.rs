@@ -56,7 +56,9 @@ const PIPE_BOTTOM_COLOR_RAW: u32 = pipe_bottom_color_u0_10(0x3FF, 0x3FF, 0x3FF);
 const PRIMARY_FORMAT_PROBE_XRGB: u32 = 0;
 const PRIMARY_FORMAT_PROBE_XBGR: u32 = 1;
 const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
-const UNIVERSAL_PLANE_SLOTS: usize = 4;
+// Display version 13 exposes one primary plus four sprite planes. TRUEOS uses
+// zero-based indices, so the hardware's top sprite is slot 4.
+const UNIVERSAL_PLANE_SLOTS: usize = crate::ui4::UNIVERSAL_PLANE_COUNT;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
@@ -107,16 +109,18 @@ const OVERLAY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.coun
 pub(super) const DISPLAY_PIPELINE_COUNT: usize = PIPES.len();
 pub(super) const DISPLAY_OUTPUT_COUNT: usize = crate::ui4::OUTPUT_COUNT;
 const _: () = assert!(DISPLAY_OUTPUT_COUNT == DISPLAY_PIPELINE_COUNT);
-// Both display GGTT and the legacy direct-RCS PPGTT consume these addresses.
-// The latter currently covers only the low 1 GiB, so keep all four pipelines'
-// two-buffer arenas below that boundary and outside the resident font/scene
-// ranges used by the production Draw3D render context.
+// The first three display overlays retain their bootstrap addresses below the
+// legacy direct-RCS 1 GiB boundary. Slot 4 is CPU-authored UI interaction
+// chrome and therefore needs no direct-RCS alias; keep it above that boundary
+// so it cannot collide with Draw3D's fixed resident scene addresses.
 const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
 const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
 const OVERLAY_PLANE_GPU_STRIDE: u64 = DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE;
 const OVERLAY_UNIVERSAL_PLANE_COUNT: usize = crate::ui4::UNIVERSAL_PLANE_COUNT - 1;
+const DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT: usize = 3;
+const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
 const PRIMARY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
 const PRIMARY_SWAP_GPU_BASE: u64 = 0x3100_0000;
 const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
@@ -125,10 +129,11 @@ const PRIMARY_SECONDARY_PIPE_GPU_BASE: u64 = 0x3900_0000;
 const PRIMARY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
 const PRIMARY_LEGACY_PIPE_GPU_CAPACITY: u64 = 0x0100_0000;
 const _: () = assert!(OVERLAY_PIPE_GPU_STRIDE >= OVERLAY_SWAP_GPU_STRIDE * 2);
-const _: () = assert!(OVERLAY_UNIVERSAL_PLANE_COUNT == 3);
+const _: () = assert!(OVERLAY_UNIVERSAL_PLANE_COUNT == 4);
 const _: () = assert!(PRIMARY_SWAP_PIPE_GPU_STRIDE >= PRIMARY_SWAP_GPU_STRIDE * 2);
 const _: () = assert!(
-    OVERLAY_SWAP_GPU_BASE + OVERLAY_UNIVERSAL_PLANE_COUNT as u64 * OVERLAY_PLANE_GPU_STRIDE
+    OVERLAY_SWAP_GPU_BASE
+        + DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT as u64 * OVERLAY_PLANE_GPU_STRIDE
         <= PRIMARY_SWAP_GPU_BASE
 );
 const _: () = assert!(
@@ -138,6 +143,10 @@ const _: () = assert!(
 const _: () = assert!(
     PRIMARY_SECONDARY_PIPE_GPU_BASE + (DISPLAY_PIPELINE_COUNT as u64 - 1) * PRIMARY_PIPE_GPU_STRIDE
         <= DISPLAY_DIRECT_RCS_VA_LIMIT
+);
+const _: () = assert!(
+    INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
+        <= (u32::MAX as u64) + 1
 );
 pub(super) const DISPLAY_FRAME_TARGET_CAPACITY: usize =
     DISPLAY_PIPELINE_COUNT * OVERLAY_UNIVERSAL_PLANE_COUNT * OVERLAY_SWAP_BUFFER_COUNT;
@@ -176,6 +185,12 @@ static OVERLAY_SURFACES_SLOT_2: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
 ];
 static OVERLAY_SURFACES_SLOT_3: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+];
+static OVERLAY_SURFACES_SLOT_4: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
@@ -1248,7 +1263,7 @@ fn stamp_overlay_plane_slot_bar(
     };
     let reason = "boot-native-plane-slot-bar-p1";
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque) {
-        program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+        program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
             return false;
         }
@@ -3677,6 +3692,18 @@ pub(crate) fn present_live_overlay_rects_damage(
     damage: CompositionDamageRect,
     reason: &str,
 ) -> bool {
+    present_live_overlay_rects_on_slot_damage(OVERLAY_PLANE_SLOT, rects, damage, reason)
+}
+
+/// Damage-aware sparse rectangle compositor for a selected universal plane.
+/// UI4 uses slot 4 for input chrome, leaving the default slot-1 helper intact
+/// for bootstrap probes and older kernel callers.
+pub(crate) fn present_live_overlay_rects_on_slot_damage(
+    plane_slot: usize,
+    rects: &[LiveOverlayRect],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -3686,7 +3713,7 @@ pub(crate) fn present_live_overlay_rects_damage(
     let Some(change) = clip_composition_damage(damage, width, height) else {
         return true;
     };
-    let Some(surface) = ensure_overlay_surface(dev, width, height) else {
+    let Some(surface) = ensure_overlay_surface_on_slot(dev, plane_slot, width, height) else {
         return false;
     };
     let effective = {
@@ -3710,7 +3737,7 @@ pub(crate) fn present_live_overlay_rects_damage(
             if flip_overlay_plane_surface(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
                 (true, "surf-only")
             } else {
-                program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+                program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
                 (
                     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason),
                     "contract-arm",
@@ -3831,7 +3858,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
             if flip_overlay_plane_surface(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
                 (true, "surf-only")
             } else {
-                program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+                program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
                 (
                     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason),
                     "contract-arm",
@@ -3936,7 +3963,7 @@ fn present_rgba_overlay_tiles_on_slot_with_background(
             if flip_overlay_plane_surface(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
                 (true, "surf-only")
             } else {
-                program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+                program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
                 (
                     arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason),
                     "contract-arm",
@@ -4018,7 +4045,7 @@ pub(crate) fn present_live_overlay_rects_preserving(
     crate::intel::dma_flush(surface.virt, byte_len);
 
     if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
-        program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+        program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
             return false;
         }
@@ -4388,7 +4415,7 @@ fn present_rgba_overlay(
         .map(|(x, y)| overlay_plane_clamped_position(surface, x, y))
         .unwrap_or_else(|| overlay_plane_top_right_position(surface));
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, alpha) {
-        program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+        program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, alpha, reason) {
             return false;
         }
@@ -5430,11 +5457,12 @@ fn program_idle_rgb8_plane_contract(dev: crate::intel::Dev, pipe: PipeInfo, slot
         && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_AUX_OFFSET_OFF) == 0
 }
 
-fn program_four_rgb_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
+fn program_five_rgb_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo, reason: &str) {
     let primary_base = overlay_plane_base(pipe, 0);
     let ui_base = overlay_plane_base(pipe, UI_OVERLAY_PLANE_SLOT);
     let slot_2_base = overlay_plane_base(pipe, crate::ui4::RGB_OVERLAY_PLANE_SLOT_2);
     let slot_3_base = overlay_plane_base(pipe, crate::ui4::RGB_OVERLAY_PLANE_SLOT_3);
+    let slot_4_base = overlay_plane_base(pipe, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT);
 
     program_plane_watermark_boot_safe(dev, primary_base, true);
     let (primary_buf_before, primary_buf_after) =
@@ -5456,6 +5484,10 @@ fn program_four_rgb_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo
     let (slot_3_buf_before, slot_3_buf_after) =
         program_plane_buf_cfg(dev, slot_3_base, PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END);
 
+    program_plane_watermark_boot_safe(dev, slot_4_base, true);
+    let (slot_4_buf_before, slot_4_buf_after) =
+        program_plane_buf_cfg(dev, slot_4_base, PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END);
+
     // Do not rewrite a live legacy surface. Normal UI4 boot reaches this with
     // slots 2 and 3 parked, at which point both become disabled RGBA8-ready
     // universal planes. The explicit legacy NV12 probe may still re-arm them.
@@ -5463,12 +5495,16 @@ fn program_four_rgb_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo
         program_idle_rgb8_plane_contract(dev, pipe, crate::ui4::RGB_OVERLAY_PLANE_SLOT_2);
     let slot_3_rgb8 =
         program_idle_rgb8_plane_contract(dev, pipe, crate::ui4::RGB_OVERLAY_PLANE_SLOT_3);
+    let slot_4_rgb8 =
+        program_idle_rgb8_plane_contract(dev, pipe, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT);
 
     crate::log!(
-        "intel/display: four-rgb-plane-resources reason={} pipe={} blocks_per_slot={} slot0=0 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} slot1={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} slot2=2 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} rgb8_ready={} slot3=3 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} rgb8_ready={}\n",
+        "intel/display: five-rgb-plane-resources reason={} pipe={} dbuf_total={} balanced_blocks={} top_blocks={} slot0=0 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} slot1={} buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} slot2=2 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} rgb8_ready={} slot3=3 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} rgb8_ready={} slot4=4 buf=0x{:08X}=>0x{:08X} wm0=0x{:08X} rgb8_ready={} role=interaction-topmost\n",
         reason,
         pipe.name,
-        PLANE_DBUF_BLOCKS_PER_SLOT,
+        PLANE_DBUF_TOTAL_BLOCKS,
+        PLANE_DBUF_BALANCED_BLOCKS,
+        PLANE_DBUF_TOP_BLOCKS,
         primary_buf_before,
         primary_buf_after,
         crate::intel::mmio_read(dev, primary_base + UNI_PLANE_WM_0_OFF),
@@ -5484,6 +5520,10 @@ fn program_four_rgb_plane_stack_resources(dev: crate::intel::Dev, pipe: PipeInfo
         slot_3_buf_after,
         crate::intel::mmio_read(dev, slot_3_base + UNI_PLANE_WM_0_OFF),
         slot_3_rgb8 as u8,
+        slot_4_buf_before,
+        slot_4_buf_after,
+        crate::intel::mmio_read(dev, slot_4_base + UNI_PLANE_WM_0_OFF),
+        slot_4_rgb8 as u8,
     );
 }
 
@@ -6108,6 +6148,7 @@ fn overlay_surface_pool(
         1 => Some(&OVERLAY_SURFACES_SLOT_1[pipe.slot]),
         2 => Some(&OVERLAY_SURFACES_SLOT_2[pipe.slot]),
         3 => Some(&OVERLAY_SURFACES_SLOT_3[pipe.slot]),
+        4 => Some(&OVERLAY_SURFACES_SLOT_4[pipe.slot]),
         _ => None,
     }
 }
@@ -6119,6 +6160,14 @@ fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfac
 fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize) -> Option<u64> {
     let plane_index = plane_slot.checked_sub(1)?;
     if plane_index >= OVERLAY_UNIVERSAL_PLANE_COUNT || index >= OVERLAY_SWAP_BUFFER_COUNT {
+        return None;
+    }
+    if plane_slot == crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT {
+        return INTERACTION_OVERLAY_GPU_BASE
+            .checked_add((pipe.slot as u64).checked_mul(OVERLAY_PIPE_GPU_STRIDE)?)?
+            .checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?);
+    }
+    if plane_index >= DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT {
         return None;
     }
     OVERLAY_SWAP_GPU_BASE
@@ -6483,7 +6532,7 @@ fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) 
     let pos_y = scanout_h.saturating_sub(surface.height) / 2;
     let reason = "default-overlay-marker";
     if overlay_plane_needs_rearm(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque) {
-        program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+        program_five_rgb_plane_stack_resources(dev, surface.pipe, reason);
         if !arm_overlay_plane(dev, surface, pos_x, pos_y, OverlayAlphaMode::Opaque, reason) {
             return false;
         }
@@ -7196,6 +7245,11 @@ fn overlay_plane_surface_flip_guard(
             overlay_plane_base(surface.pipe, VIDEO_NV12_Y_PLANE_SLOT),
             PLANE_DBUF_SLOT_3_START,
             PLANE_DBUF_SLOT_3_END,
+        ),
+        (
+            overlay_plane_base(surface.pipe, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT),
+            PLANE_DBUF_SLOT_4_START,
+            PLANE_DBUF_SLOT_4_END,
         ),
     ];
     if !resources.iter().all(|(base, start, end)| {

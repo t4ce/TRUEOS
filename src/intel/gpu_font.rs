@@ -28,6 +28,7 @@ const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
 /// Color is deliberately absent from `ResidentFontMesh`: changing this
 /// draw-time value never mutates or uploads the persistent VB/IB allocation.
 pub(crate) const GPU_FONT_LEGACY_BLUE: GpuFontRgba = GpuFontRgba::new(0, 64, 255, 255);
+pub(crate) const GPU_FONT_COLOR_KEYFRAME_CAPACITY: usize = 8;
 
 /// Select which components a color transition is allowed to change.
 /// Components outside the mask retain their value from `from`.
@@ -46,6 +47,18 @@ impl GpuFontColorChannels {
     pub(crate) const ALPHA: Self = Self(Self::ALPHA_BIT);
     pub(crate) const RGB: Self = Self(Self::RED_BIT | Self::GREEN_BIT | Self::BLUE_BIT);
     pub(crate) const RGBA: Self = Self(Self::RGB.0 | Self::ALPHA_BIT);
+
+    pub(crate) const fn from_bits(bits: u8) -> Option<Self> {
+        if bits != 0 && bits & !Self::RGBA.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
 
     pub(crate) const fn name(self) -> &'static str {
         match self.0 {
@@ -111,9 +124,35 @@ pub(crate) struct GpuFontColorTransition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuFontColorKeyframe {
+    pub(crate) offset_permille: u16,
+    pub(crate) rgba: GpuFontRgba,
+}
+
+impl GpuFontColorKeyframe {
+    pub(crate) const EMPTY: Self = Self {
+        offset_permille: 0,
+        rgba: GpuFontRgba::new(0, 0, 0, 0),
+    };
+}
+
+/// Fixed-storage CSS-like color keyframes. Validation belongs to the producer
+/// boundary; the sampler can therefore stay allocation-free in the frame path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuFontColorKeyframes {
+    pub(crate) frames: [GpuFontColorKeyframe; GPU_FONT_COLOR_KEYFRAME_CAPACITY],
+    pub(crate) frame_count: u8,
+    pub(crate) channels: GpuFontColorChannels,
+    pub(crate) duration_ms: u32,
+    pub(crate) timing: GpuFontColorTiming,
+    pub(crate) iteration: GpuFontColorIteration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GpuFontColorProgram {
     Static(GpuFontRgba),
     Transition(GpuFontColorTransition),
+    Keyframes(GpuFontColorKeyframes),
 }
 
 impl GpuFontColorProgram {
@@ -121,6 +160,7 @@ impl GpuFontColorProgram {
         match self {
             Self::Static(_) => "static",
             Self::Transition(_) => "transition",
+            Self::Keyframes(_) => "keyframes",
         }
     }
 
@@ -128,32 +168,16 @@ impl GpuFontColorProgram {
         match self {
             Self::Static(rgba) => rgba,
             Self::Transition(transition) => transition.sample(elapsed_ms),
+            Self::Keyframes(keyframes) => keyframes.sample(elapsed_ms),
         }
     }
 }
 
 impl GpuFontColorTransition {
     fn sample(self, elapsed_ms: u64) -> GpuFontRgba {
-        let duration = u64::from(self.duration_ms.max(1));
-        let linear_progress = match self.iteration {
-            GpuFontColorIteration::Once => elapsed_ms.min(duration) as f32 / duration as f32,
-            GpuFontColorIteration::Loop => (elapsed_ms % duration) as f32 / duration as f32,
-            GpuFontColorIteration::Alternate => {
-                let cycle = elapsed_ms / duration;
-                let within = (elapsed_ms % duration) as f32 / duration as f32;
-                if cycle.is_multiple_of(2) {
-                    within
-                } else {
-                    1.0 - within
-                }
-            }
-        };
-        let progress = match self.timing {
-            GpuFontColorTiming::Linear => linear_progress,
-            GpuFontColorTiming::EaseInOutSine => {
-                0.5 - 0.5 * libm::cosf(core::f32::consts::PI * linear_progress)
-            }
-        };
+        let linear_progress =
+            animation_linear_progress(self.duration_ms, self.iteration, elapsed_ms);
+        let progress = animation_timed_progress(self.timing, linear_progress);
         GpuFontRgba::new(
             transition_component(
                 self.from.r,
@@ -180,6 +204,78 @@ impl GpuFontColorTransition {
                 self.channels.contains(GpuFontColorChannels::ALPHA_BIT),
             ),
         )
+    }
+}
+
+impl GpuFontColorKeyframes {
+    fn sample(self, elapsed_ms: u64) -> GpuFontRgba {
+        let count = usize::from(self.frame_count).clamp(2, GPU_FONT_COLOR_KEYFRAME_CAPACITY);
+        let progress = animation_linear_progress(self.duration_ms, self.iteration, elapsed_ms);
+        let progress_permille = progress * 1_000.0;
+        let mut upper = 1usize;
+        while upper + 1 < count && progress_permille > f32::from(self.frames[upper].offset_permille)
+        {
+            upper += 1;
+        }
+        let lower = upper - 1;
+        let from = self.frames[lower];
+        let to = self.frames[upper];
+        let span = f32::from(to.offset_permille.saturating_sub(from.offset_permille)).max(1.0);
+        let local = ((progress_permille - f32::from(from.offset_permille)) / span).clamp(0.0, 1.0);
+        let local = animation_timed_progress(self.timing, local);
+        let base = self.frames[0].rgba;
+        GpuFontRgba::new(
+            if self.channels.contains(GpuFontColorChannels::RED_BIT) {
+                transition_component(from.rgba.r, to.rgba.r, local, true)
+            } else {
+                base.r
+            },
+            if self.channels.contains(GpuFontColorChannels::GREEN_BIT) {
+                transition_component(from.rgba.g, to.rgba.g, local, true)
+            } else {
+                base.g
+            },
+            if self.channels.contains(GpuFontColorChannels::BLUE_BIT) {
+                transition_component(from.rgba.b, to.rgba.b, local, true)
+            } else {
+                base.b
+            },
+            if self.channels.contains(GpuFontColorChannels::ALPHA_BIT) {
+                transition_component(from.rgba.a, to.rgba.a, local, true)
+            } else {
+                base.a
+            },
+        )
+    }
+}
+
+fn animation_linear_progress(
+    duration_ms: u32,
+    iteration: GpuFontColorIteration,
+    elapsed_ms: u64,
+) -> f32 {
+    let duration = u64::from(duration_ms.max(1));
+    match iteration {
+        GpuFontColorIteration::Once => elapsed_ms.min(duration) as f32 / duration as f32,
+        GpuFontColorIteration::Loop => (elapsed_ms % duration) as f32 / duration as f32,
+        GpuFontColorIteration::Alternate => {
+            let cycle = elapsed_ms / duration;
+            let within = (elapsed_ms % duration) as f32 / duration as f32;
+            if cycle.is_multiple_of(2) {
+                within
+            } else {
+                1.0 - within
+            }
+        }
+    }
+}
+
+fn animation_timed_progress(timing: GpuFontColorTiming, linear_progress: f32) -> f32 {
+    match timing {
+        GpuFontColorTiming::Linear => linear_progress,
+        GpuFontColorTiming::EaseInOutSine => {
+            0.5 - 0.5 * libm::cosf(core::f32::consts::PI * linear_progress)
+        }
     }
 }
 

@@ -6,8 +6,14 @@
 
 use alloc::{string::String, vec::Vec};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+
+use crate::intel::gpu_font::{
+    GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorIteration,
+    GpuFontColorKeyframe, GpuFontColorKeyframes, GpuFontColorProgram, GpuFontColorTiming,
+    GpuFontRgba,
+};
 
 const COLUMNS: usize = 37;
 const ROWS: usize = 53;
@@ -22,15 +28,34 @@ const STYLE_UNDERLINE: u8 = 1 << 2;
 const COLOR_COUNT: usize = 18;
 const COLOR_DEFAULT: u8 = 0;
 const COLOR_TRANSPARENT: u8 = 17;
+const TEXT_ANIMATION_COLOR_SLOTS: usize = COLOR_TRANSPARENT as usize;
+const TEXT_ANIMATION_WIRE_VERSION: u8 = 1;
+const TEXT_ANIMATION_WIRE_HEADER_BYTES: usize = 4;
+const TEXT_ANIMATION_RECORD_HEADER_BYTES: usize = 12;
+const TEXT_ANIMATION_KEYFRAME_BYTES: usize = 8;
+const MIN_ANIMATION_DURATION_MS: u32 = 16;
+const MAX_ANIMATION_DURATION_MS: u32 = 600_000;
 const MIN_SCALE_PERCENT: u32 = 1;
 const MAX_SCALE_PERCENT: u32 = 800;
 
-const SCENE_WIDTH: u32 = 700;
-const SCENE_HEIGHT: u32 = 990;
 const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
 const A4_WIDTH_MM: u32 = 210;
 const A4_HEIGHT_MM: u32 = 297;
 const CELL_EDGE_MM: u32 = 5;
+const GRID_WIDTH_MM: u32 = COLUMNS as u32 * CELL_EDGE_MM;
+const GRID_HEIGHT_MM: u32 = ROWS as u32 * CELL_EDGE_MM;
+const RULER_GUTTER_MM: u32 = 4;
+const SURFACE_WIDTH_MM: u32 = RULER_GUTTER_MM + GRID_WIDTH_MM;
+const SURFACE_HEIGHT_MM: u32 = RULER_GUTTER_MM + GRID_HEIGHT_MM;
+// The retained scene uses millimetres as its coordinate space. This makes the
+// grid, rulers, and EDID-sized raster share one physical unit directly.
+const SCENE_WIDTH: u32 = SURFACE_WIDTH_MM;
+const SCENE_HEIGHT: u32 = SURFACE_HEIGHT_MM;
+const SMALL_TICK_LENGTH_MM: f32 = 1.25;
+const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
+const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
+const TEXT_LEFT_INSET_MM: f32 = 0.75;
+const DECORATION_INSET_MM: f32 = 0.5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
 
@@ -38,6 +63,7 @@ const ERROR_INVALID_SNAPSHOT: i32 = -1;
 const ERROR_INVALID_SCALE: i32 = -2;
 const ERROR_NOT_OWNER: i32 = -3;
 const ERROR_TRANSPORT: i32 = -4;
+const ERROR_INVALID_ANIMATION: i32 = -5;
 
 struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
@@ -46,6 +72,8 @@ struct SnapshotStore {
     generation: u64,
     scale_percent: u16,
     serial: u64,
+    text_animations: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_serial: u64,
 }
 
 impl SnapshotStore {
@@ -57,6 +85,8 @@ impl SnapshotStore {
             generation: 0,
             scale_percent: 100,
             serial: 0,
+            text_animations: [None; TEXT_ANIMATION_COLOR_SLOTS],
+            animation_serial: 0,
         }
     }
 }
@@ -67,6 +97,12 @@ struct OwnedSnapshot {
     raw: Vec<u8>,
     generation: u64,
     scale_percent: u16,
+    serial: u64,
+}
+
+#[derive(Clone, Copy)]
+struct OwnedTextAnimations {
+    programs: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     serial: u64,
 }
 
@@ -98,6 +134,29 @@ pub(crate) fn submit_snapshot_for_owner(
     0
 }
 
+/// Replace the complete CSS-like text animation table for one producer.
+/// Palette indices 0..16 act as stable selectors for foreground text layers.
+pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
+    let Ok(programs) = decode_text_animations(raw) else {
+        return ERROR_INVALID_ANIMATION;
+    };
+    let mut snapshots = SNAPSHOTS.lock();
+    if snapshots.owner.is_some_and(|active| active != owner) {
+        return ERROR_NOT_OWNER;
+    }
+    snapshots.owner = Some(owner);
+    snapshots.text_animations = programs;
+    snapshots.animation_serial = snapshots.animation_serial.wrapping_add(1).max(1);
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: text-animation-table accepted serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        snapshots.animation_serial,
+        snapshots.text_animations.iter().flatten().count(),
+        raw.len(),
+    );
+    0
+}
+
 /// Relinquish producer authority without destroying the last persistent scene.
 pub(crate) fn close_owner(owner: u8) -> i32 {
     let mut snapshots = SNAPSHOTS.lock();
@@ -122,6 +181,102 @@ fn snapshot_after(serial: u64) -> Option<OwnedSnapshot> {
         scale_percent: snapshots.scale_percent,
         serial: snapshots.serial,
     })
+}
+
+fn text_animations_after(serial: u64) -> Option<OwnedTextAnimations> {
+    let snapshots = SNAPSHOTS.lock();
+    if snapshots.animation_serial == serial {
+        return None;
+    }
+    Some(OwnedTextAnimations {
+        programs: snapshots.text_animations,
+        serial: snapshots.animation_serial,
+    })
+}
+
+fn decode_text_animations(
+    raw: &[u8],
+) -> Result<[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS], ()> {
+    if raw.len() < TEXT_ANIMATION_WIRE_HEADER_BYTES
+        || raw[0] != TEXT_ANIMATION_WIRE_VERSION
+        || raw[2] != 0
+        || raw[3] != 0
+    {
+        return Err(());
+    }
+    let count = usize::from(raw[1]);
+    if count > TEXT_ANIMATION_COLOR_SLOTS {
+        return Err(());
+    }
+    let mut programs = [None; TEXT_ANIMATION_COLOR_SLOTS];
+    let mut cursor = TEXT_ANIMATION_WIRE_HEADER_BYTES;
+    for _ in 0..count {
+        let header_end = cursor
+            .checked_add(TEXT_ANIMATION_RECORD_HEADER_BYTES)
+            .ok_or(())?;
+        let header = raw.get(cursor..header_end).ok_or(())?;
+        let selector = usize::from(header[0]);
+        let channels = GpuFontColorChannels::from_bits(header[1]).ok_or(())?;
+        let timing = match header[2] {
+            0 => GpuFontColorTiming::Linear,
+            1 => GpuFontColorTiming::EaseInOutSine,
+            _ => return Err(()),
+        };
+        let iteration = match header[3] {
+            0 => GpuFontColorIteration::Once,
+            1 => GpuFontColorIteration::Loop,
+            2 => GpuFontColorIteration::Alternate,
+            _ => return Err(()),
+        };
+        let duration_ms = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let frame_count = usize::from(header[8]);
+        if selector >= TEXT_ANIMATION_COLOR_SLOTS
+            || programs[selector].is_some()
+            || !(MIN_ANIMATION_DURATION_MS..=MAX_ANIMATION_DURATION_MS).contains(&duration_ms)
+            || !(2..=GPU_FONT_COLOR_KEYFRAME_CAPACITY).contains(&frame_count)
+            || header[9..12] != [0, 0, 0]
+        {
+            return Err(());
+        }
+        cursor = header_end;
+        let mut frames = [GpuFontColorKeyframe::EMPTY; GPU_FONT_COLOR_KEYFRAME_CAPACITY];
+        let mut previous_offset = None;
+        for frame in frames.iter_mut().take(frame_count) {
+            let frame_end = cursor
+                .checked_add(TEXT_ANIMATION_KEYFRAME_BYTES)
+                .ok_or(())?;
+            let encoded = raw.get(cursor..frame_end).ok_or(())?;
+            let offset_permille = u16::from_le_bytes([encoded[0], encoded[1]]);
+            if encoded[2] != 0
+                || encoded[3] != 0
+                || offset_permille > 1_000
+                || previous_offset.is_some_and(|previous| offset_permille <= previous)
+            {
+                return Err(());
+            }
+            *frame = GpuFontColorKeyframe {
+                offset_permille,
+                rgba: GpuFontRgba::new(encoded[4], encoded[5], encoded[6], encoded[7]),
+            };
+            previous_offset = Some(offset_permille);
+            cursor = frame_end;
+        }
+        if frames[0].offset_permille != 0 || frames[frame_count - 1].offset_permille != 1_000 {
+            return Err(());
+        }
+        programs[selector] = Some(GpuFontColorProgram::Keyframes(GpuFontColorKeyframes {
+            frames,
+            frame_count: frame_count as u8,
+            channels,
+            duration_ms,
+            timing,
+            iteration,
+        }));
+    }
+    if cursor != raw.len() {
+        return Err(());
+    }
+    Ok(programs)
 }
 
 #[unsafe(no_mangle)]
@@ -159,6 +314,38 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
     // SAFETY: checked non-null above; the ABI caller promises readable bytes.
     let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
     submit_snapshot_for_owner(owner, generation, scale_percent, raw)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i32 {
+    if raw_ptr.is_null() || raw_len < TEXT_ANIMATION_WIRE_HEADER_BYTES {
+        return ERROR_INVALID_ANIMATION;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // SAFETY: the ABI caller promises `raw_len` readable bytes.
+        let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT,
+            0,
+            0,
+            raw,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
+        return ERROR_NOT_OWNER;
+    };
+    // SAFETY: checked non-null above; the ABI caller promises readable bytes.
+    let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
+    submit_text_animations_for_owner(owner, raw)
 }
 
 #[unsafe(no_mangle)]
@@ -225,9 +412,12 @@ impl From<crate::ui4::WindowBrokerError> for ServiceError {
 
 fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
     let (width, height, extent_source) =
-        crate::intel::physical_extent_pixels(A4_WIDTH_MM, A4_HEIGHT_MM)
+        crate::intel::physical_extent_pixels(SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM)
             .map(|(width, height)| (width, height, "edid-physical-mm"))
             .unwrap_or((SCENE_WIDTH, SCENE_HEIGHT, "logical-fallback"));
+    let (grid_width, grid_height) =
+        crate::intel::physical_extent_pixels(GRID_WIDTH_MM, GRID_HEIGHT_MM)
+            .unwrap_or((GRID_WIDTH_MM, GRID_HEIGHT_MM));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
@@ -247,6 +437,16 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
     };
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+    // Keep the useful grid centered. The surface itself extends only far
+    // enough above and to the left to carry the two ruler axes.
+    let x = scanout_width
+        .saturating_sub(grid_width)
+        .saturating_div(2)
+        .saturating_sub(width.saturating_sub(grid_width));
+    let y = scanout_height
+        .saturating_sub(grid_height)
+        .saturating_div(2)
+        .saturating_sub(height.saturating_sub(grid_height));
     let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
@@ -254,8 +454,8 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         output,
         plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
         placement: crate::ui4::WindowPlacement {
-            x: (scanout_width.saturating_sub(width) / 2) as i32,
-            y: (scanout_height.saturating_sub(height) / 2) as i32,
+            x: x as i32,
+            y: y as i32,
             width,
             height,
             z: 70,
@@ -280,7 +480,8 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
 }
 
 struct ResidentLayer {
-    color: [u8; 4],
+    base_color: [u8; 4],
+    text_color_selector: Option<u8>,
     mesh: crate::intel::render::ResidentTriangleMesh,
 }
 
@@ -351,9 +552,20 @@ struct TextCell {
     text: String,
     color: u8,
     x: f32,
-    baseline: f32,
+    y: f32,
     font_pixels: f32,
     bold: bool,
+}
+
+fn axis_tick_length_mm(cell_index: usize) -> f32 {
+    let distance_mm = cell_index as u32 * CELL_EDGE_MM;
+    if distance_mm % 30 == 0 {
+        THREE_CENTIMETER_TICK_LENGTH_MM
+    } else if distance_mm % 10 == 0 {
+        CENTIMETER_TICK_LENGTH_MM
+    } else {
+        SMALL_TICK_LENGTH_MM
+    }
 }
 
 fn build_resident_page(
@@ -369,26 +581,28 @@ fn build_resident_page(
     ensure_font_face_available(GpuFontFace::Default)?;
     let mut layers = Vec::new();
 
-    let mut paper = Geometry::new();
-    paper.quad(0.0, 0.0, SCENE_WIDTH as f32, SCENE_HEIGHT as f32, 0.9);
-    push_geometry_layer(&mut layers, paper, palette(COLOR_DEFAULT, true))?;
-
     let mut backgrounds: Vec<(u8, Geometry)> = Vec::new();
     let mut decorations: Vec<(u8, Geometry)> = Vec::new();
     let mut texts = Vec::new();
-    let scene_units_per_mm_x = SCENE_WIDTH as f32 / A4_WIDTH_MM as f32;
-    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / A4_HEIGHT_MM as f32;
+    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
+    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
     let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x;
     let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y;
     let grid_width = COLUMNS as f32 * cell_width;
     let grid_height = ROWS as f32 * cell_height;
-    let grid_left = (SCENE_WIDTH as f32 - grid_width) * 0.5;
-    let grid_top = (SCENE_HEIGHT as f32 - grid_height) * 0.5;
+    let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x;
+    let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y;
     let grid_right = grid_left + grid_width;
     let grid_bottom = grid_top + grid_height;
     let visible_scene_x = SCENE_WIDTH as f32 / raster_width as f32;
     let visible_scene_y = SCENE_HEIGHT as f32 / raster_height as f32;
     let scale = f32::from(snapshot.scale_percent) / 100.0;
+
+    // Only the grid owns paper. The ruler gutters remain transparent, and
+    // there is no unused A4 margin on the right or bottom of the frame.
+    let mut paper = Geometry::new();
+    paper.quad(grid_left, grid_top, grid_right, grid_bottom, 0.9);
+    push_geometry_layer(&mut layers, paper, palette(COLOR_DEFAULT, true))?;
 
     for row in 0..ROWS {
         let top = grid_top + row as f32 * cell_height;
@@ -405,10 +619,10 @@ fn build_resident_page(
 
             if background != COLOR_DEFAULT && background != COLOR_TRANSPARENT {
                 geometry_for_color(&mut backgrounds, background).quad(
-                    left + 0.5,
-                    top + 0.5,
-                    right - 0.5,
-                    bottom - 0.5,
+                    left + visible_scene_x * 0.5,
+                    top + visible_scene_y * 0.5,
+                    right - visible_scene_x * 0.5,
+                    bottom - visible_scene_y * 0.5,
                     0.8,
                 );
             }
@@ -420,24 +634,29 @@ fn build_resident_page(
                 .map_err(|_| "gridpaper-utf8")?;
             // Font size is specified in output pixels. Convert it into the
             // logical scene units consumed by the resident font mesh so 100%
-            // remains an actual 24 px regardless of the A4 raster extent.
+            // remains an actual 24 px regardless of the physical raster extent.
             let font_pixels = (DEFAULT_REGULAR_ROW_FONT_PIXELS * visible_scene_y * scale)
                 .clamp(visible_scene_y, 256.0);
             let baseline = top + cell_height * 0.72;
+            // The font tessellator's single-line mesh already starts with its
+            // baseline one em below the supplied position. Pass the true mesh
+            // origin here; passing `baseline` caused the observed one-row slip.
+            let text_y = baseline - font_pixels;
             texts.push(TextCell {
                 text: String::from(text),
                 color: foreground,
-                x: left + (2.5 * scale).min(cell_width * 0.2),
-                baseline,
+                x: left + (TEXT_LEFT_INSET_MM * scene_units_per_mm_x * scale).min(cell_width * 0.2),
+                y: text_y,
                 font_pixels,
                 bold: style & STYLE_BOLD != 0,
             });
             if style & STYLE_UNDERLINE != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
+                let inset = DECORATION_INSET_MM * scene_units_per_mm_x;
                 geometry_for_color(&mut decorations, foreground).quad(
-                    left + 2.0,
+                    left + inset,
                     baseline + thickness,
-                    right - 2.0,
+                    right - inset,
                     baseline + thickness * 2.0,
                     0.4,
                 );
@@ -445,10 +664,11 @@ fn build_resident_page(
             if style & STYLE_STRIKEOUT != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let y = baseline - font_pixels * 0.32;
+                let inset = DECORATION_INSET_MM * scene_units_per_mm_x;
                 geometry_for_color(&mut decorations, foreground).quad(
-                    left + 2.0,
+                    left + inset,
                     y,
-                    right - 2.0,
+                    right - inset,
                     y + thickness,
                     0.4,
                 );
@@ -473,6 +693,31 @@ fn build_resident_page(
     }
     push_geometry_layer(&mut layers, grid, [188, 205, 224, 255])?;
 
+    let mut rulers = Geometry::new();
+    for column in 0..=COLUMNS {
+        let x = grid_left + column as f32 * cell_width;
+        let length = axis_tick_length_mm(column) * scene_units_per_mm_y;
+        rulers.quad(
+            x - vertical_line * 0.5,
+            grid_top - length,
+            x + vertical_line * 0.5,
+            grid_top,
+            0.55,
+        );
+    }
+    for row in 0..=ROWS {
+        let y = grid_top + row as f32 * cell_height;
+        let length = axis_tick_length_mm(row) * scene_units_per_mm_x;
+        rulers.quad(
+            grid_left - length,
+            y - horizontal_line * 0.5,
+            grid_left,
+            y + horizontal_line * 0.5,
+            0.55,
+        );
+    }
+    push_geometry_layer(&mut layers, rulers, [91, 101, 115, 255])?;
+
     for (color, geometry) in decorations {
         push_geometry_layer(&mut layers, geometry, palette(color, false))?;
     }
@@ -485,13 +730,13 @@ fn build_resident_page(
         for cell in texts.iter().filter(|cell| cell.color == color) {
             entries.push(GpuFontJobEntry {
                 text: GpuFontTextRequest::SingleLine(cell.text.as_str()),
-                position: [cell.x, cell.baseline],
+                position: [cell.x, cell.y],
                 font_pixels: cell.font_pixels,
             });
             if cell.bold {
                 entries.push(GpuFontJobEntry {
                     text: GpuFontTextRequest::SingleLine(cell.text.as_str()),
-                    position: [cell.x + 0.75, cell.baseline],
+                    position: [cell.x + visible_scene_x, cell.y],
                     font_pixels: cell.font_pixels,
                 });
             }
@@ -503,7 +748,8 @@ fn build_resident_page(
             SCENE_HEIGHT,
         )?;
         layers.push(ResidentLayer {
-            color: palette(color, false),
+            base_color: palette(color, false),
+            text_color_selector: Some(color),
             mesh,
         });
     }
@@ -535,7 +781,11 @@ fn push_geometry_layer(
     }
     let mesh =
         crate::intel::render::create_resident_triangle_mesh(&geometry.vertices, &geometry.indices)?;
-    layers.push(ResidentLayer { color, mesh });
+    layers.push(ResidentLayer {
+        base_color: color,
+        text_color_selector: None,
+        mesh,
+    });
     Ok(())
 }
 
@@ -565,13 +815,15 @@ fn palette(color: u8, background: bool) -> [u8; 4] {
 fn publish_page(
     surface: &GridPaperSurface,
     page: &ResidentPage,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
     let draws = page
         .layers
         .iter()
         .map(|layer| crate::intel::render::ResidentSceneDraw {
             mesh: &layer.mesh,
-            rgba: layer.color,
+            rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
         })
         .collect::<Vec<_>>();
     let result =
@@ -588,6 +840,41 @@ fn publish_page(
     }
     publish_pixels(surface, &result)?;
     Ok(result)
+}
+
+fn resident_layer_color(
+    layer: &ResidentLayer,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
+) -> [u8; 4] {
+    let Some(selector) = layer.text_color_selector else {
+        return layer.base_color;
+    };
+    let Some(program) = text_animations
+        .get(usize::from(selector))
+        .copied()
+        .flatten()
+    else {
+        return layer.base_color;
+    };
+    let rgba = program.sample(animation_elapsed_ms);
+    [rgba.r, rgba.g, rgba.b, rgba.a]
+}
+
+fn sampled_text_colors(
+    page: &ResidentPage,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
+) -> [Option<[u8; 4]>; TEXT_ANIMATION_COLOR_SLOTS] {
+    let mut colors = [None; TEXT_ANIMATION_COLOR_SLOTS];
+    for layer in &page.layers {
+        let Some(selector) = layer.text_color_selector else {
+            continue;
+        };
+        colors[usize::from(selector)] =
+            Some(resident_layer_color(layer, text_animations, animation_elapsed_ms));
+    }
+    colors
 }
 
 fn publish_pixels(
@@ -657,7 +944,7 @@ pub async fn gridpaper_service_task() {
     };
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} physical_page_mm={}x{} grid={}x{} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 persistent_gpu_scene=1\n",
+        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 persistent_gpu_scene=1\n",
         PAGE_BYTES,
         COLUMNS * ROWS,
         SCENE_WIDTH,
@@ -667,12 +954,21 @@ pub async fn gridpaper_service_task() {
         surface.extent_source,
         A4_WIDTH_MM,
         A4_HEIGHT_MM,
-        COLUMNS,
-        ROWS,
+        GRID_WIDTH_MM,
+        GRID_HEIGHT_MM,
+        SURFACE_WIDTH_MM,
+        SURFACE_HEIGHT_MM,
+        RULER_GUTTER_MM,
         CELL_EDGE_MM,
     );
 
     let mut observed_serial = 0u64;
+    let mut observed_animation_serial = 0u64;
+    let mut text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
+    let mut animation_started_ms = Instant::now().as_millis();
+    let mut animation_dirty = false;
+    let mut last_sampled_text_colors = [None; TEXT_ANIMATION_COLOR_SLOTS];
+    let mut animation_frames = 0u64;
     let mut queued_snapshot: Option<OwnedSnapshot> = None;
     let mut pending: Option<ResidentPage> = None;
     let mut active: Option<ResidentPage> = None;
@@ -680,6 +976,20 @@ pub async fn gridpaper_service_task() {
     let mut last_render_error = None;
 
     loop {
+        if let Some(update) = text_animations_after(observed_animation_serial) {
+            observed_animation_serial = update.serial;
+            text_animations = update.programs;
+            animation_started_ms = Instant::now().as_millis();
+            animation_dirty = true;
+            crate::log_info!(
+                target: "gridpaper";
+                "gridpaper: text-animation-table activated serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
+                observed_animation_serial,
+                text_animations.iter().flatten().count(),
+                SERVICE_PERIOD_MS,
+            );
+        }
+
         if let Some(snapshot) = snapshot_after(observed_serial) {
             observed_serial = snapshot.serial;
             pending = None;
@@ -708,10 +1018,16 @@ pub async fn gridpaper_service_task() {
             }
         }
 
+        let animation_elapsed_ms = Instant::now()
+            .as_millis()
+            .saturating_sub(animation_started_ms);
+        let mut published_page_this_tick = false;
         if let Some(candidate) = pending.as_ref() {
-            match publish_page(&surface, candidate) {
+            match publish_page(&surface, candidate, &text_animations, animation_elapsed_ms) {
                 Ok(result) => {
                     let published = pending.take().expect("gridpaper pending page exists");
+                    last_sampled_text_colors =
+                        sampled_text_colors(&published, &text_animations, animation_elapsed_ms);
                     crate::log_info!(
                         target: "gridpaper";
                         "gridpaper: frame published serial={} generation={} scale={} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot\n",
@@ -724,6 +1040,8 @@ pub async fn gridpaper_service_task() {
                     );
                     let retired = active.replace(published);
                     drop(retired);
+                    animation_dirty = false;
+                    published_page_this_tick = true;
                     last_render_error = None;
                 }
                 Err(error) if last_render_error != Some(error) => {
@@ -737,6 +1055,46 @@ pub async fn gridpaper_service_task() {
                     last_render_error = Some(error);
                 }
                 Err(_) => {}
+            }
+        }
+
+        if !published_page_this_tick
+            && pending.is_none()
+            && let Some(page) = active.as_ref()
+        {
+            let sampled = sampled_text_colors(page, &text_animations, animation_elapsed_ms);
+            if animation_dirty || sampled != last_sampled_text_colors {
+                match publish_page(&surface, page, &text_animations, animation_elapsed_ms) {
+                    Ok(result) => {
+                        last_sampled_text_colors = sampled;
+                        animation_dirty = false;
+                        animation_frames = animation_frames.saturating_add(1);
+                        if animation_frames <= 8 || animation_frames.is_multiple_of(120) {
+                            crate::log_info!(
+                                target: "gridpaper";
+                                "gridpaper: text-animation-frame seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0\n",
+                                animation_frames,
+                                observed_animation_serial,
+                                animation_elapsed_ms,
+                                text_animations.iter().flatten().count(),
+                                result.changed_pixels,
+                                result.frame_us,
+                            );
+                        }
+                        last_render_error = None;
+                    }
+                    Err(error) if last_render_error != Some(error) => {
+                        crate::log_warn!(
+                            target: "gridpaper";
+                            "gridpaper: text-animation-frame pending serial={} elapsed_ms={} error={:?} action=retain-front-and-retry\n",
+                            observed_animation_serial,
+                            animation_elapsed_ms,
+                            error,
+                        );
+                        last_render_error = Some(error);
+                    }
+                    Err(_) => {}
+                }
             }
         }
 
@@ -756,7 +1114,17 @@ mod tests {
         assert_eq!((A4_WIDTH_MM, A4_HEIGHT_MM), (210, 297));
         assert_eq!(COLUMNS as u32 * CELL_EDGE_MM, 185);
         assert_eq!(ROWS as u32 * CELL_EDGE_MM, 265);
-        assert_eq!(SCENE_WIDTH * A4_HEIGHT_MM, SCENE_HEIGHT * A4_WIDTH_MM);
+        assert_eq!((GRID_WIDTH_MM, GRID_HEIGHT_MM), (185, 265));
+        assert_eq!((SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM), (189, 269));
+        assert_eq!((SCENE_WIDTH, SCENE_HEIGHT), (189, 269));
+    }
+
+    #[test]
+    fn axis_ticks_mark_half_centimeters_centimeters_and_three_centimeters() {
+        assert_eq!(axis_tick_length_mm(0), THREE_CENTIMETER_TICK_LENGTH_MM);
+        assert_eq!(axis_tick_length_mm(1), SMALL_TICK_LENGTH_MM);
+        assert_eq!(axis_tick_length_mm(2), CENTIMETER_TICK_LENGTH_MM);
+        assert_eq!(axis_tick_length_mm(6), THREE_CENTIMETER_TICK_LENGTH_MM);
     }
 
     #[test]
@@ -769,5 +1137,34 @@ mod tests {
         raw[0] = 0;
         raw[3] = 0x80;
         assert_eq!(validate_page(&raw), Err(()));
+    }
+
+    #[test]
+    fn css_keyframe_wire_decodes_and_samples_without_geometry_state() {
+        let mut wire = Vec::from([1, 1, 0, 0]);
+        wire.extend_from_slice(&[
+            13, // BrightBlue selector.
+            GpuFontColorChannels::RGB.bits(),
+            0, // linear
+            1, // loop
+        ]);
+        wire.extend_from_slice(&1_000u32.to_le_bytes());
+        wire.extend_from_slice(&[3, 0, 0, 0]);
+        for (offset, rgba) in [
+            (0u16, [255, 0, 0, 255]),
+            (500u16, [0, 255, 0, 255]),
+            (1_000u16, [255, 0, 0, 255]),
+        ] {
+            wire.extend_from_slice(&offset.to_le_bytes());
+            wire.extend_from_slice(&[0, 0]);
+            wire.extend_from_slice(&rgba);
+        }
+
+        let programs = decode_text_animations(&wire).expect("valid keyframe wire");
+        let program = programs[13].expect("selector installed");
+        assert_eq!(program.sample(0), GpuFontRgba::new(255, 0, 0, 255));
+        assert_eq!(program.sample(250), GpuFontRgba::new(128, 128, 0, 255));
+        assert_eq!(program.sample(500), GpuFontRgba::new(0, 255, 0, 255));
+        assert_eq!(program.sample(1_000), GpuFontRgba::new(255, 0, 0, 255));
     }
 }

@@ -75,7 +75,11 @@ impl WindowPlane {
     const fn valid(self) -> bool {
         match self {
             Self::Primary => true,
-            Self::Universal(slot) => slot > 0 && (slot as usize) < super::UNIVERSAL_PLANE_COUNT,
+            // Slot 4 is deliberately not a broker-window target: UI4 owns it
+            // as the topmost per-vCursor interaction plane.
+            Self::Universal(slot) => {
+                slot > 0 && (slot as usize) < super::INTERACTION_OVERLAY_PLANE_SLOT
+            }
         }
     }
 }

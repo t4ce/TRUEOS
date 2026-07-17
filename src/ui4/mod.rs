@@ -40,7 +40,7 @@ pub(crate) use window_broker::{
 };
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
-pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 4;
+pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 5;
 /// Common window extent for the temporary UI4 boot consumers. Keeping the
 /// Mandelbrot and decoded-video probes on one extent makes their placement and
 /// later interactive-resize work exercise the same broker contract.
@@ -50,6 +50,10 @@ pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
+/// Highest universal plane. UI4 reserves it for input chrome rather than
+/// broker windows so cursors, selection outlines and context menus never
+/// become part of an application composition surface.
+pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
 // Compatibility aliases for the parked legacy direct-NV12 experiment. Normal
 // UI4 video is converted into RGBA and does not reserve these plane roles.
 pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
@@ -359,6 +363,7 @@ const _: () = {
     assert!(ALPHA_OVERLAY_PLANE_SLOT == 1);
     assert!(NV12_UV_PLANE_SLOT == 2);
     assert!(NV12_Y_PLANE_SLOT == 3);
+    assert!(INTERACTION_OVERLAY_PLANE_SLOT == 4);
     let transparent = PremultipliedRgba8::TRANSPARENT;
     assert!(transparent.r == 0 && transparent.g == 0 && transparent.b == 0 && transparent.a == 0);
     let half = PremultipliedRgba8::from_straight_rgba(255, 128, 1, 128);
