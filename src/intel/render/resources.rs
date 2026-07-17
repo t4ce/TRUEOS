@@ -659,61 +659,6 @@ pub(crate) fn create_resident_font_mesh(
     create_resident_triangle_mesh(&draw_vertices, &draw_indices)
 }
 
-/// Upload font geometry whose coordinates already belong to a UI scene.
-///
-/// Unlike the stamp-oriented font path, this maps `(0, 0)..(width, height)`
-/// directly into clip space. The resulting resident VB/IB can therefore be
-/// submitted repeatedly without rebuilding glyph geometry or losing the
-/// relative placement of independently positioned text rows.
-pub(crate) fn create_resident_font_scene_mesh(
-    vertices: &[[f32; 2]],
-    indices: &[u32],
-    width: u32,
-    height: u32,
-) -> Result<ResidentFontMesh, &'static str> {
-    if width == 0
-        || height == 0
-        || width as usize > DRAW3D_SCENE_TARGET_WIDTH
-        || height as usize > DRAW3D_SCENE_TARGET_HEIGHT
-        || vertices.len() < 3
-        || indices.is_empty()
-        || !indices.len().is_multiple_of(3)
-        || indices.iter().any(|index| *index as usize >= vertices.len())
-    {
-        return Err("resident-font-scene-shape");
-    }
-
-    let width = width as f32;
-    let height = height as f32;
-    let mut draw_vertices = Vec::with_capacity(vertices.len());
-    for source in vertices {
-        if !source[0].is_finite() || !source[1].is_finite() {
-            return Err("resident-font-scene-position");
-        }
-        draw_vertices.push([
-            source[0] * 2.0 / width - 1.0,
-            1.0 - source[1] * 2.0 / height,
-            0.5,
-        ]);
-    }
-
-    let mut draw_indices = Vec::with_capacity(indices.len());
-    for triangle in indices.chunks_exact(3) {
-        let v0 = draw_vertices[triangle[0] as usize];
-        let v1 = draw_vertices[triangle[1] as usize];
-        let v2 = draw_vertices[triangle[2] as usize];
-        let area2 =
-            (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
-        if area2 < 0.0 {
-            draw_indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
-        } else {
-            draw_indices.extend_from_slice(triangle);
-        }
-    }
-
-    create_resident_triangle_mesh(&draw_vertices, &draw_indices)
-}
-
 /// Upload an indexed clip-space triangle mesh into persistent render PPGTT
 /// storage. Draw calls borrow its GPU addresses directly until release.
 pub(crate) fn create_resident_triangle_mesh(

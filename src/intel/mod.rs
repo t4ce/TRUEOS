@@ -561,6 +561,17 @@ pub(crate) fn present_rgba_overlay_tiles_on_slot(
     self::display::present_rgba_overlay_tiles_on_slot(plane_slot, tiles, reason)
 }
 
+pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
+    self::display::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
+        plane_slot, tiles, damage, reason,
+    )
+}
+
 pub fn log_display_plane_ladder_probe(label: &str) {
     self::display::log_display_plane_ladder_probe(label)
 }

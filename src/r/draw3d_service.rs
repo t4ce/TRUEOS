@@ -274,16 +274,29 @@ fn publish_ui4_scene_frame(
         return Err(Draw3dUi4Error::InvalidFrame);
     }
     let destination = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
-    for output_y in 0..fitted.height as usize {
-        let source_y = output_y.saturating_mul(result.height as usize) / fitted.height as usize;
-        let destination_y = fitted.y as usize + output_y;
-        for output_x in 0..fitted.width as usize {
-            let source_x = output_x.saturating_mul(result.width as usize) / fitted.width as usize;
-            let source_start = source_y * source_pitch + source_x * 4;
+    destination.fill(0);
+    if fitted.width == result.width && fitted.height == result.height {
+        let row_bytes = result.width as usize * 4;
+        for row in 0..result.height as usize {
+            let source_start = row * source_pitch;
             let destination_start =
-                destination_y * view.pitch as usize + (fitted.x as usize + output_x) * 4;
-            destination[destination_start..destination_start + 4]
-                .copy_from_slice(&source[source_start..source_start + 4]);
+                (fitted.y as usize + row) * view.pitch as usize + fitted.x as usize * 4;
+            destination[destination_start..destination_start + row_bytes]
+                .copy_from_slice(&source[source_start..source_start + row_bytes]);
+        }
+    } else {
+        for output_y in 0..fitted.height as usize {
+            let source_y = output_y.saturating_mul(result.height as usize) / fitted.height as usize;
+            let destination_y = fitted.y as usize + output_y;
+            for output_x in 0..fitted.width as usize {
+                let source_x =
+                    output_x.saturating_mul(result.width as usize) / fitted.width as usize;
+                let source_start = source_y * source_pitch + source_x * 4;
+                let destination_start =
+                    destination_y * view.pitch as usize + (fitted.x as usize + output_x) * 4;
+                destination[destination_start..destination_start + 4]
+                    .copy_from_slice(&source[source_start..source_start + 4]);
+            }
         }
     }
     crate::intel::dma_flush(view.virt, view.byte_len);
@@ -686,7 +699,7 @@ pub async fn draw3d_ui4_render_task() {
         .unwrap_or(0);
     crate::log_info!(
         target: "draw3d";
-        "draw3d: UI4 surface ready owner=kernel-app-3 session={} frame={} window={} output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} render_target={}x{} scaling=fused-nearest scene_running=0 content=waiting-for-tcp-start\n",
+        "draw3d: UI4 surface ready owner=kernel-app-3 session={} frame={} window={} output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} ui4_render=aspect-fit-native screenshot_target={}x{} copy=row scene_running=0 content=waiting-for-tcp-start\n",
         surface.session.raw(),
         surface.frame.raw(),
         surface.window.raw(),
@@ -706,6 +719,7 @@ pub async fn draw3d_ui4_render_task() {
     let mut last_sync_error = None;
     let mut last_render_error = None;
     let mut next_frame = Instant::now();
+    let mut published_frames = 0u64;
 
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
@@ -760,9 +774,18 @@ pub async fn draw3d_ui4_render_task() {
             let now_ns = crate::chronos::monotonic_nanos();
             let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
             let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f32 / 1_000_000_000.0;
-            let (render_width, render_height) =
+            let (capture_width, capture_height) =
                 crate::intel::render::resident_scene_target_dimensions();
-            let aspect = render_width as f32 / render_height as f32;
+            let Some(render_rect) = aspect_fit_rect(
+                capture_width as u32,
+                capture_height as u32,
+                surface.width,
+                surface.height,
+            ) else {
+                Timer::at(next_frame).await;
+                continue;
+            };
+            let aspect = render_rect.width as f32 / render_rect.height as f32;
             let (projected, clear_rgba) = with_scene(|scene| {
                 let angle = scene
                     .camera_orbit()
@@ -783,9 +806,13 @@ pub async fn draw3d_ui4_render_task() {
                             rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
                         })
                         .collect::<Vec<_>>();
-                    let capture =
-                        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied(
-                            &draws, clear_rgba, false,
+                    let capture = crate::intel::render::
+                        capture_resident_triangle_scene_frame_premultiplied_at_extent(
+                            &draws,
+                            clear_rgba,
+                            render_rect.width,
+                            render_rect.height,
+                            false,
                         );
                     match capture {
                         Ok(result)
@@ -799,14 +826,22 @@ pub async fn draw3d_ui4_render_task() {
                                     rendered_revision = revision;
                                     retry_frame = false;
                                     last_render_error = None;
-                                    crate::log_trace!(
-                                        target: "draw3d";
-                                        "draw3d: UI4 frame published revision={} draws={} changed_pixels={} plane_slot={}\n",
-                                        revision,
-                                        result.completed_draws,
-                                        result.changed_pixels,
-                                        crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
-                                    );
+                                    published_frames = published_frames.saturating_add(1);
+                                    if published_frames <= 8 || published_frames.is_multiple_of(120)
+                                    {
+                                        crate::log_trace!(
+                                            target: "draw3d";
+                                            "draw3d: UI4 frame published seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} plane_slot={}\n",
+                                            published_frames,
+                                            revision,
+                                            result.completed_draws,
+                                            result.changed_pixels,
+                                            result.width,
+                                            result.height,
+                                            result.frame_us,
+                                            crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
+                                        );
+                                    }
                                 }
                                 Err(error) => {
                                     retry_frame = true;

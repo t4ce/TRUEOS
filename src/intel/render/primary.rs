@@ -303,7 +303,8 @@ pub(crate) fn capture_resident_triangle_scene_frame(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, true)
+    let (width, height) = resident_scene_target_dimensions();
+    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, true, width, height)
 }
 
 /// Render an off-screen frame in UI4's native premultiplied-RGBA convention.
@@ -317,7 +318,30 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, false)
+    let (width, height) = resident_scene_target_dimensions();
+    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, false, width, height)
+}
+
+/// Render a premultiplied UI4 frame at the consumer's actual content extent.
+///
+/// The screenshot API intentionally retains the full resident-scene target.
+/// UI4, however, must not render and CPU-read a 2560x1440 scratch image only to
+/// reduce it into a much smaller broker frame.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    width: u32,
+    height: u32,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        width as usize,
+        height as usize,
+    )
 }
 
 fn submit_resident_triangle_scene_capture(
@@ -325,9 +349,10 @@ fn submit_resident_triangle_scene_capture(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
+    target_width: usize,
+    target_height: usize,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
-    let (target_width, target_height) = resident_scene_target_dimensions();
     if target_width == 0
         || target_height == 0
         || target_width > DRAW3D_SCENE_TARGET_WIDTH
@@ -335,8 +360,13 @@ fn submit_resident_triangle_scene_capture(
     {
         return Err("draw3d-capture-shape");
     }
-    let target_pitch = target_width * core::mem::size_of::<u32>();
-    let target_bytes = target_pitch * target_height;
+    let target_pitch = target_width
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("draw3d-capture-shape")?;
+    let target_bytes = target_pitch
+        .checked_mul(target_height)
+        .ok_or("draw3d-capture-shape")?;
+    let frame_started_ns = crate::chronos::monotonic_nanos();
 
     let lock_started_ns = crate::chronos::monotonic_nanos();
     let mut lock_spins = 0usize;
@@ -505,7 +535,7 @@ fn submit_resident_triangle_scene_capture(
             presented: false,
             width: target_width as u32,
             height: target_height as u32,
-            frame_us: 0,
+            frame_us: crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000,
             rgba,
         })
     })();
@@ -523,52 +553,9 @@ pub(crate) fn submit_resident_font_mesh_readback_once(
     Ok((render, readback))
 }
 
-/// Render a resident font scene in its original UI viewport coordinates.
-pub(crate) fn submit_resident_font_scene_mesh_readback_once(
-    mesh: &ResidentFontMesh,
-    width: u32,
-    height: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
-    let mut readback = None;
-    let render = submit_resident_font_mesh_at_extent_inner(
-        mesh,
-        width,
-        height,
-        rgba,
-        Some(&mut readback),
-    )?;
-    Ok((render, readback))
-}
-
-pub(crate) fn submit_resident_font_scene_mesh_once(
-    mesh: &ResidentFontMesh,
-    width: u32,
-    height: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-) -> Result<RenderJokerResult, &'static str> {
-    submit_resident_font_mesh_at_extent_inner(mesh, width, height, rgba, None)
-}
-
 fn submit_resident_font_mesh_inner(
     mesh: &ResidentFontMesh,
     native_scale: u32,
-    rgba: crate::intel::gpu_font::GpuFontRgba,
-    readback: Option<&mut Option<FontRenderTargetReadback>>,
-) -> Result<RenderJokerResult, &'static str> {
-    if !font_native_scale_supported(native_scale) {
-        return Err("font-native-scale-range");
-    }
-    let target_size = (FONT_STAMP_BASE_SIZE as u32)
-        .checked_mul(native_scale)
-        .ok_or("font-target-size-overflow")?;
-    submit_resident_font_mesh_at_extent_inner(mesh, target_size, target_size, rgba, readback)
-}
-
-fn submit_resident_font_mesh_at_extent_inner(
-    mesh: &ResidentFontMesh,
-    target_width: u32,
-    target_height: u32,
     rgba: crate::intel::gpu_font::GpuFontRgba,
     readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
@@ -580,12 +567,8 @@ fn submit_resident_font_mesh_at_extent_inner(
     {
         return Err("resident-font-shape");
     }
-    if target_width == 0
-        || target_height == 0
-        || target_width as usize > DRAW3D_SCENE_TARGET_WIDTH
-        || target_height as usize > DRAW3D_SCENE_TARGET_HEIGHT
-    {
-        return Err("font-target-extent-range");
+    if !font_native_scale_supported(native_scale) {
+        return Err("font-native-scale-range");
     }
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -594,6 +577,7 @@ fn submit_resident_font_mesh_at_extent_inner(
         return Err("in-flight");
     }
 
+    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
     // Keep the default color on the exact shader binary already proven on
     // hardware. Other colors use the static push-color shader; resident
     // geometry remains untouched in either case.
@@ -617,8 +601,8 @@ fn submit_resident_font_mesh_at_extent_inner(
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        target_width as usize,
-        target_height as usize,
+        target_size,
+        target_size,
         readback,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);

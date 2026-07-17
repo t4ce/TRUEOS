@@ -63,18 +63,6 @@ unsafe extern "C" {
         rows: *const TrueosUi4SolaraSceneTextRow,
         row_count: usize,
     ) -> i32;
-    pub fn trueos_cabi_ui4_solara_persistent_text_layer_replace(
-        window_id: u32,
-        layer_id: u32,
-        font_id: u32,
-        viewport_width: u32,
-        viewport_height: u32,
-        rgba: u32,
-        rows: *const TrueosUi4SolaraSceneTextRow,
-        row_count: usize,
-    ) -> i32;
-    pub fn trueos_cabi_ui4_solara_persistent_text_scene_draw(window_id: u32) -> i32;
-    pub fn trueos_cabi_ui4_solara_persistent_text_scene_clear(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_publish(
         window_id: u32,
         damage_x: u32,

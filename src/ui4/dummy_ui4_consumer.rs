@@ -598,7 +598,9 @@ fn present_plane_composition(
                         super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
                         _ => "ui4-overlay",
                     };
-                    crate::intel::present_rgba_overlay_tiles_on_slot(slot, &tiles, reason)
+                    crate::intel::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
+                        slot, &tiles, damage, reason,
+                    )
                 }
             };
             if !presented {

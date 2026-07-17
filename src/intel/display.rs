@@ -3758,6 +3758,98 @@ pub(crate) fn present_rgba_overlay_tiles_on_slot(
     present_rgba_overlay_tiles_on_slot_with_background(plane_slot, tiles, None, reason)
 }
 
+/// Compose UI4's native premultiplied RGBA frames into one alpha plane while
+/// touching only pixels whose window content or placement changed.
+///
+/// Each swap buffer carries damage debt because it can be one presentation
+/// behind the current front. This is the overlay counterpart of the primary
+/// UI4 compositor path and avoids clearing/flushing the full scanout for a
+/// small animated window.
+pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRect,
+    reason: &str,
+) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some((width, height)) = active_scanout_dimensions()
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
+    else {
+        return false;
+    };
+    let Some(change) = clip_composition_damage(damage, width, height) else {
+        return true;
+    };
+    let Some(surface) = ensure_overlay_surface_on_slot(dev, plane_slot, width, height) else {
+        return false;
+    };
+    let effective = {
+        let Some(surface_pool) = overlay_surface_pool(surface.pipe, surface.plane_slot) else {
+            return false;
+        };
+        let pool = surface_pool.lock();
+        pool.damage_debt[surface.buffer_index]
+            .map(|debt| debt.union(change))
+            .unwrap_or(change)
+    };
+
+    fill_overlay_rect(surface, effective.x, effective.y, effective.width, effective.height, 0);
+    for tile in tiles {
+        if copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, effective).is_none() {
+            return false;
+        }
+    }
+    dma_flush_overlay_rect(surface, effective);
+
+    let (presented, path) =
+        if overlay_plane_needs_rearm(dev, surface, 0, 0, OverlayAlphaMode::Straight) {
+            if flip_overlay_plane_surface(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason) {
+                (true, "surf-only")
+            } else {
+                program_four_rgb_plane_stack_resources(dev, surface.pipe, reason);
+                (
+                    arm_overlay_plane(dev, surface, 0, 0, OverlayAlphaMode::Straight, reason),
+                    "contract-arm",
+                )
+            }
+        } else {
+            mark_overlay_surface_front(surface);
+            (true, "already-live")
+        };
+    if !presented {
+        return false;
+    }
+    mark_overlay_composition_surface_front(surface, change);
+
+    let seq = OVERLAY_PRESENT_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if seq <= 8 || seq.is_multiple_of(60) {
+        crate::log!(
+            "intel/display: rgba-tile-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} tiles={} damage={}x{}@{},{} effective={}x{}@{},{} scanout={}x{} pitch=0x{:X}\n",
+            seq,
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+            surface.buffer_index,
+            path,
+            tiles.len(),
+            change.width,
+            change.height,
+            change.x,
+            change.y,
+            effective.width,
+            effective.height,
+            effective.x,
+            effective.y,
+            surface.width,
+            surface.height,
+            surface.pitch_bytes,
+        );
+    }
+    true
+}
+
 pub(crate) fn present_rgba_overlay_tiles_with_background(
     tiles: &[RgbaOverlayTile<'_>],
     background: Option<Rgba8>,
@@ -6051,6 +6143,31 @@ fn mark_overlay_surface_front(surface: OverlaySurface) {
     }
 }
 
+fn mark_overlay_composition_surface_front(surface: OverlaySurface, change: CompositionDamageRect) {
+    // The plane commit helpers establish front ownership and retire any
+    // previous-size surface. Keep that lifecycle centralized there, then add
+    // the per-buffer composition history used by partial updates.
+    mark_overlay_surface_front(surface);
+    let Some(surface_pool) = overlay_surface_pool(surface.pipe, surface.plane_slot) else {
+        return;
+    };
+    let mut pool = surface_pool.lock();
+    if !pool.matches(surface.width, surface.height, surface.pipe) {
+        return;
+    }
+    for index in 0..OVERLAY_SWAP_BUFFER_COUNT {
+        if index == surface.buffer_index {
+            pool.damage_debt[index] = None;
+        } else {
+            pool.damage_debt[index] = Some(
+                pool.damage_debt[index]
+                    .map(|debt| debt.union(change))
+                    .unwrap_or(change),
+            );
+        }
+    }
+}
+
 fn release_detached_overlay_surface(
     dev: crate::intel::Dev,
     surface: OverlaySurface,
@@ -6716,6 +6833,74 @@ fn copy_rgba_tile_into_overlay(
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), premultiplied);
                 if core::ptr::read_volatile(dst_row.add(col)) != premultiplied {
+                    storage_mismatches = storage_mismatches.saturating_add(1);
+                }
+            }
+        }
+    }
+    Some((contract_pixels, source_mismatches, storage_mismatches))
+}
+
+fn copy_premultiplied_rgba_tile_into_overlay_clipped(
+    surface: OverlaySurface,
+    tile: &RgbaOverlayTile<'_>,
+    clip: CompositionDamageRect,
+) -> Option<(u64, u64, u64)> {
+    if surface.virt.is_null()
+        || tile.width == 0
+        || tile.height == 0
+        || tile.pitch_bytes < tile.width as usize * 4
+    {
+        return None;
+    }
+    let required = tile
+        .pitch_bytes
+        .checked_mul(tile.height as usize - 1)?
+        .checked_add(tile.width as usize * 4)?;
+    if tile.pixels.len() < required {
+        return None;
+    }
+    let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
+    let Some(draw) = intersect_composition_damage(tile_rect, clip)
+        .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
+    else {
+        return Some((0, 0, 0));
+    };
+    let src_x = draw.x.saturating_sub(tile.x) as usize;
+    let src_y = draw.y.saturating_sub(tile.y) as usize;
+    let dst_pitch = surface.pitch_bytes as usize;
+    let mut contract_pixels = 0u64;
+    let mut source_mismatches = 0u64;
+    let mut storage_mismatches = 0u64;
+    for row in 0..draw.height as usize {
+        let src_row_off = (src_y + row)
+            .saturating_mul(tile.pitch_bytes)
+            .saturating_add(src_x.saturating_mul(4));
+        let dst_row_off = (draw.y as usize + row)
+            .saturating_mul(dst_pitch)
+            .saturating_add(draw.x as usize * 4);
+        let dst_row = unsafe { surface.virt.add(dst_row_off).cast::<u32>() };
+        for col in 0..draw.width as usize {
+            let src_off = src_row_off.saturating_add(col.saturating_mul(4));
+            let pixel = tile.pixels.get(src_off..src_off.saturating_add(4))?;
+            let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
+            if let Some(expected) = tile.expected_rgba
+                && a != 0
+            {
+                contract_pixels = contract_pixels.saturating_add(1);
+                if [r, g, b, a] != [expected.r, expected.g, expected.b, expected.a] {
+                    source_mismatches = source_mismatches.saturating_add(1);
+                }
+            }
+            // UI4 producers already publish premultiplied RGBA. The universal
+            // plane storage is BGRA, so this is only a channel swizzle; doing
+            // premul_u8() here again made translucent content fade each frame.
+            let bgra = u32::from_le_bytes([b, g, r, a]);
+            unsafe {
+                core::ptr::write_volatile(dst_row.add(col), bgra);
+                if tile.expected_rgba.is_some()
+                    && core::ptr::read_volatile(dst_row.add(col)) != bgra
+                {
                     storage_mismatches = storage_mismatches.saturating_add(1);
                 }
             }
