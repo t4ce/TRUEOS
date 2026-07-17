@@ -279,6 +279,9 @@ pub(crate) fn submit_resident_font_mesh_once(
 pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) mesh: &'a ResidentTriangleMesh,
     pub(crate) rgba: [u8; 4],
+    /// Per-draw translation applied by the fixed-function viewport transform.
+    /// Resident vertex and index storage is not rewritten or re-uploaded.
+    pub(crate) viewport_translation_px: [f32; 2],
 }
 
 #[derive(Debug)]
@@ -454,6 +457,7 @@ fn submit_resident_triangle_scene_capture(
             PostDrawSyncVariant::HeavyAll,
             TriangleBatchMode::Draw,
             StreamoutProofExperiment::HeaderAndPositionSlots01,
+            [0.0, 0.0],
             None,
         );
         if !clear_completed {
@@ -482,6 +486,7 @@ fn submit_resident_triangle_scene_capture(
                 PostDrawSyncVariant::HeavyAll,
                 TriangleBatchMode::Draw,
                 StreamoutProofExperiment::HeaderAndPositionSlots01,
+                draw.viewport_translation_px,
                 None,
             );
             if !completed {
@@ -677,6 +682,7 @@ pub(crate) fn submit_gpu_font_outline_mesh_once(
             PostDrawSyncVariant::HeavyAll,
             TriangleBatchMode::Draw,
             StreamoutProofExperiment::PositionSlot1,
+            [0.0, 0.0],
             None,
         );
         let frontier = latest_render_frontier_summary();
@@ -3425,6 +3431,7 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         post_draw_sync_variant,
         batch_mode,
         streamout_experiment,
+        [0.0, 0.0],
         readback,
     );
     intel_render_focus_log!(
@@ -5111,19 +5118,24 @@ fn submit_triangle_vf_draw_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        [0.0, 0.0],
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -5686,6 +5698,7 @@ fn submit_triangle_streamout_proof(
         shader_layout,
         TriangleBlendProbeMode::ExplicitRt0,
         BackendProbeMode::MesaLike,
+        [0.0, 0.0],
     ) {
         Ok(layout) => layout,
         Err(reason) => {
@@ -6217,19 +6230,24 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        [0.0, 0.0],
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
@@ -6412,6 +6430,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     post_draw_sync_variant: PostDrawSyncVariant,
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
+    viewport_translation_px: [f32; 2],
     mut readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> bool {
     let draw = if let Some(mesh) = resident_mesh {
@@ -6695,19 +6714,24 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         pipeline.ps.meta.kernel.dispatch_mode
     );
 
-    let probe_state =
-        match write_triangle_probe_state(warm, draw, shader_layout, blend_mode, backend_probe_mode)
-        {
-            Ok(layout) => layout,
-            Err(reason) => {
-                crate::log!(
-                    "{} staging skipped reason=probe-state-error detail={}\n",
-                    submit_name,
-                    reason
-                );
-                return false;
-            }
-        };
+    let probe_state = match write_triangle_probe_state(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        viewport_translation_px,
+    ) {
+        Ok(layout) => layout,
+        Err(reason) => {
+            crate::log!(
+                "{} staging skipped reason=probe-state-error detail={}\n",
+                submit_name,
+                reason
+            );
+            return false;
+        }
+    };
 
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);

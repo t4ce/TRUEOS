@@ -32,9 +32,18 @@ const EMBEDDED_FONTS: [EmbeddedFontSpec; 1] = [EmbeddedFontSpec {
     file_name: "L_10646.TTF",
     bytes: include_bytes!("../../tools/L_10646.TTF"),
 }];
-const TRUEOSFS_FONT_NAME: &str = "noto-sans-sc";
-const TRUEOSFS_FONT_FILE: &str = "NotoSansSC[wght].ttf";
-const TRUEOSFS_FONT_PATH: &str = "fonts/NotoSansSC[wght].ttf";
+const TRUEOSFS_FONTS: [TrueosFsFontSpec; 2] = [
+    TrueosFsFontSpec {
+        name: "inconsolata",
+        file_name: "Inconsolata-Regular.ttf",
+        path: "fonts/Inconsolata-Regular.ttf",
+    },
+    TrueosFsFontSpec {
+        name: "noto-sans-sc",
+        file_name: "NotoSansSC[wght].ttf",
+        path: "fonts/NotoSansSC[wght].ttf",
+    },
+];
 const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 
@@ -43,6 +52,13 @@ struct EmbeddedFontSpec {
     name: &'static str,
     file_name: &'static str,
     bytes: &'static [u8],
+}
+
+#[derive(Clone, Copy)]
+struct TrueosFsFontSpec {
+    name: &'static str,
+    file_name: &'static str,
+    path: &'static str,
 }
 
 #[allow(dead_code)]
@@ -304,6 +320,22 @@ pub(crate) fn font_summary(name: &str) -> Option<FontWarmSummary> {
             .find(|endstate| endstate.name() == FONT_ENDSTATE_OUTLINE_COMMANDS)
             .map(|endstate| endstate.summary(font, "registered", 0, 0, 0))
     })
+}
+
+/// Report whether every non-whitespace character has a glyph in a warmed
+/// face. This lets retained scenes choose a compact primary face per text run
+/// while keeping a broad Unicode face as a transparent fallback.
+pub(crate) fn font_supports_text(name: &str, text: &str) -> bool {
+    let registry = FONT_REGISTRY.lock();
+    let Some(font_record) = registry.font_by_name(name) else {
+        return false;
+    };
+    let Ok(font) = FontRef::new(font_record.bytes.as_slice()) else {
+        return false;
+    };
+    let charmap = font.charmap();
+    text.chars()
+        .all(|ch| ch.is_whitespace() || charmap.map(ch).is_some())
 }
 
 pub(crate) fn registry_summary() -> FontRegistrySummary {
@@ -648,7 +680,7 @@ fn warm_embedded_font_by_name(
     if let Some(index) = EMBEDDED_FONTS.iter().position(|spec| spec.name == name) {
         return warm_embedded_font_once(index).map(Some);
     }
-    if name == TRUEOSFS_FONT_NAME {
+    if TRUEOSFS_FONTS.iter().any(|spec| spec.name == name) {
         return Ok(font_summary(name).map(|summary| FontWarmSummary {
             status: "warm-cache",
             ..summary
@@ -812,19 +844,27 @@ pub(crate) async fn font_warm_task() {
     let mut heartbeat = 0u64;
     loop {
         heartbeat = heartbeat.saturating_add(1);
-        if font_summary(TRUEOSFS_FONT_NAME).is_some() {
+        if TRUEOSFS_FONTS
+            .iter()
+            .all(|spec| font_summary(spec.name).is_some())
+        {
             return;
         }
 
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-            crate::log_info!(
-                target: "boot";
-                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-mounted heartbeat={} retry_secs={}\n",
-                TRUEOSFS_FONT_NAME,
-                TRUEOSFS_FONT_PATH,
-                heartbeat,
-                TRUEOSFS_FONT_HEARTBEAT_SECS,
-            );
+            for spec in TRUEOSFS_FONTS
+                .iter()
+                .filter(|spec| font_summary(spec.name).is_none())
+            {
+                crate::log_info!(
+                    target: "boot";
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-mounted heartbeat={} retry_secs={}\n",
+                    spec.name,
+                    spec.path,
+                    heartbeat,
+                    TRUEOSFS_FONT_HEARTBEAT_SECS,
+                );
+            }
             embassy_time::Timer::after(embassy_time::Duration::from_secs(
                 TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
@@ -832,30 +872,35 @@ pub(crate) async fn font_warm_task() {
             continue;
         };
 
-        match crate::r::fs::trueosfs::file_out_async(disk, TRUEOSFS_FONT_PATH).await {
-            Ok(Some(bytes)) => {
-                crate::log_info!(
-                    target: "boot";
-                    "graphics-font: status=warming name={} file={} path=trueosfs:/{} source=trueosfs resident_input_bytes={} heartbeat={}\n",
-                    TRUEOSFS_FONT_NAME,
-                    TRUEOSFS_FONT_FILE,
-                    TRUEOSFS_FONT_PATH,
-                    bytes.len(),
-                    heartbeat,
-                );
-                match warm_font_bytes_once(
-                    TRUEOSFS_FONT_NAME,
-                    TRUEOSFS_FONT_FILE,
-                    FontBytes::TrueosFs(bytes),
-                ) {
-                    Ok(summary) => {
-                        crate::log_info!(
+        for (index, spec) in TRUEOSFS_FONTS.iter().enumerate() {
+            if font_summary(spec.name).is_some() {
+                continue;
+            }
+            match crate::r::fs::trueosfs::file_out_async(disk, spec.path).await {
+                Ok(Some(bytes)) => {
+                    crate::log_info!(
+                        target: "boot";
+                        "graphics-font: status=warming name={} file={} path=trueosfs:/{} source=trueosfs resident_input_bytes={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
+                        spec.name,
+                        spec.file_name,
+                        spec.path,
+                        bytes.len(),
+                        heartbeat,
+                        index + 1,
+                        TRUEOSFS_FONTS.len(),
+                    );
+                    match warm_font_bytes_once(
+                        spec.name,
+                        spec.file_name,
+                        FontBytes::TrueosFs(bytes),
+                    ) {
+                        Ok(summary) => crate::log_info!(
                             target: "boot";
-                            "graphics-font: status={} name={} file={} path=trueosfs:/{} source=trueosfs endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} heartbeat={}\n",
+                            "graphics-font: status={} name={} file={} path=trueosfs:/{} source=trueosfs endstate={} resident_bytes={} outline_cache_bytes={} glyphs={} success={} empty={} failures={} commands={} outline_ms={} total_ms={} heartbeat={} warm_index={} warm_total={} warm_policy=eager-all\n",
                             summary.status,
                             summary.name,
                             summary.file_name,
-                            TRUEOSFS_FONT_PATH,
+                            spec.path,
                             summary.endstate,
                             summary.resident_bytes,
                             summary.cache_bytes,
@@ -867,38 +912,52 @@ pub(crate) async fn font_warm_task() {
                             summary.outline_ms,
                             summary.total_ms,
                             heartbeat,
-                        );
-                        return;
+                            index + 1,
+                            TRUEOSFS_FONTS.len(),
+                        ),
+                        Err(err) => crate::log_warn!(
+                            target: "boot";
+                            "graphics-font: status=invalid name={} file={} path=trueosfs:/{} source=trueosfs heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
+                            spec.name,
+                            spec.file_name,
+                            spec.path,
+                            heartbeat,
+                            TRUEOSFS_FONT_HEARTBEAT_SECS,
+                            index + 1,
+                            TRUEOSFS_FONTS.len(),
+                            err,
+                        ),
                     }
-                    Err(err) => crate::log_warn!(
-                        target: "boot";
-                        "graphics-font: status=invalid name={} file={} path=trueosfs:/{} source=trueosfs heartbeat={} retry_secs={} err={:?}\n",
-                        TRUEOSFS_FONT_NAME,
-                        TRUEOSFS_FONT_FILE,
-                        TRUEOSFS_FONT_PATH,
-                        heartbeat,
-                        TRUEOSFS_FONT_HEARTBEAT_SECS,
-                        err,
-                    ),
                 }
+                Ok(None) => crate::log_info!(
+                    target: "boot";
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-not-present heartbeat={} retry_secs={} warm_index={} warm_total={}\n",
+                    spec.name,
+                    spec.path,
+                    heartbeat,
+                    TRUEOSFS_FONT_HEARTBEAT_SECS,
+                    index + 1,
+                    TRUEOSFS_FONTS.len(),
+                ),
+                Err(err) => crate::log_warn!(
+                    target: "boot";
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-read-failed heartbeat={} retry_secs={} warm_index={} warm_total={} err={:?}\n",
+                    spec.name,
+                    spec.path,
+                    heartbeat,
+                    TRUEOSFS_FONT_HEARTBEAT_SECS,
+                    index + 1,
+                    TRUEOSFS_FONTS.len(),
+                    err,
+                ),
             }
-            Ok(None) => crate::log_info!(
-                target: "boot";
-                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-not-present heartbeat={} retry_secs={}\n",
-                TRUEOSFS_FONT_NAME,
-                TRUEOSFS_FONT_PATH,
-                heartbeat,
-                TRUEOSFS_FONT_HEARTBEAT_SECS,
-            ),
-            Err(err) => crate::log_warn!(
-                target: "boot";
-                "graphics-font: status=waiting name={} path=trueosfs:/{} reason=file-read-failed heartbeat={} retry_secs={} err={:?}\n",
-                TRUEOSFS_FONT_NAME,
-                TRUEOSFS_FONT_PATH,
-                heartbeat,
-                TRUEOSFS_FONT_HEARTBEAT_SECS,
-                err,
-            ),
+        }
+
+        if TRUEOSFS_FONTS
+            .iter()
+            .all(|spec| font_summary(spec.name).is_some())
+        {
+            return;
         }
 
         embassy_time::Timer::after(embassy_time::Duration::from_secs(TRUEOSFS_FONT_HEARTBEAT_SECS))

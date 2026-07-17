@@ -12,7 +12,7 @@ use spin::Mutex;
 use crate::intel::gpu_font::{
     GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorIteration,
     GpuFontColorKeyframe, GpuFontColorKeyframes, GpuFontColorProgram, GpuFontColorTiming,
-    GpuFontRgba,
+    GpuFontFace, GpuFontRgba,
 };
 
 const COLUMNS: usize = 37;
@@ -25,6 +25,7 @@ const VALID_STYLE_BITS: u8 = 0x0f;
 const STYLE_BOLD: u8 = 1 << 0;
 const STYLE_STRIKEOUT: u8 = 1 << 1;
 const STYLE_UNDERLINE: u8 = 1 << 2;
+const STYLE_ITALIC: u8 = 1 << 3;
 const COLOR_COUNT: usize = 18;
 const COLOR_DEFAULT: u8 = 0;
 const COLOR_TRANSPARENT: u8 = 17;
@@ -54,7 +55,6 @@ const SCENE_HEIGHT: u32 = SURFACE_HEIGHT_MM;
 const SMALL_TICK_LENGTH_MM: f32 = 1.25;
 const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
 const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
-const TEXT_LEFT_INSET_MM: f32 = 0.75;
 const DECORATION_INSET_MM: f32 = 0.5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
@@ -93,11 +93,47 @@ impl SnapshotStore {
 
 static SNAPSHOTS: Mutex<SnapshotStore> = Mutex::new(SnapshotStore::new());
 
+#[derive(Clone)]
 struct OwnedSnapshot {
     raw: Vec<u8>,
     generation: u64,
     scale_percent: u16,
     serial: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScenePan {
+    x: f32,
+    y: f32,
+}
+
+impl ScenePan {
+    const ZERO: Self = Self { x: 0.0, y: 0.0 };
+
+    fn clamped(self, scale_percent: u16) -> Self {
+        let scale = f32::from(scale_percent) / 100.0;
+        let min_x = (SCENE_WIDTH as f32 * (1.0 - scale)).min(0.0);
+        let min_y = (SCENE_HEIGHT as f32 * (1.0 - scale)).min(0.0);
+        Self {
+            x: self.x.clamp(min_x, 0.0),
+            y: self.y.clamp(min_y, 0.0),
+        }
+    }
+
+    fn drag_pixels(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        raster_width: u32,
+        raster_height: u32,
+        scale_percent: u16,
+    ) -> bool {
+        let previous = *self;
+        self.x += dx as f32 * SCENE_WIDTH as f32 / raster_width.max(1) as f32;
+        self.y += dy as f32 * SCENE_HEIGHT as f32 / raster_height.max(1) as f32;
+        *self = self.clamped(scale_percent);
+        *self != previous
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -502,6 +538,7 @@ struct ResidentPage {
     serial: u64,
     generation: u64,
     scale_percent: u16,
+    pan: ScenePan,
     layers: Vec<ResidentLayer>,
 }
 
@@ -550,11 +587,13 @@ fn clip_vertex(x: f32, y: f32, z: f32) -> [f32; 3] {
 
 struct TextCell {
     text: String,
+    font: GpuFontFace,
     color: u8,
-    x: f32,
-    y: f32,
+    center_x: f32,
+    center_y: f32,
     font_pixels: f32,
     bold: bool,
+    italic: bool,
 }
 
 fn axis_tick_length_mm(cell_index: usize) -> f32 {
@@ -572,31 +611,35 @@ fn build_resident_page(
     snapshot: &OwnedSnapshot,
     raster_width: u32,
     raster_height: u32,
+    pan: ScenePan,
 ) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
-        GpuFontFace, GpuFontJobEntry, GpuFontTextRequest, create_resident_font_scene_mesh,
-        ensure_font_face_available,
+        GpuFontJobEntry, GpuFontTextRequest, create_resident_font_centered_scene_mesh,
+        ensure_font_face_available, font_face_supports_text,
     };
 
     ensure_font_face_available(GpuFontFace::Default)?;
+    ensure_font_face_available(GpuFontFace::Inconsolata)?;
+    ensure_font_face_available(GpuFontFace::NotoSansSc)?;
     let mut layers = Vec::new();
 
     let mut backgrounds: Vec<(u8, Geometry)> = Vec::new();
     let mut decorations: Vec<(u8, Geometry)> = Vec::new();
     let mut texts = Vec::new();
+    let scale = f32::from(snapshot.scale_percent) / 100.0;
     let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
     let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
-    let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x;
-    let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y;
+    let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
+    let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
     let grid_width = COLUMNS as f32 * cell_width;
     let grid_height = ROWS as f32 * cell_height;
-    let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x;
-    let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y;
+    let pan = pan.clamped(snapshot.scale_percent);
+    let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale;
+    let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale;
     let grid_right = grid_left + grid_width;
     let grid_bottom = grid_top + grid_height;
     let visible_scene_x = SCENE_WIDTH as f32 / raster_width as f32;
     let visible_scene_y = SCENE_HEIGHT as f32 / raster_height as f32;
-    let scale = f32::from(snapshot.scale_percent) / 100.0;
 
     // Only the grid owns paper. The ruler gutters remain transparent, and
     // there is no unused A4 margin on the right or bottom of the frame.
@@ -619,10 +662,10 @@ fn build_resident_page(
 
             if background != COLOR_DEFAULT && background != COLOR_TRANSPARENT {
                 geometry_for_color(&mut backgrounds, background).quad(
-                    left + visible_scene_x * 0.5,
-                    top + visible_scene_y * 0.5,
-                    right - visible_scene_x * 0.5,
-                    bottom - visible_scene_y * 0.5,
+                    left + visible_scene_x * scale * 0.5,
+                    top + visible_scene_y * scale * 0.5,
+                    right - visible_scene_x * scale * 0.5,
+                    bottom - visible_scene_y * scale * 0.5,
                     0.8,
                 );
             }
@@ -638,21 +681,25 @@ fn build_resident_page(
             let font_pixels = (DEFAULT_REGULAR_ROW_FONT_PIXELS * visible_scene_y * scale)
                 .clamp(visible_scene_y, 256.0);
             let baseline = top + cell_height * 0.72;
-            // The font tessellator's single-line mesh already starts with its
-            // baseline one em below the supplied position. Pass the true mesh
-            // origin here; passing `baseline` caused the observed one-row slip.
-            let text_y = baseline - font_pixels;
             texts.push(TextCell {
                 text: String::from(text),
+                font: if font_face_supports_text(GpuFontFace::Inconsolata, text) {
+                    GpuFontFace::Inconsolata
+                } else if font_face_supports_text(GpuFontFace::NotoSansSc, text) {
+                    GpuFontFace::NotoSansSc
+                } else {
+                    GpuFontFace::Default
+                },
                 color: foreground,
-                x: left + (TEXT_LEFT_INSET_MM * scene_units_per_mm_x * scale).min(cell_width * 0.2),
-                y: text_y,
+                center_x: (left + right) * 0.5,
+                center_y: (top + bottom) * 0.5,
                 font_pixels,
                 bold: style & STYLE_BOLD != 0,
+                italic: style & STYLE_ITALIC != 0,
             });
             if style & STYLE_UNDERLINE != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
-                let inset = DECORATION_INSET_MM * scene_units_per_mm_x;
+                let inset = DECORATION_INSET_MM * scene_units_per_mm_x * scale;
                 geometry_for_color(&mut decorations, foreground).quad(
                     left + inset,
                     baseline + thickness,
@@ -664,7 +711,7 @@ fn build_resident_page(
             if style & STYLE_STRIKEOUT != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let y = baseline - font_pixels * 0.32;
-                let inset = DECORATION_INSET_MM * scene_units_per_mm_x;
+                let inset = DECORATION_INSET_MM * scene_units_per_mm_x * scale;
                 geometry_for_color(&mut decorations, foreground).quad(
                     left + inset,
                     y,
@@ -681,8 +728,8 @@ fn build_resident_page(
     }
 
     let mut grid = Geometry::new();
-    let vertical_line = visible_scene_x;
-    let horizontal_line = visible_scene_y;
+    let vertical_line = visible_scene_x * scale;
+    let horizontal_line = visible_scene_y * scale;
     for column in 0..=COLUMNS {
         let x = grid_left + column as f32 * cell_width;
         grid.quad(x - vertical_line * 0.5, grid_top, x + vertical_line * 0.5, grid_bottom, 0.6);
@@ -696,7 +743,7 @@ fn build_resident_page(
     let mut rulers = Geometry::new();
     for column in 0..=COLUMNS {
         let x = grid_left + column as f32 * cell_width;
-        let length = axis_tick_length_mm(column) * scene_units_per_mm_y;
+        let length = axis_tick_length_mm(column) * scene_units_per_mm_y * scale;
         rulers.quad(
             x - vertical_line * 0.5,
             grid_top - length,
@@ -707,7 +754,7 @@ fn build_resident_page(
     }
     for row in 0..=ROWS {
         let y = grid_top + row as f32 * cell_height;
-        let length = axis_tick_length_mm(row) * scene_units_per_mm_x;
+        let length = axis_tick_length_mm(row) * scene_units_per_mm_x * scale;
         rulers.quad(
             grid_left - length,
             y - horizontal_line * 0.5,
@@ -722,42 +769,63 @@ fn build_resident_page(
         push_geometry_layer(&mut layers, geometry, palette(color, false))?;
     }
 
-    for color in 0..COLOR_COUNT as u8 {
-        if color == COLOR_TRANSPARENT || !texts.iter().any(|cell| cell.color == color) {
-            continue;
-        }
-        let mut entries = Vec::new();
-        for cell in texts.iter().filter(|cell| cell.color == color) {
-            entries.push(GpuFontJobEntry {
-                text: GpuFontTextRequest::SingleLine(cell.text.as_str()),
-                position: [cell.x, cell.y],
-                font_pixels: cell.font_pixels,
-            });
-            if cell.bold {
+    for font in [
+        GpuFontFace::Inconsolata,
+        GpuFontFace::NotoSansSc,
+        GpuFontFace::Default,
+    ] {
+        for color in 0..COLOR_COUNT as u8 {
+            if color == COLOR_TRANSPARENT
+                || !texts
+                    .iter()
+                    .any(|cell| cell.color == color && cell.font == font)
+            {
+                continue;
+            }
+            let mut entries = Vec::new();
+            for cell in texts
+                .iter()
+                .filter(|cell| cell.color == color && cell.font == font)
+            {
+                let bold_center_offset = if cell.bold {
+                    visible_scene_x * 0.5 * scale
+                } else {
+                    0.0
+                };
                 entries.push(GpuFontJobEntry {
                     text: GpuFontTextRequest::SingleLine(cell.text.as_str()),
-                    position: [cell.x + visible_scene_x, cell.y],
+                    position: [cell.center_x - bold_center_offset, cell.center_y],
                     font_pixels: cell.font_pixels,
+                    slant: if cell.italic { 0.22 } else { 0.0 },
                 });
+                if cell.bold {
+                    entries.push(GpuFontJobEntry {
+                        text: GpuFontTextRequest::SingleLine(cell.text.as_str()),
+                        position: [cell.center_x + bold_center_offset, cell.center_y],
+                        font_pixels: cell.font_pixels,
+                        slant: if cell.italic { 0.22 } else { 0.0 },
+                    });
+                }
             }
+            let mesh = create_resident_font_centered_scene_mesh(
+                &entries,
+                font,
+                SCENE_WIDTH,
+                SCENE_HEIGHT,
+            )?;
+            layers.push(ResidentLayer {
+                base_color: palette(color, false),
+                text_color_selector: Some(color),
+                mesh,
+            });
         }
-        let mesh = create_resident_font_scene_mesh(
-            &entries,
-            GpuFontFace::Default,
-            SCENE_WIDTH,
-            SCENE_HEIGHT,
-        )?;
-        layers.push(ResidentLayer {
-            base_color: palette(color, false),
-            text_color_selector: Some(color),
-            mesh,
-        });
     }
 
     Ok(ResidentPage {
         serial: snapshot.serial,
         generation: snapshot.generation,
         scale_percent: snapshot.scale_percent,
+        pan,
         layers,
     })
 }
@@ -818,12 +886,17 @@ fn publish_page(
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
+    let viewport_translation_px = [
+        page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
+        page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
+    ];
     let draws = page
         .layers
         .iter()
         .map(|layer| crate::intel::render::ResidentSceneDraw {
             mesh: &layer.mesh,
             rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
+            viewport_translation_px,
         })
         .collect::<Vec<_>>();
     let result =
@@ -921,7 +994,8 @@ fn publish_pixels(
 }
 
 /// Persistent GridPaper scene consumer. Geometry is rebuilt only for a new
-/// accepted snapshot and remains GPU-owned between publications.
+/// accepted snapshot. Middle-button pan is hot-applied through the 3D viewport
+/// transform while the font and grid meshes remain GPU-owned.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -944,7 +1018,7 @@ pub async fn gridpaper_service_task() {
     };
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 persistent_gpu_scene=1\n",
+        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=middle-pan-consumer pan_mode=hot-viewport-transform persistent_gpu_scene=1\n",
         PAGE_BYTES,
         COLUMNS * ROWS,
         SCENE_WIDTH,
@@ -969,9 +1043,15 @@ pub async fn gridpaper_service_task() {
     let mut animation_dirty = false;
     let mut last_sampled_text_colors = [None; TEXT_ANIMATION_COLOR_SLOTS];
     let mut animation_frames = 0u64;
+    let mut latest_snapshot: Option<OwnedSnapshot> = None;
     let mut queued_snapshot: Option<OwnedSnapshot> = None;
     let mut pending: Option<ResidentPage> = None;
     let mut active: Option<ResidentPage> = None;
+    let mut pan = ScenePan::ZERO;
+    let mut pan_dirty = false;
+    let mut hot_pan_frames = 0u64;
+    let mut active_pan_source = None;
+    let mut pending_pan_pixels = (0i32, 0i32);
     let mut last_build_error = None;
     let mut last_render_error = None;
 
@@ -992,12 +1072,75 @@ pub async fn gridpaper_service_task() {
 
         if let Some(snapshot) = snapshot_after(observed_serial) {
             observed_serial = snapshot.serial;
+            let clamped_pan = pan.clamped(snapshot.scale_percent);
+            if clamped_pan != pan {
+                pan = clamped_pan;
+                if let Some(page) = active.as_mut() {
+                    page.pan = pan;
+                }
+                pan_dirty = true;
+            }
             pending = None;
+            latest_snapshot = Some(snapshot.clone());
             queued_snapshot = Some(snapshot);
         }
 
+        for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
+            let crate::ui4::Ui4InputEvent::Pan(event) = event else {
+                continue;
+            };
+            if event.window != surface.window {
+                continue;
+            }
+            match event.phase {
+                crate::ui4::Ui4PanPhase::Begin => {
+                    active_pan_source = Some(event.source);
+                    pending_pan_pixels = (0, 0);
+                }
+                crate::ui4::Ui4PanPhase::Update if active_pan_source == Some(event.source) => {
+                    pending_pan_pixels.0 = pending_pan_pixels.0.saturating_add(event.dx);
+                    pending_pan_pixels.1 = pending_pan_pixels.1.saturating_add(event.dy);
+                    let Some(snapshot) = latest_snapshot.as_ref() else {
+                        continue;
+                    };
+                    if pan.drag_pixels(
+                        event.dx,
+                        event.dy,
+                        surface.width,
+                        surface.height,
+                        snapshot.scale_percent,
+                    ) {
+                        if let Some(page) = pending.as_mut() {
+                            page.pan = pan;
+                        }
+                        if let Some(page) = active.as_mut() {
+                            page.pan = pan;
+                        }
+                        pan_dirty = true;
+                    }
+                }
+                crate::ui4::Ui4PanPhase::End if active_pan_source == Some(event.source) => {
+                    active_pan_source = None;
+                    let (drag_x, drag_y) = pending_pan_pixels;
+                    pending_pan_pixels = (0, 0);
+                    if drag_x != 0 || drag_y != 0 {
+                        crate::log_info!(
+                            target: "gridpaper";
+                            "gridpaper: middle-pan ended drag_px={},{} pan_scene={:.3},{:.3} hot_frames_total={} action=retain-resident-meshes\n",
+                            drag_x,
+                            drag_y,
+                            pan.x,
+                            pan.y,
+                            hot_pan_frames,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
         if let Some(snapshot) = queued_snapshot.as_ref() {
-            match build_resident_page(&snapshot, surface.width, surface.height) {
+            match build_resident_page(&snapshot, surface.width, surface.height, pan) {
                 Ok(page) => {
                     pending = Some(page);
                     queued_snapshot = None;
@@ -1030,10 +1173,12 @@ pub async fn gridpaper_service_task() {
                         sampled_text_colors(&published, &text_animations, animation_elapsed_ms);
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: frame published serial={} generation={} scale={} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot\n",
+                        "gridpaper: frame published serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
                         published.serial,
                         published.generation,
                         published.scale_percent,
+                        published.pan.x,
+                        published.pan.y,
                         published.layers.len(),
                         result.changed_pixels,
                         result.frame_us,
@@ -1041,6 +1186,7 @@ pub async fn gridpaper_service_task() {
                     let retired = active.replace(published);
                     drop(retired);
                     animation_dirty = false;
+                    pan_dirty = false;
                     published_page_this_tick = true;
                     last_render_error = None;
                 }
@@ -1063,13 +1209,34 @@ pub async fn gridpaper_service_task() {
             && let Some(page) = active.as_ref()
         {
             let sampled = sampled_text_colors(page, &text_animations, animation_elapsed_ms);
-            if animation_dirty || sampled != last_sampled_text_colors {
+            let animation_changed = animation_dirty || sampled != last_sampled_text_colors;
+            let hot_pan_frame = pan_dirty;
+            if animation_changed || hot_pan_frame {
                 match publish_page(&surface, page, &text_animations, animation_elapsed_ms) {
                     Ok(result) => {
                         last_sampled_text_colors = sampled;
                         animation_dirty = false;
-                        animation_frames = animation_frames.saturating_add(1);
-                        if animation_frames <= 8 || animation_frames.is_multiple_of(120) {
+                        pan_dirty = false;
+                        if hot_pan_frame {
+                            hot_pan_frames = hot_pan_frames.saturating_add(1);
+                            if hot_pan_frames <= 8 || hot_pan_frames.is_multiple_of(120) {
+                                crate::log_info!(
+                                    target: "gridpaper";
+                                    "gridpaper: hot-pan-frame seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport\n",
+                                    hot_pan_frames,
+                                    page.pan.x,
+                                    page.pan.y,
+                                    result.changed_pixels,
+                                    result.frame_us,
+                                );
+                            }
+                        }
+                        if animation_changed {
+                            animation_frames = animation_frames.saturating_add(1);
+                        }
+                        if animation_changed
+                            && (animation_frames <= 8 || animation_frames.is_multiple_of(120))
+                        {
                             crate::log_info!(
                                 target: "gridpaper";
                                 "gridpaper: text-animation-frame seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0\n",
@@ -1125,6 +1292,20 @@ mod tests {
         assert_eq!(axis_tick_length_mm(1), SMALL_TICK_LENGTH_MM);
         assert_eq!(axis_tick_length_mm(2), CENTIMETER_TICK_LENGTH_MM);
         assert_eq!(axis_tick_length_mm(6), THREE_CENTIMETER_TICK_LENGTH_MM);
+    }
+
+    #[test]
+    fn middle_pan_tracks_drag_and_clamps_to_scaled_document() {
+        let mut pan = ScenePan::ZERO;
+        assert!(!pan.drag_pixels(100, 100, 810, 1_153, 150));
+        assert!(pan.drag_pixels(-10_000, -10_000, 810, 1_153, 150));
+        assert_eq!(pan.x, -(SCENE_WIDTH as f32 * 0.5));
+        assert_eq!(pan.y, -(SCENE_HEIGHT as f32 * 0.5));
+        assert!(pan.drag_pixels(10_000, 10_000, 810, 1_153, 150));
+        assert_eq!(pan, ScenePan::ZERO);
+
+        assert!(!pan.drag_pixels(-100, -100, 810, 1_153, 100));
+        assert_eq!(pan, ScenePan::ZERO);
     }
 
     #[test]

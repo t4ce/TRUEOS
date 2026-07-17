@@ -334,6 +334,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_rows(
             text: GpuFontTextRequest::SingleLine(text.as_str()),
             position: *position,
             font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+            slant: 0.0,
         })
         .collect();
     let readback = match render_font_job_readback_once(GpuFontJob {
@@ -455,6 +456,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
             text: GpuFontTextRequest::SingleLine(text.as_str()),
             position: *position,
             font_pixels: *font_pixels,
+            slant: 0.0,
         })
         .collect();
     render_scene_entries_into_surface(

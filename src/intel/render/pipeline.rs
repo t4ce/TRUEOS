@@ -154,11 +154,18 @@ fn write_triangle_probe_state(
     shader_layout: TriangleShaderLayout,
     blend_mode: TriangleBlendProbeMode,
     backend_probe_mode: BackendProbeMode,
+    viewport_translation_px: [f32; 2],
 ) -> Result<TriangleProbeStateLayout, &'static str> {
     const BLEND_FACTOR_ONE: u32 = 0x01;
     const BLEND_FACTOR_SRC_ALPHA: u32 = 0x03;
     const BLEND_FACTOR_INV_SRC_ALPHA: u32 = 0x13;
     const BLEND_FUNCTION_ADD: u32 = 0x00;
+    if viewport_translation_px
+        .iter()
+        .any(|component| !component.is_finite())
+    {
+        return Err("probe-viewport-translation");
+    }
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
     cursor = crate::intel::align_up(binding_table_offset + 4, 64).ok_or("probe-state-align")?;
@@ -282,8 +289,8 @@ fn write_triangle_probe_state(
     sf_clip_viewport[0] = (draw.target_w as f32 * 0.5).to_bits();
     sf_clip_viewport[1] = (-(draw.target_h as f32) * 0.5).to_bits();
     sf_clip_viewport[2] = 1.0f32.to_bits();
-    sf_clip_viewport[3] = (draw.target_w as f32 * 0.5).to_bits();
-    sf_clip_viewport[4] = (draw.target_h as f32 * 0.5).to_bits();
+    sf_clip_viewport[3] = (draw.target_w as f32 * 0.5 + viewport_translation_px[0]).to_bits();
+    sf_clip_viewport[4] = (draw.target_h as f32 * 0.5 + viewport_translation_px[1]).to_bits();
     sf_clip_viewport[5] = 0.0f32.to_bits();
     sf_clip_viewport[8] = (-32768.0f32).to_bits();
     sf_clip_viewport[9] = 32768.0f32.to_bits();
@@ -294,11 +301,13 @@ fn write_triangle_probe_state(
     sf_clip_viewport[14] = 0.0f32.to_bits();
     sf_clip_viewport[15] = (draw.target_h as f32).to_bits();
     intel_render_focus_log!(
-        "sf-clip-viewport-extents target={}x{} xmin=0.000 xmax={:.3} ymin=0.000 ymax={:.3} prm=viewport-transform-final-clip-rectangle\n",
+        "sf-clip-viewport-extents target={}x{} xmin=0.000 xmax={:.3} ymin=0.000 ymax={:.3} translate_px={:.3},{:.3} prm=viewport-transform-final-clip-rectangle\n",
         draw.target_w,
         draw.target_h,
         draw.target_w as f32,
         draw.target_h as f32,
+        viewport_translation_px[0],
+        viewport_translation_px[1],
     );
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];

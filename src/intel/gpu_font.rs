@@ -298,6 +298,7 @@ pub(crate) enum GpuFontTextLayout {
 pub(crate) enum GpuFontFace {
     Default = 1,
     NotoSansSc = 2,
+    Inconsolata = 3,
 }
 
 impl GpuFontFace {
@@ -305,6 +306,7 @@ impl GpuFontFace {
         match id {
             1 => Some(Self::Default),
             2 => Some(Self::NotoSansSc),
+            3 => Some(Self::Inconsolata),
             _ => None,
         }
     }
@@ -317,6 +319,7 @@ impl GpuFontFace {
         match self {
             Self::Default => "font",
             Self::NotoSansSc => "noto-sans-sc",
+            Self::Inconsolata => "inconsolata",
         }
     }
 }
@@ -329,6 +332,10 @@ pub(crate) fn ensure_font_face_available(font: GpuFontFace) -> Result<(), &'stat
         Ok(false) => Err("font-not-registered"),
         Err(_) => Err("font-warm-failed"),
     }
+}
+
+pub(crate) fn font_face_supports_text(font: GpuFontFace, text: &str) -> bool {
+    crate::graphics::font::font_supports_text(font.registry_name(), text)
 }
 
 impl GpuFontTextLayout {
@@ -357,6 +364,15 @@ pub(crate) struct GpuFontJobEntry<'a> {
     pub(crate) position: [f32; 2],
     /// Requested glyph em size in the same pixel coordinate space as position.
     pub(crate) font_pixels: f32,
+    /// Horizontal shear applied once while building the resident triangles.
+    /// Positive values lean the top of a glyph toward +X.
+    pub(crate) slant: f32,
+}
+
+#[derive(Clone, Copy)]
+enum GpuFontJobPositioning {
+    Origin,
+    VisualBoundsCenter,
 }
 
 pub(crate) struct GpuFontJob<'a> {
@@ -1293,6 +1309,7 @@ pub(crate) fn render_text_once_with_font(
         text: request,
         position: [0.0, 0.0],
         font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+        slant: 0.0,
     };
     let job = render_font_job_once(GpuFontJob {
         entries: core::slice::from_ref(&entry),
@@ -1355,6 +1372,7 @@ pub(crate) fn stamp_text_once_with_font_centered(
         text: request,
         position: [0.0, 0.0],
         font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+        slant: 0.0,
     };
     let mut built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
     let mesh_width = libm::ceilf((built.bounds.2 - built.bounds.0).max(1.0)) as u32;
@@ -1754,10 +1772,44 @@ pub(crate) fn create_resident_font_scene_mesh(
     viewport_width: u32,
     viewport_height: u32,
 ) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
+    create_resident_font_scene_mesh_with_positioning(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        GpuFontJobPositioning::Origin,
+    )
+}
+
+/// Build a resident font scene whose entry positions denote the center of each
+/// entry's actual tessellated bounds. This is visual centering, independent of
+/// advance width, side bearings, ascenders, descenders, or the chosen face.
+pub(crate) fn create_resident_font_centered_scene_mesh(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
+    create_resident_font_scene_mesh_with_positioning(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        GpuFontJobPositioning::VisualBoundsCenter,
+    )
+}
+
+fn create_resident_font_scene_mesh_with_positioning(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    positioning: GpuFontJobPositioning,
+) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
     if viewport_width == 0 || viewport_height == 0 {
         return Err("font-scene-empty");
     }
-    let built = build_font_job_mesh(entries, font)?;
+    let built = build_font_job_mesh_inner(entries, font, None, positioning)?;
     let width = viewport_width as f32;
     let height = viewport_height as f32;
     let mut vertices = Vec::with_capacity(built.vertices.len());
@@ -1787,7 +1839,7 @@ fn build_font_job_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
 ) -> Result<BuiltGpuFontJob, &'static str> {
-    build_font_job_mesh_inner(entries, font, None)
+    build_font_job_mesh_inner(entries, font, None, GpuFontJobPositioning::Origin)
 }
 
 fn build_font_job_mesh_with_tolerance(
@@ -1795,13 +1847,14 @@ fn build_font_job_mesh_with_tolerance(
     font: GpuFontFace,
     tolerance: f32,
 ) -> Result<BuiltGpuFontJob, &'static str> {
-    build_font_job_mesh_inner(entries, font, Some(tolerance))
+    build_font_job_mesh_inner(entries, font, Some(tolerance), GpuFontJobPositioning::Origin)
 }
 
 fn build_font_job_mesh_inner(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
     tolerance: Option<f32>,
+    positioning: GpuFontJobPositioning,
 ) -> Result<BuiltGpuFontJob, &'static str> {
     if entries.is_empty() {
         return Err("font-job-empty");
@@ -1818,8 +1871,10 @@ fn build_font_job_mesh_inner(
         if !entry.position[0].is_finite()
             || !entry.position[1].is_finite()
             || !entry.font_pixels.is_finite()
+            || !entry.slant.is_finite()
             || entry.font_pixels <= 0.0
             || entry.font_pixels > 256.0
+            || entry.slant.abs() > 1.0
         {
             return Err("font-job-position");
         }
@@ -1837,12 +1892,31 @@ fn build_font_job_mesh_inner(
             return Err("font-job-vertex-range");
         }
         let entry_scale = entry.font_pixels / crate::graphics::font::FONT_TESSEL_BASE_PX;
+        let shear_center_y = (mesh.summary.min_y + mesh.summary.max_y) * entry_scale * 0.5;
+        let mut local_bounds: Option<(f32, f32, f32, f32)> = None;
+        for vertex in &mesh.vertices {
+            let y = vertex[1] * entry_scale;
+            let x = vertex[0] * entry_scale + entry.slant * (shear_center_y - y);
+            local_bounds = Some(match local_bounds {
+                Some((min_x, min_y, max_x, max_y)) => {
+                    (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
+                }
+                None => (x, y, x, y),
+            });
+        }
+        let local_bounds = local_bounds.ok_or("font-job-bounds")?;
+        let entry_origin = match positioning {
+            GpuFontJobPositioning::Origin => entry.position,
+            GpuFontJobPositioning::VisualBoundsCenter => [
+                entry.position[0] - (local_bounds.0 + local_bounds.2) * 0.5,
+                entry.position[1] - (local_bounds.1 + local_bounds.3) * 0.5,
+            ],
+        };
         vertices.reserve(mesh.vertices.len());
         for vertex in &mesh.vertices {
-            vertices.push([
-                vertex[0] * entry_scale + entry.position[0],
-                vertex[1] * entry_scale + entry.position[1],
-            ]);
+            let y = vertex[1] * entry_scale;
+            let x = vertex[0] * entry_scale + entry.slant * (shear_center_y - y);
+            vertices.push([x + entry_origin[0], y + entry_origin[1]]);
         }
         indices.reserve(mesh.indices.len());
         for index in &mesh.indices {
@@ -1854,10 +1928,10 @@ fn build_font_job_mesh_inner(
         }
 
         let entry_bounds = (
-            mesh.summary.min_x * entry_scale + entry.position[0],
-            mesh.summary.min_y * entry_scale + entry.position[1],
-            mesh.summary.max_x * entry_scale + entry.position[0],
-            mesh.summary.max_y * entry_scale + entry.position[1],
+            local_bounds.0 + entry_origin[0],
+            local_bounds.1 + entry_origin[1],
+            local_bounds.2 + entry_origin[0],
+            local_bounds.3 + entry_origin[1],
         );
         bounds = Some(match bounds {
             Some((min_x, min_y, max_x, max_y)) => (
@@ -2219,7 +2293,7 @@ fn tessellate_text_request_with_tolerance(
         return Err("text-too-long");
     }
     let rows = row_lengths.len();
-    let registry_name = if font == GpuFontFace::NotoSansSc
+    let registry_name = if font != GpuFontFace::Default
         && crate::graphics::font::font_summary(font.registry_name()).is_none()
     {
         GpuFontFace::Default.registry_name()

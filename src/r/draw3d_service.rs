@@ -192,6 +192,7 @@ fn publish_ui4_waiting_frame(surface: &Draw3dUi4Surface) -> Result<(), Draw3dUi4
         text: GpuFontTextRequest::SingleLine(UI4_WAITING_TEXT),
         position: [16.0, 38.0],
         font_pixels: 24.0,
+        slant: 0.0,
     }];
     let readback = render_font_scene_readback_once(
         GpuFontJob {
@@ -656,6 +657,7 @@ fn capture_screenshot_view() -> bool {
             .map(|job| crate::intel::render::ResidentSceneDraw {
                 mesh: &job.resident,
                 rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
+                viewport_translation_px: [0.0, 0.0],
             })
             .collect::<Vec<_>>();
         crate::intel::render::capture_resident_triangle_scene_frame(&draws, clear_rgba, false)
@@ -873,6 +875,7 @@ pub async fn draw3d_ui4_render_task() {
                         .map(|job| crate::intel::render::ResidentSceneDraw {
                             mesh: &job.resident,
                             rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
+                            viewport_translation_px: [0.0, 0.0],
                         })
                         .collect::<Vec<_>>();
                     let capture = crate::intel::render::

@@ -213,7 +213,7 @@ fn parse_options(input: &str) -> Result<(GpuFontFace, u32, GpuFontRgba, bool), &
                 return Err("font-duplicate");
             }
             let id = encoded.parse::<u32>().map_err(|_| "font-id-invalid")?;
-            font = GpuFontFace::from_id(id).ok_or("font-id-out-of-range-1-to-2")?;
+            font = GpuFontFace::from_id(id).ok_or("font-id-out-of-range-1-to-3")?;
             font_seen = true;
             continue;
         }
@@ -266,7 +266,7 @@ fn parse_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "fnt: `fnt \"text\" [1..100] [font=1|2] [color=RRGGBBAA]`; rows: `fnt rows \"row 1\" \"row 2\" ...`; CJK automatically selects font 2; renders a transient centered GPU stamp",
+        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; renders a transient centered GPU stamp",
     );
 }
 
