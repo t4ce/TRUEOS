@@ -160,11 +160,8 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_GRIDPAPER_CLOSE,
-            0,
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GRIDPAPER_CLOSE, 0, 0);
         return if status == trueos_vm::vmcall::STATUS_OK {
             data as i64 as i32
         } else {
@@ -237,8 +234,8 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
             return Err(error.into());
         }
     };
-    let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
-        .unwrap_or((VIEWPORT_WIDTH, VIEWPORT_HEIGHT));
+    let (scanout_width, scanout_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((VIEWPORT_WIDTH, VIEWPORT_HEIGHT));
     let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
@@ -364,7 +361,11 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
 
     for row in 0..ROWS {
         let top_mm = (row * 10) as f32;
-        let bottom_mm = if row + 1 == ROWS { 297.0 } else { top_mm + 10.0 };
+        let bottom_mm = if row + 1 == ROWS {
+            297.0
+        } else {
+            top_mm + 10.0
+        };
         let top = top_mm * millimeter;
         let bottom = bottom_mm * millimeter;
         let cell_height = bottom - top;
@@ -379,8 +380,13 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
             let right = left + cell_width;
 
             if background != COLOR_DEFAULT && background != COLOR_TRANSPARENT {
-                geometry_for_color(&mut backgrounds, background)
-                    .quad(left + 0.5, top + 0.5, right - 0.5, bottom - 0.5, 0.8);
+                geometry_for_color(&mut backgrounds, background).quad(
+                    left + 0.5,
+                    top + 0.5,
+                    right - 0.5,
+                    bottom - 0.5,
+                    0.8,
+                );
             }
 
             if foreground == COLOR_TRANSPARENT || text_len == 0 {
@@ -514,10 +520,8 @@ fn push_geometry_layer(
     if geometry.is_empty() {
         return Ok(());
     }
-    let mesh = crate::intel::render::create_resident_triangle_mesh(
-        &geometry.vertices,
-        &geometry.indices,
-    )?;
+    let mesh =
+        crate::intel::render::create_resident_triangle_mesh(&geometry.vertices, &geometry.indices)?;
     layers.push(ResidentLayer { color, mesh });
     Ok(())
 }
@@ -557,14 +561,15 @@ fn publish_page(
             rgba: layer.color,
         })
         .collect::<Vec<_>>();
-    let result = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
-        &draws,
-        Some([0, 0, 0, 0]),
-        VIEWPORT_WIDTH,
-        VIEWPORT_HEIGHT,
-        false,
-    )
-    .map_err(ServiceError::Render)?;
+    let result =
+        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
+            &draws,
+            Some([0, 0, 0, 0]),
+            VIEWPORT_WIDTH,
+            VIEWPORT_HEIGHT,
+            false,
+        )
+        .map_err(ServiceError::Render)?;
     if result.completed_draws != result.requested_draws || result.rgba.is_none() {
         return Err(ServiceError::Render("incomplete-frame"));
     }
@@ -647,6 +652,7 @@ pub async fn gridpaper_service_task() {
     );
 
     let mut observed_serial = 0u64;
+    let mut queued_snapshot: Option<OwnedSnapshot> = None;
     let mut pending: Option<ResidentPage> = None;
     let mut active: Option<ResidentPage> = None;
     let mut last_build_error = None;
@@ -655,9 +661,15 @@ pub async fn gridpaper_service_task() {
     loop {
         if let Some(snapshot) = snapshot_after(observed_serial) {
             observed_serial = snapshot.serial;
+            pending = None;
+            queued_snapshot = Some(snapshot);
+        }
+
+        if let Some(snapshot) = queued_snapshot.as_ref() {
             match build_resident_page(&snapshot) {
                 Ok(page) => {
                     pending = Some(page);
+                    queued_snapshot = None;
                     last_build_error = None;
                 }
                 Err(error) => {
@@ -689,7 +701,8 @@ pub async fn gridpaper_service_task() {
                         result.changed_pixels,
                         result.frame_us,
                     );
-                    active = Some(published);
+                    let retired = active.replace(published);
+                    drop(retired);
                     last_render_error = None;
                 }
                 Err(error) if last_render_error != Some(error) => {
@@ -706,7 +719,6 @@ pub async fn gridpaper_service_task() {
             }
         }
 
-        let _ = active.as_ref();
         Timer::after(EmbassyDuration::from_millis(SERVICE_PERIOD_MS)).await;
     }
 }
@@ -733,4 +745,3 @@ mod tests {
         assert_eq!(validate_page(&raw), Err(()));
     }
 }
-

@@ -1677,8 +1677,7 @@ pub(crate) fn create_resident_font_scene_mesh(
         let v0 = vertices[triangle[0] as usize];
         let v1 = vertices[triangle[1] as usize];
         let v2 = vertices[triangle[2] as usize];
-        let area2 =
-            (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
+        let area2 = (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
         if area2 < 0.0 {
             indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
         } else {
