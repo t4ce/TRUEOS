@@ -18,10 +18,16 @@ use crate::intel::gpu_font::{
 
 const COLUMNS: usize = 37;
 const ROWS: usize = 53;
-const CELL_BYTES: usize = 20;
-const CELL_TEXT_CAPACITY: usize = 16;
+const GLYPH_UTF8_CAPACITY: usize = 4;
+const CELL_BYTES: usize = 13;
 const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
-const TEXT_OFFSET: usize = 4;
+const PRIMARY_LENGTH_OFFSET: usize = 0;
+const UPPER_LENGTH_OFFSET: usize = 1;
+const FOREGROUND_OFFSET: usize = 2;
+const BACKGROUND_OFFSET: usize = 3;
+const STYLE_OFFSET: usize = 4;
+const PRIMARY_OFFSET: usize = 5;
+const UPPER_OFFSET: usize = PRIMARY_OFFSET + GLYPH_UTF8_CAPACITY;
 const VALID_STYLE_BITS: u8 = 0x0f;
 const STYLE_BOLD: u8 = 1 << 0;
 const STYLE_STRIKEOUT: u8 = 1 << 1;
@@ -112,16 +118,42 @@ struct GridCellSelection {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum CellInputField {
+    #[default]
+    Primary,
+    Upper,
+}
+
+impl CellInputField {
+    const fn toggled(self) -> Self {
+        match self {
+            Self::Primary => Self::Upper,
+            Self::Upper => Self::Primary,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Upper => "upper",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct KeyboardGridOutcome {
     content_changed: bool,
     selection_changed: bool,
+    input_field_changed: bool,
     clear_selection: bool,
     capacity_rejected: bool,
+    edited_cell: Option<GridCellSelection>,
 }
 
 fn edit_snapshot_from_keyboard(
     snapshot: &mut OwnedSnapshot,
     selection: &mut GridCellSelection,
+    input_field: &mut CellInputField,
     event: crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> KeyboardGridOutcome {
     let mut outcome = KeyboardGridOutcome::default();
@@ -131,28 +163,38 @@ fn edit_snapshot_from_keyboard(
             || utf8_len > event.utf8.len()
             || event.codepoint < 0x20
             || event.codepoint == 0x7f
-            || core::str::from_utf8(&event.utf8[..utf8_len]).is_err()
+            || core::str::from_utf8(&event.utf8[..utf8_len])
+                .ok()
+                .is_none_or(|glyph| glyph.chars().count() != 1)
         {
             return outcome;
         }
         let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
         let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
-        let previous_len = usize::from(cell[0]);
-        let Some(next_len) = previous_len.checked_add(utf8_len) else {
-            outcome.capacity_rejected = true;
-            return outcome;
-        };
-        if next_len > CELL_TEXT_CAPACITY {
+        if *input_field == CellInputField::Upper && cell[PRIMARY_LENGTH_OFFSET] == 0 {
             outcome.capacity_rejected = true;
             return outcome;
         }
-        cell[TEXT_OFFSET + previous_len..TEXT_OFFSET + next_len]
-            .copy_from_slice(&event.utf8[..utf8_len]);
-        cell[0] = next_len as u8;
-        if previous_len == 0 && cell[1] == COLOR_TRANSPARENT {
-            cell[1] = COLOR_DEFAULT;
+        let edited_cell = *selection;
+        write_cell_glyph(cell, *input_field, &event.utf8[..utf8_len]);
+        if cell[FOREGROUND_OFFSET] == COLOR_TRANSPARENT {
+            cell[FOREGROUND_OFFSET] = COLOR_DEFAULT;
         }
         outcome.content_changed = true;
+        outcome.edited_cell = Some(edited_cell);
+        if *input_field == CellInputField::Primary {
+            let linear = selection
+                .row
+                .saturating_mul(COLUMNS)
+                .saturating_add(selection.column);
+            let next_linear = linear.saturating_add(1).min(COLUMNS * ROWS - 1);
+            let next = GridCellSelection {
+                column: next_linear % COLUMNS,
+                row: next_linear / COLUMNS,
+            };
+            outcome.selection_changed = next != *selection;
+            *selection = next;
+        }
         return outcome;
     }
 
@@ -160,31 +202,22 @@ fn edit_snapshot_from_keyboard(
         return outcome;
     }
     match event.key_code {
-        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => {
+        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE | crate::r::keyboard::KEYBOARD_KEY_DELETE => {
             let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
             let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
-            let previous_len = usize::from(cell[0]);
-            let text =
-                core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + previous_len]).unwrap_or("");
-            let next_len = text
-                .char_indices()
-                .next_back()
-                .map(|(offset, _)| offset)
-                .unwrap_or(0);
-            if next_len != previous_len {
-                cell[TEXT_OFFSET + next_len..TEXT_OFFSET + previous_len].fill(0);
-                cell[0] = next_len as u8;
+            let had_content = match *input_field {
+                CellInputField::Primary => {
+                    cell[PRIMARY_LENGTH_OFFSET] != 0 || cell[UPPER_LENGTH_OFFSET] != 0
+                }
+                CellInputField::Upper => cell[UPPER_LENGTH_OFFSET] != 0,
+            };
+            if had_content {
+                clear_cell_glyph(cell, *input_field);
+                if *input_field == CellInputField::Primary {
+                    clear_cell_glyph(cell, CellInputField::Upper);
+                }
                 outcome.content_changed = true;
-            }
-        }
-        crate::r::keyboard::KEYBOARD_KEY_DELETE => {
-            let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
-            let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
-            let previous_len = usize::from(cell[0]);
-            if previous_len != 0 {
-                cell[TEXT_OFFSET..TEXT_OFFSET + previous_len].fill(0);
-                cell[0] = 0;
-                outcome.content_changed = true;
+                outcome.edited_cell = Some(*selection);
             }
         }
         crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
@@ -208,18 +241,8 @@ fn edit_snapshot_from_keyboard(
             selection.row = next;
         }
         crate::r::keyboard::KEYBOARD_KEY_TAB => {
-            let linear = selection
-                .row
-                .saturating_mul(COLUMNS)
-                .saturating_add(selection.column)
-                .saturating_add(1)
-                .min(COLUMNS * ROWS - 1);
-            let next = GridCellSelection {
-                column: linear % COLUMNS,
-                row: linear / COLUMNS,
-            };
-            outcome.selection_changed = next != *selection;
-            *selection = next;
+            *input_field = input_field.toggled();
+            outcome.input_field_changed = true;
         }
         crate::r::keyboard::KEYBOARD_KEY_HOME => {
             outcome.selection_changed = selection.column != 0;
@@ -233,6 +256,27 @@ fn edit_snapshot_from_keyboard(
         _ => {}
     }
     outcome
+}
+
+fn glyph_offsets(input_field: CellInputField) -> (usize, usize) {
+    match input_field {
+        CellInputField::Primary => (PRIMARY_LENGTH_OFFSET, PRIMARY_OFFSET),
+        CellInputField::Upper => (UPPER_LENGTH_OFFSET, UPPER_OFFSET),
+    }
+}
+
+fn write_cell_glyph(cell: &mut [u8], input_field: CellInputField, encoded: &[u8]) {
+    debug_assert!(encoded.len() <= GLYPH_UTF8_CAPACITY);
+    let (length_offset, glyph_offset) = glyph_offsets(input_field);
+    cell[glyph_offset..glyph_offset + GLYPH_UTF8_CAPACITY].fill(0);
+    cell[glyph_offset..glyph_offset + encoded.len()].copy_from_slice(encoded);
+    cell[length_offset] = encoded.len() as u8;
+}
+
+fn clear_cell_glyph(cell: &mut [u8], input_field: CellInputField) {
+    let (length_offset, glyph_offset) = glyph_offsets(input_field);
+    cell[length_offset] = 0;
+    cell[glyph_offset..glyph_offset + GLYPH_UTF8_CAPACITY].fill(0);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -539,17 +583,25 @@ fn validate_page(raw: &[u8]) -> Result<(), ()> {
         return Err(());
     }
     for cell in raw.chunks_exact(CELL_BYTES) {
-        let text_len = usize::from(cell[0]);
-        if text_len > CELL_TEXT_CAPACITY
-            || cell[1] >= COLOR_COUNT as u8
-            || cell[2] >= COLOR_COUNT as u8
-            || cell[3] & !VALID_STYLE_BITS != 0
-            || core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + text_len]).is_err()
+        let primary_len = usize::from(cell[PRIMARY_LENGTH_OFFSET]);
+        let upper_len = usize::from(cell[UPPER_LENGTH_OFFSET]);
+        if primary_len > GLYPH_UTF8_CAPACITY
+            || upper_len > GLYPH_UTF8_CAPACITY
+            || (primary_len == 0 && upper_len != 0)
+            || cell[FOREGROUND_OFFSET] >= COLOR_COUNT as u8
+            || cell[BACKGROUND_OFFSET] >= COLOR_COUNT as u8
+            || cell[STYLE_OFFSET] & !VALID_STYLE_BITS != 0
+            || !valid_single_glyph(&cell[PRIMARY_OFFSET..PRIMARY_OFFSET + primary_len])
+            || !valid_single_glyph(&cell[UPPER_OFFSET..UPPER_OFFSET + upper_len])
         {
             return Err(());
         }
     }
     Ok(())
+}
+
+fn valid_single_glyph(encoded: &[u8]) -> bool {
+    core::str::from_utf8(encoded).is_ok_and(|glyph| glyph.is_empty() || glyph.chars().count() == 1)
 }
 
 struct GridPaperSurface {
@@ -765,6 +817,16 @@ struct TextCell {
     italic: bool,
 }
 
+fn font_for_glyph(glyph: &str) -> GpuFontFace {
+    if crate::intel::gpu_font::font_face_supports_text(GpuFontFace::Inconsolata, glyph) {
+        GpuFontFace::Inconsolata
+    } else if crate::intel::gpu_font::font_face_supports_text(GpuFontFace::NotoSansSc, glyph) {
+        GpuFontFace::NotoSansSc
+    } else {
+        GpuFontFace::Default
+    }
+}
+
 fn axis_tick_length_mm(cell_index: usize) -> f32 {
     let distance_mm = cell_index as u32 * CELL_EDGE_MM;
     if distance_mm % 30 == 0 {
@@ -784,7 +846,7 @@ fn build_resident_page(
 ) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
         GpuFontJobEntry, GpuFontTextRequest, create_resident_font_centered_scene_mesh,
-        ensure_font_face_available, font_face_supports_text,
+        ensure_font_face_available,
     };
 
     ensure_font_face_available(GpuFontFace::Default)?;
@@ -822,10 +884,11 @@ fn build_resident_page(
         for column in 0..COLUMNS {
             let offset = (row * COLUMNS + column) * CELL_BYTES;
             let cell = &snapshot.raw[offset..offset + CELL_BYTES];
-            let text_len = usize::from(cell[0]);
-            let foreground = cell[1];
-            let background = cell[2];
-            let style = cell[3];
+            let primary_len = usize::from(cell[PRIMARY_LENGTH_OFFSET]);
+            let upper_len = usize::from(cell[UPPER_LENGTH_OFFSET]);
+            let foreground = cell[FOREGROUND_OFFSET];
+            let background = cell[BACKGROUND_OFFSET];
+            let style = cell[STYLE_OFFSET];
             let left = grid_left + column as f32 * cell_width;
             let right = left + cell_width;
 
@@ -839,33 +902,52 @@ fn build_resident_page(
                 );
             }
 
-            if foreground == COLOR_TRANSPARENT || text_len == 0 {
+            if foreground == COLOR_TRANSPARENT || primary_len == 0 {
                 continue;
             }
-            let text = core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + text_len])
+            let primary = core::str::from_utf8(&cell[PRIMARY_OFFSET..PRIMARY_OFFSET + primary_len])
                 .map_err(|_| "gridpaper-utf8")?;
+            let upper = if upper_len == 0 {
+                None
+            } else {
+                Some(
+                    core::str::from_utf8(&cell[UPPER_OFFSET..UPPER_OFFSET + upper_len])
+                        .map_err(|_| "gridpaper-upper-utf8")?,
+                )
+            };
             // Font size is specified in output pixels. Convert it into the
             // logical scene units consumed by the resident font mesh so 100%
             // remains an actual 24 px regardless of the physical raster extent.
             let font_pixels = (DEFAULT_REGULAR_ROW_FONT_PIXELS * visible_scene_y * scale)
                 .clamp(visible_scene_y, 256.0);
             let baseline = top + cell_height * 0.72;
+            let has_upper = upper.is_some();
             texts.push(TextCell {
-                text: String::from(text),
-                font: if font_face_supports_text(GpuFontFace::Inconsolata, text) {
-                    GpuFontFace::Inconsolata
-                } else if font_face_supports_text(GpuFontFace::NotoSansSc, text) {
-                    GpuFontFace::NotoSansSc
-                } else {
-                    GpuFontFace::Default
-                },
+                text: String::from(primary),
+                font: font_for_glyph(primary),
                 color: foreground,
-                center_x: (left + right) * 0.5,
-                center_y: (top + bottom) * 0.5,
-                font_pixels,
+                center_x: (left + right) * 0.5 - if has_upper { cell_width * 0.10 } else { 0.0 },
+                center_y: (top + bottom) * 0.5 + if has_upper { cell_height * 0.08 } else { 0.0 },
+                font_pixels: if has_upper {
+                    font_pixels * 0.82
+                } else {
+                    font_pixels
+                },
                 bold: style & STYLE_BOLD != 0,
                 italic: style & STYLE_ITALIC != 0,
             });
+            if let Some(upper) = upper {
+                texts.push(TextCell {
+                    text: String::from(upper),
+                    font: font_for_glyph(upper),
+                    color: foreground,
+                    center_x: (left + right) * 0.5 + cell_width * 0.24,
+                    center_y: (top + bottom) * 0.5 - cell_height * 0.24,
+                    font_pixels: font_pixels * 0.52,
+                    bold: style & STYLE_BOLD != 0,
+                    italic: style & STYLE_ITALIC != 0,
+                });
+            }
             if style & STYLE_UNDERLINE != 0 {
                 let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let inset = DECORATION_INSET_MM * scene_units_per_mm_x * scale;
@@ -1281,6 +1363,7 @@ pub async fn gridpaper_service_task() {
     let mut active_pan_source = None;
     let mut pending_pan_pixels = (0i32, 0i32);
     let mut selection: Option<GridCellSelection> = None;
+    let mut input_field = CellInputField::Primary;
     let mut cursor_dirty = false;
     let mut keyboard_edits = 0u64;
     let mut last_build_error = None;
@@ -1343,6 +1426,7 @@ pub async fn gridpaper_service_task() {
                     });
                     if next != selection {
                         selection = next;
+                        input_field = CellInputField::Primary;
                         cursor_dirty = true;
                         if let Some(selected) = selection {
                             crate::log_info!(
@@ -1373,18 +1457,33 @@ pub async fn gridpaper_service_task() {
                         continue;
                     };
                     let mut selected = selection.expect("gridpaper selection checked");
-                    let outcome = edit_snapshot_from_keyboard(snapshot, &mut selected, event.event);
+                    let outcome = edit_snapshot_from_keyboard(
+                        snapshot,
+                        &mut selected,
+                        &mut input_field,
+                        event.event,
+                    );
                     if outcome.capacity_rejected {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: cell input rejected column={} row={} capacity_bytes={} input=ui4-keyboard\n",
+                            "gridpaper: cell input rejected column={} row={} field={} rule=one-unicode-scalar-and-upper-requires-primary input=ui4-keyboard\n",
                             selected.column,
                             selected.row,
-                            CELL_TEXT_CAPACITY,
+                            input_field.name(),
+                        );
+                    }
+                    if outcome.input_field_changed {
+                        crate::log_info!(
+                            target: "gridpaper";
+                            "gridpaper: cell input field toggled column={} row={} field={} key=tab input=ui4-focused-keyboard\n",
+                            selected.column,
+                            selected.row,
+                            input_field.name(),
                         );
                     }
                     if outcome.clear_selection {
                         selection = None;
+                        input_field = CellInputField::Primary;
                         cursor_dirty = true;
                     } else {
                         selection = Some(selected);
@@ -1392,17 +1491,21 @@ pub async fn gridpaper_service_task() {
                     }
                     if outcome.content_changed {
                         keyboard_edits = keyboard_edits.saturating_add(1);
-                        let offset = (selected.row * COLUMNS + selected.column) * CELL_BYTES;
-                        let text_len = usize::from(snapshot.raw[offset]);
+                        let edited = outcome.edited_cell.unwrap_or(selected);
+                        let offset = (edited.row * COLUMNS + edited.column) * CELL_BYTES;
+                        let primary_len = usize::from(snapshot.raw[offset + PRIMARY_LENGTH_OFFSET]);
+                        let upper_len = usize::from(snapshot.raw[offset + UPPER_LENGTH_OFFSET]);
                         queued_snapshot = Some(snapshot.clone());
                         pending = None;
                         crate::log_info!(
                             target: "gridpaper";
-                            "gridpaper: cell edited seq={} column={} row={} utf8_bytes={} key_kind={} codepoint={} input=ui4-focused-keyboard action=rebuild-selected-cell-page\n",
+                            "gridpaper: cell edited seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} input=ui4-focused-keyboard action=rebuild-page\n",
                             keyboard_edits,
-                            selected.column,
-                            selected.row,
-                            text_len,
+                            edited.column,
+                            edited.row,
+                            input_field.name(),
+                            primary_len,
+                            upper_len,
                             event.event.kind,
                             event.event.codepoint,
                         );
@@ -1612,7 +1715,8 @@ mod tests {
 
     #[test]
     fn fixed_wire_size_matches_a4_gridpaper() {
-        assert_eq!(PAGE_BYTES, 39_220);
+        assert_eq!(CELL_BYTES, 13);
+        assert_eq!(PAGE_BYTES, 25_493);
         assert_eq!((COLUMNS, ROWS), (37, 53));
         assert_eq!(COLUMNS * ROWS, 1_961);
         assert_eq!((A4_WIDTH_MM, A4_HEIGHT_MM), (210, 297));
@@ -1649,12 +1753,85 @@ mod tests {
     fn validator_rejects_non_utf8_and_unknown_style_bits() {
         let mut raw = [0u8; PAGE_BYTES];
         assert_eq!(validate_page(&raw), Ok(()));
-        raw[0] = 1;
-        raw[TEXT_OFFSET] = 0xff;
+        raw[PRIMARY_LENGTH_OFFSET] = 1;
+        raw[PRIMARY_OFFSET] = 0xff;
         assert_eq!(validate_page(&raw), Err(()));
-        raw[0] = 0;
-        raw[3] = 0x80;
+        raw[PRIMARY_LENGTH_OFFSET] = 0;
+        raw[PRIMARY_OFFSET] = 0;
+        raw[STYLE_OFFSET] = 0x80;
         assert_eq!(validate_page(&raw), Err(()));
+    }
+
+    #[test]
+    fn keyboard_primary_advances_while_upper_stays_and_delete_restores_primary_only() {
+        let mut snapshot = OwnedSnapshot {
+            raw: Vec::from([0u8; PAGE_BYTES]),
+            generation: 1,
+            scale_percent: 100,
+            serial: 1,
+        };
+        let original = GridCellSelection { column: 2, row: 3 };
+        let mut selection = original;
+        let mut input_field = CellInputField::Primary;
+        let mut primary_event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        primary_event.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT;
+        primary_event.utf8_len = 1;
+        primary_event.codepoint = 'x' as u32;
+        primary_event.utf8[0] = b'x';
+
+        let primary = edit_snapshot_from_keyboard(
+            &mut snapshot,
+            &mut selection,
+            &mut input_field,
+            primary_event,
+        );
+        assert!(primary.content_changed);
+        assert!(primary.selection_changed);
+        assert_eq!(selection, GridCellSelection { column: 3, row: 3 });
+
+        selection = original;
+        let mut tab = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        tab.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY;
+        tab.key_code = crate::r::keyboard::KEYBOARD_KEY_TAB;
+        let toggled =
+            edit_snapshot_from_keyboard(&mut snapshot, &mut selection, &mut input_field, tab);
+        assert!(toggled.input_field_changed);
+        assert_eq!(input_field, CellInputField::Upper);
+
+        let mut upper_event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        let mut encoded = [0u8; 4];
+        let upper = '²'.encode_utf8(&mut encoded);
+        upper_event.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT;
+        upper_event.utf8_len = upper.len() as u8;
+        upper_event.codepoint = '²' as u32;
+        upper_event.utf8[..upper.len()].copy_from_slice(upper.as_bytes());
+        let upper = edit_snapshot_from_keyboard(
+            &mut snapshot,
+            &mut selection,
+            &mut input_field,
+            upper_event,
+        );
+        assert!(upper.content_changed);
+        assert!(!upper.selection_changed);
+        assert_eq!(selection, original);
+
+        let offset = (original.row * COLUMNS + original.column) * CELL_BYTES;
+        let cell = &snapshot.raw[offset..offset + CELL_BYTES];
+        assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
+        assert_eq!(&cell[PRIMARY_OFFSET..PRIMARY_OFFSET + 1], b"x");
+        assert_eq!(cell[UPPER_LENGTH_OFFSET], 2);
+        assert_eq!(&cell[UPPER_OFFSET..UPPER_OFFSET + 2], "²".as_bytes());
+        assert_eq!(validate_page(&snapshot.raw), Ok(()));
+
+        let mut delete = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+        delete.kind = crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY;
+        delete.key_code = crate::r::keyboard::KEYBOARD_KEY_DELETE;
+        let deleted =
+            edit_snapshot_from_keyboard(&mut snapshot, &mut selection, &mut input_field, delete);
+        assert!(deleted.content_changed);
+        let cell = &snapshot.raw[offset..offset + CELL_BYTES];
+        assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
+        assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
     }
 
     #[test]

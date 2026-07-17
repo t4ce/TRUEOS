@@ -22,8 +22,9 @@ pub(crate) use frame_pool::{
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
-    GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, gpgpu_preview_consumer_service_task,
-    gpgpu_preview_status, request_gpgpu_preview_stop, request_mandel_preview_start,
+    GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, GpgpuPreviewPreset,
+    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_gpgpu_preview_start,
+    request_gpgpu_preview_stop,
 };
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4PanPhase, Ui4VisualRect, software_cursor_visuals,

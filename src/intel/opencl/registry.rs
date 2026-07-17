@@ -724,7 +724,10 @@ const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CHART_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["shell2:gpgpu chart artifact"],
+    consumers: &[
+        "shell2:gpgpu chart artifact",
+        "ui4::gpgpu_preview_consumer_service_task",
+    ],
 };
 
 const PIXEL_PLASMA_ARGS: &[KernelCallArg<'_>] = &[
@@ -756,7 +759,10 @@ const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: PIXEL_PLASMA_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["shell2:gpgpu pixel artifact"],
+    consumers: &[
+        "shell2:gpgpu pixel artifact",
+        "ui4::gpgpu_preview_consumer_service_task",
+    ],
 };
 
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[

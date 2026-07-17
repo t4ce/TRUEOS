@@ -17,7 +17,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu preview start mandelbrot [duration_ms] [cadence_ms] [publish_every]",
+        "gpgpu preview start <mandelbrot|chart|plasma> [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
@@ -42,14 +42,20 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         return;
     };
     if action.eq_ignore_ascii_case("start") {
-        let Some(preset) = args.next() else {
+        let Some(preset_name) = args.next() else {
             usage(io);
             return;
         };
-        if !preset.eq_ignore_ascii_case("mandelbrot") {
+        let preset = if preset_name.eq_ignore_ascii_case("mandelbrot") {
+            crate::ui4::GpgpuPreviewPreset::Mandelbrot
+        } else if preset_name.eq_ignore_ascii_case("chart") {
+            crate::ui4::GpgpuPreviewPreset::Chart
+        } else if preset_name.eq_ignore_ascii_case("plasma") {
+            crate::ui4::GpgpuPreviewPreset::Plasma
+        } else {
             usage(io);
             return;
-        }
+        };
         let duration_ms = match args.next() {
             Some(raw) => match raw.parse::<u64>() {
                 Ok(value) => value,
@@ -84,18 +90,20 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
             return;
         }
         let config = crate::ui4::GpgpuPreviewConfig {
+            preset,
             duration_ms,
             cadence_ms,
             publish_every,
         };
-        match crate::ui4::request_mandel_preview_start(config) {
+        match crate::ui4::request_gpgpu_preview_start(config) {
             Ok(serial) => {
                 let status = crate::ui4::gpgpu_preview_status();
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} preset=mandelbrot service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5",
+                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5",
                         serial,
+                        preset.label(),
                         status.online as u8,
                         duration_ms,
                         cadence_ms,
@@ -131,12 +139,13 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset=mandelbrot duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} submit_ms={} error={}",
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} error={}",
             status.online as u8,
             status.phase.label(),
             status.desired_running as u8,
             status.request_serial,
             status.applied_serial,
+            status.config.preset.label(),
             status.config.duration_ms,
             status.config.cadence_ms,
             status.config.publish_every,
@@ -151,6 +160,7 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             status.metrics.late,
             status.metrics.elapsed_ms,
             status.metrics.last_iterations,
+            status.metrics.last_marker,
             status.metrics.last_submit_ms,
             status.last_error,
         )

@@ -60,6 +60,7 @@ pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payl
 pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 scale%,payload fixed page -> rc
 pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // detach the calling VM's producer -> rc
 pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // payload CSS-like text color programs -> rc
+pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> IPP printer registry
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1028,6 +1029,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1,
                 crate::r::net::vlayer::system_services_snapshot_len_host,
                 crate::r::net::vlayer::system_services_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_PRINTER_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::printer_snapshot_len_host,
+                crate::r::net::vlayer::printer_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }

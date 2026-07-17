@@ -34,7 +34,25 @@ pub(crate) const GPGPU_PREVIEW_MAX_CADENCE_MS: u64 = 60_000;
 pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuPreviewPreset {
+    Mandelbrot,
+    Chart,
+    Plasma,
+}
+
+impl GpgpuPreviewPreset {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Mandelbrot => "mandelbrot",
+            Self::Chart => "chart",
+            Self::Plasma => "plasma",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GpgpuPreviewConfig {
+    pub(crate) preset: GpgpuPreviewPreset,
     pub(crate) duration_ms: u64,
     pub(crate) cadence_ms: u64,
     pub(crate) publish_every: u32,
@@ -42,6 +60,7 @@ pub(crate) struct GpgpuPreviewConfig {
 
 impl GpgpuPreviewConfig {
     pub(crate) const DEFAULT: Self = Self {
+        preset: GpgpuPreviewPreset::Mandelbrot,
         duration_ms: GPGPU_PREVIEW_DEFAULT_DURATION_MS,
         cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
         publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
@@ -90,6 +109,7 @@ pub(crate) struct GpgpuPreviewMetrics {
     pub(crate) late: u64,
     pub(crate) elapsed_ms: u64,
     pub(crate) last_iterations: u32,
+    pub(crate) last_marker: u32,
     pub(crate) last_submit_ms: u64,
 }
 
@@ -128,6 +148,7 @@ impl GpgpuPreviewStatus {
                 late: 0,
                 elapsed_ms: 0,
                 last_iterations: 0,
+                last_marker: 0,
                 last_submit_ms: 0,
             },
             last_error: "none",
@@ -175,9 +196,7 @@ struct ActivePreview {
     metrics: GpgpuPreviewMetrics,
 }
 
-pub(crate) fn request_mandel_preview_start(
-    config: GpgpuPreviewConfig,
-) -> Result<u64, &'static str> {
+pub(crate) fn request_gpgpu_preview_start(config: GpgpuPreviewConfig) -> Result<u64, &'static str> {
     let config = config.validate()?;
     let mut control = PREVIEW_CONTROL.lock();
     let serial = next_serial(control.desired.serial);
@@ -243,8 +262,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     Ok(preview) => {
                         crate::log_info!(
                             target: "ui4";
-                            "ui4 gpgpu-preview start request={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} plane_mutation=none\n",
+                            "ui4 gpgpu-preview start request={} preset={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} plane_mutation=none\n",
                             desired.serial,
+                            preview.config.preset.label(),
                             PREVIEW_OWNER,
                             preview.frame.raw(),
                             preview.window.raw(),
@@ -393,15 +413,9 @@ fn render_preview_frame(preview: &mut ActivePreview) {
         }
     };
 
-    let iterations = 32 + ((preview.metrics.attempted - 1) % 97) as u32;
-    preview.metrics.last_iterations = iterations;
-    let Some(result) = crate::intel::gpgpu::mandel64_worklist_surface_full(surface, iterations)
-    else {
-        let _ = cancel_frame_buffer(lease);
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        set_active_error(preview.request_serial, "mandelbrot-dispatch-unavailable");
-        return;
-    };
+    let result = dispatch_preview_kernel(preview, surface);
+    preview.metrics.last_iterations = result.iterations;
+    preview.metrics.last_marker = result.marker;
     if result.submitted {
         preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
     }
@@ -409,7 +423,7 @@ fn render_preview_frame(preview: &mut ActivePreview) {
     if !result.ok {
         let _ = cancel_frame_buffer(lease);
         preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        set_active_error(preview.request_serial, "mandelbrot-dispatch-failed");
+        set_active_error(preview.request_serial, result.error);
         return;
     }
     preview.metrics.completed = preview.metrics.completed.saturating_add(1);
@@ -429,6 +443,82 @@ fn render_preview_frame(preview: &mut ActivePreview) {
         return;
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
+}
+
+#[derive(Copy, Clone)]
+struct PreviewDispatchResult {
+    ok: bool,
+    submitted: bool,
+    iterations: u32,
+    marker: u32,
+    submit_ms: u64,
+    error: &'static str,
+}
+
+fn dispatch_preview_kernel(
+    preview: &ActivePreview,
+    surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> PreviewDispatchResult {
+    match preview.config.preset {
+        GpgpuPreviewPreset::Mandelbrot => {
+            let iterations = 32 + ((preview.metrics.attempted - 1) % 97) as u32;
+            match crate::intel::gpgpu::mandel64_worklist_surface_full(surface, iterations) {
+                Some(result) => PreviewDispatchResult {
+                    ok: result.ok,
+                    submitted: result.submitted,
+                    iterations,
+                    marker: 0,
+                    submit_ms: result.submit_ms,
+                    error: "mandelbrot-dispatch-failed",
+                },
+                None => PreviewDispatchResult {
+                    ok: false,
+                    submitted: false,
+                    iterations,
+                    marker: 0,
+                    submit_ms: 0,
+                    error: "mandelbrot-dispatch-unavailable",
+                },
+            }
+        }
+        GpgpuPreviewPreset::Chart => {
+            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
+            let flags = crate::intel::gpgpu::CHART_SINE_FLAG_GRID
+                | crate::intel::gpgpu::CHART_SINE_FLAG_AXES
+                | crate::intel::gpgpu::CHART_SINE_FLAG_GLOW
+                | crate::intel::gpgpu::CHART_SINE_FLAG_BORDER;
+            let result = crate::intel::gpgpu::chart_sine_rgba8_surface_full(
+                surface,
+                seconds * core::f32::consts::FRAC_PI_2,
+                flags,
+            );
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: 0,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                error: "chart-dispatch-failed",
+            }
+        }
+        GpgpuPreviewPreset::Plasma => {
+            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
+            let flags = crate::intel::gpgpu::PIXEL_PLASMA_FLAG_VIGNETTE
+                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_RINGS
+                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_SCANLINE
+                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_FIELD_PALETTE;
+            let result =
+                crate::intel::gpgpu::pixel_plasma_rgba8_surface_full(surface, seconds, flags);
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: 0,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                error: "plasma-dispatch-failed",
+            }
+        }
+    }
 }
 
 fn schedule_next_render(preview: &mut ActivePreview) {
@@ -521,8 +611,9 @@ fn stop_active_preview(
     retired_frames.push(preview.frame);
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview stopped request={} frame={} window={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",
+        "ui4 gpgpu-preview stopped request={} preset={} frame={} window={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",
         preview.request_serial,
+        preview.config.preset.label(),
         preview.frame.raw(),
         preview.window.raw(),
         preview.metrics.attempted,
@@ -632,12 +723,13 @@ const fn next_serial(serial: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig};
+    use super::{GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset};
 
     #[test]
     fn preview_config_accepts_continuous_duration() {
         assert!(
             GpgpuPreviewConfig {
+                preset: GpgpuPreviewPreset::Plasma,
                 duration_ms: 0,
                 cadence_ms: 16,
                 publish_every: 2,
@@ -651,6 +743,7 @@ mod tests {
     fn preview_config_rejects_invalid_scheduler_values() {
         assert!(
             GpgpuPreviewConfig {
+                preset: GpgpuPreviewPreset::Mandelbrot,
                 duration_ms: 1,
                 cadence_ms: 0,
                 publish_every: 1,
@@ -660,6 +753,7 @@ mod tests {
         );
         assert!(
             GpgpuPreviewConfig {
+                preset: GpgpuPreviewPreset::Chart,
                 duration_ms: 1,
                 cadence_ms: GPGPU_PREVIEW_MAX_CADENCE_MS + 1,
                 publish_every: 1,
@@ -669,6 +763,7 @@ mod tests {
         );
         assert!(
             GpgpuPreviewConfig {
+                preset: GpgpuPreviewPreset::Plasma,
                 duration_ms: 1,
                 cadence_ms: 1,
                 publish_every: 0,

@@ -2192,6 +2192,16 @@ pub(crate) struct GpgpuShellMandel64WorklistResult {
     pub(crate) presented: bool,
 }
 
+/// Common result for a full-surface compute node that does not own
+/// presentation. UI4 consumers decide whether and when to publish the frame.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuRgba8KernelResult {
+    pub(crate) ok: bool,
+    pub(crate) submitted: bool,
+    pub(crate) marker: u32,
+    pub(crate) submit_ms: u64,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuTwemojiSprite64Placement {
     pub(crate) slot: u16,
@@ -5217,6 +5227,46 @@ pub(crate) fn mandel64_worklist_surface_full(
     iterations: u32,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
     mandel64_worklist_surface_view_mode(dst, dst.bounds(), iterations, true)
+}
+
+/// Render the analytical chart node into an arbitrary trusted RGBA surface.
+/// This is compute-only: the caller owns frame publication and cadence.
+pub(crate) fn chart_sine_rgba8_surface_full(
+    dst: GpgpuRgba8Surface,
+    phase: f32,
+    flags: u32,
+) -> GpgpuRgba8KernelResult {
+    let start_tick = direct_rcs_now_tick();
+    let mut params = ChartSineRgba8Params::scope_defaults(phase, flags);
+    params.rect_width = dst.width;
+    params.rect_height = dst.height;
+    let marker = submit_chart_sine_rgba8(dst, params).unwrap_or(0);
+    GpgpuRgba8KernelResult {
+        ok: marker == CHART_SINE_POST_MARKER,
+        submitted: marker == CHART_SINE_POST_MARKER,
+        marker,
+        submit_ms: direct_rcs_elapsed_ms_since(start_tick),
+    }
+}
+
+/// Render the procedural plasma node into an arbitrary trusted RGBA surface.
+/// This is compute-only: the caller owns frame publication and cadence.
+pub(crate) fn pixel_plasma_rgba8_surface_full(
+    dst: GpgpuRgba8Surface,
+    time: f32,
+    flags: u32,
+) -> GpgpuRgba8KernelResult {
+    let start_tick = direct_rcs_now_tick();
+    let mut params = PixelPlasmaRgba8Params::demo_defaults(time, flags);
+    params.rect_width = dst.width;
+    params.rect_height = dst.height;
+    let marker = submit_pixel_plasma_rgba8(dst, params).unwrap_or(0);
+    GpgpuRgba8KernelResult {
+        ok: marker == PIXEL_PLASMA_POST_MARKER,
+        submitted: marker == PIXEL_PLASMA_POST_MARKER,
+        marker,
+        submit_ms: direct_rcs_elapsed_ms_since(start_tick),
+    }
 }
 
 /// Render a Mandelbrot view whose signed x/y origin selects the complex-plane

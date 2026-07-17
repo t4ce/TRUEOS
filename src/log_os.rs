@@ -315,6 +315,14 @@ pub(crate) fn blueprint_line(level: log::Level, args: fmt::Arguments<'_>) {
     log_with_area_level(flags::LogArea::Blueprint, level, args);
 }
 
+pub(crate) fn printer_discovered(name: &str, uri: &str) {
+    log_with_area_level(
+        flags::LogArea::Net,
+        log::Level::Info,
+        format_args!("printer: discovered name={} uri={}\n", name, uri),
+    );
+}
+
 fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 

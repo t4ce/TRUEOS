@@ -10,6 +10,7 @@ pub mod esp;
 pub mod https;
 pub mod mail_config;
 pub mod ports;
+pub mod printer;
 pub mod smtp_cabi;
 pub mod socket_cabi;
 pub mod srv;

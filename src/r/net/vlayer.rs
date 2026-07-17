@@ -159,6 +159,26 @@ pub fn system_services_snapshot_read_host(offset: usize, out: &mut [u8]) -> usiz
     n
 }
 
+pub fn printer_snapshot_len_host() -> usize {
+    crate::r::net::printer::snapshot_text().len()
+}
+
+pub fn printer_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+
+    let text = crate::r::net::printer::snapshot_text();
+    let bytes = text.as_bytes();
+    if offset >= bytes.len() {
+        return 0;
+    }
+
+    let n = core::cmp::min(out.len(), bytes.len() - offset);
+    out[..n].copy_from_slice(&bytes[offset..offset + n]);
+    n
+}
+
 pub fn pci_snapshot_text_host() -> String {
     ensure_pci_devices_enumerated();
 
@@ -328,6 +348,21 @@ pub unsafe extern "C" fn trueos_vlayer_system_services_snapshot_read(
         trueos_vm::vmcall::OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ,
         system_services_snapshot_len_host,
         system_services_snapshot_read_host,
+        offset,
+        out_ptr,
+        out_cap,
+    )
+}
+
+pub unsafe extern "C" fn trueos_vlayer_printer_snapshot_read(
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    vlayer_read_runtime(
+        trueos_vm::vmcall::OP_BP_PRINTER_SNAPSHOT_READ,
+        printer_snapshot_len_host,
+        printer_snapshot_read_host,
         offset,
         out_ptr,
         out_cap,
