@@ -77,6 +77,23 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     ParseOutcome::Handled
 }
 
+pub(crate) fn try_parse_slot_input(
+    io: &'static dyn ShellBackend2,
+    submitted: &str,
+) -> Option<ParseOutcome> {
+    let submitted = submitted.trim();
+    if submitted.len() != 6 || !submitted.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let output_mask = output_target_for_backend(io);
+    if crate::shell2::matrix::active_slot_app_label(output_mask).as_deref() != Some(CRY_SLOT) {
+        return None;
+    }
+
+    login_root(io, submitted);
+    Some(ParseOutcome::Handled)
+}
+
 fn setup_key(io: &'static dyn ShellBackend2) {
     match crypt::setup_root_key() {
         Ok(report) => {
@@ -108,34 +125,40 @@ fn setup_key(io: &'static dyn ShellBackend2) {
             );
             present_totp_enrollment(io);
         }
+        Err(CryError::AlreadyConfigured) => {
+            print_shell_line(io, "cry key setup: key already configured; continuing 2fa setup");
+            present_totp_enrollment(io);
+        }
         Err(error) => print_error(io, "key setup", error),
     }
 }
 
 fn present_totp_enrollment(io: &'static dyn ShellBackend2) {
     match crypt::begin_totp_enrollment() {
-        Ok(enrollment) => match render_qr(io, enrollment.qr_payload.as_str()) {
-            Ok(()) => {}
-            Err(QrPresentationError::PayloadTooLong) => {
-                print_shell_line(io, "cry 2fa setup: QR payload did not fit")
-            }
-            Err(QrPresentationError::ViewportTooSmall {
-                required_cols,
-                required_rows,
-                available_cols,
-                available_rows,
-            }) => print_shell_line(
-                io,
-                alloc::format!(
-                    "cry 2fa setup: viewport too small; need {}x{}, have {}x{}",
+        Ok(enrollment) => {
+            match render_qr(io, enrollment.qr_payload.as_str(), &enrollment.account_tag) {
+                Ok(()) => {}
+                Err(QrPresentationError::PayloadTooLong) => {
+                    print_shell_line(io, "cry 2fa setup: QR payload did not fit")
+                }
+                Err(QrPresentationError::ViewportTooSmall {
                     required_cols,
                     required_rows,
                     available_cols,
                     available_rows,
-                )
-                .as_str(),
-            ),
-        },
+                }) => print_shell_line(
+                    io,
+                    alloc::format!(
+                        "cry 2fa setup: viewport too small; need {}x{}, have {}x{}",
+                        required_cols,
+                        required_rows,
+                        available_cols,
+                        available_rows,
+                    )
+                    .as_str(),
+                ),
+            }
+        }
         Err(error) => print_error(io, "2fa setup", error),
     }
 }
@@ -188,15 +211,16 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cry: configured={} 2fa={:?} wall-clock={} isolation={:?} persistence={:?} shell-gate=off",
+            "cry: configured={} 2fa={:?} totp-clock={} isolation={:?} persistence={:?} shell-gate=off",
             status.configured as u8,
             status.two_factor,
-            if status.wall_clock_available { "ready" } else { "unavailable" },
+            if status.totp_clock.is_some() { "ntp" } else { "waiting-for-ntp" },
             status.isolation,
             status.persistence,
         )
         .as_str(),
     );
+    print_totp_clock(io, status.totp_clock);
     if let (Some(key), Some(fingerprint), Some(account)) =
         (status.key, status.fingerprint, status.account)
     {
@@ -242,7 +266,9 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::NotConfigured => "run `cry key setup` first",
         CryError::TwoFactorAlreadyActive => "2fa is already active",
         CryError::TwoFactorNotConfigured => "run `cry 2fa setup` first",
-        CryError::WallClockUnavailable => "usable Unix wall clock unavailable",
+        CryError::WallClockUnavailable => {
+            "TOTP clock is not synchronized; wait for network time and retry"
+        }
         CryError::InvalidTotpCode => "invalid 6-digit authenticator code",
         CryError::TotpReplay => "authenticator code already consumed; wait for the next code",
         CryError::TotpRateLimited {
@@ -266,6 +292,9 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::SignatureRejected => "machine-login proof was rejected",
     };
     print_shell_line(io, alloc::format!("cry {operation}: {detail}").as_str());
+    if matches!(error, CryError::InvalidTotpCode | CryError::WallClockUnavailable) {
+        print_totp_clock(io, crypt::totp_clock_status());
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -279,7 +308,11 @@ enum QrPresentationError {
     },
 }
 
-fn render_qr(io: &'static dyn ShellBackend2, payload: &str) -> Result<(), QrPresentationError> {
+fn render_qr(
+    io: &'static dyn ShellBackend2,
+    payload: &str,
+    account_tag: &[u8; 4],
+) -> Result<(), QrPresentationError> {
     let mut temp = [0u8; QR_BUFFER_BYTES];
     let mut output = [0u8; QR_BUFFER_BYTES];
     let qr = QrCode::encode_text(
@@ -312,10 +345,17 @@ fn render_qr(io: &'static dyn ShellBackend2, payload: &str) -> Result<(), QrPres
 
     crate::shell2::matrix::clear_active_lines(output_mask);
     print_network_trust_warning(io);
-    print_native_line(io, "cry 2fa: scan with Google Authenticator; issuer=TRUEOS account=root");
     print_native_line(
         io,
-        "cry 2fa: QR contains the shared secret; then enter `cry login <6-digit code>`",
+        alloc::format!(
+            "cry 2fa: scan with Google Authenticator; account=root-{}",
+            full_hex(account_tag),
+        )
+        .as_str(),
+    );
+    print_native_line(
+        io,
+        "cry 2fa: QR contains the shared secret; enter the 6-digit code in this slot",
     );
 
     let first = -QR_QUIET_ZONE;
@@ -339,8 +379,38 @@ fn render_qr(io: &'static dyn ShellBackend2, payload: &str) -> Result<(), QrPres
         print_native_line(io, line.as_str());
         top += 2;
     }
-    print_native_line(io, "cry 2fa: waiting for the first authenticator code");
+    print_native_line(io, "cry 2fa: waiting for the first authenticator code (digits only)");
     Ok(())
+}
+
+fn print_totp_clock(io: &'static dyn ShellBackend2, clock: Option<crypt::CryTotpClock>) {
+    match clock {
+        Some(clock) => {
+            let seconds_in_day = clock.unix_seconds % 86_400;
+            let utc_hour = seconds_in_day / 3_600;
+            let utc_minute = (seconds_in_day % 3_600) / 60;
+            let utc_second = seconds_in_day % 60;
+            let boot_delta = clock
+                .ntp_minus_boot_seconds
+                .map(|delta| alloc::format!(" boot-delta={delta}s"))
+                .unwrap_or_default();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cry: totp-clock=ntp utc={utc_hour:02}:{utc_minute:02}:{utc_second:02} unix={} step={} next-code-in={}s{}",
+                    clock.unix_seconds,
+                    clock.step,
+                    clock.seconds_remaining,
+                    boot_delta,
+                )
+                .as_str(),
+            );
+        }
+        None => print_shell_line(
+            io,
+            "cry: totp-clock=waiting-for-ntp; keep the network up and retry shortly",
+        ),
+    }
 }
 
 fn print_network_trust_warning(io: &'static dyn ShellBackend2) {

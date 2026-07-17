@@ -58,6 +58,7 @@ const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
 const TERMINAL_SIZE_QUERY: &str = "\x1b[18t";
 const TERMINAL_SIZE_QUERY_IDLE_TICKS: u16 = 100;
+const CRY_APP_LABEL: &str = "cry";
 pub(crate) const LOCAL_ESCAPE_KEY_BYTE: u8 = 0x1d;
 pub(crate) const LOCAL_F1_KEY_BYTE: u8 = 0x1c;
 pub(crate) const LOCAL_UNMAPPED_KEY_BYTE: u8 = 0x1e;
@@ -1181,12 +1182,12 @@ fn transcript_prefers_chronological_layout(transcript: &VecDeque<TranscriptEntry
 }
 
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
-    let recorded = user_submission_for_recording(submitted);
-    let _ =
-        matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, recorded);
+    let output_mask = output_target_for_backend(io);
+    let recorded = user_submission_for_recording(output_mask, submitted);
+    let _ = matrix::record_line_for_output(output_mask, LineSource::User, recorded);
 }
 
-fn user_submission_for_recording(submitted: &str) -> &str {
+fn user_submission_for_recording(output_mask: u8, submitted: &str) -> &str {
     let mut args = submitted.split_whitespace();
     let first = args.next();
     let second = args.next();
@@ -1204,8 +1205,13 @@ fn user_submission_for_recording(submitted: &str) -> &str {
                 && login.eq_ignore_ascii_case("login")
                 && account.eq_ignore_ascii_case("root")
                 && is_six_digit_code(code));
+    let bare_cry_code = first.is_some_and(is_six_digit_code)
+        && second.is_none()
+        && matrix::active_slot_app_label(output_mask).as_deref() == Some(CRY_APP_LABEL);
 
-    if named_login {
+    if bare_cry_code {
+        "******"
+    } else if named_login {
         "cry login ******"
     } else if named_root_login {
         "cry login root ******"
@@ -2143,7 +2149,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
-                    matrix::record_user_input(user_submission_for_recording(submitted_raw));
+                    matrix::record_user_input(user_submission_for_recording(
+                        output_mask,
+                        submitted_raw,
+                    ));
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     out.prompt(output_mask);

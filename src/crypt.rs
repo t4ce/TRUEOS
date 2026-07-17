@@ -84,6 +84,15 @@ pub(crate) enum CryTwoFactorState {
 
 pub(crate) struct CryTotpEnrollment {
     pub qr_payload: Zeroizing<String>,
+    pub account_tag: [u8; 4],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CryTotpClock {
+    pub unix_seconds: u64,
+    pub step: u64,
+    pub seconds_remaining: u64,
+    pub ntp_minus_boot_seconds: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,7 +104,7 @@ pub(crate) struct CryStatus {
     pub isolation: IsolationClass,
     pub persistence: PersistenceClass,
     pub two_factor: CryTwoFactorState,
-    pub wall_clock_available: bool,
+    pub totp_clock: Option<CryTotpClock>,
     pub session: Option<CrySessionSnapshot>,
 }
 
@@ -269,18 +278,27 @@ pub(crate) fn begin_totp_enrollment() -> Result<CryTotpEnrollment, CryError> {
         .totp
         .as_ref()
         .ok_or(CryError::TwoFactorNotConfigured)?;
+    let fingerprint = state.credential.ok_or(CryError::NotConfigured)?.fingerprint;
+    let account_tag: [u8; 4] = fingerprint[..4]
+        .try_into()
+        .map_err(|_| CryError::InvalidGeneratedIdentity)?;
     let mut base32_bytes = encode_totp_secret_base32(&factor.secret);
     let mut base32 = String::with_capacity(TOTP_BASE32_BYTES);
     for byte in base32_bytes {
         base32.push(byte as char);
     }
     let payload = Zeroizing::new(alloc::format!(
-        "otpauth://totp/{TOTP_ISSUER}:root?secret={base32}&issuer={TOTP_ISSUER}"
+        "otpauth://totp/{TOTP_ISSUER}:root-{:02x}{:02x}{:02x}{:02x}?secret={base32}&issuer={TOTP_ISSUER}",
+        account_tag[0],
+        account_tag[1],
+        account_tag[2],
+        account_tag[3],
     ));
     base32_bytes.zeroize();
     base32.zeroize();
     Ok(CryTotpEnrollment {
         qr_payload: payload,
+        account_tag,
     })
 }
 
@@ -439,6 +457,7 @@ pub(crate) fn status() -> CryStatus {
         totp_step: session.totp_step,
         authenticated_at_ticks: session.authenticated_at_ticks,
     });
+    let totp_clock = totp_clock_status();
     CryStatus {
         configured: state.credential.is_some(),
         key: state.credential.map(|credential| credential.descriptor.key),
@@ -451,9 +470,25 @@ pub(crate) fn status() -> CryStatus {
             Some(_) => CryTwoFactorState::Pending,
             None => CryTwoFactorState::NotConfigured,
         },
-        wall_clock_available: totp_unix_seconds().is_ok(),
+        totp_clock,
         session,
     }
+}
+
+pub(crate) fn totp_clock_status() -> Option<CryTotpClock> {
+    let unix_seconds = crate::r::net::ntp::current_unix_seconds()
+        .filter(|seconds| *seconds >= MIN_TOTP_UNIX_SECONDS)?;
+    let elapsed_in_step = unix_seconds % TOTP_PERIOD_SECONDS;
+    let ntp_minus_boot_seconds = crate::time::unix_time_seconds().map(|boot_seconds| {
+        let difference = i128::from(unix_seconds) - i128::from(boot_seconds);
+        difference.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+    });
+    Some(CryTotpClock {
+        unix_seconds,
+        step: unix_seconds / TOTP_PERIOD_SECONDS,
+        seconds_remaining: TOTP_PERIOD_SECONDS.saturating_sub(elapsed_in_step).max(1),
+        ntp_minus_boot_seconds,
+    })
 }
 
 fn parse_totp_code(code: &str) -> Option<u32> {
@@ -465,8 +500,8 @@ fn parse_totp_code(code: &str) -> Option<u32> {
 }
 
 fn totp_unix_seconds() -> Result<u64, CryError> {
-    crate::time::unix_time_seconds()
-        .filter(|seconds| *seconds >= MIN_TOTP_UNIX_SECONDS)
+    totp_clock_status()
+        .map(|clock| clock.unix_seconds)
         .ok_or(CryError::WallClockUnavailable)
 }
 

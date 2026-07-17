@@ -372,17 +372,14 @@ fn prepare_resident_scene_depth(
         }
     };
 
-    // Y0 and Tile4 differ only in the byte swizzle inside each 4 KiB tile.
-    // Clearing every backing dword to the same IEEE-754 value is therefore a
-    // valid layout-independent depth clear, including all row/tile padding.
-    unsafe {
-        core::slice::from_raw_parts_mut(
-            allocation.storage_virt as *mut u32,
-            clear_bytes / core::mem::size_of::<u32>(),
-        )
-        .fill(1.0f32.to_bits());
+    if allocation.storage_virt.is_null()
+        || allocation.storage_bytes < clear_bytes
+        || !allocation
+            .storage_phys
+            .is_multiple_of(crate::intel::WARM_ALIGN as u64)
+    {
+        return Err("draw3d-depth-allocation");
     }
-    crate::intel::dma_flush(allocation.storage_virt, clear_bytes);
 
     Ok(TriangleDepthConfig {
         gpu_addr: GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
@@ -391,6 +388,7 @@ fn prepare_resident_scene_depth(
         height: u32::try_from(target_height).map_err(|_| "draw3d-depth-shape")?,
         qpitch_rows_div4: u32::try_from(aligned_height / 4).map_err(|_| "draw3d-depth-shape")?,
         write_enabled: false,
+        compare_function: COMPARE_FUNCTION_LEQUAL,
     })
 }
 
@@ -590,7 +588,7 @@ fn submit_resident_triangle_scene_capture(
             let skipped = draws.iter().filter(|draw| draw.rgba[3] == 0).count();
             crate::log_info!(
                 target: "render";
-                "draw3d-depth: contract enabled opaque={} blended={} skipped={} opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
+                "draw3d-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
                 opaque,
                 blended,
                 skipped,
@@ -611,10 +609,15 @@ fn submit_resident_triangle_scene_capture(
         }
         // Clear through the same 3D context as the scene. An oversized clip-
         // space triangle covers the target with blending disabled, including
-        // transparent clear colors, without a full-frame CPU write/flush or a
-        // cross-context compute handoff.
+        // transparent clear colors. In Draw3D depth mode the same already-paid
+        // draw writes the far value across D32 with compare ALWAYS.
         const CLEAR_TRIANGLE: [[f32; 3]; 3] =
-            [[-1.0, -1.0, 0.0], [3.0, -1.0, 0.0], [-1.0, 3.0, 0.0]];
+            [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
+        let clear_depth = depth_config.map(|mut depth| {
+            depth.write_enabled = true;
+            depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+            depth
+        });
         let clear_completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             dev,
             warm,
@@ -623,7 +626,7 @@ fn submit_resident_triangle_scene_capture(
             target_width,
             target_height,
             TriangleBlendProbeMode::MesaZeroedState,
-            None,
+            clear_depth,
             &CLEAR_TRIANGLE,
             None,
             None,

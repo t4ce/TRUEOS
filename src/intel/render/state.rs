@@ -207,6 +207,7 @@ struct TriangleDepthConfig {
     height: u32,
     qpitch_rows_div4: u32,
     write_enabled: bool,
+    compare_function: u8,
 }
 
 impl TriangleBlendProbeMode {

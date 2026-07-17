@@ -36,5 +36,8 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     line: &str,
 ) -> ParseOutcome {
+    if let Some(outcome) = super::cmds::cry::try_parse_slot_input(io, line) {
+        return outcome;
+    }
     super::shell2_cmd_registry::try_dispatch(spawner, io, line.trim())
 }

@@ -380,7 +380,8 @@ fn encode_triangle_probe_batch(
             || depth.width > (1 << 14)
             || depth.height == 0
             || depth.height > (1 << 14)
-            || depth.qpitch_rows_div4 > 0x7FFF)
+            || depth.qpitch_rows_div4 > 0x7FFF
+            || depth.compare_function > 7)
     {
         return Err("probe-depth-shape");
     }
@@ -943,9 +944,8 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    const COMPARE_FUNCTION_LEQUAL: u32 = 4;
     let wm_depth_stencil_dw1 = depth_config.map_or(0, |depth| {
-        u32::from(depth.write_enabled) | (1 << 1) | (COMPARE_FUNCTION_LEQUAL << 5)
+        u32::from(depth.write_enabled) | (1 << 1) | (u32::from(depth.compare_function) << 5)
     });
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
