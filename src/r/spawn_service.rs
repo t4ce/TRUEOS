@@ -54,6 +54,7 @@ define_started_flags!(
     NET_SHELL_STARTED,
     DRAW3D_SERVICE_STARTED,
     DRAW3D_UI4_RENDER_STARTED,
+    GRIDPAPER_SERVICE_STARTED,
     TACTICS_SRV_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
@@ -418,6 +419,12 @@ fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_draw3d_ui4_render(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::draw3d_service::draw3d_ui4_render_task())
+}
+
+fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+        crate::r::gridpaper_service::gridpaper_service_task()
+    })
 }
 
 fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
@@ -1262,6 +1269,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ap1_ui_core_ready_gate,
         &DRAW3D_UI4_RENDER_STARTED,
         spawn_draw3d_ui4_render,
+    ),
+    TaskSpec::enabled_gated(
+        "gridpaper-service",
+        0,
+        ap1_ui_core_ready_gate,
+        &GRIDPAPER_SERVICE_STARTED,
+        spawn_gridpaper_service,
     ),
     TaskSpec::disabled(
         "tactics-srv",

@@ -57,6 +57,8 @@ pub const OP_BP_UI4_SOLARA_TEXT_ROWS: u32 = 0xB5; // arg0 window,arg1 font/scale
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 window,arg1 x/y,payload w/h -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
+pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 scale%,payload fixed page -> rc
+pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // detach the calling VM's producer -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -830,6 +832,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_UI4_SOLARA_FRAME_CLOSE => {
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_close(arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::gridpaper_service::submit_snapshot_for_owner(
+                vm_id,
+                arg0,
+                arg1 as u32,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GRIDPAPER_CLOSE => {
+            let rc = crate::r::gridpaper_service::close_owner(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

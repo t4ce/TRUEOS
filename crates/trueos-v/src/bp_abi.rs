@@ -38,6 +38,14 @@ pub struct TrueosUi4SolaraSceneTextRow {
 }
 
 unsafe extern "C" {
+    pub fn trueos_cabi_gridpaper_snapshot_submit(
+        generation: u64,
+        scale_percent: u32,
+        raw_ptr: *const u8,
+        raw_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gridpaper_close() -> i32;
+
     pub fn trueos_cabi_ui4_solara_font_sizes(
         out: *mut TrueosUi4SolaraFontSize,
         out_cap: usize,

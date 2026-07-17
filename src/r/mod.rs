@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod disc;
 pub mod draw3d_service;
 pub mod fs;
+pub mod gridpaper_service;
 pub mod hid_udp_srv;
 pub mod io;
 pub mod kernel_task_domain;

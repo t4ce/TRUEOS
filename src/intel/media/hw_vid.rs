@@ -10,13 +10,13 @@ const H264_BOOT_PROBE_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
     fps: 60,
-    reverse_after_forward: false,
-    cache_mode: H264PlaybackCacheMode::Off,
+    reverse_after_forward: true,
+    cache_mode: H264PlaybackCacheMode::Tail,
     stripe_study: false,
     show_cache_fill: false,
     diagnostics: false,
     noreset_lite: true,
-    loop_playback: false,
+    loop_playback: true,
     presentation: H264PresentationPolicy::Ui4ProbeRequired,
 };
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
@@ -377,27 +377,40 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} legacy_fallback=0 worker_slot={}\n",
+            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} legacy_fallback=0 worker_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
+            H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
+            H264_BOOT_PROBE_PLAYBACK_OPTIONS.cache_mode().name(),
+            H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() as u8,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.presentation().name(),
             crate::percpu::current_slot()
         );
         if let Some(file) = h264_wait_for_playback_stream().await {
-            let report = h264_i_p_playback_probe(
-                file,
-                H264_BOOT_PROBE_STREAM_PATH,
-                H264_BOOT_PROBE_PLAYBACK_OPTIONS,
-            )
-            .await;
-            crate::log!(
-                "intel/hw_vid: ui4-dummy-app2 done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} final_frame_preserved=1\n",
-                report.submitted,
-                report.skipped_unsupported,
-                report.elapsed_ms,
-                report.effective_fps_x100 / 100,
-                report.effective_fps_x100 % 100
-            );
+            let mut lap = 0usize;
+            loop {
+                lap = lap.saturating_add(1);
+                let report = h264_i_p_playback_probe(
+                    file,
+                    H264_BOOT_PROBE_STREAM_PATH,
+                    H264_BOOT_PROBE_PLAYBACK_OPTIONS,
+                )
+                .await;
+                crate::log!(
+                    "intel/hw_vid: ui4-dummy-app2 lap={} done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} direction={} loop={} final_frame_preserved=1\n",
+                    lap,
+                    report.submitted,
+                    report.skipped_unsupported,
+                    report.elapsed_ms,
+                    report.effective_fps_x100 / 100,
+                    report.effective_fps_x100 % 100,
+                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
+                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() as u8
+                );
+                if !H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() {
+                    break;
+                }
+            }
         } else {
             crate::log!(
                 "intel/hw_vid: ui4-dummy-app2 skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",

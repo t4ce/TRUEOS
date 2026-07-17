@@ -1647,6 +1647,47 @@ pub(crate) fn recycle_font_job_readback(readback: crate::intel::render::FontRend
     recycle_transient_font_readback(readback.pixels);
 }
 
+/// Build positioned font geometry once and upload it as a scene-owned mesh.
+///
+/// Unlike a font stamp, positions are mapped against the caller's complete
+/// viewport. The returned allocation can be included in resident scene draws
+/// until the owning service explicitly releases it.
+pub(crate) fn create_resident_font_scene_mesh(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
+    if viewport_width == 0 || viewport_height == 0 {
+        return Err("font-scene-empty");
+    }
+    let built = build_font_job_mesh(entries, font)?;
+    let width = viewport_width as f32;
+    let height = viewport_height as f32;
+    let mut vertices = Vec::with_capacity(built.vertices.len());
+    for source in &built.vertices {
+        vertices.push([
+            source[0] * 2.0 / width - 1.0,
+            1.0 - source[1] * 2.0 / height,
+            0.5,
+        ]);
+    }
+    let mut indices = Vec::with_capacity(built.indices.len());
+    for triangle in built.indices.chunks_exact(3) {
+        let v0 = vertices[triangle[0] as usize];
+        let v1 = vertices[triangle[1] as usize];
+        let v2 = vertices[triangle[2] as usize];
+        let area2 =
+            (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0]);
+        if area2 < 0.0 {
+            indices.extend_from_slice(&[triangle[0], triangle[2], triangle[1]]);
+        } else {
+            indices.extend_from_slice(triangle);
+        }
+    }
+    crate::intel::render::create_resident_triangle_mesh(&vertices, &indices)
+}
+
 fn build_font_job_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
