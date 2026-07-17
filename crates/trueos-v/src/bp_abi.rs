@@ -39,13 +39,18 @@ pub struct TrueosUi4SolaraSceneTextRow {
 
 unsafe extern "C" {
     pub fn trueos_cabi_gridpaper_snapshot_submit(
+        instance_id: u32,
         generation: u64,
         scale_percent: u32,
         raw_ptr: *const u8,
         raw_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_gridpaper_text_animations_submit(raw_ptr: *const u8, raw_len: usize) -> i32;
-    pub fn trueos_cabi_gridpaper_close() -> i32;
+    pub fn trueos_cabi_gridpaper_text_animations_submit(
+        instance_id: u32,
+        raw_ptr: *const u8,
+        raw_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gridpaper_close(instance_id: u32) -> i32;
 
     pub fn trueos_cabi_ui4_solara_font_sizes(
         out: *mut TrueosUi4SolaraFontSize,
@@ -80,6 +85,7 @@ unsafe extern "C" {
         damage_height: u32,
     ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
+    pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
 
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);

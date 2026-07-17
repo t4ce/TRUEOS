@@ -916,7 +916,7 @@ fn log_backend_dispatch_contract(
     let wm_stencil_write_enable = (wm_depth_stencil_dw1 >> 2) & 0x1;
     let wm_stencil_test_enable = (wm_depth_stencil_dw1 >> 3) & 0x1;
     let wm_double_sided_stencil = (wm_depth_stencil_dw1 >> 4) & 0x1;
-    let wm_depth_write_enable = (wm_depth_stencil_dw1 >> 28) & 0x1;
+    let wm_depth_write_enable = wm_depth_stencil_dw1 & 0x1;
     let wm_hz_partial_resolve = (wm_hz_op_dw1 >> 9) & 0x1;
     let wm_hz_samples = (wm_hz_op_dw1 >> 13) & 0x7;
     let wm_hz_stencil_resolve = (wm_hz_op_dw1 >> 24) & 0x1;

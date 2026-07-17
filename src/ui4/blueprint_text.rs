@@ -16,9 +16,10 @@ use crate::intel::gpu_font::{
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer,
-    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
-    finish_window_session, publish_frame_buffer, publish_window_frame, writable_rgba_view,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
+    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
+    destroy_frame, finish_window_session, finish_window_session_with_request, publish_frame_buffer,
+    publish_window_frame, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -38,6 +39,8 @@ const ERROR_NOT_FOUND: i32 = -3;
 const ERROR_STATE: i32 = -4;
 const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
+const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
+const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -597,11 +600,18 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
 }
 
 pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {
+    trueos_cabi_ui4_solara_frame_close_requested(window_id, 0)
+}
+
+pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32 {
+    if flags & !CLOSE_VALID_FLAGS != 0 {
+        return ERROR_INVALID;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return guest_status(
             trueos_vm::vmcall::OP_BP_UI4_SOLARA_FRAME_CLOSE,
             window_id as u64,
-            0,
+            flags as u64,
             &[],
         );
     }
@@ -619,7 +629,12 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {
         };
         surfaces.remove(slot)
     };
-    release_surface(surface);
+    let request = if flags & CLOSE_PERSIST_FINAL_FRAME != 0 {
+        WindowSessionCloseRequest::default().persist_final_frame()
+    } else {
+        WindowSessionCloseRequest::default()
+    };
+    release_surface_with_request(surface, request);
     0
 }
 
@@ -790,11 +805,18 @@ fn surface_mut(
         .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
 }
 
-fn release_surface(mut surface: SolaraTextSurface) {
+fn release_surface(surface: SolaraTextSurface) {
+    release_surface_with_request(surface, WindowSessionCloseRequest::default());
+}
+
+fn release_surface_with_request(
+    mut surface: SolaraTextSurface,
+    request: WindowSessionCloseRequest<'_>,
+) {
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
     }
-    let _ = finish_window_session(surface.owner, surface.session);
+    let _ = finish_window_session_with_request(surface.owner, surface.session, request);
     if let Err(error) = destroy_frame(surface.frame) {
         if error == FramePoolError::Busy {
             RETIRED_FRAMES.lock().push(surface.frame);

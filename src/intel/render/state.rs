@@ -193,6 +193,22 @@ enum TriangleBlendProbeMode {
     MesaZeroedNoBlendPointer,
 }
 
+/// Optional fixed-function depth contract for one triangle submission.
+///
+/// The surface is shared by all Draw3D submissions in a frame. Opaque draws
+/// test and write it; blended draws test the same values without becoming
+/// occluders themselves. Other render consumers pass no depth configuration
+/// and retain the proven null-depth pipeline.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct TriangleDepthConfig {
+    gpu_addr: u64,
+    pitch_bytes: u32,
+    width: u32,
+    height: u32,
+    qpitch_rows_div4: u32,
+    write_enabled: bool,
+}
+
 impl TriangleBlendProbeMode {
     fn for_attempt(attempt: usize) -> Self {
         match attempt {

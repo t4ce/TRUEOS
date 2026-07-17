@@ -55,15 +55,15 @@ pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_ROWS: u32 = 0xB5; // arg0 window,arg1 font/scale,payload rows -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 window,arg1 x/y,payload w/h -> rc
-pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window -> rc
+pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
-pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 scale%,payload fixed page -> rc
-pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // detach the calling VM's producer -> rc
-pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // payload CSS-like text color programs -> rc
+pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 instance:scale,payload fixed page -> rc
+pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // arg0 instance, detach calling VM's producer -> rc
+pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // arg0 instance,payload CSS-like text color programs -> rc
 pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> IPP printer registry
 pub const OP_BP_PRINT2D_SUBMIT: u32 = 0xBD; // arg0 document kind,arg1 subject,payload compact document -> job/rc
 pub const OP_BP_PRINT2D_STATUS: u32 = 0xBE; // arg0 job id -> PrintJobState/rc
-pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // focused F10 request token/generation
+pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // arg0 instance, focused F10 request token
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -836,7 +836,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SOLARA_FRAME_CLOSE => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_close(arg0 as u32);
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_close_requested(
+                arg0 as u32,
+                arg1 as u32,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -845,10 +848,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
+            let instance_id = (arg1 >> 32) as u32;
+            let scale_percent = arg1 as u32;
             let rc = crate::r::gridpaper_service::submit_snapshot_for_owner(
                 vm_id,
+                instance_id,
                 arg0,
-                arg1 as u32,
+                scale_percent,
                 payload,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
@@ -859,19 +865,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::r::gridpaper_service::submit_text_animations_for_owner(vm_id, payload);
+            let rc = crate::r::gridpaper_service::submit_text_animations_for_owner(
+                vm_id,
+                arg0 as u32,
+                payload,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_CLOSE => {
-            let rc = crate::r::gridpaper_service::close_owner(vm_id);
+            let rc = crate::r::gridpaper_service::close_owner(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
-            let packed = crate::r::gridpaper_service::take_print_request_for_owner(vm_id)
-                .map(|(token, _generation)| u64::from(token))
-                .unwrap_or(0);
+            let packed =
+                crate::r::gridpaper_service::take_print_request_for_owner(vm_id, arg0 as u32)
+                    .map(|(token, _generation)| u64::from(token))
+                    .unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, packed, 0);
             DispatchOutcome::Resume
         }

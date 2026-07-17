@@ -1,9 +1,11 @@
-//! UI4 composition and window-frame screenshots.
+//! UI4 composition, window-frame, and opt-in final-frame screenshots.
 //!
 //! Input only arms a request. The compositor consumes one request after a
 //! successful frame, copies either the composition or one exact leased UI4
-//! window buffer into an RGBA image, and queues that immutable image for the filesystem worker.
-//! Encoding and TRUEOSFS I/O therefore never run in the composition loop.
+//! window buffer into an RGBA image, and queues that immutable image for the
+//! filesystem worker. Session teardown can likewise copy its last published
+//! buffers after broker detach and before producer frame destruction. Encoding
+//! and TRUEOSFS I/O therefore never run in the composition or teardown path.
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -21,10 +23,11 @@ use super::{
 };
 
 const MAX_PENDING_REQUESTS: usize = 4;
-const MAX_CAPTURE_QUEUE: usize = 1;
+const MAX_CAPTURE_QUEUE: usize = 4;
 const SAVE_IDLE_PERIOD_MS: u64 = 25;
 const ROOT_RETRY_PERIOD_MS: u64 = 500;
 const SCREENSHOT_DIRECTORY: &str = "screenshots";
+const FINAL_FRAME_DIRECTORY: &str = "finalframes";
 
 static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -99,6 +102,8 @@ struct CapturedComposition {
     /// Straight-alpha RGBA8, ready for PNG encoding.
     rgba: Vec<u8>,
     scope: CaptureScope,
+    path_override: Option<String>,
+    release_interactive_gate: bool,
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button
@@ -311,6 +316,8 @@ fn capture_windows(
         height,
         rgba,
         scope: CaptureScope::Composition,
+        path_override: None,
+        release_interactive_gate: true,
     })
 }
 
@@ -358,7 +365,164 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
             id: window.id,
             plane_slot: window.plane.slot(),
         },
+        path_override: None,
+        release_interactive_gate: true,
     })
+}
+
+/// Copy the last published frames after the broker has atomically detached the
+/// session but before its consumer can destroy the backing frame handles.
+/// Final-frame requests intentionally do not wait for a future filesystem: an
+/// absent writable root makes teardown capture a cheap no-op.
+pub(super) fn capture_final_session_frames(
+    owner: super::WindowOwner,
+    session: super::WindowSessionId,
+    windows: &[WindowSnapshot],
+    requested_name: Option<&str>,
+) {
+    if windows.is_empty() {
+        crate::log_info!(target: "ui4/screenshot";
+            "ui4/final-frame: skipped owner={:?} session={} reason=no-ready-published-window\n",
+            owner,
+            session.raw(),
+        );
+        return;
+    }
+    if writable_capture_root_handle().is_none() {
+        crate::log_info!(target: "ui4/screenshot";
+            "ui4/final-frame: skipped owner={:?} session={} frames={} reason=no-writable-trueosfs-root mounted_roots={}\n",
+            owner,
+            session.raw(),
+            windows.len(),
+            crate::r::fs::trueosfs::roots_len(),
+        );
+        return;
+    }
+
+    let identity = final_frame_identity(owner, requested_name);
+    for (index, window) in windows.iter().copied().enumerate() {
+        if CAPTURE_QUEUE.lock().len() >= MAX_CAPTURE_QUEUE {
+            crate::log_warn!(target: "ui4/screenshot";
+                "ui4/final-frame: dropped owner={:?} session={} identity={} window={} index={}/{} reason=capture-queue-full capacity={}\n",
+                owner,
+                session.raw(),
+                identity.as_str(),
+                window.id.raw(),
+                index + 1,
+                windows.len(),
+                MAX_CAPTURE_QUEUE,
+            );
+            continue;
+        }
+
+        let mut capture = match capture_window(window) {
+            Ok(capture) => capture,
+            Err(error) => {
+                crate::log_warn!(target: "ui4/screenshot";
+                    "ui4/final-frame: capture failed owner={:?} session={} identity={} window={} index={}/{} error={:?}\n",
+                    owner,
+                    session.raw(),
+                    identity.as_str(),
+                    window.id.raw(),
+                    index + 1,
+                    windows.len(),
+                    error,
+                );
+                continue;
+            }
+        };
+        capture.path_override = Some(final_frame_path(identity.as_str(), index, windows.len()));
+        capture.release_interactive_gate = false;
+        let path = capture
+            .path_override
+            .as_deref()
+            .unwrap_or("finalframes/invalid.png");
+        let width = capture.width;
+        let height = capture.height;
+        let bytes = capture.rgba.len();
+        let sequence = capture.sequence;
+        let mut queue = CAPTURE_QUEUE.lock();
+        if queue.len() >= MAX_CAPTURE_QUEUE {
+            crate::log_warn!(target: "ui4/screenshot";
+                "ui4/final-frame: dropped owner={:?} session={} path=trueosfs:/{} window={} reason=capture-queue-raced-full capacity={}\n",
+                owner,
+                session.raw(),
+                path,
+                window.id.raw(),
+                MAX_CAPTURE_QUEUE,
+            );
+            continue;
+        }
+        crate::log_info!(target: "ui4/screenshot";
+            "ui4/final-frame: captured owner={:?} session={} path=trueosfs:/{} window={} index={}/{} sequence={} size={}x{} rgba_bytes={} alpha=straight overwrite=1\n",
+            owner,
+            session.raw(),
+            path,
+            window.id.raw(),
+            index + 1,
+            windows.len(),
+            sequence,
+            width,
+            height,
+            bytes,
+        );
+        queue.push_back(capture);
+    }
+}
+
+fn final_frame_identity(owner: super::WindowOwner, requested_name: Option<&str>) -> String {
+    let source = match requested_name {
+        Some(name) if !name.trim().is_empty() => String::from(name),
+        _ => match owner {
+            super::WindowOwner::Vm(vm_id) => crate::hv::blueprint_process_arg(vm_id, 0)
+                .unwrap_or_else(|| format!("blueprint-vm-{vm_id}")),
+            super::WindowOwner::KernelApp(app_id) => format!("dummy-kernel-app-{app_id}"),
+            super::WindowOwner::Kernel => String::from("dummy-kernel"),
+        },
+    };
+    sanitize_final_frame_identity(source.as_str())
+}
+
+fn sanitize_final_frame_identity(source: &str) -> String {
+    const MAX_IDENTITY_BYTES: usize = 96;
+
+    let leaf = source
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(source)
+        .trim_end_matches(".bp")
+        .trim_end_matches(".vm");
+    let mut identity = String::new();
+    let mut separator = false;
+    for ch in leaf.chars() {
+        if identity.len() >= MAX_IDENTITY_BYTES {
+            break;
+        }
+        if ch.is_ascii_alphanumeric() {
+            identity.push(ch.to_ascii_lowercase());
+            separator = false;
+        } else if !identity.is_empty() && !separator {
+            identity.push('-');
+            separator = true;
+        }
+    }
+    while identity.ends_with('-') {
+        identity.pop();
+    }
+    if identity.is_empty() {
+        String::from("ui4-app")
+    } else {
+        identity
+    }
+}
+
+fn final_frame_path(identity: &str, index: usize, count: usize) -> String {
+    if count == 1 {
+        format!("{FINAL_FRAME_DIRECTORY}/{identity}.png")
+    } else {
+        format!("{FINAL_FRAME_DIRECTORY}/{identity}-window-{:02}.png", index + 1)
+    }
 }
 
 fn release_leases(leases: &[FrameReadLease]) {
@@ -483,6 +647,9 @@ fn unpremultiply_rgba(rgba: &mut [u8]) {
 }
 
 fn screenshot_path(capture: &CapturedComposition) -> String {
+    if let Some(path) = capture.path_override.as_ref() {
+        return path.clone();
+    }
     let wall = capture.unix_seconds.unwrap_or(0);
     match capture.scope {
         CaptureScope::Composition => format!(
@@ -503,7 +670,7 @@ fn screenshot_path(capture: &CapturedComposition) -> String {
 
 /// Prefer the normal primary root, but do not let a later-mounted read-only
 /// image hide an earlier writable TRUEOSFS disk from screenshot persistence.
-fn writable_screenshot_root_handle() -> Option<crate::disc::block::DeviceHandle> {
+fn writable_capture_root_handle() -> Option<crate::disc::block::DeviceHandle> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle()
         && !disk.info().is_read_only()
     {
@@ -518,7 +685,7 @@ fn writable_screenshot_root_handle() -> Option<crate::disc::block::DeviceHandle>
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
-        "ui4/screenshot: service online trigger=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition capture=next-composed-frame format=png-rgba destination=trueosfs:/screenshots worker=background\n"
+        "ui4/screenshot: service online trigger=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition+opt-in-session-close capture=next-composed-or-coherent-final-frame format=png-rgba destination=trueosfs:/screenshots|/finalframes worker=background final_frame_overwrite=1\n"
     );
     let mut root_wait_logged = false;
     loop {
@@ -527,7 +694,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
             Timer::after(Duration::from_millis(SAVE_IDLE_PERIOD_MS)).await;
             continue;
         };
-        let Some(disk) = writable_screenshot_root_handle() else {
+        let Some(disk) = writable_capture_root_handle() else {
             if !root_wait_logged {
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: save waiting sequence={} reason=no-writable-trueosfs-root mounted_roots={} retry_ms={}\n",
@@ -541,7 +708,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
             if queue.len() < MAX_CAPTURE_QUEUE {
                 queue.push_front(capture);
             } else {
-                CAPTURE_IN_FLIGHT.store(false, Ordering::Release);
+                release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: capture dropped sequence={} reason=no-root-and-queue-full\n",
                     capture.sequence,
@@ -564,7 +731,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         ) {
             Ok(png) => png,
             Err(error) => {
-                CAPTURE_IN_FLIGHT.store(false, Ordering::Release);
+                release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: PNG encode failed sequence={} error={:?} size={}x{}\n",
                     capture.sequence,
@@ -602,6 +769,32 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 error,
             ),
         }
+        release_interactive_capture_gate(&capture);
+    }
+}
+
+fn release_interactive_capture_gate(capture: &CapturedComposition) {
+    if capture.release_interactive_gate {
         CAPTURE_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{final_frame_path, sanitize_final_frame_identity};
+
+    #[test]
+    fn final_frame_identity_is_stable_and_path_safe() {
+        assert_eq!(sanitize_final_frame_identity("apps/Solara Demo.bp"), "solara-demo");
+        assert_eq!(sanitize_final_frame_identity("../../.bp"), "ui4-app");
+    }
+
+    #[test]
+    fn one_window_overwrites_the_app_name_and_multi_window_uses_stable_slots() {
+        assert_eq!(final_frame_path("solara", 0, 1), "finalframes/solara.png");
+        assert_eq!(
+            final_frame_path("dummy-kernel-app-1", 1, 3),
+            "finalframes/dummy-kernel-app-1-window-02.png"
+        );
     }
 }

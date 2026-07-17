@@ -14,7 +14,8 @@ pub struct ProjectedMesh {
     pub vertices: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
     pub color: Rgba8,
-    /// Positive camera-space distance, used for back-to-front job ordering.
+    /// Positive camera-space distance used for pass-local draw ordering:
+    /// opaque front-to-back, then blended back-to-front.
     pub depth: f32,
 }
 
@@ -95,6 +96,12 @@ pub fn project_scene_with_camera(
         let Some(mesh) = scene.mesh(instance.mesh_id) else {
             continue;
         };
+        // Straight-alpha source-over with a constant zero-alpha mesh has no
+        // color or alpha contribution. Reject it before transform/projection,
+        // residency, and GPU submission.
+        if mesh.color.a == 0 {
+            continue;
+        }
         let mut vertices = Vec::with_capacity(mesh.vertices.len());
         let mut visible = Vec::with_capacity(mesh.vertices.len());
         let mut depth_sum = 0.0;
@@ -151,14 +158,28 @@ pub fn project_scene_with_camera(
         }
     }
 
-    projected.sort_by(|left, right| {
-        right
-            .depth
-            .partial_cmp(&left.depth)
-            .unwrap_or(core::cmp::Ordering::Equal)
-            .then_with(|| left.instance_id.cmp(&right.instance_id))
-    });
+    projected.sort_by(compare_projected_draw_order);
     projected
+}
+
+fn compare_projected_draw_order(
+    left: &ProjectedMesh,
+    right: &ProjectedMesh,
+) -> core::cmp::Ordering {
+    let left_opaque = left.color.a == u8::MAX;
+    let right_opaque = right.color.a == u8::MAX;
+    match (left_opaque, right_opaque) {
+        // Opaque geometry establishes the depth buffer before any blended
+        // draw. Front-to-back improves rejection without changing the result.
+        (true, true) => left.depth.partial_cmp(&right.depth),
+        (true, false) => Some(core::cmp::Ordering::Less),
+        (false, true) => Some(core::cmp::Ordering::Greater),
+        // Blended geometry retains the existing painter order while testing
+        // read-only against the completed opaque depth buffer.
+        (false, false) => right.depth.partial_cmp(&left.depth),
+    }
+    .unwrap_or(core::cmp::Ordering::Equal)
+    .then_with(|| left.instance_id.cmp(&right.instance_id))
 }
 
 fn normalize(value: Vec3) -> Vec3 {
@@ -226,5 +247,59 @@ mod tests {
         let point = transform.transform_point(Vec3::new(1.0, 0.0, 0.0));
         assert!(point.x.abs() < 1.0e-5);
         assert!((point.y - 1.0).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn orders_opaque_front_to_back_then_blended_back_to_front() {
+        let draw = |instance_id, depth, alpha| ProjectedMesh {
+            instance_id,
+            mesh_id: instance_id,
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            color: Rgba8::new(1, 2, 3, alpha),
+            depth,
+        };
+        let mut draws = vec![
+            draw(1, 2.0, 128),
+            draw(2, 8.0, u8::MAX),
+            draw(3, 9.0, 128),
+            draw(4, 1.0, u8::MAX),
+        ];
+        draws.sort_by(compare_projected_draw_order);
+        assert_eq!(
+            draws
+                .iter()
+                .map(|draw| draw.instance_id)
+                .collect::<Vec<_>>(),
+            vec![4, 2, 3, 1]
+        );
+    }
+
+    #[test]
+    fn zero_alpha_mesh_is_not_projected() {
+        let mut scene = Scene::default();
+        scene
+            .apply(Command::PutMesh {
+                mesh_id: 1,
+                mesh: Mesh::new(
+                    vec![
+                        Vec3::new(-1.0, -1.0, 0.0),
+                        Vec3::new(1.0, -1.0, 0.0),
+                        Vec3::new(0.0, 1.0, 0.0),
+                    ],
+                    Vec::new(),
+                    vec![Face::new(vec![0, 1, 2])],
+                    Rgba8::new(255, 255, 255, 0),
+                ),
+            })
+            .unwrap();
+        scene
+            .apply(Command::PutInstance {
+                instance_id: 1,
+                instance: Instance::new(1, Transform::IDENTITY),
+            })
+            .unwrap();
+
+        assert!(project_scene(&scene, 1.0).is_empty());
     }
 }

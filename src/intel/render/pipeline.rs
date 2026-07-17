@@ -355,6 +355,7 @@ fn encode_triangle_probe_batch(
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
     blend_mode: TriangleBlendProbeMode,
+    depth_config: Option<TriangleDepthConfig>,
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     shader_layout: TriangleShaderLayout,
     probe_state: TriangleProbeStateLayout,
@@ -370,6 +371,19 @@ fn encode_triangle_probe_batch(
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    if let Some(depth) = depth_config
+        && (depth.gpu_addr & 0xFFF != 0
+            || depth.pitch_bytes == 0
+            || depth.pitch_bytes > (1 << 18)
+            || !depth.pitch_bytes.is_multiple_of(128)
+            || depth.width == 0
+            || depth.width > (1 << 14)
+            || depth.height == 0
+            || depth.height > (1 << 14)
+            || depth.qpitch_rows_div4 > 0x7FFF)
+    {
+        return Err("probe-depth-shape");
+    }
     let vf_synthesized_vue = batch_mode.vf_synthesized_vue();
     let force_vs_with_vf_synthesized_vue =
         vf_synthesized_vue && front_end_contract.force_vs_with_vf_synthesized_vue;
@@ -929,7 +943,10 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    let wm_depth_stencil_dw1 = 0;
+    const COMPARE_FUNCTION_LEQUAL: u32 = 4;
+    let wm_depth_stencil_dw1 = depth_config.map_or(0, |depth| {
+        u32::from(depth.write_enabled) | (1 << 1) | (COMPARE_FUNCTION_LEQUAL << 5)
+    });
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
@@ -1952,13 +1969,47 @@ fn encode_triangle_probe_batch(
         );
     }
 
-    // Program explicit null depth/stencil state instead of relying on any
-    // inherited render context defaults before the first primitive launches.
-    let depth_buffer_dw1 = (DEPTH_SURFACE_FORMAT_D32_FLOAT << 24) | (SURFTYPE_NULL << 29);
-    let depth_buffer_dw5 = RENDER_MOCS;
+    // Bind a real tiled D32 surface only for the Draw3D visibility contract.
+    // Every other consumer retains the explicit null state proven during the
+    // render bring-up. SurfacePitch, Width and Height are encoded minus one;
+    // gfx12.5 replaces implicit Y0 with explicit Tile4 (encoding 3).
+    let (
+        depth_buffer_dw1,
+        depth_buffer_addr,
+        depth_buffer_dw4,
+        depth_buffer_dw5,
+        depth_buffer_dw6,
+        depth_buffer_dw7,
+    ) = if let Some(depth) = depth_config {
+        (
+            (depth.pitch_bytes - 1)
+                | (DEPTH_SURFACE_FORMAT_D32_FLOAT << 24)
+                | (1 << 28)
+                | (SURFTYPE_2D << 29),
+            depth.gpu_addr,
+            ((depth.width - 1) << 1) | ((depth.height - 1) << 17),
+            RENDER_MOCS,
+            if device_is_gfx125(warm.device_id) {
+                3 << 30
+            } else {
+                0
+            },
+            depth.qpitch_rows_div4,
+        )
+    } else {
+        ((DEPTH_SURFACE_FORMAT_D32_FLOAT << 24) | (SURFTYPE_NULL << 29), 0, 0, RENDER_MOCS, 0, 0)
+    };
     log_batch_offset(cursor, "3DSTATE_CLEAR_PARAMS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_CLEAR_PARAMS)?;
-    push(batch_dwords, &mut cursor, 0.0f32.to_bits())?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if depth_config.is_some() {
+            1.0f32.to_bits()
+        } else {
+            0.0f32.to_bits()
+        },
+    )?;
     push(batch_dwords, &mut cursor, 0)?;
 
     log_batch_offset(cursor, "3DSTATE_DEPTH_BUFFER");
@@ -1969,11 +2020,11 @@ fn encode_triangle_probe_batch(
     };
     push(batch_dwords, &mut cursor, depth_buffer_cmd)?;
     push(batch_dwords, &mut cursor, depth_buffer_dw1)?;
-    push_addr(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push_addr(batch_dwords, &mut cursor, depth_buffer_addr)?;
+    push(batch_dwords, &mut cursor, depth_buffer_dw4)?;
     push(batch_dwords, &mut cursor, depth_buffer_dw5)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, depth_buffer_dw6)?;
+    push(batch_dwords, &mut cursor, depth_buffer_dw7)?;
     if device_is_gfx125(warm.device_id) {
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
@@ -2314,6 +2365,16 @@ fn encode_triangle_probe_batch(
         pre3d_value,
     )?;
 
+    if depth_config.is_some() && !matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
+        log_batch_offset(cursor, "PIPE_CONTROL draw3d-depth-pre-draw");
+        push_pipe_control_full(
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
+            PIPE_CONTROL_BIG_PRE_DRAW_BITS,
+        )?;
+    }
+
     if matches!(backend_probe_mode, BackendProbeMode::WmLateReemit) {
         log_batch_offset(cursor, "PIPE_CONTROL big-pre-draw-flush");
         push_pipe_control_full(
@@ -2564,6 +2625,12 @@ fn encode_triangle_probe_batch(
     )?;
 
     if let Some(heavy_sync_flags) = post_draw_sync_variant.heavy_sync_flags() {
+        let heavy_sync_flags = heavy_sync_flags
+            | if depth_config.is_some() {
+                PIPE_CONTROL_DEPTH_CACHE_FLUSH | PIPE_CONTROL_DEPTH_STALL
+            } else {
+                0
+            };
         log_batch_offset(cursor, "PIPE_CONTROL post-3d-heavy-sync");
         push_pipe_control_post_sync_imm(
             batch_dwords,
@@ -2684,7 +2751,7 @@ fn encode_triangle_probe_batch(
     let wm_hz_op_active = ((wm_hz_op_dw1 | wm_hz_op_dw2 | wm_hz_op_dw3 | wm_hz_op_dw4) != 0) as u32;
     let wm_depth_test_enable = (wm_depth_stencil_dw1 >> 1) & 0x1;
     let wm_stencil_test_enable = (wm_depth_stencil_dw1 >> 3) & 0x1;
-    let wm_depth_write_enable = (wm_depth_stencil_dw1 >> 28) & 0x1;
+    let wm_depth_write_enable = wm_depth_stencil_dw1 & 0x1;
     let dispatch_reason = if wm_force_thread_dispatch == 1 {
         "force-thread-dispatch-off"
     } else if ps_valid == 0 {
@@ -2824,6 +2891,11 @@ fn encode_triangle_probe_batch(
         && bt_entry0 == probe_state.surface_state_offset_bytes
         && rt_width == draw.target_w
         && rt_height == draw.target_h;
+    let expected_depth_test = u32::from(depth_config.is_some());
+    let expected_depth_write = depth_config.map_or(0, |depth| u32::from(depth.write_enabled));
+    let depth_state_ok = wm_depth_test_enable == expected_depth_test
+        && wm_depth_write_enable == expected_depth_write
+        && wm_stencil_test_enable == 0;
     let ps_admit_ok = ps_valid != 0
         && dispatch_armed != 0
         && ps_dispatch_bits_ok
@@ -2833,9 +2905,7 @@ fn encode_triangle_probe_batch(
         && rt_binding_ok
         && wm_force_thread_dispatch != 1
         && wm_hz_op_active == 0
-        && wm_depth_test_enable == 0
-        && wm_depth_write_enable == 0
-        && wm_stencil_test_enable == 0;
+        && depth_state_ok;
     intel_render_focus_log!(
         "{} launch-checkbook-fixed accepted={} vf_vue={} clip_enable={} sf_vp_transform={} vp_extents_ok={} vp=[{:.1},{:.1}..{:.1},{:.1}] draw_rect_ok={} draw_rect=[0,0..{},{}] scissor_enable={} scissor=[{},{}..{},{}] sample_mask_ok={} sample_mask=0x{:X} cull_none={} prim_repl_ok={} prim_repl_count={} prim_repl_mask=0x{:X} note=fixed-function-admission\n",
         submit_name,
@@ -2864,7 +2934,7 @@ fn encode_triangle_probe_batch(
         primitive_replication_mask,
     );
     intel_render_focus_log!(
-        "{} launch-checkbook-ps accepted={} ps_valid={} dispatch_armed={} dispatch_bits={}{}{} wm_force={} wm_hz_op_active={} wm_hz_op_inactive={} reject_wm_hz_op_active={} depth_stencil_off={} sbe_read_valid={} sbe_attr_ps_match={} sbe_attrs={} ps_attr={} ps_reserved_mbz={} rt_binding_ok={} bt0=0x{:X} surf_off=0x{:X} rt={}x{} rt_gpu=0x{:X} cc_depth=[{:.1},{:.1}] note=ps-dispatch-admission\n",
+        "{} launch-checkbook-ps accepted={} ps_valid={} dispatch_armed={} dispatch_bits={}{}{} wm_force={} wm_hz_op_active={} wm_hz_op_inactive={} reject_wm_hz_op_active={} depth_state_ok={} depth_test={} depth_write={} sbe_read_valid={} sbe_attr_ps_match={} sbe_attrs={} ps_attr={} ps_reserved_mbz={} rt_binding_ok={} bt0=0x{:X} surf_off=0x{:X} rt={}x{} rt_gpu=0x{:X} cc_depth=[{:.1},{:.1}] note=ps-dispatch-admission\n",
         submit_name,
         ps_admit_ok as u8,
         ps_valid,
@@ -2876,8 +2946,9 @@ fn encode_triangle_probe_batch(
         wm_hz_op_active,
         (wm_hz_op_active == 0) as u8,
         (wm_hz_op_active != 0) as u8,
-        (wm_depth_test_enable == 0 && wm_depth_write_enable == 0 && wm_stencil_test_enable == 0)
-            as u8,
+        depth_state_ok as u8,
+        wm_depth_test_enable,
+        wm_depth_write_enable,
         sbe_read_valid as u8,
         sbe_ps_attr_match as u8,
         sbe_num_sf_attrs,

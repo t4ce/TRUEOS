@@ -296,6 +296,104 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) rgba: Option<Vec<u8>>,
 }
 
+#[derive(Copy, Clone)]
+struct ResidentSceneDepthAllocation {
+    storage_phys: u64,
+    storage_virt: *mut u8,
+    storage_bytes: usize,
+}
+
+unsafe impl Send for ResidentSceneDepthAllocation {}
+
+static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn prepare_resident_scene_depth(
+    device_id: u16,
+    target_width: usize,
+    target_height: usize,
+) -> Result<TriangleDepthConfig, &'static str> {
+    if !device_is_gfx12(device_id) {
+        return Err("draw3d-depth-device");
+    }
+    let row_bytes = target_width
+        .checked_mul(core::mem::size_of::<f32>())
+        .ok_or("draw3d-depth-shape")?;
+    let pitch_bytes = crate::intel::align_up(row_bytes, DRAW3D_SCENE_DEPTH_TILE_WIDTH_BYTES)
+        .ok_or("draw3d-depth-shape")?;
+    let aligned_height = crate::intel::align_up(target_height, DRAW3D_SCENE_DEPTH_TILE_HEIGHT_ROWS)
+        .ok_or("draw3d-depth-shape")?;
+    let clear_bytes = pitch_bytes
+        .checked_mul(aligned_height)
+        .ok_or("draw3d-depth-shape")?;
+    if target_width == 0
+        || target_height == 0
+        || clear_bytes > DRAW3D_SCENE_DEPTH_BYTES
+        || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
+    {
+        return Err("draw3d-depth-shape");
+    }
+
+    let allocation = {
+        let mut resident = RESIDENT_SCENE_DEPTH.lock();
+        if let Some(allocation) = *resident {
+            allocation
+        } else {
+            let Some((storage_phys, storage_virt)) =
+                crate::dma::alloc(DRAW3D_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
+            else {
+                return Err("draw3d-depth-alloc");
+            };
+            if !map_render_ppgtt_range(
+                GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
+                storage_phys,
+                DRAW3D_SCENE_DEPTH_BYTES,
+            ) {
+                crate::dma::dealloc(storage_virt, DRAW3D_SCENE_DEPTH_BYTES);
+                return Err("draw3d-depth-map");
+            }
+            let allocation = ResidentSceneDepthAllocation {
+                storage_phys,
+                storage_virt,
+                storage_bytes: DRAW3D_SCENE_DEPTH_BYTES,
+            };
+            *resident = Some(allocation);
+            crate::log_info!(
+                target: "render";
+                "draw3d-depth: resident surface allocated phys=0x{:X} gpu=0x{:X} bytes=0x{:X} format=d32-float tiling={} max={}x{}\n",
+                allocation.storage_phys,
+                GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
+                allocation.storage_bytes,
+                if device_is_gfx125(device_id) { "tile4" } else { "y0" },
+                DRAW3D_SCENE_TARGET_WIDTH,
+                DRAW3D_SCENE_TARGET_HEIGHT,
+            );
+            allocation
+        }
+    };
+
+    // Y0 and Tile4 differ only in the byte swizzle inside each 4 KiB tile.
+    // Clearing every backing dword to the same IEEE-754 value is therefore a
+    // valid layout-independent depth clear, including all row/tile padding.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            allocation.storage_virt as *mut u32,
+            clear_bytes / core::mem::size_of::<u32>(),
+        )
+        .fill(1.0f32.to_bits());
+    }
+    crate::intel::dma_flush(allocation.storage_virt, clear_bytes);
+
+    Ok(TriangleDepthConfig {
+        gpu_addr: GPU_VA_DRAW3D_SCENE_DEPTH_BASE,
+        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "draw3d-depth-shape")?,
+        width: u32::try_from(target_width).map_err(|_| "draw3d-depth-shape")?,
+        height: u32::try_from(target_height).map_err(|_| "draw3d-depth-shape")?,
+        qpitch_rows_div4: u32::try_from(aligned_height / 4).map_err(|_| "draw3d-depth-shape")?,
+        write_enabled: false,
+    })
+}
+
 pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
     (DRAW3D_SCENE_TARGET_WIDTH, DRAW3D_SCENE_TARGET_HEIGHT)
 }
@@ -307,7 +405,35 @@ pub(crate) fn capture_resident_triangle_scene_frame(
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, true, width, height)
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        true,
+        false,
+        width,
+        height,
+    )
+}
+
+/// Draw3D capture with opaque depth writes and read-only depth testing for
+/// blended meshes. Alpha classification remains an internal renderer policy;
+/// the TCP v1 wire format is unchanged.
+pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    let (width, height) = resident_scene_target_dimensions();
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        true,
+        true,
+        width,
+        height,
+    )
 }
 
 /// Render an off-screen frame in UI4's native premultiplied-RGBA convention.
@@ -322,7 +448,15 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     let (width, height) = resident_scene_target_dimensions();
-    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, false, width, height)
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        width,
+        height,
+    )
 }
 
 /// Render a premultiplied UI4 frame at the consumer's actual content extent.
@@ -342,6 +476,26 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
         clear_rgba,
         diagnostic_logs,
         false,
+        false,
+        width as usize,
+        height as usize,
+    )
+}
+
+/// UI4-sized Draw3D capture using the opaque-depth visibility contract.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    width: u32,
+    height: u32,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
         width as usize,
         height as usize,
     )
@@ -352,6 +506,7 @@ fn submit_resident_triangle_scene_capture(
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
+    opaque_depth_enabled: bool,
     target_width: usize,
     target_height: usize,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
@@ -418,6 +573,29 @@ fn submit_resident_triangle_scene_capture(
         if !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
+        let depth_config = if opaque_depth_enabled {
+            Some(prepare_resident_scene_depth(warm.device_id, target_width, target_height)?)
+        } else {
+            None
+        };
+
+        if opaque_depth_enabled
+            && !RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            let opaque = draws.iter().filter(|draw| draw.rgba[3] == u8::MAX).count();
+            let blended = draws
+                .iter()
+                .filter(|draw| draw.rgba[3] != 0 && draw.rgba[3] != u8::MAX)
+                .count();
+            let skipped = draws.iter().filter(|draw| draw.rgba[3] == 0).count();
+            crate::log_info!(
+                target: "render";
+                "draw3d-depth: contract enabled opaque={} blended={} skipped={} opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off protocol=v1-unchanged\n",
+                opaque,
+                blended,
+                skipped,
+            );
+        }
 
         // Draw3D uses straight-alpha blending.  The GPU must see the real
         // clear color as its destination for the first translucent draw;
@@ -445,6 +623,7 @@ fn submit_resident_triangle_scene_capture(
             target_width,
             target_height,
             TriangleBlendProbeMode::MesaZeroedState,
+            None,
             &CLEAR_TRIANGLE,
             None,
             None,
@@ -466,6 +645,25 @@ fn submit_resident_triangle_scene_capture(
 
         let mut completed_draws = 0usize;
         for draw in draws {
+            if opaque_depth_enabled && draw.rgba[3] == 0 {
+                completed_draws += 1;
+                continue;
+            }
+            let (blend_mode, draw_depth) = if opaque_depth_enabled {
+                let write_enabled = draw.rgba[3] == u8::MAX;
+                let mut draw_depth = depth_config.expect("opaque depth prepared");
+                draw_depth.write_enabled = write_enabled;
+                (
+                    if write_enabled {
+                        TriangleBlendProbeMode::MesaZeroedState
+                    } else {
+                        TriangleBlendProbeMode::StraightAlpha
+                    },
+                    Some(draw_depth),
+                )
+            } else {
+                (TriangleBlendProbeMode::StraightAlpha, None)
+            };
             let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 dev,
                 warm,
@@ -473,7 +671,8 @@ fn submit_resident_triangle_scene_capture(
                 target_pitch,
                 target_width,
                 target_height,
-                TriangleBlendProbeMode::StraightAlpha,
+                blend_mode,
+                draw_depth,
                 &[],
                 None,
                 None,
@@ -670,6 +869,7 @@ pub(crate) fn submit_gpu_font_outline_mesh_once(
             FONT_PROOF_TARGET_SIZE,
             FONT_PROOF_TARGET_SIZE,
             TriangleBlendProbeMode::MesaZeroedState,
+            None,
             &[],
             None,
             Some(mesh),
@@ -3419,6 +3619,7 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
         target_width,
         target_height,
         blend_mode,
+        None,
         vertices,
         indices,
         None,
@@ -5167,6 +5368,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         warm,
         draw,
         blend_mode,
+        None,
         pipeline,
         shader_layout,
         probe_state,
@@ -5727,6 +5929,7 @@ fn submit_triangle_streamout_proof(
         warm,
         draw,
         TriangleBlendProbeMode::ExplicitRt0,
+        None,
         pipeline,
         shader_layout,
         probe_state,
@@ -6277,6 +6480,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         warm,
         draw,
         blend_mode,
+        None,
         pipeline,
         shader_layout,
         probe_state,
@@ -6421,6 +6625,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
     rect_w: usize,
     rect_h: usize,
     blend_mode: TriangleBlendProbeMode,
+    depth_config: Option<TriangleDepthConfig>,
     vertices: &[[f32; 3]],
     indices: Option<&[u32]>,
     gpu_mesh: Option<crate::intel::gpgpu::GpgpuFontOutlineMesh>,
@@ -6753,6 +6958,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         warm,
         draw,
         blend_mode,
+        depth_config,
         pipeline,
         shader_layout,
         probe_state,

@@ -113,9 +113,13 @@ has no implicit Draw3D producer.
 starts or stops a presentation loop. A permanent stop discards meshes, instances, camera/orbit
 state, clear color, and the cached capture. Orbit is sampled when a render request is handled.
 
-The capture target's width divided by height supplies the default camera aspect ratio. The
-experimental target does not yet blend overlapping transparent meshes with each other, and
-triangles crossing the near or far plane are suppressed; X/Y clipping remains GPU-owned.
+The capture target's width divided by height supplies the default camera aspect ratio. Rendering
+classifies the existing mesh RGBA without changing the wire format: zero-alpha meshes are skipped,
+fully opaque meshes render front-to-back with fixed-function depth test and depth writes, then
+partially transparent meshes render back-to-front with straight-alpha blending and read-only depth
+testing against the opaque result. Transparent meshes do not write depth, so their mutual
+visibility remains order-dependent where their triangles intersect. Triangles crossing the near
+or far plane are suppressed; X/Y clipping remains GPU-owned.
 
 The active scene budget is 100 stored meshes, 100 placed instances, 1,000 vertices per mesh,
 3,000 edges per mesh, and 2,000 triangles per mesh after polygon fan triangulation. These are

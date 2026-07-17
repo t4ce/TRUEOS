@@ -27,8 +27,8 @@ pub(crate) use gpgpu_preview_consumer::{
     request_gpgpu_preview_stop,
 };
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4PanPhase, Ui4VisualRect, software_cursor_visuals,
-    take_owner_input_events, ui4_input_service_task,
+    Ui4ButtonPhase, Ui4CursorSource, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4VisualRect,
+    software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use video_frame::{
@@ -41,8 +41,9 @@ pub(crate) use video_frame::{
 
 pub(crate) use window_broker::{
     DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowPlane, WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
-    begin_window_session, close_window, create_window, finish_window_session, publish_window_frame,
+    WindowPlane, WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
+    acknowledge_window_frame, begin_window_session, close_window, create_window,
+    finish_window_session, finish_window_session_with_request, publish_window_frame,
     replace_window_frame, set_window_placement, toggle_window_maximized,
     visible_windows_for_output,
 };

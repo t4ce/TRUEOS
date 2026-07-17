@@ -103,6 +103,12 @@ pub(crate) const DRAW3D_SCENE_TARGET_WIDTH: usize = 2560;
 pub(crate) const DRAW3D_SCENE_TARGET_HEIGHT: usize = 1440;
 const WARM_STREAMOUT_BYTES: usize =
     DRAW3D_SCENE_TARGET_WIDTH * DRAW3D_SCENE_TARGET_HEIGHT * core::mem::size_of::<u32>();
+// Draw3D's first hidden-surface rung uses one D32_FLOAT surface. Gen12 depth
+// is Y0 tiled and gfx12.5 replaces that layout with the byte-compatible Tile4
+// 4 KiB tile. The maximum target is already 128-byte pitch and 32-row aligned.
+const DRAW3D_SCENE_DEPTH_TILE_WIDTH_BYTES: usize = 128;
+const DRAW3D_SCENE_DEPTH_TILE_HEIGHT_ROWS: usize = 32;
+const DRAW3D_SCENE_DEPTH_BYTES: usize = WARM_STREAMOUT_BYTES;
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -126,6 +132,9 @@ const DRAW3D_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
 // persistent-font VA range.
 const GPU_VA_VERTEX_BASE: u64 = 0x2800_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
+// The 14.0625 MiB D32 scene depth allocation lives above the warm batch and
+// below the GPGPU arena. It never aliases the color target or resident meshes.
+const GPU_VA_DRAW3D_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;

@@ -155,6 +155,29 @@ pub(crate) struct WindowCreate {
     pub(crate) placement: WindowPlacement,
 }
 
+/// Optional work performed while a session still owns coherent published
+/// frames. Ordinary teardown remains allocation-free and captures nothing.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WindowSessionCloseRequest<'a> {
+    persist_final_frame: bool,
+    final_frame_name: Option<&'a str>,
+}
+
+impl<'a> WindowSessionCloseRequest<'a> {
+    /// Persist the last published frame under UI4's owner-derived identity.
+    pub(crate) const fn persist_final_frame(mut self) -> Self {
+        self.persist_final_frame = true;
+        self
+    }
+
+    /// Persist the last published frame under an explicit stable identity.
+    pub(crate) const fn persist_final_frame_as(mut self, name: &'a str) -> Self {
+        self.persist_final_frame = true;
+        self.final_frame_name = Some(name);
+        self
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowSnapshot {
     pub(crate) id: WindowId,
@@ -364,20 +387,30 @@ impl WindowBroker {
         &mut self,
         owner: WindowOwner,
         id: WindowSessionId,
-    ) -> Result<usize, WindowBrokerError> {
+        capture_final_frames: bool,
+    ) -> Result<(usize, Vec<WindowSnapshot>), WindowBrokerError> {
         self.checked_session(owner, id)?;
         let (slot, _) = unpack_handle(id.0)?;
         self.sessions[slot].active = false;
         let mut closed = 0;
-        for window in &mut self.windows {
+        let mut final_frames = Vec::new();
+        for (window_slot, window) in self.windows.iter_mut().enumerate() {
             if window.state != WindowState::Closed && window.session == id {
+                if capture_final_frames
+                    && window.state == WindowState::Ready
+                    && let Some(snapshot) = (*window).snapshot(window_slot)
+                {
+                    final_frames.push(snapshot);
+                }
                 window.state = WindowState::Closed;
                 window.damage = None;
                 window.revision = next_serial(window.revision);
                 closed += 1;
             }
         }
-        Ok(closed)
+        final_frames
+            .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
+        Ok((closed, final_frames))
     }
 
     fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {
@@ -462,7 +495,30 @@ pub(crate) fn finish_window_session(
     owner: WindowOwner,
     session: WindowSessionId,
 ) -> Result<usize, WindowBrokerError> {
-    WINDOW_BROKER.lock().finish_session(owner, session)
+    WINDOW_BROKER
+        .lock()
+        .finish_session(owner, session, false)
+        .map(|(closed, _)| closed)
+}
+
+pub(crate) fn finish_window_session_with_request(
+    owner: WindowOwner,
+    session: WindowSessionId,
+    request: WindowSessionCloseRequest<'_>,
+) -> Result<usize, WindowBrokerError> {
+    let (closed, final_frames) =
+        WINDOW_BROKER
+            .lock()
+            .finish_session(owner, session, request.persist_final_frame)?;
+    if request.persist_final_frame {
+        super::screenshot::capture_final_session_frames(
+            owner,
+            session,
+            final_frames.as_slice(),
+            request.final_frame_name,
+        );
+    }
+    Ok(closed)
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {

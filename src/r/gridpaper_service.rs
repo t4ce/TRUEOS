@@ -45,6 +45,10 @@ const MIN_ANIMATION_DURATION_MS: u32 = 16;
 const MAX_ANIMATION_DURATION_MS: u32 = 600_000;
 const MIN_SCALE_PERCENT: u32 = 1;
 const MAX_SCALE_PERCENT: u32 = 800;
+const GRIDPAPER_INSTANCE_CAPACITY: usize = 2;
+const PRIMARY_INSTANCE_ID: u32 = 0;
+const NATIVE_INSTANCE_ID: u32 = 1;
+const NATIVE_SCALE_PERCENT: u16 = 100;
 
 const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
 const A4_WIDTH_MM: u32 = 210;
@@ -78,6 +82,7 @@ const ERROR_INVALID_SCALE: i32 = -2;
 const ERROR_NOT_OWNER: i32 = -3;
 const ERROR_TRANSPORT: i32 = -4;
 const ERROR_INVALID_ANIMATION: i32 = -5;
+const ERROR_INVALID_INSTANCE: i32 = -6;
 
 struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
@@ -107,7 +112,15 @@ impl SnapshotStore {
     }
 }
 
-static SNAPSHOTS: Mutex<SnapshotStore> = Mutex::new(SnapshotStore::new());
+static SNAPSHOTS: Mutex<[SnapshotStore; GRIDPAPER_INSTANCE_CAPACITY]> =
+    Mutex::new([const { SnapshotStore::new() }; GRIDPAPER_INSTANCE_CAPACITY]);
+
+fn instance_index(instance_id: u32) -> Result<usize, i32> {
+    let index = usize::try_from(instance_id).map_err(|_| ERROR_INVALID_INSTANCE)?;
+    (index < GRIDPAPER_INSTANCE_CAPACITY)
+        .then_some(index)
+        .ok_or(ERROR_INVALID_INSTANCE)
+}
 
 fn producer_ownership_conflicts(
     active: Option<u8>,
@@ -128,6 +141,7 @@ struct OwnedSnapshot {
 }
 
 struct GridPaperPrintRequest {
+    instance_id: u32,
     owner: u8,
     token: u32,
     generation: u64,
@@ -169,13 +183,14 @@ fn next_print_request_token() -> u32 {
     }
 }
 
-fn queue_print_request(snapshot: &OwnedSnapshot) -> Option<u32> {
+fn queue_print_request(instance_id: u32, snapshot: &OwnedSnapshot) -> Option<u32> {
     let token = next_print_request_token();
     let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
     if requests.len() >= PRINT_REQUEST_CAPACITY {
         return None;
     }
     requests.push_back(GridPaperPrintRequest {
+        instance_id,
         owner: snapshot.owner,
         token,
         generation: snapshot.generation,
@@ -186,9 +201,11 @@ fn queue_print_request(snapshot: &OwnedSnapshot) -> Option<u32> {
     Some(token)
 }
 
-pub(crate) fn take_print_request_for_owner(owner: u8) -> Option<(u32, u64)> {
+pub(crate) fn take_print_request_for_owner(owner: u8, instance_id: u32) -> Option<(u32, u64)> {
     let requests = GRIDPAPER_PRINT_REQUESTS.lock();
-    let request = requests.iter().find(|request| request.owner == owner)?;
+    let request = requests
+        .iter()
+        .find(|request| request.owner == owner && request.instance_id == instance_id)?;
     Some((request.token, request.generation))
 }
 
@@ -439,10 +456,14 @@ struct OwnedTextAnimations {
 /// Accept a snapshot from a vmcall after its producer identity is known.
 pub(crate) fn submit_snapshot_for_owner(
     owner: u8,
+    instance_id: u32,
     generation: u64,
     scale_percent: u32,
     raw: &[u8],
 ) -> i32 {
+    let Ok(instance) = instance_index(instance_id) else {
+        return ERROR_INVALID_INSTANCE;
+    };
     if raw.len() != PAGE_BYTES || validate_page(raw).is_err() {
         return ERROR_INVALID_SNAPSHOT;
     }
@@ -450,7 +471,8 @@ pub(crate) fn submit_snapshot_for_owner(
         return ERROR_INVALID_SCALE;
     }
 
-    let mut snapshots = SNAPSHOTS.lock();
+    let mut stores = SNAPSHOTS.lock();
+    let snapshots = &mut stores[instance];
     if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
     }
@@ -467,11 +489,15 @@ pub(crate) fn submit_snapshot_for_owner(
 
 /// Replace the complete CSS-like text animation table for one producer.
 /// Palette indices 0..16 act as stable selectors for foreground text layers.
-pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
+pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw: &[u8]) -> i32 {
+    let Ok(instance) = instance_index(instance_id) else {
+        return ERROR_INVALID_INSTANCE;
+    };
     let Ok(programs) = decode_text_animations(raw) else {
         return ERROR_INVALID_ANIMATION;
     };
-    let mut snapshots = SNAPSHOTS.lock();
+    let mut stores = SNAPSHOTS.lock();
+    let snapshots = &mut stores[instance];
     if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
     }
@@ -481,7 +507,8 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
     snapshots.animation_serial = snapshots.animation_serial.wrapping_add(1).max(1);
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: text-animation-table accepted serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        "gridpaper: text-animation-table accepted instance={} serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        instance_id,
         snapshots.animation_serial,
         snapshots.text_animations.iter().flatten().count(),
         raw.len(),
@@ -491,8 +518,12 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
 
 /// Relinquish producer authority. The service releases its UI4 presentation,
 /// while the kernel-owned frame and last persistent scene remain resident.
-pub(crate) fn close_owner(owner: u8) -> i32 {
-    let mut snapshots = SNAPSHOTS.lock();
+pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
+    let Ok(instance) = instance_index(instance_id) else {
+        return ERROR_INVALID_INSTANCE;
+    };
+    let mut stores = SNAPSHOTS.lock();
+    let snapshots = &mut stores[instance];
     match snapshots.owner {
         Some(active) if active == owner => {
             snapshots.owner = None;
@@ -504,8 +535,10 @@ pub(crate) fn close_owner(owner: u8) -> i32 {
     }
 }
 
-fn snapshot_after(serial: u64) -> Option<OwnedSnapshot> {
-    let snapshots = SNAPSHOTS.lock();
+fn snapshot_after(instance_id: u32, serial: u64) -> Option<OwnedSnapshot> {
+    let instance = instance_index(instance_id).ok()?;
+    let stores = SNAPSHOTS.lock();
+    let snapshots = &stores[instance];
     if snapshots.serial == 0 || snapshots.serial == serial {
         return None;
     }
@@ -518,8 +551,10 @@ fn snapshot_after(serial: u64) -> Option<OwnedSnapshot> {
     })
 }
 
-fn text_animations_after(serial: u64) -> Option<OwnedTextAnimations> {
-    let snapshots = SNAPSHOTS.lock();
+fn text_animations_after(instance_id: u32, serial: u64) -> Option<OwnedTextAnimations> {
+    let instance = instance_index(instance_id).ok()?;
+    let stores = SNAPSHOTS.lock();
+    let snapshots = &stores[instance];
     if snapshots.animation_serial == serial {
         return None;
     }
@@ -616,6 +651,7 @@ fn decode_text_animations(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
+    instance_id: u32,
     generation: u64,
     scale_percent: u32,
     raw_ptr: *const u8,
@@ -630,7 +666,7 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT,
             generation,
-            u64::from(scale_percent),
+            u64::from(scale_percent) | (u64::from(instance_id) << 32),
             raw,
             &mut [],
         );
@@ -648,11 +684,12 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
     };
     // SAFETY: checked non-null above; the ABI caller promises readable bytes.
     let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
-    submit_snapshot_for_owner(owner, generation, scale_percent, raw)
+    submit_snapshot_for_owner(owner, instance_id, generation, scale_percent, raw)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
+    instance_id: u32,
     raw_ptr: *const u8,
     raw_len: usize,
 ) -> i32 {
@@ -664,7 +701,7 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
         let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT,
-            0,
+            u64::from(instance_id),
             0,
             raw,
             &mut [],
@@ -680,14 +717,17 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
     };
     // SAFETY: checked non-null above; the ABI caller promises readable bytes.
     let raw = unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) };
-    submit_text_animations_for_owner(owner, raw)
+    submit_text_animations_for_owner(owner, instance_id, raw)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
+pub extern "C" fn trueos_cabi_gridpaper_close(instance_id: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GRIDPAPER_CLOSE, 0, 0);
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_CLOSE,
+            u64::from(instance_id),
+            0,
+        );
         return if status == trueos_vm::vmcall::STATUS_OK {
             data as i64 as i32
         } else {
@@ -695,15 +735,18 @@ pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
         };
     }
     crate::hv::current_guest_execution_context_vm_id()
-        .map(close_owner)
+        .map(|owner| close_owner(owner, instance_id))
         .unwrap_or(ERROR_NOT_OWNER)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gridpaper_print_request_take() -> u64 {
+pub extern "C" fn trueos_cabi_gridpaper_print_request_take(instance_id: u32) -> u64 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE, 0, 0);
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE,
+            u64::from(instance_id),
+            0,
+        );
         return if status == trueos_vm::vmcall::STATUS_OK {
             data
         } else {
@@ -713,7 +756,7 @@ pub extern "C" fn trueos_cabi_gridpaper_print_request_take() -> u64 {
     let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
         return 0;
     };
-    take_print_request_for_owner(owner)
+    take_print_request_for_owner(owner, instance_id)
         .map(|(token, _generation)| u64::from(token))
         .unwrap_or(0)
 }
@@ -752,6 +795,7 @@ struct GridPaperPresentation {
 }
 
 struct GridPaperSurface {
+    instance_id: u32,
     frame: crate::ui4::FrameHandle,
     presentation: Option<GridPaperPresentation>,
     width: u32,
@@ -814,7 +858,7 @@ impl From<crate::ui4::WindowBrokerError> for ServiceError {
     }
 }
 
-fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
+fn initialize_surface(instance_id: u32) -> Result<GridPaperSurface, ServiceError> {
     let (width, height, extent_source) =
         crate::intel::physical_extent_pixels(SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM)
             .map(|(width, height)| (width, height, "edid-physical-mm"))
@@ -830,6 +874,7 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?;
     Ok(GridPaperSurface {
+        instance_id,
         frame,
         presentation: None,
         width,
@@ -838,8 +883,10 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
     })
 }
 
-fn connected_owner() -> Option<u8> {
-    let mut snapshots = SNAPSHOTS.lock();
+fn connected_owner(instance_id: u32) -> Option<u8> {
+    let instance = instance_index(instance_id).ok()?;
+    let mut stores = SNAPSHOTS.lock();
+    let snapshots = &mut stores[instance];
     let owner = snapshots.owner?;
     if !snapshots.producer_connected {
         return None;
@@ -855,18 +902,18 @@ fn connected_owner() -> Option<u8> {
 fn attach_presentation(
     surface: &mut GridPaperSurface,
     producer: u8,
+    session: crate::ui4::WindowSessionId,
     expose_retained_front: bool,
 ) -> Result<GridPaperPresentation, ServiceError> {
     let (grid_width, grid_height) =
         crate::intel::physical_extent_pixels(GRID_WIDTH_MM, GRID_HEIGHT_MM)
             .unwrap_or((GRID_WIDTH_MM, GRID_HEIGHT_MM));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
     // Keep the useful grid centered. The surface itself extends only far
     // enough above and to the left to carry the two ruler axes.
-    let x = scanout_width
+    let primary_x = scanout_width
         .saturating_sub(grid_width)
         .saturating_div(2)
         .saturating_sub(surface.width.saturating_sub(grid_width));
@@ -874,7 +921,20 @@ fn attach_presentation(
         .saturating_sub(grid_height)
         .saturating_div(2)
         .saturating_sub(surface.height.saturating_sub(grid_height));
-    let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
+    let gap = 8u32;
+    let x = if surface.instance_id == PRIMARY_INSTANCE_ID {
+        primary_x
+    } else if primary_x >= surface.width.saturating_add(gap) {
+        primary_x - surface.width - gap
+    } else {
+        let right = primary_x.saturating_add(surface.width).saturating_add(gap);
+        if right.saturating_add(surface.width) <= scanout_width {
+            right
+        } else {
+            0
+        }
+    };
+    let window = crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
         frame: surface.frame,
@@ -889,19 +949,12 @@ fn attach_presentation(
             opacity: u8::MAX,
             visible: true,
         },
-    }) {
-        Ok(window) => window,
-        Err(error) => {
-            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
-            return Err(error.into());
-        }
-    };
+    })?;
 
     if expose_retained_front
         && let Err(error) =
             crate::ui4::publish_window_frame(UI4_OWNER, window, crate::ui4::DamageRect::FULL)
     {
-        let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
         return Err(error.into());
     }
 
@@ -916,26 +969,6 @@ fn attach_presentation(
 
 fn release_presentation(surface: &mut GridPaperSurface) -> Option<GridPaperPresentation> {
     let presentation = surface.presentation.take()?;
-    match crate::ui4::finish_window_session(UI4_OWNER, presentation.session) {
-        Ok(closed_windows) => crate::log_info!(
-            target: "gridpaper";
-            "gridpaper: presentation released producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
-            presentation.producer,
-            presentation.session.raw(),
-            presentation.window.raw(),
-            surface.frame.raw(),
-            closed_windows,
-        ),
-        Err(error) => crate::log_warn!(
-            target: "gridpaper";
-            "gridpaper: presentation release producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
-            presentation.producer,
-            presentation.session.raw(),
-            presentation.window.raw(),
-            surface.frame.raw(),
-            error,
-        ),
-    }
     Some(presentation)
 }
 
@@ -1020,14 +1053,29 @@ struct TextCell {
     italic: bool,
 }
 
-fn font_for_glyph(glyph: &str) -> GpuFontFace {
-    if crate::intel::gpu_font::font_face_supports_text(GpuFontFace::Inconsolata, glyph) {
-        GpuFontFace::Inconsolata
-    } else if crate::intel::gpu_font::font_face_supports_text(GpuFontFace::NotoSansSc, glyph) {
-        GpuFontFace::NotoSansSc
+fn font_preferences(instance_id: u32) -> [GpuFontFace; 3] {
+    if instance_id == NATIVE_INSTANCE_ID {
+        [
+            GpuFontFace::Default,
+            GpuFontFace::NotoSansSc,
+            GpuFontFace::Inconsolata,
+        ]
     } else {
-        GpuFontFace::Default
+        [
+            GpuFontFace::Inconsolata,
+            GpuFontFace::NotoSansSc,
+            GpuFontFace::Default,
+        ]
     }
+}
+
+fn font_for_glyph(instance_id: u32, glyph: &str) -> GpuFontFace {
+    for font in font_preferences(instance_id) {
+        if crate::intel::gpu_font::font_face_supports_text(font, glyph) {
+            return font;
+        }
+    }
+    GpuFontFace::Default
 }
 
 fn axis_tick_length_mm(cell_index: usize) -> f32 {
@@ -1042,6 +1090,7 @@ fn axis_tick_length_mm(cell_index: usize) -> f32 {
 }
 
 fn build_resident_page(
+    instance_id: u32,
     snapshot: &OwnedSnapshot,
     raster_width: u32,
     raster_height: u32,
@@ -1127,7 +1176,7 @@ fn build_resident_page(
             let has_upper = upper.is_some();
             texts.push(TextCell {
                 text: String::from(primary),
-                font: font_for_glyph(primary),
+                font: font_for_glyph(instance_id, primary),
                 color: foreground,
                 center_x: (left + right) * 0.5 - if has_upper { cell_width * 0.10 } else { 0.0 },
                 center_y: (top + bottom) * 0.5 + if has_upper { cell_height * 0.08 } else { 0.0 },
@@ -1142,7 +1191,7 @@ fn build_resident_page(
             if let Some(upper) = upper {
                 texts.push(TextCell {
                     text: String::from(upper),
-                    font: font_for_glyph(upper),
+                    font: font_for_glyph(instance_id, upper),
                     color: foreground,
                     center_x: (left + right) * 0.5 + cell_width * 0.24,
                     center_y: (top + bottom) * 0.5 - cell_height * 0.24,
@@ -1406,6 +1455,7 @@ fn render_print_page(
     };
     let result = (|| {
         let page = build_resident_page(
+            PRIMARY_INSTANCE_ID,
             &snapshot,
             PRINT_CAPTURE_WIDTH,
             PRINT_CAPTURE_HEIGHT,
@@ -1569,40 +1619,584 @@ fn paint_grid_cursor(
     }
 }
 
-/// Persistent GridPaper scene consumer. Geometry is rebuilt for accepted
-/// snapshots and keyboard edits. Selection is composited over the rendered
-/// page, while middle-button pan is hot-applied through the 3D viewport
-/// transform and keeps the font and grid meshes GPU-owned.
+struct GridPaperRuntime {
+    surface: GridPaperSurface,
+    observed_serial: u64,
+    observed_animation_serial: u64,
+    text_animations: [Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_started_ms: u64,
+    animation_dirty: bool,
+    last_sampled_text_colors: [Option<[u8; 4]>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_frames: u64,
+    latest_snapshot: Option<OwnedSnapshot>,
+    queued_snapshot: Option<OwnedSnapshot>,
+    pending: Option<ResidentPage>,
+    active: Option<ResidentPage>,
+    pan: ScenePan,
+    pan_dirty: bool,
+    hot_pan_frames: u64,
+    active_pan_source: Option<crate::ui4::Ui4CursorSource>,
+    pending_pan_pixels: (i32, i32),
+    selection: Option<GridCellSelection>,
+    input_field: CellInputField,
+    cursor_dirty: bool,
+    keyboard_edits: u64,
+    last_build_error: Option<&'static str>,
+    last_render_error: Option<ServiceError>,
+}
+
+impl GridPaperRuntime {
+    fn new(surface: GridPaperSurface) -> Self {
+        Self {
+            surface,
+            observed_serial: 0,
+            observed_animation_serial: 0,
+            text_animations: [None; TEXT_ANIMATION_COLOR_SLOTS],
+            animation_started_ms: Instant::now().as_millis(),
+            animation_dirty: false,
+            last_sampled_text_colors: [None; TEXT_ANIMATION_COLOR_SLOTS],
+            animation_frames: 0,
+            latest_snapshot: None,
+            queued_snapshot: None,
+            pending: None,
+            active: None,
+            pan: ScenePan::ZERO,
+            pan_dirty: false,
+            hot_pan_frames: 0,
+            active_pan_source: None,
+            pending_pan_pixels: (0, 0),
+            selection: None,
+            input_field: CellInputField::Primary,
+            cursor_dirty: false,
+            keyboard_edits: 0,
+            last_build_error: None,
+            last_render_error: None,
+        }
+    }
+
+    fn presented_owner(&self) -> Option<u8> {
+        self.surface
+            .presentation
+            .map(|presentation| presentation.producer)
+    }
+
+    fn presented_window(&self) -> Option<crate::ui4::WindowId> {
+        self.surface
+            .presentation
+            .map(|presentation| presentation.window)
+    }
+
+    fn reset_detached_input(&mut self) {
+        if self.selection.take().is_some() {
+            self.cursor_dirty = true;
+        }
+        self.input_field = CellInputField::Primary;
+        self.active_pan_source = None;
+        self.pending_pan_pixels = (0, 0);
+    }
+}
+
+fn attach_presentations(
+    runtimes: &mut [GridPaperRuntime],
+    desired_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY],
+) -> Result<crate::ui4::WindowSessionId, ServiceError> {
+    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
+    for (index, runtime) in runtimes.iter_mut().enumerate() {
+        let Some(producer) = desired_owners[index] else {
+            continue;
+        };
+        if let Err(error) =
+            attach_presentation(&mut runtime.surface, producer, session, runtime.active.is_some())
+        {
+            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
+            for runtime in runtimes.iter_mut() {
+                runtime.surface.presentation = None;
+            }
+            return Err(error);
+        }
+    }
+    Ok(session)
+}
+
+fn release_presentations(runtimes: &mut [GridPaperRuntime], session: crate::ui4::WindowSessionId) {
+    let release = crate::ui4::finish_window_session(UI4_OWNER, session);
+    for runtime in runtimes {
+        let Some(presentation) = release_presentation(&mut runtime.surface) else {
+            continue;
+        };
+        runtime.reset_detached_input();
+        match release {
+            Ok(closed_windows) => crate::log_info!(
+                target: "gridpaper";
+                "gridpaper: presentation released instance={} producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
+                runtime.surface.instance_id,
+                presentation.producer,
+                presentation.session.raw(),
+                presentation.window.raw(),
+                runtime.surface.frame.raw(),
+                closed_windows,
+            ),
+            Err(error) => crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: presentation release instance={} producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
+                runtime.surface.instance_id,
+                presentation.producer,
+                presentation.session.raw(),
+                presentation.window.raw(),
+                runtime.surface.frame.raw(),
+                error,
+            ),
+        }
+    }
+}
+
+fn runtime_for_window_mut(
+    runtimes: &mut [GridPaperRuntime],
+    window: crate::ui4::WindowId,
+) -> Option<&mut GridPaperRuntime> {
+    runtimes
+        .iter_mut()
+        .find(|runtime| runtime.presented_window() == Some(window))
+}
+
+fn refresh_runtime(runtime: &mut GridPaperRuntime) {
+    let instance_id = runtime.surface.instance_id;
+    if let Some(update) = text_animations_after(instance_id, runtime.observed_animation_serial) {
+        runtime.observed_animation_serial = update.serial;
+        runtime.text_animations = update.programs;
+        runtime.animation_started_ms = Instant::now().as_millis();
+        runtime.animation_dirty = true;
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: text-animation-table activated instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
+            instance_id,
+            runtime.observed_animation_serial,
+            runtime.text_animations.iter().flatten().count(),
+            SERVICE_PERIOD_MS,
+        );
+    }
+
+    if let Some(snapshot) = snapshot_after(instance_id, runtime.observed_serial) {
+        runtime.observed_serial = snapshot.serial;
+        let clamped_pan = runtime.pan.clamped(snapshot.scale_percent);
+        if clamped_pan != runtime.pan {
+            runtime.pan = clamped_pan;
+            if let Some(page) = runtime.active.as_mut() {
+                page.pan = runtime.pan;
+            }
+            runtime.pan_dirty = true;
+        }
+        runtime.pending = None;
+        runtime.latest_snapshot = Some(snapshot.clone());
+        runtime.queued_snapshot = Some(snapshot);
+    }
+}
+
+fn select_gridpaper_cell(runtime: &mut GridPaperRuntime, local_x: i32, local_y: i32) {
+    let scale_percent = runtime
+        .active
+        .as_ref()
+        .map(|page| page.scale_percent)
+        .or_else(|| runtime.pending.as_ref().map(|page| page.scale_percent))
+        .or_else(|| {
+            runtime
+                .latest_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.scale_percent)
+        });
+    let next = scale_percent.and_then(|scale_percent| {
+        grid_cell_at_local_point(&runtime.surface, local_x, local_y, scale_percent, runtime.pan)
+    });
+    if next == runtime.selection {
+        return;
+    }
+    runtime.selection = next;
+    runtime.input_field = CellInputField::Primary;
+    runtime.cursor_dirty = true;
+    if let Some(selected) = runtime.selection {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: cell selected instance={} column={} row={} local={},{} scale={} pan_scene={:.3},{:.3} input=ui4-primary-click\n",
+            runtime.surface.instance_id,
+            selected.column,
+            selected.row,
+            local_x,
+            local_y,
+            scale_percent.unwrap_or(0),
+            runtime.pan.x,
+            runtime.pan.y,
+        );
+    } else {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: cell selection cleared instance={} local={},{} input=ui4-primary-click-outside-grid\n",
+            runtime.surface.instance_id,
+            local_x,
+            local_y,
+        );
+    }
+}
+
+fn edit_gridpaper_cell(
+    runtime: &mut GridPaperRuntime,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+) {
+    let Some(mut selected) = runtime.selection else {
+        return;
+    };
+    let Some(snapshot) = runtime.latest_snapshot.as_mut() else {
+        return;
+    };
+    let outcome =
+        edit_snapshot_from_keyboard(snapshot, &mut selected, &mut runtime.input_field, event);
+    if outcome.capacity_rejected {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: cell input rejected instance={} column={} row={} field={} rule=one-unicode-scalar-and-upper-requires-primary input=ui4-keyboard\n",
+            runtime.surface.instance_id,
+            selected.column,
+            selected.row,
+            runtime.input_field.name(),
+        );
+    }
+    if outcome.input_field_changed {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: cell input field toggled instance={} column={} row={} field={} key=tab input=ui4-focused-keyboard\n",
+            runtime.surface.instance_id,
+            selected.column,
+            selected.row,
+            runtime.input_field.name(),
+        );
+    }
+    if outcome.clear_selection {
+        runtime.selection = None;
+        runtime.input_field = CellInputField::Primary;
+        runtime.cursor_dirty = true;
+    } else {
+        runtime.selection = Some(selected);
+        runtime.cursor_dirty |= outcome.selection_changed || outcome.input_field_changed;
+    }
+    if !outcome.content_changed {
+        return;
+    }
+    runtime.keyboard_edits = runtime.keyboard_edits.saturating_add(1);
+    let edited = outcome.edited_cell.unwrap_or(selected);
+    let offset = (edited.row * COLUMNS + edited.column) * CELL_BYTES;
+    let primary_len = usize::from(snapshot.raw[offset + PRIMARY_LENGTH_OFFSET]);
+    let upper_len = usize::from(snapshot.raw[offset + UPPER_LENGTH_OFFSET]);
+    runtime.queued_snapshot = Some(snapshot.clone());
+    runtime.pending = None;
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: cell edited instance={} seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} input=ui4-keyboard action=rebuild-page\n",
+        runtime.surface.instance_id,
+        runtime.keyboard_edits,
+        edited.column,
+        edited.row,
+        runtime.input_field.name(),
+        primary_len,
+        upper_len,
+        event.kind,
+        event.codepoint,
+    );
+}
+
+fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent) {
+    match event.phase {
+        crate::ui4::Ui4PanPhase::Begin => {
+            runtime.active_pan_source = Some(event.source);
+            runtime.pending_pan_pixels = (0, 0);
+        }
+        crate::ui4::Ui4PanPhase::Update if runtime.active_pan_source == Some(event.source) => {
+            runtime.pending_pan_pixels.0 = runtime.pending_pan_pixels.0.saturating_add(event.dx);
+            runtime.pending_pan_pixels.1 = runtime.pending_pan_pixels.1.saturating_add(event.dy);
+            let Some(snapshot) = runtime.latest_snapshot.as_ref() else {
+                return;
+            };
+            if runtime.pan.drag_pixels(
+                event.dx,
+                event.dy,
+                runtime.surface.width,
+                runtime.surface.height,
+                snapshot.scale_percent,
+            ) {
+                if let Some(page) = runtime.pending.as_mut() {
+                    page.pan = runtime.pan;
+                }
+                if let Some(page) = runtime.active.as_mut() {
+                    page.pan = runtime.pan;
+                }
+                runtime.pan_dirty = true;
+            }
+        }
+        crate::ui4::Ui4PanPhase::End if runtime.active_pan_source == Some(event.source) => {
+            runtime.active_pan_source = None;
+            let (drag_x, drag_y) = runtime.pending_pan_pixels;
+            runtime.pending_pan_pixels = (0, 0);
+            if drag_x != 0 || drag_y != 0 {
+                crate::log_info!(
+                    target: "gridpaper";
+                    "gridpaper: middle-pan ended instance={} drag_px={},{} pan_scene={:.3},{:.3} hot_frames_total={} action=retain-resident-meshes\n",
+                    runtime.surface.instance_id,
+                    drag_x,
+                    drag_y,
+                    runtime.pan.x,
+                    runtime.pan.y,
+                    runtime.hot_pan_frames,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn dispatch_gridpaper_input(runtimes: &mut [GridPaperRuntime], event: crate::ui4::Ui4InputEvent) {
+    match event {
+        crate::ui4::Ui4InputEvent::Button(event)
+            if event.phase == crate::ui4::Ui4ButtonPhase::Down
+                && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
+        {
+            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
+                select_gridpaper_cell(runtime, event.local_x, event.local_y);
+            }
+        }
+        crate::ui4::Ui4InputEvent::Keyboard(event)
+            if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
+        {
+            let Some(runtime) = runtime_for_window_mut(runtimes, event.window) else {
+                return;
+            };
+            if let Some(snapshot) = runtime.latest_snapshot.as_ref()
+                && queue_print_request(runtime.surface.instance_id, snapshot).is_none()
+            {
+                crate::log_os::print2d_job_state(0, "request-dropped", "gridpaper-F10-queue-full");
+            }
+        }
+        crate::ui4::Ui4InputEvent::Keyboard(event) => {
+            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
+                edit_gridpaper_cell(runtime, event.event);
+            }
+        }
+        crate::ui4::Ui4InputEvent::Pan(event) => {
+            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
+                pan_gridpaper(runtime, event);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn build_queued_page(runtime: &mut GridPaperRuntime) {
+    let Some(snapshot) = runtime.queued_snapshot.as_ref() else {
+        return;
+    };
+    match build_resident_page(
+        runtime.surface.instance_id,
+        snapshot,
+        runtime.surface.width,
+        runtime.surface.height,
+        runtime.pan,
+    ) {
+        Ok(page) => {
+            runtime.pending = Some(page);
+            runtime.queued_snapshot = None;
+            runtime.last_build_error = None;
+        }
+        Err(error) if runtime.last_build_error != Some(error) => {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: snapshot build pending instance={} serial={} generation={} reason={} action=retain-front\n",
+                runtime.surface.instance_id,
+                snapshot.serial,
+                snapshot.generation,
+                error,
+            );
+            runtime.last_build_error = Some(error);
+        }
+        Err(_) => {}
+    }
+}
+
+fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
+    let animation_elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
+    let mut published_page_this_tick = false;
+    if runtime.surface.presentation.is_some()
+        && let Some(candidate) = runtime.pending.as_ref()
+    {
+        match publish_page(
+            &runtime.surface,
+            candidate,
+            runtime.selection,
+            runtime.input_field,
+            &runtime.text_animations,
+            animation_elapsed_ms,
+        ) {
+            Ok(result) => {
+                let published = runtime
+                    .pending
+                    .take()
+                    .expect("gridpaper pending page exists");
+                runtime.last_sampled_text_colors =
+                    sampled_text_colors(&published, &runtime.text_animations, animation_elapsed_ms);
+                crate::log_info!(
+                    target: "gridpaper";
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
+                    runtime.surface.instance_id,
+                    published.serial,
+                    published.generation,
+                    published.scale_percent,
+                    published.pan.x,
+                    published.pan.y,
+                    published.layers.len(),
+                    result.changed_pixels,
+                    result.frame_us,
+                );
+                let retired = runtime.active.replace(published);
+                drop(retired);
+                runtime.animation_dirty = false;
+                runtime.pan_dirty = false;
+                runtime.cursor_dirty = false;
+                published_page_this_tick = true;
+                runtime.last_render_error = None;
+            }
+            Err(error) if runtime.last_render_error != Some(error) => {
+                crate::log_warn!(
+                    target: "gridpaper";
+                    "gridpaper: frame pending instance={} serial={} generation={} error={:?} action=retain-front-and-retry\n",
+                    runtime.surface.instance_id,
+                    candidate.serial,
+                    candidate.generation,
+                    error,
+                );
+                runtime.last_render_error = Some(error);
+            }
+            Err(_) => {}
+        }
+    }
+
+    if published_page_this_tick
+        || runtime.surface.presentation.is_none()
+        || runtime.pending.is_some()
+    {
+        return;
+    }
+    let Some(page) = runtime.active.as_ref() else {
+        return;
+    };
+    let sampled = sampled_text_colors(page, &runtime.text_animations, animation_elapsed_ms);
+    let animation_changed = runtime.animation_dirty || sampled != runtime.last_sampled_text_colors;
+    let hot_pan_frame = runtime.pan_dirty;
+    let selection_frame = runtime.cursor_dirty;
+    if !animation_changed && !hot_pan_frame && !selection_frame {
+        return;
+    }
+    match publish_page(
+        &runtime.surface,
+        page,
+        runtime.selection,
+        runtime.input_field,
+        &runtime.text_animations,
+        animation_elapsed_ms,
+    ) {
+        Ok(result) => {
+            runtime.last_sampled_text_colors = sampled;
+            runtime.animation_dirty = false;
+            runtime.pan_dirty = false;
+            runtime.cursor_dirty = false;
+            if hot_pan_frame {
+                runtime.hot_pan_frames = runtime.hot_pan_frames.saturating_add(1);
+                if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
+                    crate::log_info!(
+                        target: "gridpaper";
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor\n",
+                        runtime.surface.instance_id,
+                        runtime.hot_pan_frames,
+                        page.pan.x,
+                        page.pan.y,
+                        result.changed_pixels,
+                        result.frame_us,
+                    );
+                }
+            }
+            if animation_changed {
+                runtime.animation_frames = runtime.animation_frames.saturating_add(1);
+            }
+            if animation_changed
+                && (runtime.animation_frames <= 8 || runtime.animation_frames.is_multiple_of(120))
+            {
+                crate::log_info!(
+                    target: "gridpaper";
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0\n",
+                    runtime.surface.instance_id,
+                    runtime.animation_frames,
+                    runtime.observed_animation_serial,
+                    animation_elapsed_ms,
+                    runtime.text_animations.iter().flatten().count(),
+                    result.changed_pixels,
+                    result.frame_us,
+                );
+            }
+            runtime.last_render_error = None;
+        }
+        Err(error) if runtime.last_render_error != Some(error) => {
+            crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: text-animation-frame pending instance={} serial={} elapsed_ms={} error={:?} action=retain-front-and-retry\n",
+                runtime.surface.instance_id,
+                runtime.observed_animation_serial,
+                animation_elapsed_ms,
+                error,
+            );
+            runtime.last_render_error = Some(error);
+        }
+        Err(_) => {}
+    }
+}
+
+/// Persistent N-GridPaper scene consumer. Every indexed producer owns an
+/// independent snapshot, animation clock, native-DPI UI4 frame, input state,
+/// and resident GPU scene. Pan remains a hot viewport transform per instance.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
-    let mut last_init_error = None;
-    let mut surface = loop {
-        match initialize_surface() {
-            Ok(surface) => break surface,
-            Err(error) => {
-                if last_init_error != Some(error) {
-                    crate::log_warn!(
-                        target: "gridpaper";
-                        "gridpaper: UI4 surface pending error={:?} action=retry\n",
-                        error,
-                    );
-                    last_init_error = Some(error);
+    let mut runtimes = Vec::with_capacity(GRIDPAPER_INSTANCE_CAPACITY);
+    for instance in 0..GRIDPAPER_INSTANCE_CAPACITY {
+        let instance_id = instance as u32;
+        let mut last_init_error = None;
+        let surface = loop {
+            match initialize_surface(instance_id) {
+                Ok(surface) => break surface,
+                Err(error) => {
+                    if last_init_error != Some(error) {
+                        crate::log_warn!(
+                            target: "gridpaper";
+                            "gridpaper: UI4 surface pending instance={} error={:?} action=retry\n",
+                            instance_id,
+                            error,
+                        );
+                        last_init_error = Some(error);
+                    }
+                    Timer::after(EmbassyDuration::from_millis(250)).await;
                 }
-                Timer::after(EmbassyDuration::from_millis(250)).await;
             }
-        }
-    };
+        };
+        runtimes.push(GridPaperRuntime::new(surface));
+    }
+
+    let primary = &runtimes[PRIMARY_INSTANCE_ID as usize].surface;
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=left-click-cell+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scene=1 presentation=vm-owner-gated initial_presentation=detached\n",
+        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
+        GRIDPAPER_INSTANCE_CAPACITY,
         PAGE_BYTES,
         COLUMNS * ROWS,
         SCENE_WIDTH,
         SCENE_HEIGHT,
-        surface.width,
-        surface.height,
-        surface.extent_source,
+        primary.width,
+        primary.height,
+        primary.extent_source,
         A4_WIDTH_MM,
         A4_HEIGHT_MM,
         GRID_WIDTH_MM,
@@ -1611,71 +2205,51 @@ pub async fn gridpaper_service_task() {
         SURFACE_HEIGHT_MM,
         RULER_GUTTER_MM,
         CELL_EDGE_MM,
+        GRIDPAPER_INSTANCE_CAPACITY,
+        NATIVE_INSTANCE_ID,
+        NATIVE_SCALE_PERCENT,
     );
 
-    let mut observed_serial = 0u64;
-    let mut observed_animation_serial = 0u64;
-    let mut text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
-    let mut animation_started_ms = Instant::now().as_millis();
-    let mut animation_dirty = false;
-    let mut last_sampled_text_colors = [None; TEXT_ANIMATION_COLOR_SLOTS];
-    let mut animation_frames = 0u64;
-    let mut latest_snapshot: Option<OwnedSnapshot> = None;
-    let mut queued_snapshot: Option<OwnedSnapshot> = None;
-    let mut pending: Option<ResidentPage> = None;
-    let mut active: Option<ResidentPage> = None;
-    let mut pan = ScenePan::ZERO;
-    let mut pan_dirty = false;
-    let mut hot_pan_frames = 0u64;
-    let mut active_pan_source = None;
-    let mut pending_pan_pixels = (0i32, 0i32);
-    let mut selection: Option<GridCellSelection> = None;
-    let mut input_field = CellInputField::Primary;
-    let mut cursor_dirty = false;
-    let mut keyboard_edits = 0u64;
-    let mut last_build_error = None;
-    let mut last_render_error = None;
-    let mut last_presentation_error: Option<(u8, ServiceError)> = None;
-
+    let mut presentation_session = None;
+    let mut last_presentation_error = None;
     loop {
-        let desired_owner = connected_owner();
-        let presented_owner = surface
-            .presentation
-            .map(|presentation| presentation.producer);
-        if desired_owner != presented_owner {
-            if surface.presentation.is_some() {
-                release_presentation(&mut surface);
-                if selection.take().is_some() {
-                    cursor_dirty = true;
-                }
-                input_field = CellInputField::Primary;
-                active_pan_source = None;
-                pending_pan_pixels = (0, 0);
+        let desired_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY] =
+            core::array::from_fn(|index| connected_owner(index as u32));
+        let presented_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY] =
+            core::array::from_fn(|index| runtimes[index].presented_owner());
+        if desired_owners != presented_owners {
+            if let Some(session) = presentation_session.take() {
+                release_presentations(&mut runtimes, session);
             }
-
-            if let Some(producer) = desired_owner {
-                match attach_presentation(&mut surface, producer, active.is_some()) {
-                    Ok(presentation) => {
-                        crate::log_info!(
-                            target: "gridpaper";
-                            "gridpaper: presentation attached producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
-                            producer,
-                            presentation.session.raw(),
-                            presentation.window.raw(),
-                            surface.frame.raw(),
-                            u8::from(active.is_some()),
-                        );
+            if desired_owners.iter().any(Option::is_some) {
+                match attach_presentations(&mut runtimes, desired_owners) {
+                    Ok(session) => {
+                        presentation_session = Some(session);
+                        for runtime in &runtimes {
+                            let Some(presentation) = runtime.surface.presentation else {
+                                continue;
+                            };
+                            crate::log_info!(
+                                target: "gridpaper";
+                                "gridpaper: presentation attached instance={} producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
+                                runtime.surface.instance_id,
+                                presentation.producer,
+                                presentation.session.raw(),
+                                presentation.window.raw(),
+                                runtime.surface.frame.raw(),
+                                u8::from(runtime.active.is_some()),
+                            );
+                        }
                         last_presentation_error = None;
                     }
-                    Err(error) if last_presentation_error != Some((producer, error)) => {
+                    Err(error) if last_presentation_error != Some(error) => {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: presentation attach pending producer={} frame={} error={:?} action=retry retained_gpu_scene=1\n",
-                            producer,
-                            surface.frame.raw(),
+                            "gridpaper: presentation attach pending requested_instances={} error={:?} action=retry retained_gpu_scenes=1\n",
+                            desired_owners.iter().flatten().count(),
                             error,
                         );
-                        last_presentation_error = Some((producer, error));
+                        last_presentation_error = Some(error);
                     }
                     Err(_) => {}
                 }
@@ -1684,365 +2258,25 @@ pub async fn gridpaper_service_task() {
             }
         }
 
-        let presented_window = surface.presentation.map(|presentation| presentation.window);
-
-        if let Some(update) = text_animations_after(observed_animation_serial) {
-            observed_animation_serial = update.serial;
-            text_animations = update.programs;
-            animation_started_ms = Instant::now().as_millis();
-            animation_dirty = true;
-            crate::log_info!(
-                target: "gridpaper";
-                "gridpaper: text-animation-table activated serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
-                observed_animation_serial,
-                text_animations.iter().flatten().count(),
-                SERVICE_PERIOD_MS,
-            );
+        for runtime in &mut runtimes {
+            refresh_runtime(runtime);
         }
-
-        if let Some(snapshot) = snapshot_after(observed_serial) {
-            observed_serial = snapshot.serial;
-            let clamped_pan = pan.clamped(snapshot.scale_percent);
-            if clamped_pan != pan {
-                pan = clamped_pan;
-                if let Some(page) = active.as_mut() {
-                    page.pan = pan;
-                }
-                pan_dirty = true;
-            }
-            pending = None;
-            latest_snapshot = Some(snapshot.clone());
-            queued_snapshot = Some(snapshot);
-        }
-
         for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
-            match event {
-                crate::ui4::Ui4InputEvent::Button(event)
-                    if presented_window == Some(event.window)
-                        && event.phase == crate::ui4::Ui4ButtonPhase::Down
-                        && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
-                {
-                    let scale_percent = active
-                        .as_ref()
-                        .map(|page| page.scale_percent)
-                        .or_else(|| pending.as_ref().map(|page| page.scale_percent))
-                        .or_else(|| {
-                            latest_snapshot
-                                .as_ref()
-                                .map(|snapshot| snapshot.scale_percent)
-                        });
-                    let next = scale_percent.and_then(|scale_percent| {
-                        grid_cell_at_local_point(
-                            &surface,
-                            event.local_x,
-                            event.local_y,
-                            scale_percent,
-                            pan,
-                        )
-                    });
-                    if next != selection {
-                        selection = next;
-                        input_field = CellInputField::Primary;
-                        cursor_dirty = true;
-                        if let Some(selected) = selection {
-                            crate::log_info!(
-                                target: "gridpaper";
-                                "gridpaper: cell selected column={} row={} local={},{} scale={} pan_scene={:.3},{:.3} input=ui4-primary-click\n",
-                                selected.column,
-                                selected.row,
-                                event.local_x,
-                                event.local_y,
-                                scale_percent.unwrap_or(0),
-                                pan.x,
-                                pan.y,
-                            );
-                        } else {
-                            crate::log_info!(
-                                target: "gridpaper";
-                                "gridpaper: cell selection cleared local={},{} input=ui4-primary-click-outside-grid\n",
-                                event.local_x,
-                                event.local_y,
-                            );
-                        }
-                    }
-                }
-                crate::ui4::Ui4InputEvent::Keyboard(event)
-                    if presented_window == Some(event.window)
-                        && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                        && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
-                {
-                    if let Some(snapshot) = latest_snapshot.as_ref()
-                        && queue_print_request(snapshot).is_none()
-                    {
-                        crate::log_os::print2d_job_state(
-                            0,
-                            "request-dropped",
-                            "gridpaper-F10-queue-full",
-                        );
-                    }
-                }
-                crate::ui4::Ui4InputEvent::Keyboard(event)
-                    if presented_window == Some(event.window) && selection.is_some() =>
-                {
-                    let Some(snapshot) = latest_snapshot.as_mut() else {
-                        continue;
-                    };
-                    let mut selected = selection.expect("gridpaper selection checked");
-                    let outcome = edit_snapshot_from_keyboard(
-                        snapshot,
-                        &mut selected,
-                        &mut input_field,
-                        event.event,
-                    );
-                    if outcome.capacity_rejected {
-                        crate::log_warn!(
-                            target: "gridpaper";
-                            "gridpaper: cell input rejected column={} row={} field={} rule=one-unicode-scalar-and-upper-requires-primary input=ui4-keyboard\n",
-                            selected.column,
-                            selected.row,
-                            input_field.name(),
-                        );
-                    }
-                    if outcome.input_field_changed {
-                        crate::log_info!(
-                            target: "gridpaper";
-                            "gridpaper: cell input field toggled column={} row={} field={} key=tab input=ui4-focused-keyboard\n",
-                            selected.column,
-                            selected.row,
-                            input_field.name(),
-                        );
-                    }
-                    if outcome.clear_selection {
-                        selection = None;
-                        input_field = CellInputField::Primary;
-                        cursor_dirty = true;
-                    } else {
-                        selection = Some(selected);
-                        cursor_dirty |= outcome.selection_changed || outcome.input_field_changed;
-                    }
-                    if outcome.content_changed {
-                        keyboard_edits = keyboard_edits.saturating_add(1);
-                        let edited = outcome.edited_cell.unwrap_or(selected);
-                        let offset = (edited.row * COLUMNS + edited.column) * CELL_BYTES;
-                        let primary_len = usize::from(snapshot.raw[offset + PRIMARY_LENGTH_OFFSET]);
-                        let upper_len = usize::from(snapshot.raw[offset + UPPER_LENGTH_OFFSET]);
-                        queued_snapshot = Some(snapshot.clone());
-                        pending = None;
-                        crate::log_info!(
-                            target: "gridpaper";
-                            "gridpaper: cell edited seq={} column={} row={} field={} primary_utf8_bytes={} upper_utf8_bytes={} key_kind={} codepoint={} input=ui4-focused-keyboard action=rebuild-page\n",
-                            keyboard_edits,
-                            edited.column,
-                            edited.row,
-                            input_field.name(),
-                            primary_len,
-                            upper_len,
-                            event.event.kind,
-                            event.event.codepoint,
-                        );
-                    }
-                }
-                crate::ui4::Ui4InputEvent::Pan(event) if presented_window == Some(event.window) => {
-                    match event.phase {
-                        crate::ui4::Ui4PanPhase::Begin => {
-                            active_pan_source = Some(event.source);
-                            pending_pan_pixels = (0, 0);
-                        }
-                        crate::ui4::Ui4PanPhase::Update
-                            if active_pan_source == Some(event.source) =>
-                        {
-                            pending_pan_pixels.0 = pending_pan_pixels.0.saturating_add(event.dx);
-                            pending_pan_pixels.1 = pending_pan_pixels.1.saturating_add(event.dy);
-                            let Some(snapshot) = latest_snapshot.as_ref() else {
-                                continue;
-                            };
-                            if pan.drag_pixels(
-                                event.dx,
-                                event.dy,
-                                surface.width,
-                                surface.height,
-                                snapshot.scale_percent,
-                            ) {
-                                if let Some(page) = pending.as_mut() {
-                                    page.pan = pan;
-                                }
-                                if let Some(page) = active.as_mut() {
-                                    page.pan = pan;
-                                }
-                                pan_dirty = true;
-                            }
-                        }
-                        crate::ui4::Ui4PanPhase::End if active_pan_source == Some(event.source) => {
-                            active_pan_source = None;
-                            let (drag_x, drag_y) = pending_pan_pixels;
-                            pending_pan_pixels = (0, 0);
-                            if drag_x != 0 || drag_y != 0 {
-                                crate::log_info!(
-                                    target: "gridpaper";
-                                    "gridpaper: middle-pan ended drag_px={},{} pan_scene={:.3},{:.3} hot_frames_total={} action=retain-resident-meshes\n",
-                                    drag_x,
-                                    drag_y,
-                                    pan.x,
-                                    pan.y,
-                                    hot_pan_frames,
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
+            dispatch_gridpaper_input(&mut runtimes, event);
+        }
+        for runtime in &mut runtimes {
+            build_queued_page(runtime);
         }
 
-        if let Some(snapshot) = queued_snapshot.as_ref() {
-            match build_resident_page(&snapshot, surface.width, surface.height, pan) {
-                Ok(page) => {
-                    pending = Some(page);
-                    queued_snapshot = None;
-                    last_build_error = None;
-                }
-                Err(error) => {
-                    if last_build_error != Some(error) {
-                        crate::log_warn!(
-                            target: "gridpaper";
-                            "gridpaper: snapshot build pending serial={} generation={} reason={} action=retain-front\n",
-                            snapshot.serial,
-                            snapshot.generation,
-                            error,
-                        );
-                        last_build_error = Some(error);
-                    }
-                }
-            }
-        }
-
-        let animation_elapsed_ms = Instant::now()
-            .as_millis()
-            .saturating_sub(animation_started_ms);
+        let now_ms = Instant::now().as_millis();
         if let Some(request) = PRINT_RENDER_REQUESTS.lock().pop_front() {
-            let result = render_print_page(request, &text_animations, animation_elapsed_ms);
+            let primary = &runtimes[PRIMARY_INSTANCE_ID as usize];
+            let elapsed = now_ms.saturating_sub(primary.animation_started_ms);
+            let result = render_print_page(request, &primary.text_animations, elapsed);
             PRINT_RENDER_RESULTS.lock().push_back(result);
         }
-        let mut published_page_this_tick = false;
-        if surface.presentation.is_some()
-            && let Some(candidate) = pending.as_ref()
-        {
-            match publish_page(
-                &surface,
-                candidate,
-                selection,
-                input_field,
-                &text_animations,
-                animation_elapsed_ms,
-            ) {
-                Ok(result) => {
-                    let published = pending.take().expect("gridpaper pending page exists");
-                    last_sampled_text_colors =
-                        sampled_text_colors(&published, &text_animations, animation_elapsed_ms);
-                    crate::log_info!(
-                        target: "gridpaper";
-                        "gridpaper: frame published serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
-                        published.serial,
-                        published.generation,
-                        published.scale_percent,
-                        published.pan.x,
-                        published.pan.y,
-                        published.layers.len(),
-                        result.changed_pixels,
-                        result.frame_us,
-                    );
-                    let retired = active.replace(published);
-                    drop(retired);
-                    animation_dirty = false;
-                    pan_dirty = false;
-                    cursor_dirty = false;
-                    published_page_this_tick = true;
-                    last_render_error = None;
-                }
-                Err(error) if last_render_error != Some(error) => {
-                    crate::log_warn!(
-                        target: "gridpaper";
-                        "gridpaper: frame pending serial={} generation={} error={:?} action=retain-front-and-retry\n",
-                        candidate.serial,
-                        candidate.generation,
-                        error,
-                    );
-                    last_render_error = Some(error);
-                }
-                Err(_) => {}
-            }
-        }
-
-        if !published_page_this_tick
-            && surface.presentation.is_some()
-            && pending.is_none()
-            && let Some(page) = active.as_ref()
-        {
-            let sampled = sampled_text_colors(page, &text_animations, animation_elapsed_ms);
-            let animation_changed = animation_dirty || sampled != last_sampled_text_colors;
-            let hot_pan_frame = pan_dirty;
-            let selection_frame = cursor_dirty;
-            if animation_changed || hot_pan_frame || selection_frame {
-                match publish_page(
-                    &surface,
-                    page,
-                    selection,
-                    input_field,
-                    &text_animations,
-                    animation_elapsed_ms,
-                ) {
-                    Ok(result) => {
-                        last_sampled_text_colors = sampled;
-                        animation_dirty = false;
-                        pan_dirty = false;
-                        cursor_dirty = false;
-                        if hot_pan_frame {
-                            hot_pan_frames = hot_pan_frames.saturating_add(1);
-                            if hot_pan_frames <= 8 || hot_pan_frames.is_multiple_of(120) {
-                                crate::log_info!(
-                                    target: "gridpaper";
-                                    "gridpaper: hot-pan-frame seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor\n",
-                                    hot_pan_frames,
-                                    page.pan.x,
-                                    page.pan.y,
-                                    result.changed_pixels,
-                                    result.frame_us,
-                                );
-                            }
-                        }
-                        if animation_changed {
-                            animation_frames = animation_frames.saturating_add(1);
-                        }
-                        if animation_changed
-                            && (animation_frames <= 8 || animation_frames.is_multiple_of(120))
-                        {
-                            crate::log_info!(
-                                target: "gridpaper";
-                                "gridpaper: text-animation-frame seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0\n",
-                                animation_frames,
-                                observed_animation_serial,
-                                animation_elapsed_ms,
-                                text_animations.iter().flatten().count(),
-                                result.changed_pixels,
-                                result.frame_us,
-                            );
-                        }
-                        last_render_error = None;
-                    }
-                    Err(error) if last_render_error != Some(error) => {
-                        crate::log_warn!(
-                            target: "gridpaper";
-                            "gridpaper: text-animation-frame pending serial={} elapsed_ms={} error={:?} action=retain-front-and-retry\n",
-                            observed_animation_serial,
-                            animation_elapsed_ms,
-                            error,
-                        );
-                        last_render_error = Some(error);
-                    }
-                    Err(_) => {}
-                }
-            }
+        for runtime in &mut runtimes {
+            publish_runtime(runtime, now_ms);
         }
 
         Timer::after(EmbassyDuration::from_millis(SERVICE_PERIOD_MS)).await;
@@ -2052,6 +2286,27 @@ pub async fn gridpaper_service_task() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_slots_are_bounded_and_independent() {
+        assert_eq!(instance_index(PRIMARY_INSTANCE_ID), Ok(0));
+        assert_eq!(instance_index(NATIVE_INSTANCE_ID), Ok(1));
+        assert_eq!(instance_index(GRIDPAPER_INSTANCE_CAPACITY as u32), Err(ERROR_INVALID_INSTANCE));
+
+        let mut stores = [const { SnapshotStore::new() }; GRIDPAPER_INSTANCE_CAPACITY];
+        stores[0].scale_percent = 150;
+        stores[0].serial = 7;
+        assert_eq!(stores[0].scale_percent, 150);
+        assert_eq!(stores[0].serial, 7);
+        assert_eq!(stores[1].scale_percent, NATIVE_SCALE_PERCENT);
+        assert_eq!(stores[1].serial, 0);
+    }
+
+    #[test]
+    fn native_instance_has_its_own_font_preference() {
+        assert_eq!(font_preferences(PRIMARY_INSTANCE_ID)[0], GpuFontFace::Inconsolata);
+        assert_eq!(font_preferences(NATIVE_INSTANCE_ID)[0], GpuFontFace::Default);
+    }
 
     #[test]
     fn fixed_wire_size_matches_a4_gridpaper() {
