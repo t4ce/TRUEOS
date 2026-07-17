@@ -89,7 +89,12 @@ impl PianoUdpReceiver {
         true
     }
 
-    pub fn on_packet<F>(&mut self, handle: api::NetHandle, data: &[u8], mut on_note_event: F) -> bool
+    pub fn on_packet<F>(
+        &mut self,
+        handle: api::NetHandle,
+        data: &[u8],
+        mut on_note_event: F,
+    ) -> bool
     where
         F: FnMut(PianoNoteEvent),
     {

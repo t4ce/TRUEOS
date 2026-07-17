@@ -210,11 +210,24 @@ fn write_triangle_probe_state(
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
-    let surface_halign = backend_probe_mode.surface_halign_raw(warm.device_id);
+    let resident_msaa4 = draw.uses_resident_scene_msaa4();
+    if resident_msaa4 && !device_is_gfx125(warm.device_id) {
+        return Err("probe-msaa4-device");
+    }
+    let surface_halign = if resident_msaa4 {
+        3
+    } else {
+        backend_probe_mode.surface_halign_raw(warm.device_id)
+    };
     surface[0] = (SURFTYPE_2D << 29)
         | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
         | (surface_halign << 14)
-        | (SURFACE_VALIGN_4 << 16);
+        | (SURFACE_VALIGN_4 << 16)
+        | if resident_msaa4 {
+            (1 << 12) | (1 << 28)
+        } else {
+            0
+        };
     surface[1] = (RENDER_MOCS << 24)
         // TGL/ADL PRM: EnableUnormPathInColorPipe must never be zero on
         // gfx11 through gfx12.0 render surfaces.
@@ -222,9 +235,17 @@ fn write_triangle_probe_state(
             1 << 31
         } else {
             0
+        }
+        | if resident_msaa4 {
+            let aligned_height = crate::intel::align_up(draw.target_h as usize, 64)
+                .ok_or("probe-msaa4-shape")?;
+            u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?
+        } else {
+            0
         };
     surface[2] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
     surface[3] = draw.rt_pitch.saturating_sub(1);
+    surface[4] = if resident_msaa4 { 2 << 3 } else { 0 };
     surface[7] = (SHADER_CHANNEL_ALPHA << 16)
         | (SHADER_CHANNEL_BLUE << 19)
         | (SHADER_CHANNEL_GREEN << 22)
@@ -232,7 +253,7 @@ fn write_triangle_probe_state(
     surface[8] = draw.rt_gpu_addr as u32;
     surface[9] = (draw.rt_gpu_addr >> 32) as u32;
     intel_render_verbose_log!(
-        "probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} note=render-target-descriptor\n",
+        "probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} samples={} tiling={} note=render-target-descriptor\n",
         backend_probe_mode.label(),
         surface[0],
         (surface[0] >> 18) & 0x1FF,
@@ -242,6 +263,8 @@ fn write_triangle_probe_state(
         draw.target_h,
         draw.rt_pitch,
         draw.rt_gpu_addr,
+        if resident_msaa4 { 4 } else { 1 },
+        if resident_msaa4 { "tile64" } else { "linear" },
     );
 
     let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
@@ -371,6 +394,20 @@ fn encode_triangle_probe_batch(
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    let resident_msaa4 = draw.uses_resident_scene_msaa4();
+    if resident_msaa4 && !device_is_gfx125(warm.device_id) {
+        return Err("probe-msaa4-device");
+    }
+    let multisample_dw1 = if resident_msaa4 {
+        2 << 1
+    } else {
+        backend_probe_mode.multisample_dw1()
+    };
+    let sample_mask_dw = if resident_msaa4 {
+        0xF
+    } else {
+        backend_probe_mode.sample_mask_dw()
+    };
     if let Some(depth) = depth_config
         && (depth.gpu_addr & 0xFFF != 0
             || depth.pitch_bytes == 0
@@ -873,7 +910,11 @@ fn encode_triangle_probe_batch(
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
     let raster_dw1 = if mesa_host_fixed_function {
-        0x04A1_1003
+        if resident_msaa4 {
+            0x04A1_1C03
+        } else {
+            0x04A1_1003
+        }
     } else {
         (1 << 16)
             | if backend_probe_mode.smooth_point_raster() {
@@ -992,7 +1033,20 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let gfx125_sample_pattern_dw = 0x8888_8888;
+    let gfx125_sample_pattern_dwords = if resident_msaa4 {
+        [
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0xAE2A_E662,
+            0x0088_44CC,
+        ]
+    } else {
+        [0x8888_8888; 8]
+    };
     let gfx125_slice_hash =
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
     let gfx125_3d_mode_dw1 = gfx125_slice_hash.map(gfx125_3d_mode_dw1).unwrap_or(0);
@@ -1325,8 +1379,8 @@ fn encode_triangle_probe_batch(
     if device_is_gfx12(warm.device_id) {
         log_batch_offset(cursor, "3DSTATE_SAMPLE_PATTERN");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_PATTERN)?;
-        for _ in 0..8 {
-            push(batch_dwords, &mut cursor, gfx125_sample_pattern_dw)?;
+        for pattern_dw in gfx125_sample_pattern_dwords {
+            push(batch_dwords, &mut cursor, pattern_dw)?;
         }
     }
 
@@ -1990,7 +2044,7 @@ fn encode_triangle_probe_batch(
             ((depth.width - 1) << 1) | ((depth.height - 1) << 17),
             RENDER_MOCS,
             if device_is_gfx125(warm.device_id) {
-                3 << 30
+                if resident_msaa4 { 1 << 30 } else { 3 << 30 }
             } else {
                 0
             },
@@ -2048,10 +2102,10 @@ fn encode_triangle_probe_batch(
     if backend_probe_mode.sample_mask_before_clip() {
         log_batch_offset(cursor, "3DSTATE_MULTISAMPLE early-raster-gate");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
-        push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
+        push(batch_dwords, &mut cursor, multisample_dw1)?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK early-raster-gate");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
-        push(batch_dwords, &mut cursor, backend_probe_mode.sample_mask_dw())?;
+        push(batch_dwords, &mut cursor, sample_mask_dw)?;
     }
 
     if backend_probe_mode.draw_rect_before_clip() {
@@ -2249,10 +2303,10 @@ fn encode_triangle_probe_batch(
     if !backend_probe_mode.sample_mask_before_clip() {
         log_batch_offset(cursor, "3DSTATE_MULTISAMPLE");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
-        push(batch_dwords, &mut cursor, backend_probe_mode.multisample_dw1())?;
+        push(batch_dwords, &mut cursor, multisample_dw1)?;
         log_batch_offset(cursor, "3DSTATE_SAMPLE_MASK");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_MASK)?;
-        push(batch_dwords, &mut cursor, backend_probe_mode.sample_mask_dw())?;
+        push(batch_dwords, &mut cursor, sample_mask_dw)?;
     }
 
     if !backend_probe_mode.draw_rect_before_clip() {

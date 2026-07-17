@@ -101,6 +101,12 @@ struct TriangleDrawPrep {
     target_h: u32,
 }
 
+impl TriangleDrawPrep {
+    fn uses_resident_scene_msaa4(self) -> bool {
+        self.rt_gpu_addr == GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE
+    }
+}
+
 #[derive(Copy, Clone)]
 struct TriangleVertexUploadProof {
     vertex_count: u32,

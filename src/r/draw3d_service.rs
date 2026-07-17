@@ -660,7 +660,7 @@ fn capture_screenshot_view() -> bool {
                 viewport_translation_px: [0.0, 0.0],
             })
             .collect::<Vec<_>>();
-        crate::intel::render::capture_resident_triangle_scene_frame_with_opaque_depth(
+        crate::intel::render::capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
             &draws, clear_rgba, false,
         )
     };
@@ -881,7 +881,7 @@ pub async fn draw3d_ui4_render_task() {
                         })
                         .collect::<Vec<_>>();
                     let capture = crate::intel::render::
-                        capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth(
+                        capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth_msaa4(
                             &draws,
                             clear_rgba,
                             render_rect.width,

@@ -292,7 +292,7 @@ fn path_prefix(path: &str, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{module_path_log_area, target_log_area, LogArea};
+    use super::{LogArea, module_path_log_area, target_log_area};
 
     #[test]
     fn routes_hypervisor_aliases_to_hv_area() {

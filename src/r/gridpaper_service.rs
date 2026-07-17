@@ -651,6 +651,26 @@ fn decode_text_animations(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
+    generation: u64,
+    scale_percent: u32,
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i32 {
+    // Preserve the original portal ABI for already-packaged GridPaper
+    // Blueprints. New producers use the instance-aware symbol below.
+    unsafe {
+        trueos_cabi_gridpaper_snapshot_submit_instance(
+            PRIMARY_INSTANCE_ID,
+            generation,
+            scale_percent,
+            raw_ptr,
+            raw_len,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit_instance(
     instance_id: u32,
     generation: u64,
     scale_percent: u32,
@@ -689,6 +709,17 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_snapshot_submit(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i32 {
+    // Preserve the original single-instance portal ABI.
+    unsafe {
+        trueos_cabi_gridpaper_text_animations_submit_instance(PRIMARY_INSTANCE_ID, raw_ptr, raw_len)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit_instance(
     instance_id: u32,
     raw_ptr: *const u8,
     raw_len: usize,
@@ -721,7 +752,12 @@ pub unsafe extern "C" fn trueos_cabi_gridpaper_text_animations_submit(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gridpaper_close(instance_id: u32) -> i32 {
+pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
+    trueos_cabi_gridpaper_close_instance(PRIMARY_INSTANCE_ID)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gridpaper_close_instance(instance_id: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, data) = trueos_vm::vmcall::call(
             trueos_vm::vmcall::OP_BP_GRIDPAPER_CLOSE,
@@ -740,7 +776,12 @@ pub extern "C" fn trueos_cabi_gridpaper_close(instance_id: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_gridpaper_print_request_take(instance_id: u32) -> u64 {
+pub extern "C" fn trueos_cabi_gridpaper_print_request_take() -> u64 {
+    trueos_cabi_gridpaper_print_request_take_instance(PRIMARY_INSTANCE_ID)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gridpaper_print_request_take_instance(instance_id: u32) -> u64 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, data) = trueos_vm::vmcall::call(
             trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE,
@@ -760,6 +801,22 @@ pub extern "C" fn trueos_cabi_gridpaper_print_request_take(instance_id: u32) -> 
         .map(|(token, _generation)| u64::from(token))
         .unwrap_or(0)
 }
+
+// Portal ABI regression guards. The legacy signatures are intentionally kept
+// distinct from the instance-aware signatures so an old Blueprint cannot have
+// its pointer/length registers reinterpreted again.
+const _: unsafe extern "C" fn(u64, u32, *const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_snapshot_submit;
+const _: unsafe extern "C" fn(u32, u64, u32, *const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_snapshot_submit_instance;
+const _: unsafe extern "C" fn(*const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_text_animations_submit;
+const _: unsafe extern "C" fn(u32, *const u8, usize) -> i32 =
+    trueos_cabi_gridpaper_text_animations_submit_instance;
+const _: extern "C" fn() -> i32 = trueos_cabi_gridpaper_close;
+const _: extern "C" fn(u32) -> i32 = trueos_cabi_gridpaper_close_instance;
+const _: extern "C" fn() -> u64 = trueos_cabi_gridpaper_print_request_take;
+const _: extern "C" fn(u32) -> u64 = trueos_cabi_gridpaper_print_request_take_instance;
 
 fn validate_page(raw: &[u8]) -> Result<(), ()> {
     if raw.len() != PAGE_BYTES {
@@ -1407,7 +1464,7 @@ fn publish_page(
         })
         .collect::<Vec<_>>();
     let result =
-        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
+        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
             &draws,
             Some([0, 0, 0, 0]),
             surface.width,
@@ -1471,7 +1528,7 @@ fn render_print_page(
             })
             .collect::<Vec<_>>();
         let captured =
-            crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
+            crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
                 &draws,
                 Some([0, 0, 0, 0]),
                 PRINT_CAPTURE_WIDTH,

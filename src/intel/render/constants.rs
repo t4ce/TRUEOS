@@ -109,6 +109,10 @@ const WARM_STREAMOUT_BYTES: usize =
 const DRAW3D_SCENE_DEPTH_TILE_WIDTH_BYTES: usize = 128;
 const DRAW3D_SCENE_DEPTH_TILE_HEIGHT_ROWS: usize = 32;
 const DRAW3D_SCENE_DEPTH_BYTES: usize = WARM_STREAMOUT_BYTES;
+const RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS: usize = 64;
+const RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS: usize = 64;
+const RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES: usize = 512;
+const RESIDENT_SCENE_MSAA_DEPTH_TILE_HEIGHT_SAMPLE_ROWS: usize = 128;
 const BLT_RING_DWORDS: usize = 4;
 const BLT_RING_TAIL_BYTES: usize = BLT_RING_DWORDS * core::mem::size_of::<u32>();
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
@@ -135,6 +139,10 @@ const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 // The 14.0625 MiB D32 scene depth allocation lives above the warm batch and
 // below the GPGPU arena. It never aliases the color target or resident meshes.
 const GPU_VA_DRAW3D_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
+// gfx12.5 Tile64 4x-MSAA surfaces. Each range has 64 MiB of VA headroom;
+// physical storage is allocated lazily at the consumer's actual extent.
+const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;
+const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;

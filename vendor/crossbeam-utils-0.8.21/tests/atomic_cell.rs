@@ -39,10 +39,7 @@ fn is_lock_free() {
     );
     assert_eq!(mem::size_of::<U64Align8>(), 8);
     assert_eq!(mem::align_of::<U64Align8>(), 8);
-    assert_eq!(
-        AtomicCell::<U64Align8>::is_lock_free(),
-        cfg!(target_has_atomic = "64")
-    );
+    assert_eq!(AtomicCell::<U64Align8>::is_lock_free(), cfg!(target_has_atomic = "64"));
 
     // AtomicU128 is unstable
     assert!(!AtomicCell::<u128>::is_lock_free());
@@ -318,10 +315,7 @@ fn issue_748() {
     }
 
     assert_eq!(mem::size_of::<Test>(), 8);
-    assert_eq!(
-        AtomicCell::<Test>::is_lock_free(),
-        cfg!(target_has_atomic = "64")
-    );
+    assert_eq!(AtomicCell::<Test>::is_lock_free(), cfg!(target_has_atomic = "64"));
     let x = AtomicCell::new(Test::FieldLess);
     assert_eq!(x.load(), Test::FieldLess);
 }

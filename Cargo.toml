@@ -144,3 +144,5 @@ dma-api = { path = "vendor/dma-api-0.7.3" }
 alsa = { path = "vendor/alsa-0.11.0" }
 symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
+[build-dependencies]
+sha2 = "=0.10.9"

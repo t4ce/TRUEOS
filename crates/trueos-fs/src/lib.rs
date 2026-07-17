@@ -721,9 +721,7 @@ pub async fn replay_log_range<D: BlockIo>(
         let mut data = Vec::new();
         if hdr.kind == LogKind::RenameTree {
             data.resize(data_len, 0);
-            let data_lba = lba
-                .saturating_add(1)
-                .saturating_add(name_blocks as u64);
+            let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
             read_exact_bytes(dev, data_lba, 0, data.as_mut_slice()).await?;
         }
         apply(hdr.kind, name_bytes, data, lba);
@@ -812,7 +810,9 @@ pub async fn scan_raw_log<D: BlockIo>(
             LogKind::Put => name_len > 0 && name_len <= 4096,
             LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
             LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
-            LogKind::RenameTree => name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096,
+            LogKind::RenameTree => {
+                name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096
+            }
         };
         if !valid_shape {
             return Ok(RawLogScan {
@@ -2200,7 +2200,9 @@ pub async fn rename_tree<D: BlockIo>(
     if src.is_empty() || dst.is_empty() || src == dst {
         return Ok(false);
     }
-    if normalized_dir_prefix_str(dst.as_str()).starts_with(normalized_dir_prefix_str(src.as_str()).as_str()) {
+    if normalized_dir_prefix_str(dst.as_str())
+        .starts_with(normalized_dir_prefix_str(src.as_str()).as_str())
+    {
         return Ok(false);
     }
     if src.len() > (u16::MAX as usize) || dst.len() > 4096 {
@@ -2223,7 +2225,8 @@ pub async fn rename_tree<D: BlockIo>(
         return Ok(false);
     }
 
-    let written_blocks = write_rename_tree_entry(dev, entry_lba, src.as_str(), dst.as_str()).await?;
+    let written_blocks =
+        write_rename_tree_entry(dev, entry_lba, src.as_str(), dst.as_str()).await?;
     advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
 }

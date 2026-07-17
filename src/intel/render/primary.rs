@@ -284,6 +284,12 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) viewport_translation_px: [f32; 2],
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ResidentSceneRasterQuality {
+    SingleSample,
+    Multisample4x,
+}
+
 #[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
@@ -306,7 +312,164 @@ struct ResidentSceneDepthAllocation {
 unsafe impl Send for ResidentSceneDepthAllocation {}
 
 static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Copy, Clone)]
+struct ResidentSceneMsaaColorTarget {
+    surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+}
+
+fn prepare_resident_scene_msaa_allocation(
+    slot: &Mutex<Option<ResidentSceneDepthAllocation>>,
+    gpu_addr: u64,
+    required_bytes: usize,
+    label: &'static str,
+) -> Result<ResidentSceneDepthAllocation, &'static str> {
+    if required_bytes == 0 || required_bytes > 64 * 1024 * 1024 {
+        return Err("resident-scene-msaa-shape");
+    }
+    let mut resident = slot.lock();
+    if let Some(allocation) = *resident
+        && allocation.storage_bytes >= required_bytes
+    {
+        return Ok(allocation);
+    }
+
+    let Some((storage_phys, storage_virt)) =
+        crate::dma::alloc(required_bytes, crate::intel::WARM_ALIGN)
+    else {
+        return Err("resident-scene-msaa-alloc");
+    };
+    let previous = *resident;
+    if let Some(previous) = previous
+        && !unmap_render_ppgtt_range(gpu_addr, previous.storage_bytes)
+    {
+        crate::dma::dealloc(storage_virt, required_bytes);
+        return Err("resident-scene-msaa-unmap");
+    }
+    if !map_render_ppgtt_range(gpu_addr, storage_phys, required_bytes) {
+        if let Some(previous) = previous {
+            let _ = map_render_ppgtt_range(
+                gpu_addr,
+                previous.storage_phys,
+                previous.storage_bytes,
+            );
+        }
+        crate::dma::dealloc(storage_virt, required_bytes);
+        return Err("resident-scene-msaa-map");
+    }
+    if let Some(previous) = previous {
+        crate::dma::dealloc(previous.storage_virt, previous.storage_bytes);
+    }
+    let allocation = ResidentSceneDepthAllocation {
+        storage_phys,
+        storage_virt,
+        storage_bytes: required_bytes,
+    };
+    *resident = Some(allocation);
+    crate::log_info!(
+        target: "render";
+        "resident-scene-msaa: allocated kind={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} samples=4 tiling=tile64\n",
+        label,
+        storage_phys,
+        gpu_addr,
+        required_bytes,
+    );
+    Ok(allocation)
+}
+
+fn prepare_resident_scene_msaa_color(
+    device_id: u16,
+    target_width: usize,
+    target_height: usize,
+) -> Result<ResidentSceneMsaaColorTarget, &'static str> {
+    if !device_is_gfx125(device_id) {
+        return Err("resident-scene-msaa-device");
+    }
+    let aligned_width = crate::intel::align_up(
+        target_width,
+        RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS,
+    )
+    .ok_or("resident-scene-msaa-shape")?;
+    let aligned_height = crate::intel::align_up(
+        target_height,
+        RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS,
+    )
+    .ok_or("resident-scene-msaa-shape")?;
+    let pitch_bytes = aligned_width
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("resident-scene-msaa-shape")?;
+    let storage_bytes = pitch_bytes
+        .checked_mul(aligned_height)
+        .and_then(|bytes| bytes.checked_mul(4))
+        .ok_or("resident-scene-msaa-shape")?;
+    let allocation = prepare_resident_scene_msaa_allocation(
+        &RESIDENT_SCENE_MSAA_COLOR,
+        GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
+        storage_bytes,
+        "rgba8-color",
+    )?;
+    let surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        allocation.storage_phys,
+        GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
+        allocation.storage_bytes,
+        u32::try_from(target_width).map_err(|_| "resident-scene-msaa-shape")?,
+        u32::try_from(target_height).map_err(|_| "resident-scene-msaa-shape")?,
+        u32::try_from(pitch_bytes).map_err(|_| "resident-scene-msaa-shape")?,
+    )
+    .ok_or("resident-scene-msaa-surface")?;
+    Ok(ResidentSceneMsaaColorTarget { surface })
+}
+
+fn prepare_resident_scene_msaa_depth(
+    device_id: u16,
+    target_width: usize,
+    target_height: usize,
+) -> Result<TriangleDepthConfig, &'static str> {
+    if !device_is_gfx125(device_id) {
+        return Err("draw3d-msaa-depth-device");
+    }
+    let sample_width = target_width
+        .checked_mul(2)
+        .ok_or("draw3d-msaa-depth-shape")?;
+    let sample_height = target_height
+        .checked_mul(2)
+        .ok_or("draw3d-msaa-depth-shape")?;
+    let row_bytes = sample_width
+        .checked_mul(core::mem::size_of::<f32>())
+        .ok_or("draw3d-msaa-depth-shape")?;
+    let pitch_bytes = crate::intel::align_up(
+        row_bytes,
+        RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES,
+    )
+    .ok_or("draw3d-msaa-depth-shape")?;
+    let aligned_sample_height = crate::intel::align_up(
+        sample_height,
+        RESIDENT_SCENE_MSAA_DEPTH_TILE_HEIGHT_SAMPLE_ROWS,
+    )
+    .ok_or("draw3d-msaa-depth-shape")?;
+    let storage_bytes = pitch_bytes
+        .checked_mul(aligned_sample_height)
+        .ok_or("draw3d-msaa-depth-shape")?;
+    let _allocation = prepare_resident_scene_msaa_allocation(
+        &RESIDENT_SCENE_MSAA_DEPTH,
+        GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
+        storage_bytes,
+        "d32-depth",
+    )?;
+    Ok(TriangleDepthConfig {
+        gpu_addr: GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
+        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "draw3d-msaa-depth-shape")?,
+        width: u32::try_from(target_width).map_err(|_| "draw3d-msaa-depth-shape")?,
+        height: u32::try_from(target_height).map_err(|_| "draw3d-msaa-depth-shape")?,
+        qpitch_rows_div4: u32::try_from(aligned_sample_height / 4)
+            .map_err(|_| "draw3d-msaa-depth-shape")?,
+        write_enabled: false,
+        compare_function: COMPARE_FUNCTION_LEQUAL,
+    })
+}
 
 fn prepare_resident_scene_depth(
     device_id: u16,
@@ -409,6 +572,7 @@ pub(crate) fn capture_resident_triangle_scene_frame(
         diagnostic_logs,
         true,
         false,
+        ResidentSceneRasterQuality::SingleSample,
         width,
         height,
     )
@@ -429,6 +593,26 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
         diagnostic_logs,
         true,
         true,
+        ResidentSceneRasterQuality::SingleSample,
+        width,
+        height,
+    )
+}
+
+/// Full-size straight-RGBA Draw3D capture with 4x color/depth coverage.
+pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    let (width, height) = resident_scene_target_dimensions();
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        true,
+        true,
+        ResidentSceneRasterQuality::Multisample4x,
         width,
         height,
     )
@@ -452,6 +636,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
         diagnostic_logs,
         false,
         false,
+        ResidentSceneRasterQuality::SingleSample,
         width,
         height,
     )
@@ -475,6 +660,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
         diagnostic_logs,
         false,
         false,
+        ResidentSceneRasterQuality::SingleSample,
         width as usize,
         height as usize,
     )
@@ -494,6 +680,48 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
         diagnostic_logs,
         false,
         true,
+        ResidentSceneRasterQuality::SingleSample,
+        width as usize,
+        height as usize,
+    )
+}
+
+/// UI4-sized resident scene with native gfx12.5 4x sample coverage and a GPU
+/// resolve into the ordinary premultiplied frame buffer.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    width: u32,
+    height: u32,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::Multisample4x,
+        width as usize,
+        height as usize,
+    )
+}
+
+/// UI4-sized depth-tested resident scene with matching 4x color and depth.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth_msaa4(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    width: u32,
+    height: u32,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
+        ResidentSceneRasterQuality::Multisample4x,
         width as usize,
         height as usize,
     )
@@ -505,6 +733,7 @@ fn submit_resident_triangle_scene_capture(
     diagnostic_logs: bool,
     straight_alpha_output: bool,
     opaque_depth_enabled: bool,
+    raster_quality: ResidentSceneRasterQuality,
     target_width: usize,
     target_height: usize,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
@@ -571,8 +800,26 @@ fn submit_resident_triangle_scene_capture(
         if !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
+        let msaa_color = if raster_quality == ResidentSceneRasterQuality::Multisample4x {
+            Some(prepare_resident_scene_msaa_color(
+                warm.device_id,
+                target_width,
+                target_height,
+            )?)
+        } else {
+            None
+        };
+        let (render_target_gpu, render_target_pitch) = if let Some(target) = msaa_color {
+            (target.surface.gpu, target.surface.pitch_bytes as usize)
+        } else {
+            (GPU_VA_STREAMOUT_BASE, target_pitch)
+        };
         let depth_config = if opaque_depth_enabled {
-            Some(prepare_resident_scene_depth(warm.device_id, target_width, target_height)?)
+            Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
+                prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?
+            } else {
+                prepare_resident_scene_depth(warm.device_id, target_width, target_height)?
+            })
         } else {
             None
         };
@@ -621,8 +868,8 @@ fn submit_resident_triangle_scene_capture(
         let clear_completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
             dev,
             warm,
-            GPU_VA_STREAMOUT_BASE,
-            target_pitch,
+            render_target_gpu,
+            render_target_pitch,
             target_width,
             target_height,
             TriangleBlendProbeMode::MesaZeroedState,
@@ -670,8 +917,8 @@ fn submit_resident_triangle_scene_capture(
             let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
                 dev,
                 warm,
-                GPU_VA_STREAMOUT_BASE,
-                target_pitch,
+                render_target_gpu,
+                render_target_pitch,
                 target_width,
                 target_height,
                 blend_mode,
@@ -697,14 +944,37 @@ fn submit_resident_triangle_scene_capture(
             completed_draws += 1;
         }
 
-        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
-        let mut changed_pixels = 0usize;
         // A scene is one atomic visual result.  A timed-out draw leaves the
         // shared target partially updated, so never expose it to either the
         // display or request-render cache.  The caller will retry the same
         // revision on the next scene tick while the last complete frame stays
         // visible.
-        let frame_complete = completed_draws == draws.len();
+        let geometry_complete = completed_draws == draws.len();
+        let frame_complete = if geometry_complete {
+            if let Some(target) = msaa_color {
+                let output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                    warm.streamout_phys,
+                    GPU_VA_STREAMOUT_BASE,
+                    warm.streamout_len,
+                    target_width as u32,
+                    target_height as u32,
+                    target_pitch as u32,
+                )
+                .ok_or("resident-scene-resolve-surface")?;
+                crate::intel::gpgpu::resolve_tile64_msaa4_rgba8(
+                    target.surface,
+                    output,
+                    target_width as u32,
+                    target_height as u32,
+                )
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
+        let mut changed_pixels = 0usize;
         let mut rgba = None;
         if frame_complete {
             let pixels = unsafe {

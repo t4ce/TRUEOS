@@ -590,10 +590,29 @@ impl MioCompat {
         port
     }
 
-    fn alloc_tcp_listen_port(&mut self) -> u16 {
-        let port = self.tcp_listen_next_ephemeral;
-        self.tcp_listen_next_ephemeral = self.tcp_listen_next_ephemeral.wrapping_add(1).max(50_000);
-        port
+    fn tcp_listener_port_in_use(&self, port: u16) -> bool {
+        self.sockets.iter().any(|socket| {
+            socket.kind == MioSocketKind::TcpListener
+                && !socket.closed
+                && socket.listen_port == Some(port)
+        })
+    }
+
+    fn alloc_tcp_listen_port(&mut self) -> Option<u16> {
+        const FIRST_EPHEMERAL: u16 = 50_000;
+
+        let first = self.tcp_listen_next_ephemeral.max(FIRST_EPHEMERAL);
+        let mut port = first;
+        loop {
+            self.tcp_listen_next_ephemeral = port.wrapping_add(1).max(FIRST_EPHEMERAL);
+            if !self.tcp_listener_port_in_use(port) {
+                return Some(port);
+            }
+            port = self.tcp_listen_next_ephemeral;
+            if port == first {
+                return None;
+            }
+        }
     }
 
     fn socket(&self, socket_id: u32) -> Option<&MioSocketState> {
@@ -1283,16 +1302,28 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
                 addr,
                 port: if port == 0 {
-                    compat.alloc_tcp_listen_port()
+                    let Some(port) = compat.alloc_tcp_listen_port() else {
+                        return STATUS_IO;
+                    };
+                    port
                 } else {
+                    if compat.tcp_listener_port_in_use(port) {
+                        return STATUS_IO;
+                    }
                     port
                 },
             },
             CompatAddr::V6 { addr, port } => CompatAddr::V6 {
                 addr,
                 port: if port == 0 {
-                    compat.alloc_tcp_listen_port()
+                    let Some(port) = compat.alloc_tcp_listen_port() else {
+                        return STATUS_IO;
+                    };
+                    port
                 } else {
+                    if compat.tcp_listener_port_in_use(port) {
+                        return STATUS_IO;
+                    }
                     port
                 },
             },
