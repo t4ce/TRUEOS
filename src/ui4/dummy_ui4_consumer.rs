@@ -28,7 +28,8 @@ use super::{
     acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
     create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
     publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    software_cursor_visuals, take_owner_input_events, visible_windows_for_output,
+    replace_window_frame, software_cursor_visuals, take_owner_input_events,
+    visible_windows_for_output,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
@@ -894,6 +895,13 @@ fn dispatch_ui4_callbacks(
                         event.width,
                         event.height
                     );
+                    handle_mandel_resize_callback(
+                        runtime,
+                        owner,
+                        event.window,
+                        event.width,
+                        event.height,
+                    )?;
                 }
                 Ui4InputEvent::Keyboard(event) => {
                     crate::log_info!(
@@ -929,6 +937,76 @@ fn dispatch_ui4_callbacks(
         }
     }
     Ok((dirty_clicks, last_dirty_click))
+}
+
+fn handle_mandel_resize_callback(
+    runtime: &mut Runtime,
+    owner: WindowOwner,
+    window: WindowId,
+    width: u32,
+    height: u32,
+) -> Result<(), DummyUi4ConsumerError> {
+    if owner != runtime.mandel.owner {
+        return Ok(());
+    }
+    let Some(slot) = runtime
+        .mandel
+        .windows
+        .iter()
+        .position(|candidate| *candidate == window)
+    else {
+        return Ok(());
+    };
+    let cadence = match slot {
+        0 => FrameCadence::Immutable,
+        1 => FrameCadence::Dirty,
+        _ => FrameCadence::Streaming,
+    };
+    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let replacement = create_frame(FrameSpec {
+        output,
+        content: FrameContent::Image,
+        cadence,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: None,
+    })?;
+    let view = crate::intel::gpgpu::GpgpuRect::new(0, 0, width, height);
+    let parameter = match slot {
+        0 => STATIC_PARAMETER,
+        1 => runtime.mandel.dirty_parameter,
+        _ => runtime.mandel.stream_parameter,
+    };
+    if let Err(error) = render_mandel_frame(replacement, view, parameter, slot != 1) {
+        let _ = destroy_frame(replacement);
+        return Err(error);
+    }
+
+    let previous = runtime.mandel.frames[slot];
+    if let Err(error) = replace_window_frame(runtime.mandel.owner, window, replacement) {
+        let _ = destroy_frame(replacement);
+        return Err(error.into());
+    }
+    if let Err(error) = publish_window_frame(runtime.mandel.owner, window, DamageRect::FULL) {
+        let _ = replace_window_frame(runtime.mandel.owner, window, previous);
+        let _ = publish_window_frame(runtime.mandel.owner, window, DamageRect::FULL);
+        let _ = destroy_frame(replacement);
+        return Err(error.into());
+    }
+    runtime.mandel.frames[slot] = replacement;
+    runtime.mandel.views[slot] = view;
+    let _ = destroy_frame(previous);
+    crate::log_info!(target: "ui4";
+        "ui4 dummy-consumer mandel-resize-applied window={} slot={} extent={}x{} cadence={:?} parameter={} action=replace-frame+rerender\n",
+        window.raw(),
+        slot,
+        width,
+        height,
+        cadence,
+        parameter,
+    );
+    Ok(())
 }
 
 fn handle_mandel_pan_callback(

@@ -9,8 +9,8 @@ use alloc::{string::String, vec::Vec};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
-const COLUMNS: usize = 21;
-const ROWS: usize = 30;
+const COLUMNS: usize = 37;
+const ROWS: usize = 53;
 const CELL_BYTES: usize = 20;
 const CELL_TEXT_CAPACITY: usize = 16;
 const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
@@ -25,9 +25,12 @@ const COLOR_TRANSPARENT: u8 = 17;
 const MIN_SCALE_PERCENT: u32 = 1;
 const MAX_SCALE_PERCENT: u32 = 800;
 
-const VIEWPORT_WIDTH: u32 = 700;
-const VIEWPORT_HEIGHT: u32 = 990;
+const SCENE_WIDTH: u32 = 700;
+const SCENE_HEIGHT: u32 = 990;
 const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
+const A4_WIDTH_MM: u32 = 210;
+const A4_HEIGHT_MM: u32 = 297;
+const CELL_EDGE_MM: u32 = 5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
 
@@ -195,6 +198,9 @@ fn validate_page(raw: &[u8]) -> Result<(), ()> {
 struct GridPaperSurface {
     frame: crate::ui4::FrameHandle,
     window: crate::ui4::WindowId,
+    width: u32,
+    height: u32,
+    extent_source: &'static str,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -218,14 +224,18 @@ impl From<crate::ui4::WindowBrokerError> for ServiceError {
 }
 
 fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
+    let (width, height, extent_source) =
+        crate::intel::physical_extent_pixels(A4_WIDTH_MM, A4_HEIGHT_MM)
+            .map(|(width, height)| (width, height, "edid-physical-mm"))
+            .unwrap_or((SCENE_WIDTH, SCENE_HEIGHT, "logical-fallback"));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
         cadence: crate::ui4::FrameCadence::Dirty,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
-        width: VIEWPORT_WIDTH,
-        height: VIEWPORT_HEIGHT,
+        width,
+        height,
         base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?;
     let session = match crate::ui4::begin_window_session(UI4_OWNER) {
@@ -236,7 +246,7 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         }
     };
     let (scanout_width, scanout_height) =
-        crate::intel::active_scanout_dimensions().unwrap_or((VIEWPORT_WIDTH, VIEWPORT_HEIGHT));
+        crate::intel::active_scanout_dimensions().unwrap_or((width, height));
     let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
@@ -244,10 +254,10 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         output,
         plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
         placement: crate::ui4::WindowPlacement {
-            x: (scanout_width.saturating_sub(VIEWPORT_WIDTH) / 2) as i32,
-            y: (scanout_height.saturating_sub(VIEWPORT_HEIGHT) / 2) as i32,
-            width: VIEWPORT_WIDTH,
-            height: VIEWPORT_HEIGHT,
+            x: (scanout_width.saturating_sub(width) / 2) as i32,
+            y: (scanout_height.saturating_sub(height) / 2) as i32,
+            width,
+            height,
             z: 70,
             opacity: u8::MAX,
             visible: true,
@@ -260,7 +270,13 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
             return Err(error.into());
         }
     };
-    Ok(GridPaperSurface { frame, window })
+    Ok(GridPaperSurface {
+        frame,
+        window,
+        width,
+        height,
+        extent_source,
+    })
 }
 
 struct ResidentLayer {
@@ -325,8 +341,8 @@ impl Geometry {
 
 fn clip_vertex(x: f32, y: f32, z: f32) -> [f32; 3] {
     [
-        x * 2.0 / VIEWPORT_WIDTH as f32 - 1.0,
-        1.0 - y * 2.0 / VIEWPORT_HEIGHT as f32,
+        x * 2.0 / SCENE_WIDTH as f32 - 1.0,
+        1.0 - y * 2.0 / SCENE_HEIGHT as f32,
         z,
     ]
 }
@@ -340,7 +356,11 @@ struct TextCell {
     bold: bool,
 }
 
-fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'static str> {
+fn build_resident_page(
+    snapshot: &OwnedSnapshot,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
         GpuFontFace, GpuFontJobEntry, GpuFontTextRequest, create_resident_font_scene_mesh,
         ensure_font_face_available,
@@ -350,27 +370,29 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
     let mut layers = Vec::new();
 
     let mut paper = Geometry::new();
-    paper.quad(0.0, 0.0, VIEWPORT_WIDTH as f32, VIEWPORT_HEIGHT as f32, 0.9);
+    paper.quad(0.0, 0.0, SCENE_WIDTH as f32, SCENE_HEIGHT as f32, 0.9);
     push_geometry_layer(&mut layers, paper, palette(COLOR_DEFAULT, true))?;
 
     let mut backgrounds: Vec<(u8, Geometry)> = Vec::new();
     let mut decorations: Vec<(u8, Geometry)> = Vec::new();
     let mut texts = Vec::new();
-    let cell_width = VIEWPORT_WIDTH as f32 / COLUMNS as f32;
-    let millimeter = VIEWPORT_HEIGHT as f32 / 297.0;
-    let regular_cell_height = 10.0 * millimeter;
+    let scene_units_per_mm_x = SCENE_WIDTH as f32 / A4_WIDTH_MM as f32;
+    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / A4_HEIGHT_MM as f32;
+    let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x;
+    let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y;
+    let grid_width = COLUMNS as f32 * cell_width;
+    let grid_height = ROWS as f32 * cell_height;
+    let grid_left = (SCENE_WIDTH as f32 - grid_width) * 0.5;
+    let grid_top = (SCENE_HEIGHT as f32 - grid_height) * 0.5;
+    let grid_right = grid_left + grid_width;
+    let grid_bottom = grid_top + grid_height;
+    let visible_scene_x = SCENE_WIDTH as f32 / raster_width as f32;
+    let visible_scene_y = SCENE_HEIGHT as f32 / raster_height as f32;
     let scale = f32::from(snapshot.scale_percent) / 100.0;
 
     for row in 0..ROWS {
-        let top_mm = (row * 10) as f32;
-        let bottom_mm = if row + 1 == ROWS {
-            297.0
-        } else {
-            top_mm + 10.0
-        };
-        let top = top_mm * millimeter;
-        let bottom = bottom_mm * millimeter;
-        let cell_height = bottom - top;
+        let top = grid_top + row as f32 * cell_height;
+        let bottom = top + cell_height;
         for column in 0..COLUMNS {
             let offset = (row * COLUMNS + column) * CELL_BYTES;
             let cell = &snapshot.raw[offset..offset + CELL_BYTES];
@@ -378,7 +400,7 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
             let foreground = cell[1];
             let background = cell[2];
             let style = cell[3];
-            let left = column as f32 * cell_width;
+            let left = grid_left + column as f32 * cell_width;
             let right = left + cell_width;
 
             if background != COLOR_DEFAULT && background != COLOR_TRANSPARENT {
@@ -396,9 +418,11 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
             }
             let text = core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + text_len])
                 .map_err(|_| "gridpaper-utf8")?;
-            let font_pixels =
-                (DEFAULT_REGULAR_ROW_FONT_PIXELS * (cell_height / regular_cell_height) * scale)
-                    .clamp(1.0, 256.0);
+            // Font size is specified in output pixels. Convert it into the
+            // logical scene units consumed by the resident font mesh so 100%
+            // remains an actual 24 px regardless of the A4 raster extent.
+            let font_pixels = (DEFAULT_REGULAR_ROW_FONT_PIXELS * visible_scene_y * scale)
+                .clamp(visible_scene_y, 256.0);
             let baseline = top + cell_height * 0.72;
             texts.push(TextCell {
                 text: String::from(text),
@@ -409,7 +433,7 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
                 bold: style & STYLE_BOLD != 0,
             });
             if style & STYLE_UNDERLINE != 0 {
-                let thickness = (font_pixels / 14.0).max(1.0);
+                let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 geometry_for_color(&mut decorations, foreground).quad(
                     left + 2.0,
                     baseline + thickness,
@@ -419,7 +443,7 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
                 );
             }
             if style & STYLE_STRIKEOUT != 0 {
-                let thickness = (font_pixels / 14.0).max(1.0);
+                let thickness = (font_pixels / 14.0).max(visible_scene_y);
                 let y = baseline - font_pixels * 0.32;
                 geometry_for_color(&mut decorations, foreground).quad(
                     left + 2.0,
@@ -437,30 +461,15 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
     }
 
     let mut grid = Geometry::new();
-    let line = 1.0;
+    let vertical_line = visible_scene_x;
+    let horizontal_line = visible_scene_y;
     for column in 0..=COLUMNS {
-        let x = column as f32 * cell_width;
-        grid.quad(
-            (x - line * 0.5).max(0.0),
-            0.0,
-            (x + line * 0.5).min(VIEWPORT_WIDTH as f32),
-            VIEWPORT_HEIGHT as f32,
-            0.6,
-        );
+        let x = grid_left + column as f32 * cell_width;
+        grid.quad(x - vertical_line * 0.5, grid_top, x + vertical_line * 0.5, grid_bottom, 0.6);
     }
     for row in 0..=ROWS {
-        let y = if row == ROWS {
-            VIEWPORT_HEIGHT as f32
-        } else {
-            (row * 10) as f32 * millimeter
-        };
-        grid.quad(
-            0.0,
-            (y - line * 0.5).max(0.0),
-            VIEWPORT_WIDTH as f32,
-            (y + line * 0.5).min(VIEWPORT_HEIGHT as f32),
-            0.6,
-        );
+        let y = grid_top + row as f32 * cell_height;
+        grid.quad(grid_left, y - horizontal_line * 0.5, grid_right, y + horizontal_line * 0.5, 0.6);
     }
     push_geometry_layer(&mut layers, grid, [188, 205, 224, 255])?;
 
@@ -490,8 +499,8 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
         let mesh = create_resident_font_scene_mesh(
             &entries,
             GpuFontFace::Default,
-            VIEWPORT_WIDTH,
-            VIEWPORT_HEIGHT,
+            SCENE_WIDTH,
+            SCENE_HEIGHT,
         )?;
         layers.push(ResidentLayer {
             color: palette(color, false),
@@ -569,8 +578,8 @@ fn publish_page(
         crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
             &draws,
             Some([0, 0, 0, 0]),
-            VIEWPORT_WIDTH,
-            VIEWPORT_HEIGHT,
+            surface.width,
+            surface.height,
             false,
         )
         .map_err(ServiceError::Render)?;
@@ -585,12 +594,12 @@ fn publish_pixels(
     surface: &GridPaperSurface,
     result: &crate::intel::render::ResidentSceneFrameResult,
 ) -> Result<(), ServiceError> {
-    if result.width != VIEWPORT_WIDTH || result.height != VIEWPORT_HEIGHT {
+    if result.width != surface.width || result.height != surface.height {
         return Err(ServiceError::InvalidFrame);
     }
     let source = result.rgba.as_deref().ok_or(ServiceError::InvalidFrame)?;
-    let source_pitch = VIEWPORT_WIDTH as usize * 4;
-    if source.len() < source_pitch * VIEWPORT_HEIGHT as usize {
+    let source_pitch = surface.width as usize * 4;
+    if source.len() < source_pitch * surface.height as usize {
         return Err(ServiceError::InvalidFrame);
     }
     let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
@@ -601,15 +610,15 @@ fn publish_pixels(
             return Err(error.into());
         }
     };
-    if view.width != VIEWPORT_WIDTH
-        || view.height != VIEWPORT_HEIGHT
-        || view.pitch < VIEWPORT_WIDTH * 4
+    if view.width != surface.width
+        || view.height != surface.height
+        || view.pitch < surface.width * 4
     {
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(ServiceError::InvalidFrame);
     }
     let destination = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
-    for row in 0..VIEWPORT_HEIGHT as usize {
+    for row in 0..surface.height as usize {
         let source_start = row * source_pitch;
         let destination_start = row * view.pitch as usize;
         destination[destination_start..destination_start + source_pitch]
@@ -648,11 +657,19 @@ pub async fn gridpaper_service_task() {
     };
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 extent={}x{} owner=kernel-app-4 persistent_gpu_scene=1\n",
+        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} physical_page_mm={}x{} grid={}x{} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 persistent_gpu_scene=1\n",
         PAGE_BYTES,
         COLUMNS * ROWS,
-        VIEWPORT_WIDTH,
-        VIEWPORT_HEIGHT,
+        SCENE_WIDTH,
+        SCENE_HEIGHT,
+        surface.width,
+        surface.height,
+        surface.extent_source,
+        A4_WIDTH_MM,
+        A4_HEIGHT_MM,
+        COLUMNS,
+        ROWS,
+        CELL_EDGE_MM,
     );
 
     let mut observed_serial = 0u64;
@@ -670,7 +687,7 @@ pub async fn gridpaper_service_task() {
         }
 
         if let Some(snapshot) = queued_snapshot.as_ref() {
-            match build_resident_page(&snapshot) {
+            match build_resident_page(&snapshot, surface.width, surface.height) {
                 Ok(page) => {
                     pending = Some(page);
                     queued_snapshot = None;
@@ -733,8 +750,13 @@ mod tests {
 
     #[test]
     fn fixed_wire_size_matches_a4_gridpaper() {
-        assert_eq!(PAGE_BYTES, 12_600);
-        assert_eq!(COLUMNS * ROWS, 630);
+        assert_eq!(PAGE_BYTES, 39_220);
+        assert_eq!((COLUMNS, ROWS), (37, 53));
+        assert_eq!(COLUMNS * ROWS, 1_961);
+        assert_eq!((A4_WIDTH_MM, A4_HEIGHT_MM), (210, 297));
+        assert_eq!(COLUMNS as u32 * CELL_EDGE_MM, 185);
+        assert_eq!(ROWS as u32 * CELL_EDGE_MM, 265);
+        assert_eq!(SCENE_WIDTH * A4_HEIGHT_MM, SCENE_HEIGHT * A4_WIDTH_MM);
     }
 
     #[test]

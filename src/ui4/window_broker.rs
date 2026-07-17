@@ -163,6 +163,14 @@ pub(crate) struct WindowSnapshot {
     pub(crate) revision: u64,
     pub(crate) publish_serial: u64,
     pub(crate) damage: Option<DamageRect>,
+    pub(crate) maximized: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowPlacementTransition {
+    pub(crate) previous: WindowPlacement,
+    pub(crate) placement: WindowPlacement,
+    pub(crate) maximized: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -190,6 +198,7 @@ struct WindowRecord {
     revision: u64,
     publish_serial: u64,
     damage: Option<DamageRect>,
+    restore_placement: Option<WindowPlacement>,
 }
 
 #[derive(Copy, Clone)]
@@ -398,6 +407,7 @@ impl WindowRecord {
             revision: 1,
             publish_serial: 0,
             damage: None,
+            restore_placement: None,
         }
     }
 
@@ -414,6 +424,7 @@ impl WindowRecord {
             revision: self.revision,
             publish_serial: self.publish_serial,
             damage: self.damage,
+            maximized: self.restore_placement.is_some(),
         })
     }
 }
@@ -479,6 +490,60 @@ pub(crate) fn set_window_placement(
         );
     }
     Ok(())
+}
+
+/// Toggle one broker window between its saved geometry and full-output
+/// geometry. Gesture recognition and per-cursor hysteresis stay in the input
+/// broker; this function owns the atomic placement/restore transition and the
+/// ordinary resize callback seen by the consumer.
+pub(crate) fn toggle_window_maximized(
+    owner: WindowOwner,
+    id: WindowId,
+    output_width: u32,
+    output_height: u32,
+    restore_placement: Option<WindowPlacement>,
+) -> Result<WindowPlacementTransition, WindowBrokerError> {
+    if output_width == 0 || output_height == 0 {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    let previous = window.placement;
+    let (placement, maximized) = if let Some(restore) = window.restore_placement.take() {
+        (restore, false)
+    } else {
+        window.restore_placement = Some(restore_placement.unwrap_or(previous));
+        (
+            WindowPlacement {
+                x: 0,
+                y: 0,
+                width: output_width,
+                height: output_height,
+                ..previous
+            },
+            true,
+        )
+    };
+    if previous != placement {
+        window.placement = placement;
+        window.revision = next_serial(window.revision);
+    }
+    drop(broker);
+    if previous.width != placement.width || previous.height != placement.height {
+        super::input_broker::enqueue_window_resize(
+            owner,
+            id,
+            previous.width,
+            previous.height,
+            placement.width,
+            placement.height,
+        );
+    }
+    Ok(WindowPlacementTransition {
+        previous,
+        placement,
+        maximized,
+    })
 }
 
 pub(crate) fn publish_window_frame(

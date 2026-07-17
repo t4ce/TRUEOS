@@ -139,6 +139,7 @@ pub fn init_once() {
             display_device_name(dev.device_id)
         );
     }
+    self::display::log_bsp_display_metrics_probe(dev);
     if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
         self::display::init_primary_boot_surface(dev);
     } else {
@@ -278,6 +279,10 @@ fn media_decode_enabled_for_device(device_id: u16) -> bool {
 
 pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
+}
+
+pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
+    self::display::physical_extent_pixels(width_mm, height_mm)
 }
 
 pub(crate) use self::display::{

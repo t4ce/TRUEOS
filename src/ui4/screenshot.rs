@@ -1,8 +1,8 @@
-//! UI4 composition screenshots.
+//! UI4 composition and window-frame screenshots.
 //!
 //! Input only arms a request. The compositor consumes one request after a
-//! successful frame, copies the exact leased UI4 buffers into a transparent
-//! RGBA image, and queues that immutable image for the filesystem worker.
+//! successful frame, copies either the composition or one exact leased UI4
+//! window buffer into an RGBA image, and queues that immutable image for the filesystem worker.
 //! Encoding and TRUEOSFS I/O therefore never run in the composition loop.
 
 use alloc::collections::VecDeque;
@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
@@ -20,20 +20,22 @@ use super::{
     published_rgba_view, release_published_frame,
 };
 
-const MAX_PENDING_REQUESTS: u32 = 4;
+const MAX_PENDING_REQUESTS: usize = 4;
 const MAX_CAPTURE_QUEUE: usize = 1;
 const SAVE_IDLE_PERIOD_MS: u64 = 25;
 const ROOT_RETRY_PERIOD_MS: u64 = 500;
 const SCREENSHOT_DIRECTORY: &str = "screenshots";
 
-static PENDING_REQUESTS: AtomicU32 = AtomicU32::new(0);
 static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
 
 enum CaptureError {
     NoScanout,
     DimensionTooLarge,
+    InvalidFrameLayout,
+    WindowUnavailable(super::WindowId),
     Frame(FramePoolError),
 }
 
@@ -42,6 +44,11 @@ impl fmt::Debug for CaptureError {
         match self {
             Self::NoScanout => formatter.write_str("NoScanout"),
             Self::DimensionTooLarge => formatter.write_str("DimensionTooLarge"),
+            Self::InvalidFrameLayout => formatter.write_str("InvalidFrameLayout"),
+            Self::WindowUnavailable(window) => formatter
+                .debug_tuple("WindowUnavailable")
+                .field(&window.raw())
+                .finish(),
             Self::Frame(error) => formatter.debug_tuple("Frame").field(error).finish(),
         }
     }
@@ -53,6 +60,36 @@ impl From<FramePoolError> for CaptureError {
     }
 }
 
+#[derive(Copy, Clone)]
+enum CaptureTrigger {
+    MouseButton(u8),
+    F1,
+}
+
+#[derive(Copy, Clone)]
+enum CaptureSelection {
+    Composition,
+    Window {
+        id: super::WindowId,
+        plane_slot: usize,
+    },
+}
+
+#[derive(Copy, Clone)]
+struct CaptureRequest {
+    trigger: CaptureTrigger,
+    selection: CaptureSelection,
+}
+
+#[derive(Copy, Clone)]
+enum CaptureScope {
+    Composition,
+    Window {
+        id: super::WindowId,
+        plane_slot: usize,
+    },
+}
+
 struct CapturedComposition {
     sequence: u64,
     unix_seconds: Option<u64>,
@@ -61,38 +98,66 @@ struct CapturedComposition {
     height: u32,
     /// Straight-alpha RGBA8, ready for PNG encoding.
     rgba: Vec<u8>,
+    scope: CaptureScope,
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button
 /// transitions cannot retain an unbounded number of full-screen images.
 pub(super) fn request_capture(mouse_button: u8) {
-    let mut pending = PENDING_REQUESTS.load(Ordering::Acquire);
-    loop {
-        if pending >= MAX_PENDING_REQUESTS {
-            crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: request dropped trigger=mouse-button-{} reason=request-queue-full pending={}\n",
-                mouse_button,
-                pending,
-            );
-            return;
-        }
-        match PENDING_REQUESTS.compare_exchange_weak(
+    enqueue_request(CaptureRequest {
+        trigger: CaptureTrigger::MouseButton(mouse_button),
+        selection: CaptureSelection::Composition,
+    });
+}
+
+/// Arm a capture of one exact UI4 window on the next composed frame.
+pub(super) fn request_window_capture(window: WindowSnapshot, cursor_x: u32, cursor_y: u32) {
+    let pending = enqueue_request(CaptureRequest {
+        trigger: CaptureTrigger::F1,
+        selection: CaptureSelection::Window {
+            id: window.id,
+            plane_slot: window.plane.slot(),
+        },
+    });
+    if let Some(pending) = pending {
+        crate::log_info!(target: "ui4/screenshot";
+            "ui4/screenshot: F1 target selected window={} plane_slot={} z={} cursor={},{} pending={} capture=published-ui4-frame alpha=straight\n",
+            window.id.raw(),
+            window.plane.slot(),
+            window.placement.z,
+            cursor_x,
+            cursor_y,
             pending,
-            pending + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                crate::log_info!(target: "ui4/screenshot";
-                    "ui4/screenshot: request armed trigger=mouse-button-{} pending={} capture=next-composed-frame\n",
-                    mouse_button,
-                    pending + 1,
-                );
-                return;
-            }
-            Err(observed) => pending = observed,
-        }
+        );
     }
+}
+
+fn enqueue_request(request: CaptureRequest) -> Option<usize> {
+    let mut requests = CAPTURE_REQUESTS.lock();
+    if requests.len() >= MAX_PENDING_REQUESTS {
+        match request.trigger {
+            CaptureTrigger::MouseButton(button) => crate::log_warn!(target: "ui4/screenshot";
+                "ui4/screenshot: request dropped trigger=mouse-button-{} reason=request-queue-full pending={}\n",
+                button,
+                requests.len(),
+            ),
+            CaptureTrigger::F1 => crate::log_warn!(target: "ui4/screenshot";
+                "ui4/screenshot: request dropped trigger=F1 reason=request-queue-full pending={}\n",
+                requests.len(),
+            ),
+        }
+        return None;
+    }
+    requests.push_back(request);
+    let pending = requests.len();
+    if let CaptureTrigger::MouseButton(button) = request.trigger {
+        crate::log_info!(target: "ui4/screenshot";
+            "ui4/screenshot: request armed trigger=mouse-button-{} pending={} capture=next-composed-frame\n",
+            button,
+            pending,
+        );
+    }
+    Some(pending)
 }
 
 /// Capture at most one request from this compositor frame.
@@ -104,22 +169,33 @@ pub(super) fn capture_compositor_frame(
     windows: &[WindowSnapshot],
     rects: &[crate::intel::LiveOverlayRect],
 ) {
-    if PENDING_REQUESTS.load(Ordering::Acquire) == 0 {
-        return;
-    }
-    if CAPTURE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-    if !take_capture_request() {
+    let request = {
+        let mut requests = CAPTURE_REQUESTS.lock();
+        if requests.is_empty()
+            || CAPTURE_IN_FLIGHT
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return;
+        }
+        requests.pop_front()
+    };
+    let Some(request) = request else {
         CAPTURE_IN_FLIGHT.store(false, Ordering::Release);
         return;
-    }
+    };
 
     let started_ns = crate::chronos::monotonic_nanos();
-    match capture_windows(windows, rects) {
+    let result = match request.selection {
+        CaptureSelection::Composition => capture_windows(windows, rects),
+        CaptureSelection::Window { id, plane_slot } => windows
+            .iter()
+            .copied()
+            .find(|window| window.id == id && window.plane.slot() == plane_slot)
+            .ok_or(CaptureError::WindowUnavailable(id))
+            .and_then(capture_window),
+    };
+    match result {
         Ok(capture) => {
             let sequence = capture.sequence;
             let width = capture.width;
@@ -139,9 +215,13 @@ pub(super) fn capture_compositor_frame(
             }
             queue.push_back(capture);
             drop(queue);
+            let (scope, window, plane_slot) = capture_scope_log_fields(request.selection);
             crate::log_info!(target: "ui4/screenshot";
-                "ui4/screenshot: frame captured sequence={} size={}x{} rgba_bytes={} windows={} visuals={} copy_us={} alpha=straight-transparent-background\n",
+                "ui4/screenshot: frame captured sequence={} scope={} window={} plane_slot={} size={}x{} rgba_bytes={} windows={} visuals={} copy_us={} alpha=straight\n",
                 sequence,
+                scope,
+                window,
+                plane_slot,
                 width,
                 height,
                 bytes,
@@ -162,21 +242,10 @@ pub(super) fn capture_compositor_frame(
     }
 }
 
-fn take_capture_request() -> bool {
-    let mut pending = PENDING_REQUESTS.load(Ordering::Acquire);
-    loop {
-        if pending == 0 {
-            return false;
-        }
-        match PENDING_REQUESTS.compare_exchange_weak(
-            pending,
-            pending - 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => return true,
-            Err(observed) => pending = observed,
-        }
+fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, usize) {
+    match selection {
+        CaptureSelection::Composition => ("composition", 0, 0),
+        CaptureSelection::Window { id, plane_slot } => ("window", id.raw(), plane_slot),
     }
 }
 
@@ -241,6 +310,54 @@ fn capture_windows(
         width,
         height,
         rgba,
+        scope: CaptureScope::Composition,
+    })
+}
+
+fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, CaptureError> {
+    let lease = acquire_published_frame(window.frame)?;
+    let result = (|| {
+        let view = published_rgba_view(lease)?;
+        let row_bytes = usize::try_from(view.width)
+            .ok()
+            .and_then(|width| width.checked_mul(4))
+            .ok_or(CaptureError::DimensionTooLarge)?;
+        let height = usize::try_from(view.height).map_err(|_| CaptureError::DimensionTooLarge)?;
+        let byte_len = row_bytes
+            .checked_mul(height)
+            .ok_or(CaptureError::DimensionTooLarge)?;
+        crate::intel::dma_flush(view.virt, view.byte_len);
+        let source = unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
+        let mut rgba = alloc::vec![0u8; byte_len];
+        for row in 0..height {
+            let source_offset = row
+                .checked_mul(view.pitch as usize)
+                .ok_or(CaptureError::DimensionTooLarge)?;
+            let destination_offset = row
+                .checked_mul(row_bytes)
+                .ok_or(CaptureError::DimensionTooLarge)?;
+            let source_row = source
+                .get(source_offset..source_offset + row_bytes)
+                .ok_or(CaptureError::InvalidFrameLayout)?;
+            rgba[destination_offset..destination_offset + row_bytes].copy_from_slice(source_row);
+        }
+        unpremultiply_rgba(&mut rgba);
+        Ok::<_, CaptureError>((view.width, view.height, rgba))
+    })();
+    let _ = release_published_frame(lease);
+    let (width, height, rgba) = result?;
+
+    Ok(CapturedComposition {
+        sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
+        unix_seconds: crate::chronos::best_effort_unix_time_seconds(),
+        monotonic_ms: crate::chronos::monotonic_nanos() / 1_000_000,
+        width,
+        height,
+        rgba,
+        scope: CaptureScope::Window {
+            id: window.id,
+            plane_slot: window.plane.slot(),
+        },
     })
 }
 
@@ -367,10 +484,21 @@ fn unpremultiply_rgba(rgba: &mut [u8]) {
 
 fn screenshot_path(capture: &CapturedComposition) -> String {
     let wall = capture.unix_seconds.unwrap_or(0);
-    format!(
-        "{}/ui4-{}-{}-{:06}.png",
-        SCREENSHOT_DIRECTORY, wall, capture.monotonic_ms, capture.sequence
-    )
+    match capture.scope {
+        CaptureScope::Composition => format!(
+            "{}/ui4-{}-{}-{:06}.png",
+            SCREENSHOT_DIRECTORY, wall, capture.monotonic_ms, capture.sequence
+        ),
+        CaptureScope::Window { id, plane_slot } => format!(
+            "{}/ui4-frame-w{}-slot{}-{}-{}-{:06}.png",
+            SCREENSHOT_DIRECTORY,
+            id.raw(),
+            plane_slot,
+            wall,
+            capture.monotonic_ms,
+            capture.sequence,
+        ),
+    }
 }
 
 /// Prefer the normal primary root, but do not let a later-mounted read-only
@@ -390,7 +518,7 @@ fn writable_screenshot_root_handle() -> Option<crate::disc::block::DeviceHandle>
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
-        "ui4/screenshot: service online trigger=mouse-buttons-4-or-5 capture=next-composed-frame format=png-rgba destination=trueosfs:/screenshots worker=background\n"
+        "ui4/screenshot: service online trigger=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition capture=next-composed-frame format=png-rgba destination=trueosfs:/screenshots worker=background\n"
     );
     let mut root_wait_logged = false;
     loop {

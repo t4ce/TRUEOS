@@ -22,6 +22,9 @@ const INPUT_PUMP_PERIOD_MS: u64 = 4;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
+const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
+const MAXIMIZE_CURSOR_REARM_TRAVEL_PX: u32 = 48;
+const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 
@@ -188,7 +191,9 @@ struct CursorRoute {
     visible_after_motion: bool,
     color: crate::graphics::primitives::Rgba8,
     secondary_anchor: Option<(u32, u32)>,
+    secondary_start_placement: Option<WindowPlacement>,
     secondary_dragged: bool,
+    maximize_rearm_origin: Option<(u32, u32)>,
     context_menu: Option<(u32, u32)>,
 }
 
@@ -205,7 +210,9 @@ impl CursorRoute {
             visible_after_motion: false,
             color: software_cursor_color(source),
             secondary_anchor: None,
+            secondary_start_placement: None,
             secondary_dragged: false,
+            maximize_rearm_origin: None,
             context_menu: None,
         }
     }
@@ -320,18 +327,34 @@ impl InputBroker {
         if dx != 0 || dy != 0 {
             self.cursors[index].visible_after_motion = true;
         }
+        if self.cursors[index]
+            .maximize_rearm_origin
+            .is_some_and(|origin| {
+                point_travel_reached(origin, (x, y), MAXIMIZE_CURSOR_REARM_TRAVEL_PX)
+            })
+        {
+            self.cursors[index].maximize_rearm_origin = None;
+        }
         if pressed & SECONDARY_BUTTON_MASK != 0 {
             self.cursors[index].secondary_anchor = Some((x, y));
+            self.cursors[index].secondary_start_placement = hit.map(|window| window.placement);
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].context_menu = None;
         }
-        if buttons_down & SECONDARY_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+        if buttons_down & SECONDARY_BUTTON_MASK != 0
+            && self.cursors[index].secondary_anchor.is_some_and(|anchor| {
+                point_travel_reached(anchor, (x, y), FRAME_DRAG_GESTURE_MIN_TRAVEL_PX)
+            })
+        {
             self.cursors[index].secondary_dragged = true;
         }
-        if released & SECONDARY_BUTTON_MASK != 0 {
-            if self.cursors[index].secondary_anchor.take().is_some()
-                && !self.cursors[index].secondary_dragged
-            {
+        let secondary_released = released & SECONDARY_BUTTON_MASK != 0;
+        let secondary_drop = secondary_released
+            && self.cursors[index].secondary_anchor.is_some()
+            && self.cursors[index].secondary_dragged;
+        if secondary_released {
+            let had_anchor = self.cursors[index].secondary_anchor.take().is_some();
+            if had_anchor && !secondary_drop {
                 self.cursors[index].context_menu = Some((x, y));
             }
             self.cursors[index].secondary_dragged = false;
@@ -348,7 +371,10 @@ impl InputBroker {
             .and_then(window_snapshot_for_target)
             .or(hit);
         if let Some(mut target) = target {
-            if buttons_down & SECONDARY_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+            if buttons_down & SECONDARY_BUTTON_MASK != 0
+                && self.cursors[index].secondary_dragged
+                && (dx != 0 || dy != 0)
+            {
                 if let Some(next) =
                     translated_frame_placement(target.placement, dx, dy, width, height)
                 {
@@ -374,6 +400,52 @@ impl InputBroker {
                                 error,
                             );
                         }
+                    }
+                }
+            }
+            let maximize_latched = secondary_drop
+                && self.cursors[index].maximize_rearm_origin.is_none()
+                && (target.maximized || maximize_latch_contains(x, y, width, height));
+            if maximize_latched {
+                match super::toggle_window_maximized(
+                    target.owner,
+                    target.id,
+                    width,
+                    height,
+                    self.cursors[index].secondary_start_placement,
+                ) {
+                    Ok(transition) => {
+                        target.placement = transition.placement;
+                        target.maximized = transition.maximized;
+                        self.cursors[index].maximize_rearm_origin = Some((x, y));
+                        self.cursors[index].context_menu = None;
+                        crate::log_info!(target: "ui4";
+                            "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state={} old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} rearm_travel_px={} trigger=secondary-drag-drop\n",
+                            target.owner,
+                            target.id.raw(),
+                            target.plane.slot(),
+                            if transition.maximized { "maximized" } else { "restored" },
+                            transition.previous.width,
+                            transition.previous.height,
+                            transition.previous.x,
+                            transition.previous.y,
+                            transition.placement.width,
+                            transition.placement.height,
+                            transition.placement.x,
+                            transition.placement.y,
+                            source.controller_id,
+                            source.slot_id,
+                            source.ep_target,
+                            MAXIMIZE_CURSOR_REARM_TRAVEL_PX,
+                        );
+                    }
+                    Err(error) => {
+                        crate::log_warn!(target: "ui4";
+                            "ui4/input: frame-maximize-toggle rejected owner={:?} window={} error={:?}\n",
+                            target.owner,
+                            target.id.raw(),
+                            error,
+                        );
                     }
                 }
             }
@@ -484,6 +556,9 @@ impl InputBroker {
         self.cursors[index].x = x;
         self.cursors[index].y = y;
         self.cursors[index].buttons_down = event.buttons_down;
+        if secondary_released {
+            self.cursors[index].secondary_start_placement = None;
+        }
         if buttons_down == 0 {
             self.cursors[index].capture = None;
         }
@@ -491,6 +566,43 @@ impl InputBroker {
 
     fn process_keyboard(&self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F1
+        {
+            let route = self
+                .cursors
+                .iter()
+                .filter(|route| {
+                    if combo_id != 0 {
+                        cursor_hut_metadata(route.source).0 == combo_id
+                    } else {
+                        route.source.controller_id == event.controller_id
+                            && route.source.slot_id == event.slot_id
+                    }
+                })
+                .max_by_key(|route| route.focus_serial)
+                .or_else(|| self.cursors.iter().max_by_key(|route| route.focus_serial));
+            let Some(route) = route else {
+                crate::log_warn!(target: "ui4/screenshot";
+                    "ui4/screenshot: F1 ignored reason=no-ui4-cursor keyboard_ctrl={} keyboard_slot={} combo={}\n",
+                    event.controller_id,
+                    event.slot_id,
+                    combo_id,
+                );
+                return;
+            };
+            let Some(window) = topmost_window_at(route.x, route.y) else {
+                crate::log_warn!(target: "ui4/screenshot";
+                    "ui4/screenshot: F1 ignored reason=no-window-below-cursor cursor={},{} combo={}\n",
+                    route.x,
+                    route.y,
+                    combo_id,
+                );
+                return;
+            };
+            super::screenshot::request_window_capture(window, route.x, route.y);
+            return;
+        }
         let target = self
             .cursors
             .iter()
@@ -604,7 +716,7 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement screenshot=mouse-buttons-4-or-5/next-composed-frame\n"
+        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
     );
     loop {
         INPUT_BROKER.lock().pump();
@@ -732,6 +844,26 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
+fn point_travel_reached(origin: (u32, u32), point: (u32, u32), threshold: u32) -> bool {
+    let dx = u64::from(origin.0.abs_diff(point.0));
+    let dy = u64::from(origin.1.abs_diff(point.1));
+    let threshold = u64::from(threshold);
+    dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
+        >= threshold.saturating_mul(threshold)
+}
+
+/// Small drop target centered at the 50% horizontal point on the top edge.
+/// A maximized window accepts its restore drop anywhere because it cannot be
+/// translated while it already covers the output.
+fn maximize_latch_contains(x: u32, y: u32, screen_width: u32, screen_height: u32) -> bool {
+    if screen_width == 0 || screen_height == 0 {
+        return false;
+    }
+    let half_width = (screen_width / 16).clamp(48, 160).min(screen_width / 2);
+    let center = screen_width / 2;
+    y < MAXIMIZE_LATCH_TOP_PX.min(screen_height) && x.abs_diff(center) <= half_width
+}
+
 fn translated_frame_placement(
     mut placement: WindowPlacement,
     dx: i32,
@@ -802,6 +934,9 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
     super::visible_windows_for_output(output)
         .into_iter()
         .filter(|window| placement_contains(window.placement, x, y))
+        // Plane slot is the hardware pipe-local stacking boundary. Only z
+        // order windows against peers in the same slot; a later slot remains
+        // above an earlier slot regardless of its local z value.
         .max_by_key(|window| (window.plane.slot(), window.placement.z, window.id))
 }
 

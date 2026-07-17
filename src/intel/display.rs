@@ -18,6 +18,8 @@ use spin::Mutex;
 mod regs;
 pub(super) use self::regs::*;
 
+mod display_metrics;
+
 macro_rules! intel_display_focus_log {
     ($($arg:tt)*) => {
         if crate::log_os::flags::INTEL_STAGE1_LOGS || crate::log_os::flags::INTEL_DISPLAY_NGIN_LOGS {
@@ -1014,6 +1016,16 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     log_display_pipeline_topology(dev, "after-primary-init");
 }
 
+/// Probe the firmware-captured monitor metadata while the BSP still owns
+/// bring-up. This is read-only: Limine already obtained the EDID through the
+/// active firmware display path, so probing cannot disturb the live DDI link.
+pub(super) fn log_bsp_display_metrics_probe(dev: crate::intel::Dev) {
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let active_target = select_compatibility_pipeline_from_snapshots(&snapshots)
+        .and_then(|selection| selection.snapshot.target);
+    display_metrics::log_bsp_display_metrics_probe(active_target);
+}
+
 fn stamp_horizon_logo_top_left_screen() -> bool {
     if !PRIMARY_BOOT_HORIZON_STAMP_ENABLED {
         return false;
@@ -1635,6 +1647,13 @@ fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
 pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
     let target = primary_display_output_target()?.pipeline_target;
     Some((target.width, target.height))
+}
+
+/// Resolve a physical extent against the active mode and validated boot EDID.
+/// Callers retain their own fallback policy for displays which omit size data.
+pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
+    let target = primary_display_output_target()?.pipeline_target;
+    display_metrics::physical_extent_pixels(target, width_mm, height_mm)
 }
 
 /// Compatibility wrapper for hardware-oriented callers. New compositor and

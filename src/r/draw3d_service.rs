@@ -150,6 +150,35 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     Ok(surface)
 }
 
+fn resize_ui4_surface_frame(
+    surface: &mut Draw3dUi4Surface,
+    width: u32,
+    height: u32,
+) -> Result<crate::ui4::FrameHandle, Draw3dUi4Error> {
+    if width == 0 || height == 0 {
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let replacement = crate::ui4::create_frame(crate::ui4::FrameSpec {
+        output,
+        content: crate::ui4::FrameContent::RenderScene3d,
+        cadence: crate::ui4::FrameCadence::Streaming,
+        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
+    })?;
+    let previous = surface.frame;
+    if let Err(error) = crate::ui4::replace_window_frame(UI4_OWNER, surface.window, replacement) {
+        let _ = crate::ui4::destroy_frame(replacement);
+        return Err(error.into());
+    }
+    surface.frame = replacement;
+    surface.width = width;
+    surface.height = height;
+    Ok(previous)
+}
+
 fn publish_ui4_waiting_frame(surface: &Draw3dUi4Surface) -> Result<(), Draw3dUi4Error> {
     use crate::intel::gpu_font::{
         GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, ensure_font_face_available,
@@ -678,7 +707,7 @@ fn capture_screenshot_view() -> bool {
 pub async fn draw3d_ui4_render_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     let mut last_init_error = None;
-    let surface = loop {
+    let mut surface = loop {
         match initialize_ui4_surface() {
             Ok(surface) => break surface,
             Err(error) => {
@@ -720,9 +749,13 @@ pub async fn draw3d_ui4_render_task() {
     let mut last_render_error = None;
     let mut next_frame = Instant::now();
     let mut published_frames = 0u64;
+    let mut retired_frames = Vec::new();
 
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
+        retired_frames.retain(|frame| {
+            matches!(crate::ui4::destroy_frame(*frame), Err(crate::ui4::FramePoolError::Busy))
+        });
         let revision = SCENE_REVISION.load(Ordering::Acquire);
         let (running, orbit_moving) = with_scene(|scene| {
             (
@@ -732,6 +765,40 @@ pub async fn draw3d_ui4_render_task() {
                     .is_some_and(|orbit| orbit.angular_speed != 0.0),
             )
         });
+        for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
+            let crate::ui4::Ui4InputEvent::Resize(event) = event else {
+                continue;
+            };
+            match resize_ui4_surface_frame(&mut surface, event.width, event.height) {
+                Ok(previous) => {
+                    retired_frames.push(previous);
+                    rendered_revision = 0;
+                    retry_frame = running;
+                    waiting_pending = !running;
+                    last_render_error = None;
+                    crate::log_info!(
+                        target: "draw3d";
+                        "draw3d: UI4 resize-callback window={} old={}x{} new={}x{} action=replace-triple-buffer+rerender running={}\n",
+                        event.window.raw(),
+                        event.old_width,
+                        event.old_height,
+                        event.width,
+                        event.height,
+                        running as u8,
+                    );
+                }
+                Err(error) => {
+                    crate::log_warn!(
+                        target: "draw3d";
+                        "draw3d: UI4 resize-callback failed window={} requested={}x{} error={:?} action=retain-current-frame\n",
+                        event.window.raw(),
+                        event.width,
+                        event.height,
+                        error,
+                    );
+                }
+            }
+        }
 
         if was_running && !running {
             waiting_pending = true;
