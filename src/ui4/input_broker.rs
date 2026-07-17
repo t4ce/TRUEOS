@@ -21,6 +21,7 @@ const KEYBOARD_BATCH: usize = 64;
 const INPUT_PUMP_PERIOD_MS: u64 = 4;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
+const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 
@@ -301,8 +302,17 @@ impl InputBroker {
         let (combo_id, vcursor) = cursor_hut_metadata(source);
         let index = self.cursor_index(source, x, y);
         let previous_buttons = self.cursors[index].buttons_down;
-        let pressed = event.buttons_down & !previous_buttons;
-        let released = previous_buttons & !event.buttons_down;
+        let screenshot_pressed = event.buttons_down & !previous_buttons & SCREENSHOT_BUTTON_MASK;
+        if screenshot_pressed != 0 {
+            // Coalesce a simultaneous button-4/button-5 transition into one
+            // global capture request. Side buttons are consumed by UI4 and do
+            // not change application focus or pointer capture.
+            super::screenshot::request_capture(screenshot_pressed.trailing_zeros() as u8 + 1);
+        }
+        let buttons_down = event.buttons_down & !SCREENSHOT_BUTTON_MASK;
+        let previous_routed_buttons = previous_buttons & !SCREENSHOT_BUTTON_MASK;
+        let pressed = buttons_down & !previous_routed_buttons;
+        let released = previous_routed_buttons & !buttons_down;
         let dx = signed_delta(x, self.cursors[index].x);
         let dy = signed_delta(y, self.cursors[index].y);
         let hit = topmost_window_at(x, y);
@@ -315,7 +325,7 @@ impl InputBroker {
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].context_menu = None;
         }
-        if event.buttons_down & SECONDARY_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+        if buttons_down & SECONDARY_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
             self.cursors[index].secondary_dragged = true;
         }
         if released & SECONDARY_BUTTON_MASK != 0 {
@@ -327,7 +337,7 @@ impl InputBroker {
             self.cursors[index].secondary_dragged = false;
         }
 
-        if previous_buttons == 0 && pressed != 0 {
+        if previous_routed_buttons == 0 && pressed != 0 {
             let focus = hit.map(WindowTarget::from);
             self.set_focus(index, focus, combo_id, vcursor);
             self.cursors[index].capture = focus;
@@ -337,7 +347,36 @@ impl InputBroker {
             .capture
             .and_then(window_snapshot_for_target)
             .or(hit);
-        if let Some(target) = target {
+        if let Some(mut target) = target {
+            if buttons_down & SECONDARY_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+                if let Some(next) =
+                    translated_frame_placement(target.placement, dx, dy, width, height)
+                {
+                    match super::set_window_placement(target.owner, target.id, next) {
+                        Ok(()) => {
+                            target.placement = next;
+                            crate::log_info!(target: "ui4";
+                                "ui4/input: frame-drag owner={:?} window={} plane={} dx={} dy={} placement={},{} trigger=secondary-button\n",
+                                target.owner,
+                                target.id.raw(),
+                                target.plane.slot(),
+                                dx,
+                                dy,
+                                next.x,
+                                next.y,
+                            );
+                        }
+                        Err(error) => {
+                            crate::log_warn!(target: "ui4";
+                                "ui4/input: frame-drag rejected owner={:?} window={} error={:?}\n",
+                                target.owner,
+                                target.id.raw(),
+                                error,
+                            );
+                        }
+                    }
+                }
+            }
             let local_x = signed_local(x, target.placement.x);
             let local_y = signed_local(y, target.placement.y);
             enqueue_owner_event(
@@ -352,7 +391,7 @@ impl InputBroker {
                     dx,
                     dy,
                     wheel: event.wheel,
-                    buttons_down: event.buttons_down,
+                    buttons_down,
                     buttons_pressed: pressed,
                     buttons_released: released,
                     combo_id,
@@ -367,7 +406,7 @@ impl InputBroker {
                         window: target.id,
                         phase: Ui4ButtonPhase::Down,
                         changed_buttons: pressed,
-                        buttons_down: event.buttons_down,
+                        buttons_down,
                         x,
                         y,
                         local_x,
@@ -385,7 +424,7 @@ impl InputBroker {
                         window: target.id,
                         phase: Ui4ButtonPhase::Up,
                         changed_buttons: released,
-                        buttons_down: event.buttons_down,
+                        buttons_down,
                         x,
                         y,
                         local_x,
@@ -410,7 +449,7 @@ impl InputBroker {
                     vcursor,
                 );
             }
-            if event.buttons_down & MIDDLE_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+            if buttons_down & MIDDLE_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
                 enqueue_pan_event(
                     target,
                     source,
@@ -445,7 +484,7 @@ impl InputBroker {
         self.cursors[index].x = x;
         self.cursors[index].y = y;
         self.cursors[index].buttons_down = event.buttons_down;
-        if event.buttons_down == 0 {
+        if buttons_down == 0 {
             self.cursors[index].capture = None;
         }
     }
@@ -565,7 +604,7 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor\n"
+        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement screenshot=mouse-buttons-4-or-5/next-composed-frame\n"
     );
     loop {
         INPUT_BROKER.lock().pump();
@@ -693,6 +732,29 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
+fn translated_frame_placement(
+    mut placement: WindowPlacement,
+    dx: i32,
+    dy: i32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Option<WindowPlacement> {
+    let max_x = i64::from(screen_width.saturating_sub(placement.width));
+    let max_y = i64::from(screen_height.saturating_sub(placement.height));
+    let next_x = i64::from(placement.x)
+        .saturating_add(i64::from(dx))
+        .clamp(0, max_x) as i32;
+    let next_y = i64::from(placement.y)
+        .saturating_add(i64::from(dy))
+        .clamp(0, max_y) as i32;
+    if next_x == placement.x && next_y == placement.y {
+        return None;
+    }
+    placement.x = next_x;
+    placement.y = next_y;
+    Some(placement)
+}
+
 fn software_cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
     use crate::graphics::primitives::Rgba8;
 
@@ -739,8 +801,8 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
     let output = OutputId::from_slot(0)?;
     super::visible_windows_for_output(output)
         .into_iter()
-        .rev()
-        .find(|window| placement_contains(window.placement, x, y))
+        .filter(|window| placement_contains(window.placement, x, y))
+        .max_by_key(|window| (window.plane.slot(), window.placement.z, window.id))
 }
 
 fn window_snapshot_for_target(target: WindowTarget) -> Option<WindowSnapshot> {

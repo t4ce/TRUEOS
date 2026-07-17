@@ -372,10 +372,10 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             break;
         }
     }
-    let hidden = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
+    let stopped = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
     print_matrix_target_line(
         &target,
-        alloc::format!("vid: video-plane hidden={}", hidden as u8).as_str(),
+        alloc::format!("vid: ui4 video-frame stopped={}", stopped as u8).as_str(),
     );
     set_matrix_target_active(&target, false);
 }

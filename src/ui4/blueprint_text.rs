@@ -8,8 +8,9 @@ use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    ensure_font_face_available, recycle_font_job_readback, render_font_job_readback_once,
+    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontResidencyTag, GpuFontRgba,
+    GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, PersistentGpuFontJob, ensure_font_face_available,
+    persist_font_scene_job, recycle_font_job_readback, render_font_job_readback_once,
     render_font_scene_readback_once,
 };
 
@@ -25,6 +26,8 @@ const MAX_SURFACES: usize = 32;
 const MAX_FRAME_WIDTH: u32 = 2_560;
 const MAX_FRAME_HEIGHT: u32 = 1_440;
 const MAX_TEXT_ROWS: usize = 64;
+const MAX_PERSISTENT_TEXT_ROWS: usize = 1_024;
+const MAX_PERSISTENT_TEXT_LAYERS: usize = 32;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
@@ -73,6 +76,13 @@ struct SolaraTextSurface {
     width: u32,
     height: u32,
     write_lease: Option<FrameWriteLease>,
+    persistent_text_layers: Vec<PersistentTextLayer>,
+}
+
+struct PersistentTextLayer {
+    layer_id: u32,
+    rgba: u32,
+    lease: PersistentGpuFontJob,
 }
 
 static SURFACES: Mutex<Vec<SolaraTextSurface>> = Mutex::new(Vec::new());
@@ -209,6 +219,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             width,
             height,
             write_lease: None,
+            persistent_text_layers: Vec::new(),
         });
         return 0;
     }
@@ -220,6 +231,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         width,
         height,
         write_lease: None,
+        persistent_text_layers: Vec::new(),
     });
     crate::log_info!(target: "ui4/solara-text"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 plane=slot2 text_path=opaque-glyph-mask\n", owner, window.raw(), width, height);
     window.raw()
@@ -541,6 +553,266 @@ fn render_scene_entries_into_surface(
     result
 }
 
+/// Replace one color layer of a Blueprint-owned persistent font scene.
+///
+/// Glyph geometry is tessellated and uploaded here, then remains resident in
+/// render PPGTT until the layer is replaced, cleared, or its UI4 frame closes.
+/// Drawing the layer later changes only transient render state and color.
+pub unsafe extern "C" fn trueos_cabi_ui4_solara_persistent_text_layer_replace(
+    window_id: u32,
+    layer_id: u32,
+    font_id: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    rgba: u32,
+    rows: *const TrueosUi4SolaraSceneTextRow,
+    row_count: usize,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe {
+            guest_persistent_text_layer_replace(
+                window_id,
+                layer_id,
+                font_id,
+                viewport_width,
+                viewport_height,
+                rgba,
+                rows,
+                row_count,
+            )
+        };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let Some(font) = GpuFontFace::from_id(font_id) else {
+        return ERROR_FONT;
+    };
+    if layer_id >= MAX_PERSISTENT_TEXT_LAYERS as u32
+        || rows.is_null()
+        || row_count == 0
+        || row_count > MAX_PERSISTENT_TEXT_ROWS
+    {
+        return ERROR_INVALID;
+    }
+    if let Err(reason) = ensure_font_face_available(font) {
+        crate::log_warn!(target: "ui4/solara-text"; "persistent font unavailable owner={:?} window={} font={} reason={}\n", owner, window_id, font.registry_name(), reason);
+        return ERROR_FONT;
+    }
+    {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.width != viewport_width || surface.height != viewport_height {
+            return ERROR_INVALID;
+        }
+    }
+
+    // Own all Blueprint text before tessellation. GPU residency never retains
+    // a guest pointer; only the final indexed geometry crosses that boundary.
+    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
+    let mut strings = Vec::<String>::with_capacity(row_count);
+    let mut positions = Vec::<[f32; 2]>::with_capacity(row_count);
+    let mut font_pixels = Vec::<f32>::with_capacity(row_count);
+    for row in input {
+        if row.text_ptr.is_null()
+            || row.text_len == 0
+            || row.text_len > MAX_TEXT_ROW_BYTES
+            || !row.x.is_finite()
+            || !row.y.is_finite()
+            || !row.font_pixels.is_finite()
+            || row.font_pixels <= 0.0
+            || row.font_pixels > 256.0
+        {
+            return ERROR_INVALID;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
+        let Ok(text) = core::str::from_utf8(bytes) else {
+            return ERROR_INVALID;
+        };
+        if text.chars().count() > MAX_DYNAMIC_TEXT_CHARS {
+            return ERROR_INVALID;
+        }
+        strings.push(String::from(text));
+        positions.push([row.x, row.y]);
+        font_pixels.push(row.font_pixels);
+    }
+    let entries: Vec<_> = strings
+        .iter()
+        .zip(positions.iter())
+        .zip(font_pixels.iter())
+        .map(|((text, position), font_pixels)| GpuFontJobEntry {
+            text: GpuFontTextRequest::SingleLine(text.as_str()),
+            position: *position,
+            font_pixels: *font_pixels,
+        })
+        .collect();
+
+    // Release the previous layer before reusing its stable audit identity.
+    let old_layer = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface
+            .persistent_text_layers
+            .iter()
+            .position(|layer| layer.layer_id == layer_id)
+            .map(|slot| surface.persistent_text_layers.swap_remove(slot))
+    };
+    drop(old_layer);
+
+    let tag_instance = (u64::from(window_id) << 32) | u64::from(layer_id);
+    let lease = match persist_font_scene_job(
+        GpuFontResidencyTag::new_instance(
+            "ui4-blueprint",
+            "persistent-text-layer",
+            tag_instance,
+        ),
+        GpuFontJob {
+            entries: entries.as_slice(),
+            font,
+            native_scale: 1,
+        },
+        viewport_width,
+        viewport_height,
+    ) {
+        Ok(lease) => lease,
+        Err(reason) => {
+            crate::log_warn!(target: "ui4/solara-text"; "persistent layer rejected owner={:?} window={} layer={} rows={} reason={}\n", owner, window_id, layer_id, row_count, reason);
+            return ERROR_FONT;
+        }
+    };
+    let resident_id = lease.id();
+    let resident_generation = lease.generation();
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        drop(lease);
+        return ERROR_NOT_FOUND;
+    };
+    surface.persistent_text_layers.push(PersistentTextLayer {
+        layer_id,
+        rgba,
+        lease,
+    });
+    crate::log_info!(target: "ui4/solara-text"; "persistent layer installed owner={:?} window={} layer={} resident_id={} resident_generation={} rows={} extent={}x{} geometry_uploads=1\n", owner, window_id, layer_id, resident_id, resident_generation, row_count, viewport_width, viewport_height);
+    0
+}
+
+/// Render every installed resident layer into the currently acquired UI4 back
+/// buffer. No glyph tessellation or VB/IB upload occurs in this operation.
+pub extern "C" fn trueos_cabi_ui4_solara_persistent_text_scene_draw(window_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_DRAW,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let mut layers = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.write_lease.is_none() {
+            return ERROR_STATE;
+        }
+        core::mem::take(&mut surface.persistent_text_layers)
+    };
+
+    let mut result = 0;
+    for layer in &layers {
+        let rgba = layer.rgba;
+        let color = rgba.to_le_bytes();
+        let submitted = layer.lease.submit_scene_rgba_readback(GpuFontRgba::new(
+            color[0], color[1], color[2], color[3],
+        ));
+        let (render, readback) = match submitted {
+            Ok(submitted) => submitted,
+            Err(reason) => {
+                crate::log_warn!(target: "ui4/solara-text"; "persistent draw rejected owner={:?} window={} layer={} reason={}\n", owner, window_id, layer.layer_id, reason);
+                result = ERROR_FONT;
+                break;
+            }
+        };
+        let Some(readback) = readback else {
+            result = ERROR_FONT;
+            break;
+        };
+        if !render.completed {
+            recycle_font_job_readback(readback);
+            result = ERROR_FONT;
+            break;
+        }
+        let draw_result = {
+            let mut surfaces = SURFACES.lock();
+            let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+                recycle_font_job_readback(readback);
+                result = ERROR_NOT_FOUND;
+                break;
+            };
+            let Some(lease) = surface.write_lease else {
+                recycle_font_job_readback(readback);
+                result = ERROR_STATE;
+                break;
+            };
+            match writable_rgba_view(lease) {
+                Ok(view) => {
+                    blend_font_coverage(view, &readback, 0, 0, rgba);
+                    crate::intel::dma_flush(view.virt, view.byte_len);
+                    0
+                }
+                Err(_) => ERROR_UI4,
+            }
+        };
+        recycle_font_job_readback(readback);
+        if draw_result != 0 {
+            result = draw_result;
+            break;
+        }
+    }
+
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    surface.persistent_text_layers.append(&mut layers);
+    if result == 0 {
+        crate::log_trace!(target: "ui4/solara-text"; "persistent scene drawn owner={:?} window={} layers={} geometry_uploads=0\n", owner, window_id, surface.persistent_text_layers.len());
+    }
+    result
+}
+
+pub extern "C" fn trueos_cabi_ui4_solara_persistent_text_scene_clear(window_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_CLEAR,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let layers = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        core::mem::take(&mut surface.persistent_text_layers)
+    };
+    let count = layers.len();
+    drop(layers);
+    crate::log_info!(target: "ui4/solara-text"; "persistent scene cleared owner={:?} window={} layers={} authority=gpu-resident->released\n", owner, window_id, count);
+    0
+}
+
 /// Publish the completed dirty buffer and its window damage.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     window_id: u32,
@@ -757,6 +1029,61 @@ unsafe fn guest_text_scene(
     )
 }
 
+unsafe fn guest_persistent_text_layer_replace(
+    window_id: u32,
+    layer_id: u32,
+    font_id: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    rgba: u32,
+    rows: *const TrueosUi4SolaraSceneTextRow,
+    row_count: usize,
+) -> i32 {
+    if layer_id >= MAX_PERSISTENT_TEXT_LAYERS as u32
+        || rows.is_null()
+        || row_count == 0
+        || row_count > MAX_PERSISTENT_TEXT_ROWS
+    {
+        return ERROR_INVALID;
+    }
+    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
+    let mut payload = Vec::with_capacity(
+        TEXT_SCENE_WIRE_HEADER_BYTES
+            .saturating_add(row_count.saturating_mul(TEXT_SCENE_ROW_WIRE_HEADER_BYTES + 32)),
+    );
+    payload.extend_from_slice(&viewport_width.to_le_bytes());
+    payload.extend_from_slice(&viewport_height.to_le_bytes());
+    payload.extend_from_slice(&rgba.to_le_bytes());
+    payload.extend_from_slice(&(row_count as u32).to_le_bytes());
+    for row in input {
+        if row.text_ptr.is_null() || row.text_len == 0 || row.text_len > MAX_TEXT_ROW_BYTES {
+            return ERROR_INVALID;
+        }
+        let Some(required) = payload
+            .len()
+            .checked_add(TEXT_SCENE_ROW_WIRE_HEADER_BYTES)
+            .and_then(|bytes| bytes.checked_add(row.text_len))
+        else {
+            return ERROR_INVALID;
+        };
+        if required > trueos_vm::vmcall::PAYLOAD_CAP {
+            return ERROR_INVALID;
+        }
+        let text = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
+        payload.extend_from_slice(&row.x.to_bits().to_le_bytes());
+        payload.extend_from_slice(&row.y.to_bits().to_le_bytes());
+        payload.extend_from_slice(&row.font_pixels.to_bits().to_le_bytes());
+        payload.extend_from_slice(&(row.text_len as u32).to_le_bytes());
+        payload.extend_from_slice(text);
+    }
+    guest_status(
+        trueos_vm::vmcall::OP_BP_UI4_SOLARA_PERSISTENT_TEXT_LAYER_REPLACE,
+        window_id as u64,
+        pack_u32_pair(font_id, layer_id),
+        payload.as_slice(),
+    )
+}
+
 fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, payload, &mut []);
     if status == trueos_vm::vmcall::STATUS_OK {
@@ -857,14 +1184,14 @@ fn blend_font_coverage(
     }
 }
 
-/// Write Solara's scene glyphs as opaque pixels.
+/// Write a kernel font-scene mask into a UI4 frame as opaque pixels.
 ///
 /// The transient font target still supplies the glyph mask, but none of its
 /// coverage alpha crosses into the UI4 frame. This deliberately trades edge
-/// antialiasing for an unambiguous opaque-pixel presentation path while the
-/// compositor fading fault is isolated. The legacy text-row ABI keeps using
-/// `blend_font_coverage` and therefore retains its alpha-capable behavior.
-fn write_font_opaque_mask(
+/// antialiasing for an unambiguous opaque-pixel presentation path. Solara and
+/// small kernel-owned proof surfaces share this helper; the legacy text-row
+/// ABI keeps using `blend_font_coverage` and retains alpha-capable behavior.
+pub(crate) fn write_font_opaque_mask(
     destination: super::FrameRgbaView,
     source: &crate::intel::render::FontRenderTargetReadback,
     dst_x: i32,

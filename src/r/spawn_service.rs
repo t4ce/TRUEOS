@@ -53,6 +53,7 @@ define_started_flags!(
     SNTP_SERVICE_STARTED,
     NET_SHELL_STARTED,
     DRAW3D_SERVICE_STARTED,
+    DRAW3D_UI4_RENDER_STARTED,
     TACTICS_SRV_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
@@ -67,6 +68,7 @@ define_started_flags!(
     INTEL_CURSOR_SERVICE_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
+    UI4_SCREENSHOT_SERVICE_STARTED,
     DUMMY_UI4_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
     DUMMY_UI4_VIDEO_CONSUMER_STARTED,
@@ -414,6 +416,10 @@ fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::draw3d_service::draw3d_service_task())
 }
 
+fn spawn_draw3d_ui4_render(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::r::draw3d_service::draw3d_ui4_render_task())
+}
+
 fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tst_tactics_srv::tactics_srv_task())
 }
@@ -497,6 +503,10 @@ fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui4_input_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_input_service_task())
+}
+
+fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
 }
 
 fn spawn_dummy_ui4_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1162,7 +1172,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 58 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 60 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1245,6 +1255,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &DRAW3D_SERVICE_STARTED,
         spawn_draw3d_service,
+    ),
+    TaskSpec::enabled_gated(
+        "draw3d-ui4-render",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        ap1_ui_core_ready_gate,
+        &DRAW3D_UI4_RENDER_STARTED,
+        spawn_draw3d_ui4_render,
     ),
     TaskSpec::disabled(
         "tactics-srv",
@@ -1361,6 +1378,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ap1_ui_core_ready_gate,
         &UI4_INPUT_SERVICE_STARTED,
         spawn_ui4_input_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "ui4-screenshot-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        dummy_ui4_consumer_gate,
+        &UI4_SCREENSHOT_SERVICE_STARTED,
+        spawn_ui4_screenshot_service_task,
     ),
     TaskSpec::enabled_gated(
         "dummy-ui4-consumer-service",

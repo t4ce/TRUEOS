@@ -1,14 +1,15 @@
 //! Compact TCP scene store for renderer-independent 3D geometry placement.
 //!
 //! The wire/state implementation lives in `trueos-draw3d`; this module only adapts it to
-//! TRUEOS's native network queues and publishes the live scene to future renderers.
+//! TRUEOS's native network queues and publishes the live scene through a
+//! triple-buffered UI4 surface without exposing scene state to the compositor.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use trueos_draw3d::{
     Command, FrameDecoder, ImageFormat, ProjectedMesh, RenderImage, Response, ResponseError, Scene,
@@ -36,6 +37,13 @@ static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 static REPLY_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 const PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS: f32 = 1.75;
+const UI4_FRAME_PERIOD_US: u64 = 16_667;
+const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(3);
+const UI4_WAITING_TEXT: &str = "Draw3D TCP ready - waiting for StartScene";
+const UI4_WAITING_STAMP_WIDTH: u32 = 640;
+const UI4_WAITING_STAMP_HEIGHT: u32 = 112;
+const UI4_WAITING_X: i32 = 64;
+const UI4_WAITING_Y: i32 = 32;
 
 struct CapturedSceneFrame {
     width: u32,
@@ -51,6 +59,284 @@ struct SceneRenderJob {
     projected_coverage: f32,
     pressure_warned: bool,
     resident: crate::intel::render::ResidentTriangleMesh,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Draw3dUi4Error {
+    Frame(crate::ui4::FramePoolError),
+    Window(crate::ui4::WindowBrokerError),
+    Font(&'static str),
+    Render(&'static str),
+    InvalidFrame,
+}
+
+impl From<crate::ui4::FramePoolError> for Draw3dUi4Error {
+    fn from(error: crate::ui4::FramePoolError) -> Self {
+        Self::Frame(error)
+    }
+}
+
+impl From<crate::ui4::WindowBrokerError> for Draw3dUi4Error {
+    fn from(error: crate::ui4::WindowBrokerError) -> Self {
+        Self::Window(error)
+    }
+}
+
+struct Draw3dUi4Surface {
+    session: crate::ui4::WindowSessionId,
+    frame: crate::ui4::FrameHandle,
+    window: crate::ui4::WindowId,
+    width: u32,
+    height: u32,
+}
+
+fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
+    let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let width = crate::ui4::BOOT_DEMO_FRAME_WIDTH;
+    let height = crate::ui4::BOOT_DEMO_FRAME_HEIGHT;
+    let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
+        output,
+        content: crate::ui4::FrameContent::RenderScene3d,
+        cadence: crate::ui4::FrameCadence::Streaming,
+        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
+    })?;
+    let session = match crate::ui4::begin_window_session(UI4_OWNER) {
+        Ok(session) => session,
+        Err(error) => {
+            let _ = crate::ui4::destroy_frame(frame);
+            return Err(error.into());
+        }
+    };
+    let (scanout_width, scanout_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+    let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
+        owner: UI4_OWNER,
+        session,
+        frame,
+        output,
+        plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
+        placement: crate::ui4::WindowPlacement {
+            x: (scanout_width.saturating_sub(width) / 2) as i32,
+            y: (scanout_height.saturating_sub(height) / 2) as i32,
+            width,
+            height,
+            z: 80,
+            opacity: u8::MAX,
+            visible: true,
+        },
+    }) {
+        Ok(window) => window,
+        Err(error) => {
+            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
+            let _ = crate::ui4::destroy_frame(frame);
+            return Err(error.into());
+        }
+    };
+    let surface = Draw3dUi4Surface {
+        session,
+        frame,
+        window,
+        width,
+        height,
+    };
+    if let Err(error) = publish_ui4_waiting_frame(&surface) {
+        let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
+        let _ = crate::ui4::destroy_frame(frame);
+        return Err(error);
+    }
+    Ok(surface)
+}
+
+fn publish_ui4_waiting_frame(surface: &Draw3dUi4Surface) -> Result<(), Draw3dUi4Error> {
+    use crate::intel::gpu_font::{
+        GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, ensure_font_face_available,
+        recycle_font_job_readback, render_font_scene_readback_once,
+    };
+
+    ensure_font_face_available(GpuFontFace::Default).map_err(Draw3dUi4Error::Font)?;
+    let entries = [GpuFontJobEntry {
+        text: GpuFontTextRequest::SingleLine(UI4_WAITING_TEXT),
+        position: [16.0, 38.0],
+        font_pixels: 24.0,
+    }];
+    let readback = render_font_scene_readback_once(
+        GpuFontJob {
+            entries: &entries,
+            font: GpuFontFace::Default,
+            native_scale: 1,
+        },
+        UI4_WAITING_STAMP_WIDTH,
+        UI4_WAITING_STAMP_HEIGHT,
+    )
+    .map_err(Draw3dUi4Error::Font)?;
+
+    let lease = match crate::ui4::acquire_frame_buffer(surface.frame) {
+        Ok(lease) => lease,
+        Err(error) => {
+            recycle_font_job_readback(readback);
+            return Err(error.into());
+        }
+    };
+    let view = match crate::ui4::writable_rgba_view(lease) {
+        Ok(view) => view,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            recycle_font_job_readback(readback);
+            return Err(error.into());
+        }
+    };
+    // A stopped Draw3D scene remains a transparent top-plane surface.  The
+    // small alpha banner is only a boot/lifetime proof, not an implicit scene.
+    unsafe {
+        core::ptr::write_bytes(view.virt, 0, view.byte_len);
+    }
+    fill_ui4_rect(
+        view,
+        UI4_WAITING_X,
+        UI4_WAITING_Y,
+        UI4_WAITING_STAMP_WIDTH,
+        UI4_WAITING_STAMP_HEIGHT,
+        [0, 0, 0, 192],
+    );
+    crate::ui4::blueprint_text::write_font_opaque_mask(
+        view,
+        &readback,
+        UI4_WAITING_X,
+        UI4_WAITING_Y,
+        u32::from_le_bytes([240, 245, 255, 255]),
+    );
+    recycle_font_job_readback(readback);
+    crate::intel::dma_flush(view.virt, view.byte_len);
+    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error.into());
+    }
+    crate::ui4::publish_window_frame(UI4_OWNER, surface.window, crate::ui4::DamageRect::FULL)?;
+    Ok(())
+}
+
+fn fill_ui4_rect(
+    view: crate::ui4::FrameRgbaView,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    premultiplied_rgba: [u8; 4],
+) {
+    let left = x.max(0) as u32;
+    let top = y.max(0) as u32;
+    let right = left.saturating_add(width).min(view.width);
+    let bottom = top.saturating_add(height).min(view.height);
+    let length = (view.pitch as usize)
+        .saturating_mul(view.height as usize)
+        .min(view.byte_len);
+    let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt, length) };
+    for row in top..bottom {
+        for column in left..right {
+            let offset = row as usize * view.pitch as usize + column as usize * 4;
+            if offset + 4 <= pixels.len() {
+                pixels[offset..offset + 4].copy_from_slice(&premultiplied_rgba);
+            }
+        }
+    }
+}
+
+fn publish_ui4_scene_frame(
+    surface: &Draw3dUi4Surface,
+    result: &crate::intel::render::ResidentSceneFrameResult,
+) -> Result<(), Draw3dUi4Error> {
+    if result.width == 0 || result.height == 0 {
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    let source = result.rgba.as_deref().ok_or(Draw3dUi4Error::InvalidFrame)?;
+    let source_pitch = result.width as usize * 4;
+    if source.len() < source_pitch.saturating_mul(result.height as usize) {
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    let fitted = aspect_fit_rect(result.width, result.height, surface.width, surface.height)
+        .ok_or(Draw3dUi4Error::InvalidFrame)?;
+    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
+    let view = match crate::ui4::writable_rgba_view(lease) {
+        Ok(view) => view,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
+    if view.width != surface.width
+        || view.height != surface.height
+        || view.pitch < surface.width * 4
+    {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    let destination = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
+    for output_y in 0..fitted.height as usize {
+        let source_y = output_y.saturating_mul(result.height as usize) / fitted.height as usize;
+        let destination_y = fitted.y as usize + output_y;
+        for output_x in 0..fitted.width as usize {
+            let source_x = output_x.saturating_mul(result.width as usize) / fitted.width as usize;
+            let source_start = source_y * source_pitch + source_x * 4;
+            let destination_start =
+                destination_y * view.pitch as usize + (fitted.x as usize + output_x) * 4;
+            destination[destination_start..destination_start + 4]
+                .copy_from_slice(&source[source_start..source_start + 4]);
+        }
+    }
+    crate::intel::dma_flush(view.virt, view.byte_len);
+    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error.into());
+    }
+    crate::ui4::publish_window_frame(UI4_OWNER, surface.window, crate::ui4::DamageRect::FULL)?;
+    Ok(())
+}
+
+#[derive(Copy, Clone)]
+struct AspectFitRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+fn aspect_fit_rect(
+    source_width: u32,
+    source_height: u32,
+    destination_width: u32,
+    destination_height: u32,
+) -> Option<AspectFitRect> {
+    if source_width == 0 || source_height == 0 || destination_width == 0 || destination_height == 0
+    {
+        return None;
+    }
+    let width_limited_height =
+        u64::from(destination_width) * u64::from(source_height) / u64::from(source_width);
+    let (mut width, mut height) = if width_limited_height <= u64::from(destination_height) {
+        (destination_width, u32::try_from(width_limited_height).ok()?)
+    } else {
+        let height_limited_width =
+            u64::from(destination_height) * u64::from(source_width) / u64::from(source_height);
+        (u32::try_from(height_limited_width).ok()?, destination_height)
+    };
+    if width > 1 {
+        width &= !1;
+    }
+    if height > 1 {
+        height &= !1;
+    }
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some(AspectFitRect {
+        x: (destination_width - width) / 2,
+        y: (destination_height - height) / 2,
+        width,
+        height,
+    })
 }
 
 fn projected_draw_pressure(source: &ProjectedMesh) -> (usize, f32) {
@@ -366,6 +652,228 @@ fn capture_screenshot_view() -> bool {
             );
             false
         }
+    }
+}
+
+/// AP1 UI carrier for the TCP-owned scene.
+///
+/// The UI4 allocation exists for the complete service lifetime, but geometry
+/// submission remains strictly gated by the protocol's `StartScene` state.
+/// Static scenes publish once per revision; only a moving orbit requests the
+/// next buffer at the 60 Hz ceiling.
+#[embassy_executor::task]
+pub async fn draw3d_ui4_render_task() {
+    crate::intel::wait_hw_logo_sequence_done().await;
+    let mut last_init_error = None;
+    let surface = loop {
+        match initialize_ui4_surface() {
+            Ok(surface) => break surface,
+            Err(error) => {
+                if last_init_error != Some(error) {
+                    crate::log_warn!(
+                        target: "draw3d";
+                        "draw3d: UI4 surface pending error={:?} action=retry\n",
+                        error
+                    );
+                    last_init_error = Some(error);
+                }
+                Timer::after(EmbassyDuration::from_millis(250)).await;
+            }
+        }
+    };
+    let buffers = crate::ui4::frame_snapshot(surface.frame)
+        .map(|snapshot| snapshot.buffer_count)
+        .unwrap_or(0);
+    crate::log_info!(
+        target: "draw3d";
+        "draw3d: UI4 surface ready owner=kernel-app-3 session={} frame={} window={} output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} render_target={}x{} scaling=fused-nearest scene_running=0 content=waiting-for-tcp-start\n",
+        surface.session.raw(),
+        surface.frame.raw(),
+        surface.window.raw(),
+        crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
+        buffers,
+        surface.width,
+        surface.height,
+        crate::intel::render::resident_scene_target_dimensions().0,
+        crate::intel::render::resident_scene_target_dimensions().1,
+    );
+
+    let mut jobs = Vec::new();
+    let mut rendered_revision = 0u64;
+    let mut was_running = false;
+    let mut waiting_pending = false;
+    let mut retry_frame = false;
+    let mut last_sync_error = None;
+    let mut last_render_error = None;
+    let mut next_frame = Instant::now();
+
+    loop {
+        next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
+        let revision = SCENE_REVISION.load(Ordering::Acquire);
+        let (running, orbit_moving) = with_scene(|scene| {
+            (
+                scene.is_running(),
+                scene
+                    .camera_orbit()
+                    .is_some_and(|orbit| orbit.angular_speed != 0.0),
+            )
+        });
+
+        if was_running && !running {
+            waiting_pending = true;
+            rendered_revision = 0;
+            retry_frame = false;
+            crate::log_info!(
+                target: "draw3d";
+                "draw3d: UI4 scene stopped revision={} action=restore-waiting-frame\n",
+                revision
+            );
+        } else if !was_running && running {
+            waiting_pending = false;
+            retry_frame = true;
+            crate::log_info!(
+                target: "draw3d";
+                "draw3d: UI4 scene started revision={} action=render-to-triple-buffered-slot3\n",
+                revision
+            );
+        }
+
+        if !running && waiting_pending {
+            match publish_ui4_waiting_frame(&surface) {
+                Ok(()) => {
+                    waiting_pending = false;
+                    last_render_error = None;
+                }
+                Err(error) if last_render_error != Some(error) => {
+                    crate::log_warn!(
+                        target: "draw3d";
+                        "draw3d: UI4 waiting frame pending error={:?} action=retry\n",
+                        error
+                    );
+                    last_render_error = Some(error);
+                }
+                Err(_) => {}
+            }
+        }
+
+        if running && (revision != rendered_revision || orbit_moving || retry_frame) {
+            let now_ns = crate::chronos::monotonic_nanos();
+            let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
+            let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f32 / 1_000_000_000.0;
+            let (render_width, render_height) =
+                crate::intel::render::resident_scene_target_dimensions();
+            let aspect = render_width as f32 / render_height as f32;
+            let (projected, clear_rgba) = with_scene(|scene| {
+                let angle = scene
+                    .camera_orbit()
+                    .map_or(0.0, |orbit| orbit.angular_speed * elapsed_seconds);
+                let camera = scene.camera_at(angle);
+                let clear = scene
+                    .clear_color()
+                    .map(|color| [color.r, color.g, color.b, color.a]);
+                (project_scene_with_camera(scene, aspect, camera), clear)
+            });
+            match sync_render_jobs(&mut jobs, projected, true) {
+                Ok(()) => {
+                    last_sync_error = None;
+                    let draws = jobs
+                        .iter()
+                        .map(|job| crate::intel::render::ResidentSceneDraw {
+                            mesh: &job.resident,
+                            rgba: [job.color.r, job.color.g, job.color.b, job.color.a],
+                        })
+                        .collect::<Vec<_>>();
+                    let capture =
+                        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied(
+                            &draws, clear_rgba, false,
+                        );
+                    match capture {
+                        Ok(result)
+                            if result.completed_draws == result.requested_draws
+                                && result.rgba.is_some()
+                                && SCENE_REVISION.load(Ordering::Acquire) == revision
+                                && with_scene(Scene::is_running) =>
+                        {
+                            match publish_ui4_scene_frame(&surface, &result) {
+                                Ok(()) => {
+                                    rendered_revision = revision;
+                                    retry_frame = false;
+                                    last_render_error = None;
+                                    crate::log_trace!(
+                                        target: "draw3d";
+                                        "draw3d: UI4 frame published revision={} draws={} changed_pixels={} plane_slot={}\n",
+                                        revision,
+                                        result.completed_draws,
+                                        result.changed_pixels,
+                                        crate::ui4::RGB_OVERLAY_PLANE_SLOT_3,
+                                    );
+                                }
+                                Err(error) => {
+                                    retry_frame = true;
+                                    if last_render_error != Some(error) {
+                                        crate::log_warn!(
+                                            target: "draw3d";
+                                            "draw3d: UI4 publish pending revision={} error={:?} action=retain-front-and-retry\n",
+                                            revision,
+                                            error
+                                        );
+                                        last_render_error = Some(error);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(result) => {
+                            retry_frame = true;
+                            let error = Draw3dUi4Error::Render("incomplete-or-stale-frame");
+                            if last_render_error != Some(error) {
+                                crate::log_warn!(
+                                    target: "draw3d";
+                                    "draw3d: UI4 render pending revision={} draws={}/{} current_revision={} action=retain-front-and-retry\n",
+                                    revision,
+                                    result.completed_draws,
+                                    result.requested_draws,
+                                    SCENE_REVISION.load(Ordering::Acquire),
+                                );
+                                last_render_error = Some(error);
+                            }
+                        }
+                        Err(reason) => {
+                            retry_frame = true;
+                            let error = Draw3dUi4Error::Render(reason);
+                            if last_render_error != Some(error) {
+                                crate::log_warn!(
+                                    target: "draw3d";
+                                    "draw3d: UI4 render pending revision={} jobs={} reason={} action=retain-front-and-retry\n",
+                                    revision,
+                                    jobs.len(),
+                                    reason
+                                );
+                                last_render_error = Some(error);
+                            }
+                        }
+                    }
+                }
+                Err(reason) => {
+                    retry_frame = true;
+                    if last_sync_error != Some(reason) {
+                        crate::log_warn!(
+                            target: "draw3d";
+                            "draw3d: UI4 residency pending revision={} jobs={} reason={} action=retry\n",
+                            revision,
+                            jobs.len(),
+                            reason
+                        );
+                        last_sync_error = Some(reason);
+                    }
+                }
+            }
+        }
+        was_running = running;
+
+        if next_frame <= Instant::now() {
+            next_frame = Instant::now();
+        }
+        Timer::at(next_frame).await;
     }
 }
 

@@ -28,22 +28,20 @@ use super::{
     acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
     create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
     publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    set_window_placement, software_cursor_visuals, take_owner_input_events,
-    visible_windows_for_output,
+    software_cursor_visuals, take_owner_input_events, visible_windows_for_output,
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
 const VIDEO_APP_OWNER: WindowOwner = WindowOwner::KernelApp(2);
-const MANDEL_WIDTH: u32 = 768;
-const MANDEL_HEIGHT: u32 = 512;
+const MANDEL_WIDTH: u32 = super::BOOT_DEMO_FRAME_WIDTH;
+const MANDEL_HEIGHT: u32 = super::BOOT_DEMO_FRAME_HEIGHT;
 const STATIC_PARAMETER: u32 = 128;
-const STREAM_PARAMETER_MAX: u32 = 128;
+const STREAM_PARAMETER_MAX: u32 = 64;
 const COMPOSITION_PERIOD_MS: u64 = 16;
 const MANDEL_STREAM_DIVISOR: u8 = 2;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
 const MAX_COMPOSITION_WINDOWS: usize = 8;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
-const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 
 const STATIC_PLACEMENT: WindowPlacement = WindowPlacement {
     x: 64,
@@ -107,7 +105,6 @@ struct MandelPlaceholderApp {
     session: WindowSessionId,
     frames: [FrameHandle; 3],
     windows: [WindowId; 3],
-    placements: [WindowPlacement; 3],
     views: [crate::intel::gpgpu::GpgpuRect; 3],
     pending_pans: [(i32, i32); 3],
     dirty_parameter: u32,
@@ -127,6 +124,7 @@ struct Runtime {
 struct CompositionState {
     primary: PlaneCompositionState,
     solara: PlaneCompositionState,
+    draw3d: PlaneCompositionState,
 }
 
 #[derive(Copy, Clone)]
@@ -179,7 +177,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=ui4-probe-required legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,right-move,keyboard heartbeat_vcursor_slot={}\n",
+        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=ui4-probe-required legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard frame_drag=ui4-broker-secondary heartbeat_vcursor_slot={}\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
@@ -290,6 +288,10 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
             solara: PlaneCompositionState {
+                initialized: false,
+                windows: [None; MAX_COMPOSITION_WINDOWS],
+            },
+            draw3d: PlaneCompositionState {
                 initialized: false,
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
@@ -430,7 +432,6 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
             windows[1].unwrap(),
             windows[2].unwrap(),
         ],
-        placements: MANDEL_PLACEMENTS,
         views,
         pending_pans: [(0, 0); 3],
         dirty_parameter: 0,
@@ -445,7 +446,9 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
         || windows.len() > MAX_COMPOSITION_WINDOWS
         || windows.iter().any(|window| {
             let slot = window.plane.slot();
-            slot != super::PRIMARY_PLANE_SLOT && slot != super::RGB_OVERLAY_PLANE_SLOT_2
+            slot != super::PRIMARY_PLANE_SLOT
+                && slot != super::RGB_OVERLAY_PLANE_SLOT_2
+                && slot != super::RGB_OVERLAY_PLANE_SLOT_3
         })
     {
         return Err(DummyUi4ConsumerError::PresentFailed);
@@ -461,7 +464,15 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
         &windows,
         CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
     )?;
-    present_software_cursor_plane(&mut runtime.cursor_plane)
+    present_plane_composition(
+        &mut runtime.composition.draw3d,
+        &windows,
+        CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
+    )?;
+    let cursor_rects = software_cursor_rects();
+    present_software_cursor_plane(&mut runtime.cursor_plane, &cursor_rects)?;
+    super::screenshot::capture_compositor_frame(&windows, &cursor_rects);
+    Ok(())
 }
 
 fn present_plane_composition(
@@ -582,11 +593,12 @@ fn present_plane_composition(
                     )
                 }
                 CompositionTarget::Overlay(slot) => {
-                    crate::intel::present_rgba_overlay_tiles_on_slot(
-                        slot,
-                        &tiles,
-                        "ui4-solara-slot2",
-                    )
+                    let reason = match slot {
+                        super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2",
+                        super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
+                        _ => "ui4-overlay",
+                    };
+                    crate::intel::present_rgba_overlay_tiles_on_slot(slot, &tiles, reason)
                 }
             };
             if !presented {
@@ -605,9 +617,7 @@ fn present_plane_composition(
     Ok(())
 }
 
-fn present_software_cursor_plane(
-    state: &mut CursorPlaneState,
-) -> Result<(), DummyUi4ConsumerError> {
+fn software_cursor_rects() -> heapless::Vec<crate::intel::LiveOverlayRect, 512> {
     use crate::graphics::primitives::Rgba8;
 
     let visuals = software_cursor_visuals();
@@ -665,8 +675,15 @@ fn present_software_cursor_plane(
         push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(2), 5, 5, color);
     }
 
-    let current_bounds = overlay_rect_bounds(&rects);
-    let signature = overlay_rect_signature(&rects);
+    rects
+}
+
+fn present_software_cursor_plane(
+    state: &mut CursorPlaneState,
+    rects: &[crate::intel::LiveOverlayRect],
+) -> Result<(), DummyUi4ConsumerError> {
+    let current_bounds = overlay_rect_bounds(rects);
+    let signature = overlay_rect_signature(rects);
     if state.initialized && signature == state.signature && current_bounds == state.previous_bounds
     {
         return Ok(());
@@ -677,7 +694,7 @@ fn present_software_cursor_plane(
         (None, Some(current)) => current,
         (None, None) => return Ok(()),
     };
-    if crate::intel::present_live_overlay_rects_damage(&rects, damage, "ui4-software-cursors") {
+    if crate::intel::present_live_overlay_rects_damage(rects, damage, "ui4-software-cursors") {
         state.previous_bounds = current_bounds;
         state.signature = signature;
         state.initialized = true;
@@ -725,8 +742,8 @@ fn placement_damage(placement: WindowPlacement) -> crate::intel::CompositionDama
     )
 }
 
-fn overlay_rect_bounds<const N: usize>(
-    rects: &heapless::Vec<crate::intel::LiveOverlayRect, N>,
+fn overlay_rect_bounds(
+    rects: &[crate::intel::LiveOverlayRect],
 ) -> Option<crate::intel::CompositionDamageRect> {
     rects.iter().fold(None, |bounds, rect| {
         union_damage(
@@ -736,9 +753,7 @@ fn overlay_rect_bounds<const N: usize>(
     })
 }
 
-fn overlay_rect_signature<const N: usize>(
-    rects: &heapless::Vec<crate::intel::LiveOverlayRect, N>,
-) -> u64 {
+fn overlay_rect_signature(rects: &[crate::intel::LiveOverlayRect]) -> u64 {
     let mut hash = 0xCBF2_9CE4_8422_2325u64;
     for rect in rects {
         for value in [
@@ -813,19 +828,7 @@ fn dispatch_ui4_callbacks(
     for owner in [runtime.mandel.owner, VIDEO_APP_OWNER] {
         for event in take_owner_input_events(owner) {
             match event {
-                Ui4InputEvent::Pointer(event) => {
-                    if event.buttons_down & SECONDARY_BUTTON_MASK != 0
-                        && (event.dx != 0 || event.dy != 0)
-                    {
-                        handle_window_move_callback(
-                            runtime,
-                            owner,
-                            event.window,
-                            event.dx,
-                            event.dy,
-                        )?;
-                    }
-                }
+                Ui4InputEvent::Pointer(_) => {}
                 Ui4InputEvent::Button(event) => {
                     crate::log_info!(
                         target: "ui4";
@@ -991,119 +994,6 @@ fn handle_mandel_pan_callback(
         }
     }
     Ok(())
-}
-
-fn handle_window_move_callback(
-    runtime: &mut Runtime,
-    owner: WindowOwner,
-    window: WindowId,
-    dx: i32,
-    dy: i32,
-) -> Result<(), DummyUi4ConsumerError> {
-    let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
-        return Ok(());
-    };
-    if owner == runtime.mandel.owner {
-        let Some(slot) = runtime
-            .mandel
-            .windows
-            .iter()
-            .position(|candidate| *candidate == window)
-        else {
-            return Ok(());
-        };
-        let (dx, dy) = clamp_pan_delta(&[runtime.mandel.placements[slot]], dx, dy, width, height);
-        if dx == 0 && dy == 0 {
-            return Ok(());
-        }
-        let next = translated_placement(runtime.mandel.placements[slot], dx, dy);
-        set_window_placement(runtime.mandel.owner, window, next)?;
-        runtime.mandel.placements[slot] = next;
-        crate::log_info!(
-            target: "ui4";
-            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot={} dx={} dy={} placement={},{}\n",
-            owner,
-            window.raw(),
-            slot,
-            dx,
-            dy,
-            next.x,
-            next.y
-        );
-    } else if owner == VIDEO_APP_OWNER {
-        let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-        let Some(current) = visible_windows_for_output(output)
-            .into_iter()
-            .find(|candidate| candidate.owner == owner && candidate.id == window)
-        else {
-            return Ok(());
-        };
-        let (dx, dy) = clamp_pan_delta(&[current.placement], dx, dy, width, height);
-        if dx == 0 && dy == 0 {
-            return Ok(());
-        }
-        let next = translated_placement(current.placement, dx, dy);
-        set_window_placement(owner, window, next)?;
-        crate::log_info!(
-            target: "ui4";
-            "ui4 dummy-consumer window-move-applied trigger=secondary-drag owner={:?} window={} slot=video dx={} dy={} placement={},{}\n",
-            owner,
-            window.raw(),
-            dx,
-            dy,
-            next.x,
-            next.y
-        );
-    }
-    Ok(())
-}
-
-fn clamp_pan_delta(
-    placements: &[WindowPlacement],
-    dx: i32,
-    dy: i32,
-    width: u32,
-    height: u32,
-) -> (i32, i32) {
-    let min_x = placements
-        .iter()
-        .map(|placement| placement.x)
-        .min()
-        .unwrap_or(0);
-    let min_y = placements
-        .iter()
-        .map(|placement| placement.y)
-        .min()
-        .unwrap_or(0);
-    let max_x = placements
-        .iter()
-        .map(|placement| i64::from(placement.x) + i64::from(placement.width))
-        .max()
-        .unwrap_or(0);
-    let max_y = placements
-        .iter()
-        .map(|placement| i64::from(placement.y) + i64::from(placement.height))
-        .max()
-        .unwrap_or(0);
-    let min_dx = -i64::from(min_x);
-    let min_dy = -i64::from(min_y);
-    let max_dx = i64::from(width).saturating_sub(max_x);
-    let max_dy = i64::from(height).saturating_sub(max_y);
-    (clamp_pan_axis(dx, min_dx, max_dx), clamp_pan_axis(dy, min_dy, max_dy))
-}
-
-fn clamp_pan_axis(value: i32, minimum: i64, maximum: i64) -> i32 {
-    if minimum > maximum {
-        0
-    } else {
-        i64::from(value).clamp(minimum, maximum) as i32
-    }
-}
-
-fn translated_placement(mut placement: WindowPlacement, dx: i32, dy: i32) -> WindowPlacement {
-    placement.x = placement.x.saturating_add(dx);
-    placement.y = placement.y.saturating_add(dy);
-    placement
 }
 
 fn render_and_publish_mandel(

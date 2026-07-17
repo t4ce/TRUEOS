@@ -167,8 +167,11 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
     if !spec.valid() {
         return None;
     }
-    let frame_width = spec.visible_width;
-    let frame_height = spec.visible_height;
+    // Keep the boot video on the same broker extent as the Mandelbrot
+    // consumers. The CPU fallback performs aspect-fit scaling directly while
+    // converting NV12, without first materializing a native-size RGBA frame.
+    let frame_width = super::BOOT_DEMO_FRAME_WIDTH;
+    let frame_height = super::BOOT_DEMO_FRAME_HEIGHT;
 
     let current = *VIDEO_STREAM.lock();
     if current.is_some_and(|stream| {
@@ -340,20 +343,20 @@ pub(crate) fn cancel_decoded_rgba_stream_target(target: DecodedRgbaWriteTarget, 
 
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
     let stream = VIDEO_STREAM.lock().take();
-    let hidden = crate::intel::hide_decoded_nv12_overlay_plane(reason);
     if let Some(stream) = stream {
         let _ = finish_window_session(VIDEO_OWNER, stream.session);
         let _ = destroy_frame(stream.frame);
         crate::log_info!(
             target: "ui4";
-            "ui4 video-frame stopped reason={} frame={} window={} hidden={}\n",
+            "ui4 video-frame stopped reason={} frame={} window={} plane_mutation=none\n",
             reason,
             stream.frame.raw(),
             stream.window.raw(),
-            hidden as u8
         );
+        true
+    } else {
+        false
     }
-    hidden
 }
 
 fn create_stream(
@@ -368,7 +371,10 @@ fn create_stream(
         format: ScanoutFormat::Rgba8888Premultiplied,
         width: frame_width,
         height: frame_height,
-        base_color: None,
+        // The 16:9 movie is aspect-fitted inside the 3:2 demo frame. Initialize
+        // all three backing buffers once so the untouched letterbox area stays
+        // opaque black without a per-picture clear.
+        base_color: Some(super::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
     })
     .ok()?;
     let session = match begin_window_session(VIDEO_OWNER) {
@@ -404,14 +410,14 @@ fn create_stream(
             return None;
         }
     };
-    // A prior fallback presentation may have left the linked NV12 pair live.
-    // Once the normal UI4 window exists, ensure slots 2+3 cannot continue to
-    // sit physically above the broker-composed primary scene.
-    let linked_planes_hidden =
-        crate::intel::hide_decoded_nv12_overlay_plane("ui4-video-rgba-stream-created");
+    // This is an ordinary broker-owned RGBA window.  It must never reprogram
+    // the retired linked-NV12 slots: slot 2 belongs to Solara and slot 3 to
+    // Draw3D.  Any legacy direct-NV12 fallback owns its own explicit lifetime.
+    let fitted =
+        aspect_fit_rect(spec.visible_width, spec.visible_height, frame_width, frame_height)?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source=ytile-nv12 source_size={}x{} frame_size={}x{} placement={},{} z={} linked_planes_hidden={}\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source=ytile-nv12 source_size={}x{} frame_size={}x{} fitted_content={}x{}@{},{} scaling=fused-nearest placement={},{} z={} plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
@@ -419,10 +425,13 @@ fn create_stream(
         spec.coded_height,
         frame_width,
         frame_height,
+        fitted.width,
+        fitted.height,
+        fitted.x,
+        fitted.y,
         placement.x,
         placement.y,
         placement.z,
-        linked_planes_hidden as u8,
     );
     Some(VideoStream {
         session,
@@ -439,16 +448,29 @@ fn convert_decoded_ytile_nv12_to_rgba(
     source: DecodedNv12Source,
     destination: super::FrameRgbaView,
 ) -> bool {
-    let width = source.visible_width as usize;
-    let height = source.visible_height as usize;
+    let source_width = source.visible_width as usize;
+    let source_height = source.visible_height as usize;
+    let destination_width = destination.width as usize;
+    let destination_height = destination.height as usize;
     let pitch = destination.pitch as usize;
-    if destination.width != source.visible_width
-        || destination.height != source.visible_height
-        || pitch < width.saturating_mul(4)
-        || destination.byte_len < pitch.saturating_mul(height)
+    if pitch < destination_width.saturating_mul(4)
+        || destination.byte_len < pitch.saturating_mul(destination_height)
     {
         return false;
     }
+    let fitted = match aspect_fit_rect(
+        source.visible_width,
+        source.visible_height,
+        destination.width,
+        destination.height,
+    ) {
+        Some(fitted) => fitted,
+        None => return false,
+    };
+    let fitted_width = fitted.width as usize;
+    let fitted_height = fitted.height as usize;
+    let fitted_x = fitted.x as usize;
+    let fitted_y = fitted.y as usize;
     let tiles_per_row = source.pitch_bytes / 128;
     let chroma_row = source.uv_offset / source.pitch_bytes;
     let total_rows = match chroma_row.checked_add(source.height.div_ceil(2) as usize) {
@@ -467,12 +489,15 @@ fn convert_decoded_ytile_nv12_to_rgba(
         return false;
     }
 
-    for y in 0..height {
-        let destination_row = unsafe { destination.virt.add(y * pitch) };
-        for x in 0..width {
-            let y_offset = ytile_8bpp_offset(x, y, tiles_per_row);
-            let uv_x = (x / 2) * 2;
-            let uv_offset = ytile_8bpp_offset(uv_x, chroma_row + y / 2, tiles_per_row);
+    for output_y in 0..fitted_height {
+        let source_y = output_y.saturating_mul(source_height) / fitted_height;
+        let destination_y = fitted_y + output_y;
+        let destination_row = unsafe { destination.virt.add(destination_y * pitch) };
+        for output_x in 0..fitted_width {
+            let source_x = output_x.saturating_mul(source_width) / fitted_width;
+            let y_offset = ytile_8bpp_offset(source_x, source_y, tiles_per_row);
+            let uv_x = (source_x / 2) * 2;
+            let uv_offset = ytile_8bpp_offset(uv_x, chroma_row + source_y / 2, tiles_per_row);
             if y_offset >= source.byte_len || uv_offset.saturating_add(1) >= source.byte_len {
                 return false;
             }
@@ -483,11 +508,65 @@ fn convert_decoded_ytile_nv12_to_rgba(
                 unsafe { core::ptr::read_volatile((source.virt as *const u8).add(uv_offset + 1)) };
             let [r, g, b] = nv12_to_rgb(luma, u, v);
             let pixel = u32::from_le_bytes([r, g, b, u8::MAX]);
-            unsafe { core::ptr::write_volatile(destination_row.add(x * 4).cast::<u32>(), pixel) };
+            unsafe {
+                core::ptr::write_volatile(
+                    destination_row.add((fitted_x + output_x) * 4).cast::<u32>(),
+                    pixel,
+                )
+            };
         }
     }
     crate::intel::dma_flush(destination.virt, destination.byte_len);
     true
+}
+
+#[derive(Copy, Clone)]
+struct AspectFitRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+/// Fit one pixel extent into another without changing its aspect ratio. The
+/// resulting content dimensions are even when possible so an NV12 producer's
+/// 2x2 chroma samples remain naturally aligned.
+fn aspect_fit_rect(
+    source_width: u32,
+    source_height: u32,
+    destination_width: u32,
+    destination_height: u32,
+) -> Option<AspectFitRect> {
+    if source_width == 0 || source_height == 0 || destination_width == 0 || destination_height == 0
+    {
+        return None;
+    }
+
+    let width_limited_height =
+        u64::from(destination_width) * u64::from(source_height) / u64::from(source_width);
+    let (mut width, mut height) = if width_limited_height <= u64::from(destination_height) {
+        (destination_width, u32::try_from(width_limited_height).ok()?)
+    } else {
+        let height_limited_width =
+            u64::from(destination_height) * u64::from(source_width) / u64::from(source_height);
+        (u32::try_from(height_limited_width).ok()?, destination_height)
+    };
+    if width > 1 {
+        width &= !1;
+    }
+    if height > 1 {
+        height &= !1;
+    }
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    Some(AspectFitRect {
+        x: (destination_width - width) / 2,
+        y: (destination_height - height) / 2,
+        width,
+        height,
+    })
 }
 
 #[inline(always)]

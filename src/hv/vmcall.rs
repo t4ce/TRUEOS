@@ -57,6 +57,9 @@ pub const OP_BP_UI4_SOLARA_TEXT_ROWS: u32 = 0xB5; // arg0 window,arg1 font/scale
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 window,arg1 x/y,payload w/h -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
+pub const OP_BP_UI4_SOLARA_PERSISTENT_TEXT_LAYER_REPLACE: u32 = 0xB9; // arg0 window,arg1 font/layer,payload viewport/rows
+pub const OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_DRAW: u32 = 0xBA; // arg0 window -> rc
+pub const OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_CLEAR: u32 = 0xBB; // arg0 window -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -803,6 +806,108 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             if rc != 0 {
                 crate::log_warn!(target: "ui4/solara-text"; "scene vmcall failed vm={} window={} rows={} rc={}\n", vm_id, arg0 as u32, row_count, rc);
             }
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SOLARA_PERSISTENT_TEXT_LAYER_REPLACE => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(header) = payload.get(..16) else {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let viewport_width = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let viewport_height = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+            let rgba = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+            let row_count =
+                u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
+            if row_count == 0 || row_count > 1_024 {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let mut offset = 16usize;
+            let mut rows = alloc::vec::Vec::with_capacity(row_count);
+            for _ in 0..row_count {
+                let Some(row_header) = payload.get(offset..offset.saturating_add(16)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let x = f32::from_bits(u32::from_le_bytes([
+                    row_header[0],
+                    row_header[1],
+                    row_header[2],
+                    row_header[3],
+                ]));
+                let y = f32::from_bits(u32::from_le_bytes([
+                    row_header[4],
+                    row_header[5],
+                    row_header[6],
+                    row_header[7],
+                ]));
+                let font_pixels = f32::from_bits(u32::from_le_bytes([
+                    row_header[8],
+                    row_header[9],
+                    row_header[10],
+                    row_header[11],
+                ]));
+                let text_len = u32::from_le_bytes([
+                    row_header[12],
+                    row_header[13],
+                    row_header[14],
+                    row_header[15],
+                ]) as usize;
+                offset = offset.saturating_add(16);
+                let Some(text) = payload.get(offset..offset.saturating_add(text_len)) else {
+                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                };
+                rows.push(crate::ui4::blueprint_text::TrueosUi4SolaraSceneTextRow {
+                    text_ptr: text.as_ptr(),
+                    text_len,
+                    x,
+                    y,
+                    font_pixels,
+                });
+                offset = offset.saturating_add(text_len);
+            }
+            if offset != payload.len() {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let (font_id, layer_id) = unpack_u32_pair(arg1);
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_persistent_text_layer_replace(
+                    arg0 as u32,
+                    layer_id,
+                    font_id,
+                    viewport_width,
+                    viewport_height,
+                    rgba,
+                    rows.as_ptr(),
+                    rows.len(),
+                )
+            };
+            if rc != 0 {
+                crate::log_warn!(target: "ui4/solara-text"; "persistent layer vmcall failed vm={} window={} layer={} rows={} rc={}\n", vm_id, arg0 as u32, layer_id, row_count, rc);
+            }
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_DRAW => {
+            let rc =
+                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_persistent_text_scene_draw(
+                    arg0 as u32,
+                );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SOLARA_PERSISTENT_TEXT_SCENE_CLEAR => {
+            let rc =
+                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_persistent_text_scene_clear(
+                    arg0 as u32,
+                );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

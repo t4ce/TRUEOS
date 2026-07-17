@@ -277,11 +277,28 @@ pub(crate) struct GpuFontJob<'a> {
 pub(crate) struct GpuFontResidencyTag {
     owner: &'static str,
     name: &'static str,
+    instance: u64,
 }
 
 impl GpuFontResidencyTag {
     pub(crate) const fn new(owner: &'static str, name: &'static str) -> Self {
-        Self { owner, name }
+        Self {
+            owner,
+            name,
+            instance: 0,
+        }
+    }
+
+    pub(crate) const fn new_instance(
+        owner: &'static str,
+        name: &'static str,
+        instance: u64,
+    ) -> Self {
+        Self {
+            owner,
+            name,
+            instance,
+        }
     }
 
     pub(crate) const fn owner(self) -> &'static str {
@@ -290,6 +307,10 @@ impl GpuFontResidencyTag {
 
     pub(crate) const fn name(self) -> &'static str {
         self.name
+    }
+
+    pub(crate) const fn instance(self) -> u64 {
+        self.instance
     }
 }
 
@@ -344,6 +365,21 @@ impl PersistentGpuFontJob {
         let mut readback = None;
         let render = submit_persistent_font_job_inner(self, None, rgba, Some(&mut readback))?;
         Ok((render, readback))
+    }
+
+    /// Draw a viewport-mapped resident scene and return its pixels without
+    /// rebuilding or uploading the glyph geometry.
+    pub(crate) fn submit_scene_rgba_readback(
+        &self,
+        rgba: GpuFontRgba,
+    ) -> Result<
+        (
+            crate::intel::render::RenderJokerResult,
+            Option<crate::intel::render::FontRenderTargetReadback>,
+        ),
+        &'static str,
+    > {
+        self.submit_rgba_readback(rgba)
     }
 
     /// Reuse the same resident geometry at another supported native size.
@@ -510,6 +546,7 @@ struct ResidentGpuFontJobRecord {
     font: GpuFontFace,
     mesh: crate::intel::render::ResidentFontMesh,
     native_scale: u32,
+    scene_extent: Option<(u32, u32)>,
     entries: usize,
     text_chars: usize,
     rows: usize,
@@ -1760,6 +1797,29 @@ pub(crate) fn persist_font_job(
     tag: GpuFontResidencyTag,
     job: GpuFontJob<'_>,
 ) -> Result<PersistentGpuFontJob, &'static str> {
+    persist_font_job_inner(tag, job, None)
+}
+
+/// Persist positioned text in a fixed UI viewport instead of normalizing it
+/// into a standalone stamp. This is the font equivalent of Draw3D's resident
+/// scene meshes: geometry is uploaded once and color remains a draw-time value.
+pub(crate) fn persist_font_scene_job(
+    tag: GpuFontResidencyTag,
+    job: GpuFontJob<'_>,
+    width: u32,
+    height: u32,
+) -> Result<PersistentGpuFontJob, &'static str> {
+    if width == 0 || height == 0 {
+        return Err("resident-font-scene-extent");
+    }
+    persist_font_job_inner(tag, job, Some((width, height)))
+}
+
+fn persist_font_job_inner(
+    tag: GpuFontResidencyTag,
+    job: GpuFontJob<'_>,
+    scene_extent: Option<(u32, u32)>,
+) -> Result<PersistentGpuFontJob, &'static str> {
     if tag.owner.trim().is_empty() || tag.name.trim().is_empty() {
         return Err("resident-tag-empty");
     }
@@ -1783,11 +1843,20 @@ pub(crate) fn persist_font_job(
     let native_scale = job.native_scale;
     let font = job.font;
     let built = build_font_job_mesh(job.entries, font)?;
-    let mesh = crate::intel::render::create_resident_font_mesh(
-        built.vertices.as_slice(),
-        built.indices.as_slice(),
-        built.bounds,
-    )?;
+    let mesh = if let Some((width, height)) = scene_extent {
+        crate::intel::render::create_resident_font_scene_mesh(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            width,
+            height,
+        )?
+    } else {
+        crate::intel::render::create_resident_font_mesh(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            built.bounds,
+        )?
+    };
     let resident_bytes = mesh.storage_bytes;
     let gpu_base = mesh.gpu_base;
     service.resident_jobs.push(ResidentGpuFontJobRecord {
@@ -1797,6 +1866,7 @@ pub(crate) fn persist_font_job(
         font,
         mesh,
         native_scale,
+        scene_extent,
         entries: built.entries,
         text_chars: built.text_chars,
         rows: built.rows,
@@ -1808,11 +1878,12 @@ pub(crate) fn persist_font_job(
     service.resident_uploads = service.resident_uploads.saturating_add(1);
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: resident-create ok=1 id={} generation={} owner={} name={} font_id={} font={} authority=cpu-build->gpu-resident entries={} text_chars={} rows={} glyphs={} vertices={} indices={} native_scale={} gpu=0x{:X} bytes=0x{:X} geometry_uploads=1\n",
+        "intel/gpu-font: resident-create ok=1 id={} generation={} owner={} name={} instance={} font_id={} font={} authority=cpu-build->gpu-resident entries={} text_chars={} rows={} glyphs={} vertices={} indices={} native_scale={} scene_extent={:?} gpu=0x{:X} bytes=0x{:X} geometry_uploads=1\n",
         id,
         generation,
         tag.owner,
         tag.name,
+        tag.instance,
         font.id(),
         font.registry_name(),
         built.entries,
@@ -1822,6 +1893,7 @@ pub(crate) fn persist_font_job(
         built.vertices.len(),
         built.indices.len(),
         native_scale,
+        scene_extent,
         gpu_base,
         resident_bytes,
     );
@@ -1902,17 +1974,34 @@ fn submit_persistent_font_job_inner(
     let result = {
         let record = &service.resident_jobs[position];
         if let Some(output) = readback {
-            match crate::intel::render::submit_resident_font_mesh_readback_once(
-                &record.mesh,
-                native_scale,
-                rgba,
-            ) {
+            let submitted = if let Some((width, height)) = record.scene_extent {
+                crate::intel::render::submit_resident_font_scene_mesh_readback_once(
+                    &record.mesh,
+                    width,
+                    height,
+                    rgba,
+                )
+            } else {
+                crate::intel::render::submit_resident_font_mesh_readback_once(
+                    &record.mesh,
+                    native_scale,
+                    rgba,
+                )
+            };
+            match submitted {
                 Ok((render, captured)) => {
                     *output = captured;
                     Ok(render)
                 }
                 Err(reason) => Err(reason),
             }
+        } else if let Some((width, height)) = record.scene_extent {
+            crate::intel::render::submit_resident_font_scene_mesh_once(
+                &record.mesh,
+                width,
+                height,
+                rgba,
+            )
         } else {
             crate::intel::render::submit_resident_font_mesh_once(&record.mesh, native_scale, rgba)
         }

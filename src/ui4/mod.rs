@@ -7,6 +7,7 @@ pub(crate) mod blueprint_text;
 mod dummy_ui4_consumer;
 mod frame_pool;
 mod input_broker;
+mod screenshot;
 mod video_frame;
 mod window_broker;
 
@@ -22,6 +23,7 @@ pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4PanPhase, Ui4VisualRect, software_cursor_visuals,
     take_owner_input_events, ui4_input_service_task,
 };
+pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedRgbaProducer, DecodedRgbaWriteTarget, DecodedVideoFrameSpec,
     acquire_decoded_rgba_stream_target, cancel_decoded_rgba_stream_target,
@@ -38,6 +40,11 @@ pub(crate) use window_broker::{
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
 pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 4;
+/// Common window extent for the temporary UI4 boot consumers. Keeping the
+/// Mandelbrot and decoded-video probes on one extent makes their placement and
+/// later interactive-resize work exercise the same broker contract.
+pub(crate) const BOOT_DEMO_FRAME_WIDTH: u32 = 768;
+pub(crate) const BOOT_DEMO_FRAME_HEIGHT: u32 = 512;
 pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;

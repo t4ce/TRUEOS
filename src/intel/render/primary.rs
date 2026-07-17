@@ -281,7 +281,6 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) rgba: [u8; 4],
 }
 
-
 #[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
@@ -298,20 +297,34 @@ pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
     (DRAW3D_SCENE_TARGET_WIDTH, DRAW3D_SCENE_TARGET_HEIGHT)
 }
 
-
 /// Render an off-screen straight-RGBA frame without changing local scanout.
 pub(crate) fn capture_resident_triangle_scene_frame(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs)
+    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, true)
+}
+
+/// Render an off-screen frame in UI4's native premultiplied-RGBA convention.
+///
+/// The fixed-function blend target already contains premultiplied RGB.  This
+/// entry point preserves those bytes and premultiplies the straight protocol
+/// clear color once before the GPU clear, avoiding a full-frame round trip
+/// through straight alpha when the consumer is the UI4 compositor.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(draws, clear_rgba, diagnostic_logs, false)
 }
 
 fn submit_resident_triangle_scene_capture(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
+    straight_alpha_output: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
     let (target_width, target_height) = resident_scene_target_dimensions();
@@ -378,7 +391,13 @@ fn submit_resident_triangle_scene_capture(
         // using the old readback sentinel here would blend the first shape
         // against 0xDEAD_BEEF.  Readback below compares against this same
         // clear word to retain changed-pixel accounting.
-        let clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
+        let mut clear = clear_rgba.unwrap_or([0, 0, 0, 0]);
+        if !straight_alpha_output {
+            let alpha = u16::from(clear[3]);
+            for channel in &mut clear[..3] {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
         // Clear through the same 3D context as the scene. An oversized clip-
         // space triangle covers the target with blending disabled, including
         // transparent clear colors, without a full-frame CPU write/flush or a
@@ -464,10 +483,10 @@ fn submit_resident_triangle_scene_capture(
                     changed_pixels += 1;
                 }
                 // Fixed-function over blending produces premultiplied RGB.
-                // Screenshots expose straight RGBA, so restore straight
-                // channels only on this capture path.
+                // Screenshots expose straight RGBA, while UI4 consumes the
+                // native premultiplied bytes without a redundant conversion.
                 let [mut r, mut g, mut b, a] = raw;
-                if a != 0 && a != u8::MAX {
+                if straight_alpha_output && a != 0 && a != u8::MAX {
                     r = (((u16::from(r) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
                         .min(u16::from(u8::MAX)) as u8;
                     g = (((u16::from(g) * u16::from(u8::MAX)) + u16::from(a) / 2) / u16::from(a))
@@ -504,9 +523,52 @@ pub(crate) fn submit_resident_font_mesh_readback_once(
     Ok((render, readback))
 }
 
+/// Render a resident font scene in its original UI viewport coordinates.
+pub(crate) fn submit_resident_font_scene_mesh_readback_once(
+    mesh: &ResidentFontMesh,
+    width: u32,
+    height: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
+) -> Result<(RenderJokerResult, Option<FontRenderTargetReadback>), &'static str> {
+    let mut readback = None;
+    let render = submit_resident_font_mesh_at_extent_inner(
+        mesh,
+        width,
+        height,
+        rgba,
+        Some(&mut readback),
+    )?;
+    Ok((render, readback))
+}
+
+pub(crate) fn submit_resident_font_scene_mesh_once(
+    mesh: &ResidentFontMesh,
+    width: u32,
+    height: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
+) -> Result<RenderJokerResult, &'static str> {
+    submit_resident_font_mesh_at_extent_inner(mesh, width, height, rgba, None)
+}
+
 fn submit_resident_font_mesh_inner(
     mesh: &ResidentFontMesh,
     native_scale: u32,
+    rgba: crate::intel::gpu_font::GpuFontRgba,
+    readback: Option<&mut Option<FontRenderTargetReadback>>,
+) -> Result<RenderJokerResult, &'static str> {
+    if !font_native_scale_supported(native_scale) {
+        return Err("font-native-scale-range");
+    }
+    let target_size = (FONT_STAMP_BASE_SIZE as u32)
+        .checked_mul(native_scale)
+        .ok_or("font-target-size-overflow")?;
+    submit_resident_font_mesh_at_extent_inner(mesh, target_size, target_size, rgba, readback)
+}
+
+fn submit_resident_font_mesh_at_extent_inner(
+    mesh: &ResidentFontMesh,
+    target_width: u32,
+    target_height: u32,
     rgba: crate::intel::gpu_font::GpuFontRgba,
     readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
@@ -518,8 +580,12 @@ fn submit_resident_font_mesh_inner(
     {
         return Err("resident-font-shape");
     }
-    if !font_native_scale_supported(native_scale) {
-        return Err("font-native-scale-range");
+    if target_width == 0
+        || target_height == 0
+        || target_width as usize > DRAW3D_SCENE_TARGET_WIDTH
+        || target_height as usize > DRAW3D_SCENE_TARGET_HEIGHT
+    {
+        return Err("font-target-extent-range");
     }
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -528,7 +594,6 @@ fn submit_resident_font_mesh_inner(
         return Err("in-flight");
     }
 
-    let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
     // Keep the default color on the exact shader binary already proven on
     // hardware. Other colors use the static push-color shader; resident
     // geometry remains untouched in either case.
@@ -552,8 +617,8 @@ fn submit_resident_font_mesh_inner(
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         TriangleBatchMode::Draw,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        target_size,
-        target_size,
+        target_width as usize,
+        target_height as usize,
         readback,
     );
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
