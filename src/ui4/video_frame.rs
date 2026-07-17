@@ -8,19 +8,22 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId, ScanoutFormat,
-    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId, acquire_frame_buffer,
-    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
-    finish_window_session, publish_frame_buffer, publish_window_frame, writable_rgba_view,
+    Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
+    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
+    destroy_frame, finish_window_session, publish_frame_buffer, publish_window_frame,
+    take_owner_input_events, writable_rgba_view,
 };
 
 // Dummy UI4 app 2 owns the decoded-video frame. App 1 is the three-window
 // Mandelbrot carrier; there is deliberately no placeholder app in between.
 const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
+const VIDEO_INPUT_POLL_MS: u64 = 10;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -135,6 +138,103 @@ impl DecodedRgbaProducer {
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static SFC_TARGET_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
+
+/// Install the boot player's ordinary UI4 window without decoding a picture.
+/// Its initialized black frame gives the user a focusable target while the
+/// playback gate remains paused.
+pub(crate) fn prepare_decoded_video_player() -> bool {
+    VIDEO_PLAYBACK_PAUSED.store(true, Ordering::Release);
+    if VIDEO_STREAM.lock().is_some() {
+        return true;
+    }
+    let placeholder_spec = DecodedVideoFrameSpec {
+        coded_width: 16,
+        coded_height: 9,
+        visible_width: 16,
+        visible_height: 9,
+        progressive: true,
+    };
+    let Some(stream) = create_stream(
+        placeholder_spec,
+        super::BOOT_DEMO_FRAME_WIDTH,
+        super::BOOT_DEMO_FRAME_HEIGHT,
+        true,
+    ) else {
+        return false;
+    };
+    let write = match acquire_frame_buffer(stream.frame) {
+        Ok(write) => write,
+        Err(_) => {
+            cleanup_uninstalled_stream(stream);
+            return false;
+        }
+    };
+    if publish_frame_buffer(write).is_err()
+        || publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL).is_err()
+    {
+        let _ = cancel_frame_buffer(write);
+        cleanup_uninstalled_stream(stream);
+        return false;
+    }
+    *VIDEO_STREAM.lock() = Some(stream);
+    crate::log_info!(
+        target: "ui4";
+        "ui4 video-player ready owner={:?} frame={} window={} playback=paused-default control=focused-space source=await-first-frame\n",
+        VIDEO_OWNER,
+        stream.frame.raw(),
+        stream.window.raw(),
+    );
+    true
+}
+
+/// Drain only this consumer's owner queue and wait until focused Space leaves
+/// the player in its running state. Returns true when a pause interval occurred
+/// so the decoder can reset its frame deadline instead of reporting fake lag.
+pub(crate) async fn wait_decoded_video_playback_ready() -> bool {
+    let mut waited = VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire);
+    loop {
+        poll_decoded_video_player_input();
+        if !VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) {
+            return waited;
+        }
+        waited = true;
+        Timer::after(Duration::from_millis(VIDEO_INPUT_POLL_MS)).await;
+    }
+}
+
+fn poll_decoded_video_player_input() {
+    let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
+    for event in take_owner_input_events(VIDEO_OWNER) {
+        let Ui4InputEvent::Keyboard(event) = event else {
+            continue;
+        };
+        if Some(event.window) != window
+            || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_SPACE
+        {
+            continue;
+        }
+        let was_paused = VIDEO_PLAYBACK_PAUSED.fetch_xor(true, Ordering::AcqRel);
+        crate::log_info!(
+            target: "ui4";
+            "ui4 video-player playback-toggle owner={:?} window={} state={} trigger=focused-space keyboard={}:{}:{} combo={} virtual={}\n",
+            VIDEO_OWNER,
+            event.window.raw(),
+            if was_paused { "playing" } else { "paused" },
+            event.event.controller_id,
+            event.event.slot_id,
+            event.event.ep_target,
+            event.combo_id,
+            event.virtual_keyboard as u8,
+        );
+    }
+}
+
+fn cleanup_uninstalled_stream(stream: VideoStream) {
+    let _ = finish_window_session(VIDEO_OWNER, stream.session);
+    let _ = destroy_frame(stream.frame);
+}
 
 pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reason: &str) -> bool {
     if !valid_source(source) {
@@ -175,12 +275,30 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
 
     let current = *VIDEO_STREAM.lock();
     if current.is_some_and(|stream| {
-        stream.source_width != spec.coded_width
-            || stream.source_height != spec.coded_height
-            || stream.frame_width != frame_width
-            || stream.frame_height != frame_height
+        stream.source_width != 0
+            && (stream.source_width != spec.coded_width
+                || stream.source_height != spec.coded_height
+                || stream.frame_width != frame_width
+                || stream.frame_height != frame_height)
     }) {
         let _ = stop_decoded_nv12_stream("ui4-video-format-change");
+    } else if current.is_some_and(|stream| stream.source_width == 0) {
+        let mut slot = VIDEO_STREAM.lock();
+        if let Some(stream) = slot.as_mut() {
+            stream.source_width = spec.coded_width;
+            stream.source_height = spec.coded_height;
+            crate::log_info!(
+                target: "ui4";
+                "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} playback={}\n",
+                stream.frame.raw(),
+                stream.window.raw(),
+                spec.coded_width,
+                spec.coded_height,
+                spec.visible_width,
+                spec.visible_height,
+                if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
+            );
+        }
     }
 
     // Do not match directly on the lock expression: the scrutinee temporary
@@ -189,7 +307,7 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
     let existing = { *VIDEO_STREAM.lock() };
     let stream = match existing {
         Some(stream) => stream,
-        None => match create_stream(spec, frame_width, frame_height) {
+        None => match create_stream(spec, frame_width, frame_height, false) {
             Some(stream) => {
                 *VIDEO_STREAM.lock() = Some(stream);
                 stream
@@ -363,6 +481,7 @@ fn create_stream(
     spec: DecodedVideoFrameSpec,
     frame_width: u32,
     frame_height: u32,
+    placeholder: bool,
 ) -> Option<VideoStream> {
     let frame = create_frame(FrameSpec {
         output: VIDEO_OUTPUT,
@@ -417,10 +536,11 @@ fn create_stream(
         aspect_fit_rect(spec.visible_width, spec.visible_height, frame_width, frame_height)?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source=ytile-nv12 source_size={}x{} frame_size={}x{} fitted_content={}x{}@{},{} scaling=fused-nearest placement={},{} z={} plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source={} source_size={}x{} frame_size={}x{} fitted_content={}x{}@{},{} scaling=fused-nearest placement={},{} z={} plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
+        if placeholder { "await-first-frame" } else { "ytile-nv12" },
         spec.coded_width,
         spec.coded_height,
         frame_width,
@@ -437,8 +557,8 @@ fn create_stream(
         session,
         frame,
         window,
-        source_width: spec.coded_width,
-        source_height: spec.coded_height,
+        source_width: if placeholder { 0 } else { spec.coded_width },
+        source_height: if placeholder { 0 } else { spec.coded_height },
         frame_width,
         frame_height,
     })

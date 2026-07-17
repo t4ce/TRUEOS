@@ -1,0 +1,8 @@
+[package]
+name = "trueos-crypto"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+
+[features]
+default = []

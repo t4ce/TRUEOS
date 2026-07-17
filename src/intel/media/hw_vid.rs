@@ -380,12 +380,21 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
     if H264_BOOT_PROBE_PLAYBACK_ENABLED {
+        if !crate::ui4::prepare_decoded_video_player() {
+            crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=player-window-unavailable\n");
+            return;
+        }
+        crate::log!(
+            "intel/hw_vid: ui4-dummy-app2 armed playback=paused-default control=focused-space asset={} action=click-player-then-space\n",
+            H264_BOOT_PROBE_STREAM_PATH,
+        );
+        crate::ui4::wait_decoded_video_playback_ready().await;
         let Ok(_playback_guard) = h264_try_begin_playback("ui4-dummy-app2") else {
             crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=playback-already-active\n");
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} legacy_fallback=0 worker_slot={}\n",
+            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} playback=playing control=focused-space legacy_fallback=0 worker_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
@@ -401,6 +410,7 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
                 );
             let mut lap = 0usize;
             loop {
+                crate::ui4::wait_decoded_video_playback_ready().await;
                 lap = lap.saturating_add(1);
                 let report = h264_i_p_playback_probe(
                     file,
@@ -2684,6 +2694,11 @@ async fn h264_i_p_playback_probe_with_reader(
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
     for unit in access_units {
+        if mode.presentation() == H264PresentationPolicy::Ui4ProbeRequired
+            && crate::ui4::wait_decoded_video_playback_ready().await
+        {
+            next_frame_deadline = EmbassyInstant::now();
+        }
         if unit.nal_type == 5 {
             idr_seen += 1;
         } else {

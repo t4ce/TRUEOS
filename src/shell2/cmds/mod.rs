@@ -2,6 +2,7 @@ use alloc::string::String as AllocString;
 
 pub(crate) mod acpi;
 pub(crate) mod c4;
+pub(crate) mod cry;
 pub(crate) mod diashow;
 pub(crate) mod disc;
 pub(crate) mod fnt;

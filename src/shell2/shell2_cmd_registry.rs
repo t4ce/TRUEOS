@@ -119,6 +119,10 @@ fn dispatch_c4(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Parse
     super::cmds::c4::try_parse(io, rest)
 }
 
+fn dispatch_cry(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::cry::try_parse(io, rest)
+}
+
 fn dispatch_diashow(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::diashow::try_parse(io, rest)
 }
@@ -232,6 +236,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_c4,
         tool_description: Some("Compile C4 source to Rust and TC4O, then run the TC4O VM object."),
         tool_parameters_json: Some(TOOL_JSON_C4),
+    },
+    BuiltinShell2CmdEntry {
+        name: "cry",
+        mode: "cmd",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
+        handler: dispatch_cry,
+        tool_description: None,
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "disc",
@@ -550,7 +563,7 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
-        "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "acpi", "tlb", "smp", "etc",
+        "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

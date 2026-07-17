@@ -24,6 +24,8 @@ embassy-time = { version = "0.5.1", default-features = false, features = ["tick-
 embassy-time-driver = { version = "0.2.2", default-features = false }
 embedded-io-async = { version = "0.7.0", default-features = false }
 trueos-io = { path = "crates/trueos-io" }
+trueos-crypto = { path = "crates/trueos-crypto" }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 heapless = { version = "0.9", default-features = false }
 bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }

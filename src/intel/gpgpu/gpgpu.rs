@@ -942,6 +942,8 @@ const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
 const DIRECT_RCS_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
+pub(crate) const DIRECT_RCS_PPGTT_LIMIT_BYTES: u64 =
+    (DIRECT_RCS_PPGTT_PT_COUNT as u64) * 512 * 4096;
 const DIRECT_RCS_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
 // GuC registrations require stable HWLRCAs. Keep the GPGPU context window
@@ -9876,7 +9878,7 @@ fn direct_rcs_ppgtt_pte_flags() -> u64 {
 }
 
 fn direct_rcs_ppgtt_limit_bytes() -> u64 {
-    (DIRECT_RCS_PPGTT_PT_COUNT as u64) * 512 * 4096
+    DIRECT_RCS_PPGTT_LIMIT_BYTES
 }
 
 fn direct_rcs_map_ppgtt_region(
@@ -9886,10 +9888,17 @@ fn direct_rcs_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
+    let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
+        return false;
+    };
+    if end > DIRECT_RCS_PPGTT_LIMIT_BYTES {
+        return false;
+    }
+
     let pt_off = 12288usize;
     for page in 0..len.div_ceil(4096) {
         let va_page = (gpu >> 12) + page as u64;
-        let pd_index = ((va_page >> 9) & 0x1FF) as usize;
+        let pd_index = (va_page >> 9) as usize;
         let pt_index = (va_page & 0x1FF) as usize;
         if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
             return false;

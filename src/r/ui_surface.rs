@@ -1,15 +1,31 @@
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use crate::graphics::primitives::{
     Error, Result, UiPlaneSlot, UiPresent, UiPresentPath, UiRect, UiSurface, UiSurfaceFormat,
 };
 use spin::Mutex;
 
-// App 1's 1/2/3-buffer Mandel frames consume six surfaces. A normal
-// triple-buffered app 2 video window raises the first real UI4 composition to
-// nine, so keep enough trusted producer slots for this baseline plus growth.
-const MAX_UI_SURFACES: usize = 16;
+// Keep a generous table of trusted physical-buffer handles. This is separate
+// from the logical window/frame limits: a streaming frame consumes three
+// handles, and physical memory plus producer GPU VA remain bounded below.
+const MAX_UI_SURFACES: usize = 64;
 const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
-const UI_SURFACE_GPU_STRIDE: u64 = 0x0200_0000;
+// Producer surfaces are mapped into the direct-RCS PPGTT on demand. Keep this
+// arena below render's persistent-font range at 0x2000_0000 and well inside
+// the direct-RCS 1 GiB PPGTT. Packing actual aligned allocation sizes avoids
+// the former 32 MiB-per-handle VA waste and makes room for normal UI4 growth.
+const UI_SURFACE_GPU_LIMIT: u64 = 0x2000_0000;
+const UI_SURFACE_MAX_BYTES: u64 = 0x0200_0000;
 const UI_SURFACE_BYTES_PER_PIXEL: u32 = 4;
+
+const _: () = {
+    assert!(UI_SURFACE_GPU_BASE % 4096 == 0);
+    assert!(UI_SURFACE_GPU_LIMIT % 4096 == 0);
+    assert!(UI_SURFACE_MAX_BYTES % 4096 == 0);
+    assert!(UI_SURFACE_GPU_BASE < UI_SURFACE_GPU_LIMIT);
+    assert!(UI_SURFACE_MAX_BYTES <= UI_SURFACE_GPU_LIMIT - UI_SURFACE_GPU_BASE);
+    assert!(UI_SURFACE_GPU_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
@@ -76,6 +92,10 @@ unsafe impl Sync for UiSurfacePixelAccess {}
 
 static SURFACES: Mutex<[Option<TrustedUiSurface>; MAX_UI_SURFACES]> =
     Mutex::new([None; MAX_UI_SURFACES]);
+static SURFACE_TOO_LARGE_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static HANDLE_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static PRODUCER_VA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static DMA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 
 pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Result<UiSurfaceHandle> {
     if width == 0 || height == 0 {
@@ -87,16 +107,27 @@ pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Resul
         .ok_or(Error::Invalid)?;
     let byte_len =
         crate::intel::align_up(raw_len, crate::intel::WARM_ALIGN).ok_or(Error::Invalid)?;
-    if byte_len as u64 > UI_SURFACE_GPU_STRIDE {
+    if byte_len as u64 > UI_SURFACE_MAX_BYTES {
+        let active = SURFACES.lock().iter().flatten().count();
+        log_allocation_rejected("surface-too-large", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
     }
 
     let mut surfaces = SURFACES.lock();
+    let active = surfaces.iter().flatten().count();
     let Some(slot) = surfaces.iter().position(Option::is_none) else {
+        drop(surfaces);
+        log_allocation_rejected("handle-capacity", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
     };
-    let gpu = UI_SURFACE_GPU_BASE + (slot as u64) * UI_SURFACE_GPU_STRIDE;
+    let Some(gpu) = allocate_surface_gpu_va(&surfaces[..], byte_len) else {
+        drop(surfaces);
+        log_allocation_rejected("producer-va-capacity", active, width, height, pitch, byte_len);
+        return Err(Error::OutOfMemory);
+    };
     let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
+        drop(surfaces);
+        log_allocation_rejected("dma-capacity", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
     };
     unsafe {
@@ -123,6 +154,83 @@ pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Resul
         byte_len,
     });
     Ok(UiSurfaceHandle::from_slot(slot))
+}
+
+fn allocate_surface_gpu_va(surfaces: &[Option<TrustedUiSurface>], byte_len: usize) -> Option<u64> {
+    let byte_len = u64::try_from(byte_len).ok()?;
+    if byte_len == 0 || byte_len > UI_SURFACE_MAX_BYTES {
+        return None;
+    }
+
+    let mut candidate = UI_SURFACE_GPU_BASE;
+    loop {
+        let candidate_end = candidate.checked_add(byte_len)?;
+        if candidate_end > UI_SURFACE_GPU_LIMIT {
+            return None;
+        }
+
+        let mut next_candidate = candidate;
+        for surface in surfaces.iter().flatten() {
+            let surface_start = surface.desc.gpu;
+            let surface_end = surface_start.checked_add(surface.byte_len as u64)?;
+            if candidate < surface_end && surface_start < candidate_end {
+                next_candidate = next_candidate.max(surface_end);
+            }
+        }
+        if next_candidate == candidate {
+            return Some(candidate);
+        }
+        candidate = next_candidate;
+    }
+}
+
+fn log_allocation_rejected(
+    reason: &'static str,
+    active: usize,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    byte_len: usize,
+) {
+    let counter = match reason {
+        "surface-too-large" => &SURFACE_TOO_LARGE_REJECTIONS,
+        "handle-capacity" => &HANDLE_CAPACITY_REJECTIONS,
+        "producer-va-capacity" => &PRODUCER_VA_CAPACITY_REJECTIONS,
+        _ => &DMA_CAPACITY_REJECTIONS,
+    };
+    let occurrences = counter.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    if occurrences == 1 {
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 trusted-surface allocation rejected reason={} occurrences={} active={} requested={} handle_max={} request={}x{} pitch=0x{:X} bytes=0x{:X} max_surface_bytes=0x{:X} producer_va=0x{:X}..0x{:X} action=reject-create\n",
+            reason,
+            occurrences,
+            active,
+            active.saturating_add(1),
+            MAX_UI_SURFACES,
+            width,
+            height,
+            pitch,
+            byte_len,
+            UI_SURFACE_MAX_BYTES,
+            UI_SURFACE_GPU_BASE,
+            UI_SURFACE_GPU_LIMIT,
+        );
+    } else if occurrences >= 64 && occurrences.is_power_of_two() {
+        crate::log_trace!(
+            target: "ui4";
+            "ui4 trusted-surface allocation still rejected reason={} occurrences={} active={} requested={} handle_max={} request={}x{} pitch=0x{:X} bytes=0x{:X} action=reject-create\n",
+            reason,
+            occurrences,
+            active,
+            active.saturating_add(1),
+            MAX_UI_SURFACES,
+            width,
+            height,
+            pitch,
+            byte_len,
+        );
+    }
 }
 
 pub fn destroy_surface(handle: UiSurfaceHandle) -> bool {
@@ -432,5 +540,78 @@ fn flush_surface_rect(surface: TrustedUiSurface, rect: UiRect) {
     if start < surface.byte_len {
         let bytes = bytes.min(surface.byte_len.saturating_sub(start));
         crate::intel::dma_flush(unsafe { surface.virt.add(start) }, bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_UI_SURFACES, TrustedUiSurface, UI_SURFACE_GPU_BASE, UI_SURFACE_GPU_LIMIT,
+        allocate_surface_gpu_va,
+    };
+    use crate::graphics::primitives::{UiSurface, UiSurfaceFormat};
+
+    const TEST_BYTES: usize = 0x20_0000;
+
+    fn test_surface(gpu: u64, byte_len: usize) -> TrustedUiSurface {
+        TrustedUiSurface {
+            desc: UiSurface {
+                gpu,
+                width: 1,
+                height: 1,
+                pitch: 64,
+                format: UiSurfaceFormat::Rgba8888,
+            },
+            phys: 0,
+            virt: core::ptr::null_mut(),
+            byte_len,
+        }
+    }
+
+    #[test]
+    fn producer_va_packs_real_allocation_sizes() {
+        let mut surfaces = [None; MAX_UI_SURFACES];
+        surfaces[7] = Some(test_surface(UI_SURFACE_GPU_BASE, TEST_BYTES));
+        surfaces[2] = Some(test_surface(UI_SURFACE_GPU_BASE + TEST_BYTES as u64, TEST_BYTES));
+
+        assert_eq!(
+            allocate_surface_gpu_va(&surfaces, TEST_BYTES),
+            Some(UI_SURFACE_GPU_BASE + (2 * TEST_BYTES) as u64)
+        );
+    }
+
+    #[test]
+    fn producer_va_reuses_first_fitting_hole() {
+        let mut surfaces = [None; MAX_UI_SURFACES];
+        surfaces[0] = Some(test_surface(UI_SURFACE_GPU_BASE + TEST_BYTES as u64, TEST_BYTES));
+
+        assert_eq!(allocate_surface_gpu_va(&surfaces, TEST_BYTES), Some(UI_SURFACE_GPU_BASE));
+    }
+
+    #[test]
+    fn producer_va_rejects_exhausted_arena() {
+        let mut surfaces = [None; MAX_UI_SURFACES];
+        let max_surface_bytes = 0x0200_0000usize;
+        for (slot, surface) in surfaces.iter_mut().take(7).enumerate() {
+            *surface = Some(test_surface(
+                UI_SURFACE_GPU_BASE + (slot * max_surface_bytes) as u64,
+                max_surface_bytes,
+            ));
+        }
+
+        assert_eq!(allocate_surface_gpu_va(&surfaces, TEST_BYTES), None);
+    }
+
+    #[test]
+    fn producer_va_fits_all_preview_sized_handles() {
+        let mut surfaces = [None; MAX_UI_SURFACES];
+        let preview_bytes = 768usize * 512 * 4;
+        for slot in 0..MAX_UI_SURFACES {
+            let gpu = allocate_surface_gpu_va(&surfaces, preview_bytes)
+                .expect("packed preview-sized surface must fit");
+            surfaces[slot] = Some(test_surface(gpu, preview_bytes));
+        }
+        let last = surfaces[MAX_UI_SURFACES - 1].unwrap();
+        assert!(last.desc.gpu + last.byte_len as u64 <= UI_SURFACE_GPU_LIMIT);
     }
 }

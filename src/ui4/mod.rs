@@ -34,8 +34,9 @@ pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedRgbaProducer, DecodedRgbaWriteTarget, DecodedVideoFrameSpec,
     acquire_decoded_rgba_stream_target, cancel_decoded_rgba_stream_target,
-    present_decoded_nv12_stream_frame, publish_decoded_rgba_stream_target,
-    stop_decoded_nv12_stream,
+    prepare_decoded_video_player, present_decoded_nv12_stream_frame,
+    publish_decoded_rgba_stream_target, stop_decoded_nv12_stream,
+    wait_decoded_video_playback_ready,
 };
 
 pub(crate) use window_broker::{

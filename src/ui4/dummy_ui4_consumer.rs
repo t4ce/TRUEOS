@@ -33,7 +33,6 @@ use super::{
 };
 
 const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
-const VIDEO_APP_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const MANDEL_WIDTH: u32 = super::BOOT_DEMO_FRAME_WIDTH;
 const MANDEL_HEIGHT: u32 = super::BOOT_DEMO_FRAME_HEIGHT;
 const STATIC_PARAMETER: u32 = 128;
@@ -178,7 +177,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=ui4-probe-required legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues callbacks=focus,left-click,middle-pan,keyboard frame_drag=ui4-broker-secondary heartbeat_vcursor_slot={}\n",
+        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=paused/focused-space ui4_probe_required=1 legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues app1_callbacks=focus,left-click,middle-pan,keyboard app2_callbacks=video-consumer frame_drag=ui4-broker-secondary heartbeat_vcursor_slot={}\n",
         MANDEL_WIDTH,
         MANDEL_HEIGHT,
         STATIC_PARAMETER,
@@ -845,15 +844,14 @@ fn release_leases(leases: &[FrameReadLease]) {
     }
 }
 
-/// Consume callbacks routed to both temporary app identities. App 2's pixels
-/// are driven by the boot decoder, while its window still follows normal UI4
-/// focus and movement policy.
+/// Consume callbacks routed to the Mandel app. The independent video consumer
+/// owns app 2's queue so its focused Space control cannot be stolen here.
 fn dispatch_ui4_callbacks(
     runtime: &mut Runtime,
 ) -> Result<(u32, Option<(u32, u32)>), DummyUi4ConsumerError> {
     let mut dirty_clicks = 0u32;
     let mut last_dirty_click = None;
-    for owner in [runtime.mandel.owner, VIDEO_APP_OWNER] {
+    for owner in [runtime.mandel.owner] {
         for event in take_owner_input_events(owner) {
             match event {
                 Ui4InputEvent::Pointer(_) => {}

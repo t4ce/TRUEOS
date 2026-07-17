@@ -83,6 +83,7 @@ struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
     published: usize,
     owner: Option<u8>,
+    producer_connected: bool,
     generation: u64,
     scale_percent: u16,
     serial: u64,
@@ -96,6 +97,7 @@ impl SnapshotStore {
             buffers: [[0; PAGE_BYTES]; 2],
             published: 0,
             owner: None,
+            producer_connected: false,
             generation: 0,
             scale_percent: 100,
             serial: 0,
@@ -106,6 +108,15 @@ impl SnapshotStore {
 }
 
 static SNAPSHOTS: Mutex<SnapshotStore> = Mutex::new(SnapshotStore::new());
+
+fn producer_ownership_conflicts(
+    active: Option<u8>,
+    producer_connected: bool,
+    requester: u8,
+) -> bool {
+    producer_connected
+        && active.is_some_and(|active| active != requester && crate::hv::vm_state(active).running)
+}
 
 #[derive(Clone)]
 struct OwnedSnapshot {
@@ -440,13 +451,14 @@ pub(crate) fn submit_snapshot_for_owner(
     }
 
     let mut snapshots = SNAPSHOTS.lock();
-    if snapshots.owner.is_some_and(|active| active != owner) {
+    if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
     }
     let next = snapshots.published ^ 1;
     snapshots.buffers[next].copy_from_slice(raw);
     snapshots.published = next;
     snapshots.owner = Some(owner);
+    snapshots.producer_connected = true;
     snapshots.generation = generation;
     snapshots.scale_percent = scale_percent as u16;
     snapshots.serial = snapshots.serial.wrapping_add(1).max(1);
@@ -460,10 +472,11 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
         return ERROR_INVALID_ANIMATION;
     };
     let mut snapshots = SNAPSHOTS.lock();
-    if snapshots.owner.is_some_and(|active| active != owner) {
+    if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
     }
     snapshots.owner = Some(owner);
+    snapshots.producer_connected = true;
     snapshots.text_animations = programs;
     snapshots.animation_serial = snapshots.animation_serial.wrapping_add(1).max(1);
     crate::log_info!(
@@ -476,12 +489,14 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, raw: &[u8]) -> i32 {
     0
 }
 
-/// Relinquish producer authority without destroying the last persistent scene.
+/// Relinquish producer authority. The service releases its UI4 presentation,
+/// while the kernel-owned frame and last persistent scene remain resident.
 pub(crate) fn close_owner(owner: u8) -> i32 {
     let mut snapshots = SNAPSHOTS.lock();
     match snapshots.owner {
         Some(active) if active == owner => {
             snapshots.owner = None;
+            snapshots.producer_connected = false;
             0
         }
         Some(_) => ERROR_NOT_OWNER,
@@ -729,9 +744,16 @@ fn valid_single_glyph(encoded: &[u8]) -> bool {
     core::str::from_utf8(encoded).is_ok_and(|glyph| glyph.is_empty() || glyph.chars().count() == 1)
 }
 
+#[derive(Copy, Clone)]
+struct GridPaperPresentation {
+    producer: u8,
+    session: crate::ui4::WindowSessionId,
+    window: crate::ui4::WindowId,
+}
+
 struct GridPaperSurface {
     frame: crate::ui4::FrameHandle,
-    window: crate::ui4::WindowId,
+    presentation: Option<GridPaperPresentation>,
     width: u32,
     height: u32,
     extent_source: &'static str,
@@ -797,9 +819,6 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         crate::intel::physical_extent_pixels(SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM)
             .map(|(width, height)| (width, height, "edid-physical-mm"))
             .unwrap_or((SCENE_WIDTH, SCENE_HEIGHT, "logical-fallback"));
-    let (grid_width, grid_height) =
-        crate::intel::physical_extent_pixels(GRID_WIDTH_MM, GRID_HEIGHT_MM)
-            .unwrap_or((GRID_WIDTH_MM, GRID_HEIGHT_MM));
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
@@ -810,36 +829,62 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         height,
         base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?;
-    let session = match crate::ui4::begin_window_session(UI4_OWNER) {
-        Ok(session) => session,
-        Err(error) => {
-            let _ = crate::ui4::destroy_frame(frame);
-            return Err(error.into());
-        }
-    };
+    Ok(GridPaperSurface {
+        frame,
+        presentation: None,
+        width,
+        height,
+        extent_source,
+    })
+}
+
+fn connected_owner() -> Option<u8> {
+    let mut snapshots = SNAPSHOTS.lock();
+    let owner = snapshots.owner?;
+    if !snapshots.producer_connected {
+        return None;
+    }
+    if crate::hv::vm_state(owner).running {
+        Some(owner)
+    } else {
+        snapshots.producer_connected = false;
+        None
+    }
+}
+
+fn attach_presentation(
+    surface: &mut GridPaperSurface,
+    producer: u8,
+    expose_retained_front: bool,
+) -> Result<GridPaperPresentation, ServiceError> {
+    let (grid_width, grid_height) =
+        crate::intel::physical_extent_pixels(GRID_WIDTH_MM, GRID_HEIGHT_MM)
+            .unwrap_or((GRID_WIDTH_MM, GRID_HEIGHT_MM));
+    let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
     let (scanout_width, scanout_height) =
-        crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+        crate::intel::active_scanout_dimensions().unwrap_or((surface.width, surface.height));
     // Keep the useful grid centered. The surface itself extends only far
     // enough above and to the left to carry the two ruler axes.
     let x = scanout_width
         .saturating_sub(grid_width)
         .saturating_div(2)
-        .saturating_sub(width.saturating_sub(grid_width));
+        .saturating_sub(surface.width.saturating_sub(grid_width));
     let y = scanout_height
         .saturating_sub(grid_height)
         .saturating_div(2)
-        .saturating_sub(height.saturating_sub(grid_height));
+        .saturating_sub(surface.height.saturating_sub(grid_height));
     let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
-        frame,
+        frame: surface.frame,
         output,
         plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
         placement: crate::ui4::WindowPlacement {
             x: x as i32,
             y: y as i32,
-            width,
-            height,
+            width: surface.width,
+            height: surface.height,
             z: 70,
             opacity: u8::MAX,
             visible: true,
@@ -848,17 +893,50 @@ fn initialize_surface() -> Result<GridPaperSurface, ServiceError> {
         Ok(window) => window,
         Err(error) => {
             let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
-            let _ = crate::ui4::destroy_frame(frame);
             return Err(error.into());
         }
     };
-    Ok(GridPaperSurface {
-        frame,
+
+    if expose_retained_front
+        && let Err(error) =
+            crate::ui4::publish_window_frame(UI4_OWNER, window, crate::ui4::DamageRect::FULL)
+    {
+        let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
+        return Err(error.into());
+    }
+
+    let presentation = GridPaperPresentation {
+        producer,
+        session,
         window,
-        width,
-        height,
-        extent_source,
-    })
+    };
+    surface.presentation = Some(presentation);
+    Ok(presentation)
+}
+
+fn release_presentation(surface: &mut GridPaperSurface) -> Option<GridPaperPresentation> {
+    let presentation = surface.presentation.take()?;
+    match crate::ui4::finish_window_session(UI4_OWNER, presentation.session) {
+        Ok(closed_windows) => crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: presentation released producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
+            presentation.producer,
+            presentation.session.raw(),
+            presentation.window.raw(),
+            surface.frame.raw(),
+            closed_windows,
+        ),
+        Err(error) => crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: presentation release producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
+            presentation.producer,
+            presentation.session.raw(),
+            presentation.window.raw(),
+            surface.frame.raw(),
+            error,
+        ),
+    }
+    Some(presentation)
 }
 
 struct ResidentLayer {
@@ -1260,6 +1338,7 @@ fn publish_page(
     surface: &GridPaperSurface,
     page: &ResidentPage,
     selection: Option<GridCellSelection>,
+    input_field: CellInputField,
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
@@ -1288,7 +1367,7 @@ fn publish_page(
     if result.completed_draws != result.requested_draws || result.rgba.is_none() {
         return Err(ServiceError::Render("incomplete-frame"));
     }
-    publish_pixels(surface, page, selection, &result)?;
+    publish_pixels(surface, page, selection, input_field, &result)?;
     Ok(result)
 }
 
@@ -1383,8 +1462,12 @@ fn publish_pixels(
     surface: &GridPaperSurface,
     page: &ResidentPage,
     selection: Option<GridCellSelection>,
+    input_field: CellInputField,
     result: &crate::intel::render::ResidentSceneFrameResult,
 ) -> Result<(), ServiceError> {
+    let presentation = surface
+        .presentation
+        .ok_or(ServiceError::Window(crate::ui4::WindowBrokerError::SessionClosed))?;
     if result.width != surface.width || result.height != surface.height {
         return Err(ServiceError::InvalidFrame);
     }
@@ -1416,14 +1499,14 @@ fn publish_pixels(
             .copy_from_slice(&source[source_start..source_start + source_pitch]);
     }
     if let Some(selection) = selection {
-        paint_grid_cursor(destination, view.pitch, surface, page, selection);
+        paint_grid_cursor(destination, view.pitch, surface, page, selection, input_field);
     }
     crate::intel::dma_flush(view.virt, view.byte_len);
     if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(error.into());
     }
-    crate::ui4::publish_window_frame(UI4_OWNER, surface.window, crate::ui4::DamageRect::FULL)?;
+    crate::ui4::publish_window_frame(UI4_OWNER, presentation.window, crate::ui4::DamageRect::FULL)?;
     Ok(())
 }
 
@@ -1433,24 +1516,29 @@ fn paint_grid_cursor(
     surface: &GridPaperSurface,
     page: &ResidentPage,
     selection: GridCellSelection,
+    input_field: CellInputField,
 ) {
     let scale = f32::from(page.scale_percent) / 100.0;
     let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
     let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
     let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
     let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
-    let scene_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale
+    let mut scene_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale
         + selection.column as f32 * cell_width
         + page.pan.x;
     let scene_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale
         + selection.row as f32 * cell_height
         + page.pan.y;
+    let scene_right = scene_left + cell_width;
+    let mut scene_bottom = scene_top + cell_height;
+    if input_field == CellInputField::Upper {
+        scene_left += cell_width * 0.5;
+        scene_bottom -= cell_height * 0.5;
+    }
     let left = libm::floorf(scene_left * surface.width as f32 / SCENE_WIDTH as f32) as i32;
     let top = libm::floorf(scene_top * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
-    let right =
-        libm::ceilf((scene_left + cell_width) * surface.width as f32 / SCENE_WIDTH as f32) as i32;
-    let bottom =
-        libm::ceilf((scene_top + cell_height) * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
+    let right = libm::ceilf(scene_right * surface.width as f32 / SCENE_WIDTH as f32) as i32;
+    let bottom = libm::ceilf(scene_bottom * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
     let clipped_left = left.clamp(0, surface.width as i32) as u32;
     let clipped_top = top.clamp(0, surface.height as i32) as u32;
     let clipped_right = right.clamp(0, surface.width as i32) as u32;
@@ -1487,7 +1575,7 @@ fn paint_grid_cursor(
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     let mut last_init_error = None;
-    let surface = loop {
+    let mut surface = loop {
         match initialize_surface() {
             Ok(surface) => break surface,
             Err(error) => {
@@ -1505,7 +1593,7 @@ pub async fn gridpaper_service_task() {
     };
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=left-click-cell+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scene=1\n",
+        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=left-click-cell+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scene=1 presentation=vm-owner-gated initial_presentation=detached\n",
         PAGE_BYTES,
         COLUMNS * ROWS,
         SCENE_WIDTH,
@@ -1545,8 +1633,57 @@ pub async fn gridpaper_service_task() {
     let mut keyboard_edits = 0u64;
     let mut last_build_error = None;
     let mut last_render_error = None;
+    let mut last_presentation_error: Option<(u8, ServiceError)> = None;
 
     loop {
+        let desired_owner = connected_owner();
+        let presented_owner = surface
+            .presentation
+            .map(|presentation| presentation.producer);
+        if desired_owner != presented_owner {
+            if surface.presentation.is_some() {
+                release_presentation(&mut surface);
+                if selection.take().is_some() {
+                    cursor_dirty = true;
+                }
+                input_field = CellInputField::Primary;
+                active_pan_source = None;
+                pending_pan_pixels = (0, 0);
+            }
+
+            if let Some(producer) = desired_owner {
+                match attach_presentation(&mut surface, producer, active.is_some()) {
+                    Ok(presentation) => {
+                        crate::log_info!(
+                            target: "gridpaper";
+                            "gridpaper: presentation attached producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
+                            producer,
+                            presentation.session.raw(),
+                            presentation.window.raw(),
+                            surface.frame.raw(),
+                            u8::from(active.is_some()),
+                        );
+                        last_presentation_error = None;
+                    }
+                    Err(error) if last_presentation_error != Some((producer, error)) => {
+                        crate::log_warn!(
+                            target: "gridpaper";
+                            "gridpaper: presentation attach pending producer={} frame={} error={:?} action=retry retained_gpu_scene=1\n",
+                            producer,
+                            surface.frame.raw(),
+                            error,
+                        );
+                        last_presentation_error = Some((producer, error));
+                    }
+                    Err(_) => {}
+                }
+            } else {
+                last_presentation_error = None;
+            }
+        }
+
+        let presented_window = surface.presentation.map(|presentation| presentation.window);
+
         if let Some(update) = text_animations_after(observed_animation_serial) {
             observed_animation_serial = update.serial;
             text_animations = update.programs;
@@ -1579,7 +1716,7 @@ pub async fn gridpaper_service_task() {
         for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
             match event {
                 crate::ui4::Ui4InputEvent::Button(event)
-                    if event.window == surface.window
+                    if presented_window == Some(event.window)
                         && event.phase == crate::ui4::Ui4ButtonPhase::Down
                         && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
                 {
@@ -1628,7 +1765,7 @@ pub async fn gridpaper_service_task() {
                     }
                 }
                 crate::ui4::Ui4InputEvent::Keyboard(event)
-                    if event.window == surface.window
+                    if presented_window == Some(event.window)
                         && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
                         && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
                 {
@@ -1643,7 +1780,7 @@ pub async fn gridpaper_service_task() {
                     }
                 }
                 crate::ui4::Ui4InputEvent::Keyboard(event)
-                    if event.window == surface.window && selection.is_some() =>
+                    if presented_window == Some(event.window) && selection.is_some() =>
                 {
                     let Some(snapshot) = latest_snapshot.as_mut() else {
                         continue;
@@ -1679,7 +1816,7 @@ pub async fn gridpaper_service_task() {
                         cursor_dirty = true;
                     } else {
                         selection = Some(selected);
-                        cursor_dirty |= outcome.selection_changed;
+                        cursor_dirty |= outcome.selection_changed || outcome.input_field_changed;
                     }
                     if outcome.content_changed {
                         keyboard_edits = keyboard_edits.saturating_add(1);
@@ -1703,7 +1840,7 @@ pub async fn gridpaper_service_task() {
                         );
                     }
                 }
-                crate::ui4::Ui4InputEvent::Pan(event) if event.window == surface.window => {
+                crate::ui4::Ui4InputEvent::Pan(event) if presented_window == Some(event.window) => {
                     match event.phase {
                         crate::ui4::Ui4PanPhase::Begin => {
                             active_pan_source = Some(event.source);
@@ -1786,11 +1923,14 @@ pub async fn gridpaper_service_task() {
             PRINT_RENDER_RESULTS.lock().push_back(result);
         }
         let mut published_page_this_tick = false;
-        if let Some(candidate) = pending.as_ref() {
+        if surface.presentation.is_some()
+            && let Some(candidate) = pending.as_ref()
+        {
             match publish_page(
                 &surface,
                 candidate,
                 selection,
+                input_field,
                 &text_animations,
                 animation_elapsed_ms,
             ) {
@@ -1833,6 +1973,7 @@ pub async fn gridpaper_service_task() {
         }
 
         if !published_page_this_tick
+            && surface.presentation.is_some()
             && pending.is_none()
             && let Some(page) = active.as_ref()
         {
@@ -1845,6 +1986,7 @@ pub async fn gridpaper_service_task() {
                     &surface,
                     page,
                     selection,
+                    input_field,
                     &text_animations,
                     animation_elapsed_ms,
                 ) {

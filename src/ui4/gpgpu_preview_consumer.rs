@@ -11,12 +11,12 @@ use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::{
-    DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec, OutputId,
-    PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer, begin_window_session,
-    cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
-    gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame, replace_window_frame,
-    take_owner_input_events,
+    DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
+    OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer,
+    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
+    finish_window_session, gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame,
+    replace_window_frame, take_owner_input_events,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::KernelApp(5);
@@ -322,7 +322,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let frame = create_preview_frame(output, PREVIEW_WIDTH, PREVIEW_HEIGHT)
-        .map_err(|_| "frame-create-failed")?;
+        .map_err(preview_frame_create_error_label)?;
     let session = match begin_window_session(PREVIEW_OWNER) {
         Ok(session) => session,
         Err(_) => {
@@ -369,6 +369,30 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         next_render: now,
         metrics: GpgpuPreviewMetrics::default(),
     })
+}
+
+const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str {
+    match error {
+        FramePoolError::InvalidPlan(FramePlanError::EmptyExtent) => {
+            "frame-create-invalid-plan-empty-extent"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::BaseColorRequiresPremultipliedRgba) => {
+            "frame-create-invalid-plan-base-color-format"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresRgbaOrNv12) => {
+            "frame-create-invalid-plan-video-format"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::Nv12RequiresVideo) => {
+            "frame-create-invalid-plan-nv12-content"
+        }
+        FramePoolError::InvalidHandle => "frame-create-invalid-handle",
+        FramePoolError::UnsupportedFormat => "frame-create-unsupported-format",
+        FramePoolError::OutOfMemory => "frame-create-out-of-memory",
+        FramePoolError::Busy => "frame-create-busy",
+        FramePoolError::ImmutablePublished => "frame-create-immutable-published",
+        FramePoolError::NotPublished => "frame-create-not-published",
+        FramePoolError::InvalidLease => "frame-create-invalid-lease",
+    }
 }
 
 fn create_preview_frame(
@@ -723,7 +747,10 @@ const fn next_serial(serial: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset};
+    use super::{
+        FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
+        GpgpuPreviewPreset, preview_frame_create_error_label,
+    };
 
     #[test]
     fn preview_config_accepts_continuous_duration() {
@@ -770,6 +797,24 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn preview_frame_create_errors_keep_stable_detail() {
+        assert_eq!(
+            preview_frame_create_error_label(FramePoolError::OutOfMemory),
+            "frame-create-out-of-memory"
+        );
+        assert_eq!(
+            preview_frame_create_error_label(FramePoolError::UnsupportedFormat),
+            "frame-create-unsupported-format"
+        );
+        assert_eq!(
+            preview_frame_create_error_label(FramePoolError::InvalidPlan(
+                FramePlanError::EmptyExtent
+            )),
+            "frame-create-invalid-plan-empty-extent"
         );
     }
 }

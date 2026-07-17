@@ -23,6 +23,7 @@ mod blueprint_net_wire;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;
+mod crypt;
 mod disc;
 pub mod dma;
 mod efi;
