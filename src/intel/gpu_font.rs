@@ -23,6 +23,8 @@ const NATIVE_FONT_STAMP_PADDING_PIXELS: u32 = 2;
 const DEFAULT_FONT_FILL_TOLERANCE: f32 = 0.1;
 const MIN_NATIVE_FONT_FILL_TOLERANCE: f32 = 0.005;
 const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
+const SMALL_FONT_HINT_MIN_RASTER_PX: f32 = 8.0;
+const SMALL_FONT_HINT_MAX_RASTER_PX: f32 = 32.0;
 
 /// Original shader color retained by the compatibility submit helpers.
 /// Color is deliberately absent from `ResidentFontMesh`: changing this
@@ -373,6 +375,12 @@ pub(crate) struct GpuFontJobEntry<'a> {
 enum GpuFontJobPositioning {
     Origin,
     VisualBoundsCenter,
+}
+
+#[derive(Clone, Copy)]
+struct GpuFontRasterQuality {
+    pixels_per_unit_x: f32,
+    pixels_per_unit_y: f32,
 }
 
 pub(crate) struct GpuFontJob<'a> {
@@ -1778,6 +1786,7 @@ pub(crate) fn create_resident_font_scene_mesh(
         viewport_width,
         viewport_height,
         GpuFontJobPositioning::Origin,
+        None,
     )
 }
 
@@ -1796,6 +1805,36 @@ pub(crate) fn create_resident_font_centered_scene_mesh(
         viewport_width,
         viewport_height,
         GpuFontJobPositioning::VisualBoundsCenter,
+        None,
+    )
+}
+
+/// Build a centered resident font scene with knowledge of the final physical
+/// target. Glyphs at 8..=32 raster pixels are grid-fitted at their actual ppem
+/// and mapped back into scene units; larger glyphs retain the existing warmed,
+/// size-independent outline path.
+pub(crate) fn create_resident_font_centered_scene_mesh_at_raster(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
+    if raster_width == 0 || raster_height == 0 {
+        return Err("font-raster-empty");
+    }
+    let quality = GpuFontRasterQuality {
+        pixels_per_unit_x: raster_width as f32 / viewport_width.max(1) as f32,
+        pixels_per_unit_y: raster_height as f32 / viewport_height.max(1) as f32,
+    };
+    create_resident_font_scene_mesh_with_positioning(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        GpuFontJobPositioning::VisualBoundsCenter,
+        Some(quality),
     )
 }
 
@@ -1805,11 +1844,31 @@ fn create_resident_font_scene_mesh_with_positioning(
     viewport_width: u32,
     viewport_height: u32,
     positioning: GpuFontJobPositioning,
+    raster_quality: Option<GpuFontRasterQuality>,
 ) -> Result<crate::intel::render::ResidentTriangleMesh, &'static str> {
     if viewport_width == 0 || viewport_height == 0 {
         return Err("font-scene-empty");
     }
-    let built = build_font_job_mesh_inner(entries, font, None, positioning)?;
+    let built = build_font_job_mesh_inner(entries, font, None, positioning, raster_quality)?;
+    let hinted_entries = built
+        .summaries
+        .iter()
+        .filter(|summary| summary.outline_source == "skrifa-size-hinted-outline")
+        .count();
+    if hinted_entries != 0 {
+        let quality = raster_quality.ok_or("font-raster-quality")?;
+        crate::log_info!(
+            target: "render";
+            "intel/gpu-font: small-raster-quality font={} entries={} hinted_entries={} raster_scale={:.4},{:.4} ppem_range={:.1}..={:.1} outline=skrifa-smooth-hinted origin=pixel-snapped coverage=single-sample-next-rung geometry_uploads=1\n",
+            font.registry_name(),
+            built.entries,
+            hinted_entries,
+            quality.pixels_per_unit_x,
+            quality.pixels_per_unit_y,
+            SMALL_FONT_HINT_MIN_RASTER_PX,
+            SMALL_FONT_HINT_MAX_RASTER_PX,
+        );
+    }
     let width = viewport_width as f32;
     let height = viewport_height as f32;
     let mut vertices = Vec::with_capacity(built.vertices.len());
@@ -1839,7 +1898,7 @@ fn build_font_job_mesh(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
 ) -> Result<BuiltGpuFontJob, &'static str> {
-    build_font_job_mesh_inner(entries, font, None, GpuFontJobPositioning::Origin)
+    build_font_job_mesh_inner(entries, font, None, GpuFontJobPositioning::Origin, None)
 }
 
 fn build_font_job_mesh_with_tolerance(
@@ -1847,7 +1906,26 @@ fn build_font_job_mesh_with_tolerance(
     font: GpuFontFace,
     tolerance: f32,
 ) -> Result<BuiltGpuFontJob, &'static str> {
-    build_font_job_mesh_inner(entries, font, Some(tolerance), GpuFontJobPositioning::Origin)
+    build_font_job_mesh_inner(entries, font, Some(tolerance), GpuFontJobPositioning::Origin, None)
+}
+
+fn small_font_hint_ppem(
+    font_units: f32,
+    quality: GpuFontRasterQuality,
+    allow_hinting: bool,
+) -> Option<f32> {
+    if !allow_hinting
+        || !quality.pixels_per_unit_x.is_finite()
+        || !quality.pixels_per_unit_y.is_finite()
+        || quality.pixels_per_unit_x <= 0.0
+        || quality.pixels_per_unit_y <= 0.0
+    {
+        return None;
+    }
+    let ppem = font_units * quality.pixels_per_unit_y;
+    (ppem.is_finite()
+        && (SMALL_FONT_HINT_MIN_RASTER_PX..=SMALL_FONT_HINT_MAX_RASTER_PX).contains(&ppem))
+    .then_some(ppem)
 }
 
 fn build_font_job_mesh_inner(
@@ -1855,6 +1933,7 @@ fn build_font_job_mesh_inner(
     font: GpuFontFace,
     tolerance: Option<f32>,
     positioning: GpuFontJobPositioning,
+    raster_quality: Option<GpuFontRasterQuality>,
 ) -> Result<BuiltGpuFontJob, &'static str> {
     if entries.is_empty() {
         return Err("font-job-empty");
@@ -1878,8 +1957,17 @@ fn build_font_job_mesh_inner(
         {
             return Err("font-job-position");
         }
-        let (mesh, entry_chars, entry_rows) =
-            tessellate_text_request_with_tolerance(entry.text, font, tolerance)?;
+        let hinted_ppem = raster_quality.and_then(|quality| {
+            small_font_hint_ppem(entry.font_pixels, quality, tolerance.is_none())
+        });
+        let tessellation_px = hinted_ppem.unwrap_or(crate::graphics::font::FONT_TESSEL_BASE_PX);
+        let (mesh, entry_chars, entry_rows) = tessellate_text_request_with_tolerance(
+            entry.text,
+            font,
+            tolerance,
+            tessellation_px,
+            hinted_ppem.is_some(),
+        )?;
         if vertices.len() > u32::MAX as usize {
             return Err("font-job-vertex-range");
         }
@@ -1891,12 +1979,18 @@ fn build_font_job_mesh_inner(
         if next_vertex_len > u32::MAX as usize {
             return Err("font-job-vertex-range");
         }
-        let entry_scale = entry.font_pixels / crate::graphics::font::FONT_TESSEL_BASE_PX;
-        let shear_center_y = (mesh.summary.min_y + mesh.summary.max_y) * entry_scale * 0.5;
+        let (entry_scale_x, entry_scale_y) = if hinted_ppem.is_some() {
+            let quality = raster_quality.ok_or("font-raster-quality")?;
+            (quality.pixels_per_unit_x.recip(), quality.pixels_per_unit_y.recip())
+        } else {
+            let scale = entry.font_pixels / crate::graphics::font::FONT_TESSEL_BASE_PX;
+            (scale, scale)
+        };
+        let shear_center_y = (mesh.summary.min_y + mesh.summary.max_y) * entry_scale_y * 0.5;
         let mut local_bounds: Option<(f32, f32, f32, f32)> = None;
         for vertex in &mesh.vertices {
-            let y = vertex[1] * entry_scale;
-            let x = vertex[0] * entry_scale + entry.slant * (shear_center_y - y);
+            let y = vertex[1] * entry_scale_y;
+            let x = vertex[0] * entry_scale_x + entry.slant * (shear_center_y - y);
             local_bounds = Some(match local_bounds {
                 Some((min_x, min_y, max_x, max_y)) => {
                     (min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y))
@@ -1905,17 +1999,24 @@ fn build_font_job_mesh_inner(
             });
         }
         let local_bounds = local_bounds.ok_or("font-job-bounds")?;
-        let entry_origin = match positioning {
+        let mut entry_origin = match positioning {
             GpuFontJobPositioning::Origin => entry.position,
             GpuFontJobPositioning::VisualBoundsCenter => [
                 entry.position[0] - (local_bounds.0 + local_bounds.2) * 0.5,
                 entry.position[1] - (local_bounds.1 + local_bounds.3) * 0.5,
             ],
         };
+        if hinted_ppem.is_some() {
+            let quality = raster_quality.ok_or("font-raster-quality")?;
+            entry_origin[0] = libm::roundf(entry_origin[0] * quality.pixels_per_unit_x)
+                / quality.pixels_per_unit_x;
+            entry_origin[1] = libm::roundf(entry_origin[1] * quality.pixels_per_unit_y)
+                / quality.pixels_per_unit_y;
+        }
         vertices.reserve(mesh.vertices.len());
         for vertex in &mesh.vertices {
-            let y = vertex[1] * entry_scale;
-            let x = vertex[0] * entry_scale + entry.slant * (shear_center_y - y);
+            let y = vertex[1] * entry_scale_y;
+            let x = vertex[0] * entry_scale_x + entry.slant * (shear_center_y - y);
             vertices.push([x + entry_origin[0], y + entry_origin[1]]);
         }
         indices.reserve(mesh.indices.len());
@@ -2276,13 +2377,21 @@ fn tessellate_text_request(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
 ) -> Result<(FontTesselMesh, usize, usize), &'static str> {
-    tessellate_text_request_with_tolerance(request, font, None)
+    tessellate_text_request_with_tolerance(
+        request,
+        font,
+        None,
+        crate::graphics::font::FONT_TESSEL_BASE_PX,
+        false,
+    )
 }
 
 fn tessellate_text_request_with_tolerance(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
     tolerance: Option<f32>,
+    px_size: f32,
+    hinted: bool,
 ) -> Result<(FontTesselMesh, usize, usize), &'static str> {
     let (layout, normalized, row_lengths) = normalize_text_request(request)?;
     let char_count = normalized.chars().count();
@@ -2300,33 +2409,46 @@ fn tessellate_text_request_with_tolerance(
     } else {
         font.registry_name()
     };
-    let mesh = match (layout, tolerance) {
-        (GpuFontTextLayout::SingleLine, Some(tolerance)) => {
+    let mesh = match (layout, tolerance, hinted) {
+        (GpuFontTextLayout::SingleLine, _, true) => {
+            crate::graphics::font::tessellate_text_mesh_hinted(
+                registry_name,
+                normalized.as_str(),
+                px_size,
+            )
+        }
+        (GpuFontTextLayout::Rows, _, true) => {
+            crate::graphics::font::tessellate_text_rows_mesh_hinted(
+                registry_name,
+                normalized.as_str(),
+                px_size,
+                row_lengths.as_slice(),
+            )
+        }
+        (GpuFontTextLayout::SingleLine, Some(tolerance), false) => {
             crate::graphics::font::tessellate_text_mesh_with_tolerance(
                 registry_name,
                 normalized.as_str(),
-                crate::graphics::font::FONT_TESSEL_BASE_PX,
+                px_size,
                 tolerance,
             )
         }
-        (GpuFontTextLayout::Rows, Some(tolerance)) => {
+        (GpuFontTextLayout::Rows, Some(tolerance), false) => {
             crate::graphics::font::tessellate_text_rows_mesh_with_tolerance(
                 registry_name,
                 normalized.as_str(),
-                crate::graphics::font::FONT_TESSEL_BASE_PX,
+                px_size,
                 row_lengths.as_slice(),
                 tolerance,
             )
         }
-        (GpuFontTextLayout::SingleLine, None) => crate::graphics::font::tessellate_text_mesh(
+        (GpuFontTextLayout::SingleLine, None, false) => {
+            crate::graphics::font::tessellate_text_mesh(registry_name, normalized.as_str(), px_size)
+        }
+        (GpuFontTextLayout::Rows, None, false) => crate::graphics::font::tessellate_text_rows_mesh(
             registry_name,
             normalized.as_str(),
-            crate::graphics::font::FONT_TESSEL_BASE_PX,
-        ),
-        (GpuFontTextLayout::Rows, None) => crate::graphics::font::tessellate_text_rows_mesh(
-            registry_name,
-            normalized.as_str(),
-            crate::graphics::font::FONT_TESSEL_BASE_PX,
+            px_size,
             row_lengths.as_slice(),
         ),
     };
@@ -2462,4 +2584,59 @@ pub(crate) fn invalidate_all(reason: &str) -> bool {
 pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'static str> {
     let _ = invalidate_all(reason);
     warm_default_font_once()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GpuFontRasterQuality, SMALL_FONT_HINT_MAX_RASTER_PX, SMALL_FONT_HINT_MIN_RASTER_PX,
+        small_font_hint_ppem,
+    };
+
+    #[test]
+    fn small_font_hint_policy_uses_final_raster_ppem() {
+        let quality = GpuFontRasterQuality {
+            pixels_per_unit_x: 810.0 / 189.0,
+            pixels_per_unit_y: 1_153.0 / 269.0,
+        };
+        let scene_em = 24.0 / quality.pixels_per_unit_y;
+        let ppem = small_font_hint_ppem(scene_em, quality, true).expect("24 px is hinted");
+        assert!((ppem - 24.0).abs() < 0.001);
+
+        let min = small_font_hint_ppem(
+            SMALL_FONT_HINT_MIN_RASTER_PX / quality.pixels_per_unit_y,
+            quality,
+            true,
+        )
+        .expect("lower bound is inclusive");
+        assert!((min - SMALL_FONT_HINT_MIN_RASTER_PX).abs() < 0.001);
+        let max = small_font_hint_ppem(
+            SMALL_FONT_HINT_MAX_RASTER_PX / quality.pixels_per_unit_y,
+            quality,
+            true,
+        )
+        .expect("upper bound is inclusive");
+        assert!((max - SMALL_FONT_HINT_MAX_RASTER_PX).abs() < 0.001);
+        assert!(small_font_hint_ppem(scene_em, quality, false).is_none());
+    }
+
+    #[test]
+    fn small_font_hint_policy_rejects_large_or_invalid_targets() {
+        let quality = GpuFontRasterQuality {
+            pixels_per_unit_x: 4.0,
+            pixels_per_unit_y: 4.0,
+        };
+        assert!(small_font_hint_ppem(12.0, quality, true).is_none());
+        assert!(
+            small_font_hint_ppem(
+                6.0,
+                GpuFontRasterQuality {
+                    pixels_per_unit_x: 0.0,
+                    pixels_per_unit_y: 4.0,
+                },
+                true,
+            )
+            .is_none()
+        );
+    }
 }

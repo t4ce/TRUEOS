@@ -408,11 +408,8 @@ pub unsafe extern "C" fn trueos_vlayer_print2d_submit(
 
 pub extern "C" fn trueos_vlayer_print2d_status(job_id: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_PRINT2D_STATUS,
-            u64::from(job_id),
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_PRINT2D_STATUS, u64::from(job_id), 0);
         return if status == trueos_vm::vmcall::STATUS_OK {
             data as i64 as i32
         } else {

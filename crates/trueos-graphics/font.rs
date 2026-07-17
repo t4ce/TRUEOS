@@ -10,13 +10,13 @@ use core::mem::size_of;
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
     instance::{LocationRef, Size},
-    outline::{DrawSettings, OutlinePen},
+    outline::{DrawSettings, HintingInstance, HintingOptions, OutlinePen},
     raw::TableProvider,
 };
 use spin::Mutex;
 
 use super::path_mesh::{
-    FillError, FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, point,
+    FillError, FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, Point, point,
 };
 
 const FONT_ENDSTATE_OUTLINE_COMMANDS: &str = "font-units-outline-commands";
@@ -150,6 +150,7 @@ pub(crate) struct FontTesselMesh {
 struct TransientGlyphMesh {
     glyph_index: u32,
     path_commands: usize,
+    advance_width: f32,
     bounds: TesselBounds,
     vertices: Vec<[f32; 2]>,
     indices: Vec<u32>,
@@ -365,7 +366,7 @@ pub(crate) fn tessellate_default_text_mesh() -> FontTesselMesh {
 }
 
 pub(crate) fn tessellate_text_mesh(name: &'static str, text: &str, px_size: f32) -> FontTesselMesh {
-    tessellate_text_mesh_grouped(name, text, px_size, None, FillOptions::DEFAULT)
+    tessellate_text_mesh_grouped(name, text, px_size, None, FillOptions::DEFAULT, false)
 }
 
 pub(crate) fn tessellate_text_mesh_with_tolerance(
@@ -380,7 +381,20 @@ pub(crate) fn tessellate_text_mesh_with_tolerance(
         px_size,
         None,
         FillOptions::DEFAULT.with_tolerance(tolerance),
+        false,
     )
+}
+
+/// Tessellate at the final raster ppem after applying the face's smooth-target
+/// hinting program. This is intentionally separate from the warmed unscaled
+/// outline path: retained scene consumers opt in only when they know the
+/// physical pixel scale of their final target.
+pub(crate) fn tessellate_text_mesh_hinted(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(name, text, px_size, None, FillOptions::DEFAULT, true)
 }
 
 pub(crate) fn tessellate_text_rows_mesh(
@@ -389,7 +403,14 @@ pub(crate) fn tessellate_text_rows_mesh(
     px_size: f32,
     row_lengths: &[usize],
 ) -> FontTesselMesh {
-    tessellate_text_mesh_grouped(name, text, px_size, Some(row_lengths), FillOptions::DEFAULT)
+    tessellate_text_mesh_grouped(
+        name,
+        text,
+        px_size,
+        Some(row_lengths),
+        FillOptions::DEFAULT,
+        false,
+    )
 }
 
 pub(crate) fn tessellate_text_rows_mesh_with_tolerance(
@@ -405,7 +426,17 @@ pub(crate) fn tessellate_text_rows_mesh_with_tolerance(
         px_size,
         Some(row_lengths),
         FillOptions::DEFAULT.with_tolerance(tolerance),
+        false,
     )
+}
+
+pub(crate) fn tessellate_text_rows_mesh_hinted(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+    row_lengths: &[usize],
+) -> FontTesselMesh {
+    tessellate_text_mesh_grouped(name, text, px_size, Some(row_lengths), FillOptions::DEFAULT, true)
 }
 
 fn tessellate_text_mesh_grouped(
@@ -414,6 +445,7 @@ fn tessellate_text_mesh_grouped(
     px_size: f32,
     row_lengths: Option<&[usize]>,
     fill_options: FillOptions,
+    hinted: bool,
 ) -> FontTesselMesh {
     let total_start = embassy_time_driver::now();
     match warm_embedded_font_by_name(name) {
@@ -467,13 +499,40 @@ fn tessellate_text_mesh_grouped(
 
     let charmap_start = embassy_time_driver::now();
     let charmap = font.charmap();
-    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
-    let scale = px_size / (font_record.units_per_em as f32).max(1.0);
-    let fallback_advance = font_record.units_per_em as f32 * 0.35;
+    let outlines = font.outline_glyphs();
+    let hinting = hinted
+        .then(|| {
+            HintingInstance::new(
+                &outlines,
+                Size::new(px_size),
+                LocationRef::default(),
+                HintingOptions::default(),
+            )
+            .ok()
+        })
+        .flatten();
+    let hinted = hinting.is_some();
+    let metrics_size = if hinted {
+        Size::new(px_size)
+    } else {
+        Size::unscaled()
+    };
+    let metrics = font.glyph_metrics(metrics_size, LocationRef::default());
+    let scale = if hinted {
+        1.0
+    } else {
+        px_size / (font_record.units_per_em as f32).max(1.0)
+    };
+    let fallback_advance = if hinted {
+        px_size * 0.35
+    } else {
+        font_record.units_per_em as f32 * 0.35
+    };
     let space_advance = charmap
         .map(' ')
         .and_then(|glyph_id| metrics.advance_width(glyph_id))
-        .unwrap_or(fallback_advance);
+        .unwrap_or(fallback_advance)
+        * scale;
     let charmap_ms = elapsed_ms_since(charmap_start);
 
     let mut glyphs = 0usize;
@@ -512,7 +571,7 @@ fn tessellate_text_mesh_grouped(
         }
         glyphs = glyphs.saturating_add(1);
         if ch.is_whitespace() {
-            pen_x += space_advance * scale;
+            pen_x += space_advance;
             chars_placed = chars_placed.saturating_add(1);
             continue;
         }
@@ -533,14 +592,30 @@ fn tessellate_text_mesh_grouped(
             let path_start = embassy_time_driver::now();
             let mut builder = FillPath::builder_with_options(&fill_options);
             let mut glyph_bounds = TesselBounds::default();
-            let appended = outline.append_glyph_path(
-                glyph_id,
-                &mut builder,
-                0.0,
-                0.0,
-                scale,
-                &mut glyph_bounds,
-            );
+            let mut hinted_advance = None;
+            let appended = if let Some(hinting) = hinting.as_ref() {
+                if let Some(glyph) = outlines.get(glyph_id) {
+                    let mut pen = RasterOutlinePen::new(&mut builder, &mut glyph_bounds);
+                    match glyph.draw(DrawSettings::hinted(hinting, false), &mut pen) {
+                        Ok(adjusted) => {
+                            hinted_advance = adjusted.advance_width;
+                            pen.finish()
+                        }
+                        Err(_) => 0,
+                    }
+                } else {
+                    0
+                }
+            } else {
+                outline.append_glyph_path(
+                    glyph_id,
+                    &mut builder,
+                    0.0,
+                    0.0,
+                    scale,
+                    &mut glyph_bounds,
+                )
+            };
             let path = builder.build();
             path_ms = path_ms.saturating_add(elapsed_ms_since(path_start));
 
@@ -562,6 +637,10 @@ fn tessellate_text_mesh_grouped(
             glyph_meshes.push(TransientGlyphMesh {
                 glyph_index,
                 path_commands: appended,
+                advance_width: hinted_advance
+                    .or_else(|| metrics.advance_width(glyph_id))
+                    .unwrap_or(fallback_advance)
+                    * scale,
                 bounds: glyph_bounds,
                 vertices: glyph_vertices,
                 indices: glyph_indices,
@@ -604,7 +683,7 @@ fn tessellate_text_mesh_grouped(
             indices.reserve(cached.indices.len());
             indices.extend(cached.indices.iter().map(|index| base_index + *index));
         }
-        pen_x += metrics.advance_width(glyph_id).unwrap_or(fallback_advance) * scale;
+        pen_x += cached.advance_width;
         chars_placed = chars_placed.saturating_add(1);
     }
     let tessellated_ok = tessellate_failures == 0;
@@ -626,7 +705,11 @@ fn tessellate_text_mesh_grouped(
         text: text.into(),
         font_name: font_record.name,
         font_file: font_record.file_name,
-        outline_source: outline.name,
+        outline_source: if hinted {
+            "skrifa-size-hinted-outline"
+        } else {
+            outline.name
+        },
         px_size,
         glyphs,
         glyph_hits,
@@ -1464,6 +1547,81 @@ struct WarmOutlinePen {
     quad_to: usize,
     curve_to: usize,
     close: usize,
+}
+
+/// Receives an already-scaled hinted outline and maps its +Y-up coordinates
+/// into the +Y-down space used by the fill tessellator.
+struct RasterOutlinePen<'a> {
+    builder: &'a mut FillPathBuilder,
+    bounds: &'a mut TesselBounds,
+    open: bool,
+    commands: usize,
+}
+
+impl<'a> RasterOutlinePen<'a> {
+    fn new(builder: &'a mut FillPathBuilder, bounds: &'a mut TesselBounds) -> Self {
+        Self {
+            builder,
+            bounds,
+            open: false,
+            commands: 0,
+        }
+    }
+
+    fn map(&mut self, x: f32, y: f32) -> Point {
+        let mapped = point(x, -y);
+        self.bounds.include(mapped.x, mapped.y);
+        mapped
+    }
+
+    fn finish(mut self) -> usize {
+        if self.open {
+            self.builder.end(false);
+            self.open = false;
+        }
+        self.commands
+    }
+}
+
+impl OutlinePen for RasterOutlinePen<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        if self.open {
+            self.builder.end(false);
+        }
+        let to = self.map(x, y);
+        self.builder.begin(to);
+        self.open = true;
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        let to = self.map(x, y);
+        self.builder.line_to(to);
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        let control = self.map(cx0, cy0);
+        let to = self.map(x, y);
+        self.builder.quadratic_bezier_to(control, to);
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        let control0 = self.map(cx0, cy0);
+        let control1 = self.map(cx1, cy1);
+        let to = self.map(x, y);
+        self.builder.cubic_bezier_to(control0, control1, to);
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    fn close(&mut self) {
+        if self.open {
+            self.builder.close();
+            self.open = false;
+        }
+        self.commands = self.commands.saturating_add(1);
+    }
 }
 
 impl OutlinePen for WarmOutlinePen {

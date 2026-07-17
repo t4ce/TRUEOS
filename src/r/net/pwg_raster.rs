@@ -40,12 +40,10 @@ pub(crate) fn encode_gridpaper_a4(
     let page_height = tenth_mm_to_pixels(A4_HEIGHT_TENTH_MM);
     let surface_left = tenth_mm_to_pixels(SURFACE_LEFT_TENTH_MM);
     let surface_top = tenth_mm_to_pixels(SURFACE_TOP_TENTH_MM);
-    let surface_right = tenth_mm_to_pixels(
-        SURFACE_LEFT_TENTH_MM.saturating_add(SURFACE_WIDTH_TENTH_MM),
-    );
-    let surface_bottom = tenth_mm_to_pixels(
-        SURFACE_TOP_TENTH_MM.saturating_add(SURFACE_HEIGHT_TENTH_MM),
-    );
+    let surface_right =
+        tenth_mm_to_pixels(SURFACE_LEFT_TENTH_MM.saturating_add(SURFACE_WIDTH_TENTH_MM));
+    let surface_bottom =
+        tenth_mm_to_pixels(SURFACE_TOP_TENTH_MM.saturating_add(SURFACE_HEIGHT_TENTH_MM));
     let surface_width = surface_right.saturating_sub(surface_left).max(1);
     let surface_height = surface_bottom.saturating_sub(surface_top).max(1);
 

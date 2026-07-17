@@ -1048,7 +1048,7 @@ fn build_resident_page(
     pan: ScenePan,
 ) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
-        GpuFontJobEntry, GpuFontTextRequest, create_resident_font_centered_scene_mesh,
+        GpuFontJobEntry, GpuFontTextRequest, create_resident_font_centered_scene_mesh_at_raster,
         ensure_font_face_available,
     };
 
@@ -1261,11 +1261,13 @@ fn build_resident_page(
                     });
                 }
             }
-            let mesh = create_resident_font_centered_scene_mesh(
+            let mesh = create_resident_font_centered_scene_mesh_at_raster(
                 &entries,
                 font,
                 SCENE_WIDTH,
                 SCENE_HEIGHT,
+                raster_width,
+                raster_height,
             )?;
             layers.push(ResidentLayer {
                 base_color: palette(color, false),

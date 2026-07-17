@@ -904,6 +904,22 @@ pub(crate) fn reserve_matrix_target_for_vm_slot_selected(
     }
 }
 
+pub(crate) fn claim_matrix_target_for_app_slot_selected(
+    output_mask: u8,
+    requested: &str,
+    app_label: &str,
+) -> MatrixTarget {
+    let slot_id = matrix::claim_available_app_slot_selected(output_mask, requested, app_label);
+    let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);
+    let interrupt_generation = matrix::slot_interrupt_generation(&slot_id);
+    MatrixTarget {
+        output_mask,
+        slot_id,
+        slot_lifetime_generation,
+        interrupt_generation,
+    }
+}
+
 pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) -> MatrixTarget {
     let slot_id = matrix::switch_active_slot(target.output_mask, requested);
     let slot_lifetime_generation = matrix::slot_lifetime_generation(&slot_id);

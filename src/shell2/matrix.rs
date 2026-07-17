@@ -267,7 +267,7 @@ pub(crate) fn switch_active_slot(output_mask: u8, requested: &str) -> MatrixSlot
 }
 
 fn slot_available_for_vm(slot: &MatrixSlot) -> bool {
-    slot.vm_id.is_none() && !slot.vm_launch_reserved
+    slot.vm_id.is_none() && !slot.vm_launch_reserved && slot.app_label.is_none()
 }
 
 fn reserve_vm_slot_id(guard: &mut MatrixState, id: &MatrixSlotId) -> bool {
@@ -352,6 +352,92 @@ pub(crate) fn reserve_available_vm_slot_selected(output_mask: u8, preferred: &st
     }
 
     let _ = reserve_vm_slot_id(&mut guard, &preferred_id);
+    *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
+    bump_active_view_revision(&mut guard, output_mask);
+    preferred_id
+}
+
+fn claim_app_slot(guard: &mut MatrixState, id: &MatrixSlotId, app_label: &str) -> bool {
+    let idx = ensure_slot_index(&mut guard.slots, id);
+    let slot = &guard.slots[idx];
+    let already_owned = slot.app_label.as_deref() == Some(app_label)
+        && slot.vm_id.is_none()
+        && !slot.vm_launch_reserved;
+    let unoccupied = slot.lines.is_empty()
+        && slot.activity == MatrixSlotActivity::Idle
+        && slot.running_count == 0
+        && slot.vm_id.is_none()
+        && !slot.vm_launch_reserved
+        && slot.app_label.is_none();
+    if !already_owned && !unoccupied {
+        return false;
+    }
+
+    let slot = &mut guard.slots[idx];
+    let next_label = Some(AllocString::from(app_label));
+    let changed = slot.app_label != next_label || slot.activity != MatrixSlotActivity::Session;
+    slot.app_label = next_label;
+    slot.activity = MatrixSlotActivity::Session;
+    if changed {
+        bump_slot_revision(guard, idx);
+    }
+    true
+}
+
+/// Select one app-owned Matrix slot, reusing its prior claim or applying the
+/// same compact base-36 collision fallback used by VM-backed slots.
+pub(crate) fn claim_available_app_slot_selected(
+    output_mask: u8,
+    preferred: &str,
+    app_label: &str,
+) -> MatrixSlotId {
+    let preferred_id = normalize_slot_id(preferred);
+    let default_id = default_slot_id();
+    let mut guard = state().lock();
+
+    if let Some(existing) = guard
+        .slots
+        .iter()
+        .find(|slot| {
+            slot.app_label.as_deref() == Some(app_label)
+                && slot.vm_id.is_none()
+                && !slot.vm_launch_reserved
+        })
+        .map(|slot| slot.id.clone())
+    {
+        *active_slot_id_mut(&mut guard, output_mask) = existing.clone();
+        bump_active_view_revision(&mut guard, output_mask);
+        return existing;
+    }
+
+    if preferred_id != default_id && claim_app_slot(&mut guard, &preferred_id, app_label) {
+        *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
+        bump_active_view_revision(&mut guard, output_mask);
+        return preferred_id;
+    }
+
+    for attempt in 1..=35 {
+        let candidate = fallback_slot_candidate(&preferred_id, attempt);
+        if candidate == default_id {
+            continue;
+        }
+        if claim_app_slot(&mut guard, &candidate, app_label) {
+            *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
+            bump_active_view_revision(&mut guard, output_mask);
+            return candidate;
+        }
+    }
+
+    for attempt in 0..(26 * 36 * 36) {
+        let candidate = broad_slot_candidate(attempt);
+        if claim_app_slot(&mut guard, &candidate, app_label) {
+            *active_slot_id_mut(&mut guard, output_mask) = candidate.clone();
+            bump_active_view_revision(&mut guard, output_mask);
+            return candidate;
+        }
+    }
+
+    let _ = claim_app_slot(&mut guard, &preferred_id, app_label);
     *active_slot_id_mut(&mut guard, output_mask) = preferred_id.clone();
     bump_active_view_revision(&mut guard, output_mask);
     preferred_id
@@ -811,4 +897,17 @@ pub(crate) fn slot_transcript_text(slot_id: &MatrixSlotId) -> AllocString {
         out.push_str(line.text.as_str());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_slot_fallback_keeps_two_letter_stem_and_base36_suffix() {
+        let stem = normalize_slot_id("cry");
+        assert_eq!(fallback_slot_candidate(&stem, 1).as_str(), "cr1");
+        assert_eq!(fallback_slot_candidate(&stem, 2).as_str(), "cr2");
+        assert_eq!(fallback_slot_candidate(&stem, 10).as_str(), "cra");
+    }
 }
