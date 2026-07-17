@@ -375,7 +375,8 @@ async fn hid_boot_stream_task(
     let product_id = desc.product_id;
     let slot_id = u32::from(device.slot_id());
     let ep_target = endpoint_target_from_address(target.in_endpoint);
-    let mut boot_protocol_ok = false;
+    let mut hid_protocol_ok = false;
+    let mut selected_protocol = "native";
     let mut set_idle_ok = false;
 
     if let Err(err) = device.set_configuration(target.configuration_value).await {
@@ -412,6 +413,18 @@ async fn hid_boot_stream_task(
 
     if matches!(target.kind, HidBootKind::Mouse | HidBootKind::Keyboard) && !target.generic_pointer
     {
+        // Boot-mouse protocol only guarantees buttons 1-3.  Keep keyboards in
+        // their small, predictable boot format, but ask mice for report
+        // protocol so HID button usages 4+ (side/back/forward buttons) survive
+        // into the UI4 input ring.  Conventional boot mice use the same
+        // buttons/dx/dy/wheel prefix in report protocol.
+        let protocol = if matches!(target.kind, HidBootKind::Mouse) {
+            selected_protocol = "report";
+            1
+        } else {
+            selected_protocol = "boot";
+            0
+        };
         match interface
             .device()
             .control_out(
@@ -419,7 +432,7 @@ async fn hid_boot_stream_task(
                     request_type: usb_if::transfer::RequestType::Class,
                     recipient: usb_if::transfer::Recipient::Interface,
                     request: usb_if::transfer::Request::Other(0x0B),
-                    value: 0,
+                    value: protocol,
                     index: u16::from(target.interface_number),
                 },
                 &[],
@@ -427,14 +440,15 @@ async fn hid_boot_stream_task(
             .await
         {
             Ok(_) => {
-                boot_protocol_ok = true;
+                hid_protocol_ok = true;
             }
             Err(err) => {
                 crate::log_info!(target: "usb";
-                    "crabusb: hid {} {:04X}:{:04X} boot protocol if#{} failed (continuing): {:?}\n",
+                    "crabusb: hid {} {:04X}:{:04X} {} protocol if#{} failed (continuing): {:?}\n",
                     target.kind.as_str(),
                     vendor_id,
                     product_id,
+                    selected_protocol,
                     target.interface_number,
                     err
                 );
@@ -537,7 +551,7 @@ async fn hid_boot_stream_task(
     };
 
     crate::log_info!(target: "usb";
-        "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} boot={} idle={}\n",
+        "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} selected_protocol={} protocol_set={} idle={}\n",
         target.kind.as_str(),
         vendor_id,
         product_id,
@@ -549,7 +563,8 @@ async fn hid_boot_stream_task(
         target.in_max_packet_size,
         ep_target,
         target.protocol,
-        boot_protocol_ok,
+        selected_protocol,
+        hid_protocol_ok,
         set_idle_ok
     );
 
@@ -758,6 +773,26 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                         target.interface_number
                     );
                 }
+            }
+        } else if matches!(target.kind, HidBootKind::Mouse) {
+            // Report protocol may prefix the mouse payload with a report ID,
+            // unlike the boot packet we used before.  Discover that before
+            // handing the interface to the stream task so button 4/5 do not
+            // get shifted into the button byte.
+            if let Some(info) =
+                read_generic_pointer_info(host, dev_info, target.interface_number).await
+            {
+                target.strip_report_id = info.has_report_id;
+                if info.has_report_id {
+                    target.report_len = usize::from(target.in_max_packet_size.max(5));
+                }
+                crate::log_info!(target: "usb";
+                    "crabusb: hid {:04X}:{:04X} boot mouse if#{} report_id={} selected_protocol=report\n",
+                    vendor_id,
+                    product_id,
+                    target.interface_number,
+                    info.has_report_id,
+                );
             }
         }
 

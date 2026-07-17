@@ -79,6 +79,10 @@ const PRIMARY_REARM_PRESERVE_NON_PRIMARY_PLANES: bool = true;
 const UI_OVERLAY_PLANE_SLOT: usize = crate::ui4::ALPHA_OVERLAY_PLANE_SLOT;
 const VIDEO_NV12_PLANE_SLOT: usize = crate::ui4::NV12_UV_PLANE_SLOT;
 const VIDEO_NV12_Y_PLANE_SLOT: usize = crate::ui4::NV12_Y_PLANE_SLOT;
+// The retired linked-NV12 experiment owns zero-based slots 2/3 (hardware
+// planes 3/4). Keep its ABI callable but inert while UI4 owns those slots as
+// ordinary RGB windows.
+const LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED: bool = false;
 const OVERLAY_PLANE_SLOT: usize = UI_OVERLAY_PLANE_SLOT;
 const DEFAULT_OVERLAY_MARKER_ENABLED: bool = false;
 const DEFAULT_OVERLAY_MARKER_SIZE: u32 = 50;
@@ -5254,6 +5258,9 @@ pub(super) fn program_decoded_nv12_overlay_plane_alpha(
 }
 
 pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> bool {
+    if !LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED {
+        return false;
+    }
     let before = VIDEO_NV12_PLANE_ALPHA.swap(u32::from(alpha), Ordering::AcqRel) as u8;
     let mut applied = None;
     if let Some(dev) = crate::intel::claimed_device()
@@ -5606,6 +5613,9 @@ fn mute_decoded_nv12_overlay_plane_before_hide(
 }
 
 pub(crate) fn hide_decoded_nv12_overlay_plane(reason: &str) -> bool {
+    if !LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED {
+        return false;
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };

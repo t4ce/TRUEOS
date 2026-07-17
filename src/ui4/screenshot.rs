@@ -373,18 +373,42 @@ fn screenshot_path(capture: &CapturedComposition) -> String {
     )
 }
 
+/// Prefer the normal primary root, but do not let a later-mounted read-only
+/// image hide an earlier writable TRUEOSFS disk from screenshot persistence.
+fn writable_screenshot_root_handle() -> Option<crate::disc::block::DeviceHandle> {
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle()
+        && !disk.info().is_read_only()
+    {
+        return Some(disk);
+    }
+    crate::r::fs::trueosfs::list_roots()
+        .into_iter()
+        .filter_map(|root| crate::disc::block::device_handle(root.disk_id))
+        .find(|disk| !disk.info().is_read_only())
+}
+
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
         "ui4/screenshot: service online trigger=mouse-buttons-4-or-5 capture=next-composed-frame format=png-rgba destination=trueosfs:/screenshots worker=background\n"
     );
+    let mut root_wait_logged = false;
     loop {
         let capture = CAPTURE_QUEUE.lock().pop_front();
         let Some(capture) = capture else {
             Timer::after(Duration::from_millis(SAVE_IDLE_PERIOD_MS)).await;
             continue;
         };
-        let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        let Some(disk) = writable_screenshot_root_handle() else {
+            if !root_wait_logged {
+                crate::log_warn!(target: "ui4/screenshot";
+                    "ui4/screenshot: save waiting sequence={} reason=no-writable-trueosfs-root mounted_roots={} retry_ms={}\n",
+                    capture.sequence,
+                    crate::r::fs::trueosfs::roots_len(),
+                    ROOT_RETRY_PERIOD_MS,
+                );
+                root_wait_logged = true;
+            }
             let mut queue = CAPTURE_QUEUE.lock();
             if queue.len() < MAX_CAPTURE_QUEUE {
                 queue.push_front(capture);
@@ -399,6 +423,8 @@ pub(crate) async fn ui4_screenshot_service_task() {
             Timer::after(Duration::from_millis(ROOT_RETRY_PERIOD_MS)).await;
             continue;
         };
+        root_wait_logged = false;
+        let disk_id = disk.id().raw();
         let path = screenshot_path(&capture);
         let encode_started_ns = crate::chronos::monotonic_nanos();
         let stride = capture.width as usize * 4;
@@ -424,8 +450,9 @@ pub(crate) async fn ui4_screenshot_service_task() {
         let encoded_ns = crate::chronos::monotonic_nanos();
         match crate::r::fs::trueosfs::file_in_async(disk, path.as_str(), png.as_slice()).await {
             Ok(true) => crate::log_info!(target: "ui4/screenshot";
-                "ui4/screenshot: saved path=trueosfs:/{} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
+                "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
                 path,
+                disk_id,
                 capture.sequence,
                 capture.width,
                 capture.height,
@@ -434,13 +461,15 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 crate::chronos::monotonic_nanos().saturating_sub(encoded_ns) / 1_000,
             ),
             Ok(false) => crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: save failed path=trueosfs:/{} sequence={} reason=no-space-or-root-placement\n",
+                "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} reason=no-space-or-root-placement\n",
                 path,
+                disk_id,
                 capture.sequence,
             ),
             Err(error) => crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: save failed path=trueosfs:/{} sequence={} error={:?}\n",
+                "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} error={:?}\n",
                 path,
+                disk_id,
                 capture.sequence,
                 error,
             ),

@@ -2034,7 +2034,7 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
     uv_offset: usize,
     byte_len: usize,
 ) -> bool {
-    if !DIRECT_NV12_PLANE_PROBE_ENABLED {
+    if !LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED || !DIRECT_NV12_PLANE_PROBE_ENABLED {
         return false;
     }
     let Some(dev) = crate::intel::claimed_device() else {
@@ -2109,7 +2109,7 @@ pub(crate) fn arm_decoded_nv12_overlay_plane_probe(
 }
 
 pub(crate) fn decoded_nv12_overlay_plane_probe_replaces_cpu_present() -> bool {
-    DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED
+    LEGACY_DIRECT_NV12_PLANE_ABI_ENABLED && DIRECT_NV12_LINKED_PLANES_PROBE_ENABLED
 }
 
 fn rgb_plane_probe_spec(index: usize) -> Option<(usize, u32, u32, u32, u32, u32, &'static str)> {

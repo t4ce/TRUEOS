@@ -27,6 +27,7 @@ const MAX_SCALE_PERCENT: u32 = 800;
 
 const VIEWPORT_WIDTH: u32 = 700;
 const VIEWPORT_HEIGHT: u32 = 990;
+const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
 
@@ -357,6 +358,7 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
     let mut texts = Vec::new();
     let cell_width = VIEWPORT_WIDTH as f32 / COLUMNS as f32;
     let millimeter = VIEWPORT_HEIGHT as f32 / 297.0;
+    let regular_cell_height = 10.0 * millimeter;
     let scale = f32::from(snapshot.scale_percent) / 100.0;
 
     for row in 0..ROWS {
@@ -394,7 +396,9 @@ fn build_resident_page(snapshot: &OwnedSnapshot) -> Result<ResidentPage, &'stati
             }
             let text = core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + text_len])
                 .map_err(|_| "gridpaper-utf8")?;
-            let font_pixels = (cell_height * 0.58 * scale).clamp(1.0, 256.0);
+            let font_pixels =
+                (DEFAULT_REGULAR_ROW_FONT_PIXELS * (cell_height / regular_cell_height) * scale)
+                    .clamp(1.0, 256.0);
             let baseline = top + cell_height * 0.72;
             texts.push(TextCell {
                 text: String::from(text),

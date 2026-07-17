@@ -10,8 +10,8 @@ const H264_BOOT_PROBE_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
 const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
     fps: 60,
-    reverse_after_forward: true,
-    cache_mode: H264PlaybackCacheMode::Tail,
+    reverse_after_forward: false,
+    cache_mode: H264PlaybackCacheMode::Off,
     stripe_study: false,
     show_cache_fill: false,
     diagnostics: false,
@@ -19,6 +19,14 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
     loop_playback: true,
     presentation: H264PresentationPolicy::Ui4ProbeRequired,
 };
+// Cached reverse frames still use the retired primary-surface presentation
+// path instead of the ordinary UI4 window. Keep that ABI parked until reverse
+// presentation is converted to the same UI4 RGBA producer as forward playback.
+const H264_REVERSE_PLAYBACK_ENABLED: bool = false;
+// The old direct linked-plane and primary-surface fallbacks escape UI4 frame
+// ownership. Leave their call sites in place for bring-up archaeology, but do
+// not let playback enter them while the ABI is parked.
+const H264_LEGACY_PRESENTATION_ABI_ENABLED: bool = false;
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
 const H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
@@ -387,6 +395,10 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
             crate::percpu::current_slot()
         );
         if let Some(file) = h264_wait_for_playback_stream().await {
+            let old_noreset_lite =
+                crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(
+                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.noreset_lite(),
+                );
             let mut lap = 0usize;
             loop {
                 lap = lap.saturating_add(1);
@@ -411,6 +423,7 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
                     break;
                 }
             }
+            crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
         } else {
             crate::log!(
                 "intel/hw_vid: ui4-dummy-app2 skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
@@ -2576,9 +2589,10 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut indexed_frames = Vec::new();
     let mut last_idr_frame: Option<usize> = None;
     let forward_full_cache_enabled = matches!(mode.cache_mode(), H264PlaybackCacheMode::Full)
-        && (mode.reverse_after_forward() || mode.stripe_study());
-    let forward_tail_cache_enabled =
-        matches!(mode.cache_mode(), H264PlaybackCacheMode::Tail) && mode.reverse_after_forward();
+        && ((H264_REVERSE_PLAYBACK_ENABLED && mode.reverse_after_forward()) || mode.stripe_study());
+    let forward_tail_cache_enabled = H264_REVERSE_PLAYBACK_ENABLED
+        && matches!(mode.cache_mode(), H264PlaybackCacheMode::Tail)
+        && mode.reverse_after_forward();
     let capture_forward_output = forward_full_cache_enabled || forward_tail_cache_enabled;
     let mut forward_full_cache = Vec::new();
     let mut forward_tail_start_frame = 0usize;
@@ -2961,6 +2975,13 @@ async fn h264_reverse_playback_probe(
     forward_cache: Option<H264ForwardCache>,
     mode: H264PlaybackOptions,
 ) {
+    if !H264_REVERSE_PLAYBACK_ENABLED {
+        crate::log!(
+            "intel/hw_vid: h264-reverse-probe skipped reason=reverse-playback-abi-disabled path={}\n",
+            path
+        );
+        return;
+    }
     if frames.is_empty() {
         crate::log!("intel/hw_vid: h264-reverse-probe skipped reason=no-indexed-frames\n");
         return;
@@ -3779,10 +3800,18 @@ fn h264_present_probe_output(
             }
             return ui4_presented;
         }
-        if ui4_presented
-            && crate::intel::display::decoded_nv12_overlay_plane_probe_replaces_cpu_present()
-        {
+        if ui4_presented {
             return true;
+        }
+        if !H264_LEGACY_PRESENTATION_ABI_ENABLED {
+            crate::log!(
+                "intel/hw_vid: h264-present ui4 failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame legacy_presentation_abi=disabled\n",
+                phase,
+                playback_frame,
+                stream_idr_index,
+                output.id
+            );
+            return false;
         }
         // Keep the already-proven linked-plane path as a migration fallback.
         // It is reached only if UI4 could not allocate, lease, convert or
@@ -3865,7 +3894,7 @@ fn h264_capture_probe_output(output: &super::hw_pic::HwPicOutput) -> Option<H264
 }
 
 fn h264_present_decoded_frame(frame: &H264DecodedFrame) -> bool {
-    if frame.bytes.is_empty() {
+    if !H264_LEGACY_PRESENTATION_ABI_ENABLED || frame.bytes.is_empty() {
         return false;
     }
     crate::intel::display::present_ytile_nv12_surface_center(
