@@ -1165,8 +1165,41 @@ fn transcript_prefers_chronological_layout(transcript: &VecDeque<TranscriptEntry
 }
 
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
+    let recorded = user_submission_for_recording(submitted);
     let _ =
-        matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, submitted);
+        matrix::record_line_for_output(output_target_for_backend(io), LineSource::User, recorded);
+}
+
+fn user_submission_for_recording(submitted: &str) -> &str {
+    let mut args = submitted.split_whitespace();
+    let first = args.next();
+    let second = args.next();
+    let third = args.next();
+    let fourth = args.next();
+
+    let named_login = matches!((first, second, third, fourth),
+        (Some(command), Some(login), Some(code), None)
+            if command.eq_ignore_ascii_case("cry")
+                && login.eq_ignore_ascii_case("login")
+                && is_six_digit_code(code));
+    let named_root_login = matches!((first, second, third, fourth),
+        (Some(command), Some(login), Some(account), Some(code))
+            if command.eq_ignore_ascii_case("cry")
+                && login.eq_ignore_ascii_case("login")
+                && account.eq_ignore_ascii_case("root")
+                && is_six_digit_code(code));
+
+    if named_login {
+        "cry login ******"
+    } else if named_root_login {
+        "cry login root ******"
+    } else {
+        submitted
+    }
+}
+
+fn is_six_digit_code(value: &str) -> bool {
+    value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
@@ -1509,7 +1542,7 @@ fn handle_command_session_input(
             )
         }
         shell2_cmd::CommandSessionKind::RemoveSure(session_id) => {
-            crate::shell2::cmds::rm::handle_session_input(&target, submitted, session_id)
+            crate::shell2::cmds::rm::handle_session_input(spawner, &target, submitted, session_id)
         }
     }
 }
@@ -2094,7 +2127,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
-                    matrix::record_user_input(submitted_raw);
+                    matrix::record_user_input(user_submission_for_recording(submitted_raw));
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     out.prompt(output_mask);

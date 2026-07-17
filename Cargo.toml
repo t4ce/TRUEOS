@@ -26,6 +26,7 @@ embedded-io-async = { version = "0.7.0", default-features = false }
 trueos-io = { path = "crates/trueos-io" }
 trueos-crypto = { path = "crates/trueos-crypto" }
 ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
+qrcodegen = { package = "qrcodegen-no-heap", version = "1.8.1", default-features = false }
 heapless = { version = "0.9", default-features = false }
 bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }
@@ -35,7 +36,7 @@ getrandom_02 = { package = "getrandom", version = "0.2", default-features = fals
 raw-cpuid = { version = "11", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
-zeroize = { version = "1", default-features = false }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
 libm = { version = "0.2", default-features = false }
 skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }

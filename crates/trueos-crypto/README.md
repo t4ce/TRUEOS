@@ -30,12 +30,16 @@ Local account authentication is represented separately by
 `MachineLoginChallenge` and `SignIntent::MachineLogin`. Account and role
 authorization remain outside the cryptographic provider.
 
+The crate also contains the narrow RFC 6238 SHA-1 TOTP compatibility primitive
+needed by common authenticator applications. TOTP enrollment state, secret
+storage, retry policy, and account authorization remain runtime responsibilities.
+
 ## Current non-goals
 
 - no CLI commands or shell registration;
 - no runtime service, executor task, or global state;
 - no filesystem or `/crypt` persistence implementation;
-- no cryptographic algorithm implementation;
+- no signing-key algorithm implementation;
 - no mailbox/wire encoding;
 - no hot-path integration.
 

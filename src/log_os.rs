@@ -11,10 +11,10 @@ pub(crate) mod flags {
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
 
-    // Intel-first GPGPU diagnostic profile. Keep failures, lifecycle summaries,
-    // and the lowest-level trace records while deliberately leaving Debug out:
-    // LogLevelPolicy::Only lets this profile select non-contiguous levels.
-    const GPGPU_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
+    // Intel graphics/render diagnostic profile. Keep failures, lifecycle
+    // summaries, and the lowest-level trace records while deliberately leaving
+    // Debug out: LogLevelPolicy::Only selects these non-contiguous levels.
+    const GFX_RENDER_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
         .union(LogLevelSet::WARN)
         .union(LogLevelSet::INFO)
         .union(LogLevelSet::TRACE);
@@ -27,9 +27,12 @@ pub(crate) mod flags {
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     // GPGPU diagnosis needs the Intel device/display setup that surrounds
     // kernel upload and submission, not just the GPGPU records themselves.
-    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
-    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GPGPU_DIAG_LEVELS);
+    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GFX_RENDER_DIAG_LEVELS);
+    // Per-submit GuC trace records are a hot stream. GPGPU's ordinary profile
+    // starts at Info; targeted trace capture can be reintroduced explicitly.
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy =
+        LogLevelPolicy::only(GFX_RENDER_DIAG_LEVELS);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     // Blueprint log facades remain Info by default and opt individual hunt

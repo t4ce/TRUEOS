@@ -2,10 +2,14 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use embassy_executor::Spawner;
 use regex_automata::meta::Regex;
 use spin::Mutex;
 
-use super::super::{MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line,
+    set_matrix_target_active,
+};
 use crate::disc::block::{self, DeviceHandle};
 use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
@@ -125,13 +129,6 @@ fn list_dir(disk: DeviceHandle, path: &str) -> Result<Vec<String>, block::Error>
             .filter(|line| !line.is_empty())
             .map(String::from)
             .collect())
-    })
-}
-
-fn delete_file(disk: DeviceHandle, path: &str) -> Result<bool, block::Error> {
-    let path = String::from(path);
-    crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await
     })
 }
 
@@ -352,6 +349,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, name: &str, rest: &str) 
 }
 
 pub(crate) fn handle_session_input(
+    spawner: &Spawner,
     target: &MatrixTarget,
     submitted: &str,
     session_id: u64,
@@ -377,22 +375,42 @@ pub(crate) fn handle_session_input(
         return CommandSessionInputResult::CompleteIdle;
     };
 
+    print_matrix_target_line(
+        target,
+        alloc::format!("rm: removing {} files...", pending.files.len()).as_str(),
+    );
+    set_matrix_target_active(target, true);
+    match remove_command_task(target.clone(), disk, pending) {
+        Ok(token) => {
+            spawner.spawn(token);
+            CommandSessionInputResult::CompleteRunning
+        }
+        Err(_) => {
+            set_matrix_target_active(target, false);
+            print_matrix_target_line(target, "rm: spawn failed");
+            CommandSessionInputResult::CompleteIdle
+        }
+    }
+}
+
+#[embassy_executor::task(pool_size = 2)]
+async fn remove_command_task(target: MatrixTarget, disk: DeviceHandle, pending: PendingRemove) {
     let mut removed = 0usize;
     let mut missed = 0usize;
     for path in pending.files.iter().rev() {
-        match delete_file(disk, path.as_str()) {
+        match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
             Ok(true) => removed = removed.saturating_add(1),
             Ok(false) => missed = missed.saturating_add(1),
             Err(err) => {
-                print_matrix_target_line(target, alloc::format!("rm: {path}: {:?}", err).as_str());
+                print_matrix_target_line(&target, alloc::format!("rm: {path}: {:?}", err).as_str());
                 missed = missed.saturating_add(1);
             }
         }
     }
 
     print_matrix_target_line(
-        target,
+        &target,
         alloc::format!("rm: removed {removed} files, {missed} missed").as_str(),
     );
-    CommandSessionInputResult::CompleteIdle
+    set_matrix_target_active(&target, false);
 }

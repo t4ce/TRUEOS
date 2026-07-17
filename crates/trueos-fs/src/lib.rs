@@ -3,6 +3,9 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+extern crate std;
+
 use alloc::{collections::BTreeSet, format, string::String, vec, vec::Vec};
 
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
@@ -2106,21 +2109,15 @@ pub async fn read_file_at_for_name<D: BlockIo>(
     Ok(Some(out))
 }
 
-pub async fn delete_file<D: BlockIo>(
+async fn append_delete_for_entry<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
+    deleted_entry_lba: u64,
 ) -> Result<bool, FsError<D::Error>> {
     if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(false);
     }
-    if find_latest_record(dev, params, name).await?.is_none() {
-        return Ok(false);
-    }
-
-    let Some(base) = find_latest_record(dev, params, name).await? else {
-        return Ok(false);
-    };
 
     let bs = dev.block_size();
     if bs == 0 {
@@ -2138,9 +2135,54 @@ pub async fn delete_file<D: BlockIo>(
         return Ok(false);
     }
 
-    let written_blocks = write_delete_entry(dev, entry_lba, name, base.entry_lba).await?;
+    let written_blocks = write_delete_entry(dev, entry_lba, name, deleted_entry_lba).await?;
     advance_log_head(dev, params, sb, written_blocks).await?;
     Ok(true)
+}
+
+/// Delete `name` using its current indexed record.
+///
+/// This validates the supplied record with bounded I/O, then appends a delete
+/// tombstone without scanning the complete append-only log. Callers must supply
+/// the latest record from their mounted index/cache.
+pub async fn delete_file_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    record: &FileRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
+        return Ok(false);
+    }
+
+    let Some(validated) = get_file_record_at(dev, params, record.entry_lba, name).await? else {
+        return Ok(false);
+    };
+    if validated != *record {
+        return Ok(false);
+    }
+
+    append_delete_for_entry(dev, params, name, validated.entry_lba).await
+}
+
+/// Delete `name` by resolving it from the on-disk log.
+///
+/// Mounted filesystems should prefer [`delete_file_at_record`] so their index
+/// can avoid this compatibility path's complete log scan.
+pub async fn delete_file<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
+        return Ok(false);
+    }
+
+    let Some(base) = find_latest_record(dev, params, name).await? else {
+        return Ok(false);
+    };
+
+    append_delete_for_entry(dev, params, name, base.entry_lba).await
 }
 
 pub async fn rename_tree<D: BlockIo>(
@@ -2384,4 +2426,143 @@ pub async fn append_file<D: BlockIo>(
     };
     base.extend_from_slice(append_bytes);
     write_file(dev, params, name, &base).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::future::Future;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::task::{Context, Poll, Waker};
+    use std::sync::Mutex;
+
+    const BLOCK_SIZE: usize = 512;
+    const BLOCK_COUNT: usize = 4096;
+
+    struct MemoryBlockIo {
+        bytes: Mutex<Vec<u8>>,
+        reads: AtomicUsize,
+    }
+
+    impl MemoryBlockIo {
+        fn new() -> Self {
+            let mut bytes = vec![0; BLOCK_SIZE * BLOCK_COUNT];
+            write_blank_superblock(&mut bytes[..BLOCK_SIZE]);
+            Self {
+                bytes: Mutex::new(bytes),
+                reads: AtomicUsize::new(0),
+            }
+        }
+
+        fn reset_reads(&self) {
+            self.reads.store(0, Ordering::Release);
+        }
+
+        fn read_count(&self) -> usize {
+            self.reads.load(Ordering::Acquire)
+        }
+    }
+
+    impl BlockIo for MemoryBlockIo {
+        type Error = ();
+
+        fn block_size(&self) -> usize {
+            BLOCK_SIZE
+        }
+
+        fn block_count(&self) -> u64 {
+            BLOCK_COUNT as u64
+        }
+
+        async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, Self::Error> {
+            let start = (lba as usize).checked_mul(BLOCK_SIZE).ok_or(())?;
+            let len = blocks.checked_mul(BLOCK_SIZE).ok_or(())?;
+            let end = start.checked_add(len).ok_or(())?;
+            let bytes = self.bytes.lock().map_err(|_| ())?;
+            let out = bytes.get(start..end).ok_or(())?.to_vec();
+            self.reads.fetch_add(blocks, Ordering::AcqRel);
+            Ok(out)
+        }
+
+        async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<(), Self::Error> {
+            if !buf.len().is_multiple_of(BLOCK_SIZE) {
+                return Err(());
+            }
+            let start = (lba as usize).checked_mul(BLOCK_SIZE).ok_or(())?;
+            let end = start.checked_add(buf.len()).ok_or(())?;
+            let mut bytes = self.bytes.lock().map_err(|_| ())?;
+            bytes.get_mut(start..end).ok_or(())?.copy_from_slice(buf);
+            Ok(())
+        }
+
+        async fn flush(&self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    fn params() -> FsParams {
+        FsParams {
+            super_lba: 0,
+            data_lba: data_lba_from_super(0),
+            data_end_lba_exclusive: Some(BLOCK_COUNT as u64),
+        }
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = core::pin::pin!(future);
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            match future.as_mut().poll(&mut cx) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_delete_has_bounded_reads_on_a_long_log() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let target = "screenshots/target.png";
+
+            assert_eq!(write_file(&disk, &params, target, b"target").await, Ok(true));
+            let record = lookup_file_record(&disk, &params, target)
+                .await
+                .expect("record lookup should succeed")
+                .expect("target record should exist");
+
+            for index in 0..64 {
+                let name = alloc::format!("screenshots/filler-{index:02}.png");
+                assert_eq!(write_file(&disk, &params, &name, b"x").await, Ok(true));
+            }
+
+            disk.reset_reads();
+            assert_eq!(delete_file_at_record(&disk, &params, target, &record).await, Ok(true));
+            assert_eq!(disk.read_count(), 3);
+            assert_eq!(lookup_file_record(&disk, &params, target).await, Ok(None));
+        });
+    }
+
+    #[test]
+    fn path_delete_scans_the_log_only_once() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            const FILES: usize = 12;
+
+            for index in 0..FILES {
+                let name = alloc::format!("item-{index:02}");
+                assert_eq!(write_file(&disk, &params, &name, b"x").await, Ok(true));
+            }
+
+            disk.reset_reads();
+            assert_eq!(delete_file(&disk, &params, "item-11").await, Ok(true));
+            assert!(
+                disk.read_count() <= 2 + (FILES * 2),
+                "path deletion read the log more than once: {} block reads",
+                disk.read_count()
+            );
+        });
+    }
 }

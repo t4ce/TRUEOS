@@ -4,6 +4,7 @@
 //! challenge construction, signing, and verification while the future account
 //! gate and persistent/hardware providers remain separate work.
 
+use alloc::string::String;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -11,15 +12,28 @@ use trueos_crypto::{
     AccountId, AlgorithmId, BootId, IsolationClass, KeyDescriptor, KeyHandle, KeyProfile,
     KeyPurpose, KeyPurposeSet, KeyRef, KeySpec, MachineId, MachineLoginChallenge,
     MachineLoginChallengeError, MachineRole, PersistenceClass, ProviderId, SignIntent,
+    TOTP_BASE32_BYTES, TOTP_PERIOD_SECONDS, TOTP_SECRET_BYTES, TotpError,
+    encode_totp_secret_base32, verify_totp_sha1,
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const LOGIN_CHALLENGE_TTL_SECONDS: u64 = 30;
+const MIN_TOTP_UNIX_SECONDS: u64 = 1_577_836_800; // 2020-01-01T00:00:00Z
+const TOTP_SKEW_STEPS: u8 = 1;
+const TOTP_MAX_FAILURES_PER_STEP: u8 = 5;
+const TOTP_ISSUER: &str = "TRUEOS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CryError {
     AlreadyConfigured,
     NotConfigured,
+    TwoFactorAlreadyActive,
+    TwoFactorNotConfigured,
+    WallClockUnavailable,
+    InvalidTotpCode,
+    TotpReplay,
+    TotpRateLimited { retry_after_seconds: u64 },
+    Totp(TotpError),
     EntropyUnavailable,
     InvalidGeneratedIdentity,
     InvalidKeySpec,
@@ -46,6 +60,8 @@ pub(crate) struct CryLoginReport {
     pub account: AccountId,
     pub role: MachineRole,
     pub challenge_sequence: u64,
+    pub totp_step: u64,
+    pub enrollment_activated: bool,
     pub issued_at_ticks: u64,
     pub expires_at_ticks: u64,
 }
@@ -55,7 +71,19 @@ pub(crate) struct CrySessionSnapshot {
     pub account: AccountId,
     pub role: MachineRole,
     pub challenge_sequence: u64,
+    pub totp_step: u64,
     pub authenticated_at_ticks: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CryTwoFactorState {
+    NotConfigured,
+    Pending,
+    Active,
+}
+
+pub(crate) struct CryTotpEnrollment {
+    pub qr_payload: Zeroizing<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +94,8 @@ pub(crate) struct CryStatus {
     pub account: Option<AccountId>,
     pub isolation: IsolationClass,
     pub persistence: PersistenceClass,
+    pub two_factor: CryTwoFactorState,
+    pub wall_clock_available: bool,
     pub session: Option<CrySessionSnapshot>,
 }
 
@@ -83,7 +113,36 @@ struct AuthenticatedSession {
     account: AccountId,
     role: MachineRole,
     challenge_sequence: u64,
+    totp_step: u64,
     authenticated_at_ticks: u64,
+}
+
+struct TotpFactor {
+    secret: [u8; TOTP_SECRET_BYTES],
+    active: bool,
+    last_accepted_step: Option<u64>,
+    failure_window_step: u64,
+    failed_attempts: u8,
+    blocked_until_ticks: u64,
+}
+
+impl TotpFactor {
+    fn pending(secret: [u8; TOTP_SECRET_BYTES]) -> Self {
+        Self {
+            secret,
+            active: false,
+            last_accepted_step: None,
+            failure_window_step: 0,
+            failed_attempts: 0,
+            blocked_until_ticks: 0,
+        }
+    }
+}
+
+impl Drop for TotpFactor {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
 }
 
 struct CryState {
@@ -91,6 +150,7 @@ struct CryState {
     credential: Option<AccountCredential>,
     machine: Option<MachineId>,
     boot: Option<BootId>,
+    totp: Option<TotpFactor>,
     challenge_sequence: u64,
     session: Option<AuthenticatedSession>,
 }
@@ -102,6 +162,7 @@ impl CryState {
             credential: None,
             machine: None,
             boot: None,
+            totp: None,
             challenge_sequence: 0,
             session: None,
         }
@@ -169,6 +230,7 @@ fn setup_root_key_inner(
     state.credential = Some(credential);
     state.machine = Some(machine);
     state.boot = Some(boot);
+    state.totp = None;
     state.challenge_sequence = 0;
     state.session = None;
 
@@ -183,7 +245,48 @@ fn setup_root_key_inner(
     })
 }
 
-pub(crate) fn login_root() -> Result<CryLoginReport, CryError> {
+pub(crate) fn begin_totp_enrollment() -> Result<CryTotpEnrollment, CryError> {
+    let _ = totp_unix_seconds()?;
+    let mut state = CRY_STATE.lock();
+    if state.credential.is_none() {
+        return Err(CryError::NotConfigured);
+    }
+    if state.totp.as_ref().is_some_and(|factor| factor.active) {
+        return Err(CryError::TwoFactorAlreadyActive);
+    }
+
+    if state.totp.is_none() {
+        let mut secret = [0u8; TOTP_SECRET_BYTES];
+        if !crate::tyche::fill_bytes(&mut secret) {
+            secret.zeroize();
+            return Err(CryError::EntropyUnavailable);
+        }
+        state.totp = Some(TotpFactor::pending(secret));
+        secret.zeroize();
+    }
+
+    let factor = state
+        .totp
+        .as_ref()
+        .ok_or(CryError::TwoFactorNotConfigured)?;
+    let mut base32_bytes = encode_totp_secret_base32(&factor.secret);
+    let mut base32 = String::with_capacity(TOTP_BASE32_BYTES);
+    for byte in base32_bytes {
+        base32.push(byte as char);
+    }
+    let payload = Zeroizing::new(alloc::format!(
+        "otpauth://totp/{TOTP_ISSUER}:root?secret={base32}&issuer={TOTP_ISSUER}"
+    ));
+    base32_bytes.zeroize();
+    base32.zeroize();
+    Ok(CryTotpEnrollment {
+        qr_payload: payload,
+    })
+}
+
+pub(crate) fn login_root(code: &str) -> Result<CryLoginReport, CryError> {
+    let code = parse_totp_code(code).ok_or(CryError::InvalidTotpCode)?;
+    let unix_seconds = totp_unix_seconds()?;
     let mut nonce = [0u8; 32];
     if !crate::tyche::fill_bytes(&mut nonce) {
         return Err(CryError::EntropyUnavailable);
@@ -196,6 +299,69 @@ pub(crate) fn login_root() -> Result<CryLoginReport, CryError> {
     let credential = state.credential.ok_or(CryError::NotConfigured)?;
     let machine = state.machine.ok_or(CryError::NotConfigured)?;
     let boot = state.boot.ok_or(CryError::NotConfigured)?;
+    if state.signing_key.is_none() {
+        return Err(CryError::NotConfigured);
+    }
+
+    let current_step = unix_seconds / TOTP_PERIOD_SECONDS;
+    let matched_step = {
+        let factor = state
+            .totp
+            .as_ref()
+            .ok_or(CryError::TwoFactorNotConfigured)?;
+        if now < factor.blocked_until_ticks {
+            return Err(CryError::TotpRateLimited {
+                retry_after_seconds: ticks_to_seconds_ceil(
+                    factor.blocked_until_ticks.saturating_sub(now),
+                ),
+            });
+        }
+        verify_totp_sha1(&factor.secret, unix_seconds, code, TOTP_SKEW_STEPS)
+            .map_err(CryError::Totp)?
+    };
+
+    let Some(totp_step) = matched_step else {
+        let factor = state
+            .totp
+            .as_mut()
+            .ok_or(CryError::TwoFactorNotConfigured)?;
+        if factor.failure_window_step != current_step {
+            factor.failure_window_step = current_step;
+            factor.failed_attempts = 0;
+        }
+        factor.failed_attempts = factor.failed_attempts.saturating_add(1);
+        if factor.failed_attempts >= TOTP_MAX_FAILURES_PER_STEP {
+            factor.failed_attempts = 0;
+            let retry_after_seconds =
+                (TOTP_PERIOD_SECONDS - (unix_seconds % TOTP_PERIOD_SECONDS)).max(1);
+            factor.blocked_until_ticks = now
+                .saturating_add(embassy_time_driver::TICK_HZ.saturating_mul(retry_after_seconds));
+            return Err(CryError::TotpRateLimited {
+                retry_after_seconds,
+            });
+        }
+        return Err(CryError::InvalidTotpCode);
+    };
+
+    let enrollment_activated = {
+        let factor = state
+            .totp
+            .as_mut()
+            .ok_or(CryError::TwoFactorNotConfigured)?;
+        if factor
+            .last_accepted_step
+            .is_some_and(|accepted| totp_step <= accepted)
+        {
+            return Err(CryError::TotpReplay);
+        }
+        let activated = !factor.active;
+        factor.active = true;
+        factor.last_accepted_step = Some(totp_step);
+        factor.failure_window_step = current_step;
+        factor.failed_attempts = 0;
+        factor.blocked_until_ticks = 0;
+        activated
+    };
 
     state.challenge_sequence = state.challenge_sequence.saturating_add(1).max(1);
     let challenge_sequence = state.challenge_sequence;
@@ -243,6 +409,7 @@ pub(crate) fn login_root() -> Result<CryLoginReport, CryError> {
         account: credential.account,
         role: credential.maximum_role,
         challenge_sequence: challenge.sequence(),
+        totp_step,
         authenticated_at_ticks: now,
     });
 
@@ -252,6 +419,8 @@ pub(crate) fn login_root() -> Result<CryLoginReport, CryError> {
         account: credential.account,
         role: credential.maximum_role,
         challenge_sequence: challenge.sequence(),
+        totp_step,
+        enrollment_activated,
         issued_at_ticks: challenge.issued_at_ticks(),
         expires_at_ticks: challenge.expires_at_ticks(),
     })
@@ -267,6 +436,7 @@ pub(crate) fn status() -> CryStatus {
         account: session.account,
         role: session.role,
         challenge_sequence: session.challenge_sequence,
+        totp_step: session.totp_step,
         authenticated_at_ticks: session.authenticated_at_ticks,
     });
     CryStatus {
@@ -276,8 +446,33 @@ pub(crate) fn status() -> CryStatus {
         account: state.credential.map(|credential| credential.account),
         isolation: IsolationClass::Software,
         persistence: PersistenceClass::Volatile,
+        two_factor: match state.totp.as_ref() {
+            Some(factor) if factor.active => CryTwoFactorState::Active,
+            Some(_) => CryTwoFactorState::Pending,
+            None => CryTwoFactorState::NotConfigured,
+        },
+        wall_clock_available: totp_unix_seconds().is_ok(),
         session,
     }
+}
+
+fn parse_totp_code(code: &str) -> Option<u32> {
+    if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    code.bytes()
+        .try_fold(0u32, |value, byte| value.checked_mul(10)?.checked_add(u32::from(byte - b'0')))
+}
+
+fn totp_unix_seconds() -> Result<u64, CryError> {
+    crate::time::unix_time_seconds()
+        .filter(|seconds| *seconds >= MIN_TOTP_UNIX_SECONDS)
+        .ok_or(CryError::WallClockUnavailable)
+}
+
+fn ticks_to_seconds_ceil(ticks: u64) -> u64 {
+    let hz = embassy_time_driver::TICK_HZ.max(1);
+    ticks.saturating_add(hz - 1) / hz
 }
 
 fn public_key_fingerprint(public_key: &[u8; 32]) -> [u8; 16] {

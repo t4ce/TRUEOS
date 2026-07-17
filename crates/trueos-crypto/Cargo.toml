@@ -6,3 +6,7 @@ license-file = "../../LICENSE"
 
 [features]
 default = []
+
+[dependencies]
+hmac = { version = "0.12.1", default-features = false }
+sha1 = { version = "=0.10.6", default-features = false }

@@ -1480,11 +1480,25 @@ pub async fn file_delete_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    let ok = trueos_fs::delete_file(&io, &params, name)
+    let disk_id = disk.id();
+    let record = match file_record_cache_lookup(disk_id, name) {
+        Some(record) => Some(record),
+        None => {
+            let record = lookup_via_index_async(disk, &placement, name).await?;
+            if let Some(record) = record {
+                file_record_cache_insert(disk_id, name, record);
+            }
+            record
+        }
+    };
+    let Some(record) = record else {
+        return Ok(false);
+    };
+
+    let ok = trueos_fs::delete_file_at_record(&io, &params, name, &record)
         .await
         .map_err(map_engine_err)?;
     if ok {
-        let disk_id = disk.id();
         bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
         if !update_root_index_delete(disk_id, name) {

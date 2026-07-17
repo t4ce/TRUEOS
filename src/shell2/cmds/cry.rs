@@ -1,37 +1,59 @@
 use alloc::string::String;
 use core::fmt::Write;
 
-use super::super::{ShellBackend2, print_shell_line};
-use crate::crypt::{self, CryError};
+use qrcodegen::{QrCode, QrCodeEcc, Version};
+
+use super::super::{
+    OUTPUT_CONTAINER_MASK, ShellBackend2, konsole_viewport_size_for_target,
+    matrix_target_for_backend, output_target_for_backend, print_native_line, print_shell_line,
+};
+use crate::crypt::{self, CryError, CryTwoFactorState};
 use crate::shell2::shell2_cmd::ParseOutcome;
+
+const QR_QUIET_ZONE: i32 = 4;
+const QR_MAX_VERSION: Version = Version::new(10);
+const QR_BUFFER_BYTES: usize = QR_MAX_VERSION.buffer_len();
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cry status");
     print_shell_line(io, "cry key setup");
-    print_shell_line(io, "cry login [root]");
+    print_shell_line(io, "cry 2fa setup");
+    print_shell_line(io, "cry login <6-digit authenticator code>");
     print_shell_line(io, "cry logout");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    match (args.next(), args.next(), args.next()) {
-        (None, None, None) => {
+    match (args.next(), args.next(), args.next(), args.next()) {
+        (None, None, None, None) => {
             print_status(io);
             usage(io);
         }
-        (Some(command), None, None) if command.eq_ignore_ascii_case("status") => print_status(io),
-        (Some(command), Some(action), None)
+        (Some(command), None, None, None) if command.eq_ignore_ascii_case("status") => {
+            print_status(io)
+        }
+        (Some(command), Some(action), None, None)
             if command.eq_ignore_ascii_case("key") && action.eq_ignore_ascii_case("setup") =>
         {
             setup_key(io)
         }
-        (Some(command), None, None) if command.eq_ignore_ascii_case("login") => login_root(io),
-        (Some(command), Some(account), None)
+        (Some(command), Some(action), None, None)
+            if command.eq_ignore_ascii_case("2fa") && action.eq_ignore_ascii_case("setup") =>
+        {
+            present_totp_enrollment(io)
+        }
+        (Some(command), Some(code), None, None) if command.eq_ignore_ascii_case("login") => {
+            login_root(io, code)
+        }
+        (Some(command), Some(account), Some(code), None)
             if command.eq_ignore_ascii_case("login") && account.eq_ignore_ascii_case("root") =>
         {
-            login_root(io)
+            login_root(io, code)
         }
-        (Some(command), None, None) if command.eq_ignore_ascii_case("logout") => {
+        (Some(command), None, None, None) if command.eq_ignore_ascii_case("login") => {
+            print_shell_line(io, "cry login: enter `cry login <6-digit authenticator code>`");
+        }
+        (Some(command), None, None, None) if command.eq_ignore_ascii_case("logout") => {
             let ended = crypt::logout();
             print_shell_line(
                 io,
@@ -42,13 +64,18 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
                 },
             );
         }
-        (Some(command), None, None) if command.eq_ignore_ascii_case("help") => usage(io),
+        (Some(command), None, None, None) if command.eq_ignore_ascii_case("help") => usage(io),
         _ => usage(io),
     }
     ParseOutcome::Handled
 }
 
 fn setup_key(io: &'static dyn ShellBackend2) {
+    if !is_local_container(io) {
+        print_shell_line(io, "cry key setup: refused; local F4 Cmd display required");
+        return;
+    }
+
     match crypt::setup_root_key() {
         Ok(report) => {
             print_shell_line(
@@ -77,21 +104,65 @@ fn setup_key(io: &'static dyn ShellBackend2) {
                 io,
                 "cry key setup: assurance=ceremony-only shell-gate=off reboot-persistence=off",
             );
+            present_totp_enrollment(io);
         }
         Err(error) => print_error(io, "key setup", error),
     }
 }
 
-fn login_root(io: &'static dyn ShellBackend2) {
-    match crypt::login_root() {
+fn present_totp_enrollment(io: &'static dyn ShellBackend2) {
+    if !is_local_container(io) {
+        print_shell_line(io, "cry 2fa setup: refused; QR enrollment is local-display-only");
+        return;
+    }
+
+    match crypt::begin_totp_enrollment() {
+        Ok(enrollment) => match render_qr(io, enrollment.qr_payload.as_str()) {
+            Ok(()) => {}
+            Err(QrPresentationError::PayloadTooLong) => {
+                print_shell_line(io, "cry 2fa setup: QR payload did not fit")
+            }
+            Err(QrPresentationError::ViewportTooSmall {
+                required_cols,
+                required_rows,
+                available_cols,
+                available_rows,
+            }) => print_shell_line(
+                io,
+                alloc::format!(
+                    "cry 2fa setup: viewport too small; need {}x{}, have {}x{}",
+                    required_cols,
+                    required_rows,
+                    available_cols,
+                    available_rows,
+                )
+                .as_str(),
+            ),
+        },
+        Err(error) => print_error(io, "2fa setup", error),
+    }
+}
+
+fn login_root(io: &'static dyn ShellBackend2, code: &str) {
+    if !is_local_container(io) {
+        print_shell_line(io, "cry login: refused; authenticator codes are local-input-only");
+        return;
+    }
+
+    match crypt::login_root(code) {
         Ok(report) => {
+            crate::shell2::matrix::clear_active_lines(output_target_for_backend(io));
+            if report.enrollment_activated {
+                print_shell_line(io, "cry 2fa: enrollment=confirmed profile=totp-sha1-6digit-30s");
+            }
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cry login: proof=verified account={} role={:?} challenge={} fingerprint={}",
+                    "cry login: proof=verified account={} role={:?} factors=machine-key+totp challenge={} totp-step={} fingerprint={}",
                     account_name(report.account),
                     report.role,
                     report.challenge_sequence,
+                    report.totp_step,
                     full_hex(&report.fingerprint),
                 )
                 .as_str(),
@@ -121,8 +192,10 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "cry: configured={} isolation={:?} persistence={:?} shell-gate=off",
+            "cry: configured={} 2fa={:?} wall-clock={} isolation={:?} persistence={:?} shell-gate=off",
             status.configured as u8,
+            status.two_factor,
+            if status.wall_clock_available { "ready" } else { "unavailable" },
             status.isolation,
             status.persistence,
         )
@@ -147,15 +220,23 @@ fn print_status(io: &'static dyn ShellBackend2) {
         Some(session) => print_shell_line(
             io,
             alloc::format!(
-                "cry: session=verified account={} role={:?} challenge={} authenticated_tick={} scope=cry-only",
+                "cry: session=verified account={} role={:?} factors=machine-key+totp challenge={} totp-step={} authenticated_tick={} scope=cry-only",
                 account_name(session.account),
                 session.role,
                 session.challenge_sequence,
+                session.totp_step,
                 session.authenticated_at_ticks,
             )
             .as_str(),
         ),
         None => print_shell_line(io, "cry: session=anonymous"),
+    }
+
+    if status.two_factor == CryTwoFactorState::Pending {
+        print_shell_line(
+            io,
+            "cry: 2fa enrollment pending; scan `cry 2fa setup`, then run `cry login <code>`",
+        );
     }
 }
 
@@ -163,6 +244,24 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
     let detail = match error {
         CryError::AlreadyConfigured => "key already configured for this boot",
         CryError::NotConfigured => "run `cry key setup` first",
+        CryError::TwoFactorAlreadyActive => "2fa is already active",
+        CryError::TwoFactorNotConfigured => "run `cry 2fa setup` first",
+        CryError::WallClockUnavailable => "usable Unix wall clock unavailable",
+        CryError::InvalidTotpCode => "invalid 6-digit authenticator code",
+        CryError::TotpReplay => "authenticator code already consumed; wait for the next code",
+        CryError::TotpRateLimited {
+            retry_after_seconds,
+        } => {
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cry {operation}: too many attempts; retry in {retry_after_seconds}s"
+                )
+                .as_str(),
+            );
+            return;
+        }
+        CryError::Totp(_) => "TOTP computation failed",
         CryError::EntropyUnavailable => "strong entropy unavailable",
         CryError::InvalidGeneratedIdentity => "generated identity was invalid",
         CryError::InvalidKeySpec => "machine-login key profile was rejected",
@@ -171,6 +270,82 @@ fn print_error(io: &'static dyn ShellBackend2, operation: &str, error: CryError)
         CryError::SignatureRejected => "machine-login proof was rejected",
     };
     print_shell_line(io, alloc::format!("cry {operation}: {detail}").as_str());
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QrPresentationError {
+    PayloadTooLong,
+    ViewportTooSmall {
+        required_cols: usize,
+        required_rows: usize,
+        available_cols: usize,
+        available_rows: usize,
+    },
+}
+
+fn render_qr(io: &'static dyn ShellBackend2, payload: &str) -> Result<(), QrPresentationError> {
+    let mut temp = [0u8; QR_BUFFER_BYTES];
+    let mut output = [0u8; QR_BUFFER_BYTES];
+    let qr = QrCode::encode_text(
+        payload,
+        &mut temp,
+        &mut output,
+        QrCodeEcc::Medium,
+        Version::MIN,
+        QR_MAX_VERSION,
+        None,
+        true,
+    )
+    .map_err(|_| QrPresentationError::PayloadTooLong)?;
+
+    let symbol_with_quiet_zone = qr.size() + QR_QUIET_ZONE * 2;
+    let required_cols = symbol_with_quiet_zone as usize;
+    let required_rows = (symbol_with_quiet_zone as usize).div_ceil(2) + 3;
+    let target = matrix_target_for_backend(io);
+    let (available_cols, available_rows) = konsole_viewport_size_for_target(&target);
+    if required_cols > available_cols || required_rows > available_rows {
+        return Err(QrPresentationError::ViewportTooSmall {
+            required_cols,
+            required_rows,
+            available_cols,
+            available_rows,
+        });
+    }
+
+    crate::shell2::matrix::clear_active_lines(output_target_for_backend(io));
+    print_native_line(io, "cry 2fa: scan with Google Authenticator; issuer=TRUEOS account=root");
+    print_native_line(
+        io,
+        "cry 2fa: QR contains the shared secret; then enter `cry login <6-digit code>`",
+    );
+
+    let first = -QR_QUIET_ZONE;
+    let last = qr.size() + QR_QUIET_ZONE;
+    let mut top = first;
+    while top < last {
+        let bottom = top + 1;
+        let mut line = String::with_capacity(required_cols.saturating_mul(3) + 16);
+        line.push_str("\x1b[30;47m");
+        for x in first..last {
+            let upper_dark = qr.get_module(x, top);
+            let lower_dark = qr.get_module(x, bottom);
+            line.push(match (upper_dark, lower_dark) {
+                (false, false) => ' ',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (true, true) => '█',
+            });
+        }
+        line.push_str("\x1b[0m");
+        print_native_line(io, line.as_str());
+        top += 2;
+    }
+    print_native_line(io, "cry 2fa: waiting for the first authenticator code");
+    Ok(())
+}
+
+fn is_local_container(io: &'static dyn ShellBackend2) -> bool {
+    output_target_for_backend(io) == OUTPUT_CONTAINER_MASK
 }
 
 fn account_name(account: trueos_crypto::AccountId) -> &'static str {
