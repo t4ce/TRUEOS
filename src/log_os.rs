@@ -323,6 +323,16 @@ pub(crate) fn printer_discovered(name: &str, uri: &str) {
     );
 }
 
+pub(crate) fn printer_spooler_online() {
+    log_with_area_level(
+        flags::LogArea::Net,
+        log::Level::Info,
+        format_args!(
+            "print2d: kernel spooler online policy=single-default transport=ipp format=pwg-raster\n"
+        ),
+    );
+}
+
 pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) {
     log_with_area_level(
         flags::LogArea::Net,
@@ -338,10 +348,7 @@ pub(crate) fn print2d_job_state(job_id: u32, state: &str, detail: &str) {
     log_with_area_level(
         flags::LogArea::Net,
         log::Level::Info,
-        format_args!(
-            "print2d: job={} state={} detail={}\n",
-            job_id, state, detail
-        ),
+        format_args!("print2d: job={} state={} detail={}\n", job_id, state, detail),
     );
 }
 

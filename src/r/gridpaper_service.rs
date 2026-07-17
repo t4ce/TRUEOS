@@ -120,7 +120,6 @@ struct GridPaperPrintRequest {
     owner: u8,
     token: u32,
     generation: u64,
-    delivered: bool,
     raw: Vec<u8>,
 }
 
@@ -145,10 +144,8 @@ static NEXT_PRINT_REQUEST_TOKEN: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(1);
 static GRIDPAPER_PRINT_REQUESTS: Mutex<VecDeque<GridPaperPrintRequest>> =
     Mutex::new(VecDeque::new());
-static PRINT_RENDER_REQUESTS: Mutex<VecDeque<PrintRenderRequest>> =
-    Mutex::new(VecDeque::new());
-static PRINT_RENDER_RESULTS: Mutex<VecDeque<PrintRenderResult>> =
-    Mutex::new(VecDeque::new());
+static PRINT_RENDER_REQUESTS: Mutex<VecDeque<PrintRenderRequest>> = Mutex::new(VecDeque::new());
+static PRINT_RENDER_RESULTS: Mutex<VecDeque<PrintRenderResult>> = Mutex::new(VecDeque::new());
 
 fn next_print_request_token() -> u32 {
     use core::sync::atomic::Ordering;
@@ -171,7 +168,6 @@ fn queue_print_request(snapshot: &OwnedSnapshot) -> Option<u32> {
         owner: snapshot.owner,
         token,
         generation: snapshot.generation,
-        delivered: false,
         raw: snapshot.raw.clone(),
     });
     drop(requests);
@@ -180,11 +176,8 @@ fn queue_print_request(snapshot: &OwnedSnapshot) -> Option<u32> {
 }
 
 pub(crate) fn take_print_request_for_owner(owner: u8) -> Option<(u32, u64)> {
-    let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
-    let request = requests
-        .iter_mut()
-        .find(|request| request.owner == owner && !request.delivered)?;
-    request.delivered = true;
+    let requests = GRIDPAPER_PRINT_REQUESTS.lock();
+    let request = requests.iter().find(|request| request.owner == owner)?;
     Some((request.token, request.generation))
 }
 
@@ -694,11 +687,8 @@ pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_gridpaper_print_request_take() -> u64 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE,
-            0,
-            0,
-        );
+        let (status, data) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE, 0, 0);
         return if status == trueos_vm::vmcall::STATUS_OK {
             data
         } else {

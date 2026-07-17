@@ -35,6 +35,7 @@ pub enum PrintJobState {
     Completed = 8,
     Failed = 9,
     Canceled = 10,
+    OutcomeUnknown = 11,
 }
 
 impl PrintJobState {
@@ -50,19 +51,17 @@ impl PrintJobState {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Canceled => "canceled",
+            Self::OutcomeUnknown => "outcome-unknown",
         }
     }
 
     pub const fn terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Canceled)
+        matches!(self, Self::Completed | Self::Failed | Self::Canceled | Self::OutcomeUnknown)
     }
 }
 
 pub(crate) enum PrintDocument {
-    GridPaperA4 {
-        generation: u64,
-        raw: Vec<u8>,
-    },
+    GridPaperA4 { generation: u64, raw: Vec<u8> },
 }
 
 pub(crate) struct PrintJob {
@@ -101,6 +100,14 @@ impl PrintQueue {
             let _ = self.records.remove(removable);
         }
     }
+
+    fn has_job_capacity(&self) -> bool {
+        self.records
+            .iter()
+            .filter(|record| !record.state.terminal())
+            .count()
+            < QUEUE_CAPACITY
+    }
 }
 
 static NEXT_JOB_ID: AtomicU32 = AtomicU32::new(1);
@@ -119,7 +126,7 @@ fn enqueue(owner: u8, document: PrintDocument) -> Result<u32, i64> {
     let id = next_job_id();
     {
         let mut queue = PRINT_QUEUE.lock();
-        if queue.pending.len() >= QUEUE_CAPACITY {
+        if !queue.has_job_capacity() {
             return Err(ERROR_QUEUE_FULL);
         }
         queue.retain_status_capacity();
@@ -138,12 +145,39 @@ fn enqueue(owner: u8, document: PrintDocument) -> Result<u32, i64> {
     Ok(id)
 }
 
-pub(crate) fn submit_for_owner(
-    owner: u8,
-    document_kind: u32,
-    subject: u64,
-    raw: &[u8],
-) -> i64 {
+fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
+    let id = {
+        // Keep queue capacity and request consumption atomic from the caller's
+        // perspective. A full print queue leaves the F10 token available for
+        // the Blueprint to retry on its next cooperative poll.
+        let mut queue = PRINT_QUEUE.lock();
+        if !queue.has_job_capacity() {
+            return Err(ERROR_QUEUE_FULL);
+        }
+        let Some((generation, raw)) =
+            crate::r::gridpaper_service::consume_print_request(owner, token)
+        else {
+            return Err(ERROR_NOT_OWNER);
+        };
+        let id = next_job_id();
+        queue.retain_status_capacity();
+        queue.records.push_back(JobRecord {
+            id,
+            owner,
+            state: PrintJobState::Queued,
+        });
+        queue.pending.push_back(PrintJob {
+            id,
+            owner,
+            document: PrintDocument::GridPaperA4 { generation, raw },
+        });
+        id
+    };
+    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted-f10");
+    Ok(id)
+}
+
+pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw: &[u8]) -> i64 {
     let document = match document_kind {
         DOCUMENT_GRIDPAPER_A4 => {
             if !crate::r::gridpaper_service::valid_print_snapshot(raw) {
@@ -158,12 +192,10 @@ pub(crate) fn submit_for_owner(
             if !raw.is_empty() || subject == 0 || subject > u32::MAX as u64 {
                 return ERROR_INVALID_DOCUMENT;
             }
-            let Some((generation, raw)) =
-                crate::r::gridpaper_service::consume_print_request(owner, subject as u32)
-            else {
-                return ERROR_NOT_OWNER;
+            return match enqueue_gridpaper_request(owner, subject as u32) {
+                Ok(id) => i64::from(id),
+                Err(error) => error,
             };
-            PrintDocument::GridPaperA4 { generation, raw }
         }
         _ => return ERROR_INVALID_DOCUMENT,
     };

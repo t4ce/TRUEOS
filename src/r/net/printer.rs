@@ -13,12 +13,22 @@ use core::fmt::Write as _;
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
-use super::VNet;
+use super::{
+    VNet,
+    ipp_print::{IppClient, IppError, RemoteJobState},
+    pwg_raster,
+};
+use crate::r::print2d::{self, PrintDocument, PrintJob, PrintJobState};
 
 const MDNS_PORT: u16 = 5_353;
 const MDNS_MULTICAST: v::vnet::EndpointV4 = v::vnet::EndpointV4::new([224, 0, 0, 251], MDNS_PORT);
 const DISCOVERY_INTERVAL_MS: u64 = 15_000;
 const PRINTER_STALE_AFTER_MS: u64 = DISCOVERY_INTERVAL_MS * 3;
+const SPOOL_IDLE_MS: u64 = 25;
+const PRINTER_WAIT_MS: u64 = 1_000;
+const PRINT_RETRY_MS: u64 = 2_000;
+const REMOTE_JOB_POLL_MS: u64 = 1_000;
+const RENDER_TIMEOUT_MS: u64 = 30_000;
 const SERVICES: [&str; 3] = [
     "_ipp._tcp.local.",
     "_print._sub._ipp._tcp.local.",
@@ -60,6 +70,23 @@ fn monotonic_ms() -> u64 {
 
 pub fn snapshot() -> Vec<PrinterSnapshot> {
     PRINTERS.lock().clone()
+}
+
+/// Select the one implicit printer used by the current compact print2d ABI.
+/// Plain IPP is required until the BSP TLS transport can be attached here.
+pub fn default_printer() -> Option<PrinterSnapshot> {
+    PRINTERS
+        .lock()
+        .iter()
+        .find(|printer| {
+            !printer.secure
+                && (printer.formats.is_empty()
+                    || printer
+                        .formats
+                        .iter()
+                        .any(|format| format.eq_ignore_ascii_case(pwg_raster::MIME_TYPE)))
+        })
+        .cloned()
 }
 
 pub fn snapshot_text() -> String {
@@ -257,6 +284,154 @@ pub async fn printer_discovery_task() {
         }
 
         Timer::after(Duration::from_millis(250)).await;
+    }
+}
+
+async fn render_job(job: &PrintJob) -> Result<Vec<u8>, &'static str> {
+    let (generation, raw) = match &job.document {
+        PrintDocument::GridPaperA4 { generation, raw } => (*generation, raw.clone()),
+    };
+    print2d::transition(job.id, PrintJobState::Rendering, "gridpaper-a4-100-percent");
+    if !crate::r::gridpaper_service::request_print_render(job.id, generation, raw) {
+        return Err("render-request-rejected");
+    }
+
+    let deadline = Instant::now() + Duration::from_millis(RENDER_TIMEOUT_MS);
+    loop {
+        if let Some(rendered) = crate::r::gridpaper_service::take_print_render_result(job.id) {
+            let frame = rendered.result?;
+            return pwg_raster::encode_gridpaper_a4(
+                frame.width,
+                frame.height,
+                frame.rgba_premultiplied.as_slice(),
+            )
+            .map_err(|_| "pwg-raster-encode-failed");
+        }
+        if Instant::now() >= deadline {
+            return Err("render-timeout");
+        }
+        Timer::after(Duration::from_millis(5)).await;
+    }
+}
+
+async fn wait_for_default_printer(job_id: u32) -> PrinterSnapshot {
+    loop {
+        if let Some(printer) = default_printer() {
+            return printer;
+        }
+        print2d::transition(job_id, PrintJobState::WaitingForPrinter, "no-online-ipp-pwg-default");
+        Timer::after(Duration::from_millis(PRINTER_WAIT_MS)).await;
+    }
+}
+
+async fn run_print_job(job: PrintJob) {
+    let document = match render_job(&job).await {
+        Ok(document) => document,
+        Err(detail) => {
+            print2d::transition(job.id, PrintJobState::Failed, detail);
+            return;
+        }
+    };
+
+    let printer = wait_for_default_printer(job.id).await;
+    let client = loop {
+        print2d::transition(job.id, PrintJobState::Connecting, "default-ipp-printer");
+        match IppClient::new(printer.uri.as_str()) {
+            Ok(client) => break client,
+            Err(error) if error.submission_retryable() => {
+                print2d::transition(job.id, PrintJobState::WaitingForPrinter, "network-not-ready");
+                Timer::after(Duration::from_millis(PRINT_RETRY_MS)).await;
+            }
+            Err(_) => {
+                print2d::transition(job.id, PrintJobState::Failed, "invalid-printer-uri");
+                return;
+            }
+        }
+    };
+
+    let remote = loop {
+        print2d::transition(job.id, PrintJobState::Sending, "ipp-print-job");
+        match client
+            .print_job(job.id, pwg_raster::MIME_TYPE, document.as_slice())
+            .await
+        {
+            Ok(remote) => break remote,
+            Err(error) if error.submission_retryable() => {
+                print2d::transition(
+                    job.id,
+                    PrintJobState::WaitingForPrinter,
+                    "ipp-transport-retry",
+                );
+                Timer::after(Duration::from_millis(PRINT_RETRY_MS)).await;
+            }
+            Err(error) => {
+                let detail = if matches!(error, IppError::Rejected | IppError::HttpStatus) {
+                    "ipp-print-job-rejected"
+                } else {
+                    // Once bytes may have reached the printer, never retry a
+                    // whole document automatically: that could create a
+                    // duplicate physical page.
+                    "ipp-delivery-uncertain-no-retry"
+                };
+                let state = if matches!(error, IppError::Rejected | IppError::HttpStatus) {
+                    PrintJobState::Failed
+                } else {
+                    PrintJobState::OutcomeUnknown
+                };
+                print2d::transition(job.id, state, detail);
+                return;
+            }
+        }
+    };
+
+    print2d::transition(job.id, PrintJobState::Submitted, "ipp-job-accepted");
+    loop {
+        Timer::after(Duration::from_millis(REMOTE_JOB_POLL_MS)).await;
+        match client.job_state(job.id, &remote).await {
+            Ok(RemoteJobState::Pending) => {
+                print2d::transition(job.id, PrintJobState::Submitted, "remote-pending");
+            }
+            Ok(RemoteJobState::Printing) => {
+                print2d::transition(job.id, PrintJobState::Printing, "remote-processing");
+            }
+            Ok(RemoteJobState::Completed) => {
+                print2d::transition(job.id, PrintJobState::Completed, "remote-completed");
+                return;
+            }
+            Ok(RemoteJobState::Canceled) => {
+                print2d::transition(job.id, PrintJobState::Canceled, "remote-canceled");
+                return;
+            }
+            Ok(RemoteJobState::Aborted) => {
+                print2d::transition(job.id, PrintJobState::Failed, "remote-aborted");
+                return;
+            }
+            Err(error) if error.status_retryable() => {
+                // The job was already accepted; retry status without resubmitting it.
+            }
+            Err(_) => {
+                print2d::transition(
+                    job.id,
+                    PrintJobState::OutcomeUnknown,
+                    "remote-status-unavailable",
+                );
+                return;
+            }
+        }
+    }
+}
+
+#[embassy_executor::task]
+pub async fn printer_spooler_task() {
+    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+    crate::log_os::printer_spooler_online();
+
+    loop {
+        if let Some(job) = print2d::take_next_job() {
+            run_print_job(job).await;
+        } else {
+            Timer::after(Duration::from_millis(SPOOL_IDLE_MS)).await;
+        }
     }
 }
 

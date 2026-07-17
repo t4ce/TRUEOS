@@ -16,7 +16,8 @@ pub(crate) enum IppError {
     InvalidUri,
     NoNetwork,
     Connect,
-    Timeout,
+    ConnectTimeout,
+    ResponseTimeout,
     Transport,
     HttpStatus,
     InvalidResponse,
@@ -24,10 +25,18 @@ pub(crate) enum IppError {
 }
 
 impl IppError {
-    pub(crate) const fn retryable(self) -> bool {
+    pub(crate) const fn submission_retryable(self) -> bool {
+        matches!(self, Self::NoNetwork | Self::Connect | Self::ConnectTimeout)
+    }
+
+    pub(crate) const fn status_retryable(self) -> bool {
         matches!(
             self,
-            Self::NoNetwork | Self::Connect | Self::Timeout | Self::Transport
+            Self::NoNetwork
+                | Self::Connect
+                | Self::ConnectTimeout
+                | Self::ResponseTimeout
+                | Self::Transport
         )
     }
 }
@@ -90,11 +99,8 @@ impl IppClient {
         local_job_id: u32,
         job: &RemoteJob,
     ) -> Result<RemoteJobState, IppError> {
-        let ipp = build_get_job_attributes_request(
-            local_job_id,
-            self.target.printer_uri.as_str(),
-            job,
-        );
+        let ipp =
+            build_get_job_attributes_request(local_job_id, self.target.printer_uri.as_str(), job);
         let body = self.request(ipp.as_slice(), None).await?;
         require_ipp_success(body.as_slice())?;
         match find_integer_attribute(body.as_slice(), "job-state") {
@@ -124,7 +130,7 @@ impl IppClient {
                 }
             }
             if Instant::now() >= connect_deadline {
-                return Err(IppError::Timeout);
+                return Err(IppError::ConnectTimeout);
             }
             Timer::after(Duration::from_millis(5)).await;
         };
@@ -176,7 +182,7 @@ impl IppClient {
             }
             if Instant::now() >= deadline {
                 let _ = self.vnet.submit(v::vnet::Command::Close { handle });
-                return Err(IppError::Timeout);
+                return Err(IppError::ResponseTimeout);
             }
             Timer::after(Duration::from_millis(5)).await;
         }
@@ -210,11 +216,7 @@ fn parse_ipp_uri(uri: &str) -> Result<IppTarget, IppError> {
     })
 }
 
-fn build_print_job_request(
-    request_id: u32,
-    printer_uri: &str,
-    document_format: &str,
-) -> Vec<u8> {
+fn build_print_job_request(request_id: u32, printer_uri: &str, document_format: &str) -> Vec<u8> {
     let mut out = ipp_header(0x0002, request_id);
     out.push(0x01); // operation-attributes-tag
     push_text_attribute(&mut out, 0x47, "attributes-charset", "utf-8");
@@ -388,16 +390,17 @@ fn require_http_success(headers: &[u8]) -> Result<(), IppError> {
 }
 
 fn http_content_length(headers: &[u8]) -> Option<usize> {
-    http_header(headers, "content-length")?.parse::<usize>().ok()
+    http_header(headers, "content-length")?
+        .parse::<usize>()
+        .ok()
 }
 
 fn header_has_chunked(headers: &[u8]) -> bool {
-    http_header(headers, "transfer-encoding")
-        .is_some_and(|value| {
-            value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
-        })
+    http_header(headers, "transfer-encoding").is_some_and(|value| {
+        value
+            .split(',')
+            .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
+    })
 }
 
 fn http_header<'a>(headers: &'a [u8], wanted: &str) -> Option<&'a str> {
@@ -417,7 +420,10 @@ fn decode_chunked(body: &[u8]) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     let mut offset = 0usize;
     loop {
-        let line_end = body.get(offset..)?.windows(2).position(|window| window == b"\r\n")?;
+        let line_end = body
+            .get(offset..)?
+            .windows(2)
+            .position(|window| window == b"\r\n")?;
         let line = core::str::from_utf8(body.get(offset..offset + line_end)?).ok()?;
         let length = usize::from_str_radix(line.split(';').next()?.trim(), 16).ok()?;
         offset = offset.checked_add(line_end + 2)?;
@@ -448,7 +454,11 @@ mod tests {
     fn print_request_is_ipp2_and_a4_pwg() {
         let request = build_print_job_request(7, "ipp://192.0.2.1/ipp/print", "image/pwg-raster");
         assert_eq!(&request[..8], &[2, 0, 0, 2, 0, 0, 0, 7]);
-        assert!(request.windows(19).any(|window| window == b"iso_a4_210x297mm"));
+        assert!(
+            request
+                .windows(19)
+                .any(|window| window == b"iso_a4_210x297mm")
+        );
         assert_eq!(request.last(), Some(&3));
     }
 }
