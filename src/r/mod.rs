@@ -14,6 +14,7 @@ pub mod net;
 pub mod pat;
 pub mod path;
 pub mod platform;
+pub mod print2d;
 pub mod rdp;
 pub mod readiness;
 pub mod silk_service;

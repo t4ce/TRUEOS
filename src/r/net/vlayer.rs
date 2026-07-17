@@ -369,6 +369,63 @@ pub unsafe extern "C" fn trueos_vlayer_printer_snapshot_read(
     )
 }
 
+pub unsafe extern "C" fn trueos_vlayer_print2d_submit(
+    document_kind: u32,
+    subject: u64,
+    raw_ptr: *const u8,
+    raw_len: usize,
+) -> i64 {
+    let raw = if raw_len == 0 {
+        &[][..]
+    } else {
+        if raw_ptr.is_null() {
+            return crate::r::print2d::ERROR_INVALID_DOCUMENT;
+        }
+        // SAFETY: the ABI caller promises `raw_len` readable bytes.
+        unsafe { core::slice::from_raw_parts(raw_ptr, raw_len) }
+    };
+
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_PRINT2D_SUBMIT,
+            u64::from(document_kind),
+            subject,
+            raw,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64
+        } else {
+            crate::r::print2d::ERROR_TRANSPORT
+        };
+    }
+
+    let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
+        return crate::r::print2d::ERROR_NOT_OWNER;
+    };
+    crate::r::print2d::submit_for_owner(owner, document_kind, subject, raw)
+}
+
+pub extern "C" fn trueos_vlayer_print2d_status(job_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_PRINT2D_STATUS,
+            u64::from(job_id),
+            0,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            crate::r::print2d::ERROR_TRANSPORT as i32
+        };
+    }
+
+    let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
+        return crate::r::print2d::ERROR_NOT_OWNER as i32;
+    };
+    crate::r::print2d::status_for_owner(owner, job_id)
+}
+
 fn vlayer_read_runtime(
     vmcall_op: u32,
     host_len: fn() -> usize,

@@ -61,6 +61,9 @@ pub const OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT: u32 = 0xB9; // arg0 generation,arg1 s
 pub const OP_BP_GRIDPAPER_CLOSE: u32 = 0xBA; // detach the calling VM's producer -> rc
 pub const OP_BP_GRIDPAPER_TEXT_ANIMATIONS_SUBMIT: u32 = 0xBB; // payload CSS-like text color programs -> rc
 pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> IPP printer registry
+pub const OP_BP_PRINT2D_SUBMIT: u32 = 0xBD; // arg0 document kind,arg1 subject,payload compact document -> job/rc
+pub const OP_BP_PRINT2D_STATUS: u32 = 0xBE; // arg0 job id -> PrintJobState/rc
+pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // focused F10 request token/generation
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -863,6 +866,27 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_GRIDPAPER_CLOSE => {
             let rc = crate::r::gridpaper_service::close_owner(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
+            let packed = crate::r::gridpaper_service::take_print_request_for_owner(vm_id)
+                .map(|(token, _generation)| u64::from(token))
+                .unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, packed, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_PRINT2D_SUBMIT => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let result = crate::r::print2d::submit_for_owner(vm_id, arg0 as u32, arg1, payload);
+            write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_PRINT2D_STATUS => {
+            let state = crate::r::print2d::status_for_owner(vm_id, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (state as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_YIELD => {

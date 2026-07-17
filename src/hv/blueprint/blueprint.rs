@@ -1413,6 +1413,16 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_vlayer_printer_snapshot_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_printer_snapshot_read as *const () as usize)
         }
+        "trueos_vlayer_print2d_submit" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_print2d_submit as *const () as usize)
+        }
+        "trueos_vlayer_print2d_status" => {
+            Some(crate::r::net::vlayer::trueos_vlayer_print2d_status as *const () as usize)
+        }
+        "trueos_cabi_gridpaper_print_request_take" => Some(
+            crate::r::gridpaper_service::trueos_cabi_gridpaper_print_request_take as *const ()
+                as usize,
+        ),
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
         }

@@ -323,6 +323,28 @@ pub(crate) fn printer_discovered(name: &str, uri: &str) {
     );
 }
 
+pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) {
+    log_with_area_level(
+        flags::LogArea::Net,
+        log::Level::Info,
+        format_args!(
+            "print2d: gridpaper request owner={} token={} generation={} trigger=F10\n",
+            owner, token, generation
+        ),
+    );
+}
+
+pub(crate) fn print2d_job_state(job_id: u32, state: &str, detail: &str) {
+    log_with_area_level(
+        flags::LogArea::Net,
+        log::Level::Info,
+        format_args!(
+            "print2d: job={} state={} detail={}\n",
+            job_id, state, detail
+        ),
+    );
+}
+
 fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = LOG_WRITE_LOCK.lock();
 

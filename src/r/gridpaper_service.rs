@@ -5,7 +5,7 @@
 //! presentation lifetime. No UI4 handles or generic drawing operations cross
 //! the ABI.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
@@ -68,6 +68,10 @@ const SERVICE_PERIOD_MS: u64 = 16;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
 const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
+const PRINT_REQUEST_CAPACITY: usize = 8;
+const PRINT_CAPTURE_HEIGHT: u32 = 1_440;
+const PRINT_CAPTURE_WIDTH: u32 =
+    (PRINT_CAPTURE_HEIGHT * SURFACE_WIDTH_MM + SURFACE_HEIGHT_MM / 2) / SURFACE_HEIGHT_MM;
 
 const ERROR_INVALID_SNAPSHOT: i32 = -1;
 const ERROR_INVALID_SCALE: i32 = -2;
@@ -106,9 +110,117 @@ static SNAPSHOTS: Mutex<SnapshotStore> = Mutex::new(SnapshotStore::new());
 #[derive(Clone)]
 struct OwnedSnapshot {
     raw: Vec<u8>,
+    owner: u8,
     generation: u64,
     scale_percent: u16,
     serial: u64,
+}
+
+struct GridPaperPrintRequest {
+    owner: u8,
+    token: u32,
+    generation: u64,
+    delivered: bool,
+    raw: Vec<u8>,
+}
+
+struct PrintRenderRequest {
+    job_id: u32,
+    generation: u64,
+    raw: Vec<u8>,
+}
+
+pub(crate) struct PrintRasterFrame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba_premultiplied: Vec<u8>,
+}
+
+pub(crate) struct PrintRenderResult {
+    pub job_id: u32,
+    pub result: Result<PrintRasterFrame, &'static str>,
+}
+
+static NEXT_PRINT_REQUEST_TOKEN: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(1);
+static GRIDPAPER_PRINT_REQUESTS: Mutex<VecDeque<GridPaperPrintRequest>> =
+    Mutex::new(VecDeque::new());
+static PRINT_RENDER_REQUESTS: Mutex<VecDeque<PrintRenderRequest>> =
+    Mutex::new(VecDeque::new());
+static PRINT_RENDER_RESULTS: Mutex<VecDeque<PrintRenderResult>> =
+    Mutex::new(VecDeque::new());
+
+fn next_print_request_token() -> u32 {
+    use core::sync::atomic::Ordering;
+
+    loop {
+        let token = NEXT_PRINT_REQUEST_TOKEN.fetch_add(1, Ordering::Relaxed);
+        if token != 0 {
+            return token;
+        }
+    }
+}
+
+fn queue_print_request(snapshot: &OwnedSnapshot) -> Option<u32> {
+    let token = next_print_request_token();
+    let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
+    if requests.len() >= PRINT_REQUEST_CAPACITY {
+        return None;
+    }
+    requests.push_back(GridPaperPrintRequest {
+        owner: snapshot.owner,
+        token,
+        generation: snapshot.generation,
+        delivered: false,
+        raw: snapshot.raw.clone(),
+    });
+    drop(requests);
+    crate::log_os::gridpaper_print_requested(snapshot.owner, token, snapshot.generation);
+    Some(token)
+}
+
+pub(crate) fn take_print_request_for_owner(owner: u8) -> Option<(u32, u64)> {
+    let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
+    let request = requests
+        .iter_mut()
+        .find(|request| request.owner == owner && !request.delivered)?;
+    request.delivered = true;
+    Some((request.token, request.generation))
+}
+
+pub(crate) fn consume_print_request(owner: u8, token: u32) -> Option<(u64, Vec<u8>)> {
+    let mut requests = GRIDPAPER_PRINT_REQUESTS.lock();
+    let index = requests
+        .iter()
+        .position(|request| request.owner == owner && request.token == token)?;
+    let request = requests.remove(index)?;
+    Some((request.generation, request.raw))
+}
+
+pub(crate) fn valid_print_snapshot(raw: &[u8]) -> bool {
+    raw.len() == PAGE_BYTES && validate_page(raw).is_ok()
+}
+
+pub(crate) fn request_print_render(job_id: u32, generation: u64, raw: Vec<u8>) -> bool {
+    if !valid_print_snapshot(&raw) {
+        return false;
+    }
+    let mut requests = PRINT_RENDER_REQUESTS.lock();
+    if requests.len() >= PRINT_REQUEST_CAPACITY {
+        return false;
+    }
+    requests.push_back(PrintRenderRequest {
+        job_id,
+        generation,
+        raw,
+    });
+    true
+}
+
+pub(crate) fn take_print_render_result(job_id: u32) -> Option<PrintRenderResult> {
+    let mut results = PRINT_RENDER_RESULTS.lock();
+    let index = results.iter().position(|result| result.job_id == job_id)?;
+    results.remove(index)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -391,6 +503,7 @@ fn snapshot_after(serial: u64) -> Option<OwnedSnapshot> {
     }
     Some(OwnedSnapshot {
         raw: snapshots.buffers[snapshots.published].to_vec(),
+        owner: snapshots.owner?,
         generation: snapshots.generation,
         scale_percent: snapshots.scale_percent,
         serial: snapshots.serial,
@@ -576,6 +689,28 @@ pub extern "C" fn trueos_cabi_gridpaper_close() -> i32 {
     crate::hv::current_guest_execution_context_vm_id()
         .map(close_owner)
         .unwrap_or(ERROR_NOT_OWNER)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gridpaper_print_request_take() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE,
+            0,
+            0,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data
+        } else {
+            0
+        };
+    }
+    let Some(owner) = crate::hv::current_guest_execution_context_vm_id() else {
+        return 0;
+    };
+    take_print_request_for_owner(owner)
+        .map(|(token, _generation)| u64::from(token))
+        .unwrap_or(0)
 }
 
 fn validate_page(raw: &[u8]) -> Result<(), ()> {
@@ -1186,6 +1321,58 @@ fn resident_layer_color(
     [rgba.r, rgba.g, rgba.b, rgba.a]
 }
 
+fn render_print_page(
+    request: PrintRenderRequest,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
+) -> PrintRenderResult {
+    let snapshot = OwnedSnapshot {
+        raw: request.raw,
+        owner: 0,
+        generation: request.generation,
+        scale_percent: 100,
+        serial: u64::from(request.job_id),
+    };
+    let result = (|| {
+        let page = build_resident_page(
+            &snapshot,
+            PRINT_CAPTURE_WIDTH,
+            PRINT_CAPTURE_HEIGHT,
+            ScenePan::ZERO,
+        )?;
+        let draws = page
+            .layers
+            .iter()
+            .map(|layer| crate::intel::render::ResidentSceneDraw {
+                mesh: &layer.mesh,
+                rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
+                viewport_translation_px: [0.0, 0.0],
+            })
+            .collect::<Vec<_>>();
+        let captured =
+            crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent(
+                &draws,
+                Some([0, 0, 0, 0]),
+                PRINT_CAPTURE_WIDTH,
+                PRINT_CAPTURE_HEIGHT,
+                false,
+            )?;
+        if captured.completed_draws != captured.requested_draws {
+            return Err("incomplete-print-frame");
+        }
+        let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
+        Ok(PrintRasterFrame {
+            width: PRINT_CAPTURE_WIDTH,
+            height: PRINT_CAPTURE_HEIGHT,
+            rgba_premultiplied,
+        })
+    })();
+    PrintRenderResult {
+        job_id: request.job_id,
+        result,
+    }
+}
+
 fn sampled_text_colors(
     page: &ResidentPage,
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
@@ -1451,6 +1638,21 @@ pub async fn gridpaper_service_task() {
                     }
                 }
                 crate::ui4::Ui4InputEvent::Keyboard(event)
+                    if event.window == surface.window
+                        && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                        && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
+                {
+                    if let Some(snapshot) = latest_snapshot.as_ref()
+                        && queue_print_request(snapshot).is_none()
+                    {
+                        crate::log_os::print2d_job_state(
+                            0,
+                            "request-dropped",
+                            "gridpaper-F10-queue-full",
+                        );
+                    }
+                }
+                crate::ui4::Ui4InputEvent::Keyboard(event)
                     if event.window == surface.window && selection.is_some() =>
                 {
                     let Some(snapshot) = latest_snapshot.as_mut() else {
@@ -1589,6 +1791,10 @@ pub async fn gridpaper_service_task() {
         let animation_elapsed_ms = Instant::now()
             .as_millis()
             .saturating_sub(animation_started_ms);
+        if let Some(request) = PRINT_RENDER_REQUESTS.lock().pop_front() {
+            let result = render_print_page(request, &text_animations, animation_elapsed_ms);
+            PRINT_RENDER_RESULTS.lock().push_back(result);
+        }
         let mut published_page_this_tick = false;
         if let Some(candidate) = pending.as_ref() {
             match publish_page(
