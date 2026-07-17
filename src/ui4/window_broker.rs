@@ -12,6 +12,7 @@ use super::{FrameHandle, OutputId};
 const MAX_WINDOWS: usize = 256;
 const MAX_WINDOWS_PER_SESSION: usize = 16;
 const MAX_SESSIONS: usize = 64;
+pub(super) const MAX_ACTIVE_WINDOWS: usize = 64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
@@ -300,6 +301,22 @@ impl WindowBroker {
             })
             .count();
         if count >= MAX_WINDOWS_PER_SESSION {
+            return Err(WindowBrokerError::Capacity);
+        }
+        let active_count = self
+            .windows
+            .iter()
+            .filter(|window| window.state != WindowState::Closed)
+            .count();
+        if active_count >= MAX_ACTIVE_WINDOWS {
+            crate::log_warn!(
+                target: "ui4";
+                "ui4 window admission soft-cap exceeded requested={} cap={} owner={:?} session={} action=reject-create\n",
+                active_count.saturating_add(1),
+                MAX_ACTIVE_WINDOWS,
+                request.owner,
+                request.session.raw(),
+            );
             return Err(WindowBrokerError::Capacity);
         }
 

@@ -365,6 +365,7 @@ fn encode_triangle_probe_batch(
     batch_mode: TriangleBatchMode,
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
+    viewport_translation_px: [f32; 2],
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
@@ -741,7 +742,17 @@ fn encode_triangle_probe_batch(
     // still exports real VUEs, which are handed directly to SF; only the
     // fixed-function unit at the currently stalled boundary is bypassed.
     let mesa_clip_bypass = backend_probe_mode.mesa_clip_bypass();
-    let clip_dw1 = if mesa_host_fixed_function {
+    // SF viewport translation happens after fixed-function clipping. Bypass
+    // canonical clip rejection for a translated resident scene and rely on
+    // the target scissor for final bounds; otherwise offscreen primitives can
+    // never become visible when the consumer pans toward them.
+    let translated_viewport_clip_bypass = mesa_host_fixed_function
+        && viewport_translation_px
+            .iter()
+            .any(|component| *component != 0.0);
+    let clip_dw1 = if translated_viewport_clip_bypass {
+        0
+    } else if mesa_host_fixed_function {
         0x0004_0400
     } else if mesa_clip_bypass {
         0
@@ -753,7 +764,9 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
-    let clip_dw2 = if mesa_host_fixed_function {
+    let clip_dw2 = if translated_viewport_clip_bypass {
+        CLIP_PERSPECTIVE_DIVIDE_DISABLE
+    } else if mesa_host_fixed_function {
         0xD400_0001
     } else if mesa_simple_rect_stack || mesa_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
@@ -794,7 +807,9 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let clip_dw3 = if mesa_host_fixed_function {
+    let clip_dw3 = if translated_viewport_clip_bypass {
+        0
+    } else if mesa_host_fixed_function {
         0x0003_FFE0
     } else if mesa_clip_bypass {
         0

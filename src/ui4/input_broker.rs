@@ -613,7 +613,7 @@ impl InputBroker {
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
-        let target = self
+        let matched_target = self
             .cursors
             .iter()
             .filter_map(|route| {
@@ -631,6 +631,21 @@ impl InputBroker {
             })
             .max_by_key(|(serial, _)| *serial)
             .map(|(_, focus)| focus);
+        let target = matched_target.or_else(|| {
+            if combo_id != 0 {
+                return None;
+            }
+            self.cursors
+                .iter()
+                .filter_map(|route| {
+                    let focus = route.focus?;
+                    window_snapshot_for_target(focus)
+                        .is_some()
+                        .then_some((route.focus_serial, focus))
+                })
+                .max_by_key(|(serial, _)| *serial)
+                .map(|(_, focus)| focus)
+        });
         let Some(target) = target else {
             return;
         };
@@ -730,7 +745,7 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px selection=primary-button/active-outline screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
+        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px selection=primary-button/active-outline screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
     );
     loop {
         INPUT_BROKER.lock().pump();

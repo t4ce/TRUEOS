@@ -1,52 +1,30 @@
 use alloc::string::String;
 use core::fmt::Write;
 use core::str::SplitWhitespace;
-use core::sync::atomic::AtomicU32;
 
 use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
-    CHART_SINE_FLAG_AXES, CHART_SINE_FLAG_BORDER, CHART_SINE_FLAG_GLOW, CHART_SINE_FLAG_GRID,
     CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
-    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, PIXEL_PLASMA_FLAG_ALPHA,
-    PIXEL_PLASMA_FLAG_FIELD_PALETTE, PIXEL_PLASMA_FLAG_RINGS, PIXEL_PLASMA_FLAG_SCANLINE,
-    PIXEL_PLASMA_FLAG_VIGNETTE, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
     reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_font_outline_probe,
     upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
     upload_pixel_plasma_rgba8_kernel,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const CANVAS2D_SPRITE_DEFAULT_DURATION_MS: u64 = 5_000;
-const CANVAS2D_SPRITE_DEFAULT_CADENCE_MS: u64 = 0;
-const CANVAS2D_SPRITE_DEFAULT_COUNT: u32 = 256;
-const CANVAS2D_SPRITE_DEFAULT_PRESENT_EVERY: u32 = 1;
-const CANVAS2D_SPRITE_MAX_COUNT: u32 = 256;
-const CANVAS2D_SPRITE_MAX_PRESENT_EVERY: u32 = 1024;
-const CANVAS2D_SPRITES64_COUNT: u32 = 16;
-
-static CANVAS2D_SPRITE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
-
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu canvas2d sprite [duration_ms] [cadence_ms] [count] [present_every]",
+        "gpgpu preview start mandelbrot [duration_ms] [cadence_ms] [publish_every]",
     );
-    print_shell_line(io, "gpgpu canvas2d sprites64");
-    print_shell_line(io, "gpgpu canvas3d cube");
-    print_shell_line(io, "gpgpu canvas3d ico");
-    print_shell_line(io, "gpgpu canvas3d para");
-    print_shell_line(io, "gpgpu artificial-pixel");
+    print_shell_line(io, "gpgpu preview status");
+    print_shell_line(io, "gpgpu preview stop");
     print_shell_line(io, "gpgpu chart artifact");
-    print_shell_line(io, "gpgpu chart static [phase]");
-    print_shell_line(io, "gpgpu chart wave [duration_ms] [hz] [present_every]");
     print_shell_line(io, "gpgpu pixel artifact");
-    print_shell_line(io, "gpgpu pixel static [time]");
-    print_shell_line(io, "gpgpu pixel plasma [duration_ms] [hz] [present_every]");
-    print_shell_line(io, "gpgpu font-tessel [artifact|audit|flatten|mesh|all]");
+    print_shell_line(io, "gpgpu probe font-tessel [artifact|audit|flatten|mesh|all]");
     print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
-    print_shell_line(io, "gpgpu smoke");
 }
 
 fn expect_no_more(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
@@ -58,90 +36,126 @@ fn expect_no_more(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     }
 }
 
-fn parse_canvas2d_sprite_args(args: &mut SplitWhitespace<'_>) -> Option<(u64, u64, u32, u32)> {
-    let duration_ms = match args.next() {
-        Some(raw) => raw.parse::<u64>().ok()?,
-        None => CANVAS2D_SPRITE_DEFAULT_DURATION_MS,
-    };
-    let cadence_ms = match args.next() {
-        Some(raw) => raw.parse::<u64>().ok()?,
-        None => CANVAS2D_SPRITE_DEFAULT_CADENCE_MS,
-    };
-    let count = match args.next() {
-        Some(raw) => raw.parse::<u32>().ok()?,
-        None => CANVAS2D_SPRITE_DEFAULT_COUNT,
-    }
-    .clamp(1, CANVAS2D_SPRITE_MAX_COUNT);
-    let present_every = match args.next() {
-        Some(raw) => raw.parse::<u32>().ok()?,
-        None => CANVAS2D_SPRITE_DEFAULT_PRESENT_EVERY,
-    }
-    .clamp(1, CANVAS2D_SPRITE_MAX_PRESENT_EVERY);
-    if args.next().is_some() {
-        return None;
-    }
-    Some((duration_ms, cadence_ms, count, present_every))
-}
-
-fn now_ticks() -> u64 {
-    embassy_time_driver::now()
-}
-
-fn ticks_from_ms(ms: u64) -> u64 {
-    let hz = embassy_time_driver::TICK_HZ;
-    if hz == 0 {
-        return ms.max(1);
-    }
-    let ticks = ((ms as u128).saturating_mul(hz as u128).saturating_add(999) / 1000) as u64;
-    if ms == 0 { 0 } else { ticks.max(1) }
-}
-
-fn elapsed_ms_since(start_tick: u64) -> u64 {
-    let hz = embassy_time_driver::TICK_HZ;
-    if hz == 0 {
-        return 0;
-    }
-    now_ticks().saturating_sub(start_tick).saturating_mul(1000) / hz
-}
-
-fn elapsed_us_since(start_tick: u64) -> u64 {
-    let hz = embassy_time_driver::TICK_HZ;
-    if hz == 0 {
-        return 0;
-    }
-    now_ticks()
-        .saturating_sub(start_tick)
-        .saturating_mul(1_000_000)
-        / hz
-}
-
-fn ticks_for_hz(hz: u32) -> u64 {
-    let clock_hz = embassy_time_driver::TICK_HZ;
-    if clock_hz == 0 {
-        return 1;
-    }
-    clock_hz.div_ceil(u64::from(hz.max(1))).max(1)
-}
-
-fn wait_until_tick(deadline: u64) {
-    while now_ticks() < deadline {
-        core::hint::spin_loop();
-    }
-}
-
-fn run_canvas2d(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(kind) = args.next() else {
+fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(action) = args.next() else {
         usage(io);
         return;
     };
-
-    if kind.eq_ignore_ascii_case("sprites64") {
+    if action.eq_ignore_ascii_case("start") {
+        let Some(preset) = args.next() else {
+            usage(io);
+            return;
+        };
+        if !preset.eq_ignore_ascii_case("mandelbrot") {
+            usage(io);
+            return;
+        }
+        let duration_ms = match args.next() {
+            Some(raw) => match raw.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    usage(io);
+                    return;
+                }
+            },
+            None => crate::ui4::GPGPU_PREVIEW_DEFAULT_DURATION_MS,
+        };
+        let cadence_ms = match args.next() {
+            Some(raw) => match raw.parse::<u64>() {
+                Ok(value) => value,
+                Err(_) => {
+                    usage(io);
+                    return;
+                }
+            },
+            None => crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
+        };
+        let publish_every = match args.next() {
+            Some(raw) => match raw.parse::<u32>() {
+                Ok(value) => value,
+                Err(_) => {
+                    usage(io);
+                    return;
+                }
+            },
+            None => crate::ui4::GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
+        };
         if !expect_no_more(io, args) {
             return;
+        }
+        let config = crate::ui4::GpgpuPreviewConfig {
+            duration_ms,
+            cadence_ms,
+            publish_every,
+        };
+        match crate::ui4::request_mandel_preview_start(config) {
+            Ok(serial) => {
+                let status = crate::ui4::gpgpu_preview_status();
+                print_shell_line(
+                    io,
+                    alloc::format!(
+                        "gpgpu preview start: queued=1 request={} preset=mandelbrot service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5",
+                        serial,
+                        status.online as u8,
+                        duration_ms,
+                        cadence_ms,
+                        publish_every,
+                    )
+                    .as_str(),
+                );
+            }
+            Err(reason) => print_shell_line(
+                io,
+                alloc::format!("gpgpu preview start: queued=0 reason={reason}").as_str(),
+            ),
+        }
+    } else if action.eq_ignore_ascii_case("status") {
+        if expect_no_more(io, args) {
+            print_preview_status(io);
+        }
+    } else if action.eq_ignore_ascii_case("stop") {
+        if expect_no_more(io, args) {
+            let serial = crate::ui4::request_gpgpu_preview_stop();
+            print_shell_line(
+                io,
+                alloc::format!("gpgpu preview stop: queued=1 request={serial}").as_str(),
+            );
         }
     } else {
         usage(io);
     }
+}
+
+fn print_preview_status(io: &'static dyn ShellBackend2) {
+    let status = crate::ui4::gpgpu_preview_status();
+    print_shell_line(
+        io,
+        alloc::format!(
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset=mandelbrot duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} submit_ms={} error={}",
+            status.online as u8,
+            status.phase.label(),
+            status.desired_running as u8,
+            status.request_serial,
+            status.applied_serial,
+            status.config.duration_ms,
+            status.config.cadence_ms,
+            status.config.publish_every,
+            status.frame.map(|frame| frame.raw()).unwrap_or(0),
+            status.window.map(|window| window.raw()).unwrap_or(0),
+            status.metrics.attempted,
+            status.metrics.submitted,
+            status.metrics.completed,
+            status.metrics.published,
+            status.metrics.dropped_busy,
+            status.metrics.failed,
+            status.metrics.late,
+            status.metrics.elapsed_ms,
+            status.metrics.last_iterations,
+            status.metrics.last_submit_ms,
+            status.last_error,
+        )
+        .as_str(),
+    );
 }
 
 fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
@@ -153,10 +167,6 @@ fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         if expect_no_more(io, args) {
             run_chart_artifact(io);
         }
-    } else if probe.eq_ignore_ascii_case("static") {
-        run_chart_static(io, args);
-    } else if probe.eq_ignore_ascii_case("wave") {
-        run_chart_wave(io, args);
     } else {
         usage(io);
     }
@@ -221,16 +231,6 @@ fn run_chart_artifact(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn run_chart_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let _ = args;
-    print_shell_line(io, "gpgpu chart static: presentation removed; UI4 baseline is logo-only");
-}
-
-fn run_chart_wave(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let _ = args;
-    print_shell_line(io, "gpgpu chart wave: presentation removed; UI4 baseline is logo-only");
-}
-
 fn run_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
     let Some(probe) = args.next() else {
         usage(io);
@@ -240,10 +240,6 @@ fn run_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         if expect_no_more(io, args) {
             run_pixel_artifact(io);
         }
-    } else if probe.eq_ignore_ascii_case("static") {
-        run_pixel_static(io, args);
-    } else if probe.eq_ignore_ascii_case("plasma") {
-        run_pixel_plasma(io, args);
     } else {
         usage(io);
     }
@@ -309,31 +305,6 @@ fn run_pixel_artifact(io: &'static dyn ShellBackend2) {
     }
 }
 
-fn run_pixel_static(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let _ = args;
-    print_shell_line(io, "gpgpu pixel static: presentation removed; UI4 baseline is logo-only");
-}
-
-fn run_pixel_plasma(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let _ = args;
-    print_shell_line(io, "gpgpu pixel plasma: presentation removed; UI4 baseline is logo-only");
-}
-
-fn run_canvas3d(
-    _spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    let _ = args;
-    print_shell_line(io, "gpgpu canvas3d: presentation removed; UI4 baseline is logo-only");
-    ParseOutcome::Handled
-}
-
-fn run_artificial_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let _ = args;
-    print_shell_line(io, "gpgpu artificial-pixel: presentation removed; UI4 baseline is logo-only");
-}
-
 fn outline_checksum(ops: &[[u32; 8]]) -> u32 {
     let mut hash = 0x811C_9DC5u32;
     for op in ops {
@@ -349,11 +320,14 @@ fn run_font_tessel_artifact(io: &'static dyn ShellBackend2) -> bool {
     let artifact = FONT_OUTLINE_MESH_ADLS_ARTIFACT;
     let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
     let Some(known) = crate::intel::opencl::registry::known_aot_kernel(artifact.name) else {
-        print_shell_line(io, "gpgpu font-tessel artifact: ok=0 reason=missing-known-aot-contract");
+        print_shell_line(
+            io,
+            "gpgpu probe font-tessel artifact: ok=0 reason=missing-known-aot-contract",
+        );
         return false;
     };
     let Some(upload) = upload_font_outline_mesh_kernel() else {
-        print_shell_line(io, "gpgpu font-tessel artifact: ok=0 reason=upload-unavailable");
+        print_shell_line(io, "gpgpu probe font-tessel artifact: ok=0 reason=upload-unavailable");
         return false;
     };
     let hash_ok = upload.bin_sha256 == artifact.bin_sha256;
@@ -366,7 +340,7 @@ fn run_font_tessel_artifact(io: &'static dyn ShellBackend2) -> bool {
     let ok =
         registry_report.passed() && upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
     let message = alloc::format!(
-        "gpgpu font-tessel artifact: ok={} kernel={} role={:?} target={} source={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_all_ok={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
+        "gpgpu probe font-tessel artifact: ok={} kernel={} role={:?} target={} source={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_all_ok={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
         ok as u8,
         artifact.name,
         known.role,
@@ -433,7 +407,7 @@ fn run_font_tessel_stage(
         _ => "unknown",
     };
     let message = alloc::format!(
-        "gpgpu font-tessel {}: ok={} hw_ok={} shape_ok={} setup=[{},{},{},{},{},{},{},{},{}] retired={} kernel_done={} ops={} move={} line={} quad={} cubic={} close={} segments={}/{} vertices={} indices={} checksum=0x{:08X} invalid={} truncated={} index_range={} markers=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] bounds=({:.2},{:.2})..({:.2},{:.2}) geometry={} retained=probe-scratch cpu_geometry_math=0",
+        "gpgpu probe font-tessel {}: ok={} hw_ok={} shape_ok={} setup=[{},{},{},{},{},{},{},{},{}] retired={} kernel_done={} ops={} move={} line={} quad={} cubic={} close={} segments={}/{} vertices={} indices={} checksum=0x{:08X} invalid={} truncated={} index_range={} markers=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] bounds=({:.2},{:.2})..({:.2},{:.2}) geometry={} retained=probe-scratch cpu_geometry_math=0",
         label,
         ok as u8,
         result.ok as u8,
@@ -497,11 +471,11 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
         return;
     }
     let Ok(outline) = crate::graphics::font::default_gpu_outline() else {
-        print_shell_line(io, "gpgpu font-tessel: ok=0 reason=outline-unavailable");
+        print_shell_line(io, "gpgpu probe font-tessel: ok=0 reason=outline-unavailable");
         return;
     };
     let intro = alloc::format!(
-        "gpgpu font-tessel: text=\"{}\" font={} file={} units_per_em={} glyphs={} contours={} full_ops={} mesh_ops={} outline_checksum=0x{:08X} source=skrifa-warm-outline placement=full-text-stream orientation=upright fill_tessellation=0",
+        "gpgpu probe font-tessel: text=\"{}\" font={} file={} units_per_em={} glyphs={} contours={} full_ops={} mesh_ops={} outline_checksum=0x{:08X} source=skrifa-warm-outline placement=full-text-stream orientation=upright fill_tessellation=0",
         outline.text,
         outline.font_name,
         outline.font_file,
@@ -561,7 +535,7 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
         print_shell_line(
             io,
             alloc::format!(
-                "gpgpu font-tessel compute-to-3d: ok={} mesh_ready={} completed={} vs={} clip={} ps={} error={} cpu_geometry_copy=0 target=scratch-visible-overlay",
+                "gpgpu probe font-tessel compute-to-3d: ok={} mesh_ready={} completed={} vs={} clip={} ps={} error={} cpu_geometry_copy=0 target=scratch-visible-overlay",
                 chain_ok as u8,
                 mesh_result.generated_mesh.is_some() as u8,
                 chain.as_ref().is_some_and(|render| render.completed) as u8,
@@ -576,12 +550,24 @@ fn run_font_tessel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu font-tessel done: ok={} compute_to_3d={} scope=full-True-OS-section-sign presentation=native-512x512-1to1 next=hole-aware-fill",
+            "gpgpu probe font-tessel done: ok={} compute_to_3d={} scope=full-True-OS-section-sign presentation=native-512x512-1to1 next=hole-aware-fill",
             ok as u8,
             wants_mesh as u8
         )
         .as_str(),
     );
+}
+
+fn run_probe(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(probe) = args.next() else {
+        usage(io);
+        return;
+    };
+    if probe.eq_ignore_ascii_case("font-tessel") {
+        run_font_tessel(io, args);
+    } else {
+        usage(io);
+    }
 }
 
 fn digest_hex(digest: &[u8; 32]) -> String {
@@ -646,7 +632,7 @@ fn run_artifacts(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>)
 }
 
 pub(crate) fn try_parse(
-    spawner: &Spawner,
+    _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
@@ -655,18 +641,14 @@ pub(crate) fn try_parse(
         return ParseOutcome::Handled;
     };
 
-    if cmd.eq_ignore_ascii_case("canvas2d") {
-        run_canvas2d(io, args);
-    } else if cmd.eq_ignore_ascii_case("canvas3d") {
-        return run_canvas3d(spawner, io, args);
-    } else if cmd.eq_ignore_ascii_case("artificial-pixel") {
-        run_artificial_pixel(io, args);
+    if cmd.eq_ignore_ascii_case("preview") {
+        run_preview(io, args);
     } else if cmd.eq_ignore_ascii_case("chart") {
         run_chart(io, args);
     } else if cmd.eq_ignore_ascii_case("pixel") {
         run_pixel(io, args);
-    } else if cmd.eq_ignore_ascii_case("font-tessel") {
-        run_font_tessel(io, args);
+    } else if cmd.eq_ignore_ascii_case("probe") {
+        run_probe(io, args);
     } else if cmd.eq_ignore_ascii_case("artifacts") {
         run_artifacts(io, args);
     } else {

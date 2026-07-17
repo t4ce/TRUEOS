@@ -5177,6 +5177,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         batch_mode,
         vf_experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        [0.0, 0.0],
         backend_probe_mode,
         post_draw_sync_variant,
     ) {
@@ -5736,6 +5737,7 @@ fn submit_triangle_streamout_proof(
         TriangleBatchMode::StreamoutProof,
         experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        [0.0, 0.0],
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::HeavyAll,
     ) {
@@ -6285,6 +6287,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         batch_mode,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
+        [0.0, 0.0],
         backend_probe_mode,
         post_draw_sync_variant,
     ) {
@@ -6760,6 +6763,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         batch_mode,
         streamout_experiment,
         front_end_contract,
+        viewport_translation_px,
         backend_probe_mode,
         post_draw_sync_variant,
     ) {

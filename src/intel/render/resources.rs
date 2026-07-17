@@ -96,6 +96,18 @@ fn upload_triangle_shader_pipeline_at(
             host_simd16.code_offset_bytes,
             host_simd16_pipeline.ps.code,
         )?;
+        if let Some(rgba) = draw_rgba {
+            // Both dispatch widths are enabled in 3DSTATE_PS. Specializing
+            // only SIMD8 leaves the paired SIMD16 kernel at its baked
+            // #0040FFFF color, so whichever fragments land on SIMD16 leak
+            // isolated legacy-blue pixels into an otherwise colored draw.
+            specialize_uploaded_triangle_ps_color(
+                warm.draw_state_virt,
+                host_simd16.code_offset_bytes,
+                host_simd16_pipeline,
+                rgba,
+            )?;
+        }
     }
 
     crate::intel::dma_flush(warm.draw_state_virt, used_end);
@@ -145,7 +157,10 @@ fn encode_compacted_float_immediate(component: u8) -> u32 {
 
 #[cfg(test)]
 mod compacted_float_immediate_tests {
-    use super::encode_compacted_float_immediate;
+    use super::{
+        TRIANGLE_PS_COLOR_WORDS, encode_compacted_float_immediate,
+        specialize_uploaded_triangle_ps_color,
+    };
 
     #[test]
     fn every_rgba_byte_preserves_the_compacted_instruction_fields() {
@@ -164,6 +179,29 @@ mod compacted_float_immediate_tests {
         assert_eq!(encode_compacted_float_immediate(64), 0x3E81_0000);
         assert_eq!(encode_compacted_float_immediate(255), 0x3F81_0000);
     }
+
+    #[test]
+    fn both_enabled_pixel_dispatch_widths_receive_the_draw_color() {
+        let rgba = [17, 91, 203, 149];
+        for pipeline in [
+            crate::intel::shader::triangle_pipeline(),
+            crate::intel::shader::triangle_pipeline_simd16(),
+        ] {
+            let mut uploaded = [0u32; 12];
+            uploaded.copy_from_slice(pipeline.ps.code);
+            specialize_uploaded_triangle_ps_color(
+                uploaded.as_mut_ptr() as *mut u8,
+                0,
+                pipeline,
+                rgba,
+            )
+            .expect("constant-color shader contract");
+
+            for (word_index, component) in TRIANGLE_PS_COLOR_WORDS.into_iter().zip(rgba) {
+                assert_eq!(uploaded[word_index], encode_compacted_float_immediate(component));
+            }
+        }
+    }
 }
 
 fn specialize_uploaded_triangle_ps_color(
@@ -173,13 +211,23 @@ fn specialize_uploaded_triangle_ps_color(
     rgba: [u8; 4],
 ) -> Result<(), &'static str> {
     let constant_color_pipeline = crate::intel::shader::triangle_pipeline();
-    if pipeline.ps.code.as_ptr() != constant_color_pipeline.ps.code.as_ptr()
-        || pipeline.ps.code.len() != 12
-        || pipeline.ps.code[0] != 0xA07E_0061
-        || pipeline.ps.code[2] != 0xA078_0061
-        || pipeline.ps.code[4] != 0xA07A_0061
-        || pipeline.ps.code[6] != 0xA07C_0061
-        || pipeline.ps.code[8..] != [0x0004_0132, 0x0000_0004, 0x5000_7E14, 0x00C4_7834]
+    let constant_color_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
+    let simd8_contract = pipeline.ps.code.as_ptr() == constant_color_pipeline.ps.code.as_ptr()
+        && pipeline.ps.code.len() == 12
+        && pipeline.ps.code[0] == 0xA07E_0061
+        && pipeline.ps.code[2] == 0xA078_0061
+        && pipeline.ps.code[4] == 0xA07A_0061
+        && pipeline.ps.code[6] == 0xA07C_0061
+        && pipeline.ps.code[8..] == [0x0004_0132, 0x0000_0004, 0x5000_7E14, 0x00C4_7834];
+    let simd16_contract = pipeline.ps.code.as_ptr()
+        == constant_color_simd16_pipeline.ps.code.as_ptr()
+        && pipeline.ps.code.len() == 12
+        && pipeline.ps.code[0] == 0xA17F_0061
+        && pipeline.ps.code[2] == 0xA17C_0061
+        && pipeline.ps.code[4] == 0xA17D_0061
+        && pipeline.ps.code[6] == 0xA17E_0061
+        && pipeline.ps.code[8..] == [0x0003_0132, 0x0000_0004, 0x5800_7F0C, 0x00C4_7C1C];
+    if (!simd8_contract && !simd16_contract)
         || encode_compacted_float_immediate(0) != pipeline.ps.code[1]
         || encode_compacted_float_immediate(64) != pipeline.ps.code[3]
         || encode_compacted_float_immediate(255) != pipeline.ps.code[5]

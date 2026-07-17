@@ -41,7 +41,7 @@ const STREAM_PARAMETER_MAX: u32 = 64;
 const COMPOSITION_PERIOD_MS: u64 = 16;
 const MANDEL_STREAM_DIVISOR: u8 = 2;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
-const MAX_COMPOSITION_WINDOWS: usize = 8;
+const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 
 const STATIC_PLACEMENT: WindowPlacement = WindowPlacement {
@@ -443,8 +443,19 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
 fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let windows = visible_windows_for_output(output);
+    if windows.len() > MAX_COMPOSITION_WINDOWS {
+        // `ui4` deliberately has no narrower LogArea, so log-os routes this
+        // admission failure to [global] [warn].
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 compositor visible-window soft-cap exceeded output={} requested={} cap={} action=reject-composition\n",
+            output.name(),
+            windows.len(),
+            MAX_COMPOSITION_WINDOWS,
+        );
+        return Err(DummyUi4ConsumerError::PresentFailed);
+    }
     if windows.is_empty()
-        || windows.len() > MAX_COMPOSITION_WINDOWS
         || windows.iter().any(|window| {
             let slot = window.plane.slot();
             slot != super::PRIMARY_PLANE_SLOT

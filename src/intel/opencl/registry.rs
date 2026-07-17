@@ -84,20 +84,12 @@ const GENERIC_PER_THREAD_BYTES: u32 = 96;
 const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
 const RECT_WORKLIST_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
-    "shell2:gpgpu smoke",
     "font service rect/gradient loops",
     "gpgpu rect worklist probes",
 ];
-const TEXT_RENDER_CONSUMERS: &[&str] = &[
-    "intel::init_once upload",
-    "shell2:gpgpu canvas2d sprites64",
-    "font service text loop",
-];
+const TEXT_RENDER_CONSUMERS: &[&str] = &["intel::init_once upload", "font service text loop"];
 const CANVAS_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
-    "shell2:gpgpu canvas3d cube",
-    "shell2:gpgpu canvas3d ico",
-    "shell2:gpgpu canvas3d para",
     "explicit canvas worker",
     "gpgpu canvas3d probes",
 ];
@@ -472,6 +464,7 @@ const MANDEL64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &[
         "intel::init_once upload",
         "ui4::dummy_ui4_consumer_service_task",
+        "ui4::gpgpu_preview_consumer_service_task",
         "gpgpu mandel64 probe",
     ],
 };
@@ -731,7 +724,7 @@ const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CHART_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["shell2:gpgpu chart artifact|static|wave"],
+    consumers: &["shell2:gpgpu chart artifact"],
 };
 
 const PIXEL_PLASMA_ARGS: &[KernelCallArg<'_>] = &[
@@ -763,7 +756,7 @@ const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: PIXEL_PLASMA_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["shell2:gpgpu pixel artifact|static|plasma"],
+    consumers: &["shell2:gpgpu pixel artifact"],
 };
 
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[
@@ -791,7 +784,7 @@ const FONT_OUTLINE_MESH_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: FONT_OUTLINE_MESH_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_1d(),
-    consumers: &["shell2:gpgpu font-tessel audit|flatten|mesh|all"],
+    consumers: &["shell2:gpgpu probe font-tessel audit|flatten|mesh|all"],
 };
 
 pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[

@@ -203,6 +203,7 @@ pub const fn threshold_down_set(filter: LevelFilter) -> LogLevelSet {
 
 pub fn target_log_area(target: &str) -> LogArea {
     match target {
+        "global" | "ui4" => LogArea::Global,
         "boot" | "cpu" | "tokio" | "rapl" | "tga" => LogArea::Boot,
         "service" | "spawn-svc" | "http" => LogArea::Service,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => LogArea::Net,
@@ -291,7 +292,7 @@ fn path_prefix(path: &str, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogArea, module_path_log_area, target_log_area};
+    use super::{module_path_log_area, target_log_area, LogArea};
 
     #[test]
     fn routes_hypervisor_aliases_to_hv_area() {
@@ -314,6 +315,11 @@ mod tests {
         assert_eq!(target_log_area("intel/opencl"), LogArea::Gpgpu);
         assert_eq!(module_path_log_area("TRUEOS::intel::opencl"), LogArea::Gpgpu);
         assert_eq!(module_path_log_area("TRUEOS::intel::opencl::registry"), LogArea::Gpgpu);
+    }
+
+    #[test]
+    fn routes_ui4_to_global_area() {
+        assert_eq!(target_log_area("ui4"), LogArea::Global);
     }
 }
 

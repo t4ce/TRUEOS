@@ -1,8 +1,9 @@
 //! Embassy consumer for GridPaper's fixed snapshot format.
 //!
-//! The Blueprint owns edits and publication cadence. This service owns the
-//! accepted copy, UI4 surface, GPU allocations, and presentation lifetime.
-//! No UI4 handles or generic drawing operations cross the ABI.
+//! The Blueprint owns snapshot publication cadence. This service owns the
+//! accepted working copy, UI4 editing/focus state, GPU allocations, and
+//! presentation lifetime. No UI4 handles or generic drawing operations cross
+//! the ABI.
 
 use alloc::{string::String, vec::Vec};
 
@@ -58,6 +59,9 @@ const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
 const DECORATION_INSET_MM: f32 = 0.5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
+const GRID_CURSOR_STROKE_PX: u32 = 3;
+const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
 
 const ERROR_INVALID_SNAPSHOT: i32 = -1;
 const ERROR_INVALID_SCALE: i32 = -2;
@@ -99,6 +103,136 @@ struct OwnedSnapshot {
     generation: u64,
     scale_percent: u16,
     serial: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GridCellSelection {
+    column: usize,
+    row: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct KeyboardGridOutcome {
+    content_changed: bool,
+    selection_changed: bool,
+    clear_selection: bool,
+    capacity_rejected: bool,
+}
+
+fn edit_snapshot_from_keyboard(
+    snapshot: &mut OwnedSnapshot,
+    selection: &mut GridCellSelection,
+    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> KeyboardGridOutcome {
+    let mut outcome = KeyboardGridOutcome::default();
+    if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_TEXT {
+        let utf8_len = usize::from(event.utf8_len);
+        if utf8_len == 0
+            || utf8_len > event.utf8.len()
+            || event.codepoint < 0x20
+            || event.codepoint == 0x7f
+            || core::str::from_utf8(&event.utf8[..utf8_len]).is_err()
+        {
+            return outcome;
+        }
+        let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
+        let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+        let previous_len = usize::from(cell[0]);
+        let Some(next_len) = previous_len.checked_add(utf8_len) else {
+            outcome.capacity_rejected = true;
+            return outcome;
+        };
+        if next_len > CELL_TEXT_CAPACITY {
+            outcome.capacity_rejected = true;
+            return outcome;
+        }
+        cell[TEXT_OFFSET + previous_len..TEXT_OFFSET + next_len]
+            .copy_from_slice(&event.utf8[..utf8_len]);
+        cell[0] = next_len as u8;
+        if previous_len == 0 && cell[1] == COLOR_TRANSPARENT {
+            cell[1] = COLOR_DEFAULT;
+        }
+        outcome.content_changed = true;
+        return outcome;
+    }
+
+    if event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY {
+        return outcome;
+    }
+    match event.key_code {
+        crate::r::keyboard::KEYBOARD_KEY_BACKSPACE => {
+            let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
+            let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+            let previous_len = usize::from(cell[0]);
+            let text =
+                core::str::from_utf8(&cell[TEXT_OFFSET..TEXT_OFFSET + previous_len]).unwrap_or("");
+            let next_len = text
+                .char_indices()
+                .next_back()
+                .map(|(offset, _)| offset)
+                .unwrap_or(0);
+            if next_len != previous_len {
+                cell[TEXT_OFFSET + next_len..TEXT_OFFSET + previous_len].fill(0);
+                cell[0] = next_len as u8;
+                outcome.content_changed = true;
+            }
+        }
+        crate::r::keyboard::KEYBOARD_KEY_DELETE => {
+            let offset = (selection.row * COLUMNS + selection.column) * CELL_BYTES;
+            let cell = &mut snapshot.raw[offset..offset + CELL_BYTES];
+            let previous_len = usize::from(cell[0]);
+            if previous_len != 0 {
+                cell[TEXT_OFFSET..TEXT_OFFSET + previous_len].fill(0);
+                cell[0] = 0;
+                outcome.content_changed = true;
+            }
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
+            let next = selection.column.saturating_sub(1);
+            outcome.selection_changed = next != selection.column;
+            selection.column = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
+            let next = selection.column.saturating_add(1).min(COLUMNS - 1);
+            outcome.selection_changed = next != selection.column;
+            selection.column = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_UP => {
+            let next = selection.row.saturating_sub(1);
+            outcome.selection_changed = next != selection.row;
+            selection.row = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ARROW_DOWN | crate::r::keyboard::KEYBOARD_KEY_ENTER => {
+            let next = selection.row.saturating_add(1).min(ROWS - 1);
+            outcome.selection_changed = next != selection.row;
+            selection.row = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_TAB => {
+            let linear = selection
+                .row
+                .saturating_mul(COLUMNS)
+                .saturating_add(selection.column)
+                .saturating_add(1)
+                .min(COLUMNS * ROWS - 1);
+            let next = GridCellSelection {
+                column: linear % COLUMNS,
+                row: linear / COLUMNS,
+            };
+            outcome.selection_changed = next != *selection;
+            *selection = next;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_HOME => {
+            outcome.selection_changed = selection.column != 0;
+            selection.column = 0;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_END => {
+            outcome.selection_changed = selection.column != COLUMNS - 1;
+            selection.column = COLUMNS - 1;
+        }
+        crate::r::keyboard::KEYBOARD_KEY_ESCAPE => outcome.clear_selection = true,
+        _ => {}
+    }
+    outcome
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -424,6 +558,41 @@ struct GridPaperSurface {
     width: u32,
     height: u32,
     extent_source: &'static str,
+}
+
+fn grid_cell_at_local_point(
+    surface: &GridPaperSurface,
+    local_x: i32,
+    local_y: i32,
+    scale_percent: u16,
+    pan: ScenePan,
+) -> Option<GridCellSelection> {
+    if local_x < 0
+        || local_y < 0
+        || local_x >= surface.width as i32
+        || local_y >= surface.height as i32
+    {
+        return None;
+    }
+    let scale = f32::from(scale_percent) / 100.0;
+    let scene_x = local_x as f32 * SCENE_WIDTH as f32 / surface.width.max(1) as f32 - pan.x;
+    let scene_y = local_y as f32 * SCENE_HEIGHT as f32 / surface.height.max(1) as f32 - pan.y;
+    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
+    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
+    let grid_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale;
+    let grid_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale;
+    let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
+    let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
+    let grid_right = grid_left + COLUMNS as f32 * cell_width;
+    let grid_bottom = grid_top + ROWS as f32 * cell_height;
+    if scene_x < grid_left || scene_y < grid_top || scene_x >= grid_right || scene_y >= grid_bottom
+    {
+        return None;
+    }
+    Some(GridCellSelection {
+        column: ((scene_x - grid_left) / cell_width) as usize,
+        row: ((scene_y - grid_top) / cell_height) as usize,
+    })
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -883,6 +1052,7 @@ fn palette(color: u8, background: bool) -> [u8; 4] {
 fn publish_page(
     surface: &GridPaperSurface,
     page: &ResidentPage,
+    selection: Option<GridCellSelection>,
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
@@ -911,7 +1081,7 @@ fn publish_page(
     if result.completed_draws != result.requested_draws || result.rgba.is_none() {
         return Err(ServiceError::Render("incomplete-frame"));
     }
-    publish_pixels(surface, &result)?;
+    publish_pixels(surface, page, selection, &result)?;
     Ok(result)
 }
 
@@ -952,6 +1122,8 @@ fn sampled_text_colors(
 
 fn publish_pixels(
     surface: &GridPaperSurface,
+    page: &ResidentPage,
+    selection: Option<GridCellSelection>,
     result: &crate::intel::render::ResidentSceneFrameResult,
 ) -> Result<(), ServiceError> {
     if result.width != surface.width || result.height != surface.height {
@@ -984,6 +1156,9 @@ fn publish_pixels(
         destination[destination_start..destination_start + source_pitch]
             .copy_from_slice(&source[source_start..source_start + source_pitch]);
     }
+    if let Some(selection) = selection {
+        paint_grid_cursor(destination, view.pitch, surface, page, selection);
+    }
     crate::intel::dma_flush(view.virt, view.byte_len);
     if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
         let _ = crate::ui4::cancel_frame_buffer(lease);
@@ -993,9 +1168,62 @@ fn publish_pixels(
     Ok(())
 }
 
-/// Persistent GridPaper scene consumer. Geometry is rebuilt only for a new
-/// accepted snapshot. Middle-button pan is hot-applied through the 3D viewport
-/// transform while the font and grid meshes remain GPU-owned.
+fn paint_grid_cursor(
+    destination: &mut [u8],
+    pitch: u32,
+    surface: &GridPaperSurface,
+    page: &ResidentPage,
+    selection: GridCellSelection,
+) {
+    let scale = f32::from(page.scale_percent) / 100.0;
+    let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
+    let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
+    let cell_width = CELL_EDGE_MM as f32 * scene_units_per_mm_x * scale;
+    let cell_height = CELL_EDGE_MM as f32 * scene_units_per_mm_y * scale;
+    let scene_left = RULER_GUTTER_MM as f32 * scene_units_per_mm_x * scale
+        + selection.column as f32 * cell_width
+        + page.pan.x;
+    let scene_top = RULER_GUTTER_MM as f32 * scene_units_per_mm_y * scale
+        + selection.row as f32 * cell_height
+        + page.pan.y;
+    let left = libm::floorf(scene_left * surface.width as f32 / SCENE_WIDTH as f32) as i32;
+    let top = libm::floorf(scene_top * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
+    let right =
+        libm::ceilf((scene_left + cell_width) * surface.width as f32 / SCENE_WIDTH as f32) as i32;
+    let bottom =
+        libm::ceilf((scene_top + cell_height) * surface.height as f32 / SCENE_HEIGHT as f32) as i32;
+    let clipped_left = left.clamp(0, surface.width as i32) as u32;
+    let clipped_top = top.clamp(0, surface.height as i32) as u32;
+    let clipped_right = right.clamp(0, surface.width as i32) as u32;
+    let clipped_bottom = bottom.clamp(0, surface.height as i32) as u32;
+    if clipped_left >= clipped_right || clipped_top >= clipped_bottom {
+        return;
+    }
+    let stroke = GRID_CURSOR_STROKE_PX
+        .min(clipped_right - clipped_left)
+        .min(clipped_bottom - clipped_top);
+    let pitch = pitch as usize;
+    for y in clipped_top..clipped_bottom {
+        for x in clipped_left..clipped_right {
+            if x - clipped_left >= stroke
+                && clipped_right - x > stroke
+                && y - clipped_top >= stroke
+                && clipped_bottom - y > stroke
+            {
+                continue;
+            }
+            let offset = y as usize * pitch + x as usize * 4;
+            if let Some(pixel) = destination.get_mut(offset..offset + 4) {
+                pixel.copy_from_slice(&GRID_CURSOR_RGBA);
+            }
+        }
+    }
+}
+
+/// Persistent GridPaper scene consumer. Geometry is rebuilt for accepted
+/// snapshots and keyboard edits. Selection is composited over the rendered
+/// page, while middle-button pan is hot-applied through the 3D viewport
+/// transform and keeps the font and grid meshes GPU-owned.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -1018,7 +1246,7 @@ pub async fn gridpaper_service_task() {
     };
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=middle-pan-consumer pan_mode=hot-viewport-transform persistent_gpu_scene=1\n",
+        "gridpaper: embassy service ready page_bytes={} cells={} snapshot_buffers=2 ui4_buffers=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=left-click-cell+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scene=1\n",
         PAGE_BYTES,
         COLUMNS * ROWS,
         SCENE_WIDTH,
@@ -1052,6 +1280,9 @@ pub async fn gridpaper_service_task() {
     let mut hot_pan_frames = 0u64;
     let mut active_pan_source = None;
     let mut pending_pan_pixels = (0i32, 0i32);
+    let mut selection: Option<GridCellSelection> = None;
+    let mut cursor_dirty = false;
+    let mut keyboard_edits = 0u64;
     let mut last_build_error = None;
     let mut last_render_error = None;
 
@@ -1086,53 +1317,144 @@ pub async fn gridpaper_service_task() {
         }
 
         for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
-            let crate::ui4::Ui4InputEvent::Pan(event) = event else {
-                continue;
-            };
-            if event.window != surface.window {
-                continue;
-            }
-            match event.phase {
-                crate::ui4::Ui4PanPhase::Begin => {
-                    active_pan_source = Some(event.source);
-                    pending_pan_pixels = (0, 0);
-                }
-                crate::ui4::Ui4PanPhase::Update if active_pan_source == Some(event.source) => {
-                    pending_pan_pixels.0 = pending_pan_pixels.0.saturating_add(event.dx);
-                    pending_pan_pixels.1 = pending_pan_pixels.1.saturating_add(event.dy);
-                    let Some(snapshot) = latest_snapshot.as_ref() else {
-                        continue;
-                    };
-                    if pan.drag_pixels(
-                        event.dx,
-                        event.dy,
-                        surface.width,
-                        surface.height,
-                        snapshot.scale_percent,
-                    ) {
-                        if let Some(page) = pending.as_mut() {
-                            page.pan = pan;
+            match event {
+                crate::ui4::Ui4InputEvent::Button(event)
+                    if event.window == surface.window
+                        && event.phase == crate::ui4::Ui4ButtonPhase::Down
+                        && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
+                {
+                    let scale_percent = active
+                        .as_ref()
+                        .map(|page| page.scale_percent)
+                        .or_else(|| pending.as_ref().map(|page| page.scale_percent))
+                        .or_else(|| {
+                            latest_snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.scale_percent)
+                        });
+                    let next = scale_percent.and_then(|scale_percent| {
+                        grid_cell_at_local_point(
+                            &surface,
+                            event.local_x,
+                            event.local_y,
+                            scale_percent,
+                            pan,
+                        )
+                    });
+                    if next != selection {
+                        selection = next;
+                        cursor_dirty = true;
+                        if let Some(selected) = selection {
+                            crate::log_info!(
+                                target: "gridpaper";
+                                "gridpaper: cell selected column={} row={} local={},{} scale={} pan_scene={:.3},{:.3} input=ui4-primary-click\n",
+                                selected.column,
+                                selected.row,
+                                event.local_x,
+                                event.local_y,
+                                scale_percent.unwrap_or(0),
+                                pan.x,
+                                pan.y,
+                            );
+                        } else {
+                            crate::log_info!(
+                                target: "gridpaper";
+                                "gridpaper: cell selection cleared local={},{} input=ui4-primary-click-outside-grid\n",
+                                event.local_x,
+                                event.local_y,
+                            );
                         }
-                        if let Some(page) = active.as_mut() {
-                            page.pan = pan;
-                        }
-                        pan_dirty = true;
                     }
                 }
-                crate::ui4::Ui4PanPhase::End if active_pan_source == Some(event.source) => {
-                    active_pan_source = None;
-                    let (drag_x, drag_y) = pending_pan_pixels;
-                    pending_pan_pixels = (0, 0);
-                    if drag_x != 0 || drag_y != 0 {
+                crate::ui4::Ui4InputEvent::Keyboard(event)
+                    if event.window == surface.window && selection.is_some() =>
+                {
+                    let Some(snapshot) = latest_snapshot.as_mut() else {
+                        continue;
+                    };
+                    let mut selected = selection.expect("gridpaper selection checked");
+                    let outcome = edit_snapshot_from_keyboard(snapshot, &mut selected, event.event);
+                    if outcome.capacity_rejected {
+                        crate::log_warn!(
+                            target: "gridpaper";
+                            "gridpaper: cell input rejected column={} row={} capacity_bytes={} input=ui4-keyboard\n",
+                            selected.column,
+                            selected.row,
+                            CELL_TEXT_CAPACITY,
+                        );
+                    }
+                    if outcome.clear_selection {
+                        selection = None;
+                        cursor_dirty = true;
+                    } else {
+                        selection = Some(selected);
+                        cursor_dirty |= outcome.selection_changed;
+                    }
+                    if outcome.content_changed {
+                        keyboard_edits = keyboard_edits.saturating_add(1);
+                        let offset = (selected.row * COLUMNS + selected.column) * CELL_BYTES;
+                        let text_len = usize::from(snapshot.raw[offset]);
+                        queued_snapshot = Some(snapshot.clone());
+                        pending = None;
                         crate::log_info!(
                             target: "gridpaper";
-                            "gridpaper: middle-pan ended drag_px={},{} pan_scene={:.3},{:.3} hot_frames_total={} action=retain-resident-meshes\n",
-                            drag_x,
-                            drag_y,
-                            pan.x,
-                            pan.y,
-                            hot_pan_frames,
+                            "gridpaper: cell edited seq={} column={} row={} utf8_bytes={} key_kind={} codepoint={} input=ui4-focused-keyboard action=rebuild-selected-cell-page\n",
+                            keyboard_edits,
+                            selected.column,
+                            selected.row,
+                            text_len,
+                            event.event.kind,
+                            event.event.codepoint,
                         );
+                    }
+                }
+                crate::ui4::Ui4InputEvent::Pan(event) if event.window == surface.window => {
+                    match event.phase {
+                        crate::ui4::Ui4PanPhase::Begin => {
+                            active_pan_source = Some(event.source);
+                            pending_pan_pixels = (0, 0);
+                        }
+                        crate::ui4::Ui4PanPhase::Update
+                            if active_pan_source == Some(event.source) =>
+                        {
+                            pending_pan_pixels.0 = pending_pan_pixels.0.saturating_add(event.dx);
+                            pending_pan_pixels.1 = pending_pan_pixels.1.saturating_add(event.dy);
+                            let Some(snapshot) = latest_snapshot.as_ref() else {
+                                continue;
+                            };
+                            if pan.drag_pixels(
+                                event.dx,
+                                event.dy,
+                                surface.width,
+                                surface.height,
+                                snapshot.scale_percent,
+                            ) {
+                                if let Some(page) = pending.as_mut() {
+                                    page.pan = pan;
+                                }
+                                if let Some(page) = active.as_mut() {
+                                    page.pan = pan;
+                                }
+                                pan_dirty = true;
+                            }
+                        }
+                        crate::ui4::Ui4PanPhase::End if active_pan_source == Some(event.source) => {
+                            active_pan_source = None;
+                            let (drag_x, drag_y) = pending_pan_pixels;
+                            pending_pan_pixels = (0, 0);
+                            if drag_x != 0 || drag_y != 0 {
+                                crate::log_info!(
+                                    target: "gridpaper";
+                                    "gridpaper: middle-pan ended drag_px={},{} pan_scene={:.3},{:.3} hot_frames_total={} action=retain-resident-meshes\n",
+                                    drag_x,
+                                    drag_y,
+                                    pan.x,
+                                    pan.y,
+                                    hot_pan_frames,
+                                );
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -1166,7 +1488,13 @@ pub async fn gridpaper_service_task() {
             .saturating_sub(animation_started_ms);
         let mut published_page_this_tick = false;
         if let Some(candidate) = pending.as_ref() {
-            match publish_page(&surface, candidate, &text_animations, animation_elapsed_ms) {
+            match publish_page(
+                &surface,
+                candidate,
+                selection,
+                &text_animations,
+                animation_elapsed_ms,
+            ) {
                 Ok(result) => {
                     let published = pending.take().expect("gridpaper pending page exists");
                     last_sampled_text_colors =
@@ -1187,6 +1515,7 @@ pub async fn gridpaper_service_task() {
                     drop(retired);
                     animation_dirty = false;
                     pan_dirty = false;
+                    cursor_dirty = false;
                     published_page_this_tick = true;
                     last_render_error = None;
                 }
@@ -1211,18 +1540,26 @@ pub async fn gridpaper_service_task() {
             let sampled = sampled_text_colors(page, &text_animations, animation_elapsed_ms);
             let animation_changed = animation_dirty || sampled != last_sampled_text_colors;
             let hot_pan_frame = pan_dirty;
-            if animation_changed || hot_pan_frame {
-                match publish_page(&surface, page, &text_animations, animation_elapsed_ms) {
+            let selection_frame = cursor_dirty;
+            if animation_changed || hot_pan_frame || selection_frame {
+                match publish_page(
+                    &surface,
+                    page,
+                    selection,
+                    &text_animations,
+                    animation_elapsed_ms,
+                ) {
                     Ok(result) => {
                         last_sampled_text_colors = sampled;
                         animation_dirty = false;
                         pan_dirty = false;
+                        cursor_dirty = false;
                         if hot_pan_frame {
                             hot_pan_frames = hot_pan_frames.saturating_add(1);
                             if hot_pan_frames <= 8 || hot_pan_frames.is_multiple_of(120) {
                                 crate::log_info!(
                                     target: "gridpaper";
-                                    "gridpaper: hot-pan-frame seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport\n",
+                                    "gridpaper: hot-pan-frame seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor\n",
                                     hot_pan_frames,
                                     page.pan.x,
                                     page.pan.y,
