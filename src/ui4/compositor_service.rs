@@ -21,7 +21,7 @@ const PENDING_POLL_PERIOD_MS: u64 = 1;
 const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
-static DRAW3D_SINGLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -121,7 +121,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor rewire live consumer=draw3d-kernel-service-only composition_ms={} active_plane=slot3 install=single-direct-import per_frame_composition=off slot0=disabled slot1=disabled slot2=disabled slot4=disabled input=disabled screenshots=disabled previews=disabled video=disabled\n",
+        "ui4 compositor rewire live consumer=draw3d-kernel-service-only composition_ms={} active_plane=slot3 present=triple-direct-import per_frame_guc_composition=off per_frame_display_flip=on slot0=disabled slot1=disabled slot2=disabled slot4=disabled input=disabled screenshots=disabled previews=disabled video=disabled\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -509,10 +509,10 @@ fn queue_async_plane(
             && direct_overlay_eligible(window, view)
         {
             if view.gpu_authored
-                && !DRAW3D_SINGLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
+                && !DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=single action=import-once-and-scanout-in-place per_frame_guc_jobs=0 per_frame_flips=0\n",
+                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=triple action=import-complete-buffer-and-flip per_frame_guc_jobs=0 render_fence=retired-before-publish display_release=surflive\n",
                     window.frame.raw(), slot,
                 );
             }
@@ -614,9 +614,11 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     if !view.gpu_authored {
         return true;
     }
+    // Draw3D publishes only after its synchronous scene completion. The
+    // compositor read lease then prevents reuse through the SURFLIVE latch.
     frame_snapshot(window.frame).is_ok_and(|snapshot| {
         snapshot.plan.content == FrameContent::RenderScene3d
-            && snapshot.plan.buffering == super::FrameBuffering::Single
+            && snapshot.plan.buffering == super::FrameBuffering::Triple
     })
 }
 

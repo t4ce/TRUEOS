@@ -83,8 +83,6 @@ struct Draw3dUi4Surface {
     session: crate::ui4::WindowSessionId,
     frame: crate::ui4::FrameHandle,
     window: Option<crate::ui4::WindowId>,
-    first_write: Option<crate::ui4::FrameWriteLease>,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     width: u32,
     height: u32,
 }
@@ -99,7 +97,7 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
-        cadence: crate::ui4::FrameCadence::Immutable,
+        cadence: crate::ui4::FrameCadence::Streaming,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -112,38 +110,22 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
             return Err(error.into());
         }
     };
-    let first_write = match crate::ui4::acquire_frame_buffer(frame) {
-        Ok(lease) => lease,
-        Err(error) => {
-            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
-            let _ = crate::ui4::destroy_frame(frame);
-            return Err(error.into());
-        }
-    };
-    let destination = match crate::ui4::gpgpu_rgba_surface(first_write) {
-        Ok(destination) => destination,
-        Err(error) => {
-            let _ = crate::ui4::cancel_frame_buffer(first_write);
-            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
-            let _ = crate::ui4::destroy_frame(frame);
-            return Err(error.into());
-        }
-    };
     Ok(Draw3dUi4Surface {
         session,
         frame,
         window: None,
-        first_write: Some(first_write),
-        destination,
         width,
         height,
     })
 }
 
-fn publish_first_ui4_scene_frame(surface: &mut Draw3dUi4Surface) -> Result<(), Draw3dUi4Error> {
-    if let Some(lease) = surface.first_write {
-        crate::ui4::publish_frame_buffer(lease)?;
-        surface.first_write = None;
+fn publish_ui4_scene_frame(
+    surface: &mut Draw3dUi4Surface,
+    lease: crate::ui4::FrameWriteLease,
+) -> Result<(), Draw3dUi4Error> {
+    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error.into());
     }
     if surface.window.is_none() {
         let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
@@ -180,11 +162,19 @@ fn render_and_publish_ui4_scene_frame(
     clear_rgba: Option<[u8; 4]>,
     revision: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, Draw3dUi4Error> {
-    let destination = surface.destination;
+    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
+    let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
     if destination.width != surface.width
         || destination.height != surface.height
         || destination.pitch_bytes < surface.width.saturating_mul(4)
     {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(Draw3dUi4Error::InvalidFrame);
     }
     let result = match crate::intel::render::
@@ -195,22 +185,24 @@ fn render_and_publish_ui4_scene_frame(
             false,
         ) {
         Ok(result) => result,
-        Err(reason) => return Err(Draw3dUi4Error::Render(reason)),
+        Err(reason) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(Draw3dUi4Error::Render(reason));
+        }
     };
     if result.completed_draws != result.requested_draws
         || result.rgba.is_some()
         || SCENE_REVISION.load(Ordering::Acquire) != revision
         || !with_scene(Scene::is_running)
     {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(Draw3dUi4Error::Render("incomplete-or-stale-gpu-frame"));
     }
-    if surface.first_write.is_some() || surface.window.is_none() {
-        publish_first_ui4_scene_frame(surface)?;
-    }
+    publish_ui4_scene_frame(surface, lease)?;
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "draw3d";
-            "draw3d: live frame path=one-guc-scene-submit-to-single-ui4-surface target_gpu=0x{:X} size={}x{} pitch={} buffers=1 publishes=1 per_frame_ui4_copy=0 per_frame_ui4_flip=0 compositor_expected=direct-scanout cpu_readback=0 cpu_frame_copy=0\n",
+            "draw3d: live frame path=one-guc-scene-submit-to-ui4-triple-buffer target_gpu=0x{:X} size={}x{} pitch={} buffers=3 publish_after_guc_fence=1 compositor_expected=direct-scanout-vblank-flip cpu_readback=0 cpu_frame_copy=0\n",
             destination.gpu,
             destination.width,
             destination.height,
@@ -544,7 +536,8 @@ fn capture_screenshot_view() -> bool {
 /// The UI4 allocation exists for the complete service lifetime, but geometry
 /// submission remains strictly gated by the protocol's `StartScene` state.
 /// Static scenes render once per revision; a moving orbit submits at the
-/// 60 Hz ceiling into the same permanently published buffer.
+/// 60 Hz ceiling into an acquired buffer that is published only after the
+/// scene-level GuC fence retires.
 #[embassy_executor::task]
 pub async fn draw3d_ui4_render_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -570,7 +563,7 @@ pub async fn draw3d_ui4_render_task() {
         .unwrap_or(0);
     crate::log_info!(
         target: "draw3d";
-        "draw3d: UI4 rewire surface ready owner=kernel-app-3 session={} frame={} window=deferred-until-first-scene output=D01 plane_slot={} format=rgba8-premultiplied cadence=immutable buffers={} extent={}x{} ui4_consumers=draw3d-only frame_addresses=1 target_hz=60 producer=one-guc-scene-submit presentation=single-publish-direct-scanout per_frame_compositor_jobs=0 per_frame_flips=0 cpu_readback=0 cpu_frame_copy=0 scene_running=0\n",
+        "draw3d: UI4 rewire surface ready owner=kernel-app-3 session={} frame={} window=deferred-until-first-scene output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} ui4_consumers=draw3d-only frame_addresses=3 target_hz=60 producer=one-guc-scene-submit presentation=triple-buffer-direct-scanout per_frame_compositor_jobs=0 per_frame_display_flips=1 cpu_readback=0 cpu_frame_copy=0 scene_running=0\n",
         surface.session.raw(),
         surface.frame.raw(),
         UI4_PLANE_SLOT,
@@ -604,14 +597,14 @@ pub async fn draw3d_ui4_render_task() {
             retry_frame = false;
             crate::log_info!(
                 target: "draw3d";
-                "draw3d: UI4 scene stopped revision={} action=freeze-last-single-buffer-frame guc_submits=0\n",
+                "draw3d: UI4 scene stopped revision={} action=freeze-last-presented-frame guc_submits=0\n",
                 revision
             );
         } else if !was_running && running {
             retry_frame = true;
             crate::log_info!(
                 target: "draw3d";
-                "draw3d: UI4 scene started revision={} action=render-to-fixed-single-buffer-slot3 target_hz=60\n",
+                "draw3d: UI4 scene started revision={} action=render-publish-flip-triple-buffer-slot3 target_hz=60\n",
                 revision
             );
         }
@@ -660,7 +653,7 @@ pub async fn draw3d_ui4_render_task() {
                             if submitted_frames <= 8 || submitted_frames.is_multiple_of(120) {
                                 crate::log_trace!(
                                     target: "draw3d";
-                                    "draw3d: UI4 fixed frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish={} ui4_compositor_jobs=0 ui4_flips=0 cpu_readback=0 cpu_frame_copy=0 plane_slot={}\n",
+                                    "draw3d: UI4 triple frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish=1 ui4_compositor_jobs=0 ui4_display_flip=1 cpu_readback=0 cpu_frame_copy=0 plane_slot={}\n",
                                     submitted_frames,
                                     revision,
                                     result.completed_draws,
@@ -671,7 +664,6 @@ pub async fn draw3d_ui4_render_task() {
                                     result.geometry_us,
                                     result.resolve_us,
                                     result.present_copy_us,
-                                    (submitted_frames == 1) as u8,
                                     UI4_PLANE_SLOT,
                                 );
                             }
