@@ -119,6 +119,11 @@ const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
 const PRIMARY_COMPOSE_RCS_GPU_ALIAS: u64 = 0x3D00_0000;
 const OVERLAY_COMPOSE_RCS_GPU_ALIAS: u64 = 0x3E00_0000;
 const COMPOSE_RCS_GPU_ALIAS_BYTES: u64 = 0x0100_0000;
+// The multi-source command stream is not part of the live UI4 contract until
+// it has a bare-metal completion proof. A submitted two-run batch currently
+// fails to retire its post marker on ADL-S and must never gate the compositor
+// service during boot.
+const UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED: bool = false;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
 const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
@@ -7205,7 +7210,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
 ) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
+    if !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
+        || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || !crate::intel::gpgpu::sprite_quad_worklist_ready()
     {
         return GpgpuCompositionResult::Unavailable;
@@ -7349,7 +7355,8 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
 ) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
+    if !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
+        || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || !crate::intel::gpgpu::sprite_quad_worklist_ready()
     {
         return GpgpuCompositionResult::Unavailable;
