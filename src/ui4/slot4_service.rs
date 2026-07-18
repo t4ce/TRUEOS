@@ -27,6 +27,7 @@ struct Slot4State {
     previous_rects: Slot4Rects,
     signature: u64,
     initialized: bool,
+    consecutive_present_failures: u64,
 }
 
 impl Slot4State {
@@ -35,6 +36,7 @@ impl Slot4State {
             previous_rects: Slot4Rects::new(),
             signature: 0,
             initialized: false,
+            consecutive_present_failures: 0,
         }
     }
 }
@@ -77,17 +79,25 @@ pub(crate) async fn ui4_slot4_service_task() {
         if visual_dirty && now_ms >= next_present_ms {
             let rects = software_cursor_rects();
             if !present_slot4(&mut state, &rects) {
-                crate::log_error!(target: "ui4/slot4";
-                    "ui4/slot4: service stopped reason=present-failed rects={}\n",
-                    rects.len(),
-                );
-                if let Some(cursor) = heartbeat_cursor {
-                    let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
+                state.consecutive_present_failures =
+                    state.consecutive_present_failures.saturating_add(1);
+                if state.consecutive_present_failures <= 4
+                    || state.consecutive_present_failures.is_power_of_two()
+                {
+                    crate::log_warn!(target: "ui4/slot4";
+                        "ui4/slot4: present deferred reason=display-transaction-busy rects={} consecutive={} retry_ms={}\n",
+                        rects.len(),
+                        state.consecutive_present_failures,
+                        SLOT4_PRESENT_PERIOD_MS,
+                    );
                 }
-                return;
+                visual_dirty = true;
+                next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
+            } else {
+                state.consecutive_present_failures = 0;
+                visual_dirty = false;
+                next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
             }
-            visual_dirty = false;
-            next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
         }
 
         let now_ms = Instant::now().as_millis();

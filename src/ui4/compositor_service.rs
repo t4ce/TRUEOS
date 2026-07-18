@@ -15,6 +15,8 @@ use super::{
 };
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
+const PENDING_POLL_PERIOD_MS: u64 = 1;
+const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 
@@ -32,6 +34,7 @@ impl From<FramePoolError> for Ui4CompositorError {
 
 struct Runtime {
     composition: CompositionState,
+    pending: Option<PendingFrame>,
 }
 
 #[derive(Copy, Clone)]
@@ -52,6 +55,43 @@ struct PlaneCompositionState {
 enum CompositionTarget {
     Primary,
     Overlay(usize),
+}
+
+#[derive(Copy, Clone)]
+struct PlanePlan {
+    target: CompositionTarget,
+    changed: bool,
+    next_windows: [Option<CompositionWindowStamp>; MAX_COMPOSITION_WINDOWS],
+    damage: crate::intel::CompositionDamageRegion,
+    flush_sources: [bool; MAX_COMPOSITION_WINDOWS],
+}
+
+impl PlanePlan {
+    const fn empty(target: CompositionTarget) -> Self {
+        Self {
+            target,
+            changed: false,
+            next_windows: [None; MAX_COMPOSITION_WINDOWS],
+            damage: crate::intel::CompositionDamageRegion::EMPTY,
+            flush_sources: [false; MAX_COMPOSITION_WINDOWS],
+        }
+    }
+}
+
+struct PendingFrame {
+    windows: Vec<WindowSnapshot>,
+    leases: Vec<FrameReadLease>,
+    plans: [PlanePlan; 4],
+    next_plane: usize,
+    active: Option<crate::intel::Ui4AsyncComposition>,
+    completed: Vec<crate::intel::Ui4AsyncComposition>,
+    flip_submitted: bool,
+    started_ns: u64,
+}
+
+enum DriveResult {
+    Pending,
+    Complete,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -81,7 +121,12 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     let mut consecutive_failures = 0u32;
     loop {
-        match present_composition(&mut runtime) {
+        let result = if UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED {
+            advance_async_composition(&mut runtime)
+        } else {
+            present_composition(&mut runtime)
+        };
+        match result {
             Ok(()) => {
                 if consecutive_failures != 0 {
                     crate::log_info!(
@@ -107,7 +152,14 @@ pub(crate) async fn ui4_compositor_service_task() {
             }
         }
 
-        Timer::after(EmbassyDuration::from_millis(COMPOSITION_PERIOD_MS)).await;
+        Timer::after(EmbassyDuration::from_millis(
+            if runtime.pending.is_some() {
+                PENDING_POLL_PERIOD_MS
+            } else {
+                COMPOSITION_PERIOD_MS
+            },
+        ))
+        .await;
     }
 }
 
@@ -131,6 +183,388 @@ fn initialize() -> Runtime {
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
         },
+        pending: None,
+    }
+}
+
+fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
+    if runtime.pending.is_none() {
+        runtime.pending = prepare_async_frame(runtime)?;
+    }
+    let Some(mut pending) = runtime.pending.take() else {
+        return Ok(());
+    };
+    match drive_async_frame(runtime, &mut pending) {
+        Ok(DriveResult::Pending) => {
+            runtime.pending = Some(pending);
+            Ok(())
+        }
+        Ok(DriveResult::Complete) => Ok(()),
+        Err(error) => {
+            crate::intel::cancel_ui4_plane_surface_flip_batch();
+            release_leases(&pending.leases);
+            Err(error)
+        }
+    }
+}
+
+fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4CompositorError> {
+    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    super::advance_window_close_transitions();
+    let windows = visible_windows_for_output(output);
+    validate_window_snapshot(output, &windows)?;
+
+    let mut leases = Vec::with_capacity(windows.len());
+    for window in &windows {
+        match acquire_published_frame(window.frame) {
+            Ok(lease) => leases.push(lease),
+            Err(error) => {
+                release_leases(&leases);
+                return Err(error.into());
+            }
+        }
+    }
+    let views: Vec<FrameRgbaView> = match leases
+        .iter()
+        .copied()
+        .map(published_rgba_view)
+        .collect::<Result<_, _>>()
+    {
+        Ok(views) => views,
+        Err(error) => {
+            release_leases(&leases);
+            return Err(error.into());
+        }
+    };
+    let plans = [
+        build_plane_plan(
+            &runtime.composition.primary,
+            &windows,
+            &views,
+            CompositionTarget::Primary,
+        ),
+        build_plane_plan(
+            &runtime.composition.alpha,
+            &windows,
+            &views,
+            CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT),
+        ),
+        build_plane_plan(
+            &runtime.composition.solara,
+            &windows,
+            &views,
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
+        ),
+        build_plane_plan(
+            &runtime.composition.draw3d,
+            &windows,
+            &views,
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
+        ),
+    ];
+    if !plans.iter().any(|plan| plan.changed) {
+        release_leases(&leases);
+        return Ok(None);
+    }
+
+    // Producers flush their actual writes, but UI4 remains the ownership
+    // boundary for legacy CPU producers. Flush each newly published source at
+    // most once; destination swap buffers are never CPU-flushed on this path.
+    let mut flushed = [false; MAX_COMPOSITION_WINDOWS];
+    for plan in &plans {
+        for (index, needs_flush) in plan.flush_sources.iter().copied().enumerate() {
+            if needs_flush && !flushed[index] {
+                let view = views[index];
+                crate::intel::dma_flush(view.virt, view.byte_len);
+                flushed[index] = true;
+            }
+        }
+    }
+
+    Ok(Some(PendingFrame {
+        windows,
+        leases,
+        plans,
+        next_plane: 0,
+        active: None,
+        completed: Vec::new(),
+        flip_submitted: false,
+        started_ns: crate::chronos::monotonic_nanos(),
+    }))
+}
+
+fn validate_window_snapshot(
+    output: OutputId,
+    windows: &[WindowSnapshot],
+) -> Result<(), Ui4CompositorError> {
+    if windows.len() > MAX_COMPOSITION_WINDOWS {
+        crate::log_warn!(target: "ui4";
+            "ui4 compositor visible-window soft-cap exceeded output={} requested={} cap={} action=reject-composition\n",
+            output.name(), windows.len(), MAX_COMPOSITION_WINDOWS,
+        );
+        return Err(Ui4CompositorError::PresentFailed);
+    }
+    if windows.iter().any(|window| {
+        !matches!(
+            window.plane.slot(),
+            super::PRIMARY_PLANE_SLOT
+                | super::ALPHA_OVERLAY_PLANE_SLOT
+                | super::RGB_OVERLAY_PLANE_SLOT_2
+                | super::RGB_OVERLAY_PLANE_SLOT_3
+        )
+    }) {
+        return Err(Ui4CompositorError::PresentFailed);
+    }
+    Ok(())
+}
+
+fn build_plane_plan(
+    state: &PlaneCompositionState,
+    all_windows: &[WindowSnapshot],
+    views: &[FrameRgbaView],
+    target: CompositionTarget,
+) -> PlanePlan {
+    let plane_slot = target_plane_slot(target);
+    let mut plan = PlanePlan::empty(target);
+    let plane_windows: Vec<(usize, WindowSnapshot)> = all_windows
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, window)| window.plane.slot() == plane_slot)
+        .collect();
+    if plane_windows.is_empty() && !state.initialized {
+        return plan;
+    }
+
+    let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+    let mut composition_changed = !state.initialized;
+    for (local_slot, (global_slot, window)) in plane_windows.iter().copied().enumerate() {
+        let current = CompositionWindowStamp {
+            id: window.id,
+            frame: window.frame,
+            publish_serial: window.publish_serial,
+            placement: window.placement,
+        };
+        plan.next_windows[local_slot] = Some(current);
+        let previous = state
+            .windows
+            .iter()
+            .flatten()
+            .find(|previous| previous.id == current.id);
+        let changed = !state.initialized || previous != Some(&current);
+        composition_changed |= changed;
+        match previous {
+            None => {
+                add_placement_damage(&mut plan.damage, current.placement, output_width, output_height);
+                plan.flush_sources[global_slot] = true;
+            }
+            Some(previous) if previous.placement != current.placement => {
+                add_placement_damage(&mut plan.damage, previous.placement, output_width, output_height);
+                add_placement_damage(&mut plan.damage, current.placement, output_width, output_height);
+            }
+            Some(previous) if previous.frame != current.frame => {
+                add_placement_damage(&mut plan.damage, current.placement, output_width, output_height);
+                plan.flush_sources[global_slot] = true;
+            }
+            Some(previous) if previous.publish_serial != current.publish_serial => {
+                let local = window
+                    .damage
+                    .unwrap_or_else(|| super::DamageRegion::from_rect(DamageRect::FULL));
+                add_mapped_window_damage(
+                    &mut plan.damage,
+                    local,
+                    views[global_slot],
+                    window.placement,
+                    output_width,
+                    output_height,
+                );
+                plan.flush_sources[global_slot] = true;
+            }
+            Some(_) => {}
+        }
+    }
+    for previous in state.windows.iter().flatten() {
+        if !plan
+            .next_windows
+            .iter()
+            .flatten()
+            .any(|current| current.id == previous.id)
+        {
+            composition_changed = true;
+            add_placement_damage(&mut plan.damage, previous.placement, output_width, output_height);
+        }
+    }
+    if !state.initialized {
+        plan.damage = crate::intel::CompositionDamageRegion::from_rect(
+            crate::intel::CompositionDamageRect::new(0, 0, output_width, output_height),
+        );
+    }
+    plan.changed = composition_changed && !plan.damage.is_empty();
+    plan
+}
+
+fn drive_async_frame(
+    runtime: &mut Runtime,
+    pending: &mut PendingFrame,
+) -> Result<DriveResult, Ui4CompositorError> {
+    if pending.flip_submitted {
+        return match crate::intel::poll_ui4_plane_surface_flip_batch() {
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Pending => Ok(DriveResult::Pending),
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Complete => {
+                for composition in pending.completed.iter().copied() {
+                    crate::intel::commit_ui4_composition_flip(composition);
+                }
+                commit_async_frame(runtime, pending);
+                Ok(DriveResult::Complete)
+            }
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Failed => {
+                Err(Ui4CompositorError::PresentFailed)
+            }
+        };
+    }
+
+    if let Some(active) = pending.active {
+        match crate::intel::poll_ui4_composition(active) {
+            crate::intel::Ui4AsyncCompositionPoll::Pending => return Ok(DriveResult::Pending),
+            crate::intel::Ui4AsyncCompositionPoll::Ready => {
+                pending.completed.push(active);
+                pending.active = None;
+            }
+            crate::intel::Ui4AsyncCompositionPoll::Failed => {
+                return Err(Ui4CompositorError::PresentFailed);
+            }
+        }
+    }
+
+    while pending.next_plane < pending.plans.len() {
+        let plan = pending.plans[pending.next_plane];
+        pending.next_plane += 1;
+        if !plan.changed {
+            continue;
+        }
+        pending.active = Some(queue_async_plane(pending, plan)?);
+        return Ok(DriveResult::Pending);
+    }
+
+    if pending.completed.is_empty() || !crate::intel::begin_ui4_plane_surface_flip_batch() {
+        return Err(Ui4CompositorError::PresentFailed);
+    }
+    for composition in pending.completed.iter().copied() {
+        if !crate::intel::stage_ui4_composition_flip(composition) {
+            return Err(Ui4CompositorError::PresentFailed);
+        }
+    }
+    if !crate::intel::submit_ui4_plane_surface_flip_batch() {
+        return Err(Ui4CompositorError::PresentFailed);
+    }
+    pending.flip_submitted = true;
+    Ok(DriveResult::Pending)
+}
+
+fn queue_async_plane(
+    pending: &PendingFrame,
+    plan: PlanePlan,
+) -> Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError> {
+    let views: Vec<FrameRgbaView> = pending
+        .leases
+        .iter()
+        .copied()
+        .map(published_rgba_view)
+        .collect::<Result<_, _>>()?;
+    let selected: Vec<(WindowSnapshot, FrameRgbaView)> = pending
+        .windows
+        .iter()
+        .copied()
+        .zip(views.iter().copied())
+        .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
+        .collect();
+    let pixels: Vec<&[u8]> = selected
+        .iter()
+        .map(|(_, view)| unsafe {
+            core::slice::from_raw_parts(
+                view.virt.cast_const(),
+                (view.pitch as usize).saturating_mul(view.height as usize),
+            )
+        })
+        .collect();
+    let tiles: Vec<_> = selected
+        .iter()
+        .zip(pixels.iter())
+        .map(|((window, view), pixels)| crate::intel::RgbaOverlayTile {
+            x: window.placement.x.max(0) as u32,
+            y: window.placement.y.max(0) as u32,
+            width: window.placement.width,
+            height: window.placement.height,
+            source_width: view.width,
+            source_height: view.height,
+            pitch_bytes: view.pitch as usize,
+            pixels,
+            gpgpu_surface: crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                view.phys,
+                view.gpu,
+                view.byte_len,
+                view.width,
+                view.height,
+                view.pitch,
+            ),
+            opacity: window.placement.opacity,
+            expected_rgba: None,
+        })
+        .collect();
+    let queued = match plan.target {
+        CompositionTarget::Primary => crate::intel::queue_ui4_primary_composition(
+            &tiles,
+            plan.damage,
+            "ui4-compositor-primary-async",
+        ),
+        CompositionTarget::Overlay(slot) => {
+            let reason = match slot {
+                super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
+                super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2-async",
+                super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3-async",
+                _ => "ui4-overlay-async",
+            };
+            crate::intel::queue_ui4_overlay_composition(slot, &tiles, plan.damage, reason)
+        }
+    };
+    queued.map_err(|_| Ui4CompositorError::PresentFailed)
+}
+
+fn commit_async_frame(runtime: &mut Runtime, pending: &PendingFrame) {
+    for plan in pending.plans.iter().copied().filter(|plan| plan.changed) {
+        let state = match plan.target {
+            CompositionTarget::Primary => &mut runtime.composition.primary,
+            CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT) => {
+                &mut runtime.composition.alpha
+            }
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2) => {
+                &mut runtime.composition.solara
+            }
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3) => {
+                &mut runtime.composition.draw3d
+            }
+            CompositionTarget::Overlay(_) => continue,
+        };
+        state.initialized = true;
+        state.windows = plan.next_windows;
+        let slot = target_plane_slot(plan.target);
+        for window in pending.windows.iter().filter(|window| window.plane.slot() == slot) {
+            let _ = acknowledge_window_frame(window.id, window.publish_serial);
+        }
+    }
+    super::screenshot::capture_compositor_frame(&pending.windows);
+    release_leases(&pending.leases);
+    let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;
+    crate::log_trace!(target: "ui4";
+        "ui4/guc-compositor: frame-retired planes={} windows={} elapsed_us={} ap1_wait_loops=0\n",
+        pending.completed.len(), pending.windows.len(), elapsed_us,
+    );
+}
+
+const fn target_plane_slot(target: CompositionTarget) -> usize {
+    match target {
+        CompositionTarget::Primary => super::PRIMARY_PLANE_SLOT,
+        CompositionTarget::Overlay(slot) => slot,
     }
 }
 

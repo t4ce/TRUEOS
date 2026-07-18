@@ -23,6 +23,7 @@ use super::{
 // The decoded-video producer owns one ordinary broker window independently of
 // the compositor service.
 const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
+const VIDEO_PLAYBACK_AUTOSTART: bool = true;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_INPUT_POLL_MS: u64 = 10;
 
@@ -152,7 +153,7 @@ static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 /// Its initialized black frame gives the user a focusable target while the
 /// playback gate remains paused.
 pub(crate) fn prepare_decoded_video_player() -> bool {
-    VIDEO_PLAYBACK_PAUSED.store(true, Ordering::Release);
+    VIDEO_PLAYBACK_PAUSED.store(!VIDEO_PLAYBACK_AUTOSTART, Ordering::Release);
     if VIDEO_STREAM.lock().is_some() {
         return true;
     }
@@ -188,10 +189,11 @@ pub(crate) fn prepare_decoded_video_player() -> bool {
     *VIDEO_STREAM.lock() = Some(stream);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player ready owner={:?} frame={} window={} playback=paused-default control=focused-space source=await-first-frame\n",
+        "ui4 video-player ready owner={:?} frame={} window={} playback={} control=focused-space source=await-first-frame\n",
         VIDEO_OWNER,
         stream.frame.raw(),
         stream.window.raw(),
+        if VIDEO_PLAYBACK_AUTOSTART { "playing-autostart" } else { "paused-default" },
     );
     true
 }

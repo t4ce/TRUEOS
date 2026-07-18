@@ -326,8 +326,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x4F, 0x3F, 0x4E, 0xEF, 0x78, 0xDF, 0x2E, 0x66, 0x7B, 0x9F, 0x40, 0x4E, 0x34, 0xA8, 0x22, 0xFB,
 ];
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x0D, 0x23, 0x28, 0xA4, 0x48, 0xA2, 0x1B, 0x73, 0x92, 0x43, 0x0F, 0xA5, 0xA5, 0x35, 0xD5, 0x7E,
-    0x0A, 0x94, 0xCD, 0x49, 0x31, 0xF5, 0x8B, 0xAF, 0xBB, 0x0F, 0xCC, 0x9E, 0xBF, 0x7F, 0x81, 0x21,
+    0x1E, 0x15, 0xBC, 0xA9, 0x51, 0xE3, 0xB6, 0xFF, 0x26, 0xEE, 0x20, 0x31, 0x51, 0x97, 0x35, 0x95,
+    0x07, 0xEE, 0xB3, 0x53, 0xA4, 0xE6, 0xA0, 0x1F, 0xD0, 0x66, 0xFA, 0x3B, 0x2A, 0xA7, 0x71, 0x03,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x8B, 0x17, 0x46, 0x98, 0x4F, 0x74, 0x15, 0x6C, 0xCD, 0xBE, 0xB9, 0x43, 0x1D, 0xF9, 0xD2, 0x50,
@@ -598,7 +598,10 @@ const FILL_RECT_WORKLIST_CROSS_THREAD_BYTES: usize =
 const RECT_WORKLIST_PER_THREAD_BYTES: usize = 96;
 const RECT_WORKLIST_INDIRECT_BYTES: usize =
     RECT_WORKLIST_CROSS_THREAD_BYTES + RECT_WORKLIST_PER_THREAD_BYTES;
-const SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS: u32 = 3;
+// The 2D kernel consumes global/local/enqueued-local payload fields before its
+// three pointers and scalar arguments.  The baked ADL-S artifact therefore
+// declares 104 bytes of cross-thread data, rounded to four 32-byte GRFs.
+const SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS: u32 = 4;
 const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: usize =
     SPRITE_QUAD_WORKLIST_CROSS_THREAD_GRFS as usize * 32;
 const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: usize = 96;
@@ -632,11 +635,12 @@ const RECT_WORKLIST_DESCS_PER_WALKER: usize = 16;
 const RECT_WORKLIST_MAX_WALKERS: usize = RECT_WORKLIST_MAX_DESCS / RECT_WORKLIST_DESCS_PER_WALKER;
 const RECT_WORKLIST_DESC_BYTES: usize = 8192;
 const SPRITE_QUAD_WORKLIST_MAX_DESCS: usize = 256;
-const SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
-const SPRITE_QUAD_WORKLIST_MAX_WALKERS: usize = 1;
+const SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER: usize = 1;
+const SPRITE_QUAD_WORKLIST_MAX_WALKERS: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
 const SPRITE_QUAD_WORKLIST_DESC_BYTES: usize =
     SPRITE_QUAD_WORKLIST_MAX_DESCS * core::mem::size_of::<GpgpuSpriteQuadWorklistDesc>();
 const SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER: usize = SPRITE_QUAD_WORKLIST_MAX_DESCS;
+const SPRITE_QUAD_WORKLIST_TILE_ROWS: u32 = 64;
 const MANDEL64_WORKLIST_CELL_PIXELS: u32 = 64;
 const MANDEL64_WORKLIST_BAND_ROWS: u32 = 4;
 const MANDEL64_WORKLIST_BANDS_PER_TILE: usize =
@@ -977,6 +981,15 @@ const _: () =
 const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
 
+// A compositor submission is intentionally allowed to remain in flight while
+// the ordinary GPGPU client services video, fonts, and application compute.
+// These GGTT addresses back a distinct HWLRCA/ring/batch/result set; the
+// compositor also owns a distinct PPGTT root and vGPU principal below.
+const UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE: u64 = 0x01D0_0000;
+const UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01D1_0000;
+const UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE: u64 = 0x01D4_0000;
+const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
+
 
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
@@ -1018,6 +1031,7 @@ static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
 static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static FONT_OUTLINE_COVERAGE_R8_SELF_TEST: Once<bool> = Once::new();
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 
 
 
@@ -1027,9 +1041,15 @@ static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mu
 static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
+static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
+    Mutex::new(None);
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
+    Mutex::new(DirectRcsSubmitRuntime::new());
+static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
+    Mutex::new(Ui4CompositorRuntime::new());
 
 
 
@@ -1497,6 +1517,68 @@ const fn copy_rect_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDisp
     fill_rect_2d_dispatch(work_item_width, height)
 }
 
+const fn sprite_quad_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDispatch> {
+    let Some(mut dispatch) = fill_rect_2d_dispatch(width, height) else {
+        return None;
+    };
+    dispatch.group_y = height.div_ceil(SPRITE_QUAD_WORKLIST_TILE_ROWS);
+    Some(dispatch)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct SpriteQuadDescriptorDispatch {
+    walker: FillRect2dDispatch,
+    global_x: u32,
+    global_tile_y: u32,
+}
+
+fn sprite_quad_descriptor_dispatch(
+    desc: GpgpuSpriteQuadWorklistDesc,
+    dst_width: u32,
+    dst_height: u32,
+) -> Option<SpriteQuadDescriptorDispatch> {
+    if dst_width == 0 || dst_height == 0 {
+        return None;
+    }
+    let xs = [desc.c0_x, desc.c1_x, desc.c2_x, desc.c3_x];
+    let ys = [desc.c0_y, desc.c1_y, desc.c2_y, desc.c3_y];
+    if xs.iter().chain(ys.iter()).any(|value| !value.is_finite()) {
+        return None;
+    }
+    let mut left = xs[0];
+    let mut right = xs[0];
+    let mut top = ys[0];
+    let mut bottom = ys[0];
+    for value in xs.into_iter().skip(1) {
+        left = left.min(value);
+        right = right.max(value);
+    }
+    for value in ys.into_iter().skip(1) {
+        top = top.min(value);
+        bottom = bottom.max(value);
+    }
+
+    let min_x = (libm::floorf(left).max(0.0) as u32).min(dst_width - 1);
+    let max_x = (libm::ceilf(right).max(0.0) as u32).min(dst_width - 1);
+    let min_y = (libm::floorf(top).max(0.0) as u32).min(dst_height - 1);
+    let max_y = (libm::ceilf(bottom).max(0.0) as u32).min(dst_height - 1);
+    if max_x < min_x || max_y < min_y || right < 0.0 || bottom < 0.0 {
+        return None;
+    }
+
+    let global_tile_y = min_y / SPRITE_QUAD_WORKLIST_TILE_ROWS;
+    let final_tile_y = max_y / SPRITE_QUAD_WORKLIST_TILE_ROWS;
+    Some(SpriteQuadDescriptorDispatch {
+        walker: FillRect2dDispatch {
+            group_x: max_x.saturating_sub(min_x).saturating_add(1).div_ceil(16),
+            group_y: final_tile_y.saturating_sub(global_tile_y).saturating_add(1),
+            right_mask: GPGPU_WALKER_SIMD16_MASK,
+        },
+        global_x: min_x,
+        global_tile_y,
+    })
+}
+
 const _: () = {
     let exact = fill_rect_2d_dispatch(16, 1).unwrap();
     assert!(exact.group_x == 1);
@@ -1515,6 +1597,9 @@ const _: () = {
     let copy_tail = copy_rect_2d_dispatch(33, 3).unwrap();
     assert!(copy_tail.group_x == 2);
     assert!(copy_tail.group_y == 3);
+    let sprite_scanout = sprite_quad_2d_dispatch(2560, 1440).unwrap();
+    assert!(sprite_scanout.group_x == 160);
+    assert!(sprite_scanout.group_y == 23);
 };
 
 
@@ -1845,7 +1930,7 @@ pub(crate) struct GpgpuSubmitStats {
     pub(crate) total_ms: u64,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpgpuWorklistSubmitStats {
     pub(crate) descs: usize,
     pub(crate) walkers: usize,
@@ -1873,6 +1958,28 @@ impl Default for GpgpuSubmissionOutcome {
 pub(crate) struct GpgpuWorklistSubmitResult {
     pub(crate) stats: GpgpuWorklistSubmitStats,
     pub(crate) outcome: GpgpuSubmissionOutcome,
+}
+
+/// Opaque serial for the one-deep persistent UI4 compositor queue.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4CompositorSubmission {
+    serial: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui4CompositorSubmitError {
+    Busy,
+    Unavailable,
+    InvalidWorklist,
+    SubmissionRejected,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui4CompositorCompletion {
+    Pending,
+    Complete(GpgpuWorklistSubmitStats),
+    Failed,
+    InvalidSubmission,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -3552,6 +3659,172 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
     GpgpuWorklistSubmitResult { stats, outcome }
 }
 
+/// Queue one UI4 blend without waiting for its post marker.  Every mutable GPU
+/// object used here is compositor-private: LRC/ring, batch, result page,
+/// descriptor page, PPGTT root, vGPU device, and timeline.
+pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
+    dst: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    if !dst.is_valid() || !sprite_quad_worklist_ready() {
+        return Err(Ui4CompositorSubmitError::Unavailable);
+    }
+    let total_descs = runs
+        .iter()
+        .try_fold(0usize, |total, run| total.checked_add(run.descs.len()))
+        .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
+    if runs.is_empty()
+        || total_descs == 0
+        || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS
+        || runs.iter().any(|run| run.descs.is_empty())
+    {
+        return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+
+    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    if runtime.pending.is_some() {
+        return Err(Ui4CompositorSubmitError::Busy);
+    }
+    let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let upload = upload_sprite_quad_worklist_rgba8_kernel()
+        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let state = ui4_compositor_rcs_state_once(dev)
+        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
+        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
+
+    unsafe {
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let out = desc.virt as *mut GpgpuSpriteQuadWorklistDesc;
+        let mut index = 0usize;
+        for run in runs {
+            for descriptor in run.descs.iter().copied() {
+                core::ptr::write_volatile(out.add(index), descriptor);
+                index = index.saturating_add(1);
+            }
+        }
+    }
+    super::dma_flush(desc.virt, desc.bytes);
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ppgtt_ok = dst_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let mut src_ppgtt_ok = desc_ppgtt_ok;
+    if src_ppgtt_ok {
+        for run in runs {
+            if !direct_rcs_map_ppgtt_kernel(state, run.src.gpu, run.src.phys, run.src.bytes) {
+                src_ppgtt_ok = false;
+                break;
+            }
+        }
+    }
+    let batch_ok = src_ppgtt_ok
+        && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
+    if !batch_ok {
+        crate::log_error!(target: "ui4";
+            "ui4/guc-compositor: queue rejected stage=prepare forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} src={} batch={} descs={}\n",
+            forcewake_ok as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ppgtt_ok as u8,
+            dst_ppgtt_ok as u8,
+            desc_ppgtt_ok as u8,
+            src_ppgtt_ok as u8,
+            batch_ok as u8,
+            total_descs,
+        );
+        return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+    let started_tick = direct_rcs_now_tick();
+    if !direct_rcs_submit_batch_for(
+        dev,
+        state,
+        &mut runtime.submit,
+        crate::gpu::vgpu::KernelClient::Ui4Compositor,
+    ) {
+        return Err(Ui4CompositorSubmitError::SubmissionRejected);
+    }
+    runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
+    let serial = runtime.next_serial;
+    runtime.pending = Some(Ui4CompositorPending {
+        serial,
+        started_tick,
+        stats: GpgpuWorklistSubmitStats {
+            descs: total_descs,
+            walkers: total_descs,
+            submits: 1,
+            submit_ms: 0,
+        },
+    });
+    crate::log_trace!(target: "ui4";
+        "ui4/guc-compositor: queued serial={} descs={} context=isolated persistent=1 wait=none\n",
+        serial,
+        total_descs,
+    );
+    Ok(Ui4CompositorSubmission { serial })
+}
+
+/// Observe one compositor marker exactly once.  This function never spins.
+pub(crate) fn poll_ui4_compositor_submission(
+    submission: Ui4CompositorSubmission,
+) -> Ui4CompositorCompletion {
+    const FAILURE_TIMEOUT_MS: u64 = 1_000;
+
+    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    let Some(mut pending) = runtime.pending else {
+        return Ui4CompositorCompletion::InvalidSubmission;
+    };
+    if pending.serial != submission.serial {
+        return Ui4CompositorCompletion::InvalidSubmission;
+    }
+    let Some(state) = *UI4_COMPOSITOR_RCS_STATE.lock() else {
+        runtime.pending = None;
+        let _ = crate::gpu::vgpu::complete_kernel_submission(
+            crate::gpu::vgpu::KernelClient::Ui4Compositor,
+            false,
+        );
+        return Ui4CompositorCompletion::Failed;
+    };
+    let observed = direct_rcs_read_result_slot(state, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT);
+    if observed == SPRITE_QUAD_WORKLIST_POST_MARKER {
+        pending.stats.submit_ms = direct_rcs_elapsed_ms_since(pending.started_tick);
+        runtime.pending = None;
+        let _ = crate::gpu::vgpu::complete_kernel_submission(
+            crate::gpu::vgpu::KernelClient::Ui4Compositor,
+            true,
+        );
+        crate::log_trace!(target: "ui4";
+            "ui4/guc-compositor: complete serial={} descs={} elapsed_ms={} poll=single\n",
+            pending.serial,
+            pending.stats.descs,
+            pending.stats.submit_ms,
+        );
+        return Ui4CompositorCompletion::Complete(pending.stats);
+    }
+    if direct_rcs_elapsed_ms_since(pending.started_tick) >= FAILURE_TIMEOUT_MS {
+        runtime.pending = None;
+        let _ = crate::gpu::vgpu::complete_kernel_submission(
+            crate::gpu::vgpu::KernelClient::Ui4Compositor,
+            false,
+        );
+        crate::log_error!(target: "ui4";
+            "ui4/guc-compositor: completion timeout serial={} observed=0x{:08X} want=0x{:08X} timeout_ms={}\n",
+            pending.serial,
+            observed,
+            SPRITE_QUAD_WORKLIST_POST_MARKER,
+            FAILURE_TIMEOUT_MS,
+        );
+        return Ui4CompositorCompletion::Failed;
+    }
+    Ui4CompositorCompletion::Pending
+}
+
 
 
 
@@ -4330,6 +4603,32 @@ fn sprite_quad_worklist_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer
     }
     super::dma_flush(virt, bytes);
 
+    let buffer = GpgpuRectWorklistDescBuffer {
+        phys,
+        gpu: SPRITE_QUAD_WORKLIST_DESC_GPU,
+        virt,
+        bytes,
+    };
+    *guard = Some(buffer);
+    Some(buffer)
+}
+
+fn ui4_compositor_sprite_quad_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer> {
+    let mut guard = UI4_COMPOSITOR_SPRITE_QUAD_DESC.lock();
+    if let Some(buffer) = *guard {
+        return Some(buffer);
+    }
+
+    let bytes = align_up(SPRITE_QUAD_WORKLIST_DESC_BYTES, super::WARM_ALIGN)?;
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+
+    // This numeric VA may match the ordinary descriptor VA because the UI4
+    // compositor owns a distinct PPGTT root.  The physical page is separate
+    // so an ordinary GPGPU submission cannot overwrite an in-flight frame.
     let buffer = GpgpuRectWorklistDescBuffer {
         phys,
         gpu: SPRITE_QUAD_WORKLIST_DESC_GPU,
@@ -6159,6 +6458,71 @@ struct DirectRcsState {
     canvas3d_tmp_phys: u64,
     ppgtt_phys: u64,
     ppgtt_virt: *mut u8,
+    gpu_va: DirectRcsGpuVa,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DirectRcsGpuVa {
+    ring: u64,
+    context: u64,
+    batch: u64,
+    result: u64,
+    map_general_auxiliary: bool,
+}
+
+const DIRECT_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
+    ring: DIRECT_RCS_GPU_VA_RING_BASE,
+    context: DIRECT_RCS_GPU_VA_CONTEXT_BASE,
+    batch: DIRECT_RCS_GPU_VA_BATCH_BASE,
+    result: DIRECT_RCS_GPU_VA_RESULT_BASE,
+    map_general_auxiliary: true,
+};
+
+const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
+    ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
+    context: UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE,
+    batch: UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE,
+    result: UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE,
+    map_general_auxiliary: false,
+};
+
+#[derive(Copy, Clone, Debug)]
+struct DirectRcsSubmitRuntime {
+    context_initialized: bool,
+    ring_tail_bytes: usize,
+}
+
+impl DirectRcsSubmitRuntime {
+    const fn new() -> Self {
+        Self {
+            context_initialized: false,
+            ring_tail_bytes: 0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Ui4CompositorPending {
+    serial: u64,
+    started_tick: u64,
+    stats: GpgpuWorklistSubmitStats,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Ui4CompositorRuntime {
+    submit: DirectRcsSubmitRuntime,
+    next_serial: u64,
+    pending: Option<Ui4CompositorPending>,
+}
+
+impl Ui4CompositorRuntime {
+    const fn new() -> Self {
+        Self {
+            submit: DirectRcsSubmitRuntime::new(),
+            next_serial: 0,
+            pending: None,
+        }
+    }
 }
 
 unsafe impl Send for DirectRcsState {}
@@ -6168,6 +6532,23 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     if let Some(state) = *DIRECT_RCS_STATE.lock() {
         return Some(state);
     }
+
+    let state = allocate_direct_rcs_state(DIRECT_RCS_GPU_VA)?;
+    *DIRECT_RCS_STATE.lock() = Some(state);
+    Some(state)
+}
+
+fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if let Some(state) = *UI4_COMPOSITOR_RCS_STATE.lock() {
+        return Some(state);
+    }
+
+    let state = allocate_direct_rcs_state(UI4_COMPOSITOR_RCS_GPU_VA)?;
+    *UI4_COMPOSITOR_RCS_STATE.lock() = Some(state);
+    Some(state)
+}
+
+fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
 
     let (ring_phys, ring_virt) = crate::dma::alloc(DIRECT_RCS_RING_BYTES, super::WARM_ALIGN)?;
     let (context_phys, context_virt) =
@@ -6209,33 +6590,34 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
         canvas3d_tmp_phys,
         ppgtt_phys,
         ppgtt_virt,
+        gpu_va,
     };
-    *DIRECT_RCS_STATE.lock() = Some(state);
     Some(state)
 }
 
 fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
-    let mapped =
-        super::map_ggtt(dev, state.ring_phys, DIRECT_RCS_RING_BYTES, DIRECT_RCS_GPU_VA_RING_BASE)
+    let core_mapped =
+        super::map_ggtt(dev, state.ring_phys, DIRECT_RCS_RING_BYTES, state.gpu_va.ring)
             && super::map_ggtt(
                 dev,
                 state.context_phys,
                 DIRECT_RCS_CONTEXT_BYTES,
-                DIRECT_RCS_GPU_VA_CONTEXT_BASE,
+                state.gpu_va.context,
             )
             && super::map_ggtt(
                 dev,
                 state.batch_phys,
                 DIRECT_RCS_BATCH_BYTES,
-                DIRECT_RCS_GPU_VA_BATCH_BASE,
+                state.gpu_va.batch,
             )
             && super::map_ggtt(
                 dev,
                 state.result_phys,
                 DIRECT_RCS_RESULT_BYTES,
-                DIRECT_RCS_GPU_VA_RESULT_BASE,
-            )
-            && super::map_ggtt(
+                state.gpu_va.result,
+            );
+    let auxiliary_mapped = !state.gpu_va.map_general_auxiliary
+        || (super::map_ggtt(
                 dev,
                 state.clear_test_phys,
                 CLEAR_RECT_TEST_BYTES,
@@ -6252,7 +6634,8 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
                 state.canvas3d_tmp_phys,
                 CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
                 DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE,
-            );
+            ));
+    let mapped = core_mapped && auxiliary_mapped;
     if mapped {
         super::ggtt_invalidate(dev);
     }
@@ -6282,25 +6665,25 @@ fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
 
     let ok = direct_rcs_map_ppgtt_region(
         state,
-        DIRECT_RCS_GPU_VA_RING_BASE,
+        state.gpu_va.ring,
         state.ring_phys,
         DIRECT_RCS_RING_BYTES,
         pte_present_rw,
     ) && direct_rcs_map_ppgtt_region(
         state,
-        DIRECT_RCS_GPU_VA_CONTEXT_BASE,
+        state.gpu_va.context,
         state.context_phys,
         DIRECT_RCS_CONTEXT_BYTES,
         pte_present_rw,
     ) && direct_rcs_map_ppgtt_region(
         state,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
         state.batch_phys,
         DIRECT_RCS_BATCH_BYTES,
         pte_present_rw,
     ) && direct_rcs_map_ppgtt_region(
         state,
-        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        state.gpu_va.result,
         state.result_phys,
         DIRECT_RCS_RESULT_BYTES,
         pte_present_rw,
@@ -6550,12 +6933,11 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     desc_bytes: usize,
 ) -> bool {
     let desc_count = params.desc_count as usize;
-    let walker_count = sprite_quad_worklist_walker_count(desc_count);
-    if desc_count == 0 || walker_count == 0 {
+    if desc_count == 0 || sprite_quad_worklist_walker_count(desc_count) != desc_count {
         return false;
     }
     let payload_end =
-        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker_count * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + desc_count * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -6580,25 +6962,32 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     ) {
         return false;
     }
-    for walker in 0..walker_count {
-        let desc_base = walker.saturating_mul(SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER);
-        let local_count = desc_count
-            .saturating_sub(desc_base)
-            .min(SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER);
+    for descriptor in 0..desc_count {
         let payload_offset =
-            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
         let payload_params = SpriteQuadWorklistRgba8Params {
-            desc_base: params.desc_base.saturating_add(desc_base as u32),
-            desc_count: local_count as u32,
+            desc_base: params.desc_base.saturating_add(descriptor as u32),
+            desc_count: 1,
             ..params
         };
-        if !direct_rcs_write_sprite_quad_worklist_payload_at(state, payload_offset, payload_params)
-        {
+        if !direct_rcs_write_sprite_quad_worklist_payload_at(
+            state,
+            payload_offset,
+            payload_params,
+            0,
+            0,
+        ) {
             return false;
         }
     }
 
-    direct_rcs_encode_sprite_quad_worklist_command_stream(state, upload, walker_count, desc_count)
+    direct_rcs_encode_sprite_quad_worklist_command_stream(
+        state,
+        upload,
+        params.dst_width,
+        params.dst_height,
+        desc_count,
+    )
 }
 
 fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
@@ -6635,10 +7024,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     else {
         return false;
     };
-    let payload_end = payload_base.saturating_add(
-        runs.len()
-            .saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES),
-    );
+    let payload_end = payload_base
+        .saturating_add(total_descs.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES));
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -6680,28 +7067,49 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
         ) {
             return false;
         }
-        let payload_offset =
-            payload_base + run_index.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
-        let params = SpriteQuadWorklistRgba8Params {
-            src_gpu: run.src.gpu,
-            dst_gpu: dst.gpu,
-            desc_gpu: desc.gpu,
-            src_pitch_bytes: run.src.pitch_bytes,
-            dst_pitch_bytes: dst.pitch_bytes,
-            src_width: run.src.width,
-            src_height: run.src.height,
-            dst_width: dst.width,
-            dst_height: dst.height,
-            desc_base: desc_base as u32,
-            desc_count: run.descs.len() as u32,
-        };
-        if !direct_rcs_write_sprite_quad_worklist_payload_at(state, payload_offset, params) {
-            return false;
+        for descriptor in 0..run.descs.len() {
+            let payload_offset = payload_base
+                + desc_base.saturating_add(descriptor) * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            let params = SpriteQuadWorklistRgba8Params {
+                src_gpu: run.src.gpu,
+                dst_gpu: dst.gpu,
+                desc_gpu: desc.gpu,
+                src_pitch_bytes: run.src.pitch_bytes,
+                dst_pitch_bytes: dst.pitch_bytes,
+                src_width: run.src.width,
+                src_height: run.src.height,
+                dst_width: dst.width,
+                dst_height: dst.height,
+                desc_base: desc_base.saturating_add(descriptor) as u32,
+                desc_count: 1,
+            };
+            let Some(dispatch) = sprite_quad_descriptor_dispatch(
+                run.descs[descriptor],
+                dst.width,
+                dst.height,
+            ) else {
+                return false;
+            };
+            if !direct_rcs_write_sprite_quad_worklist_payload_at(
+                state,
+                payload_offset,
+                params,
+                dispatch.global_x,
+                dispatch.global_tile_y,
+            ) {
+                return false;
+            }
         }
         desc_base = desc_base.saturating_add(run.descs.len());
     }
 
-    direct_rcs_encode_sprite_quad_worklist_runs_command_stream(state, upload, runs, payload_base)
+    direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
+        state,
+        upload,
+        dst,
+        runs,
+        payload_base,
+    )
 }
 
 fn direct_rcs_encode_rect_worklist_command_stream(
@@ -6806,6 +7214,7 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
     batch: &mut [u32],
     cursor: &mut usize,
     upload: UploadedKernelArtifact,
+    batch_gpu: u64,
 ) -> bool {
     direct_rcs_push_pipe_control_full(
         batch,
@@ -6824,8 +7233,8 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
         && direct_rcs_push_state_base_address(
             batch,
             cursor,
-            DIRECT_RCS_GPU_VA_BATCH_BASE,
-            DIRECT_RCS_GPU_VA_BATCH_BASE,
+            batch_gpu,
+            batch_gpu,
             upload.gpu,
         )
         && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
@@ -6845,11 +7254,18 @@ fn direct_rcs_push_gpgpu_dispatch_prologue(
 fn direct_rcs_push_gpgpu_dispatch_epilogue(
     batch: &mut [u32],
     cursor: &mut usize,
+    result_gpu: u64,
     post_marker_slot: usize,
     post_marker: u32,
 ) -> bool {
     direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_FLUSH_BITS)
-        && direct_rcs_push_store_marker(batch, cursor, post_marker_slot, post_marker)
+        && direct_rcs_push_store_marker_at(
+            batch,
+            cursor,
+            result_gpu,
+            post_marker_slot,
+            post_marker,
+        )
         && direct_rcs_push(batch, cursor, MI_BATCH_BUFFER_END)
         && direct_rcs_push(batch, cursor, MI_NOOP)
 }
@@ -6857,6 +7273,7 @@ fn direct_rcs_push_gpgpu_dispatch_epilogue(
 fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
+    dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
     payload_base: usize,
 ) -> bool {
@@ -6865,41 +7282,60 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
     let mut cursor = 0usize;
     let mut ok = true;
 
-    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
+    ok &= direct_rcs_push_store_marker_at(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_PRE_MARKER,
     );
+    let mut descriptor_base = 0usize;
+    let total_descriptors = runs
+        .iter()
+        .fold(0usize, |total, run| total.saturating_add(run.descs.len()));
+    let mut submitted_descriptors = 0usize;
     for (run_index, run) in runs.iter().enumerate() {
         let idd_offset =
             RECT_WORKLIST_IDD_OFFSET_BYTES + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
-        let payload_offset =
-            payload_base + run_index.saturating_mul(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
         ok &= direct_rcs_push(batch, &mut cursor, idd_offset as u32);
-        ok &= direct_rcs_push_sprite_quad_worklist_walker(
-            batch,
-            &mut cursor,
-            payload_offset,
-            run.descs.len() as u32,
-            simd16_right_mask(16),
-        );
-        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
-        ok &= direct_rcs_push(batch, &mut cursor, 0);
-        if run_index + 1 < runs.len() {
-            // Later source-over runs read destination pixels written by this
-            // run. MEDIA_STATE_FLUSH retires the walker; the data-port/cache
-            // flush establishes the actual write-to-read dependency.
-            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        for descriptor in 0..run.descs.len() {
+            let Some(dispatch) = sprite_quad_descriptor_dispatch(
+                run.descs[descriptor],
+                dst.width,
+                dst.height,
+            ) else {
+                return false;
+            };
+            let payload_offset = payload_base
+                + descriptor_base.saturating_add(descriptor)
+                    * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            ok &= direct_rcs_push_sprite_quad_worklist_walker(
+                batch,
+                &mut cursor,
+                payload_offset,
+                dispatch.walker.group_x,
+                dispatch.walker.group_y,
+                dispatch.walker.right_mask,
+            );
+            ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+            ok &= direct_rcs_push(batch, &mut cursor, 0);
+            submitted_descriptors = submitted_descriptors.saturating_add(1);
+            if submitted_descriptors < total_descriptors {
+                // Each descriptor is an ordered layer. Retire and expose its
+                // destination writes before the next layer reads them.
+                ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+            }
         }
+        descriptor_base = descriptor_base.saturating_add(run.descs.len());
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
@@ -6916,7 +7352,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
 fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    walker_count: usize,
+    dst_width: u32,
+    dst_height: u32,
     desc_count: usize,
 ) -> bool {
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
@@ -6924,37 +7361,42 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     let mut cursor = 0usize;
     let mut ok = true;
 
-    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_OFFSET_BYTES as u32);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_store_marker_at(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_PRE_MARKER,
     );
-    for walker in 0..walker_count {
-        let desc_base = walker.saturating_mul(SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER);
-        let local_count = desc_count
-            .saturating_sub(desc_base)
-            .min(SPRITE_QUAD_WORKLIST_DESCS_PER_WALKER);
+    let Some(dispatch) = sprite_quad_2d_dispatch(dst_width, dst_height) else {
+        return false;
+    };
+    for descriptor in 0..desc_count {
         let payload_offset =
-            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
         ok &= direct_rcs_push_sprite_quad_worklist_walker(
             batch,
             &mut cursor,
             payload_offset,
-            local_count as u32,
-            simd16_right_mask(16),
+            dispatch.group_x,
+            dispatch.group_y,
+            dispatch.right_mask,
         );
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        if descriptor + 1 < desc_count {
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        }
     }
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
@@ -7361,7 +7803,7 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
     let mut ok = true;
-    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
@@ -7409,6 +7851,7 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         COPY_RECT_POST_MARKER_SLOT,
         COPY_RECT_POST_MARKER,
     );
@@ -9013,6 +9456,8 @@ fn direct_rcs_write_sprite_quad_worklist_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
     params: SpriteQuadWorklistRgba8Params,
+    global_x: u32,
+    global_tile_y: u32,
 ) -> bool {
     if payload_offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;
@@ -9022,26 +9467,28 @@ fn direct_rcs_write_sprite_quad_worklist_payload_at(
         let payload = state.batch_virt.add(payload_offset);
         core::ptr::write_bytes(payload, 0, SPRITE_QUAD_WORKLIST_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords, global_x);
+        core::ptr::write_volatile(dwords.add(1), global_tile_y);
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
         core::ptr::write_volatile(dwords.add(5), 1);
         core::ptr::write_volatile(dwords.add(8), 16);
         core::ptr::write_volatile(dwords.add(9), 1);
         core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(8), params.src_gpu as u32);
-        core::ptr::write_volatile(dwords.add(9), (params.src_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(10), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(11), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(12), params.desc_gpu as u32);
-        core::ptr::write_volatile(dwords.add(13), (params.desc_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(14), params.src_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(15), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(16), params.src_width);
-        core::ptr::write_volatile(dwords.add(17), params.src_height);
-        core::ptr::write_volatile(dwords.add(18), params.dst_width);
-        core::ptr::write_volatile(dwords.add(19), params.dst_height);
-        core::ptr::write_volatile(dwords.add(20), params.desc_base);
-        core::ptr::write_volatile(dwords.add(21), params.desc_count);
+        core::ptr::write_volatile(dwords.add(12), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(16), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(17), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(18), params.src_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(19), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(20), params.src_width);
+        core::ptr::write_volatile(dwords.add(21), params.src_height);
+        core::ptr::write_volatile(dwords.add(22), params.dst_width);
+        core::ptr::write_volatile(dwords.add(23), params.dst_height);
+        core::ptr::write_volatile(dwords.add(24), params.desc_base);
+        core::ptr::write_volatile(dwords.add(25), params.desc_count);
 
         let local_ids = payload.add(SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
@@ -9266,7 +9713,23 @@ fn direct_rcs_push_store_marker(
     slot: usize,
     value: u32,
 ) -> bool {
-    let dst = DIRECT_RCS_GPU_VA_RESULT_BASE + (slot as u64) * core::mem::size_of::<u32>() as u64;
+    direct_rcs_push_store_marker_at(
+        batch,
+        cursor,
+        DIRECT_RCS_GPU_VA_RESULT_BASE,
+        slot,
+        value,
+    )
+}
+
+fn direct_rcs_push_store_marker_at(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    result_gpu: u64,
+    slot: usize,
+    value: u32,
+) -> bool {
+    let dst = result_gpu + (slot as u64) * core::mem::size_of::<u32>() as u64;
     direct_rcs_push(batch, cursor, MI_STORE_DATA_IMM_GGTT_DW1)
         && direct_rcs_push(batch, cursor, dst as u32)
         && direct_rcs_push(batch, cursor, (dst >> 32) as u32)
@@ -9348,9 +9811,13 @@ fn direct_rcs_push_sprite_quad_worklist_walker(
     cursor: &mut usize,
     payload_offset: usize,
     group_x: u32,
+    group_y: u32,
     right_mask: u32,
 ) -> bool {
-    if group_x == 0 || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER {
+    if group_x == 0
+        || group_y == 0
+        || group_x as usize > SPRITE_QUAD_WORKLIST_MAX_GROUPS_PER_WALKER
+    {
         return false;
     }
     direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
@@ -9367,7 +9834,7 @@ fn direct_rcs_push_sprite_quad_worklist_walker(
         && direct_rcs_push(batch, cursor, group_x)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, 0)
-        && direct_rcs_push(batch, cursor, 1)
+        && direct_rcs_push(batch, cursor, group_y)
         && direct_rcs_push(batch, cursor, 0)
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_GROUP_Z_DIM)
         && direct_rcs_push(batch, cursor, right_mask)
@@ -9437,21 +9904,50 @@ fn direct_rcs_push_sba_size(
 }
 
 fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    let ring_tail_bytes = direct_rcs_build_ring_batch_start(state, DIRECT_RCS_GPU_VA_BATCH_BASE);
+    let mut runtime = DIRECT_RCS_SUBMIT_RUNTIME.lock();
+    direct_rcs_submit_batch_for(
+        dev,
+        state,
+        &mut runtime,
+        crate::gpu::vgpu::KernelClient::Gpgpu,
+    )
+}
+
+fn direct_rcs_submit_batch_for(
+    dev: super::Dev,
+    state: DirectRcsState,
+    runtime: &mut DirectRcsSubmitRuntime,
+    client: crate::gpu::vgpu::KernelClient,
+) -> bool {
+    // The GuC owns one persistent logical context for the direct-RCS client.
+    // Its ring must therefore be persistent as well: publishing the same tail
+    // for every request does not describe new work once the first request has
+    // advanced the saved ring head. Append one BBS entry and advance the tail
+    // instead of rebuilding the registered context at offset zero.
+    let old_tail_bytes = runtime.ring_tail_bytes;
+    let ring_tail_bytes = direct_rcs_append_ring_batch_start(
+        state,
+        old_tail_bytes,
+        state.gpu_va.batch,
+    );
     let Some(ring_ctl) = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES) else {
         return false;
     };
-    if !direct_rcs_init_lrc_context_image(
-        state,
-        DIRECT_RCS_GPU_VA_RING_BASE as u32,
-        ring_tail_bytes as u32,
-        ring_ctl,
-    ) {
-        return false;
+    if !runtime.context_initialized {
+        if !direct_rcs_init_lrc_context_image(
+            state,
+            state.gpu_va.ring as u32,
+            ring_tail_bytes as u32,
+            ring_ctl,
+        ) {
+            return false;
+        }
+        runtime.context_initialized = true;
+    } else {
+        direct_rcs_write_lrc_ring_tail(state, ring_tail_bytes as u32);
     }
     let (context_desc_lo, context_desc_hi) =
-        guc_rcs_context_descriptor(DIRECT_RCS_GPU_VA_CONTEXT_BASE);
-    direct_rcs_write_lrc_ring_tail(state, ring_tail_bytes as u32);
+        guc_rcs_context_descriptor(state.gpu_va.context);
     super::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
@@ -9460,10 +9956,15 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
         hwlrca_hi: context_desc_hi,
         gpuvm_root_phys: state.ppgtt_phys,
     };
-    match crate::gpu::vgpu::submit_kernel_context(crate::gpu::vgpu::KernelClient::Gpgpu, descriptor)
-    {
-        Ok(_) => true,
+    match crate::gpu::vgpu::submit_kernel_context(client, descriptor) {
+        Ok(_) => {
+            runtime.ring_tail_bytes = ring_tail_bytes;
+            true
+        }
         Err(error) => {
+            // The entry was not admitted. Keep the software tail at the last
+            // accepted position so a retry cannot silently skip ring space.
+            direct_rcs_write_lrc_ring_tail(state, old_tail_bytes as u32);
             crate::log!(
                 "gpgpu/vgpu: submit failed error={:?} submission_owner=vgpu/guc direct_elsp=0\n",
                 error
@@ -9473,8 +9974,14 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     }
 }
 
-fn direct_rcs_build_ring_batch_start(state: DirectRcsState, batch_gpu_addr: u64) -> usize {
-    let start = 0usize;
+fn direct_rcs_append_ring_batch_start(
+    state: DirectRcsState,
+    ring_tail_bytes: usize,
+    batch_gpu_addr: u64,
+) -> usize {
+    debug_assert_eq!(ring_tail_bytes % (DIRECT_RCS_BATCH_START_DWORDS * 4), 0);
+    debug_assert!(ring_tail_bytes < DIRECT_RCS_RING_BYTES);
+    let start = ring_tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = state.ring_virt as *mut u32;
         core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT);
@@ -9482,8 +9989,14 @@ fn direct_rcs_build_ring_batch_start(state: DirectRcsState, batch_gpu_addr: u64)
         core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
         core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);
     }
-    let tail_bytes = (start + DIRECT_RCS_BATCH_START_DWORDS) * core::mem::size_of::<u32>();
-    super::dma_flush(state.ring_virt, DIRECT_RCS_RING_BYTES);
+    let tail_bytes = (ring_tail_bytes + DIRECT_RCS_BATCH_START_DWORDS * core::mem::size_of::<u32>())
+        % DIRECT_RCS_RING_BYTES;
+    unsafe {
+        super::dma_flush(
+            state.ring_virt.add(ring_tail_bytes),
+            DIRECT_RCS_BATCH_START_DWORDS * core::mem::size_of::<u32>(),
+        );
+    }
     tail_bytes
 }
 

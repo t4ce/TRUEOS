@@ -290,7 +290,8 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
 
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
-    PrimaryPlaneSourceFormat, RgbaOverlayTile,
+    PrimaryPlaneSourceFormat, RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionPoll,
+    Ui4PlaneSurfaceFlipPoll,
 };
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
@@ -307,6 +308,49 @@ pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
 
 pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
     self::display::finish_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
+    self::display::submit_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
+    self::display::poll_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn cancel_ui4_plane_surface_flip_batch() {
+    self::display::cancel_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn queue_ui4_primary_composition(
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_primary_composition(tiles, damage, reason)
+}
+
+pub(crate) fn queue_ui4_overlay_composition(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_overlay_composition(plane_slot, tiles, damage, reason)
+}
+
+pub(crate) fn poll_ui4_composition(
+    composition: Ui4AsyncComposition,
+) -> Ui4AsyncCompositionPoll {
+    self::display::poll_ui4_composition(composition)
+}
+
+pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bool {
+    self::display::stage_ui4_composition_flip(composition)
+}
+
+pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
+    self::display::commit_ui4_composition_flip(composition)
 }
 
 pub(crate) fn present_ui_surface_to_primary_plane(

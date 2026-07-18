@@ -119,10 +119,12 @@ const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
 const PRIMARY_COMPOSE_RCS_GPU_ALIAS: u64 = 0x3D00_0000;
 const OVERLAY_COMPOSE_RCS_GPU_ALIAS: u64 = 0x3E00_0000;
 const COMPOSE_RCS_GPU_ALIAS_BYTES: u64 = 0x0100_0000;
-// The multi-source command stream is not part of the live UI4 contract until
-// it has a bare-metal completion proof. A submitted two-run batch currently
-// fails to retire its post marker on ADL-S and must never gate the compositor
-// service during boot.
+// One persistent GuC RCS context now advances its logical-ring tail for every
+// admitted submission. This makes the probe followed by a multi-source UI4
+// worklist real successive jobs instead of republishing the first ring entry.
+// Never run the synchronous UI4 compositor through the general GPGPU LRC.
+// Video conversion and fonts own that queue.  UI4 is re-enabled only through
+// its isolated asynchronous compositor context.
 const UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED: bool = false;
 const OVERLAY_SWAP_GPU_BASE: u64 = 0x1800_0000;
 const OVERLAY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
@@ -181,6 +183,8 @@ struct PlaneSurfaceFlipBatch {
     accepting: bool,
     len: usize,
     entries: [Option<PlaneSurfaceFlip>; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
+    submitted_ns: u64,
+    polls: u32,
 }
 
 impl PlaneSurfaceFlipBatch {
@@ -190,6 +194,8 @@ impl PlaneSurfaceFlipBatch {
             accepting: false,
             len: 0,
             entries: [None; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
+            submitted_ns: 0,
+            polls: 0,
         }
     }
 }
@@ -199,6 +205,13 @@ enum PlaneSurfaceFlipQueueResult {
     Inactive,
     Queued,
     Rejected,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui4PlaneSurfaceFlipPoll {
+    Pending,
+    Complete,
+    Failed,
 }
 
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
@@ -3925,7 +3938,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
 
     let composition_started_ns = crate::chronos::monotonic_nanos();
     let gpu_composed =
-        compose_premultiplied_rgba_tiles_into_overlay_gpgpu(surface, tiles, effective);
+        compose_premultiplied_rgba_tiles_into_overlay_gpgpu(surface, tiles, effective, false);
     let compositor = match gpu_composed {
         GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
         GpgpuCompositionResult::Unavailable => {
@@ -3949,6 +3962,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
             // against a destination that may still be owned by the GPU.
             return false;
         }
+        GpgpuCompositionResult::Queued(_) => return false,
     };
     let composition_us =
         crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
@@ -4398,7 +4412,7 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
     };
     let composition_started_ns = crate::chronos::monotonic_nanos();
     let compositor =
-        match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective) {
+        match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective, false) {
             GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
             GpgpuCompositionResult::Unavailable => {
                 // Reconstruct damaged pixels from the original opaque primary,
@@ -4427,6 +4441,7 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
                 // front instead of racing it with a CPU replay or plane flip.
                 return false;
             }
+            GpgpuCompositionResult::Queued(_) => return false,
         };
     let composition_us =
         crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
@@ -5310,14 +5325,27 @@ pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
     true
 }
 
+pub(crate) fn cancel_ui4_plane_surface_flip_batch() {
+    *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
+}
+
 fn queue_ui4_plane_surface_flip(
     plane_base: usize,
     surface_reg: u32,
     reason: &str,
 ) -> PlaneSurfaceFlipQueueResult {
-    // Do not absorb a concurrent non-UI4 display client merely because UI4
-    // currently has a transaction open on another CPU.
-    if !reason.starts_with("ui4-") {
+    // This transaction belongs exclusively to the application compositor.
+    // Slot 4 has its own input-driven presentation loop and must never be
+    // absorbed into, or rejected by, an application-plane transaction merely
+    // because both callers use a `ui4-` reason prefix.
+    if !matches!(
+        reason,
+        "ui4-compositor-primary-async"
+            | "ui4-alpha-slot1-async"
+            | "ui4-solara-slot2-async"
+            | "ui4-draw3d-slot3-async"
+            | "ui4-overlay-async"
+    ) {
         return PlaneSurfaceFlipQueueResult::Inactive;
     }
     let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
@@ -5348,76 +5376,71 @@ fn queue_ui4_plane_surface_flip(
     PlaneSurfaceFlipQueueResult::Queued
 }
 
-/// Publish every staged SURF address back-to-back, then wait once for the
-/// complete set of SURFLIVE registers. This avoids serially consuming one
-/// scanout-latch wait per changed UI4 plane.
-pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
-    let queued = {
-        let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
-        if !batch.active || !batch.accepting {
-            return false;
-        }
-        batch.accepting = false;
-        let queued = *batch;
-        queued
-    };
-    if queued.len == 0 {
-        *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
-        return true;
-    }
+/// Publish all staged SURF addresses back-to-back and return immediately.
+pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
-        *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
         return false;
     };
-
-    for entry in queued.entries[..queued.len].iter().flatten() {
+    let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+    if !batch.active || !batch.accepting {
+        return false;
+    }
+    batch.accepting = false;
+    batch.submitted_ns = crate::chronos::monotonic_nanos();
+    batch.polls = 0;
+    for entry in batch.entries[..batch.len].iter().flatten() {
         crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SURF_OFF, entry.surface_reg);
     }
+    true
+}
 
-    let started_ns = crate::chronos::monotonic_nanos();
+/// Observe every staged SURFLIVE register once.  AP1 calls this from a later
+/// compositor tick; it never burns a frame interval in a polling loop.
+pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
+    let Some(dev) = crate::intel::claimed_device() else {
+        *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
+        return Ui4PlaneSurfaceFlipPoll::Failed;
+    };
+    let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+    if !batch.active || batch.accepting {
+        return Ui4PlaneSurfaceFlipPoll::Failed;
+    }
+    batch.polls = batch.polls.saturating_add(1);
     let mut live = [0u32; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY];
-    let mut live_mask: u32;
-    let mut iterations = 0usize;
-    loop {
-        live_mask = 0;
-        for (index, entry) in queued.entries[..queued.len].iter().flatten().enumerate() {
-            live[index] = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_SURFLIVE_OFF);
-            if live[index] == entry.surface_reg {
-                live_mask |= 1u32 << index;
-            }
+    let mut live_mask = 0u32;
+    for (index, entry) in batch.entries[..batch.len].iter().flatten().enumerate() {
+        live[index] = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_SURFLIVE_OFF);
+        if live[index] == entry.surface_reg {
+            live_mask |= 1u32 << index;
         }
-        let want_mask = (1u32 << queued.len) - 1;
-        if live_mask == want_mask {
-            break;
-        }
-        if iterations.is_multiple_of(256)
-            && crate::chronos::monotonic_nanos().saturating_sub(started_ns)
-                >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS
-        {
-            break;
-        }
-        core::hint::spin_loop();
-        iterations += 1;
+    }
+    let want_mask = if batch.len == 0 {
+        0
+    } else {
+        (1u32 << batch.len) - 1
+    };
+    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(batch.submitted_ns);
+    let committed = live_mask == want_mask;
+    let timed_out = !committed && elapsed_ns >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS;
+    if !committed && !timed_out {
+        return Ui4PlaneSurfaceFlipPoll::Pending;
     }
 
-    let want_mask = (1u32 << queued.len) - 1;
-    let committed = live_mask == want_mask;
-    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(started_ns);
     let seq = UI4_PLANE_SURFACE_FLIP_BATCH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    if !committed || seq <= 8 || seq.is_multiple_of(60) {
+    if timed_out || seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} want_mask=0x{:X} wait_iters={} wait_ns={} commit=surf-addresses-together wait=shared\n",
+            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surf-addresses-together wait=async\n",
             seq,
             committed as u8,
-            queued.len,
+            batch.len,
             live_mask,
             want_mask,
-            iterations,
+            batch.polls,
             elapsed_ns,
         );
     }
-    if !committed {
-        for (index, entry) in queued.entries[..queued.len].iter().flatten().enumerate() {
+    if timed_out {
+        for (index, entry) in batch.entries[..batch.len].iter().flatten().enumerate() {
             if live[index] != entry.surface_reg {
                 crate::log_warn!(
                     target: "intel/display";
@@ -5429,8 +5452,27 @@ pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
             }
         }
     }
-    *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
-    committed
+    *batch = PlaneSurfaceFlipBatch::new();
+    if committed {
+        Ui4PlaneSurfaceFlipPoll::Complete
+    } else {
+        Ui4PlaneSurfaceFlipPoll::Failed
+    }
+}
+
+/// Compatibility wrapper for display clients not yet moved to a task-level
+/// state machine. UI4's compositor service uses submit+poll directly.
+pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
+    if !submit_ui4_plane_surface_flip_batch() {
+        return false;
+    }
+    loop {
+        match poll_ui4_plane_surface_flip_batch() {
+            Ui4PlaneSurfaceFlipPoll::Pending => core::hint::spin_loop(),
+            Ui4PlaneSurfaceFlipPoll::Complete => return true,
+            Ui4PlaneSurfaceFlipPoll::Failed => return false,
+        }
+    }
 }
 
 fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
@@ -7203,14 +7245,225 @@ enum GpgpuCompositionResult {
     Unavailable,
     Complete,
     SubmittedIncomplete,
+    Queued(crate::intel::gpgpu::Ui4CompositorSubmission),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Ui4AsyncCompositionError {
+    Unavailable,
+    Busy,
+    Failed,
+}
+
+#[derive(Copy, Clone)]
+enum Ui4AsyncCompositionTarget {
+    Primary {
+        surface: PrimarySwapSurface,
+        pipeline: DisplayPipelineId,
+    },
+    Overlay {
+        surface: OverlaySurface,
+    },
+}
+
+/// Display-owned record for a GPU job whose destination is the next scanout
+/// swap surface.  UI4 retains producer leases until this record completes.
+#[derive(Copy, Clone)]
+pub(crate) struct Ui4AsyncComposition {
+    gpu: crate::intel::gpgpu::Ui4CompositorSubmission,
+    target: Ui4AsyncCompositionTarget,
+    change: CompositionDamageRegion,
+    effective: CompositionDamageRegion,
+    tile_count: usize,
+    queued_ns: u64,
+    reason: &'static str,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum Ui4AsyncCompositionPoll {
+    Pending,
+    Ready,
+    Failed,
+}
+
+pub(crate) fn queue_ui4_primary_composition(
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target.pipeline.pipe().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    if target.width == 0 || target.height == 0 {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let change = clip_composition_damage_region(damage, target.width, target.height);
+    if change.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let effective = {
+        let pool = primary_swap_surface_pool(surface.pipe).lock();
+        let mut effective = pool.damage_debt[surface.buffer_index];
+        effective.add_region(change);
+        effective
+    };
+    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(
+        surface,
+        tiles,
+        effective,
+        true,
+    ) {
+        GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
+            gpu,
+            target: Ui4AsyncCompositionTarget::Primary {
+                surface,
+                pipeline: target.pipeline,
+            },
+            change,
+            effective,
+            tile_count: tiles.len(),
+            queued_ns: crate::chronos::monotonic_nanos(),
+            reason,
+        }),
+        GpgpuCompositionResult::SubmittedIncomplete => Err(Ui4AsyncCompositionError::Busy),
+        _ => Err(Ui4AsyncCompositionError::Failed),
+    }
+}
+
+pub(crate) fn queue_ui4_overlay_composition(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let change = clip_composition_damage_region(damage, width, height);
+    if change.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let surface = ensure_overlay_surface_on_slot(dev, plane_slot, width, height)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let effective = {
+        let surface_pool = overlay_surface_pool(surface.pipe, surface.plane_slot)
+            .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+        let pool = surface_pool.lock();
+        let mut effective = pool.damage_debt[surface.buffer_index];
+        effective.add_region(change);
+        effective
+    };
+    match compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
+        surface,
+        tiles,
+        effective,
+        true,
+    ) {
+        GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
+            gpu,
+            target: Ui4AsyncCompositionTarget::Overlay { surface },
+            change,
+            effective,
+            tile_count: tiles.len(),
+            queued_ns: crate::chronos::monotonic_nanos(),
+            reason,
+        }),
+        GpgpuCompositionResult::SubmittedIncomplete => Err(Ui4AsyncCompositionError::Busy),
+        _ => Err(Ui4AsyncCompositionError::Failed),
+    }
+}
+
+pub(crate) fn poll_ui4_composition(
+    composition: Ui4AsyncComposition,
+) -> Ui4AsyncCompositionPoll {
+    match crate::intel::gpgpu::poll_ui4_compositor_submission(composition.gpu) {
+        crate::intel::gpgpu::Ui4CompositorCompletion::Pending => {
+            Ui4AsyncCompositionPoll::Pending
+        }
+        crate::intel::gpgpu::Ui4CompositorCompletion::Complete(_) => {
+            Ui4AsyncCompositionPoll::Ready
+        }
+        crate::intel::gpgpu::Ui4CompositorCompletion::Failed
+        | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission => {
+            Ui4AsyncCompositionPoll::Failed
+        }
+    }
+}
+
+/// Stage only the stable SURF address.  Front ownership and damage history are
+/// committed later, after the asynchronous SURFLIVE poll proves the latch.
+pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    match composition.target {
+        Ui4AsyncCompositionTarget::Primary { surface, pipeline } => {
+            if active_display_pipeline_target().map(|target| target.pipeline) != Some(pipeline) {
+                return false;
+            }
+            program_primary_plane_source_for_pipeline(
+                PrimaryPlaneSource {
+                    phys: surface.phys,
+                    gpu: surface.gpu,
+                    byte_len: surface.byte_len,
+                    width: surface.width,
+                    height: surface.height,
+                    pitch_bytes: surface.pitch_bytes,
+                    format: PrimaryPlaneSourceFormat::Xrgb8888,
+                    src_x: 0,
+                    src_y: 0,
+                    dst_x: 0,
+                    dst_y: 0,
+                    dst_w: surface.width,
+                    dst_h: surface.height,
+                },
+                pipeline,
+                composition.reason,
+                true,
+            )
+        }
+        Ui4AsyncCompositionTarget::Overlay { surface } => {
+            stage_overlay_plane_surface_flip(dev, surface, composition.reason)
+        }
+    }
+}
+
+pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
+    match composition.target {
+        Ui4AsyncCompositionTarget::Primary { surface, .. } => {
+            mark_primary_composition_surface_front(surface, composition.change)
+        }
+        Ui4AsyncCompositionTarget::Overlay { surface } => {
+            mark_overlay_composition_surface_front(surface, composition.change)
+        }
+    }
+    let elapsed_us = crate::chronos::monotonic_nanos()
+        .saturating_sub(composition.queued_ns)
+        / 1_000;
+    let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
+    crate::log_trace!(target: "ui4";
+        "ui4/guc-compositor: scanout-ready reason={} tiles={} effective_rects={} effective_bounds={}x{}@{},{} elapsed_us={}\n",
+        composition.reason,
+        composition.tile_count,
+        composition.effective.len(),
+        effective_bounds.width,
+        effective_bounds.height,
+        effective_bounds.x,
+        effective_bounds.y,
+        elapsed_us,
+    );
 }
 
 fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     surface: PrimarySwapSurface,
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    asynchronous: bool,
 ) -> GpgpuCompositionResult {
-    if !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
+    if (!asynchronous && !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED)
         || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || !crate::intel::gpgpu::sprite_quad_worklist_ready()
     {
@@ -7335,8 +7588,22 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
                 descs: descriptors,
             }),
     );
-    let result =
-        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
+    if asynchronous {
+        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
+            destination,
+            &runs,
+        ) {
+            Ok(submission) => GpgpuCompositionResult::Queued(submission),
+            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+                GpgpuCompositionResult::SubmittedIncomplete
+            }
+            Err(_) => GpgpuCompositionResult::Unavailable,
+        };
+    }
+    let result = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(
+        destination,
+        &runs,
+    );
     match result.outcome {
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
             if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
@@ -7354,8 +7621,9 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     surface: OverlaySurface,
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    asynchronous: bool,
 ) -> GpgpuCompositionResult {
-    if !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
+    if (!asynchronous && !UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED)
         || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || !crate::intel::gpgpu::sprite_quad_worklist_ready()
     {
@@ -7457,8 +7725,22 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
                 descs: descriptors,
             }),
     );
-    let result =
-        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
+    if asynchronous {
+        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
+            destination,
+            &runs,
+        ) {
+            Ok(submission) => GpgpuCompositionResult::Queued(submission),
+            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+                GpgpuCompositionResult::SubmittedIncomplete
+            }
+            Err(_) => GpgpuCompositionResult::Unavailable,
+        };
+    }
+    let result = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(
+        destination,
+        &runs,
+    );
     match result.outcome {
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
             if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
@@ -8067,6 +8349,22 @@ fn flip_overlay_plane_surface(
         );
     }
     true
+}
+
+fn stage_overlay_plane_surface_flip(
+    dev: crate::intel::Dev,
+    surface: OverlaySurface,
+    reason: &str,
+) -> bool {
+    if overlay_plane_surface_flip_guard(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT).is_err() {
+        return false;
+    }
+    let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
+    let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
+        return false;
+    };
+    queue_ui4_plane_surface_flip(plane_base, surface_reg, reason)
+        == PlaneSurfaceFlipQueueResult::Queued
 }
 
 fn present_overlay_surface_with_bootstrap_contract(

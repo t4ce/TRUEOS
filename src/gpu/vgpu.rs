@@ -62,6 +62,11 @@ impl Capabilities {
 pub(crate) enum KernelClient {
     Render,
     Gpgpu,
+    /// Persistent UI4 composition queue.  This is deliberately a separate
+    /// virtual device/principal from general kernel GPGPU: UI4 may leave one
+    /// frame in flight while video conversion, fonts, and application compute
+    /// continue to submit through `Gpgpu`.
+    Ui4Compositor,
 }
 
 impl KernelClient {
@@ -69,6 +74,7 @@ impl KernelClient {
         match self {
             Self::Render => "kernel-render",
             Self::Gpgpu => "kernel-gpgpu",
+            Self::Ui4Compositor => "kernel-ui4-compositor",
         }
     }
 
@@ -76,6 +82,7 @@ impl KernelClient {
         match self {
             Self::Render => Principal::KernelRender,
             Self::Gpgpu => Principal::KernelGpgpu,
+            Self::Ui4Compositor => Principal::KernelUi4Compositor,
         }
     }
 
@@ -83,6 +90,7 @@ impl KernelClient {
         match self {
             Self::Render => QueueClass::Render,
             Self::Gpgpu => QueueClass::Compute,
+            Self::Ui4Compositor => QueueClass::Compute,
         }
     }
 }
@@ -91,6 +99,7 @@ impl KernelClient {
 pub(crate) enum Principal {
     KernelRender,
     KernelGpgpu,
+    KernelUi4Compositor,
     HostRuntime,
     HullGuest(u16),
     RuntimeTest(u16),
@@ -101,6 +110,7 @@ impl Principal {
         match self {
             Self::KernelRender => "kernel-render",
             Self::KernelGpgpu => "kernel-gpgpu",
+            Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::HostRuntime => "host-runtime",
             Self::HullGuest(_) => "hull-guest",
             Self::RuntimeTest(_) => "runtime-test",
@@ -1024,7 +1034,9 @@ fn allowed_capabilities(
         caps = caps.union(Capabilities::COPY);
     }
     match principal {
-        Principal::KernelRender | Principal::KernelGpgpu => caps
+        Principal::KernelRender
+        | Principal::KernelGpgpu
+        | Principal::KernelUi4Compositor => caps
             .union(Capabilities::PRESENT)
             .union(Capabilities::KERNEL_CONTEXT),
         Principal::HostRuntime | Principal::HullGuest(_) | Principal::RuntimeTest(_) => caps,
@@ -1033,7 +1045,9 @@ fn allowed_capabilities(
 
 const fn quota_for(principal: Principal) -> Quota {
     match principal {
-        Principal::KernelRender | Principal::KernelGpgpu => Quota::KERNEL,
+        Principal::KernelRender
+        | Principal::KernelGpgpu
+        | Principal::KernelUi4Compositor => Quota::KERNEL,
         Principal::HostRuntime => Quota::HOST,
         Principal::HullGuest(_) => Quota::GUEST,
         Principal::RuntimeTest(_) => Quota::TEST,

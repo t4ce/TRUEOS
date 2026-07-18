@@ -81,6 +81,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     }
     print_kernel_timeline(io, "render/font", KernelClient::Render);
     print_kernel_timeline(io, "gpgpu", KernelClient::Gpgpu);
+    print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
 }
 
 fn print_kernel_timeline(io: &'static dyn ShellBackend2, name: &str, client: KernelClient) {

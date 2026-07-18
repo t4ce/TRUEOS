@@ -387,7 +387,7 @@ pub(crate) async fn ui4_video_playback_task() {
             return;
         }
         crate::log!(
-            "intel/hw_vid: ui4-video-playback armed playback=paused-default control=focused-space asset={} action=click-player-then-space carrier=bsp\n",
+            "intel/hw_vid: ui4-video-playback armed playback=playing-autostart control=focused-space asset={} action=space-toggles-pause carrier=bsp\n",
             H264_BOOT_PROBE_STREAM_PATH,
         );
         crate::ui4::wait_decoded_video_playback_ready().await;
