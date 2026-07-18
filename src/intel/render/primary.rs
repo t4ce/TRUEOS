@@ -303,6 +303,9 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) frame_us: u64,
+    pub(crate) geometry_us: u64,
+    pub(crate) resolve_us: u64,
+    pub(crate) coverage_us: u64,
     pub(crate) coverage_submits: usize,
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
@@ -1104,6 +1107,7 @@ fn submit_resident_triangle_scene_capture(
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let geometry_complete = completed_draws == draws.len();
+        let geometry_finished_ns = crate::chronos::monotonic_nanos();
         let scratch_output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
             warm.streamout_phys,
             GPU_VA_STREAMOUT_BASE,
@@ -1134,6 +1138,7 @@ fn submit_resident_triangle_scene_capture(
         } else {
             false
         };
+        let resolve_finished_ns = crate::chronos::monotonic_nanos();
         let mut completed_coverage_draws = 0usize;
         let mut coverage_submits = 0usize;
         let mut coverage_walkers = 0usize;
@@ -1170,6 +1175,7 @@ fn submit_resident_triangle_scene_capture(
                 }
             }
         }
+        let coverage_finished_ns = crate::chronos::monotonic_nanos();
         completed_draws = completed_draws.saturating_add(completed_coverage_draws);
         let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
         if frame_complete
@@ -1233,6 +1239,9 @@ fn submit_resident_triangle_scene_capture(
             width: target_width as u32,
             height: target_height as u32,
             frame_us: crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000,
+            geometry_us: geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000,
+            resolve_us: resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
+            coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
             coverage_submits,
             coverage_walkers,
             rgba,

@@ -2468,7 +2468,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2481,6 +2481,9 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
+                    result.geometry_us,
+                    result.resolve_us,
+                    result.coverage_us,
                 );
                 let retired = runtime.active.replace(published);
                 drop(retired);
@@ -2539,7 +2542,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
@@ -2548,6 +2551,9 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                         result.coverage_walkers,
                         result.changed_pixels,
                         result.frame_us,
+                        result.geometry_us,
+                        result.resolve_us,
+                        result.coverage_us,
                     );
                 }
             }
@@ -2559,7 +2565,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
@@ -2569,6 +2575,9 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
+                    result.geometry_us,
+                    result.resolve_us,
+                    result.coverage_us,
                 );
             }
             runtime.last_render_error = None;

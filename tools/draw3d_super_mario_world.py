@@ -12,7 +12,6 @@ from draw3d_house_demo import Draw3dClient
 from draw3d_super_mario_scene import extruded_polygon, uv_sphere
 
 
-BACKGROUND = (82, 164, 231, 255)
 IDENTITY = (0.0, 0.0, 0.0)
 UNIT_SCALE = (1.0, 1.0, 1.0)
 WORLD_SPHERE = uv_sphere(8, 5)
@@ -408,7 +407,7 @@ def populate_live(client, orbit_speed=0.045, phase_delay=0.30):
     # Clear while running, then establish the moving camera before the first mesh.
     # Each phase becomes visible as its instances arrive.
     client.clear()
-    client.start(BACKGROUND)
+    client.start()
     set_orbit(client, orbit_speed)
 
     phase_counts = []

@@ -567,7 +567,13 @@ const COPY_RECT_BATCH_MAX_SPANS: usize = 32;
 // GridPaper can retain 17 independently colored layers for each of its three
 // font faces (51 total). Keep enough room to submit the complete scene once.
 const GLYPH_MASK_BATCH_MAX_LAYERS: usize = 64;
-const GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x4000;
+const GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES: usize = 0x3000;
+const GLYPH_MASK_BATCH_STATE_BLOCK_BYTES: usize = 0x100;
+const GLYPH_MASK_BATCH_IDD_OFFSET_IN_BLOCK_BYTES: usize = 0x00;
+const GLYPH_MASK_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES: usize = 0x40;
+const GLYPH_MASK_BATCH_SRC_SURFACE_OFFSET_IN_BLOCK_BYTES: usize = 0x80;
+const GLYPH_MASK_BATCH_DST_SURFACE_OFFSET_IN_BLOCK_BYTES: usize = 0xC0;
+const GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x8000;
 const COPY_RECT_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
 const COPY_RECT_SURFACE_STATE_DWORDS: usize = 16;
 const COPY_RECT_CROSS_THREAD_BYTES: usize = 96;
@@ -984,8 +990,13 @@ const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
 const _: () = assert!(
-    512 + GLYPH_MASK_BATCH_MAX_LAYERS * 23
-        < GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES / core::mem::size_of::<u32>()
+    512 + GLYPH_MASK_BATCH_MAX_LAYERS * 27
+        < GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES / core::mem::size_of::<u32>()
+);
+const _: () = assert!(
+    GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
+        + GLYPH_MASK_BATCH_MAX_LAYERS * GLYPH_MASK_BATCH_STATE_BLOCK_BYTES
+        <= GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
 );
 const _: () = assert!(
     GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES
@@ -13565,7 +13576,6 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     dst: GpgpuRgba8Surface,
 ) -> bool {
     let mut active_walkers = 0usize;
-    let mut first = None;
     for layer in layers {
         let blit = GpgpuGlyphMaskBlit {
             mask: layer.mask,
@@ -13574,14 +13584,13 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
             dst_xy: layer.dst_xy,
             color_rgba: layer.color_rgba,
         };
-        if let Some(params) = lower_glyph_mask_blit(blit) {
-            first.get_or_insert((params, layer.mask.bytes));
+        if lower_glyph_mask_blit(blit).is_some() {
             active_walkers += 1;
         }
     }
-    let Some((first_params, first_mask_bytes)) = first else {
+    if active_walkers == 0 {
         return false;
-    };
+    }
     if active_walkers > GLYPH_MASK_BATCH_MAX_LAYERS {
         return false;
     }
@@ -13596,25 +13605,6 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
-    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
-        state,
-        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES,
-        4,
-    ) || !direct_rcs_write_copy_rect_surface_states_at(
-        state,
-        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
-        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
-        first_params.src_gpu,
-        first_mask_bytes,
-        first_params.dst_gpu,
-        dst.bytes,
-    ) {
-        return false;
-    }
-
     let mut walker_index = 0usize;
     for layer in layers {
         let blit = GpgpuGlyphMaskBlit {
@@ -13627,6 +13617,31 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         let Some(params) = lower_glyph_mask_blit(blit) else {
             continue;
         };
+        let state_block = GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
+            + walker_index * GLYPH_MASK_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset = state_block + GLYPH_MASK_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let binding_table_offset =
+            state_block + GLYPH_MASK_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES;
+        let src_surface_offset = state_block + GLYPH_MASK_BATCH_SRC_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        let dst_surface_offset = state_block + GLYPH_MASK_BATCH_DST_SURFACE_OFFSET_IN_BLOCK_BYTES;
+        if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+            state,
+            idd_offset,
+            binding_table_offset,
+            GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES,
+            4,
+        ) || !direct_rcs_write_copy_rect_surface_states_at(
+            state,
+            binding_table_offset,
+            src_surface_offset,
+            dst_surface_offset,
+            params.src_gpu,
+            layer.mask.bytes,
+            params.dst_gpu,
+            dst.bytes,
+        ) {
+            return false;
+        }
         let payload_offset =
             GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES + walker_index * GLYPH_MASK_INDIRECT_BYTES;
         if !direct_rcs_write_glyph_mask_payload_at(state, payload_offset, params, layer.color_rgba)
@@ -13641,10 +13656,6 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
     let mut cursor = 0usize;
     let mut ok = true;
     ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload);
-    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
-    ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
-    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_store_marker(
         batch,
         &mut cursor,
@@ -13667,8 +13678,15 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         let Some(dispatch) = fill_rect_2d_dispatch(params.width, params.height) else {
             return false;
         };
+        let state_block = GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
+            + walker_index * GLYPH_MASK_BATCH_STATE_BLOCK_BYTES;
+        let idd_offset = state_block + GLYPH_MASK_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
         let payload_offset =
             GLYPH_MASK_BATCH_PAYLOAD_BASE_OFFSET_BYTES + walker_index * GLYPH_MASK_INDIRECT_BYTES;
+        ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, 0);
+        ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+        ok &= direct_rcs_push(batch, &mut cursor, idd_offset as u32);
         ok &= direct_rcs_push_gpgpu_walker_2d(
             batch,
             &mut cursor,
@@ -13681,11 +13699,6 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         walker_index += 1;
-        if walker_index < active_walkers {
-            // Preserve source-over ordering for overlapping text layers while
-            // still keeping all walkers inside one hardware submission.
-            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
-        }
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
@@ -13693,7 +13706,10 @@ fn direct_rcs_encode_glyph_mask_layers_2d_batch(
         COPY_RECT_POST_MARKER_SLOT,
         COPY_RECT_POST_MARKER,
     );
-    if !ok {
+    if !ok
+        || cursor.saturating_mul(core::mem::size_of::<u32>())
+            > GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES
+    {
         return false;
     }
     super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
