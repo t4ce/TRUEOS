@@ -79,6 +79,7 @@ const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
 const CHART_CROSS_THREAD_BYTES: u32 = 128;
 const PIXEL_PLASMA_CROSS_THREAD_BYTES: u32 = 128;
 const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: u32 = 128;
+const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
 const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
@@ -793,6 +794,38 @@ const FONT_OUTLINE_MESH_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["shell2:gpgpu probe font-tessel audit|flatten|mesh|all"],
 };
 
+const FONT_OUTLINE_COVERAGE_R8_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
+    rw_buf!(1, "mask_u8", "__global uchar*", 1, 14),
+    u32_arg!(2, "op_count", 16),
+    u32_arg!(3, "subdivisions", 17),
+    u32_arg!(4, "mask_pitch_bytes", 18),
+    u32_arg!(5, "mask_width", 19),
+    u32_arg!(6, "mask_height", 20),
+    u32_arg!(7, "rect_x", 21),
+    u32_arg!(8, "rect_y", 22),
+    u32_arg!(9, "rect_width", 23),
+    u32_arg!(10, "rect_height", 24),
+    f32_arg!(11, "optical_bias_px", 25),
+];
+const FONT_OUTLINE_COVERAGE_R8_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
+    source_path: "src/intel/gpgpu/kernels/font_outline_coverage_r8.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 2,
+    args: FONT_OUTLINE_COVERAGE_R8_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &[
+        "intel::gpu_font small-raster coverage",
+        "gridpaper resident scene",
+    ],
+};
+
 pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
     KnownAotKernel {
         name: gpgpu::COPY_RECT_RGBA8_KERNEL_NAME,
@@ -960,6 +993,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         contract: &FONT_OUTLINE_MESH_CONTRACT,
         upload: gpgpu::upload_font_outline_mesh_kernel,
         status: gpgpu::font_outline_mesh_upload_status,
+        role: KnownKernelRole::Font,
+    },
+    KnownAotKernel {
+        name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
+        artifact: &gpgpu::FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,
+        contract: &FONT_OUTLINE_COVERAGE_R8_CONTRACT,
+        upload: gpgpu::upload_font_outline_coverage_r8_kernel,
+        status: gpgpu::font_outline_coverage_r8_upload_status,
         role: KnownKernelRole::Font,
     },
 ];

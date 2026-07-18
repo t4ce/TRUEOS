@@ -355,6 +355,7 @@ pub(crate) struct BlueprintProcessContext {
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
     console_route: BlueprintConsoleRoute,
+    console_attached: bool,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
     exit_reason: Option<AllocString>,
@@ -965,7 +966,11 @@ pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
         .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
     vm.pause_latched.store(true, Ordering::Release);
     match request_preserve(vm_id) {
-        Ok(true) => Ok(true),
+        Ok(true) => {
+            suspend_blueprint_process_context(vm_id);
+            crate::r::gridpaper_service::pause_owner_lifecycle(vm_id);
+            Ok(true)
+        }
         other => {
             vm.pause_latched.store(false, Ordering::Release);
             other
@@ -976,6 +981,8 @@ pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
 pub fn mark_replicatable_resumed(vm_id: u8) {
     if let Some(vm) = vm_slot(vm_id) {
         vm.pause_latched.store(false, Ordering::Release);
+        resume_blueprint_process_context(vm_id);
+        crate::r::gridpaper_service::resume_owner_lifecycle(vm_id);
     }
 }
 
@@ -1420,6 +1427,7 @@ pub fn stage_blueprint_launch(
         console_target,
         console_surface,
         console_route,
+        console_attached: true,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
         exit_reason: None,
@@ -1963,7 +1971,36 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 alloc::format!("vmx-shell: stop failed: {:?}", err).as_str(),
             ),
         },
-        "pause" | "preserve" => match request_preserve(vm_id) {
+        "pause" => {
+            let state = vm_state(vm_id);
+            if !state.replicatable {
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: app is not tagged replicatable; use preserve for a raw checkpoint",
+                );
+            } else if !state.running && !state.starting {
+                blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running");
+            } else {
+                // A successful replicatable pause detaches this console before
+                // returning, so publish the acknowledgement first.
+                blueprint_control_shell_line(
+                    vm_id,
+                    "vmx-shell: requesting replicatable pause; resume it from F2 pause by vmid",
+                );
+                match request_replicatable_pause(vm_id) {
+                    Ok(true) => {}
+                    Ok(false) => blueprint_control_shell_line(
+                        vm_id,
+                        "vmx-shell: replicatable pause was not accepted",
+                    ),
+                    Err(err) => blueprint_control_shell_line(
+                        vm_id,
+                        alloc::format!("vmx-shell: pause failed: {:?}", err).as_str(),
+                    ),
+                }
+            }
+        }
+        "preserve" => match request_preserve(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: preserve requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
             Err(err) => blueprint_control_shell_line(
@@ -1978,7 +2015,12 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
 pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bool {
     if BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)
-        .and_then(|slot| slot.lock().as_ref().map(|_| ()))
+        .and_then(|slot| {
+            slot.lock()
+                .as_ref()
+                .filter(|context| context.console_attached)
+                .map(|_| ())
+        })
         .is_none()
     {
         return false;
@@ -1999,6 +2041,9 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     let Some(context) = guard.as_mut() else {
         return 0;
     };
+    if !context.console_attached {
+        return 0;
+    }
     for &byte in data {
         if context.console_input.len() >= MAX_CONSOLE_INPUT {
             let _ = context.console_input.pop_front();
@@ -2015,7 +2060,13 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     }
     let target = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context.and_then(|slot| {
+            let guard = slot.lock();
+            let context = guard.as_ref()?;
+            context
+                .console_attached
+                .then(|| context.console_target.clone())?
+        })
     };
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return 0;
@@ -2024,6 +2075,9 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
     let Some(context) = guard.as_mut() else {
         return 0;
     };
+    if !context.console_attached {
+        return 0;
+    }
     for &byte in data {
         match byte {
             b'\r' | b'\n' => {
@@ -2060,6 +2114,9 @@ pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let mut guard = slot.lock();
         if let Some(context) = guard.as_mut() {
+            if !context.console_attached {
+                return None;
+            }
             if context.console_route.is_net_shell_direct() {
                 drop(guard);
                 return crate::shell2::backends::net_tcp::net_shell_direct_read_byte(vm_id);
@@ -2074,6 +2131,9 @@ pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let guard = slot.lock();
         if let Some(context) = guard.as_ref() {
+            if !context.console_attached {
+                return 0;
+            }
             if context.console_route.is_net_shell_direct() {
                 return crate::shell2::backends::net_tcp::net_shell_direct_readable_len(vm_id);
             }
@@ -2086,7 +2146,13 @@ pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
     let target = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| slot.lock().as_ref()?.console_target.clone())
+        context.and_then(|slot| {
+            let guard = slot.lock();
+            let context = guard.as_ref()?;
+            context
+                .console_attached
+                .then(|| context.console_target.clone())?
+        })
     };
     if let Some(target) = target {
         crate::shell2::print_matrix_target_line(&target, line);
@@ -2108,13 +2174,71 @@ fn clear_blueprint_process_context(vm_id: u8) {
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let previous = slot.lock().take();
         if let Some(context) = previous {
-            if context.console_route.is_net_shell_direct() {
+            if context.console_attached && context.console_route.is_net_shell_direct() {
                 crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
             }
-            if let Some(target) = context.console_target.as_ref() {
+            if context.console_attached
+                && let Some(target) = context.console_target.as_ref()
+            {
                 crate::shell2::unbind_matrix_target_vm(target, vm_id);
             }
         }
+    }
+}
+
+fn suspend_blueprint_process_context(vm_id: u8) {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return;
+    };
+    let detached = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return;
+        };
+        if !context.console_attached {
+            return;
+        }
+        context.console_attached = false;
+        (context.console_route, context.console_target.clone())
+    };
+    if detached.0.is_net_shell_direct() {
+        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    } else if let Some(target) = detached.1.as_ref() {
+        crate::shell2::unbind_matrix_target_vm(target, vm_id);
+    }
+}
+
+fn resume_blueprint_process_context(vm_id: u8) {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return;
+    };
+    let route = {
+        let guard = slot.lock();
+        let Some(context) = guard.as_ref() else {
+            return;
+        };
+        if context.console_attached {
+            return;
+        }
+        (context.console_route, context.console_target.clone())
+    };
+    let attached = if route.0.is_net_shell_direct() {
+        crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id)
+    } else {
+        if let Some(target) = route.1.as_ref() {
+            crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+        }
+        true
+    };
+    if attached {
+        if let Some(context) = slot.lock().as_mut() {
+            context.console_attached = true;
+        }
+    } else {
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: retained console reattach pending (route busy)",
+            vm_id
+        ));
     }
 }
 
@@ -2345,8 +2469,15 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         hvlogf(format_args!("hv: vm{} lifecycle: exit reason={}", vm_id, reason));
     }
     clear_blueprint_pending_launch(vm_id);
-    let _ = take_blueprint_launch(vm_id);
-    clear_blueprint_process_context(vm_id);
+    if vm.pause_latched.load(Ordering::Acquire) {
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: retained blueprint launch/process context for resume",
+            vm_id
+        ));
+    } else {
+        let _ = take_blueprint_launch(vm_id);
+        clear_blueprint_process_context(vm_id);
+    }
     hvlogf(format_args!("hv: vm{} lifecycle: stopped", vm_id));
     if let Some(pending) = pending_crash {
         crate::hv::app_crash::write(vm_id, pending).await;

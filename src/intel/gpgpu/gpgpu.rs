@@ -92,6 +92,9 @@ pub(crate) const PIXEL_PLASMA_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const FONT_OUTLINE_MESH_KERNEL_NAME: &str = "font_outline_mesh";
 pub(crate) const FONT_OUTLINE_MESH_OPENCL_SOURCE: &str =
     include_str!("kernels/font_outline_mesh.cl");
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME: &str = "font_outline_coverage_r8";
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
+    include_str!("kernels/font_outline_coverage_r8.cl");
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -128,6 +131,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(FONT_OUTLINE_MESH_OPENCL_SOURCE),
+        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
         _ => None,
     }
 }
@@ -191,6 +195,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/chart_sine_rgba8.cl"),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.cl"),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some("src/intel/gpgpu/kernels/font_outline_mesh.cl"),
+        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => {
+            Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.cl")
+        }
         _ => None,
     }
 }
@@ -295,6 +302,10 @@ pub(crate) const FONT_OUTLINE_MESH_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/font_outline_mesh.bin");
 pub(crate) const FONT_OUTLINE_MESH_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/font_outline_mesh.spv");
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/font_outline_coverage_r8.bin");
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/font_outline_coverage_r8.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -395,6 +406,10 @@ pub(crate) const FONT_OUTLINE_MESH_ADLS_BIN_SHA256: [u8; 32] = [
     0xbf, 0x78, 0xe5, 0xd6, 0x87, 0x0f, 0x23, 0x03, 0xb7, 0x07, 0xd3, 0x03, 0x20, 0xd8, 0xda, 0xa1,
     0x55, 0x54, 0x08, 0x5a, 0x75, 0xd4, 0x7a, 0x48, 0xb5, 0x1f, 0xb9, 0x32, 0xf4, 0xfa, 0x3d, 0x25,
 ];
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] = [
+    0xA4, 0xF0, 0xDD, 0xDC, 0x7F, 0x2A, 0x9D, 0x9D, 0x67, 0xE5, 0xE7, 0x14, 0x59, 0xD5, 0x4D, 0xA2,
+    0xE4, 0xA7, 0xAD, 0xE8, 0xCD, 0x1A, 0xF8, 0xC2, 0x72, 0x83, 0xA8, 0x84, 0xF2, 0x21, 0xB8, 0x36,
+];
 
 const COPY_RECT_RGBA8_ADLS_GPU: u64 = 0x0D20_0000;
 const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_GPU: u64 = 0x0D3C_0000;
@@ -419,8 +434,10 @@ const SKYBOX_SAMPLE_RGB565_ADLS_GPU: u64 = 0x0D38_0000;
 const CHART_SINE_RGBA8_ADLS_GPU: u64 = 0x0D39_0000;
 const PIXEL_PLASMA_RGBA8_ADLS_GPU: u64 = 0x0D3A_0000;
 const FONT_OUTLINE_MESH_ADLS_GPU: u64 = 0x0D3B_0000;
+const FONT_OUTLINE_COVERAGE_R8_ADLS_GPU: u64 = 0x0D3D_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const RESOLVE_TILE64_MSAA4_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
+const FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const GRADIENT_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
@@ -530,6 +547,7 @@ const FILL_RECT_PIXELS_PER_GROUP_X: u32 = 16;
 const FILL_RECT_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const ALPHA_BLEND_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS: u64 = 250;
+const FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS: u64 = 500;
 const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
 const GPGPU_WALKER_SIMD16_MASK: u32 = 0x0000_FFFF;
 const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
@@ -830,6 +848,10 @@ const FONT_OUTLINE_MESH_CROSS_THREAD_BYTES: usize = 128;
 const FONT_OUTLINE_MESH_PER_THREAD_BYTES: usize = 96;
 const FONT_OUTLINE_MESH_INDIRECT_BYTES: usize =
     FONT_OUTLINE_MESH_CROSS_THREAD_BYTES + FONT_OUTLINE_MESH_PER_THREAD_BYTES;
+const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: usize = 128;
+const FONT_OUTLINE_COVERAGE_R8_PER_THREAD_BYTES: usize = 96;
+const FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES: usize =
+    FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES + FONT_OUTLINE_COVERAGE_R8_PER_THREAD_BYTES;
 const FONT_OUTLINE_MESH_PRE_MARKER_SLOT: usize = 33;
 const FONT_OUTLINE_MESH_POST_MARKER_SLOT: usize = 32;
 const FONT_OUTLINE_MESH_PRE_MARKER: u32 = 0xC0DE_F701;
@@ -976,6 +998,10 @@ const DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE: u64 = 0x008F_0000;
 const DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE: u64 = 0x0090_0000;
 const DIRECT_RCS_GPU_VA_PRESENT_STAGING_BASE: u64 = 0x00A0_0000;
 const DIRECT_RCS_GPU_VA_SOLID_RECT_SOURCE_BASE: u64 = 0x0400_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE: u64 = 0x0440_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_MASK_BASE: u64 = 0x0480_0000;
+const DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES: usize = 4 * 1024 * 1024;
+const DIRECT_RCS_FONT_COVERAGE_MASK_WINDOW_BYTES: usize = 16 * 1024 * 1024;
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_FONT_TESSEL_MARKER: u32 = 0xF07E_5501;
@@ -1015,6 +1041,7 @@ static SKYBOX_SAMPLE_RGB565_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mute
 static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
 static GPGPU_PRESENT_STAGING_SURFACE: Mutex<Option<GpgpuPresentStagingSurface>> = Mutex::new(None);
@@ -1038,6 +1065,7 @@ static PRESENT_RGBA8_TO_PRIMARY_XRGB_FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0)
 static FILL_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static ALPHA_BLEND_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static RESOLVE_TILE64_MSAA4_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
+static FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static COPY_RECT_256_RAN: AtomicBool = AtomicBool::new(false);
 static COPY_RECT_256X2_RAN: AtomicBool = AtomicBool::new(false);
 static RECT_API_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
@@ -1572,6 +1600,22 @@ struct FontOutlineMeshParams {
     stroke_half_width: f32,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct FontOutlineCoverageR8Params {
+    ops_gpu: u64,
+    mask_gpu: u64,
+    op_count: u32,
+    subdivisions: u32,
+    mask_pitch_bytes: u32,
+    mask_width: u32,
+    mask_height: u32,
+    rect_x: u32,
+    rect_y: u32,
+    rect_width: u32,
+    rect_height: u32,
+    optical_bias_px: f32,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuFontOutlineMesh {
     pub(crate) storage_phys: u64,
@@ -1992,6 +2036,26 @@ pub(crate) struct GpgpuMask8Surface {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
+}
+
+pub(crate) struct GpgpuOwnedMask8Surface {
+    surface: GpgpuMask8Surface,
+    virt: *mut u8,
+}
+
+unsafe impl Send for GpgpuOwnedMask8Surface {}
+unsafe impl Sync for GpgpuOwnedMask8Surface {}
+
+impl GpgpuOwnedMask8Surface {
+    pub(crate) const fn surface(&self) -> GpgpuMask8Surface {
+        self.surface
+    }
+}
+
+impl Drop for GpgpuOwnedMask8Surface {
+    fn drop(&mut self) {
+        crate::dma::dealloc(self.virt, self.surface.bytes);
+    }
 }
 
 impl GpgpuMask8Surface {
@@ -2677,6 +2741,15 @@ pub(crate) const FONT_OUTLINE_MESH_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKer
     bin_sha256: FONT_OUTLINE_MESH_ADLS_BIN_SHA256,
 };
 
+pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact {
+        name: FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
+        target: "adls",
+        bin: FONT_OUTLINE_COVERAGE_R8_ADLS_BIN,
+        spv: FONT_OUTLINE_COVERAGE_R8_ADLS_SPV,
+        bin_sha256: FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256,
+    };
+
 pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
@@ -2765,6 +2838,10 @@ pub(crate) fn pixel_plasma_rgba8_upload_status() -> Option<UploadedKernelArtifac
 
 pub(crate) fn font_outline_mesh_upload_status() -> Option<UploadedKernelArtifact> {
     *FONT_OUTLINE_MESH_UPLOAD.lock()
+}
+
+pub(crate) fn font_outline_coverage_r8_upload_status() -> Option<UploadedKernelArtifact> {
+    *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock()
 }
 
 pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -3246,6 +3323,28 @@ pub(crate) fn upload_font_outline_mesh_kernel() -> Option<UploadedKernelArtifact
     Some(upload)
 }
 
+pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() {
+        return Some(upload);
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        crate::log_warn!(
+            target: "gpgpu";
+            "intel/gpgpu: font-outline-coverage-r8 upload skipped reason=no-claimed-device\n"
+        );
+        return None;
+    };
+
+    let upload = upload_artifact(
+        dev,
+        FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,
+        FONT_OUTLINE_COVERAGE_R8_ADLS_GPU,
+    )?;
+    *FONT_OUTLINE_COVERAGE_R8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactReloadError {
     UnknownKernel,
@@ -3299,6 +3398,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
+    FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
 ];
 
 pub(crate) fn reload_known_kernel_artifact(
@@ -3462,6 +3562,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: FONT_OUTLINE_MESH_ADLS_GPU,
             upload: &FONT_OUTLINE_MESH_UPLOAD,
         }),
+        FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,
+            gpu: FONT_OUTLINE_COVERAGE_R8_ADLS_GPU,
+            upload: &FONT_OUTLINE_COVERAGE_R8_UPLOAD,
+        }),
         _ => None,
     }
 }
@@ -3586,6 +3691,112 @@ pub(crate) fn resolve_tile64_msaa4_rgba8(
         return false;
     };
     submit_resolve_tile64_msaa4_2d(src, dst, params)
+}
+
+/// Allocate one persistent linear R8 mask. Every font mask deliberately uses
+/// the same PPGTT virtual address: direct submissions are serialized and remap
+/// that window to the owning allocation before each generation/composite.
+pub(crate) fn allocate_font_coverage_mask(
+    width: u32,
+    height: u32,
+) -> Option<GpgpuOwnedMask8Surface> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let pitch_bytes = u32::try_from(align_up(width as usize, 64)?).ok()?;
+    let raw_bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
+    let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
+    if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_WINDOW_BYTES {
+        return None;
+    }
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    super::dma_flush(virt, bytes);
+    let Some(surface) = GpgpuMask8Surface::new(
+        phys,
+        DIRECT_RCS_GPU_VA_FONT_COVERAGE_MASK_BASE,
+        bytes,
+        width,
+        height,
+        pitch_bytes,
+    ) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
+    Some(GpgpuOwnedMask8Surface { surface, virt })
+}
+
+/// Add one positioned Skrifa outline stream into a persistent R8 mask.
+/// Existing coverage is retained with `max`, allowing bold duplicate runs and
+/// multiple glyphs to share one color-layer mask without CPU mask blending.
+pub(crate) fn font_outline_coverage_r8(
+    mask: &GpgpuOwnedMask8Surface,
+    outline_ops: &[[u32; 8]],
+    rect: GpgpuRect,
+    subdivisions: u32,
+    optical_bias_px: f32,
+) -> bool {
+    let surface = mask.surface();
+    if outline_ops.is_empty()
+        || outline_ops.len() > u32::MAX as usize
+        || rect.x < 0
+        || rect.y < 0
+        || !rect_is_inside_mask(surface, rect)
+        || !(1..=16).contains(&subdivisions)
+        || !optical_bias_px.is_finite()
+        || !(0.0..=0.35).contains(&optical_bias_px)
+    {
+        return false;
+    }
+    let input_bytes = match outline_ops
+        .len()
+        .checked_mul(core::mem::size_of::<[u32; 8]>())
+    {
+        Some(bytes) => bytes,
+        None => return false,
+    };
+    let mapped_bytes = match align_up(input_bytes, super::WARM_ALIGN) {
+        Some(bytes) => bytes,
+        None => return false,
+    };
+    if mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
+        return false;
+    }
+    let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
+        core::ptr::copy_nonoverlapping(outline_ops.as_ptr().cast::<u8>(), ops_virt, input_bytes);
+    }
+    super::dma_flush(ops_virt, mapped_bytes);
+    let params = FontOutlineCoverageR8Params {
+        ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
+        mask_gpu: surface.gpu,
+        op_count: outline_ops.len() as u32,
+        subdivisions,
+        mask_pitch_bytes: surface.pitch_bytes,
+        mask_width: surface.width,
+        mask_height: surface.height,
+        rect_x: rect.x as u32,
+        rect_y: rect.y as u32,
+        rect_width: rect.width,
+        rect_height: rect.height,
+        optical_bias_px,
+    };
+    let completed = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
+    crate::dma::dealloc(ops_virt, mapped_bytes);
+    completed
+}
+
+/// Composite one R8 glyph layer in a single native two-dimensional dispatch.
+pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
+    let Some(params) = lower_glyph_mask_blit(blit) else {
+        return false;
+    };
+    submit_glyph_mask_2d(blit.mask, blit.dst, params, blit.color_rgba)
 }
 
 pub(crate) fn alpha_blend_rgba8_over_stats(
@@ -7550,6 +7761,15 @@ fn rect_is_inside(surface: GpgpuRgba8Surface, rect: GpgpuRect) -> bool {
     x2 <= surface.width as i64 && y2 <= surface.height as i64
 }
 
+fn rect_is_inside_mask(surface: GpgpuMask8Surface, rect: GpgpuRect) -> bool {
+    if rect.is_empty() || rect.x < 0 || rect.y < 0 {
+        return false;
+    }
+    let x2 = rect.x as i64 + rect.width as i64;
+    let y2 = rect.y as i64 + rect.height as i64;
+    x2 <= surface.width as i64 && y2 <= surface.height as i64
+}
+
 #[inline]
 fn rgba8_alpha(color_rgba: u32) -> u8 {
     (color_rgba >> 24) as u8
@@ -8360,6 +8580,118 @@ fn submit_resolve_tile64_msaa4_2d(
         }
     }
     completed
+}
+
+fn submit_font_outline_coverage_r8_2d(
+    ops_phys: u64,
+    ops_bytes: usize,
+    mask: GpgpuMask8Surface,
+    params: FontOutlineCoverageR8Params,
+) -> bool {
+    let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
+        return false;
+    };
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_font_outline_coverage_r8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let ops_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.ops_gpu, ops_phys, ops_bytes);
+    let mask_ppgtt_ok =
+        ops_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.mask_gpu, mask.phys, mask.bytes);
+    let batch_ok = mask_ppgtt_ok
+        && direct_rcs_encode_font_outline_coverage_r8_2d_batch(
+            state, upload, params, ops_bytes, mask.bytes,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+            FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    let completed = observed == COPY_RECT_POST_MARKER;
+    if !completed {
+        let occurrence =
+            FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        if occurrence <= 8 || occurrence.is_multiple_of(20) {
+            crate::log_warn!(
+                target: "intel-gpgpu";
+                "font_outline_coverage_r8 incomplete occurrence={} ops={} rect={}x{} groups={}x{} submitted={} post=0x{:08X} timeout_ms={} action=triangle-fallback\n",
+                occurrence,
+                params.op_count,
+                params.rect_width,
+                params.rect_height,
+                dispatch.group_x,
+                dispatch.group_y,
+                submitted as u8,
+                observed,
+                FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS,
+            );
+        }
+    }
+    completed
+}
+
+fn submit_glyph_mask_2d(
+    mask: GpgpuMask8Surface,
+    dst: GpgpuRgba8Surface,
+    params: CopyRectRgba8Params,
+    color_rgba: u32,
+) -> bool {
+    if fill_rect_2d_dispatch(params.width, params.height).is_none() {
+        return false;
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_glyph_mask_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let mask_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, mask.phys, mask.bytes);
+    let dst_ppgtt_ok =
+        mask_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.dst_gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_glyph_mask_2d_batch(
+            state, upload, params, color_rgba, mask.bytes, dst.bytes,
+        );
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+            RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    observed == COPY_RECT_POST_MARKER
 }
 
 fn submit_copy_rect_span_batch(
@@ -9706,6 +10038,7 @@ fn upload_artifact_bytes(
             | CHART_SINE_RGBA8_KERNEL_NAME
             | PIXEL_PLASMA_RGBA8_KERNEL_NAME
             | FONT_OUTLINE_MESH_KERNEL_NAME
+            | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
     );
     if requires_allowlisted_sha && actual_sha256 != artifact.bin_sha256 {
         crate::log_error!(
@@ -12639,6 +12972,197 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
     true
 }
 
+fn direct_rcs_encode_font_outline_coverage_r8_2d_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: FontOutlineCoverageR8Params,
+    ops_bytes: usize,
+    mask_bytes: usize,
+) -> bool {
+    if params.rect_width == 0
+        || params.rect_height == 0
+        || COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES
+            > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES,
+        4,
+    ) || !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.ops_gpu,
+        ops_bytes,
+        params.mask_gpu,
+        mask_bytes,
+    ) || !direct_rcs_write_font_outline_coverage_r8_payload_at(
+        state,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        params,
+    ) {
+        return false;
+    }
+    direct_rcs_finish_two_buffer_2d_batch(
+        state,
+        upload,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES,
+        params.rect_width,
+        params.rect_height,
+    )
+}
+
+fn direct_rcs_encode_glyph_mask_2d_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: CopyRectRgba8Params,
+    color_rgba: u32,
+    mask_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if params.width == 0
+        || params.height == 0
+        || COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + GLYPH_MASK_INDIRECT_BYTES
+            > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+    if !direct_rcs_write_copy_rect_interface_descriptor_at_with_cross_thread_grfs(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES,
+        4,
+    ) || !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.src_gpu,
+        mask_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) || !direct_rcs_write_glyph_mask_payload_at(
+        state,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        params,
+        color_rgba,
+    ) {
+        return false;
+    }
+    direct_rcs_finish_two_buffer_2d_batch(
+        state,
+        upload,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        GLYPH_MASK_INDIRECT_BYTES,
+        params.width,
+        params.height,
+    )
+}
+
+fn direct_rcs_finish_two_buffer_2d_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    payload_offset: usize,
+    indirect_bytes: usize,
+    width: u32,
+    height: u32,
+) -> bool {
+    let Some(dispatch) = fill_rect_2d_dispatch(width, height) else {
+        return false;
+    };
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
+    let mut cursor = 0usize;
+    let mut ok = true;
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
+    ok &= direct_rcs_push_pipe_control_full(
+        batch,
+        &mut cursor,
+        (1 << 9) | (1 << 11),
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
+    );
+    ok &= direct_rcs_push_state_base_address(
+        batch,
+        &mut cursor,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        upload.gpu,
+    );
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
+    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
+    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_VFE_STATE_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
+    ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_BATCH_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_PRE_MARKER_SLOT,
+        COPY_RECT_PRE_MARKER,
+    );
+    ok &= direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        &mut cursor,
+        payload_offset,
+        indirect_bytes,
+        dispatch.group_x,
+        dispatch.group_y,
+        dispatch.right_mask,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
+    ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+    ok &= direct_rcs_push_store_marker(
+        batch,
+        &mut cursor,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+    );
+    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
+    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
+    if !ok {
+        return false;
+    }
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
 fn direct_rcs_encode_fill_rect_2d_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -14064,6 +14588,73 @@ fn direct_rcs_write_pixel_plasma_rgba8_payload_at(
         }
 
         let local_ids = payload.add(PIXEL_PLASMA_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
+fn direct_rcs_write_font_outline_coverage_r8_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: FontOutlineCoverageR8Params,
+) -> bool {
+    if payload_offset + FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+    let Some(known) =
+        super::opencl::registry::known_aot_kernel(FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME)
+    else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: font-outline-coverage-r8 payload rejected reason=missing-opencl-contract\n"
+        );
+        return false;
+    };
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, FONT_OUTLINE_COVERAGE_R8_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(9), 1);
+        core::ptr::write_volatile(dwords.add(10), 1);
+        core::ptr::write_volatile(dwords.add(12), params.ops_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.ops_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.mask_gpu as u32);
+        core::ptr::write_volatile(dwords.add(15), (params.mask_gpu >> 32) as u32);
+
+        let cross_thread =
+            core::slice::from_raw_parts_mut(payload, FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES);
+        let values = (|| {
+            let mut writer = super::opencl::KernelValueWriter::new(known.contract, cross_thread)?;
+            writer.set_u32(2, params.op_count)?;
+            writer.set_u32(3, params.subdivisions)?;
+            writer.set_u32(4, params.mask_pitch_bytes)?;
+            writer.set_u32(5, params.mask_width)?;
+            writer.set_u32(6, params.mask_height)?;
+            writer.set_u32(7, params.rect_x)?;
+            writer.set_u32(8, params.rect_y)?;
+            writer.set_u32(9, params.rect_width)?;
+            writer.set_u32(10, params.rect_height)?;
+            writer.set_f32(11, params.optical_bias_px)?;
+            writer.finish()?;
+            Ok::<(), super::opencl::KernelValueError>(())
+        })();
+        if let Err(err) = values {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: font-outline-coverage-r8 payload rejected reason=value-contract error={:?}\n",
+                err
+            );
+            return false;
+        }
+        let local_ids = payload.add(FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);

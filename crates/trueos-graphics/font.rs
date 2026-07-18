@@ -164,7 +164,7 @@ struct TransientGlyphMesh {
 /// units. Scale, baseline/Y orientation, curve flattening, and mesh generation
 /// are deliberately left to the compute artifact.
 pub(crate) struct FontGpuOutline {
-    pub(crate) text: &'static str,
+    pub(crate) text: String,
     pub(crate) font_name: &'static str,
     pub(crate) font_file: &'static str,
     pub(crate) units_per_em: u16,
@@ -178,9 +178,9 @@ pub(crate) fn default_gpu_outline() -> Result<FontGpuOutline, &'static str> {
     gpu_outline_for_text("font", FONT_TESSEL_SAMPLE_TEXT)
 }
 
-fn gpu_outline_for_text(
+pub(crate) fn gpu_outline_for_text(
     name: &'static str,
-    text: &'static str,
+    text: &str,
 ) -> Result<FontGpuOutline, &'static str> {
     match warm_embedded_font_by_name(name).map_err(|_| "font-warm-failed")? {
         Some(_) => {}
@@ -221,7 +221,7 @@ fn gpu_outline_for_text(
     }
     let checksum = outline_words_checksum(ops.as_slice());
     Ok(FontGpuOutline {
-        text,
+        text: String::from(text),
         font_name: font_record.name,
         font_file: font_record.file_name,
         units_per_em: font_record.units_per_em,

@@ -284,6 +284,16 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) viewport_translation_px: [f32; 2],
 }
 
+/// One persistent R8 analytical font layer composited after triangle resolve.
+/// The mask is colorless; animated RGBA and integer scene pan are supplied for
+/// each frame without rebuilding the Skrifa/GPGPU coverage artifact.
+pub(crate) struct ResidentSceneCoverageDraw {
+    pub(crate) mask: crate::intel::gpgpu::GpgpuMask8Surface,
+    pub(crate) mask_rect: crate::intel::gpgpu::GpgpuRect,
+    pub(crate) dst_xy: crate::intel::gpgpu::GpgpuPoint,
+    pub(crate) rgba: [u8; 4],
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ResidentSceneRasterQuality {
     SingleSample,
@@ -591,6 +601,7 @@ pub(crate) fn capture_resident_triangle_scene_frame(
     let (width, height) = resident_scene_target_dimensions();
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         true,
@@ -612,6 +623,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
     let (width, height) = resident_scene_target_dimensions();
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         true,
@@ -631,6 +643,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
     let (width, height) = resident_scene_target_dimensions();
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         true,
@@ -655,6 +668,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
     let (width, height) = resident_scene_target_dimensions();
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -679,6 +693,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -699,6 +714,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -720,6 +736,31 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::Multisample4x,
+        width as usize,
+        height as usize,
+    )
+}
+
+/// UI4-sized 4x triangle scene followed by persistent analytical font masks.
+/// Coverage is composited only after the MSAA resolve, preserving its R8 alpha
+/// steps instead of treating the mask as additional fixed-function samples.
+pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
+    draws: &[ResidentSceneDraw<'_>],
+    coverage_draws: &[ResidentSceneCoverageDraw],
+    clear_rgba: Option<[u8; 4]>,
+    width: u32,
+    height: u32,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        coverage_draws,
         clear_rgba,
         diagnostic_logs,
         false,
@@ -740,6 +781,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     submit_resident_triangle_scene_capture(
         draws,
+        &[],
         clear_rgba,
         diagnostic_logs,
         false,
@@ -752,6 +794,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
 
 fn submit_resident_triangle_scene_capture(
     draws: &[ResidentSceneDraw<'_>],
+    coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
     straight_alpha_output: bool,
@@ -995,17 +1038,17 @@ fn submit_resident_triangle_scene_capture(
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let geometry_complete = completed_draws == draws.len();
-        let frame_complete = if geometry_complete {
+        let output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+            warm.streamout_phys,
+            GPU_VA_STREAMOUT_BASE,
+            warm.streamout_len,
+            target_width as u32,
+            target_height as u32,
+            target_pitch as u32,
+        )
+        .ok_or("resident-scene-resolve-surface")?;
+        let resolved = if geometry_complete {
             if let Some(target) = msaa_color {
-                let output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-                    warm.streamout_phys,
-                    GPU_VA_STREAMOUT_BASE,
-                    warm.streamout_len,
-                    target_width as u32,
-                    target_height as u32,
-                    target_pitch as u32,
-                )
-                .ok_or("resident-scene-resolve-surface")?;
                 crate::intel::gpgpu::resolve_tile64_msaa4_rgba8(
                     target.surface,
                     output,
@@ -1018,6 +1061,26 @@ fn submit_resident_triangle_scene_capture(
         } else {
             false
         };
+        let mut completed_coverage_draws = 0usize;
+        if resolved {
+            for draw in coverage_draws {
+                let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d(
+                    crate::intel::gpgpu::GpgpuGlyphMaskBlit {
+                        mask: draw.mask,
+                        mask_rect: draw.mask_rect,
+                        dst: output,
+                        dst_xy: draw.dst_xy,
+                        color_rgba: u32::from_le_bytes(draw.rgba),
+                    },
+                );
+                if !completed {
+                    break;
+                }
+                completed_coverage_draws += 1;
+            }
+        }
+        completed_draws = completed_draws.saturating_add(completed_coverage_draws);
+        let frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
         crate::intel::dma_flush(warm.streamout_virt, target_bytes);
         let mut changed_pixels = 0usize;
         let mut rgba = None;
@@ -1052,7 +1115,7 @@ fn submit_resident_triangle_scene_capture(
         }
         Ok(ResidentSceneFrameResult {
             completed_draws,
-            requested_draws: draws.len(),
+            requested_draws: draws.len().saturating_add(coverage_draws.len()),
             changed_pixels,
             presented: false,
             width: target_width as u32,

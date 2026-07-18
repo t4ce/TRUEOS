@@ -84,11 +84,15 @@ const ERROR_TRANSPORT: i32 = -4;
 const ERROR_INVALID_ANIMATION: i32 = -5;
 const ERROR_INVALID_INSTANCE: i32 = -6;
 
+static COVERAGE_COMPOSITE_FALLBACK_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
 struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
     published: usize,
     owner: Option<u8>,
     producer_connected: bool,
+    lifecycle_paused: bool,
     generation: u64,
     scale_percent: u16,
     serial: u64,
@@ -103,6 +107,7 @@ impl SnapshotStore {
             published: 0,
             owner: None,
             producer_connected: false,
+            lifecycle_paused: false,
             generation: 0,
             scale_percent: 100,
             serial: 0,
@@ -128,7 +133,13 @@ fn producer_ownership_conflicts(
     requester: u8,
 ) -> bool {
     producer_connected
-        && active.is_some_and(|active| active != requester && crate::hv::vm_state(active).running)
+        && active.is_some_and(|active| {
+            if active == requester {
+                return false;
+            }
+            let state = crate::hv::vm_state(active);
+            state.running || state.starting || state.pause_latched
+        })
 }
 
 #[derive(Clone)]
@@ -476,6 +487,9 @@ pub(crate) fn submit_snapshot_for_owner(
     if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
     }
+    if snapshots.owner != Some(owner) || !crate::hv::vm_state(owner).pause_latched {
+        snapshots.lifecycle_paused = false;
+    }
     let next = snapshots.published ^ 1;
     snapshots.buffers[next].copy_from_slice(raw);
     snapshots.published = next;
@@ -500,6 +514,9 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw:
     let snapshots = &mut stores[instance];
     if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
         return ERROR_NOT_OWNER;
+    }
+    if snapshots.owner != Some(owner) || !crate::hv::vm_state(owner).pause_latched {
+        snapshots.lifecycle_paused = false;
     }
     snapshots.owner = Some(owner);
     snapshots.producer_connected = true;
@@ -528,11 +545,59 @@ pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
         Some(active) if active == owner => {
             snapshots.owner = None;
             snapshots.producer_connected = false;
+            snapshots.lifecycle_paused = false;
             0
         }
         Some(_) => ERROR_NOT_OWNER,
         None => 0,
     }
+}
+
+/// Detach every Gridpaper presentation owned by a VM while keeping its page,
+/// resident 3D scene, GPU allocations, and last front buffer available for a
+/// same-slot resume.
+pub(crate) fn pause_owner_lifecycle(owner: u8) -> usize {
+    let mut stores = SNAPSHOTS.lock();
+    let mut retained = 0usize;
+    for snapshot in stores.iter_mut() {
+        if snapshot.owner == Some(owner) {
+            snapshot.lifecycle_paused = true;
+            retained = retained.saturating_add(1);
+        }
+    }
+    if retained != 0 {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: lifecycle pause owner={} retained_scenes={} action=detach-ui4-preserve-resident-3d\n",
+            owner,
+            retained,
+        );
+    }
+    retained
+}
+
+/// Re-arm retained Gridpaper producers after their VM slot has been restored.
+/// UI4 creates a fresh presentation session; no snapshotted window or GPU
+/// handle is reused.
+pub(crate) fn resume_owner_lifecycle(owner: u8) -> usize {
+    let mut stores = SNAPSHOTS.lock();
+    let mut resumed = 0usize;
+    for snapshot in stores.iter_mut() {
+        if snapshot.owner == Some(owner) {
+            snapshot.lifecycle_paused = false;
+            snapshot.producer_connected = true;
+            resumed = resumed.saturating_add(1);
+        }
+    }
+    if resumed != 0 {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: lifecycle resume owner={} retained_scenes={} action=reattach-fresh-ui4-session\n",
+            owner,
+            resumed,
+        );
+    }
+    resumed
 }
 
 fn snapshot_after(instance_id: u32, serial: u64) -> Option<OwnedSnapshot> {
@@ -945,10 +1010,11 @@ fn connected_owner(instance_id: u32) -> Option<u8> {
     let mut stores = SNAPSHOTS.lock();
     let snapshots = &mut stores[instance];
     let owner = snapshots.owner?;
-    if !snapshots.producer_connected {
+    if snapshots.lifecycle_paused || !snapshots.producer_connected {
         return None;
     }
-    if crate::hv::vm_state(owner).running {
+    let state = crate::hv::vm_state(owner);
+    if state.running || state.starting {
         Some(owner)
     } else {
         snapshots.producer_connected = false;
@@ -1033,6 +1099,7 @@ struct ResidentLayer {
     base_color: [u8; 4],
     text_color_selector: Option<u8>,
     mesh: crate::intel::render::ResidentTriangleMesh,
+    coverage: Option<crate::intel::gpu_font::GpuFontCoverageMask>,
 }
 
 impl Drop for ResidentLayer {
@@ -1154,8 +1221,9 @@ fn build_resident_page(
     pan: ScenePan,
 ) -> Result<ResidentPage, &'static str> {
     use crate::intel::gpu_font::{
-        GpuFontJobEntry, GpuFontTextRequest, create_resident_font_centered_scene_mesh_at_raster,
-        ensure_font_face_available,
+        GpuFontJobEntry, GpuFontTextRequest, create_gpu_font_centered_coverage_mask_at_raster,
+        create_resident_font_centered_scene_mesh_at_raster, ensure_font_face_available,
+        gpu_font_entries_use_small_coverage,
     };
 
     ensure_font_face_available(GpuFontFace::Default)?;
@@ -1375,10 +1443,44 @@ fn build_resident_page(
                 raster_width,
                 raster_height,
             )?;
+            let coverage = if gpu_font_entries_use_small_coverage(
+                &entries,
+                SCENE_WIDTH,
+                SCENE_HEIGHT,
+                raster_width,
+                raster_height,
+            ) {
+                match create_gpu_font_centered_coverage_mask_at_raster(
+                    &entries,
+                    font,
+                    SCENE_WIDTH,
+                    SCENE_HEIGHT,
+                    raster_width,
+                    raster_height,
+                ) {
+                    Ok(coverage) => Some(coverage),
+                    Err(reason) => {
+                        crate::log_warn!(
+                            target: "gridpaper";
+                            "gridpaper: analytical font coverage unavailable instance={} scale={} font={} color={} entries={} reason={} action=resident-triangle-fallback\n",
+                            instance_id,
+                            snapshot.scale_percent,
+                            font.registry_name(),
+                            color,
+                            entries.len(),
+                            reason,
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             layers.push(ResidentLayer {
                 base_color: palette(color, false),
                 text_color_selector: Some(color),
                 mesh,
+                coverage,
             });
         }
     }
@@ -1415,6 +1517,7 @@ fn push_geometry_layer(
         base_color: color,
         text_color_selector: None,
         mesh,
+        coverage: None,
     });
     Ok(())
 }
@@ -1454,29 +1557,108 @@ fn publish_page(
         page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
         page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
     ];
-    let draws = page
+    let result = capture_resident_page_frame(
+        page,
+        text_animations,
+        animation_elapsed_ms,
+        viewport_translation_px,
+        surface.width,
+        surface.height,
+    )
+    .map_err(ServiceError::Render)?;
+    publish_pixels(surface, page, selection, input_field, &result)?;
+    Ok(result)
+}
+
+fn capture_resident_page_frame(
+    page: &ResidentPage,
+    text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
+    animation_elapsed_ms: u64,
+    viewport_translation_px: [f32; 2],
+    width: u32,
+    height: u32,
+) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
+    let triangle_draws = page
         .layers
         .iter()
+        .filter(|layer| layer.coverage.is_none())
         .map(|layer| crate::intel::render::ResidentSceneDraw {
             mesh: &layer.mesh,
             rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
             viewport_translation_px,
         })
         .collect::<Vec<_>>();
-    let result =
-        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
-            &draws,
-            Some([0, 0, 0, 0]),
-            surface.width,
-            surface.height,
-            false,
-        )
-        .map_err(ServiceError::Render)?;
-    if result.completed_draws != result.requested_draws || result.rgba.is_none() {
-        return Err(ServiceError::Render("incomplete-frame"));
+    let pan_px = [
+        libm::roundf(viewport_translation_px[0]) as i32,
+        libm::roundf(viewport_translation_px[1]) as i32,
+    ];
+    let coverage_draws = page
+        .layers
+        .iter()
+        .filter_map(|layer| {
+            let coverage = layer.coverage.as_ref()?;
+            let origin = coverage.origin_px();
+            Some(crate::intel::render::ResidentSceneCoverageDraw {
+                mask: coverage.surface(),
+                mask_rect: coverage.full_rect(),
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                    origin[0].saturating_add(pan_px[0]),
+                    origin[1].saturating_add(pan_px[1]),
+                ),
+                rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
+            })
+        })
+        .collect::<Vec<_>>();
+    let captured = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
+        &triangle_draws,
+        &coverage_draws,
+        Some([0, 0, 0, 0]),
+        width,
+        height,
+        false,
+    );
+    match captured {
+        Ok(result) if result.completed_draws == result.requested_draws && result.rgba.is_some() => {
+            Ok(result)
+        }
+        Ok(_) if coverage_draws.is_empty() => Err("incomplete-frame"),
+        Err(reason) if coverage_draws.is_empty() => Err(reason),
+        failed => {
+            if !COVERAGE_COMPOSITE_FALLBACK_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel)
+            {
+                let reason = match failed {
+                    Ok(_) => "incomplete-coverage-frame",
+                    Err(reason) => reason,
+                };
+                crate::log_warn!(
+                    target: "gridpaper";
+                    "gridpaper: analytical coverage composite failed reason={} masks={} action=rerender-resident-triangle-fallback\n",
+                    reason,
+                    coverage_draws.len(),
+                );
+            }
+            let fallback_draws = page
+                .layers
+                .iter()
+                .map(|layer| crate::intel::render::ResidentSceneDraw {
+                    mesh: &layer.mesh,
+                    rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
+                    viewport_translation_px,
+                })
+                .collect::<Vec<_>>();
+            let fallback = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
+                &fallback_draws,
+                Some([0, 0, 0, 0]),
+                width,
+                height,
+                false,
+            )?;
+            if fallback.completed_draws != fallback.requested_draws || fallback.rgba.is_none() {
+                return Err("incomplete-fallback-frame");
+            }
+            Ok(fallback)
+        }
     }
-    publish_pixels(surface, page, selection, input_field, &result)?;
-    Ok(result)
 }
 
 fn resident_layer_color(
@@ -1518,26 +1700,14 @@ fn render_print_page(
             PRINT_CAPTURE_HEIGHT,
             ScenePan::ZERO,
         )?;
-        let draws = page
-            .layers
-            .iter()
-            .map(|layer| crate::intel::render::ResidentSceneDraw {
-                mesh: &layer.mesh,
-                rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
-                viewport_translation_px: [0.0, 0.0],
-            })
-            .collect::<Vec<_>>();
-        let captured =
-            crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
-                &draws,
-                Some([0, 0, 0, 0]),
-                PRINT_CAPTURE_WIDTH,
-                PRINT_CAPTURE_HEIGHT,
-                false,
-            )?;
-        if captured.completed_draws != captured.requested_draws {
-            return Err("incomplete-print-frame");
-        }
+        let captured = capture_resident_page_frame(
+            &page,
+            text_animations,
+            animation_elapsed_ms,
+            [0.0, 0.0],
+            PRINT_CAPTURE_WIDTH,
+            PRINT_CAPTURE_HEIGHT,
+        )?;
         let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
         Ok(PrintRasterFrame {
             width: PRINT_CAPTURE_WIDTH,
@@ -2101,9 +2271,14 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .expect("gridpaper pending page exists");
                 runtime.last_sampled_text_colors =
                     sampled_text_colors(&published, &runtime.text_animations, animation_elapsed_ms);
+                let coverage_masks = published
+                    .layers
+                    .iter()
+                    .filter(|layer| layer.coverage.is_some())
+                    .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} changed_pixels={} frame_us={} persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_small_path=skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2111,6 +2286,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     published.pan.x,
                     published.pan.y,
                     published.layers.len(),
+                    coverage_masks,
                     result.changed_pixels,
                     result.frame_us,
                 );
@@ -2249,7 +2425,7 @@ pub async fn gridpaper_service_task() {
     let primary = &runtimes[PRIMARY_INSTANCE_ID as usize].surface;
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
+        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_small_path=skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over font_small_ppem=8..32 optical_bias_px=0.04..0.22 owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
         GRIDPAPER_INSTANCE_CAPACITY,
         PAGE_BYTES,
         COLUMNS * ROWS,

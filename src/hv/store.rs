@@ -245,7 +245,9 @@ fn vm_id_supported(vm_id: u8) -> bool {
 }
 
 fn vm_store_disk(vm_id: u8) -> Option<block::DeviceHandle> {
-    VM_STORE_DISKS.get(vm_id as usize).and_then(|slot| *slot.lock())
+    VM_STORE_DISKS
+        .get(vm_id as usize)
+        .and_then(|slot| *slot.lock())
 }
 
 async fn read_committed_bytes(
