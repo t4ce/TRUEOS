@@ -629,7 +629,7 @@ pub extern "C" fn trueos_cabi_audio_state(handle: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64 {
-    crate::tst::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(u64::MAX)
+    crate::aud::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(u64::MAX)
 }
 
 #[unsafe(no_mangle)]
@@ -647,7 +647,7 @@ pub unsafe extern "C" fn trueos_cabi_audio_monitor_read_i16_since(
     }
 
     let mut samples = Vec::with_capacity(out_cap);
-    let Some(next) = crate::tst::esynth::live_pcm_read_since(cursor, &mut samples, out_cap) else {
+    let Some(next) = crate::aud::esynth::live_pcm_read_since(cursor, &mut samples, out_cap) else {
         return -(ENODEV as isize);
     };
 

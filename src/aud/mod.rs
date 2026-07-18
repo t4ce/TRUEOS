@@ -11,9 +11,11 @@
 
 #[cfg(target_os = "trueos")]
 pub mod alsa_trueos_backend;
+pub mod audio_live_http;
 pub mod backing_pattern;
 pub mod cabi;
 pub mod dmg;
+pub mod esynth;
 pub mod live_piano;
 pub mod m4a;
 pub mod m4a_demux;

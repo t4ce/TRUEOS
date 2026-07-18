@@ -530,7 +530,7 @@ fn wav_stream_head() -> Vec<u8> {
     head.extend_from_slice(b"Content-Type: audio/wav\r\n");
     head.extend_from_slice(b"Cache-Control: no-store\r\n");
     head.extend_from_slice(b"Connection: close\r\n\r\n");
-    head.extend_from_slice(crate::tst::esynth::live_wav_stream_header().as_slice());
+    head.extend_from_slice(crate::aud::esynth::live_wav_stream_header().as_slice());
     head
 }
 
@@ -660,7 +660,7 @@ fn handle_request(
             }
             let preroll_samples = SAMPLE_RATE * CHANNELS * PREROLL_MS / 1000;
             session.cursor =
-                crate::tst::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(0);
+                crate::aud::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(0);
             session.voice_cursors = mixer.start_cursors();
             let self_monitor = target
                 .map(|target| query_flag(target, "self"))
@@ -775,7 +775,7 @@ fn stream_audio_tick(vnet: &VNet, session: &mut AudioHttpSession, mixer: &VoiceM
     let mut samples = Vec::with_capacity(max_samples);
 
     let Some(next) =
-        crate::tst::esynth::live_pcm_read_since(session.cursor, &mut samples, max_samples)
+        crate::aud::esynth::live_pcm_read_since(session.cursor, &mut samples, max_samples)
     else {
         return false;
     };

@@ -79,15 +79,6 @@ mod surfer;
 mod tga;
 #[path = "../crates/trueos-gboi/mod.rs"]
 mod trueos_gboi;
-mod tst;
-#[path = "tst/audio_live_http.rs"]
-mod tst_audio_live_http;
-#[path = "tst/http_trueosfs.rs"]
-mod tst_http_trueosfs;
-#[path = "tst/tactics_srv.rs"]
-mod tst_tactics_srv;
-#[path = "tst/ws_time.rs"]
-mod tst_ws_time;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
@@ -323,9 +314,6 @@ fn _loop(executor: &'static Executor) -> ! {
     loop {
         time::poll();
         unsafe { executor.poll() };
-        //if counter.is_multiple_of(5_000) {
-        //    let _ = crate::tst::coreticks_demo::coreticks_tick_tile_index(0);
-        //}
         //if counter.is_multiple_of(10_000_000) {
         //    log_os::debugcon_write_byte_raw(b'0');
         //}

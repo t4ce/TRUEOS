@@ -55,7 +55,6 @@ define_started_flags!(
     DRAW3D_SERVICE_STARTED,
     DRAW3D_UI4_RENDER_STARTED,
     GRIDPAPER_SERVICE_STARTED,
-    TACTICS_SRV_STARTED,
     HID_UDP_SRV_STARTED,
     AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
@@ -429,10 +428,6 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-fn spawn_tactics_srv(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_tactics_srv::tactics_srv_task())
-}
-
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::hid_udp_srv::hid_udp_srv_task())
 }
@@ -456,11 +451,11 @@ fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_http_trueosfs::http_trueosfs_task())
+    spawn_local(spawner, |_spawner| crate::r::fs::http_trueosfs::http_trueosfs_task())
 }
 
 fn spawn_ws_time(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_ws_time::ws_time_task())
+    spawn_local(spawner, |_spawner| crate::r::net::cli::ws_time::ws_time_task())
 }
 
 fn spawn_lan_discovery(spawner: Spawner) -> SpawnAttempt {
@@ -576,11 +571,11 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::tst::esynth::tinyaudio_service_task())
+    spawn_on_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
 }
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_audio_live_http::tinyaudio_live_http_task())
+    spawn_local(spawner, |_spawner| crate::aud::audio_live_http::tinyaudio_live_http_task())
 }
 
 #[inline]
@@ -1226,7 +1221,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 63 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 62 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1328,12 +1323,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &GRIDPAPER_SERVICE_STARTED,
         spawn_gridpaper_service,
-    ),
-    TaskSpec::disabled(
-        "tactics-srv",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &TACTICS_SRV_STARTED,
-        spawn_tactics_srv,
     ),
     TaskSpec::enabled(
         "hid-udp-srv",
