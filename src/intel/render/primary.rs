@@ -835,6 +835,30 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
     )
 }
 
+/// Render a depth-tested retained scene through the linear single-sample
+/// target, then copy the complete frame into a leased UI4 RGBA surface on the
+/// GPU. This is the correctness fallback while the gfx12.5 Tile64 4x resolve
+/// is not trusted for live presentation; no framebuffer pixels cross the CPU.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_linear_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
+        ResidentSceneRasterQuality::SingleSample,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::GpuSurface(destination),
+    )
+}
+
 /// UI4-sized depth-tested resident scene with matching 4x color and depth.
 pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth_msaa4(
     draws: &[ResidentSceneDraw<'_>],
@@ -7572,14 +7596,14 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
 
     let (completion_value, completion_slot, completion_kind) = if matches!(
         submit_name,
-        "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
+        "draw3d-scene" | "font-tessel-3d-once" | "font-outline-gpu-mesh-3d" | "font-resident-3d"
     ) && post_draw_sync_variant
         == PostDrawSyncVariant::HeavyAll
     {
         (
             RCS_EXEC_RESULT_DRAW_POST3D,
             RESULT_SLOT_POST3D_LIGHT_PIPE_CONTROL_LO_DWORD,
-            "cs-stalled-postsync-rt-flush",
+            "full-cache-drain-then-cs-stalled-postsync-rt-flush",
         )
     } else {
         (RCS_EXEC_RESULT_DONE, RESULT_SLOT_FINAL_DWORD, "mi-tail-store")

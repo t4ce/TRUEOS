@@ -52,6 +52,11 @@ pub(crate) struct FrameRgbaView {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch: u32,
+    /// This exact buffer has been exposed as a GPU render/compute target since
+    /// it was acquired. Until UI4 has an explicit producer-release fence that
+    /// display can consume, such a publication must be snapshotted into a
+    /// display-owned back buffer instead of imported directly for scanout.
+    pub(crate) gpu_authored: bool,
 }
 
 unsafe impl Send for FrameRgbaView {}
@@ -92,6 +97,7 @@ struct FrameRecord {
     next_buffer: u8,
     acquired: Option<AcquiredBuffer>,
     readers: [u16; 3],
+    gpu_authored: [bool; 3],
     next_token: u64,
     publish_serial: u64,
 }
@@ -109,6 +115,7 @@ impl FrameRecord {
             next_buffer: 0,
             acquired: None,
             readers: [0; 3],
+            gpu_authored: [false; 3],
             next_token: 0,
             publish_serial: 0,
         }
@@ -130,6 +137,7 @@ impl FrameRecord {
         self.next_buffer = 0;
         self.acquired = None;
         self.readers = [0; 3];
+        self.gpu_authored = [false; 3];
         self.next_token = 0;
         self.publish_serial = 0;
     }
@@ -308,6 +316,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
         .ok_or(FramePoolError::Busy)?;
 
     frame.next_buffer = (index + 1) % count;
+    frame.gpu_authored[index as usize] = false;
     frame.next_token = next_serial(frame.next_token);
     let acquired = AcquiredBuffer {
         index,
@@ -357,7 +366,7 @@ pub(crate) fn retain_published_frame(
 }
 
 pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView, FramePoolError> {
-    let surface = {
+    let (surface, gpu_authored) = {
         let pool = FRAME_POOL.lock();
         let frame = pool.checked(lease.frame)?;
         if frame.readers[lease.buffer_index as usize] == 0 {
@@ -366,7 +375,10 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
             return Err(FramePoolError::UnsupportedFormat);
         }
-        frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?
+        (
+            frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?,
+            frame.gpu_authored[lease.buffer_index as usize],
+        )
     };
     let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
     Ok(FrameRgbaView {
@@ -377,6 +389,7 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         width: access.width,
         height: access.height,
         pitch: access.pitch,
+        gpu_authored,
     })
 }
 
@@ -399,6 +412,7 @@ pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView
         width: access.width,
         height: access.height,
         pitch: access.pitch,
+        gpu_authored: false,
     })
 }
 
@@ -450,13 +464,16 @@ pub(crate) fn gpgpu_rgba_surface(
     lease: FrameWriteLease,
 ) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, FramePoolError> {
     let surface = {
-        let pool = FRAME_POOL.lock();
-        let frame = pool.checked(lease.frame)?;
+        let mut pool = FRAME_POOL.lock();
+        let frame = pool.checked_mut(lease.frame)?;
         checked_lease(frame, lease)?;
         if frame.plan.format != ScanoutFormat::Rgba8888Premultiplied {
             return Err(FramePoolError::UnsupportedFormat);
         }
-        frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?
+        let index = lease.buffer_index as usize;
+        let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+        frame.gpu_authored[index] = true;
+        surface
     };
     ui_surface::gpgpu_rgba_surface(surface).ok_or(FramePoolError::InvalidLease)
 }

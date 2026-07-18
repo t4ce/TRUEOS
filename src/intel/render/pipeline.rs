@@ -2656,6 +2656,26 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_PRE_LIGHT_PC,
     )?;
 
+    if post_draw_sync_variant == PostDrawSyncVariant::HeavyAll {
+        // Draw3D reuses one color/depth target across separately scheduled
+        // mesh contexts.  The Mesa-shaped completion packet below drains the
+        // render-target cache, but it does not drain D32, Tile, HDC, or the L3
+        // fabric.  Its marker can therefore become visible before all pixels
+        // needed by the next mesh (or the present copy) are globally visible.
+        //
+        // Use the already-proven gfx12 full drain packet first, including its
+        // required DW0 HDC/untyped-dataport bits.  The following post-sync PC
+        // remains the sole completion fence, so observing its value proves
+        // that this drain retired as well.
+        log_batch_offset(cursor, "PIPE_CONTROL post-3d-full-cache-drain");
+        push_pipe_control_full(
+            batch_dwords,
+            &mut cursor,
+            PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS,
+            PIPE_CONTROL_BIG_PRE_DRAW_BITS,
+        )?;
+    }
+
     log_batch_offset(cursor, "PIPE_CONTROL post-3d-light-marker");
     let light_sync_flags = post_draw_sync_variant.light_sync_flags();
     if post_draw_sync_variant.light_post_sync_enabled() {

@@ -5,6 +5,7 @@
 //! surface-flip batch. It intentionally creates no application windows.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
@@ -20,6 +21,7 @@ const PENDING_POLL_PERIOD_MS: u64 = 1;
 const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
+static GPU_AUTHORED_DIRECT_SCANOUT_GATED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -546,6 +548,17 @@ fn queue_async_plane(
                 }
             }
         }
+        if let Some((window, view)) = selected.as_slice().first().copied()
+            && selected.len() == 1
+            && view.gpu_authored
+            && direct_overlay_geometry_eligible(window, view)
+            && !GPU_AUTHORED_DIRECT_SCANOUT_GATED_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::log_warn!(target: "ui4";
+                "ui4/direct-present: gated frame={} slot={} reason=gpu-authored-release-fence-unproven action=guc-snapshot-to-display-back-buffer cpu_pixel_copy=0\n",
+                window.frame.raw(), slot,
+            );
+        }
     }
     let pixels: Vec<&[u8]> = selected
         .iter()
@@ -598,6 +611,10 @@ fn queue_async_plane(
 }
 
 fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
+    !view.gpu_authored && direct_overlay_geometry_eligible(window, view)
+}
+
+fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
     let placement = window.placement;
     let Some((output_width, output_height)) = crate::intel::active_scanout_dimensions() else {
         return false;

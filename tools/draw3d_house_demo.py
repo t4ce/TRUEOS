@@ -256,12 +256,18 @@ def populate(client):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="192.168.178.94")
     parser.add_argument(
         "--output", type=Path, default=Path("bld/draw3d-captures/house-tree-gabled.png")
     )
     parser.add_argument("--settle", type=float, default=1.5)
+    parser.add_argument(
+        "--orbit-speed",
+        type=float,
+        default=0.18,
+        help="camera-orbit speed in radians per second; use 0 for a static camera",
+    )
     parser.add_argument("--expect-width", type=int, default=2560)
     parser.add_argument("--expect-height", type=int, default=1440)
     args = parser.parse_args()
@@ -269,12 +275,25 @@ def main():
     client = Draw3dClient(args.host)
     try:
         populate(client)
+        client.stop()
+        if args.orbit_speed != 0.0:
+            client.camera(
+                (14.0, 2.0, 0.0),
+                (0.0, 2.0, 0.0),
+                48.0,
+                orbit_scale=(14.0, 9.0),
+                orbit_rotation=(math.radians(-8.0), 0.0, math.radians(3.0)),
+                orbit_speed=args.orbit_speed,
+            )
+        # Starting without RGBA selects the protocol's transparent clear color.
+        client.start()
         time.sleep(args.settle)
         output, image_format, width, height, image = client.render(args.output)
         mesh_count, instance_count, vertices, edges, faces, mesh_bytes = client.stats()
         print(
             f"scene meshes={mesh_count} instances={instance_count} vertices={vertices} "
-            f"edges={edges} faces={faces} mesh_bytes={mesh_bytes}"
+            f"edges={edges} faces={faces} mesh_bytes={mesh_bytes} "
+            f"orbit_speed={args.orbit_speed} transparent_background=1"
         )
         print(
             f"capture format={image_format} size={width}x{height} bytes={len(image)} "

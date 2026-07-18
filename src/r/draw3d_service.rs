@@ -299,7 +299,7 @@ fn render_and_publish_ui4_scene_frame(
         return Err(Draw3dUi4Error::InvalidFrame);
     }
     let result = match crate::intel::render::
-        render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_to_surface(
+        render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_linear_to_surface(
             draws,
             clear_rgba,
             destination,
@@ -327,7 +327,7 @@ fn render_and_publish_ui4_scene_frame(
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "draw3d";
-            "draw3d: live frame path=gpu-msaa-resolve-to-ui4 target_gpu=0x{:X} size={}x{} pitch={} cpu_readback=0 cpu_frame_copy=0 compositor_expected=direct-scanout\n",
+            "draw3d: live frame path=gpu-linear-render-copy-to-ui4 target_gpu=0x{:X} size={}x{} pitch={} msaa=0 tile64_resolve=0 cpu_readback=0 cpu_frame_copy=0 compositor_expected=guc-snapshot\n",
             destination.gpu,
             destination.width,
             destination.height,
@@ -687,7 +687,7 @@ pub async fn draw3d_ui4_render_task() {
         .unwrap_or(0);
     crate::log_info!(
         target: "draw3d";
-        "draw3d: UI4 surface ready owner=kernel-app-3 session={} frame={} window={} output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} ui4_render=gpu-msaa-resolve-to-leased-surface cpu_readback=0 cpu_frame_copy=0 scene_running=0 content=waiting-for-tcp-start\n",
+        "draw3d: UI4 surface ready owner=kernel-app-3 session={} frame={} window={} output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} ui4_render=gpu-linear-render-copy-to-leased-surface msaa=0 tile64_resolve=0 cpu_readback=0 cpu_frame_copy=0 scene_running=0 content=waiting-for-tcp-start\n",
         surface.session.raw(),
         surface.frame.raw(),
         surface.window.raw(),
