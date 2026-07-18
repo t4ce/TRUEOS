@@ -1062,10 +1062,9 @@ fn vmexit_is_preserve(lr: LaunchResult) -> bool {
     let vm_id = current_vm_id_for_log();
     lr.entered != 0
         && lr.launch_failed == 0
-        && ((lr.exit_reason & 0xFFFF) == VMEXIT_REASON_VMCALL
-            || vm_slot(vm_id)
-                .map(|vm| vm.preserve_exit.load(Ordering::Acquire))
-                .unwrap_or(false))
+        && vm_slot(vm_id)
+            .map(|vm| vm.preserve_exit.load(Ordering::Acquire))
+            .unwrap_or(false)
 }
 
 fn snapshot_on_preserve_exit(vm_id: u8) {
@@ -2771,6 +2770,13 @@ async fn vmx_launch_once_with_ept(
                 match crate::hv::vmcall::dispatch(vm_id) {
                     crate::hv::vmcall::DispatchOutcome::Resume => {}
                     crate::hv::vmcall::DispatchOutcome::Stop => break,
+                    crate::hv::vmcall::DispatchOutcome::Preserve => {
+                        preserve_requested = true;
+                        if let Some(vm) = vm {
+                            vm.preserve_exit.store(true, Ordering::Release);
+                        }
+                        break;
+                    }
                     crate::hv::vmcall::DispatchOutcome::Yield => {
                         clear_current_vm_id();
                         Timer::after(EmbassyDuration::from_millis(1)).await;

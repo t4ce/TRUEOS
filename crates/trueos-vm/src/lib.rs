@@ -71,6 +71,7 @@ pub mod vmcall {
     pub const OP_PING: u32 = 0x02;
     pub const OP_UNIX_TIME: u32 = 0x03;
     pub const OP_MONOTONIC_NANOS: u32 = 0x08;
+    pub const OP_LIFECYCLE_PAUSE: u32 = 0x09;
     pub const OP_BP_CPU_COUNT: u32 = 0x07;
     pub const OP_NET_TCP_WRITE: u32 = 0x10;
     pub const OP_NET_TCP_READ: u32 = 0x11;

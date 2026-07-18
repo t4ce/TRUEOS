@@ -32,6 +32,7 @@ pub const OP_SLEEP_MS: u32 = 0x05; // cooperative host sleep before resume
 pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload is random bytes
 pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
 pub const OP_MONOTONIC_NANOS: u32 = 0x08; // response_data = host monotonic nanos
+pub const OP_LIFECYCLE_PAUSE: u32 = 0x09; // tagged Blueprint pause + snapshot + stop
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
@@ -188,6 +189,7 @@ pub struct CommPage {
 pub enum DispatchOutcome {
     Resume,
     Stop,
+    Preserve,
     Yield,
     SleepMs(u64),
 }
@@ -434,7 +436,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
     match op {
         OP_PRESERVE => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
-            DispatchOutcome::Stop
+            DispatchOutcome::Preserve
+        }
+        OP_LIFECYCLE_PAUSE => match crate::hv::request_replicatable_pause(vm_id) {
+            Ok(true) => {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+                DispatchOutcome::Preserve
+            }
+            Ok(false) | Err(_) => {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                DispatchOutcome::Resume
+            }
         }
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
