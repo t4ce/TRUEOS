@@ -370,6 +370,16 @@ pub(crate) fn map_render_ppgtt_range(gpu: u64, phys: u64, bytes: usize) -> bool 
         .is_some()
 }
 
+pub(crate) fn map_render_ppgtt_scanout_range(gpu: u64, phys: u64, bytes: usize) -> bool {
+    let mut guard = RENDER_PPGTT.lock();
+    let Some(ppgtt) = guard.as_mut() else {
+        return false;
+    };
+    ppgtt
+        .map_scanout_range(crate::intel::ppgtt::PpgttRange { gpu, phys, bytes })
+        .is_some()
+}
+
 pub(crate) fn unmap_render_ppgtt_range(gpu: u64, bytes: usize) -> bool {
     let mut guard = RENDER_PPGTT.lock();
     let Some(ppgtt) = guard.as_mut() else {

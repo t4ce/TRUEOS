@@ -11,10 +11,10 @@ from draw3d_celestial_garden import GardenMesh, add_box, add_octahedron, radial_
 from draw3d_house_demo import Draw3dClient
 
 
-BACKGROUND = (5, 9, 20, 255)
 DEFAULT_CELLS = 128
 DEFAULT_CHUNK_CELLS = 26
 DEFAULT_WORLD_SIZE = 64.0
+DEFAULT_ORBIT_SPEED = math.radians(8.0)
 
 VIEWS = {
     "river": ((-38.0, 25.0, 42.0), (0.0, 0.5, 0.0), 52.0),
@@ -274,7 +274,25 @@ def build_world_details(world_size=DEFAULT_WORLD_SIZE):
     )
 
 
-def populate(client, cells=DEFAULT_CELLS, chunk_cells=DEFAULT_CHUNK_CELLS, world_size=DEFAULT_WORLD_SIZE):
+def set_orbit(client, speed=DEFAULT_ORBIT_SPEED):
+    look_at = (0.0, 7.0, 0.0)
+    client.camera(
+        (68.0, 11.0, 0.0),
+        look_at,
+        VIEWS["overview"][2],
+        orbit_scale=(68.0, 62.0),
+        orbit_rotation=(math.radians(-3.5), 0.0, math.radians(3.5)),
+        orbit_speed=speed,
+    )
+
+
+def populate(
+    client,
+    cells=DEFAULT_CELLS,
+    chunk_cells=DEFAULT_CHUNK_CELLS,
+    world_size=DEFAULT_WORLD_SIZE,
+    orbit_speed=DEFAULT_ORBIT_SPEED,
+):
     client.stop()
     client.clear()
     position, target, fov = VIEWS["overview"]
@@ -298,7 +316,9 @@ def populate(client, cells=DEFAULT_CELLS, chunk_cells=DEFAULT_CHUNK_CELLS, world
             )
         client.mesh(mesh_id, color, mesh.vertices, mesh.faces)
         client.instance(80_000 + mesh_id, mesh_id, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
-    client.start(BACKGROUND)
+    set_orbit(client, orbit_speed)
+    # Empty StartScene preserves alpha so UI4 can composite the world over its desktop.
+    client.start()
     return len(terrain_chunks), len(detail_meshes)
 
 
@@ -320,21 +340,44 @@ def main():
     parser.add_argument("--cells", type=int, default=DEFAULT_CELLS)
     parser.add_argument("--chunk-cells", type=int, default=DEFAULT_CHUNK_CELLS)
     parser.add_argument("--world-size", type=float, default=DEFAULT_WORLD_SIZE)
+    parser.add_argument(
+        "--orbit-speed",
+        type=float,
+        default=DEFAULT_ORBIT_SPEED,
+        help="camera-orbit speed in radians per second (default: 8 degrees/second)",
+    )
     parser.add_argument("--settle", type=float, default=4.0)
     parser.add_argument("--output-dir", type=Path, default=Path("bld/draw3d-captures"))
+    parser.add_argument(
+        "--capture",
+        action="store_true",
+        help="opt in to rendering the three diagnostic PNG views",
+    )
     args = parser.parse_args()
 
     client = Draw3dClient(args.host)
     try:
-        terrain_count, detail_count = populate(client, args.cells, args.chunk_cells, args.world_size)
-        for view_name in ("river", "platforms", "overview"):
-            capture_view(client, view_name, args.output_dir, args.settle)
+        terrain_count, detail_count = populate(
+            client,
+            args.cells,
+            args.chunk_cells,
+            args.world_size,
+            args.orbit_speed,
+        )
+        if args.capture:
+            try:
+                for view_name in ("river", "platforms", "overview"):
+                    capture_view(client, view_name, args.output_dir, args.settle)
+            finally:
+                set_orbit(client, args.orbit_speed)
         stats = client.stats()
         print(
             f"grid={args.cells}x{args.cells} logical_quads={args.cells * args.cells} "
             f"terrain_meshes={terrain_count} detail_meshes={detail_count} "
             f"scene_meshes={stats[0]} instances={stats[1]} vertices={stats[2]} "
-            f"faces={stats[4]} mesh_bytes={stats[5]} final_view=overview"
+            f"faces={stats[4]} mesh_bytes={stats[5]} "
+            f"orbit_speed={args.orbit_speed:.9f} background=transparent "
+            f"captures={int(args.capture)} final_view=orbit"
         )
     finally:
         client.close()

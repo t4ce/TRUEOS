@@ -158,7 +158,7 @@ pub fn init_once() {
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
     crate::log!(
-        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} ppgtt=pat0-wb ggtt=system-memory-address-only pat=[wb,wc,wt,uc,wb,wb,wb,wb]\n",
+        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} ppgtt_default=pat0-wb ppgtt_scanout=pat3-uc ggtt=system-memory-address-only pat=[wb,wc,wt,uc,wb,wb,wb,wb]\n",
         pat_ready as u8,
         display_device_name(dev.device_id),
         dev.device_id,
@@ -1146,7 +1146,7 @@ pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64
     }
     if !DISPLAY_GGTT_POLICY_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log!(
-            "intel/display-cache-contract: accepted=1 device=0x{:04X} render_ppgtt=pat0-wb display_ggtt=address-present-only system_memory=1 cpu_surface_flush=not-part-of-mapping render_release=required\n",
+            "intel/display-cache-contract: accepted=1 device=0x{:04X} render_ppgtt=pat3-uc-for-direct-scanout display_ggtt=address-present-only system_memory=1 cpu_surface_flush=not-part-of-mapping render_release=required\n",
             dev.device_id,
         );
     }

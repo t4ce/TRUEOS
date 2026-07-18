@@ -471,7 +471,7 @@ fn prepare_resident_scene_direct_ui4_target(
     let gpu = GPU_VA_DRAW3D_UI4_FRAME_BASE
         .checked_add(slot as u64 * GPU_VA_DRAW3D_UI4_FRAME_STRIDE)
         .ok_or("resident-scene-direct-ui4-address")?;
-    if !map_render_ppgtt_range(gpu, destination.phys, destination.bytes) {
+    if !map_render_ppgtt_scanout_range(gpu, destination.phys, destination.bytes) {
         return Err("resident-scene-direct-ui4-map");
     }
     mappings[slot] = Some(ResidentSceneDirectUi4Mapping {
@@ -481,7 +481,7 @@ fn prepare_resident_scene_direct_ui4_target(
     });
     crate::log_info!(
         target: "render";
-        "draw3d: acquired UI4 triple buffer render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} persistent_render_va=1 hot_remap=0\n",
+        "draw3d: acquired UI4 triple buffer render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} ppgtt_pat=3 ppgtt_cache=uc leaf_readback=verified persistent_render_va=1 hot_remap=0\n",
         slot,
         gpu,
         destination.phys,
