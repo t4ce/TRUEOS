@@ -286,8 +286,8 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
 }
 
 pub(crate) use self::display::{
-    CompositionDamageRect, LiveOverlayRect, PrimaryPlaneSource, PrimaryPlaneSourceFormat,
-    RgbaOverlayTile,
+    CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
+    PrimaryPlaneSourceFormat, RgbaOverlayTile,
 };
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
@@ -346,7 +346,7 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles(
 
 pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
     tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRect,
+    damage: CompositionDamageRegion,
     reason: &str,
 ) -> bool {
     self::display::present_premultiplied_rgba_primary_tiles_damage(tiles, damage, reason)
@@ -586,7 +586,7 @@ pub(crate) fn present_rgba_overlay_tiles_on_slot(
 pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
-    damage: CompositionDamageRect,
+    damage: CompositionDamageRegion,
     reason: &str,
 ) -> bool {
     self::display::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
@@ -1011,17 +1011,123 @@ pub(crate) fn empty() -> Buf {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) fn dma_flush(ptr: *mut u8, len: usize) {
+fn dma_flush_cache_lines(ptr: *mut u8, len: usize) {
     unsafe {
-        use core::arch::x86_64::{_mm_clflush, _mm_mfence};
+        use core::arch::x86_64::_mm_clflush;
         let mut p = (ptr as usize) & !63usize;
         let end = (ptr as usize).saturating_add(len);
         while p < end {
             _mm_clflush(p as *const _);
-            p += 64;
+            let Some(next) = p.checked_add(64) else {
+                break;
+            };
+            p = next;
         }
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn dma_flush_cache_lines(_ptr: *mut u8, _len: usize) {}
+
+#[cfg(target_arch = "x86_64")]
+fn dma_flush_fence() {
+    unsafe {
+        use core::arch::x86_64::_mm_mfence;
         _mm_mfence();
     }
 }
+
 #[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn dma_flush(_ptr: *mut u8, _len: usize) {}
+fn dma_flush_fence() {}
+
+pub(crate) fn dma_flush(ptr: *mut u8, len: usize) {
+    dma_flush_cache_lines(ptr, len);
+    dma_flush_fence();
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DmaFlushRows {
+    ptr: *mut u8,
+    row_bytes: usize,
+    row_stride: usize,
+    rows: usize,
+}
+
+impl DmaFlushRows {
+    pub(crate) const EMPTY: Self = Self::new(core::ptr::null_mut(), 0, 0, 0);
+
+    pub(crate) const fn new(
+        ptr: *mut u8,
+        row_bytes: usize,
+        row_stride: usize,
+        rows: usize,
+    ) -> Self {
+        Self {
+            ptr,
+            row_bytes,
+            row_stride,
+            rows,
+        }
+    }
+}
+
+fn dma_flush_rows_span_len(span: DmaFlushRows) -> Option<usize> {
+    if span.row_bytes == 0 || span.rows == 0 {
+        return Some(0);
+    }
+    if span.ptr.is_null() || (span.rows > 1 && span.row_stride < span.row_bytes) {
+        return None;
+    }
+    let last_row_offset = span.row_stride.checked_mul(span.rows - 1)?;
+    let total_span = last_row_offset.checked_add(span.row_bytes)?;
+    (span.ptr as usize).checked_add(total_span)?;
+    Some(total_span)
+}
+
+/// Validate every strided set before touching a cache line, then flush the
+/// complete collection with one final visibility fence.
+pub(crate) fn dma_flush_strided_row_spans(spans: &[DmaFlushRows]) -> bool {
+    if spans
+        .iter()
+        .copied()
+        .any(|span| dma_flush_rows_span_len(span).is_none())
+    {
+        return false;
+    }
+
+    let mut flushed = false;
+    for span in spans.iter().copied() {
+        let Some(total_span) = dma_flush_rows_span_len(span) else {
+            unreachable!("DMA flush spans were prevalidated");
+        };
+        if total_span == 0 {
+            continue;
+        }
+        if span.rows == 1 || span.row_stride == span.row_bytes {
+            dma_flush_cache_lines(span.ptr, total_span);
+        } else {
+            for row in 0..span.rows {
+                // Validation of the final row proves every earlier offset.
+                let offset = span.row_stride * row;
+                dma_flush_cache_lines(unsafe { span.ptr.add(offset) }, span.row_bytes);
+            }
+        }
+        flushed = true;
+    }
+    if flushed {
+        dma_flush_fence();
+    }
+    true
+}
+
+/// Flush `rows` cacheable DMA spans separated by `row_stride`, then establish
+/// one visibility point for the complete set. This preserves `dma_flush`'s
+/// CLFLUSH + MFENCE contract without paying one MFENCE per scanout row.
+pub(crate) fn dma_flush_strided_rows(
+    ptr: *mut u8,
+    row_bytes: usize,
+    row_stride: usize,
+    rows: usize,
+) -> bool {
+    dma_flush_strided_row_spans(&[DmaFlushRows::new(ptr, row_bytes, row_stride, rows)])
+}

@@ -416,6 +416,8 @@ struct PreparedGpuFontCoverageEntry {
     optical_bias_px: f32,
 }
 
+const ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS: u32 = 8;
+
 pub(crate) struct GpuFontJob<'a> {
     pub(crate) entries: &'a [GpuFontJobEntry<'a>],
     pub(crate) font: GpuFontFace,
@@ -2165,6 +2167,96 @@ fn include_coverage_point(bounds: &mut Option<(f32, f32, f32, f32)>, x: f32, y: 
     });
 }
 
+/// Return the exact segment envelope consumed by the analytical coverage
+/// kernel. Control points deliberately do not participate by themselves:
+/// they can sit well outside a quadratic or cubic while the flattened curve
+/// remains safely inside them. Keeping those points in the output-edge audit
+/// made an otherwise valid outline fail only after its ppem was increased.
+fn flattened_outline_bounds(
+    ops: &[[u32; 8]],
+    subdivisions: u32,
+) -> Result<(f32, f32, f32, f32), &'static str> {
+    if !(1..=16).contains(&subdivisions) {
+        return Err("font-coverage-subdivisions");
+    }
+
+    let point = |op: &[u32; 8], word: usize| -> Result<[f32; 2], &'static str> {
+        let value = [f32::from_bits(op[word]), f32::from_bits(op[word + 1])];
+        value
+            .iter()
+            .all(|component| component.is_finite())
+            .then_some(value)
+            .ok_or("font-coverage-outline-point")
+    };
+    let mut bounds = None;
+    let mut current = [0.0f32; 2];
+    let mut contour_start = current;
+    let mut have_current = false;
+    for op in ops {
+        match op[0] {
+            0 => {
+                current = point(op, 1)?;
+                contour_start = current;
+                have_current = true;
+            }
+            1 if have_current => {
+                let next = point(op, 1)?;
+                include_coverage_point(&mut bounds, current[0], current[1]);
+                include_coverage_point(&mut bounds, next[0], next[1]);
+                current = next;
+            }
+            2 if have_current => {
+                let start = current;
+                let p0 = point(op, 1)?;
+                let p1 = point(op, 3)?;
+                include_coverage_point(&mut bounds, current[0], current[1]);
+                for step in 1..=subdivisions {
+                    let t = step as f32 / subdivisions as f32;
+                    let one = 1.0 - t;
+                    let next = [
+                        one * one * start[0] + 2.0 * one * t * p0[0] + t * t * p1[0],
+                        one * one * start[1] + 2.0 * one * t * p0[1] + t * t * p1[1],
+                    ];
+                    include_coverage_point(&mut bounds, next[0], next[1]);
+                    current = next;
+                }
+            }
+            3 if have_current => {
+                let start = current;
+                let p0 = point(op, 1)?;
+                let p1 = point(op, 3)?;
+                let p2 = point(op, 5)?;
+                include_coverage_point(&mut bounds, current[0], current[1]);
+                for step in 1..=subdivisions {
+                    let t = step as f32 / subdivisions as f32;
+                    let one = 1.0 - t;
+                    let next = [
+                        one * one * one * start[0]
+                            + 3.0 * one * one * t * p0[0]
+                            + 3.0 * one * t * t * p1[0]
+                            + t * t * t * p2[0],
+                        one * one * one * start[1]
+                            + 3.0 * one * one * t * p0[1]
+                            + 3.0 * one * t * t * p1[1]
+                            + t * t * t * p2[1],
+                    ];
+                    include_coverage_point(&mut bounds, next[0], next[1]);
+                    current = next;
+                }
+            }
+            4 if have_current => {
+                include_coverage_point(&mut bounds, current[0], current[1]);
+                include_coverage_point(&mut bounds, contour_start[0], contour_start[1]);
+                current = contour_start;
+                have_current = false;
+            }
+            0..=4 => {}
+            _ => return Err("font-coverage-outline-op"),
+        }
+    }
+    bounds.ok_or("font-coverage-outline-bounds")
+}
+
 fn transform_outline_to_raster(
     source: &[[u32; 8]],
     units_per_em: u16,
@@ -2172,7 +2264,14 @@ fn transform_outline_to_raster(
     quality: GpuFontRasterQuality,
     ppem: f32,
     positioning: GpuFontJobPositioning,
-) -> Result<(Vec<[u32; 8]>, (f32, f32, f32, f32)), &'static str> {
+) -> Result<
+    (
+        Vec<[u32; 8]>,
+        (f32, f32, f32, f32),
+        (f32, f32, f32, f32),
+    ),
+    &'static str,
+> {
     if source.is_empty() || units_per_em == 0 {
         return Err("font-coverage-outline-empty");
     }
@@ -2239,7 +2338,12 @@ fn transform_outline_to_raster(
             include_coverage_point(&mut bounds, x, y);
         }
     }
-    Ok((transformed, bounds.ok_or("font-coverage-outline-bounds")?))
+    let conservative_bounds = bounds.ok_or("font-coverage-outline-bounds")?;
+    let flattened_bounds = flattened_outline_bounds(
+        transformed.as_slice(),
+        ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
+    )?;
+    Ok((transformed, conservative_bounds, flattened_bounds))
 }
 
 fn coverage_integer_rect(
@@ -2348,6 +2452,7 @@ fn create_gpu_font_coverage_mask_at_raster(
 
     let mut prepared = Vec::with_capacity(entries.len());
     let mut union_rect: Option<(i32, i32, i32, i32)> = None;
+    let mut audit_union_rect: Option<(i32, i32, i32, i32)> = None;
     let mut ppem_min = f32::MAX;
     let mut ppem_max = 0.0f32;
     let mut optical_bias_max_px = 0.0f32;
@@ -2368,7 +2473,7 @@ fn create_gpu_font_coverage_mask_at_raster(
             .ok_or("font-coverage-ineligible")?;
         let optical_bias_px = small_font_optical_bias_px(ppem);
         let outline = crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?;
-        let (ops, bounds) = transform_outline_to_raster(
+        let (ops, bounds, flattened_bounds) = transform_outline_to_raster(
             outline.ops.as_slice(),
             outline.units_per_em,
             entry,
@@ -2377,11 +2482,21 @@ fn create_gpu_font_coverage_mask_at_raster(
             positioning,
         )?;
         let rect = coverage_integer_rect(bounds, optical_bias_px)?;
+        let audit_rect = coverage_integer_rect(flattened_bounds, optical_bias_px)?;
         union_rect = Some(match union_rect {
             Some(union) => {
                 (union.0.min(rect.0), union.1.min(rect.1), union.2.max(rect.2), union.3.max(rect.3))
             }
             None => rect,
+        });
+        audit_union_rect = Some(match audit_union_rect {
+            Some(union) => (
+                union.0.min(audit_rect.0),
+                union.1.min(audit_rect.1),
+                union.2.max(audit_rect.2),
+                union.3.max(audit_rect.3),
+            ),
+            None => audit_rect,
         });
         ppem_min = ppem_min.min(ppem);
         ppem_max = ppem_max.max(ppem);
@@ -2412,7 +2527,7 @@ fn create_gpu_font_coverage_mask_at_raster(
             &storage,
             entry.ops.as_slice(),
             rect,
-            8,
+            ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
             entry.optical_bias_px,
         ) {
             return Err("font-coverage-dispatch");
@@ -2422,26 +2537,31 @@ fn create_gpu_font_coverage_mask_at_raster(
     let audit = storage
         .nonzero_audit()
         .ok_or("font-coverage-empty-output")?;
-    let audit_right = u32::try_from(audit.bounds.x)
-        .ok()
-        .and_then(|x| x.checked_add(audit.bounds.width))
-        .ok_or("font-coverage-audit-range")?;
-    let audit_bottom = u32::try_from(audit.bounds.y)
-        .ok()
-        .and_then(|y| y.checked_add(audit.bounds.height))
-        .ok_or("font-coverage-audit-range")?;
-    const EDGE_AUDIT_SLOP_PX: u32 = 3;
-    if audit.bounds.x > EDGE_AUDIT_SLOP_PX as i32
-        || audit.bounds.y > EDGE_AUDIT_SLOP_PX as i32
-        || width.saturating_sub(audit_right) > EDGE_AUDIT_SLOP_PX
-        || height.saturating_sub(audit_bottom) > EDGE_AUDIT_SLOP_PX
+    let expected = audit_union_rect.ok_or("font-coverage-empty")?;
+    let expected_local = (
+        i64::from(expected.0) - i64::from(union.0),
+        i64::from(expected.1) - i64::from(union.1),
+        i64::from(expected.2) - i64::from(union.0),
+        i64::from(expected.3) - i64::from(union.1),
+    );
+    let occupied = (
+        i64::from(audit.bounds.x),
+        i64::from(audit.bounds.y),
+        i64::from(audit.bounds.x) + i64::from(audit.bounds.width),
+        i64::from(audit.bounds.y) + i64::from(audit.bounds.height),
+    );
+    const EDGE_AUDIT_SLOP_PX: i64 = 2;
+    if occupied.0 > expected_local.0 + EDGE_AUDIT_SLOP_PX
+        || occupied.1 > expected_local.1 + EDGE_AUDIT_SLOP_PX
+        || occupied.2 + EDGE_AUDIT_SLOP_PX < expected_local.2
+        || occupied.3 + EDGE_AUDIT_SLOP_PX < expected_local.3
     {
         return Err("font-coverage-truncated-output");
     }
 
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions=8 va=unique-resident audit=edge-span fallback=resident-triangles\n",
+        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span fallback=resident-triangles\n",
         font.registry_name(),
         prepared.len(),
         match positioning {
@@ -2457,10 +2577,15 @@ fn create_gpu_font_coverage_mask_at_raster(
         audit.bounds.y,
         audit.bounds.width,
         audit.bounds.height,
+        expected_local.0,
+        expected_local.1,
+        expected_local.2,
+        expected_local.3,
         audit.nonzero_pixels,
         ppem_min,
         ppem_max,
         optical_bias_max_px,
+        ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
     );
     Ok(GpuFontCoverageMask {
         storage,
@@ -3349,7 +3474,7 @@ mod tests {
             font_pixels: 20.0,
             slant: 0.0,
         };
-        let (_ops, bounds) = transform_outline_to_raster(
+        let (_ops, bounds, flattened_bounds) = transform_outline_to_raster(
             &source,
             1_000,
             entry,
@@ -3362,5 +3487,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bounds, (90.0, 40.0, 110.0, 60.0));
+        assert_eq!(flattened_bounds, bounds);
+    }
+
+    #[test]
+    fn flattened_bounds_ignore_cubic_control_point_overshoot() {
+        let f = f32::to_bits;
+        let ops = [
+            [0, f(0.0), f(0.0), 0, 0, 0, 0, 0],
+            [
+                3,
+                f(100.0),
+                f(0.0),
+                f(100.0),
+                f(100.0),
+                f(0.0),
+                f(100.0),
+                0,
+            ],
+            [4, 0, 0, 0, 0, 0, 0, 0],
+        ];
+        let bounds = flattened_outline_bounds(&ops, ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS)
+            .unwrap();
+        assert_eq!(bounds, (0.0, 0.0, 75.0, 100.0));
     }
 }

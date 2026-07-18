@@ -4,6 +4,7 @@
 //! not expose a guest/userspace ABI and it does not own presentation yet.
 
 pub(crate) mod blueprint_text;
+mod damage;
 mod dummy_ui4_consumer;
 mod frame_pool;
 mod gpgpu_preview_consumer;
@@ -12,6 +13,7 @@ mod screenshot;
 mod video_frame;
 mod window_broker;
 
+pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use dummy_ui4_consumer::dummy_ui4_consumer_service_task;
 pub(crate) use frame_pool::{
     FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
@@ -40,8 +42,8 @@ pub(crate) use video_frame::{
 };
 
 pub(crate) use window_broker::{
-    DamageRect, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowPlane, WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
+    WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
     acknowledge_window_frame, advance_window_close_transitions, begin_window_session, close_window,
     create_window, finish_window_session, finish_window_session_with_request, publish_window_frame,
     replace_window_frame, set_window_placement, toggle_window_maximized,

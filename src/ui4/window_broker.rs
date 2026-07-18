@@ -7,7 +7,7 @@
 use alloc::vec::Vec;
 use spin::Mutex;
 
-use super::{FrameHandle, OutputId};
+use super::{DamageRect, DamageRegion, FrameHandle, OutputId};
 
 const MAX_WINDOWS: usize = 256;
 const MAX_WINDOWS_PER_SESSION: usize = 16;
@@ -104,49 +104,6 @@ impl WindowPlacement {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DamageRect {
-    pub(crate) x: u32,
-    pub(crate) y: u32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-}
-
-impl DamageRect {
-    pub(crate) const FULL: Self = Self {
-        x: 0,
-        y: 0,
-        width: u32::MAX,
-        height: u32::MAX,
-    };
-
-    const fn valid(self) -> bool {
-        self.width != 0 && self.height != 0
-    }
-
-    fn union(self, other: Self) -> Self {
-        if self == Self::FULL || other == Self::FULL {
-            return Self::FULL;
-        }
-        let x = self.x.min(other.x);
-        let y = self.y.min(other.y);
-        let right = self
-            .x
-            .saturating_add(self.width)
-            .max(other.x.saturating_add(other.width));
-        let bottom = self
-            .y
-            .saturating_add(self.height)
-            .max(other.y.saturating_add(other.height));
-        Self {
-            x,
-            y,
-            width: right.saturating_sub(x),
-            height: bottom.saturating_sub(y),
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowCreate {
     pub(crate) owner: WindowOwner,
     pub(crate) session: WindowSessionId,
@@ -211,7 +168,7 @@ pub(crate) struct WindowSnapshot {
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
     pub(crate) publish_serial: u64,
-    pub(crate) damage: Option<DamageRect>,
+    pub(crate) damage: Option<DamageRegion>,
     pub(crate) maximized: bool,
 }
 
@@ -246,7 +203,7 @@ struct WindowRecord {
     state: WindowState,
     revision: u64,
     publish_serial: u64,
-    damage: Option<DamageRect>,
+    damage: Option<DamageRegion>,
     restore_placement: Option<WindowPlacement>,
     close_transition: Option<WindowCloseTransition>,
 }
@@ -484,7 +441,7 @@ impl WindowBroker {
                 if let Some(transition) = transition {
                     window.state = WindowState::Closing;
                     window.close_transition = Some(transition);
-                    window.damage = Some(DamageRect::FULL);
+                    window.damage = Some(DamageRegion::FULL);
                     animated += 1;
                 } else {
                     if animate {
@@ -533,7 +490,7 @@ impl WindowBroker {
             let placement = close_transition_placement(transition.initial, elapsed_ms);
             if placement != window.placement {
                 window.placement = placement;
-                window.damage = Some(DamageRect::FULL);
+                window.damage = Some(DamageRegion::FULL);
                 window.revision = next_serial(window.revision);
             }
         }
@@ -844,10 +801,8 @@ pub(crate) fn publish_window_frame(
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
     window.revision = next_serial(window.revision);
-    window.damage = Some(match window.damage {
-        Some(previous) => previous.union(damage),
-        None => damage,
-    });
+    let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
+    pending.add(damage);
     Ok(window.publish_serial)
 }
 

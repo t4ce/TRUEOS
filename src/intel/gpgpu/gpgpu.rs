@@ -4024,9 +4024,18 @@ pub(crate) fn font_outline_coverage_r8(
 }
 
 /// Composite one R8 glyph layer in a single native two-dimensional dispatch.
+/// A valid layer that is fully outside the destination is already complete:
+/// panning a resident scene must not turn an empty clip into a GPU failure and
+/// demote all of its other analytical layers to triangle rendering.
 pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
-    let Some(params) = lower_glyph_mask_blit(blit) else {
+    if !blit.mask.is_valid()
+        || !blit.dst.is_valid()
+        || !rect_is_inside_mask(blit.mask, blit.mask_rect)
+    {
         return false;
+    }
+    let Some(params) = lower_glyph_mask_blit(blit) else {
+        return true;
     };
     submit_glyph_mask_2d(blit.mask, blit.dst, params, blit.color_rgba)
 }

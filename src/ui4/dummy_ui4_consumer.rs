@@ -529,7 +529,10 @@ fn present_plane_composition(
     }
 
     let mut changed = [false; MAX_COMPOSITION_WINDOWS];
-    let mut damage = None;
+    let mut content_damage = [false; MAX_COMPOSITION_WINDOWS];
+    let mut composition_changed = !state.initialized;
+    let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+    let mut damage = crate::intel::CompositionDamageRegion::EMPTY;
     for (slot, current) in next_windows.iter().flatten().enumerate() {
         let previous = state
             .windows
@@ -537,13 +540,22 @@ fn present_plane_composition(
             .flatten()
             .find(|previous| previous.id == current.id);
         changed[slot] = !state.initialized || previous != Some(current);
-        if changed[slot] {
-            damage = union_damage(damage, placement_damage(current.placement));
-        }
-        if let Some(previous) = previous
-            && previous.placement != current.placement
-        {
-            damage = union_damage(damage, placement_damage(previous.placement));
+        composition_changed |= changed[slot];
+        match previous {
+            None => {
+                add_placement_damage(&mut damage, current.placement, output_width, output_height)
+            }
+            Some(previous) if previous.placement != current.placement => {
+                add_placement_damage(&mut damage, previous.placement, output_width, output_height);
+                add_placement_damage(&mut damage, current.placement, output_width, output_height);
+            }
+            Some(previous) if previous.frame != current.frame => {
+                add_placement_damage(&mut damage, current.placement, output_width, output_height)
+            }
+            Some(previous) if previous.publish_serial != current.publish_serial => {
+                content_damage[slot] = true;
+            }
+            Some(_) => {}
         }
     }
     for previous in state.windows.iter().flatten() {
@@ -552,15 +564,17 @@ fn present_plane_composition(
             .flatten()
             .any(|current| current.id == previous.id)
         {
-            damage = union_damage(damage, placement_damage(previous.placement));
+            composition_changed = true;
+            add_placement_damage(&mut damage, previous.placement, output_width, output_height);
         }
     }
     if !state.initialized {
-        let (width, height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
-        damage = Some(crate::intel::CompositionDamageRect::new(0, 0, width, height));
+        damage = crate::intel::CompositionDamageRegion::from_rect(
+            crate::intel::CompositionDamageRect::new(0, 0, output_width, output_height),
+        );
     }
 
-    if let Some(damage) = damage {
+    if composition_changed {
         let mut leases = Vec::with_capacity(windows.len());
         for window in &windows {
             match acquire_published_frame(window.frame) {
@@ -578,6 +592,22 @@ fn present_plane_composition(
                 .copied()
                 .map(published_rgba_view)
                 .collect::<Result<_, _>>()?;
+            for (slot, (window, view)) in windows.iter().zip(views.iter()).enumerate() {
+                if !content_damage[slot] {
+                    continue;
+                }
+                let local = window
+                    .damage
+                    .unwrap_or_else(|| super::DamageRegion::from_rect(DamageRect::FULL));
+                add_mapped_window_damage(
+                    &mut damage,
+                    local,
+                    *view,
+                    window.placement,
+                    output_width,
+                    output_height,
+                );
+            }
             for (slot, view) in views.iter().enumerate() {
                 if changed[slot] {
                     crate::intel::dma_flush(view.virt, view.byte_len);
@@ -609,27 +639,29 @@ fn present_plane_composition(
                     expected_rgba: None,
                 })
                 .collect();
-            let presented = match target {
-                CompositionTarget::Primary => {
-                    crate::intel::present_premultiplied_rgba_primary_tiles_damage(
-                        &tiles,
-                        damage,
-                        "ui4-dummy-consumer-primary",
-                    )
+            if !damage.is_empty() {
+                let presented = match target {
+                    CompositionTarget::Primary => {
+                        crate::intel::present_premultiplied_rgba_primary_tiles_damage(
+                            &tiles,
+                            damage,
+                            "ui4-dummy-consumer-primary",
+                        )
+                    }
+                    CompositionTarget::Overlay(slot) => {
+                        let reason = match slot {
+                            super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2",
+                            super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
+                            _ => "ui4-overlay",
+                        };
+                        crate::intel::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
+                            slot, &tiles, damage, reason,
+                        )
+                    }
+                };
+                if !presented {
+                    return Err(DummyUi4ConsumerError::PresentFailed);
                 }
-                CompositionTarget::Overlay(slot) => {
-                    let reason = match slot {
-                        super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2",
-                        super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
-                        _ => "ui4-overlay",
-                    };
-                    crate::intel::present_premultiplied_rgba_overlay_tiles_on_slot_damage(
-                        slot, &tiles, damage, reason,
-                    )
-                }
-            };
-            if !presented {
-                return Err(DummyUi4ConsumerError::PresentFailed);
             }
             Ok(())
         })();
@@ -763,6 +795,110 @@ fn damage_union(
     )
 }
 
+fn add_placement_damage(
+    region: &mut crate::intel::CompositionDamageRegion,
+    placement: WindowPlacement,
+    output_width: u32,
+    output_height: u32,
+) {
+    if let Some(rect) = clipped_output_rect(
+        i64::from(placement.x),
+        i64::from(placement.y),
+        i64::from(placement.x).saturating_add(i64::from(placement.width)),
+        i64::from(placement.y).saturating_add(i64::from(placement.height)),
+        output_width,
+        output_height,
+    ) {
+        region.add(rect);
+    }
+}
+
+fn add_mapped_window_damage(
+    output: &mut crate::intel::CompositionDamageRegion,
+    local: super::DamageRegion,
+    view: FrameRgbaView,
+    placement: WindowPlacement,
+    output_width: u32,
+    output_height: u32,
+) {
+    for rect in local.rects() {
+        if let Some(rect) = map_window_damage_rect(
+            *rect,
+            view.width,
+            view.height,
+            placement,
+            output_width,
+            output_height,
+        ) {
+            output.add(rect);
+        }
+    }
+}
+
+fn map_window_damage_rect(
+    local: DamageRect,
+    source_width: u32,
+    source_height: u32,
+    placement: WindowPlacement,
+    output_width: u32,
+    output_height: u32,
+) -> Option<crate::intel::CompositionDamageRect> {
+    if source_width == 0 || source_height == 0 || placement.width == 0 || placement.height == 0 {
+        return None;
+    }
+    let local = local.intersection(DamageRect::new(0, 0, source_width, source_height))?;
+    let source_right = local.x.saturating_add(local.width);
+    let source_bottom = local.y.saturating_add(local.height);
+    let destination_left = scale_floor(local.x, placement.width, source_width);
+    let destination_top = scale_floor(local.y, placement.height, source_height);
+    let destination_right = scale_ceil(source_right, placement.width, source_width);
+    let destination_bottom = scale_ceil(source_bottom, placement.height, source_height);
+    clipped_output_rect(
+        i64::from(placement.x).saturating_add(i64::from(destination_left)),
+        i64::from(placement.y).saturating_add(i64::from(destination_top)),
+        i64::from(placement.x).saturating_add(i64::from(destination_right)),
+        i64::from(placement.y).saturating_add(i64::from(destination_bottom)),
+        output_width,
+        output_height,
+    )
+}
+
+fn scale_floor(coordinate: u32, destination_extent: u32, source_extent: u32) -> u32 {
+    (u64::from(coordinate).saturating_mul(u64::from(destination_extent)) / u64::from(source_extent))
+        .min(u64::from(u32::MAX)) as u32
+}
+
+fn scale_ceil(coordinate: u32, destination_extent: u32, source_extent: u32) -> u32 {
+    let numerator = u64::from(coordinate).saturating_mul(u64::from(destination_extent));
+    numerator
+        .saturating_add(u64::from(source_extent).saturating_sub(1))
+        .checked_div(u64::from(source_extent))
+        .unwrap_or(0)
+        .min(u64::from(u32::MAX)) as u32
+}
+
+fn clipped_output_rect(
+    left: i64,
+    top: i64,
+    right: i64,
+    bottom: i64,
+    output_width: u32,
+    output_height: u32,
+) -> Option<crate::intel::CompositionDamageRect> {
+    let left = left.clamp(0, i64::from(output_width));
+    let top = top.clamp(0, i64::from(output_height));
+    let right = right.clamp(0, i64::from(output_width));
+    let bottom = bottom.clamp(0, i64::from(output_height));
+    (right > left && bottom > top).then(|| {
+        crate::intel::CompositionDamageRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        )
+    })
+}
+
 fn union_damage(
     current: Option<crate::intel::CompositionDamageRect>,
     next: crate::intel::CompositionDamageRect,
@@ -771,15 +907,6 @@ fn union_damage(
         current
             .map(|current| damage_union(current, next))
             .unwrap_or(next),
-    )
-}
-
-fn placement_damage(placement: WindowPlacement) -> crate::intel::CompositionDamageRect {
-    crate::intel::CompositionDamageRect::new(
-        placement.x.max(0) as u32,
-        placement.y.max(0) as u32,
-        placement.width,
-        placement.height,
     )
 }
 
@@ -1180,5 +1307,44 @@ fn destroy_optional_frames(frames: [Option<FrameHandle>; 3]) {
 fn destroy_frames(frames: [FrameHandle; 3]) {
     for frame in frames {
         let _ = destroy_frame(frame);
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::*;
+
+    #[test]
+    fn producer_damage_scales_outward() {
+        let placement = WindowPlacement {
+            x: 10,
+            y: 20,
+            width: 33,
+            height: 33,
+            z: 0,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        assert_eq!(
+            map_window_damage_rect(DamageRect::new(1, 1, 1, 1), 100, 100, placement, 200, 200),
+            Some(crate::intel::CompositionDamageRect::new(10, 20, 1, 1))
+        );
+    }
+
+    #[test]
+    fn producer_damage_clips_negative_placement() {
+        let placement = WindowPlacement {
+            x: -25,
+            y: -10,
+            width: 100,
+            height: 80,
+            z: 0,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        assert_eq!(
+            map_window_damage_rect(DamageRect::FULL, 100, 80, placement, 100, 100),
+            Some(crate::intel::CompositionDamageRect::new(0, 0, 75, 70))
+        );
     }
 }
