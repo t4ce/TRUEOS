@@ -1,4 +1,4 @@
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
@@ -19,7 +19,6 @@ pub(crate) enum AppsPromptMode {
     Dl,
     Peer,
     Pause,
-    Unpause,
     Save,
     Load,
     Stop,
@@ -33,8 +32,7 @@ impl AppsPromptMode {
             Self::Online => Self::Dl,
             Self::Dl => Self::Peer,
             Self::Peer => Self::Pause,
-            Self::Pause => Self::Unpause,
-            Self::Unpause => Self::Save,
+            Self::Pause => Self::Save,
             Self::Save => Self::Load,
             Self::Load => Self::Stop,
             Self::Stop => Self::Status,
@@ -49,7 +47,6 @@ impl AppsPromptMode {
             Self::Dl => "dl",
             Self::Peer => "peer",
             Self::Pause => "pause",
-            Self::Unpause => "unpause",
             Self::Save => "save",
             Self::Load => "load",
             Self::Stop => "stop",
@@ -116,6 +113,54 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
     }
     table.emit_footer(|text| print_shell_line(io, text));
     print_hv_status(io);
+}
+
+fn replicatable_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
+    if state.pause_latched && (state.running || state.starting) {
+        "pause-pending"
+    } else if state.running {
+        "running"
+    } else if state.starting {
+        "starting"
+    } else if state.pause_latched && stored {
+        "paused"
+    } else if state.pause_latched {
+        "latch-pending"
+    } else {
+        "offline"
+    }
+}
+
+fn print_replicatable_vms(io: &'static dyn ShellBackend2) {
+    const HEADERS: &[&str; 4] = &["vmid", "blueprint", "state", "store"];
+    let table = TlbTable::with_width(HEADERS, line_width_for_backend(io).saturating_sub(2))
+        .with_max_col_widths(&[4, 0, 16, 8]);
+    let mut found = false;
+    table.emit_header(|text| print_shell_line(io, text));
+    for idx in 0..crate::hv::TRUEOS_VM_ID_LIMIT {
+        let vm_id = idx as u8;
+        let state = crate::hv::vm_state(vm_id);
+        if !state.replicatable || !(state.running || state.starting || state.pause_latched) {
+            continue;
+        }
+        found = true;
+        let stored = state.pause_snapshot_ready;
+        let vm_id_text = alloc::format!("{}", vm_id);
+        let blueprint = crate::hv::app_vm_archive(vm_id).unwrap_or_else(|| String::from("-"));
+        let row = [
+            vm_id_text.as_str(),
+            blueprint.as_str(),
+            replicatable_state_label(state, stored),
+            if stored { "saved" } else { "-" },
+        ];
+        table.emit_row(&row, |text| print_shell_line(io, text));
+    }
+    table.emit_footer(|text| print_shell_line(io, text));
+    if !found {
+        line(io, "apps: no running or paused replicatable Blueprints");
+    } else {
+        line(io, "apps: enter a vmid to toggle pause/resume");
+    }
 }
 
 fn format_bytes(bytes: usize) -> String {
@@ -490,20 +535,82 @@ fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, labe
     }
 }
 
-fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
+fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -> bool {
     match crate::hv::restore_snapshot(vm_id) {
         Ok(bytes) => {
             line(io, alloc::format!("apps: vm{} loaded {} bytes", vm_id, bytes).as_str());
             match crate::hv::start(vm_id, spawner, io, None) {
-                Ok(()) => line(io, alloc::format!("apps: vm{} unpause requested", vm_id).as_str()),
-                Err(crate::hv::StartError::AlreadyRunning) => {
-                    line(io, alloc::format!("apps: vm{} already running", vm_id).as_str())
+                Ok(()) => {
+                    line(io, alloc::format!("apps: vm{} resume requested", vm_id).as_str());
+                    true
                 }
-                Err(err) => line(io, alloc::format!("apps: unpause failed: {:?}", err).as_str()),
+                Err(crate::hv::StartError::AlreadyRunning) => {
+                    line(io, alloc::format!("apps: vm{} already running", vm_id).as_str());
+                    false
+                }
+                Err(err) => {
+                    line(io, alloc::format!("apps: resume failed: {:?}", err).as_str());
+                    false
+                }
             }
         }
-        Err(err) => line(io, alloc::format!("apps: load failed: {:?}", err).as_str()),
+        Err(err) => {
+            line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
+            false
+        }
     }
+}
+
+fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
+    let state = crate::hv::vm_state(vm_id);
+    if !state.supported {
+        line(io, alloc::format!("apps: unsupported vmid {}", vm_id).as_str());
+        print_replicatable_vms(io);
+        return;
+    }
+    if !state.replicatable {
+        line(io, alloc::format!("apps: vm{} is not tagged replicatable", vm_id).as_str());
+        print_replicatable_vms(io);
+        return;
+    }
+
+    if state.running || state.starting {
+        match crate::hv::request_replicatable_pause(vm_id) {
+            Ok(true) => line(io, alloc::format!("apps: vm{} pause requested", vm_id).as_str()),
+            Ok(false) => {
+                line(io, alloc::format!("apps: vm{} is not available for pause", vm_id).as_str())
+            }
+            Err(err) => line(io, alloc::format!("apps: pause failed: {:?}", err).as_str()),
+        }
+        return;
+    }
+
+    if state.pause_latched {
+        if !state.pause_snapshot_ready {
+            line(io, alloc::format!("apps: vm{} pause is still latching", vm_id).as_str());
+            return;
+        }
+        if load_vm(spawner, io, vm_id) {
+            crate::hv::mark_replicatable_resumed(vm_id);
+        }
+        return;
+    }
+
+    line(io, alloc::format!("apps: vm{} has no replicatable lifecycle latch", vm_id).as_str());
+    print_replicatable_vms(io);
+}
+
+fn pause_mode(spawner: &Spawner, io: &'static dyn ShellBackend2, args: &[String]) {
+    let Some(id) = args.first() else {
+        print_replicatable_vms(io);
+        return;
+    };
+    let Ok(vm_id) = id.parse::<u8>() else {
+        line(io, "apps: pause expects a vmid from the table");
+        print_replicatable_vms(io);
+        return;
+    };
+    toggle_replicatable_vm(spawner, io, vm_id);
 }
 
 fn load_remote(io: &'static dyn ShellBackend2, endpoint: &str, vm_id: u8) {
@@ -548,7 +655,7 @@ pub(crate) fn submit(
         Some("dl") => (AppsPromptMode::Dl, parts.map(String::from).collect()),
         Some("peer") => (AppsPromptMode::Peer, parts.map(String::from).collect()),
         Some("pause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
-        Some("unpause") => (AppsPromptMode::Unpause, parts.map(String::from).collect()),
+        Some("unpause") => (AppsPromptMode::Pause, parts.map(String::from).collect()),
         Some("save") => (AppsPromptMode::Save, parts.map(String::from).collect()),
         Some("load") => (AppsPromptMode::Load, parts.map(String::from).collect()),
         Some("stop") => (AppsPromptMode::Stop, parts.map(String::from).collect()),
@@ -568,10 +675,8 @@ pub(crate) fn submit(
             super::shell2_dl::submit_download(spawner, io, rest.join(" ").as_str())
         }
         AppsPromptMode::Peer => peer_app(spawner, io, rest),
-        AppsPromptMode::Pause => {
-            preserve_selected_or_all(io, parse_id(rest.first().map(String::as_str)), "pause")
-        }
-        AppsPromptMode::Unpause | AppsPromptMode::Load => {
+        AppsPromptMode::Pause => pause_mode(spawner, io, rest.as_slice()),
+        AppsPromptMode::Load => {
             let mut args = rest.iter();
             let first = args.next().map(String::as_str);
             if let Some(endpoint) = first.filter(|s| s.contains("://")) {
@@ -579,7 +684,7 @@ pub(crate) fn submit(
                 load_remote(io, endpoint, vm_id);
             } else {
                 let vm_id = parse_id(first).unwrap_or(0);
-                load_vm(spawner, io, vm_id);
+                let _ = load_vm(spawner, io, vm_id);
             }
         }
         AppsPromptMode::Save => {

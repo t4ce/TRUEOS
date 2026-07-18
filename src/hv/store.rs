@@ -31,7 +31,10 @@ fn boot_probe_ms() -> u64 {
 }
 
 static VM_STORE_ONLINE: AtomicBool = AtomicBool::new(false);
-static VM_STORE_DISK: Mutex<Option<block::DeviceHandle>> = Mutex::new(None);
+// A save formats a private ramdisk. Keep one handle per VM so pausing another
+// slot cannot replace an earlier slot's committed checkpoint.
+static VM_STORE_DISKS: [Mutex<Option<block::DeviceHandle>>; VM_STORE_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; VM_STORE_VM_ID_LIMIT];
 static VM_STORE_QUEUE: Mutex<Deque<Request, VM_STORE_QUEUE_CAP>> = Mutex::new(Deque::new());
 static VM_STORE_QUEUE_WAIT: WaitQueue = WaitQueue::new();
 static VM_STORE_REQ_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -241,6 +244,10 @@ fn vm_id_supported(vm_id: u8) -> bool {
     (vm_id as usize) < VM_STORE_VM_ID_LIMIT
 }
 
+fn vm_store_disk(vm_id: u8) -> Option<block::DeviceHandle> {
+    VM_STORE_DISKS.get(vm_id as usize).and_then(|slot| *slot.lock())
+}
+
 async fn read_committed_bytes(
     disk: block::DeviceHandle,
     vm_id: u8,
@@ -336,7 +343,7 @@ fn wait_until_online(timeout_ms: u64) -> bool {
     crate::wait::spin_until_timeout(timeout_ms, online)
 }
 
-fn current_committed_seq(vm_id: u8) -> u64 {
+pub(crate) fn current_committed_seq(vm_id: u8) -> u64 {
     VM_STORE_COMMITTED_SEQS
         .lock()
         .get(&vm_id)
@@ -535,7 +542,7 @@ pub async fn vm_store_replication_task() {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 }
-                                let Some(disk) = *VM_STORE_DISK.lock() else {
+                                let Some(disk) = vm_store_disk(id) else {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 };
@@ -768,9 +775,10 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             write_committed_manifest(disk, vm_id, seq)
                 .await
                 .map_err(VmStoreError::Write)?;
-            *VM_STORE_DISK.lock() = Some(disk);
+            if let Some(slot) = VM_STORE_DISKS.get(vm_id as usize) {
+                *slot.lock() = Some(disk);
+            }
             let mut seqs = VM_STORE_COMMITTED_SEQS.lock();
-            seqs.clear();
             seqs.insert(vm_id, seq);
             VM_STORE_COMMIT_WAIT.notify_all();
             crate::log!(
@@ -785,7 +793,7 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             Ok(VmStoreResponse::Saved(bytes.len()))
         }
         RequestKind::Load(vm_id) => {
-            let Some(disk) = *VM_STORE_DISK.lock() else {
+            let Some(disk) = vm_store_disk(vm_id) else {
                 return Err(VmStoreError::MissingSnapshot);
             };
             let manifest_path = vm_manifest_path(vm_id);

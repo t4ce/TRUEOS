@@ -315,6 +315,8 @@ static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct ResidentSceneMsaaColorTarget {
@@ -351,11 +353,7 @@ fn prepare_resident_scene_msaa_allocation(
     }
     if !map_render_ppgtt_range(gpu_addr, storage_phys, required_bytes) {
         if let Some(previous) = previous {
-            let _ = map_render_ppgtt_range(
-                gpu_addr,
-                previous.storage_phys,
-                previous.storage_bytes,
-            );
+            let _ = map_render_ppgtt_range(gpu_addr, previous.storage_phys, previous.storage_bytes);
         }
         crate::dma::dealloc(storage_virt, required_bytes);
         return Err("resident-scene-msaa-map");
@@ -388,23 +386,9 @@ fn prepare_resident_scene_msaa_color(
     if !device_is_gfx125(device_id) {
         return Err("resident-scene-msaa-device");
     }
-    let aligned_width = crate::intel::align_up(
-        target_width,
-        RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS,
-    )
-    .ok_or("resident-scene-msaa-shape")?;
-    let aligned_height = crate::intel::align_up(
-        target_height,
-        RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS,
-    )
-    .ok_or("resident-scene-msaa-shape")?;
-    let pitch_bytes = aligned_width
-        .checked_mul(core::mem::size_of::<u32>())
-        .ok_or("resident-scene-msaa-shape")?;
-    let storage_bytes = pitch_bytes
-        .checked_mul(aligned_height)
-        .and_then(|bytes| bytes.checked_mul(4))
-        .ok_or("resident-scene-msaa-shape")?;
+    let (pitch_bytes, _aligned_height, storage_bytes) =
+        resident_scene_msaa_color_layout(target_width, target_height)
+            .ok_or("resident-scene-msaa-shape")?;
     let allocation = prepare_resident_scene_msaa_allocation(
         &RESIDENT_SCENE_MSAA_COLOR,
         GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
@@ -423,6 +407,34 @@ fn prepare_resident_scene_msaa_color(
     Ok(ResidentSceneMsaaColorTarget { surface })
 }
 
+fn resident_scene_msaa_color_layout(
+    target_width: usize,
+    target_height: usize,
+) -> Option<(usize, usize, usize)> {
+    let aligned_width =
+        crate::intel::align_up(target_width, RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS)?;
+    let aligned_height =
+        crate::intel::align_up(target_height, RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS)?;
+    let pitch_bytes = aligned_width.checked_mul(core::mem::size_of::<u32>())?;
+    let storage_bytes = pitch_bytes.checked_mul(aligned_height)?.checked_mul(4)?;
+    Some((pitch_bytes, aligned_height, storage_bytes))
+}
+
+fn resident_scene_msaa_depth_layout(
+    target_width: usize,
+    target_height: usize,
+) -> Option<(usize, usize, usize)> {
+    let sample_width = target_width.checked_mul(2)?;
+    let sample_height = target_height.checked_mul(2)?;
+    let row_bytes = sample_width.checked_mul(core::mem::size_of::<f32>())?;
+    let pitch_bytes =
+        crate::intel::align_up(row_bytes, RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES)?;
+    let aligned_sample_height =
+        crate::intel::align_up(sample_height, RESIDENT_SCENE_MSAA_DEPTH_TILE_HEIGHT_SAMPLE_ROWS)?;
+    let storage_bytes = pitch_bytes.checked_mul(aligned_sample_height)?;
+    Some((pitch_bytes, aligned_sample_height, storage_bytes))
+}
+
 fn prepare_resident_scene_msaa_depth(
     device_id: u16,
     target_width: usize,
@@ -431,28 +443,9 @@ fn prepare_resident_scene_msaa_depth(
     if !device_is_gfx125(device_id) {
         return Err("draw3d-msaa-depth-device");
     }
-    let sample_width = target_width
-        .checked_mul(2)
-        .ok_or("draw3d-msaa-depth-shape")?;
-    let sample_height = target_height
-        .checked_mul(2)
-        .ok_or("draw3d-msaa-depth-shape")?;
-    let row_bytes = sample_width
-        .checked_mul(core::mem::size_of::<f32>())
-        .ok_or("draw3d-msaa-depth-shape")?;
-    let pitch_bytes = crate::intel::align_up(
-        row_bytes,
-        RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES,
-    )
-    .ok_or("draw3d-msaa-depth-shape")?;
-    let aligned_sample_height = crate::intel::align_up(
-        sample_height,
-        RESIDENT_SCENE_MSAA_DEPTH_TILE_HEIGHT_SAMPLE_ROWS,
-    )
-    .ok_or("draw3d-msaa-depth-shape")?;
-    let storage_bytes = pitch_bytes
-        .checked_mul(aligned_sample_height)
-        .ok_or("draw3d-msaa-depth-shape")?;
+    let (pitch_bytes, aligned_sample_height, storage_bytes) =
+        resident_scene_msaa_depth_layout(target_width, target_height)
+            .ok_or("draw3d-msaa-depth-shape")?;
     let _allocation = prepare_resident_scene_msaa_allocation(
         &RESIDENT_SCENE_MSAA_DEPTH,
         GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
@@ -469,6 +462,36 @@ fn prepare_resident_scene_msaa_depth(
         write_enabled: false,
         compare_function: COMPARE_FUNCTION_LEQUAL,
     })
+}
+
+#[cfg(test)]
+mod resident_scene_msaa_layout_tests {
+    use super::{
+        GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE, GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
+        resident_scene_msaa_color_layout, resident_scene_msaa_depth_layout,
+    };
+
+    #[test]
+    fn gridpaper_extent_uses_matching_tile64_color_and_depth_storage() {
+        let color = resident_scene_msaa_color_layout(810, 1153).unwrap();
+        let depth = resident_scene_msaa_depth_layout(810, 1153).unwrap();
+        assert_eq!(color, (3328, 1216, 16_187_392));
+        assert_eq!(depth, (6656, 2432, 16_187_392));
+    }
+
+    #[test]
+    fn maximum_scene_fits_each_reserved_va_window() {
+        let color = resident_scene_msaa_color_layout(2560, 1440).unwrap();
+        let depth = resident_scene_msaa_depth_layout(2560, 1440).unwrap();
+        assert_eq!(color, (10_240, 1472, 60_293_120));
+        assert_eq!(depth, (20_480, 2944, 60_293_120));
+        assert!(color.2 <= 64 * 1024 * 1024);
+        assert!(depth.2 <= 64 * 1024 * 1024);
+        assert_eq!(
+            GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE - GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
+            64 * 1024 * 1024
+        );
+    }
 }
 
 fn prepare_resident_scene_depth(
@@ -800,12 +823,22 @@ fn submit_resident_triangle_scene_capture(
         if !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
+        let raster_quality = if raster_quality == ResidentSceneRasterQuality::Multisample4x
+            && !device_is_gfx125(warm.device_id)
+        {
+            if !RESIDENT_SCENE_MSAA_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::log_warn!(
+                    target: "render";
+                    "resident-scene-msaa: requested=4 effective=1 reason=tile64-msaa-requires-gfx125 device=0x{:04X}\n",
+                    warm.device_id,
+                );
+            }
+            ResidentSceneRasterQuality::SingleSample
+        } else {
+            raster_quality
+        };
         let msaa_color = if raster_quality == ResidentSceneRasterQuality::Multisample4x {
-            Some(prepare_resident_scene_msaa_color(
-                warm.device_id,
-                target_width,
-                target_height,
-            )?)
+            Some(prepare_resident_scene_msaa_color(warm.device_id, target_width, target_height)?)
         } else {
             None
         };
@@ -814,6 +847,18 @@ fn submit_resident_triangle_scene_capture(
         } else {
             (GPU_VA_STREAMOUT_BASE, target_pitch)
         };
+        if let Some(target) = msaa_color
+            && !RESIDENT_SCENE_MSAA_CONTRACT_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::log_info!(
+                target: "render";
+                "resident-scene-msaa: contract enabled samples=4 color=rgba8-unorm/tile64 color_pitch={} depth={} raster=on-pattern sample_mask=0xF resolve=gpgpu-single-dispatch/linear-rgba8 target={}x{} mesh_storage=unchanged\n",
+                target.surface.pitch_bytes,
+                if opaque_depth_enabled { "d32-float/tile64-ims" } else { "none" },
+                target_width,
+                target_height,
+            );
+        }
         let depth_config = if opaque_depth_enabled {
             Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
                 prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?

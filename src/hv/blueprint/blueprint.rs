@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 const BLUEPRINT_HEADER_LEN: usize = 24;
+const BLUEPRINT_PAYLOAD_MASK: u16 = 0x00FF;
+const BLUEPRINT_PAYLOAD_RAW: u16 = 1;
+const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
+pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 const ELF64_HEADER_LEN: usize = 64;
 const ELF64_SECTION_HEADER_LEN: usize = 64;
 const ELF64_SYM_LEN: usize = 24;
@@ -38,6 +42,12 @@ pub(crate) struct BlueprintModule<'a> {
     pub(crate) entry: u64,
     pub(crate) raw_payload_len: usize,
     pub(crate) payload: &'a [u8],
+}
+
+impl BlueprintModule<'_> {
+    pub(crate) const fn is_replicatable(&self) -> bool {
+        self.flags & BLUEPRINT_CAP_REPLICATABLE != 0
+    }
 }
 
 pub(crate) struct ElfImport<'a> {
@@ -1824,9 +1834,9 @@ pub(crate) fn parse_blueprint(bytes: &[u8]) -> Result<BlueprintModule<'_>, &'sta
 }
 
 pub(crate) fn unpack_blueprint(module: &BlueprintModule<'_>) -> Result<Vec<u8>, &'static str> {
-    match module.flags {
-        1 => Ok(module.payload.to_vec()),
-        2 => crate::z7::extract_single_file_to_vec(module.payload)
+    match module.flags & BLUEPRINT_PAYLOAD_MASK {
+        BLUEPRINT_PAYLOAD_RAW => Ok(module.payload.to_vec()),
+        BLUEPRINT_PAYLOAD_7Z => crate::z7::extract_single_file_to_vec(module.payload)
             .map_err(|_| "7z payload decode failed"),
         _ => Err("unsupported blueprint payload flags"),
     }

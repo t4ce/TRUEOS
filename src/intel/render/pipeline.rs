@@ -1396,7 +1396,8 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, gfx125_3d_mode_dw3)?;
         let slice_hash = gfx125_slice_hash.expect("gfx125 slice hash config");
         intel_render_verbose_log!(
-            "gfx125-svl-init sample_pattern=center slice_hash_ptr=0x{:X} geom_dss=0x{:08X} ppipe_dss={}/{}/{} mask1=0x{:X} mask2=0x{:X} mode_dw1=0x{:08X} mode_dw3=0x{:08X} cross_slice_mode={}({}) rhwo_disable=1\n",
+            "gfx125-svl-init sample_pattern={} slice_hash_ptr=0x{:X} geom_dss=0x{:08X} ppipe_dss={}/{}/{} mask1=0x{:X} mask2=0x{:X} mode_dw1=0x{:08X} mode_dw3=0x{:08X} cross_slice_mode={}({}) rhwo_disable=1\n",
+            if resident_msaa4 { "standard-4x" } else { "center" },
             probe_state.slice_hash_table_offset_bytes,
             slice_hash.geometry_dss_enable,
             slice_hash.ppipe_subslices[0],

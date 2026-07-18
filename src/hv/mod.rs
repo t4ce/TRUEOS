@@ -53,6 +53,9 @@ struct TrueosVmId {
     stop_req: AtomicBool,
     preserve_req: AtomicBool,
     preserve_exit: AtomicBool,
+    replicatable: AtomicBool,
+    pause_latched: AtomicBool,
+    pause_store_seq: AtomicU64,
     marker_seen: AtomicBool,
 }
 
@@ -64,6 +67,9 @@ impl TrueosVmId {
             stop_req: AtomicBool::new(false),
             preserve_req: AtomicBool::new(false),
             preserve_exit: AtomicBool::new(false),
+            replicatable: AtomicBool::new(false),
+            pause_latched: AtomicBool::new(false),
+            pause_store_seq: AtomicU64::new(0),
             marker_seen: AtomicBool::new(false),
         }
     }
@@ -91,6 +97,8 @@ static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_CONSOLE_LOG_BUFFERS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_LIFECYCLE_ARCHIVES: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 
 pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
@@ -385,6 +393,9 @@ pub struct HvVmState {
     pub stop_requested: bool,
     pub preserve_requested: bool,
     pub preserve_exit: bool,
+    pub replicatable: bool,
+    pub pause_latched: bool,
+    pub pause_snapshot_ready: bool,
 }
 
 #[inline]
@@ -399,7 +410,10 @@ fn vm_slot(vm_id: u8) -> Option<&'static TrueosVmId> {
 
 pub fn first_free_vm_id() -> Option<u8> {
     for (idx, slot) in trueos_vm_ids.iter().enumerate() {
-        if !slot.running.load(Ordering::Acquire) && !slot.starting.load(Ordering::Acquire) {
+        if !slot.running.load(Ordering::Acquire)
+            && !slot.starting.load(Ordering::Acquire)
+            && !slot.pause_latched.load(Ordering::Acquire)
+        {
             return Some(idx as u8);
         }
     }
@@ -445,8 +459,15 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
             stop_requested: false,
             preserve_requested: false,
             preserve_exit: false,
+            replicatable: false,
+            pause_latched: false,
+            pause_snapshot_ready: false,
         };
     };
+    let pause_latched = vm.pause_latched.load(Ordering::Acquire);
+    let pause_snapshot_ready = pause_latched
+        && crate::hv::store::current_committed_seq(vm_id)
+            > vm.pause_store_seq.load(Ordering::Acquire);
     HvVmState {
         id: vm_id,
         supported: true,
@@ -455,6 +476,9 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
         stop_requested: vm.stop_req.load(Ordering::Acquire),
         preserve_requested: vm.preserve_req.load(Ordering::Acquire),
         preserve_exit: vm.preserve_exit.load(Ordering::Acquire),
+        replicatable: vm.replicatable.load(Ordering::Acquire),
+        pause_latched,
+        pause_snapshot_ready,
     }
 }
 
@@ -462,7 +486,38 @@ pub fn app_vm_archive(vm_id: u8) -> Option<AllocString> {
     if vm_slot(vm_id).is_none() {
         return None;
     }
-    blueprint_launch_snapshot(vm_id).map(|state| state.archive)
+    blueprint_launch_snapshot(vm_id)
+        .map(|state| state.archive)
+        .or_else(|| {
+            BLUEPRINT_LIFECYCLE_ARCHIVES
+                .get(vm_id as usize)?
+                .lock()
+                .clone()
+        })
+}
+
+fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bool) {
+    let Some(vm) = vm_slot(vm_id) else {
+        return;
+    };
+    vm.replicatable.store(replicatable, Ordering::Release);
+    vm.pause_latched.store(false, Ordering::Release);
+    vm.pause_store_seq.store(0, Ordering::Release);
+    if let Some(slot) = BLUEPRINT_LIFECYCLE_ARCHIVES.get(vm_id as usize) {
+        *slot.lock() = replicatable.then(|| AllocString::from(archive));
+    }
+}
+
+fn clear_blueprint_lifecycle_capability(vm_id: u8) {
+    let Some(vm) = vm_slot(vm_id) else {
+        return;
+    };
+    vm.replicatable.store(false, Ordering::Release);
+    vm.pause_latched.store(false, Ordering::Release);
+    vm.pause_store_seq.store(0, Ordering::Release);
+    if let Some(slot) = BLUEPRINT_LIFECYCLE_ARCHIVES.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
 }
 
 pub(crate) fn current_vm_id() -> Option<u8> {
@@ -888,6 +943,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     };
 
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
+        clear_blueprint_lifecycle_capability(vm_id);
         vm.stop_req.store(true, Ordering::Release);
         hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
         nudge_vm_control(vm_id, "stop");
@@ -895,6 +951,31 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     } else {
         hvwarnf(format_args!("hv: vm{} lifecycle: stop ignored (not running)", vm_id));
         Ok(false)
+    }
+}
+
+pub fn request_replicatable_pause(vm_id: u8) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
+    if !vm.replicatable.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    vm.pause_store_seq
+        .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
+    vm.pause_latched.store(true, Ordering::Release);
+    match request_preserve(vm_id) {
+        Ok(true) => Ok(true),
+        other => {
+            vm.pause_latched.store(false, Ordering::Release);
+            other
+        }
+    }
+}
+
+pub fn mark_replicatable_resumed(vm_id: u8) {
+    if let Some(vm) = vm_slot(vm_id) {
+        vm.pause_latched.store(false, Ordering::Release);
     }
 }
 
@@ -981,23 +1062,43 @@ fn vmexit_is_preserve(lr: LaunchResult) -> bool {
 }
 
 fn snapshot_on_preserve_exit(vm_id: u8) {
-    match snapshot_bytes(vm_id) {
+    let saved = match snapshot_bytes(vm_id) {
         Ok(bytes) => match crate::hv::store::save_bytes(vm_id, bytes) {
-            Ok(saved) => hvlogf(format_args!(
-                "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path={} bytes={}",
-                vm_id,
-                snapshot_path(vm_id).as_str(),
-                saved
-            )),
-            Err(e) => hvwarnf(format_args!(
-                "hv: vm{} reporting: preserve snapshot save failed ({:?})",
-                vm_id, e
-            )),
+            Ok(saved) => {
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: preserve snapshot saved store=hv-ramdisk path={} bytes={}",
+                    vm_id,
+                    snapshot_path(vm_id).as_str(),
+                    saved
+                ));
+                true
+            }
+            Err(e) => {
+                hvwarnf(format_args!(
+                    "hv: vm{} reporting: preserve snapshot save failed ({:?})",
+                    vm_id, e
+                ));
+                false
+            }
         },
-        Err(e) => hvwarnf(format_args!(
-            "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
-            vm_id, e
-        )),
+        Err(e) => {
+            hvwarnf(format_args!(
+                "hv: vm{} reporting: preserve snapshot bytes failed ({:?})",
+                vm_id, e
+            ));
+            false
+        }
+    };
+    if !saved {
+        if let Some(vm) = vm_slot(vm_id) {
+            if vm.pause_latched.swap(false, Ordering::AcqRel) {
+                vm.pause_store_seq.store(0, Ordering::Release);
+                hvwarnf(format_args!(
+                    "hv: vm{} lifecycle: pause latch released after snapshot failure",
+                    vm_id
+                ));
+            }
+        }
     }
 }
 
@@ -1219,6 +1320,7 @@ fn prepare_blueprint_launch_on_lane(
     let host_alloc_guard = crate::allocators::enter_host_alloc_domain_current_cpu();
     let module = crate::hv::blueprint::parse_blueprint(pending.module_bytes.as_slice())
         .map_err(|err| alloc::format!("app-vm parse failed: {}", err))?;
+    let replicatable = module.is_replicatable();
     let unpacked_bytes = crate::hv::blueprint::unpack_blueprint(&module)
         .map_err(|err| alloc::format!("app-vm unpack failed: {}", err))?;
 
@@ -1251,6 +1353,7 @@ fn prepare_blueprint_launch_on_lane(
         return Err(AllocString::from("app-vm stack profile allocation failed"));
     }
 
+    let lifecycle_archive = pending.archive.clone();
     stage_blueprint_launch(
         vm_id,
         BlueprintLaunchState {
@@ -1263,6 +1366,7 @@ fn prepare_blueprint_launch_on_lane(
         console_surface,
     )
     .map_err(|err| alloc::format!("app-vm stage failed: {:?}", err))?;
+    set_blueprint_lifecycle_capability(vm_id, lifecycle_archive.as_str(), replicatable);
 
     crate::log!(
         "app-vm-run-queue: AP prep ok vm={} stack_mib={}\n",
