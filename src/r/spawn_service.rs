@@ -83,7 +83,7 @@ define_started_flags!(
     HTML_SHACK_SERVICE_STARTED,
     ASSET_SHACK_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
-    TRUEOSFS_READY_HOOK_STARTED,
+    USER_INPUT_RECORD_WRITER_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
@@ -615,65 +615,8 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
 }
 
-const USER_INPUT_RECORD_FLUSH_INTERVAL_SECS: u64 = 120;
-const USER_INPUT_RECORD_PATH: &str = "user_input_record.txt";
-
-fn user_input_record_payload(entries: &[String]) -> String {
-    let mut payload = String::new();
-    for entry in entries {
-        payload.push_str(entry.as_str());
-        payload.push('\n');
-    }
-    payload
-}
-
-async fn flush_user_input_record_once() {
-    let entries: Vec<String> = crate::shell2::take_user_input_record();
-    if entries.is_empty() {
-        return;
-    }
-
-    let appended_lines = entries.len();
-    let payload = user_input_record_payload(entries.as_slice());
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::shell2::restore_user_input_record(entries);
-        crate::log!("spawn-svc: user-input-record err=no-root\n");
-        return;
-    };
-
-    match crate::r::fs::trueosfs::file_append_async(
-        disk,
-        USER_INPUT_RECORD_PATH,
-        payload.as_bytes(),
-    )
-    .await
-    {
-        Ok(true) => {
-            crate::log!("spawn-svc: user-input-record ok appended_lines={}\n", appended_lines);
-        }
-        Ok(false) => {
-            crate::shell2::restore_user_input_record(entries);
-            crate::log!("spawn-svc: user-input-record err=append-false\n");
-        }
-        Err(e) => {
-            crate::shell2::restore_user_input_record(entries);
-            crate::log!("spawn-svc: user-input-record err={:?}\n", e);
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn trueosfs_ready_hook_task() {
-    crate::log_info!(target: "service"; "spawn-svc: trueosfs-ready-hook task online\n");
-    crate::intel::run_media_source_warmup_async().await;
-    loop {
-        flush_user_input_record_once().await;
-        Timer::after(EmbassyDuration::from_secs(USER_INPUT_RECORD_FLUSH_INTERVAL_SECS)).await;
-    }
-}
-
-fn spawn_trueosfs_ready_hook(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| trueosfs_ready_hook_task())
+fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::user_input_record::writer_task())
 }
 
 const TRUEOSFS_RW_PROBE_PATH: &str = "trueos/probe/rw-500k.bin";
@@ -1554,11 +1497,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TINYAUDIO_LIVE_HTTP_STARTED,
         spawn_tinyaudio_live_http,
     ),
-    TaskSpec::disabled(
-        "trueosfs-ready-hook",
+    TaskSpec::enabled(
+        "user-input-record-writer",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &TRUEOSFS_READY_HOOK_STARTED,
-        spawn_trueosfs_ready_hook,
+        &USER_INPUT_RECORD_WRITER_STARTED,
+        spawn_user_input_record_writer,
     ),
     TaskSpec::enabled("net-tcp-shell", 0, &NET_TCP_SHELL_STARTED, spawn_net_tcp_shell),
     TaskSpec::disabled("atomic_bomb", 0, &ATOMIC_BOMB_STARTED, spawn_atomic_bomb),

@@ -11,7 +11,6 @@ use super::{LineSource, TranscriptEntry};
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
 pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
-const USER_INPUT_RECORD_CAP: usize = 256;
 const LIVE_USER_INPUT_CAP: usize = 10;
 
 pub(crate) type MatrixSlotId = HString<MATRIX_SLOT_ID_MAX>;
@@ -60,7 +59,6 @@ struct MatrixState {
     net_view_revision: u64,
     local_view_revision: u64,
     container_view_revision: u64,
-    user_input_record: VecDeque<AllocString>,
     live_user_input_record: VecDeque<LiveUserInputEntry>,
     revision: u64,
 }
@@ -78,7 +76,6 @@ fn state() -> &'static spin::Mutex<MatrixState> {
             net_view_revision: 1,
             local_view_revision: 1,
             container_view_revision: 1,
-            user_input_record: VecDeque::new(),
             live_user_input_record: VecDeque::new(),
             revision: 1,
         };
@@ -207,13 +204,6 @@ fn push_line(slot: &mut MatrixSlot, source: LineSource, text: &str) {
         source,
         text: AllocString::from(text),
     });
-}
-
-fn push_user_input_record(state: &mut MatrixState, text: &str) {
-    if state.user_input_record.len() >= USER_INPUT_RECORD_CAP {
-        let _ = state.user_input_record.pop_front();
-    }
-    state.user_input_record.push_back(AllocString::from(text));
 }
 
 fn push_live_user_input_record(state: &mut MatrixState, text: &str) {
@@ -594,9 +584,9 @@ pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, te
     bump_slot_revision(&mut guard, idx);
 }
 
-pub(crate) fn record_user_input(text: &str) {
+pub(crate) fn record_user_input(output_mask: u8, text: &str) {
+    crate::user_input_record::capture(output_mask, text);
     let mut guard = state().lock();
-    push_user_input_record(&mut guard, text);
     push_live_user_input_record(&mut guard, text);
 }
 
@@ -607,25 +597,6 @@ pub(crate) fn live_user_input_record() -> Vec<LiveUserInputEntry> {
         .iter()
         .cloned()
         .collect()
-}
-
-pub(crate) fn take_user_input_record() -> Vec<AllocString> {
-    let mut guard = state().lock();
-    guard.user_input_record.drain(..).collect()
-}
-
-pub(crate) fn restore_user_input_record(entries: Vec<AllocString>) {
-    if entries.is_empty() {
-        return;
-    }
-
-    let mut guard = state().lock();
-    for entry in entries.into_iter().rev() {
-        guard.user_input_record.push_front(entry);
-    }
-    while guard.user_input_record.len() > USER_INPUT_RECORD_CAP {
-        let _ = guard.user_input_record.pop_front();
-    }
 }
 
 pub(crate) fn set_slot_activity(slot_id: &MatrixSlotId, activity: MatrixSlotActivity) {

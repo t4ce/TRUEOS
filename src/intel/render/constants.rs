@@ -213,7 +213,8 @@ const GEN12_CTX_PRIORITY_NORMAL: u32 = 1 << 9;
 const GEN8_CTX_ADDRESSING_MODE_SHIFT: u32 = 3;
 const GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT: u32 = 0xD;
 const RCS_EXEC_RESULT_DONE: u32 = 0xC0DE_7701;
-const RCS_EXEC_RESULT_SCENE_FRAME_DONE: u32 = 0xC0DE_7741;
+const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO: u32 = 0xC0DE_7741;
+const RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI: u32 = 0xC0DE_7742;
 const RCS_EXEC_RESULT_MI_PROBE_DONE: u32 = 0xC0DE_7711;
 const RCS_EXEC_RESULT_MI_SCANOUT_DONE: u32 = 0xC0DE_7713;
 const RCS_EXEC_RESULT_GPGPU_PREFLIGHT_DONE: u32 = 0xC0DE_7731;
@@ -438,6 +439,21 @@ const PIPE_CONTROL_POST_DRAW_LIGHT_POSTSYNC_NO_STALL_BITS: u32 =
 const PIPE_CONTROL_POST_DRAW_LIGHT_CS_STALL_ONLY_BITS: u32 = PIPE_CONTROL_CS_STALL;
 const PIPE_CONTROL_POST_DRAW_SYNC_BITS: u32 =
     PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT;
+// Gen12 producer release for a color target written by the 3D pixel backend.
+// Render-target and tile-cache writeback are the only cache operations needed
+// for this path.  Do not add top-of-pipe invalidations here: those execute at
+// parse time and are not part of an end-of-pipe producer release.
+const PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS: u32 = PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+    | PIPE_CONTROL_TILE_CACHE_FLUSH
+    | PIPE_CONTROL_FLUSH_ENABLE
+    | PIPE_CONTROL_CS_STALL;
+// A separate post-sync packet follows the cache-release packet.  Its PPGTT
+// QWord write is the retirement cookie observed by the host. Keep the generic
+// PIPE_CONTROL flush bit on this packet as i915 does for its separated Gen12
+// RCS breadcrumb write.
+const PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS: u32 = PIPE_CONTROL_FLUSH_ENABLE
+    | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE
+    | PIPE_CONTROL_CS_STALL;
 // Exact successful gfx12 post-draw completion packet from the Mesa capture.
 // It targets PPGTT (DEST_GGTT clear) and avoids HDC flush, whose gfx12 form
 // additionally requires a header bit.
@@ -485,8 +501,8 @@ const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
 // The scene release is written by PIPE_CONTROL as a QWord post-sync
-// operation. Keep its destination 8-byte aligned even though the low DWORD is
-// the only value the host consumes.
+// operation. Keep its destination 8-byte aligned; both DWORDs are checked so
+// an old or partially observed cookie cannot manufacture a release proof.
 const RESULT_SLOT_SCENE_FRAME_DWORD: usize = 24;
 const RESULT_OA_REPORT_DWORDS: usize = 64;
 const RESULT_OA_BEGIN_DWORD: usize = 64;

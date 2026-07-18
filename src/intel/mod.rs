@@ -52,6 +52,30 @@ const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
 const GGTT_PAGE_BYTES: u64 = 4096;
 const GEN8_PAGE_PRESENT: u64 = 1;
+const GEN12_GGTT_PTE_ADDR_MASK: u64 = ((1u64 << 46) - 1) & !0xFFF;
+const GEN12_PAT_INDEX_BASE: usize = 0x4800;
+const GEN12_PAT_INDEX_COUNT: usize = 8;
+const GEN12_PAT_INDEX_STRIDE: usize = 4;
+const GEN12_PAT_VALUE_MASK: u32 = 0x3;
+const GEN12_PAT_WB: u32 = 0x3;
+const GEN12_PAT_WC: u32 = 0x1;
+const GEN12_PAT_WT: u32 = 0x2;
+const GEN12_PAT_UC: u32 = 0x0;
+// Match the Intel Xe-LP PRM required table and the Gen12 table used by i915:
+// PPGTT PAT0 is WB, PAT1 is WC, PAT2 is WT, PAT3 is UC, and the
+// otherwise-unused entries remain WB.
+// Pre-Meteor-Lake GGTT PTEs do not carry a PAT selector, so scanout relies on
+// the producer's explicit PPGTT policy plus its render-cache release packet.
+const GEN12_INTEGRATED_PAT: [u32; GEN12_PAT_INDEX_COUNT] = [
+    GEN12_PAT_WB,
+    GEN12_PAT_WC,
+    GEN12_PAT_WT,
+    GEN12_PAT_UC,
+    GEN12_PAT_WB,
+    GEN12_PAT_WB,
+    GEN12_PAT_WB,
+    GEN12_PAT_WB,
+];
 const FORCEWAKE_RENDER: usize = 0x0A278;
 const FORCEWAKE_MEDIA: usize = 0x0A184;
 const FORCEWAKE_GT: usize = 0x0A188;
@@ -79,6 +103,8 @@ const PCI_DEVICE_ALDER_LAKE_S_GT1: u16 = 0x4680;
 const PCI_DEVICE_ALDER_LAKE_N_N100_UHD: u16 = 0x46D1;
 const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 static INIT: AtomicBool = AtomicBool::new(false);
+static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
+static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
 
 #[derive(Copy, Clone)]
@@ -128,6 +154,16 @@ pub fn init_once() {
         media_decode_enabled_for_device(dev.device_id) as u8
     );
     *CLAIMED_DEVICE.lock() = Some(dev);
+    let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
+    let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
+    GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
+    crate::log!(
+        "intel/cache-policy: accepted={} platform={} device=0x{:04X} forcewake={} ppgtt=pat0-wb ggtt=system-memory-address-only pat=[wb,wc,wt,uc,wb,wb,wb,wb]\n",
+        pat_ready as u8,
+        display_device_name(dev.device_id),
+        dev.device_id,
+        forcewake_ready as u8,
+    );
     if guc_boot {
         let _ = init_required_guc_transport(dev);
     } else {
@@ -194,7 +230,6 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     }
 
     ggtt_invalidate(dev);
-    forcewake(dev);
     let ready = self::guc::bootstrap(dev, fw, ads, false);
     let status = self::guc::status(dev);
     let (bootrom, ukernel, auth) = self::guc::describe_status(status);
@@ -924,9 +959,9 @@ fn find_dev() -> Option<Dev> {
     out
 }
 
-fn forcewake(dev: Dev) {
+fn forcewake(dev: Dev) -> bool {
     mmio_write(dev, FORCEWAKE_RENDER, mask_dis(FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK));
-    wait_eq(
+    let render_cleared = wait_eq(
         dev,
         FORCEWAKE_ACK_RENDER,
         FORCEWAKE_KERNEL | FORCEWAKE_FALLBACK,
@@ -934,17 +969,116 @@ fn forcewake(dev: Dev) {
         FORCEWAKE_POLL_ITERS,
     );
     mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
-    wait_eq(dev, FORCEWAKE_ACK_RENDER, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    let render_ready = wait_eq(
+        dev,
+        FORCEWAKE_ACK_RENDER,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_KERNEL,
+        FORCEWAKE_POLL_ITERS,
+    );
     mmio_write(dev, FORCEWAKE_MEDIA, mask_en(FORCEWAKE_KERNEL));
-    wait_eq(dev, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    let _media_ready =
+        wait_eq(dev, FORCEWAKE_ACK_MEDIA, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
     mmio_write(dev, FORCEWAKE_GT, mask_en(FORCEWAKE_KERNEL));
-    wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    let gt_ready =
+        wait_eq(dev, FORCEWAKE_ACK_GT, FORCEWAKE_KERNEL, FORCEWAKE_KERNEL, FORCEWAKE_POLL_ITERS);
+    // The PAT registers are in the GT domain. Media forcewake is retained for
+    // the existing codec path, but its availability must not gate render and
+    // display memory policy on SKUs where media is intentionally disabled.
+    render_cleared && render_ready && gt_ready
+}
+
+fn device_uses_gen12_integrated_pat(device_id: u16) -> bool {
+    matches!(
+        device_id,
+        PCI_DEVICE_ALDER_LAKE_S_GT1
+            | 0x4682
+            | 0x4688
+            | 0x468A
+            | 0x468B
+            | 0x4690
+            | 0x4692
+            | 0x4693
+            | PCI_DEVICE_ALDER_LAKE_N_N100_UHD
+            | PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770
+    )
+}
+
+fn init_gen12_integrated_pat(dev: Dev) -> bool {
+    if !device_uses_gen12_integrated_pat(dev.device_id) {
+        crate::log!(
+            "intel/cache-policy: accepted=0 device=0x{:04X} reason=unsupported-pat-register-layout\n",
+            dev.device_id,
+        );
+        return false;
+    }
+    if GEN12_PAT_INDEX_BASE
+        .checked_add(GEN12_PAT_INDEX_COUNT * GEN12_PAT_INDEX_STRIDE)
+        .is_none_or(|end| end > dev.mmio_len)
+    {
+        crate::log!(
+            "intel/cache-policy: accepted=0 device=0x{:04X} reason=pat-registers-outside-mmio mmio_len=0x{:X}\n",
+            dev.device_id,
+            dev.mmio_len,
+        );
+        return false;
+    }
+
+    for (index, value) in GEN12_INTEGRATED_PAT.iter().copied().enumerate() {
+        mmio_write(dev, GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE, value);
+    }
+    // No TRUEOS-owned GGTT or PPGTT mapping is live yet. Invalidate the GGTT
+    // translation cache here so subsequent imports cannot inherit firmware's
+    // view of the old global policy.
+    ggtt_invalidate(dev);
+
+    let mut observed = [0u32; GEN12_PAT_INDEX_COUNT];
+    let mut accepted = true;
+    for (index, expected) in GEN12_INTEGRATED_PAT.iter().copied().enumerate() {
+        let value = mmio_read(dev, GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE);
+        observed[index] = value;
+        accepted &= value & GEN12_PAT_VALUE_MASK == expected;
+    }
+    if !accepted {
+        crate::log!(
+            "intel/cache-policy: accepted=0 device=0x{:04X} reason=pat-readback-mismatch observed=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}]\n",
+            dev.device_id,
+            observed[0],
+            observed[1],
+            observed[2],
+            observed[3],
+            observed[4],
+            observed[5],
+            observed[6],
+            observed[7],
+        );
+    }
+    accepted
 }
 
 fn map_ggtt_pages(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
-    for page in 0..len.div_ceil(WARM_ALIGN) {
-        let g = gpu + (page as u64) * GGTT_PAGE_BYTES;
-        let p = (phys + (page as u64) * GGTT_PAGE_BYTES) & !0xFFF;
+    if phys & (GGTT_PAGE_BYTES - 1) != 0
+        || gpu & (GGTT_PAGE_BYTES - 1) != 0
+        || phys & !GEN12_GGTT_PTE_ADDR_MASK != 0
+    {
+        return false;
+    }
+    let page_count = len.div_ceil(WARM_ALIGN);
+    if page_count != 0 {
+        let Some(last_offset) = (page_count as u64 - 1).checked_mul(GGTT_PAGE_BYTES) else {
+            return false;
+        };
+        let Some(last_phys) = phys.checked_add(last_offset) else {
+            return false;
+        };
+        if last_phys & !GEN12_GGTT_PTE_ADDR_MASK != 0 || gpu.checked_add(last_offset).is_none() {
+            return false;
+        }
+    }
+    for page in 0..page_count {
+        let offset = page as u64 * GGTT_PAGE_BYTES;
+        let g = gpu + offset;
+        let p = phys + offset;
         let idx = match usize::try_from(g / GGTT_PAGE_BYTES)
             .ok()
             .and_then(|v| v.checked_mul(8))
@@ -955,11 +1089,17 @@ fn map_ggtt_pages(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
         unsafe {
             core::ptr::write_volatile(
                 dev.mmio.add(GGTT_ALIAS_BASE_OFF + idx) as *mut u64,
-                p | GEN8_PAGE_PRESENT,
+                gen12_integrated_ggtt_pte(p),
             );
         }
     }
     true
+}
+
+fn gen12_integrated_ggtt_pte(phys: u64) -> u64 {
+    // Alder/Raptor Lake GGTT PTEs have no PAT selector for system memory.
+    // Bits 3/4/7 are not the PPGTT PAT bits in this address space.
+    (phys & GEN12_GGTT_PTE_ADDR_MASK) | GEN8_PAGE_PRESENT
 }
 
 fn ggtt_offset_index(gpu: u64) -> Option<usize> {
@@ -974,7 +1114,47 @@ pub(crate) fn map_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
 }
 
 pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
-    map_ggtt_pages(dev, phys, len, gpu)
+    if !gen12_integrated_pat_ready()
+        || !device_uses_gen12_integrated_pat(dev.device_id)
+        || len == 0
+        || !map_ggtt_pages(dev, phys, len, gpu)
+    {
+        return false;
+    }
+
+    let last_page = (len - 1) / GGTT_PAGE_BYTES as usize;
+    let last_gpu = match gpu.checked_add(last_page as u64 * GGTT_PAGE_BYTES) {
+        Some(address) => address,
+        None => return false,
+    };
+    let last_phys = match phys.checked_add(last_page as u64 * GGTT_PAGE_BYTES) {
+        Some(address) => address,
+        None => return false,
+    };
+    let first_ok = read_ggtt_pte(dev, gpu) == Some(gen12_integrated_ggtt_pte(phys));
+    let last_ok = read_ggtt_pte(dev, last_gpu) == Some(gen12_integrated_ggtt_pte(last_phys));
+    if !first_ok || !last_ok {
+        crate::log!(
+            "intel/display-cache-contract: accepted=0 reason=ggtt-pte-readback first_ok={} last_ok={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X}\n",
+            first_ok as u8,
+            last_ok as u8,
+            gpu,
+            phys,
+            len,
+        );
+        return false;
+    }
+    if !DISPLAY_GGTT_POLICY_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log!(
+            "intel/display-cache-contract: accepted=1 device=0x{:04X} render_ppgtt=pat0-wb display_ggtt=address-present-only system_memory=1 cpu_surface_flush=not-part-of-mapping render_release=required\n",
+            dev.device_id,
+        );
+    }
+    true
+}
+
+pub(crate) fn gen12_integrated_pat_ready() -> bool {
+    GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire)
 }
 
 /// Remove a display-owned GGTT range after its plane has been proven idle.
@@ -1028,13 +1208,14 @@ pub(crate) fn mmio_write(dev: Dev, off: usize, v: u32) {
         unsafe { core::ptr::write_volatile(dev.mmio.add(off) as *mut u32, v) }
     }
 }
-fn wait_eq(dev: Dev, reg: usize, mask: u32, want: u32, n: usize) {
+fn wait_eq(dev: Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
     for _ in 0..n {
         if (mmio_read(dev, reg) & mask) == want {
-            break;
+            return true;
         }
         core::hint::spin_loop();
     }
+    false
 }
 pub(crate) fn mask_en(v: u32) -> u32 {
     v | (v << 16)

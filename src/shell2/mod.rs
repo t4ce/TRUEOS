@@ -1019,14 +1019,6 @@ pub(crate) fn history_lines_text(start_line: usize, max_lines: usize) -> AllocSt
     matrix::history_lines_text(start_line, max_lines)
 }
 
-pub(crate) fn take_user_input_record() -> Vec<AllocString> {
-    matrix::take_user_input_record()
-}
-
-pub(crate) fn restore_user_input_record(entries: Vec<AllocString>) {
-    matrix::restore_user_input_record(entries)
-}
-
 pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
@@ -1661,8 +1653,27 @@ fn pop_input_grapheme(line: &mut HString<MAX_LINE>) -> bool {
     let Some((start, _)) = line.as_str().grapheme_indices(true).next_back() else {
         return false;
     };
+    let old_len = line.len();
     line.truncate(start);
+    // `truncate` changes the logical length but does not scrub the removed
+    // bytes from heapless' inline storage.
+    let bytes = unsafe { line.as_mut_vec() };
+    for offset in start..old_len {
+        unsafe { core::ptr::write_volatile(bytes.as_mut_ptr().add(offset), 0) };
+    }
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
     true
+}
+
+fn zeroize_input_line(line: &mut HString<MAX_LINE>) {
+    // The inline storage can contain bytes beyond the current logical length
+    // after editing or history replacement, so overwrite its full capacity.
+    let bytes = unsafe { line.as_mut_vec() };
+    for offset in 0..bytes.capacity() {
+        unsafe { core::ptr::write_volatile(bytes.as_mut_ptr().add(offset), 0) };
+    }
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    line.clear();
 }
 
 fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: u8, line: &HString<MAX_LINE>) {
@@ -1681,7 +1692,7 @@ fn set_input_line(
     line: &mut HString<MAX_LINE>,
     text: &str,
 ) {
-    line.clear();
+    zeroize_input_line(line);
     for ch in text.chars() {
         if line.push(ch).is_err() {
             break;
@@ -1725,7 +1736,7 @@ fn handle_control_c(
         }
     }
 
-    line.clear();
+    zeroize_input_line(line);
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
     out.prompt(output_mask);
@@ -1875,7 +1886,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 live_history_cursor = None;
                 cmd_status_text = None;
                 if active_terminal_hotkey_mode(output_mask) {
-                    line.clear();
+                    zeroize_input_line(&mut line);
                     let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
                     transcript = redraw_active_view(
                         &out,
@@ -2157,10 +2168,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     }
                     live_history_cursor = None;
                     let submitted_raw = line.as_str();
-                    matrix::record_user_input(user_submission_for_recording(
+                    matrix::record_user_input(
                         output_mask,
-                        submitted_raw,
-                    ));
+                        user_submission_for_recording(output_mask, submitted_raw),
+                    );
                     let submitted = submitted_raw.trim();
                     cmd_status_text = None;
                     out.prompt(output_mask);
@@ -2426,7 +2437,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                             }
                         }
                     }
-                    line.clear();
+                    zeroize_input_line(&mut line);
                     out.prompt(output_mask);
                     input_bytes_since_yield = 0;
                     if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {

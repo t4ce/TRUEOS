@@ -376,14 +376,17 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) coverage_submits: usize,
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
-    /// Present only when the final GPU cache-release packet retired after
-    /// writing directly into the returned UI4 allocation.
+    /// Present only when RCS was the final writer and its color-cache release
+    /// plus separate post-sync retirement marker completed for the returned
+    /// UI4 allocation.
     pub(crate) release_fence: Option<ResidentSceneReleaseFence>,
 }
 
-/// Proof that one exact direct-render allocation is complete and globally
-/// visible to the display consumer. The fields are private so a UI producer
-/// cannot manufacture a release merely from a physical address.
+/// Proof that RCS completed the producer-release command sequence for one
+/// exact direct-render allocation. This deliberately does not claim that an
+/// independently mapped display GGTT alias has a compatible cache policy;
+/// that is the consumer side of the handoff. The fields are private so a UI
+/// producer cannot manufacture a release merely from a physical address.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResidentSceneReleaseFence {
     phys: u64,
@@ -1135,17 +1138,29 @@ fn encode_resident_scene_primary_batch(
     }
     let completion_gpu =
         GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
-    // This is the producer release fence for the whole scene. A plain
-    // MI_STORE proves command-stream progress but does not make render-target
-    // bytes visible to scanout. Drain the render/depth/tile/HDC/L3 paths once,
-    // then write the completion value from the same PIPE_CONTROL. DEST_GGTT
-    // remains clear because the result allocation is in the render PPGTT.
-    push(PIPE_CONTROL_CMD | PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS)?;
-    push(PIPE_CONTROL_BIG_PRE_DRAW_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE)?;
+    // Release the color target written by the Gen12 3D pixel backend. Keep
+    // this end-of-pipe writeback separate from all top-of-pipe invalidations:
+    // mixing them into one packet can invalidate first and only then wait for
+    // older rendering. Depth remains private to the ordered RCS workload, so
+    // it is not part of the display-ownership release.
+    push(PIPE_CONTROL_CMD)?;
+    push(PIPE_CONTROL_SCENE_COLOR_RELEASE_BITS)?;
+    push(0)?;
+    push(0)?;
+    push(0)?;
+    push(0)?;
+
+    // Retire the release with a second, ordered PIPE_CONTROL. The unique
+    // QWord cookie proves that the preceding RT/tile flush and CS stall ran;
+    // it does not by itself prove the display GGTT alias is cache-compatible.
+    // DEST_GGTT remains clear because the result allocation is in the render
+    // PPGTT.
+    push(PIPE_CONTROL_CMD)?;
+    push(PIPE_CONTROL_SCENE_RELEASE_MARKER_BITS)?;
     push(completion_gpu as u32)?;
     push((completion_gpu >> 32) as u32)?;
-    push(RCS_EXEC_RESULT_SCENE_FRAME_DONE)?;
-    push(0)?;
+    push(RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO)?;
+    push(RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI)?;
     push(MI_BATCH_BUFFER_END)?;
     push(MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
@@ -1275,7 +1290,7 @@ fn submit_resident_scene_geometry_batched(
     let completed = submit_warm_render_batch(
         dev,
         warm,
-        RCS_EXEC_RESULT_SCENE_FRAME_DONE,
+        RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
         RESULT_SLOT_SCENE_FRAME_DWORD,
         "draw3d-scene",
     );
@@ -1624,7 +1639,15 @@ fn submit_resident_triangle_scene_capture(
             // pixels written rather than pretending that no frame changed.
             changed_pixels = target_width.saturating_mul(target_height);
         }
+        // The RCS marker only releases the direct, single-sample color target
+        // when no later engine touched it. MSAA resolve, coverage composition,
+        // and a present copy all have their own last writer and therefore may
+        // not inherit the earlier geometry release.
+        let rcs_was_final_writer = msaa_color.is_none()
+            && coverage_draws.is_empty()
+            && !present_copy_performed;
         let release_fence = if frame_complete
+            && rcs_was_final_writer
             && let ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
             && output.gpu == destination.gpu
         {

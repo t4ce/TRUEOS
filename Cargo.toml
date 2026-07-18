@@ -52,6 +52,7 @@ trueos-qjs = { path = "crates/trueos-qjs", features = ["trueos"] }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 ring = { version = "=0.17.14", default-features = false }
+chacha20poly1305 = { version = "0.10.1", default-features = false }
 webpki-roots = { version = "1.0.7", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 lzma-rust2 = { version = "0.16.2", default-features = false, features = ["encoder"] }

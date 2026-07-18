@@ -408,6 +408,13 @@ pub(crate) struct Ui4DirectRgbaFrame {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
+    /// Producer-side identity carried only for end-to-end handoff evidence.
+    /// Display still consumes the physical allocation through its own GGTT
+    /// alias and never interprets the producer's GPU virtual address.
+    pub(crate) producer_frame: u64,
+    pub(crate) producer_buffer_index: u8,
+    pub(crate) producer_publish_serial: u64,
+    pub(crate) producer_release_sequence: u64,
 }
 
 /// Output-space damage consumed by the display compositor.
@@ -887,6 +894,10 @@ struct Ui4DirectOverlaySurface {
     alias_index: usize,
     pos_x: u32,
     pos_y: u32,
+    producer_frame: u64,
+    producer_buffer_index: u8,
+    producer_publish_serial: u64,
+    producer_release_sequence: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -8023,6 +8034,10 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         alias_index,
         pos_x,
         pos_y,
+        producer_frame: source.producer_frame,
+        producer_buffer_index: source.producer_buffer_index,
+        producer_publish_serial: source.producer_publish_serial,
+        producer_release_sequence: source.producer_release_sequence,
     };
     let change = CompositionDamageRegion::from_rect(CompositionDamageRect::new(
         pos_x,
@@ -8031,10 +8046,14 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         source.height,
     ));
     crate::log_trace!(target: "ui4";
-        "ui4/direct-present: queued reason={} slot={} alias={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
+        "ui4/direct-present: queued reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
         reason,
         plane_slot,
         alias_index,
+        source.producer_frame,
+        source.producer_buffer_index,
+        source.producer_publish_serial,
+        source.producer_release_sequence,
         source.phys,
         gpu,
         source.width,
@@ -8276,10 +8295,14 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
         crate::log_info!(target: "ui4";
-            "ui4/direct-present: scanout-ready reason={} slot={} alias={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",
+            "ui4/direct-present: scanout-ready reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",
             composition.reason,
             surface.plane_slot,
             surface.alias_index,
+            surface.producer_frame,
+            surface.producer_buffer_index,
+            surface.producer_publish_serial,
+            surface.producer_release_sequence,
             surface.phys,
             surface.gpu,
             surface.width,

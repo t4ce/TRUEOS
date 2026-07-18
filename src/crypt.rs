@@ -1,8 +1,7 @@
-//! Inert machine-login ceremony used by the Shell2 `cry` command.
+//! Machine-login ceremony used by the Shell2 `cry` command.
 //!
-//! This is deliberately not an access-control hook. It exercises enrollment,
-//! challenge construction, signing, and verification while the future account
-//! gate and persistent/hardware providers remain separate work.
+//! The verified session gates encrypted user-input persistence. Broader shell
+//! authority and persistent/hardware key providers remain separate work.
 
 use alloc::string::String;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
@@ -73,6 +72,7 @@ pub(crate) struct CrySessionSnapshot {
     pub challenge_sequence: u64,
     pub totp_step: u64,
     pub authenticated_at_ticks: u64,
+    pub scope_id: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +124,21 @@ struct AuthenticatedSession {
     challenge_sequence: u64,
     totp_step: u64,
     authenticated_at_ticks: u64,
+    scope_id: u8,
+}
+
+pub(crate) struct CryUserInputRecordKey {
+    pub account: AccountId,
+    pub challenge_sequence: u64,
+    pub authenticated_at_ticks: u64,
+    pub scope_id: u8,
+    key: Zeroizing<[u8; 32]>,
+}
+
+impl CryUserInputRecordKey {
+    pub(crate) fn key_bytes(&self) -> &[u8; 32] {
+        &self.key
+    }
 }
 
 struct TotpFactor {
@@ -302,7 +317,7 @@ pub(crate) fn begin_totp_enrollment() -> Result<CryTotpEnrollment, CryError> {
     })
 }
 
-pub(crate) fn login_root(code: &str) -> Result<CryLoginReport, CryError> {
+pub(crate) fn login_root(code: &str, scope_id: u8) -> Result<CryLoginReport, CryError> {
     let code = parse_totp_code(code).ok_or(CryError::InvalidTotpCode)?;
     let unix_seconds = totp_unix_seconds()?;
     let mut nonce = [0u8; 32];
@@ -429,6 +444,7 @@ pub(crate) fn login_root(code: &str) -> Result<CryLoginReport, CryError> {
         challenge_sequence: challenge.sequence(),
         totp_step,
         authenticated_at_ticks: now,
+        scope_id,
     });
 
     Ok(CryLoginReport {
@@ -444,8 +460,47 @@ pub(crate) fn login_root(code: &str) -> Result<CryLoginReport, CryError> {
     })
 }
 
-pub(crate) fn logout() -> bool {
-    CRY_STATE.lock().session.take().is_some()
+pub(crate) fn logout(scope_id: u8) -> bool {
+    let mut state = CRY_STATE.lock();
+    if state
+        .session
+        .is_some_and(|session| session.scope_id == scope_id)
+    {
+        state.session.take();
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn authenticated_user_input_record_key(scope_id: u8) -> Option<CryUserInputRecordKey> {
+    const DOMAIN: &[u8] = b"TRUEOS/user-input-record/chacha20-poly1305/v1";
+
+    let state = CRY_STATE.lock();
+    let session = state.session?;
+    if session.scope_id != scope_id {
+        return None;
+    }
+    let signing_key = state.signing_key.as_ref()?;
+    let credential = state.credential?;
+
+    let signing_seed = Zeroizing::new(signing_key.to_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(DOMAIN);
+    hasher.update(signing_seed.as_slice());
+    hasher.update(credential.account.raw().to_le_bytes());
+    let mut digest = hasher.finalize();
+    let mut key = Zeroizing::new([0u8; 32]);
+    key.copy_from_slice(digest.as_slice());
+    digest.as_mut_slice().zeroize();
+
+    Some(CryUserInputRecordKey {
+        account: session.account,
+        challenge_sequence: session.challenge_sequence,
+        authenticated_at_ticks: session.authenticated_at_ticks,
+        scope_id: session.scope_id,
+        key,
+    })
 }
 
 pub(crate) fn status() -> CryStatus {
@@ -456,6 +511,7 @@ pub(crate) fn status() -> CryStatus {
         challenge_sequence: session.challenge_sequence,
         totp_step: session.totp_step,
         authenticated_at_ticks: session.authenticated_at_ticks,
+        scope_id: session.scope_id,
     });
     let totp_clock = totp_clock_status();
     CryStatus {

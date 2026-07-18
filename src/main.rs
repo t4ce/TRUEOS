@@ -77,6 +77,7 @@ mod unix_compat;
 mod unix_fd_probe;
 #[path = "usb3/mod.rs"]
 pub(crate) mod usb3;
+mod user_input_record;
 mod virtio_gpu_logo;
 mod wait;
 mod workers;

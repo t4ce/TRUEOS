@@ -4,9 +4,9 @@ use core::fmt::Write;
 use qrcodegen::{QrCode, QrCodeEcc, Version};
 
 use super::super::{
-    OUTPUT_NET_TCP_MASK, ShellBackend2, claim_matrix_target_for_app_slot_selected,
-    konsole_viewport_size_for_target, matrix_target_for_backend, output_target_for_backend,
-    print_native_line, print_shell_line,
+    OUTPUT_CONTAINER_MASK, OUTPUT_NET_TCP_MASK, ShellBackend2,
+    claim_matrix_target_for_app_slot_selected, konsole_viewport_size_for_target,
+    matrix_target_for_backend, output_target_for_backend, print_native_line, print_shell_line,
 };
 use crate::crypt::{self, CryError, CryTwoFactorState};
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -61,13 +61,13 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             print_shell_line(io, "cry login: enter `cry login <6-digit authenticator code>`");
         }
         (Some(command), None, None, None) if command.eq_ignore_ascii_case("logout") => {
-            let ended = crypt::logout();
+            let ended = crypt::logout(output_target_for_backend(io));
             print_shell_line(
                 io,
                 if ended {
-                    "cry logout: session=ended scope=cry-only"
+                    "cry logout: session=ended input-recording=off"
                 } else {
-                    "cry logout: session=none"
+                    "cry logout: matching-session=none input-recording=off"
                 },
             );
         }
@@ -121,7 +121,7 @@ fn setup_key(io: &'static dyn ShellBackend2) {
             );
             print_shell_line(
                 io,
-                "cry key setup: assurance=ceremony-only shell-gate=off reboot-persistence=off",
+                "cry key setup: input-recording=off-until-2fa-login reboot-persistence=off",
             );
             present_totp_enrollment(io);
         }
@@ -164,7 +164,8 @@ fn present_totp_enrollment(io: &'static dyn ShellBackend2) {
 }
 
 fn login_root(io: &'static dyn ShellBackend2, code: &str) {
-    match crypt::login_root(code) {
+    let scope_id = output_target_for_backend(io);
+    match crypt::login_root(code, scope_id) {
         Ok(report) => {
             crate::shell2::matrix::clear_active_lines(output_target_for_backend(io));
             print_network_trust_warning(io);
@@ -196,7 +197,11 @@ fn login_root(io: &'static dyn ShellBackend2, code: &str) {
             );
             print_shell_line(
                 io,
-                "cry login: scope=cry-session shell-authority=unchanged pre-mode=not-wired",
+                alloc::format!(
+                    "cry login: input-recording=on scope={} storage=chacha20-poly1305",
+                    scope_name(scope_id),
+                )
+                .as_str(),
             );
         }
         Err(error) => {
@@ -208,15 +213,20 @@ fn login_root(io: &'static dyn ShellBackend2, code: &str) {
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = crypt::status();
+    let scope_id = output_target_for_backend(io);
+    let recording_on = status
+        .session
+        .is_some_and(|session| session.scope_id == scope_id);
     print_shell_line(
         io,
         alloc::format!(
-            "cry: configured={} 2fa={:?} totp-clock={} isolation={:?} persistence={:?} shell-gate=off",
+            "cry: configured={} 2fa={:?} totp-clock={} isolation={:?} persistence={:?} input-recording={}",
             status.configured as u8,
             status.two_factor,
             if status.totp_clock.is_some() { "ntp" } else { "waiting-for-ntp" },
             status.isolation,
             status.persistence,
+            if recording_on { "on" } else { "off" },
         )
         .as_str(),
     );
@@ -240,12 +250,14 @@ fn print_status(io: &'static dyn ShellBackend2) {
         Some(session) => print_shell_line(
             io,
             alloc::format!(
-                "cry: session=verified account={} role={:?} factors=machine-key+totp challenge={} totp-step={} authenticated_tick={} scope=cry-only",
+                "cry: session=verified account={} role={:?} factors=machine-key+totp challenge={} totp-step={} authenticated_tick={} scope={} encrypted-input-recording={}",
                 account_name(session.account),
                 session.role,
                 session.challenge_sequence,
                 session.totp_step,
                 session.authenticated_at_ticks,
+                scope_name(session.scope_id),
+                if recording_on { "on" } else { "off-for-this-shell" },
             )
             .as_str(),
         ),
@@ -257,6 +269,16 @@ fn print_status(io: &'static dyn ShellBackend2) {
             io,
             "cry: 2fa enrollment pending; scan `cry 2fa setup`, then run `cry login <code>`",
         );
+    }
+}
+
+fn scope_name(scope_id: u8) -> &'static str {
+    if (scope_id & OUTPUT_NET_TCP_MASK) != 0 {
+        "net-tcp"
+    } else if (scope_id & OUTPUT_CONTAINER_MASK) != 0 {
+        "container"
+    } else {
+        "local"
     }
 }
 

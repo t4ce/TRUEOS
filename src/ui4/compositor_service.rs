@@ -546,6 +546,12 @@ fn queue_async_plane(
                     width: view.width,
                     height: view.height,
                     pitch_bytes: view.pitch,
+                    producer_frame: window.frame.raw(),
+                    producer_buffer_index: display_lease.buffer_index,
+                    producer_publish_serial: window.publish_serial,
+                    producer_release_sequence: view
+                        .gpu_release
+                        .map_or(0, |release| release.sequence()),
                 },
                 window.placement.x as u32,
                 window.placement.y as u32,

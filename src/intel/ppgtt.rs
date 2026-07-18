@@ -9,8 +9,34 @@ const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_RW: u64 = 1 << 1;
 const PAGE_PWT: u64 = 1 << 3;
 const PAGE_PCD: u64 = 1 << 4;
-const PTE_PRESENT_RW: u64 = PAGE_PRESENT | PAGE_RW;
+const GEN12_PPGTT_PTE_PAT0: u64 = 1 << 3;
+const GEN12_PPGTT_PTE_PAT1: u64 = 1 << 4;
+const GEN12_PPGTT_PTE_PAT2: u64 = 1 << 7;
+const GEN12_SYSTEM_MEMORY_WB_PAT_INDEX: u8 = 0;
 const PDE_PRESENT_RW_UC: u64 = PAGE_PRESENT | PAGE_RW | PAGE_PWT | PAGE_PCD;
+
+const fn gen12_ppgtt_leaf_flags(pat_index: u8) -> u64 {
+    PAGE_PRESENT
+        | PAGE_RW
+        | if pat_index & 1 != 0 {
+            GEN12_PPGTT_PTE_PAT0
+        } else {
+            0
+        }
+        | if pat_index & 2 != 0 {
+            GEN12_PPGTT_PTE_PAT1
+        } else {
+            0
+        }
+        | if pat_index & 4 != 0 {
+            GEN12_PPGTT_PTE_PAT2
+        } else {
+            0
+        }
+}
+
+const PTE_PRESENT_RW_PAT0_WB: u64 = gen12_ppgtt_leaf_flags(GEN12_SYSTEM_MEMORY_WB_PAT_INDEX);
+const _: () = assert!(PTE_PRESENT_RW_PAT0_WB == PAGE_PRESENT | PAGE_RW);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct PpgttRange {
@@ -36,6 +62,11 @@ unsafe impl Sync for SparsePpgtt {}
 
 impl SparsePpgtt {
     pub(crate) fn new() -> Option<Self> {
+        // Do not create a Gen12 PPGTT whose PAT0 meaning is inherited from
+        // firmware. The display handoff relies on PAT0 being verified WB.
+        if !crate::intel::gen12_integrated_pat_ready() {
+            return None;
+        }
         let pml4 = alloc_table_page()?;
         Some(Self {
             pml4,
@@ -113,7 +144,10 @@ fn map_page(ppgtt: &mut SparsePpgtt, gpu: u64, phys: u64) -> Option<()> {
     let pd = ensure_child_table(ppgtt, pdp, pdp_index)?;
     let pt = ensure_child_table(ppgtt, pd, pd_index)?;
     unsafe {
-        core::ptr::write_volatile(pt.virt.add(pt_index), (phys & ENTRY_ADDR_MASK) | PTE_PRESENT_RW);
+        core::ptr::write_volatile(
+            pt.virt.add(pt_index),
+            (phys & ENTRY_ADDR_MASK) | PTE_PRESENT_RW_PAT0_WB,
+        );
     }
     Some(())
 }

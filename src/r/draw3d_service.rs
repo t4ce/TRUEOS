@@ -211,7 +211,7 @@ fn render_and_publish_ui4_scene_frame(
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "draw3d";
-            "draw3d: live frame path=one-guc-scene-submit-to-ui4-triple-buffer target_gpu=0x{:X} size={}x{} pitch={} buffers=3 publish_after_guc_release=1 release_sequence={} render_to_display_visibility=final-rcs-pipe-control compositor_expected=direct-scanout-vblank-flip cpu_surface_sweep=0 cpu_readback=0 cpu_frame_copy=0\n",
+            "draw3d: live frame path=one-guc-scene-submit-to-ui4-triple-buffer target_gpu=0x{:X} size={}x{} pitch={} buffers=3 publish_after_guc_release=1 release_sequence={} render_release=rt-tile-flush+separate-qword-cookie display_cache_policy=verified-pat0-wb+ggtt-pte-readback compositor_expected=direct-scanout-vblank-flip cpu_surface_sweep=0 cpu_readback=0 cpu_frame_copy=0\n",
             destination.gpu,
             destination.width,
             destination.height,

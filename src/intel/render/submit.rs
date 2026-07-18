@@ -148,7 +148,14 @@ fn submit_warm_render_batch(
             }
             _ => result0,
         };
-        if observed == expected_result {
+        // The scene release uses a QWord cookie from the dedicated post-sync
+        // PIPE_CONTROL. Checking both halves makes completion specifically a
+        // proof of that packet, rather than generic command-stream progress.
+        let expected_marker_observed = observed == expected_result
+            && (expected_result_slot_dword != RESULT_SLOT_SCENE_FRAME_DWORD
+                || read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD + 1)
+                    == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI);
+        if expected_marker_observed {
             completed = true;
             break;
         }
@@ -665,6 +672,9 @@ fn submit_warm_render_batch(
             submit_name
         );
     }
+    // This still bridges hardware retirement into the software GuC timeline
+    // by CPU-polling the post-sync cookie. It is a correctness boundary, not
+    // yet the eventual asynchronous GuC fence implementation.
     let _ = crate::gpu::executor::complete_kernel_submission(gpu_submission, completed);
     completed
 }
