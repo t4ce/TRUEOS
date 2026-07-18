@@ -78,6 +78,13 @@ fn container_shell_prompt() {
     attached_write_str("vmx> ");
 }
 
+fn container_shell_help() {
+    attached_write_line("commands: host home env smp help stop pause preserve");
+    attached_write_line("  stop     stop without writing a checkpoint");
+    attached_write_line("  pause    replicatable checkpoint; resume by vmid from F2 pause");
+    attached_write_line("  preserve raw checkpoint-and-stop without a lifecycle latch");
+}
+
 fn container_shell_read_line(line: &mut Vec<u8>) {
     line.clear();
     loop {
@@ -142,7 +149,42 @@ fn container_shell_command(raw: &str) -> bool {
             }
             attached_write_line(line.as_str());
         }
-        "stop" | "pause" | "preserve" => return false,
+        "help" | "?" => container_shell_help(),
+        "stop" => {
+            attached_write_line("vmx-shell: requesting stop without checkpoint");
+            let (status, _) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_SHUTDOWN,
+                0,
+                0,
+                b"vmx mini-shell stop",
+                &mut [],
+            );
+            attached_write_line(
+                alloc::format!("vmx-shell: stop returned unexpectedly status={}", status).as_str(),
+            );
+        }
+        "pause" => {
+            attached_write_line(
+                "vmx-shell: requesting replicatable pause; resume it from F2 pause by vmid",
+            );
+            let (status, _) = trueos_vm::vmcall::call(
+                trueos_vm::vmcall::OP_LIFECYCLE_PAUSE,
+                0,
+                0,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK {
+                attached_write_line(
+                    "vmx-shell: replicatable pause unavailable; use preserve for a raw checkpoint",
+                );
+            } else {
+                attached_write_line("vmx-shell: pause returned unexpectedly");
+            }
+        }
+        "preserve" => {
+            attached_write_line("vmx-shell: requesting raw checkpoint-and-stop");
+            trueos_vm::vmcall::preserve();
+            attached_write_line("vmx-shell: preserve returned unexpectedly");
+        }
         _ => attached_write_line("unknown vmx command"),
     }
     true
@@ -271,7 +313,7 @@ pub extern "C" fn trueos_hv_guest_shell_run() -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
     attached_write_line("vmx-shell: ready");
-    attached_write_line("commands: host home env smp stop pause preserve");
+    container_shell_help();
     let mut line = Vec::new();
     loop {
         container_shell_prompt();
@@ -280,13 +322,7 @@ pub extern "C" fn trueos_hv_guest_container_shell_run() -> ! {
             attached_write_line("input: invalid utf8");
             continue;
         };
-        if !container_shell_command(text) {
-            attached_write_line("vmx-shell: preserving hull");
-            trueos_vm::vmcall::preserve();
-            loop {
-                core::hint::spin_loop();
-            }
-        }
+        let _ = container_shell_command(text);
     }
 }
 

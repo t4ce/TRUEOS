@@ -1962,6 +1962,13 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
                 .as_str(),
             );
         }
+        "help" | "?" => blueprint_control_shell_write_text(
+            vm_id,
+            "commands: host home env smp help stop pause preserve\n\
+             stop: stop without a checkpoint\n\
+             pause: replicatable checkpoint; resume by vmid from F2 pause\n\
+             preserve: raw checkpoint-and-stop without a lifecycle latch",
+        ),
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
