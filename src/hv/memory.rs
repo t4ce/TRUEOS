@@ -2342,30 +2342,61 @@ pub unsafe fn copy_into_guest_page(dst: *mut [u64; 512], src: &[u8]) {
     core::ptr::copy_nonoverlapping(src.as_ptr(), dst.cast::<u8>(), PAGE_SIZE_4K);
 }
 
-pub unsafe fn push_guest_page(out: &mut alloc::vec::Vec<u8>, page: *const [u64; 512]) {
-    out.extend_from_slice(core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
+unsafe fn push_guest_page_sparse(
+    out: &mut alloc::vec::Vec<u8>,
+    bitmap_offset: usize,
+    page_index: usize,
+    page: *const [u64; 512],
+) -> Result<bool, &'static str> {
+    let bitmap_byte = bitmap_offset
+        .checked_add(page_index / 8)
+        .ok_or("snapshot bitmap overflow")?;
+    let bitmap_slot = out.get_mut(bitmap_byte).ok_or("snapshot bitmap bounds")?;
+    let page_bytes = unsafe { core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K) };
+    if page_bytes.iter().all(|byte| *byte == 0) {
+        return Ok(false);
+    }
+    *bitmap_slot |= 1 << (page_index % 8);
+    out.extend_from_slice(page_bytes);
+    Ok(true)
 }
 
-pub unsafe fn push_guest_pages_for_vm(
+pub unsafe fn push_guest_pages_sparse_for_vm(
     vm_id: u8,
     out: &mut alloc::vec::Vec<u8>,
-) -> Result<(), &'static str> {
+    bitmap_offset: usize,
+) -> Result<usize, &'static str> {
     let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let mut page_index = 0usize;
+    let mut stored_pages = 0usize;
+    let mut push_page = |page: *const [u64; 512]| -> Result<(), &'static str> {
+        if unsafe { push_guest_page_sparse(out, bitmap_offset, page_index, page)? } {
+            stored_pages = stored_pages.saturating_add(1);
+        }
+        page_index = page_index.saturating_add(1);
+        Ok(())
+    };
     unsafe {
-        push_guest_page(out, core::ptr::addr_of!((*tables).pml4.0));
-        push_guest_page(out, core::ptr::addr_of!((*tables).low_pdpt.0));
-        push_guest_page(out, core::ptr::addr_of!((*tables).low_pd.0));
+        push_page(core::ptr::addr_of!((*tables).pml4.0))?;
+        push_page(core::ptr::addr_of!((*tables).low_pdpt.0))?;
+        push_page(core::ptr::addr_of!((*tables).low_pd.0))?;
         for i in 0..GUEST_LOW_PT_COUNT {
-            push_guest_page(out, core::ptr::addr_of!((*tables).low_pts[i].0));
+            push_page(core::ptr::addr_of!((*tables).low_pts[i].0))?;
         }
-        push_guest_page(out, core::ptr::addr_of!((*tables).high_pdpt.0));
-        push_guest_page(out, core::ptr::addr_of!((*tables).high_pd.0));
+        push_page(core::ptr::addr_of!((*tables).high_pdpt.0))?;
+        push_page(core::ptr::addr_of!((*tables).high_pd.0))?;
         for i in 0..GUEST_HIGH_IMAGE_PT_COUNT {
-            push_guest_page(out, core::ptr::addr_of!((*tables).image_pts[i].0));
+            push_page(core::ptr::addr_of!((*tables).image_pts[i].0))?;
         }
-        push_guest_page(out, core::ptr::addr_of!((*tables).code_pt.0));
+        push_page(core::ptr::addr_of!((*tables).code_pt.0))?;
     }
-    Ok(())
+    let expected = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if page_index != expected {
+        return Err("snapshot page count mismatch");
+    }
+    Ok(stored_pages)
 }
 
 pub unsafe fn restore_guest_pages_for_vm(
@@ -2373,8 +2404,41 @@ pub unsafe fn restore_guest_pages_for_vm(
     bytes: &[u8],
     off: &mut usize,
 ) -> Result<(), &'static str> {
+    unsafe { restore_guest_pages_impl(vm_id, bytes, off, None) }
+}
+
+pub unsafe fn restore_guest_pages_sparse_for_vm(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+    bitmap: &[u8],
+) -> Result<(), &'static str> {
+    let expected_pages = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if bitmap.len() < expected_pages.div_ceil(8) {
+        return Err("snapshot bitmap bounds");
+    }
+    unsafe { restore_guest_pages_impl(vm_id, bytes, off, Some(bitmap)) }
+}
+
+unsafe fn restore_guest_pages_impl(
+    vm_id: u8,
+    bytes: &[u8],
+    off: &mut usize,
+    bitmap: Option<&[u8]>,
+) -> Result<(), &'static str> {
     let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let mut page_index = 0usize;
     let mut take_page = |dst: *mut [u64; 512]| -> Result<(), &'static str> {
+        let present = bitmap
+            .map(|map| map[page_index / 8] & (1 << (page_index % 8)) != 0)
+            .unwrap_or(true);
+        page_index = page_index.saturating_add(1);
+        if !present {
+            unsafe { zero_guest_page(dst) };
+            return Ok(());
+        }
         let end = off
             .checked_add(PAGE_SIZE_4K)
             .ok_or("snapshot page overflow")?;
@@ -2397,6 +2461,12 @@ pub unsafe fn restore_guest_pages_for_vm(
             take_page(core::ptr::addr_of_mut!((*tables).image_pts[i].0))?;
         }
         take_page(core::ptr::addr_of_mut!((*tables).code_pt.0))?;
+    }
+    let expected = 6usize
+        .saturating_add(GUEST_LOW_PT_COUNT)
+        .saturating_add(GUEST_HIGH_IMAGE_PT_COUNT);
+    if page_index != expected {
+        return Err("snapshot page count mismatch");
     }
     Ok(())
 }

@@ -1797,16 +1797,13 @@ const fn fill_rect_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDisp
     let full_groups = width / FILL_RECT_PIXELS_PER_GROUP_X;
     let tail_pixels = width % FILL_RECT_PIXELS_PER_GROUP_X;
     let group_x = full_groups + if tail_pixels == 0 { 0 } else { 1 };
-    let active_lanes = if tail_pixels == 0 {
-        FILL_RECT_PIXELS_PER_GROUP_X
-    } else {
-        tail_pixels
-    };
-    let right_mask = if active_lanes == FILL_RECT_PIXELS_PER_GROUP_X {
-        GPGPU_WALKER_SIMD16_MASK
-    } else {
-        (1u32 << active_lanes) - 1
-    };
+    // GPGPU_WALKER's RightExecutionMask applies to every SIMD hardware
+    // thread, not just the final X workgroup.  A tail-derived mask therefore
+    // removes the same lanes from every 16-pixel block and turns glyphs into
+    // periodic vertical fragments.  All callers using this dispatch have an
+    // explicit x/width guard, so run every group with all lanes enabled and
+    // let the final padded lanes return without touching the surface.
+    let right_mask = GPGPU_WALKER_SIMD16_MASK;
     Some(FillRect2dDispatch {
         group_x,
         group_y: height,
@@ -1822,7 +1819,7 @@ const _: () = {
     let tail = fill_rect_2d_dispatch(17, 3).unwrap();
     assert!(tail.group_x == 2);
     assert!(tail.group_y == 3);
-    assert!(tail.right_mask == 1);
+    assert!(tail.right_mask == GPGPU_WALKER_SIMD16_MASK);
     let scanout = fill_rect_2d_dispatch(2560, 1440).unwrap();
     assert!(scanout.group_x == 160);
     assert!(scanout.group_y == 1440);
@@ -3930,7 +3927,10 @@ fn run_font_outline_coverage_r8_self_test() -> bool {
     };
     let mut solid_interior = true;
     for y in 3..8usize {
-        for x in 3..16usize {
+        // Include x=16 from the odd-width tail workgroup.  This catches a
+        // walker that incorrectly applies a three-lane tail mask to every
+        // SIMD16 group while still appearing to complete successfully.
+        for x in 3..17usize {
             let offset = y * surface.pitch_bytes as usize + x;
             let coverage = unsafe { core::ptr::read_volatile(mask.virt.add(offset)) };
             solid_interior &= coverage == u8::MAX;
@@ -3940,7 +3940,7 @@ fn run_font_outline_coverage_r8_self_test() -> bool {
     let ok = solid_interior && corner == 0 && audit.nonzero_pixels >= 65;
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: font-outline-coverage-r8 self-test={} mask_gpu=0x{:X} nonzero={} bounds={},{},{}x{} tail_width={} invariant=solid-interior+empty-corner+unique-va\n",
+        "intel/gpgpu: font-outline-coverage-r8 self-test={} mask_gpu=0x{:X} nonzero={} bounds={},{},{}x{} tail_width={} right_mask=full-simd16 invariant=solid-interior-including-tail+empty-corner+unique-va\n",
         if ok { "pass" } else { "fail" },
         surface.gpu,
         audit.nonzero_pixels,

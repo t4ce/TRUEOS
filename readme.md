@@ -1,52 +1,3 @@
-# TRUEOS — native Intel Gen12 3D rendering on bare metal
-
-> [!IMPORTANT]
-> **Milestone reached on 13 July 2026:** TRUEOS directly brought up the Intel
-> Gen12/Xe-LP 3D pipeline, rendered its unchanged tessellated `hello world`
-> mesh, read back the complete RGBA8 render target, and presented the result
-> through its own bare-metal display stack.
-
-The proven draw processed **807 vertices / 269 triangles**, advanced the
-IA, VS, clipping and pixel-shader hardware counters, produced **134 verified
-render-target pixels** in a linear 64×64 buffer, and displayed the result as a
-4× enlarged 256×256 hardware-plane overlay. The demonstrated path is native
-TRUEOS code; Linux DRM/i915, Mesa and vendor graphics drivers are not running
-underneath it.
-
-To the best of our public-source research, this appears to be the **first
-publicly documented hobby-built operating system to directly bring up a modern
-Intel Gen12 3D pipeline and present its rendered output using its own display
-stack**. This is deliberately a public-record claim—private or unpublished
-experiments cannot be surveyed. The closest documented projects are
-[Genode/Sculpt](https://genode.org/documentation/release-notes/22.11), which
-uses Mesa Iris with a custom GPU multiplexer, and Google's institutional
-[Fuchsia Magma](https://fuchsia.dev/fuchsia-src/development/graphics/magma)
-driver architecture. The OSDev Intel documentation still notes that its native
-Intel guide does not cover shader-driven 2D/3D acceleration
-([reference](https://wiki.osdev.org/Native_Intel_graphics)).
-
-Copyright (c) 2026 Jonas Baethke. All rights reserved.
-
-TRUEOS uses a two-lane permission model under `LICENSE`: the first-party source
-is source-available for public view, while official TRUEOS binary releases may
-be used, run, evaluated, deployed, and commercially used.
-
-Do not copy, publish, redistribute, clone, or build a 1:1 source-derived TRUEOS
-from the first-party source without prior written permission. Blueprints,
-scripts, applications, data, and configuration are the intended path for
-extending and programming TRUEOS at runtime, including commercially.
-
-# “You can boot a tiny Rust OS and make it do real things.”
-## Why it is interesting
-
-- Tiny bootable ISO, currently around 5 MB
-- Rust-first bare-metal runtime
-- Video/JPEG/media playback experiments
-- Async and parallel Rust workload support
-- Blueprint-based runtime extension model
-- Signed upstream GitHub Actions releases
-- QEMU, VFIO, bridge networking, and hardware bring-up workflows
-
 ```
 TRUE OS § ® 2026
 ██████████████████████████████████████████████████████████████████████
@@ -65,12 +16,52 @@ Think of TRUE OS as the world’s fast-moving “entropy dividend”:
 A constant influx of resources, money, and safety.
 ```
 
-# Release is done entirely Upstream, via GitHub Actions
+# TRUEOS — native Intel Gen12 3D rendering on bare metal
+
+> “You can boot a tiny Rust OS and make it do real things.”
+
+## Download TRUEOS
+
+> [!TIP]
+> **Ready-to-boot ISO:** [Download TRUEOS 0.0.178 (`.7z`, 6 MB)](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/TrueOS-0.0.178.7z)
+>
+> [Latest release and notes](https://github.com/t4ce/TRUEOS/releases/latest) ·
+> [All releases](https://github.com/t4ce/TRUEOS/releases) ·
+> [SHA-256 checksums](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/SHA256SUMS) ·
+> [Release public key](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/TRUEOS-release-public-key.json)
+
+The release archive contains the bootable ISO, provenance record, firmware, and
+one-command launchers for Linux and macOS. Use the latest-release link for
+release notes, checksums, and signatures.
+
+Copyright (c) 2026 Jonas Baethke. All rights reserved.
+
+TRUEOS uses a two-lane permission model under `LICENSE`: the first-party source
+is source-available for public view, while official TRUEOS binary releases may
+be used, run, evaluated, deployed, and commercially used.
+
+Do not copy, publish, redistribute, clone, or build a 1:1 source-derived TRUEOS
+from the first-party source without prior written permission. Blueprints,
+scripts, applications, data, and configuration are the intended path for
+extending and programming TRUEOS at runtime, including commercially.
+
+## Why it is interesting
+
+- Tiny bootable ISO, currently around 5 MB
+- Rust-first bare-metal runtime
+- Video/JPEG/media playback experiments
+- Async and parallel Rust workload support
+- Blueprint-based runtime extension model
+- Signed upstream GitHub Actions releases
+- QEMU, VFIO, bridge networking, and hardware bring-up workflows
+
+## Release builds and verification
+
 > [!Note]
 > Makes it impossible to alter the build tools
 > and sourcefiles are signed & included
 
-## Cloud releases - Batteries included
+### Cloud releases - Batteries included
 
 Official public releases are built upstream by GitHub Actions:
 

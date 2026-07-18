@@ -4,8 +4,13 @@ use super::hvlogf;
 use crate::hv::memory::*;
 
 pub const VM_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
-pub const VM_SNAPSHOT_VERSION: u32 = 1;
+pub const VM_SNAPSHOT_VERSION_LEGACY: u32 = 1;
+pub const VM_SNAPSHOT_VERSION: u32 = 2;
 pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
+pub const GUEST_SNAPSHOT_PAGE_BITMAP_BYTES: usize = GUEST_SNAPSHOT_PAGE_COUNT.div_ceil(8);
+// Version 2 stores this fixed bitmap immediately after the header, followed by
+// only the 4 KiB page-table pages whose bits are set. Stack and code follow in
+// their original order. Version 1 has no bitmap and stores every table page.
 
 pub fn snapshot_path(vm_id: u8) -> String {
     format!("vm/vm{}.snapshot", vm_id)
@@ -84,19 +89,33 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
     };
     let guest_stack = guest_stack_slice_for_vm(vm_id).ok_or(SaveError::NoSnapshot)?;
 
-    let total = core::mem::size_of::<VmSnapshotHeader>()
+    let total_capacity = core::mem::size_of::<VmSnapshotHeader>()
+        + GUEST_SNAPSHOT_PAGE_BITMAP_BYTES
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
         + guest_stack.len()
         + meta.code_len as usize;
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::with_capacity(total_capacity);
     push_bytes(&mut out, unsafe {
         core::slice::from_raw_parts(
             (&header as *const VmSnapshotHeader).cast::<u8>(),
             core::mem::size_of::<VmSnapshotHeader>(),
         )
     });
+    let bitmap_offset = out.len();
+    out.resize(bitmap_offset + GUEST_SNAPSHOT_PAGE_BITMAP_BYTES, 0);
     unsafe {
-        push_guest_pages_for_vm(vm_id, &mut out).map_err(|_| SaveError::NoSnapshot)?;
+        let stored_pages = push_guest_pages_sparse_for_vm(vm_id, &mut out, bitmap_offset)
+            .map_err(|_| SaveError::NoSnapshot)?;
+        hvlogf(format_args!(
+            "hv: vm{} reporting: snapshot page tables sparse stored={} zero={} saved_bytes={}",
+            vm_id,
+            stored_pages,
+            GUEST_SNAPSHOT_PAGE_COUNT.saturating_sub(stored_pages),
+            GUEST_SNAPSHOT_PAGE_COUNT
+                .saturating_sub(stored_pages)
+                .saturating_mul(PAGE_SIZE_4K)
+                .saturating_sub(GUEST_SNAPSHOT_PAGE_BITMAP_BYTES),
+        ));
         push_bytes(&mut out, guest_stack);
         push_bytes(
             &mut out,
@@ -119,10 +138,28 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     }
 
     let header = parse_snapshot_header(&bytes[..header_len])?;
+    let sparse_pages = header.version == VM_SNAPSHOT_VERSION;
+    let bitmap_end = if sparse_pages {
+        header_len
+            .checked_add(GUEST_SNAPSHOT_PAGE_BITMAP_BYTES)
+            .ok_or(RestoreError::BadSnapshot)?
+    } else {
+        header_len
+    };
+    let bitmap = bytes
+        .get(header_len..bitmap_end)
+        .ok_or(RestoreError::BadSnapshot)?;
+    let stored_page_count = if sparse_pages {
+        sparse_page_count(bitmap)
+    } else {
+        GUEST_SNAPSHOT_PAGE_COUNT
+    };
     let expected = header_len
-        + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
-        + (header.guest_stack_bytes as usize)
-        + (header.code_len as usize);
+        .checked_add(bitmap.len())
+        .and_then(|len| len.checked_add(stored_page_count.checked_mul(PAGE_SIZE_4K)?))
+        .and_then(|len| len.checked_add(usize::try_from(header.guest_stack_bytes).ok()?))
+        .and_then(|len| len.checked_add(usize::try_from(header.code_len).ok()?))
+        .ok_or(RestoreError::BadSnapshot)?;
     if bytes.len() < expected || header.guest_page_bytes as usize != PAGE_SIZE_4K {
         return Err(RestoreError::BadSnapshot);
     }
@@ -131,10 +168,15 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     prepare_guest_stack_bytes_for_vm(vm_id, header_stack_bytes)
         .map_err(|_| RestoreError::BadSnapshot)?;
 
-    let mut off = header_len;
+    let mut off = bitmap_end;
     unsafe {
-        restore_guest_pages_for_vm(vm_id, bytes, &mut off)
-            .map_err(|_| RestoreError::BadSnapshot)?;
+        if sparse_pages {
+            restore_guest_pages_sparse_for_vm(vm_id, bytes, &mut off, bitmap)
+                .map_err(|_| RestoreError::BadSnapshot)?;
+        } else {
+            restore_guest_pages_for_vm(vm_id, bytes, &mut off)
+                .map_err(|_| RestoreError::BadSnapshot)?;
+        }
         let stack_ptr = guest_stack_mut_ptr_for_vm(vm_id).ok_or(RestoreError::BadSnapshot)?;
         core::ptr::copy_nonoverlapping(
             bytes[off..off + header_stack_bytes].as_ptr(),
@@ -144,11 +186,10 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
         off += header_stack_bytes;
     }
 
-    let code_end = off + header.code_len as usize;
-    let live_code = unsafe {
-        core::slice::from_raw_parts(header.code_base as *const u8, header.code_len as usize)
-    };
-    if live_code != &bytes[off..code_end] {
+    let code_len = usize::try_from(header.code_len).map_err(|_| RestoreError::BadSnapshot)?;
+    let code_end = off.checked_add(code_len).ok_or(RestoreError::BadSnapshot)?;
+    let stored_code = bytes.get(off..code_end).ok_or(RestoreError::BadSnapshot)?;
+    if !immutable_code_matches(&header, stored_code) {
         return Err(RestoreError::CodeMismatch);
     }
 
@@ -166,9 +207,11 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     *snapshot_meta_lock.lock() = Some(restored);
     *restore_meta_lock.lock() = Some(restored);
     hvlogf(format_args!(
-        "hv: vm{} reporting: restore armed path={} guest_cr3=0x{:016X} guest_rip=0x{:016X} guest_rsp=0x{:016X}",
+        "hv: vm{} reporting: restore armed path={} format=v{} table_pages={} guest_cr3=0x{:016X} guest_rip=0x{:016X} guest_rsp=0x{:016X}",
         vm_id,
         snapshot_path(vm_id).as_str(),
+        header.version,
+        stored_page_count,
         restored.guest_cr3,
         restored.guest_rip,
         restored.guest_rsp
@@ -190,7 +233,9 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
     let exit_guest_rip = take_u64(bytes, &mut off)?;
     let guest_stack_bytes = take_u64(bytes, &mut off)?;
     let guest_page_bytes = take_u64(bytes, &mut off)?;
-    if magic != VM_SNAPSHOT_MAGIC || version != VM_SNAPSHOT_VERSION {
+    if magic != VM_SNAPSHOT_MAGIC
+        || (version != VM_SNAPSHOT_VERSION && version != VM_SNAPSHOT_VERSION_LEGACY)
+    {
         return Err(RestoreError::BadSnapshot);
     }
     Ok(VmSnapshotHeader {
@@ -233,4 +278,50 @@ fn take_u64(bytes: &[u8], off: &mut usize) -> Result<u64, RestoreError> {
 
 fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
+}
+
+fn sparse_page_count(bitmap: &[u8]) -> usize {
+    (0..GUEST_SNAPSHOT_PAGE_COUNT)
+        .filter(|index| bitmap[index / 8] & (1 << (index % 8)) != 0)
+        .count()
+}
+
+fn immutable_code_matches(header: &VmSnapshotHeader, stored_code: &[u8]) -> bool {
+    let layout = crate::hv::guest::hull_image_layout();
+    immutable_span_matches(header.code_base, stored_code, layout.text_start, layout.text_end)
+        && immutable_span_matches(
+            header.code_base,
+            stored_code,
+            layout.rodata_start,
+            layout.rodata_end,
+        )
+}
+
+fn immutable_span_matches(
+    code_base: u64,
+    stored_code: &[u8],
+    span_start: u64,
+    span_end: u64,
+) -> bool {
+    if span_end < span_start || span_start < code_base {
+        return false;
+    }
+    let Some(start) = span_start
+        .checked_sub(code_base)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return false;
+    };
+    let Some(end) = span_end
+        .checked_sub(code_base)
+        .and_then(|offset| usize::try_from(offset).ok())
+    else {
+        return false;
+    };
+    let Some(stored) = stored_code.get(start..end) else {
+        return false;
+    };
+    let live =
+        unsafe { core::slice::from_raw_parts(span_start as *const u8, end.saturating_sub(start)) };
+    live == stored
 }
