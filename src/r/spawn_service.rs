@@ -65,6 +65,7 @@ define_started_flags!(
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
+    GPU_COMPLETION_REAPER_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
@@ -480,6 +481,10 @@ fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tga::tga_task())
+}
+
+fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::intel::gpgpu::gpu_completion_reaper_task())
 }
 
 #[embassy_executor::task]
@@ -1221,7 +1226,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 62 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 63 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1422,6 +1427,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &TGA_TASK_STARTED,
         spawn_tga_task,
+    ),
+    TaskSpec::enabled_gated(
+        "gpu-completion-reaper",
+        0,
+        intel_cursor_service_gate,
+        &GPU_COMPLETION_REAPER_STARTED,
+        spawn_gpu_completion_reaper,
     ),
     TaskSpec::enabled_gated(
         "intel-cursor-service",

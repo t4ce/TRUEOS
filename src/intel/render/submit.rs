@@ -60,17 +60,20 @@ fn submit_warm_render_batch(
         hwlrca_hi: context_desc_hi,
         gpuvm_root_phys: pml4_phys,
     };
-    if let Err(error) = crate::gpu::vgpu::submit_kernel_context(
+    let gpu_submission = match crate::gpu::executor::submit_kernel_context(
         crate::gpu::vgpu::KernelClient::Render,
         descriptor,
     ) {
-        crate::log!(
-            "{} vgpu-submit-failed error={:?} submission_owner=vgpu/guc direct_elsp=0\n",
-            submit_name,
-            error
-        );
-        return false;
-    }
+        Ok(submission) => submission,
+        Err(error) => {
+            crate::log!(
+                "{} vgpu-submit-failed error={:?} submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
+                submit_name,
+                error
+            );
+            return false;
+        }
+    };
 
     if should_log_primary_probe_detail() {
         crate::log!(
@@ -662,10 +665,7 @@ fn submit_warm_render_batch(
             submit_name
         );
     }
-    let _ = crate::gpu::vgpu::complete_kernel_submission(
-        crate::gpu::vgpu::KernelClient::Render,
-        completed,
-    );
+    let _ = crate::gpu::executor::complete_kernel_submission(gpu_submission, completed);
     completed
 }
 

@@ -42,6 +42,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = vgpu::broker_status();
+    let executor = crate::gpu::executor::status();
     print_shell_line(
         io,
         format!(
@@ -57,6 +58,19 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.scheduler.context_capacity,
             status.scheduler.submissions,
             status.scheduler.failures,
+        )
+        .as_str(),
+    );
+    print_shell_line(
+        io,
+        format!(
+            "vgpu: executor submissions={} completions={} failures={} admitting={} inflight={} waiters={}",
+            executor.submissions,
+            executor.completions,
+            executor.failures,
+            executor.admitting,
+            executor.inflight,
+            executor.waiters,
         )
         .as_str(),
     );

@@ -339,6 +339,7 @@ struct BufferSlot {
 struct QueueRecord {
     class: QueueClass,
     timeline: TimelineStatus,
+    failed_points: Vec<u64>,
 }
 
 struct QueueSlot {
@@ -718,6 +719,7 @@ pub(crate) fn create_queue(
         QueueRecord {
             class,
             timeline: TimelineStatus::default(),
+            failed_points: Vec::new(),
         },
     ))
 }
@@ -794,6 +796,30 @@ pub(crate) fn wait_timeline(
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum TimelinePointStatus {
+    Pending,
+    Complete,
+    Failed,
+}
+
+/// Query one exact point on an adopted kernel queue.
+pub(crate) fn kernel_point_status(
+    client: KernelClient,
+    point: TimelinePoint,
+) -> Result<TimelinePointStatus, VgpuError> {
+    let broker = BROKER.lock();
+    let (_, device) =
+        find_device_by_principal(&broker, client.principal()).ok_or(VgpuError::InvalidHandle)?;
+    ensure_live(device)?;
+    let queue_handle =
+        find_queue_by_class(device, client.queue_class()).ok_or(VgpuError::InvalidHandle)?;
+    if queue_handle != point.queue {
+        return Err(VgpuError::InvalidHandle);
+    }
+    point_status(lookup_queue(device, queue_handle)?, point)
+}
+
 /// Admit one already-prepared kernel LRC through its privileged virtual
 /// device, then through the physical GuC scheduler.
 pub(crate) fn submit_kernel_context(
@@ -844,27 +870,37 @@ pub(crate) fn submit_kernel_context(
     })
 }
 
-/// Retire the latest serialized kernel submission after its existing hardware
+/// Retire one exact serialized kernel submission after its hardware
 /// marker/fence has been observed (or has definitively failed).
 pub(crate) fn complete_kernel_submission(
     client: KernelClient,
+    point: TimelinePoint,
     completed: bool,
 ) -> Option<TimelinePoint> {
     let mut broker = BROKER.lock();
     let principal = client.principal();
     let (_, device) = find_device_mut_by_principal(&mut broker, principal)?;
     let queue_handle = find_queue_by_class(device, client.queue_class())?;
+    if queue_handle != point.queue || point.value == 0 {
+        return None;
+    }
     let queue = lookup_queue_mut(device, queue_handle).ok()?;
-    if queue.timeline.completed < queue.timeline.submitted {
-        queue.timeline.completed = queue.timeline.submitted;
+    if point.value > queue.timeline.submitted {
+        return None;
+    }
+    if queue.timeline.completed < point.value {
+        queue.timeline.completed = point.value;
         if !completed {
             queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+            if !queue.failed_points.contains(&point.value) {
+                queue.failed_points.push(point.value);
+            }
         }
     }
     Some(TimelinePoint {
         queue: queue_handle,
-        value: queue.timeline.completed,
-        physical_serial: queue.timeline.last_physical_serial,
+        value: point.value,
+        physical_serial: point.physical_serial,
     })
 }
 
@@ -1114,8 +1150,26 @@ fn ensure_kernel_queue(
         QueueRecord {
             class,
             timeline: TimelineStatus::default(),
+            failed_points: Vec::new(),
         },
     ))
+}
+
+fn point_status(
+    queue: &QueueRecord,
+    point: TimelinePoint,
+) -> Result<TimelinePointStatus, VgpuError> {
+    if point.value == 0 || point.value > queue.timeline.submitted {
+        return Err(VgpuError::InvalidHandle);
+    }
+    if queue.failed_points.contains(&point.value) {
+        return Ok(TimelinePointStatus::Failed);
+    }
+    if queue.timeline.completed >= point.value {
+        Ok(TimelinePointStatus::Complete)
+    } else {
+        Ok(TimelinePointStatus::Pending)
+    }
 }
 
 fn device_gpuvm_root(principal: Principal, handle: DeviceHandle) -> Option<u64> {

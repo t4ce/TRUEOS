@@ -198,11 +198,31 @@ fn render_and_publish_ui4_scene_frame(
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(Draw3dUi4Error::Render("incomplete-or-stale-gpu-frame"));
     }
+    // The GuC completion proves that rendering retired, but scanout is a
+    // different cache consumer.  Make the completed bytes visible through
+    // the exact leased allocation before its display-GGTT alias is imported.
+    // This is deliberately a narrow render-to-display coherency proof: it
+    // does not copy pixels, change buffering, or enqueue another GPU job.
+    let view = match crate::ui4::writable_rgba_view(lease) {
+        Ok(view) => view,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
+    if view.phys != destination.phys
+        || view.byte_len != destination.bytes
+        || view.pitch != destination.pitch_bytes
+    {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    crate::intel::dma_flush(view.virt, view.byte_len);
     publish_ui4_scene_frame(surface, lease)?;
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "draw3d";
-            "draw3d: live frame path=one-guc-scene-submit-to-ui4-triple-buffer target_gpu=0x{:X} size={}x{} pitch={} buffers=3 publish_after_guc_fence=1 compositor_expected=direct-scanout-vblank-flip cpu_readback=0 cpu_frame_copy=0\n",
+            "draw3d: live frame path=one-guc-scene-submit-to-ui4-triple-buffer target_gpu=0x{:X} size={}x{} pitch={} buffers=3 publish_after_guc_fence=1 render_to_display_visibility=clflush-mfence compositor_expected=direct-scanout-vblank-flip cpu_readback=0 cpu_frame_copy=0\n",
             destination.gpu,
             destination.width,
             destination.height,

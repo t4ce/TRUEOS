@@ -393,10 +393,19 @@ struct ResidentSceneDepthAllocation {
 
 unsafe impl Send for ResidentSceneDepthAllocation {}
 
+#[derive(Copy, Clone)]
+struct ResidentSceneDirectUi4Mapping {
+    phys: u64,
+    bytes: usize,
+    gpu: u64,
+}
+
 static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
-static RESIDENT_SCENE_DIRECT_UI4_TARGET: Mutex<Option<(u64, usize)>> = Mutex::new(None);
+static RESIDENT_SCENE_DIRECT_UI4_TARGETS: Mutex<
+    [Option<ResidentSceneDirectUi4Mapping>; DRAW3D_UI4_FRAME_BUFFER_COUNT],
+> = Mutex::new([None; DRAW3D_UI4_FRAME_BUFFER_COUNT]);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -409,37 +418,50 @@ struct ResidentSceneMsaaColorTarget {
 fn prepare_resident_scene_direct_ui4_target(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<u64, &'static str> {
-    if !destination.is_valid() || destination.bytes > 64 * 1024 * 1024 {
+    if !destination.is_valid()
+        || destination.bytes as u64 > GPU_VA_DRAW3D_UI4_FRAME_STRIDE
+    {
         return Err("resident-scene-direct-ui4-shape");
     }
-    let mut mapping = RESIDENT_SCENE_DIRECT_UI4_TARGET.lock();
-    if *mapping == Some((destination.phys, destination.bytes)) {
-        return Ok(GPU_VA_DRAW3D_UI4_FRAME_BASE);
-    }
-    let previous = *mapping;
-    if let Some((_, bytes)) = previous
-        && !unmap_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, bytes)
+    let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
+    if let Some(existing) = mappings
+        .iter()
+        .flatten()
+        .copied()
+        .find(|mapping| mapping.phys == destination.phys)
     {
-        return Err("resident-scene-direct-ui4-unmap");
-    }
-    if !map_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, destination.phys, destination.bytes) {
-        if let Some((phys, bytes)) = previous {
-            let _ = map_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, phys, bytes);
+        if existing.bytes != destination.bytes {
+            return Err("resident-scene-direct-ui4-shape-changed");
         }
+        return Ok(existing.gpu);
+    }
+
+    let Some(slot) = mappings.iter().position(Option::is_none) else {
+        return Err("resident-scene-direct-ui4-buffer-limit");
+    };
+    let gpu = GPU_VA_DRAW3D_UI4_FRAME_BASE
+        .checked_add(slot as u64 * GPU_VA_DRAW3D_UI4_FRAME_STRIDE)
+        .ok_or("resident-scene-direct-ui4-address")?;
+    if !map_render_ppgtt_range(gpu, destination.phys, destination.bytes) {
         return Err("resident-scene-direct-ui4-map");
     }
-    *mapping = Some((destination.phys, destination.bytes));
+    mappings[slot] = Some(ResidentSceneDirectUi4Mapping {
+        phys: destination.phys,
+        bytes: destination.bytes,
+        gpu,
+    });
     crate::log_info!(
         target: "render";
-        "draw3d: direct UI4 render target mapped render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} frame_addresses=1\n",
-        GPU_VA_DRAW3D_UI4_FRAME_BASE,
+        "draw3d: acquired UI4 triple buffer render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} persistent_render_va=1 hot_remap=0\n",
+        slot,
+        gpu,
         destination.phys,
         destination.bytes,
         destination.width,
         destination.height,
         destination.pitch_bytes,
     );
-    Ok(GPU_VA_DRAW3D_UI4_FRAME_BASE)
+    Ok(gpu)
 }
 
 fn prepare_resident_scene_msaa_allocation(
