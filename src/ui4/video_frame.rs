@@ -492,7 +492,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-direct-primary source=ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X}\n",
+            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-direct-primary source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X}\n",
             sequence,
             stream.frame.raw(),
             stream.window.raw(),
@@ -674,7 +674,7 @@ fn create_stream(
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
-        if placeholder { "await-first-frame" } else { "ytile-nv12" },
+        if placeholder { "await-first-frame" } else { "tile64-nv12" },
         spec.coded_width,
         spec.coded_height,
         frame_width,

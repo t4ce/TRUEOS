@@ -1202,7 +1202,7 @@ pub(crate) struct CopyRectRgba8Params {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Ui4Nv12YTileToPrimaryXrgbParams {
+pub(crate) struct Ui4Nv12Tile64ToPrimaryXrgbParams {
     pub(crate) nv12_gpu: u64,
     pub(crate) base_gpu: u64,
     pub(crate) dst_gpu: u64,
@@ -1863,11 +1863,11 @@ impl GpgpuRgba8Surface {
     }
 }
 
-/// Decoder-owned Y-tiled NV12 storage mapped read-only by convention into the
+/// Decoder-owned Xe media Tile64 NV12 storage mapped read-only by convention into the
 /// compositor's private PPGTT.  The media engine's VA is only an opaque alias;
 /// direct RCS installs its own PTEs for the same physical picture.
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct GpgpuNv12YTileSurface {
+pub(crate) struct GpgpuNv12Tile64Surface {
     pub(crate) phys: u64,
     pub(crate) gpu: u64,
     pub(crate) bytes: usize,
@@ -1877,7 +1877,7 @@ pub(crate) struct GpgpuNv12YTileSurface {
     pub(crate) uv_offset: u32,
 }
 
-impl GpgpuNv12YTileSurface {
+impl GpgpuNv12Tile64Surface {
     pub(crate) fn new(
         phys: u64,
         gpu: u64,
@@ -1907,23 +1907,27 @@ impl GpgpuNv12YTileSurface {
             || self.width == 0
             || self.height == 0
             || self.pitch_bytes < self.width
-            || !self.pitch_bytes.is_multiple_of(128)
+            || !self.pitch_bytes.is_multiple_of(256)
             || self.uv_offset == 0
             || !self.uv_offset.is_multiple_of(self.pitch_bytes)
         {
             return false;
         }
-        let tiles_per_row = u64::from(self.pitch_bytes / 128);
-        let chroma_tile_rows = u64::from(self.height.div_ceil(2).div_ceil(32));
-        let Some(chroma_bytes) = chroma_tile_rows
-            .checked_mul(tiles_per_row)
-            .and_then(|tiles| tiles.checked_mul(4096))
+        let chroma_row = self.uv_offset / self.pitch_bytes;
+        if !chroma_row.is_multiple_of(256) {
+            return false;
+        }
+        let Some(total_rows) = chroma_row
+            .checked_add(self.height.div_ceil(2))
+            .map(|rows| rows.next_multiple_of(256))
         else {
             return false;
         };
-        u64::from(self.uv_offset)
-            .checked_add(chroma_bytes)
-            .is_some_and(|required| required <= self.bytes as u64)
+        let Some(required) = u64::from(total_rows).checked_mul(u64::from(self.pitch_bytes))
+        else {
+            return false;
+        };
+        required <= self.bytes as u64
     }
 }
 
@@ -4241,8 +4245,8 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
 /// Queue the complete native-video primary rebuild as one GuC-owned RCS job.
 /// No CPU pixel conversion, intermediate RGBA frame, descriptor worklist, or
 /// post-submit fallback is part of this contract.
-pub(crate) fn queue_ui4_compositor_nv12_ytile_to_primary(
-    source: GpgpuNv12YTileSurface,
+pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
+    source: GpgpuNv12Tile64Surface,
     base: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     content_dst_x: u32,
@@ -4280,7 +4284,7 @@ pub(crate) fn queue_ui4_compositor_nv12_ytile_to_primary(
     if !destination_valid || !source_valid || !layouts_match || !ranges_distinct {
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
-    let params = Ui4Nv12YTileToPrimaryXrgbParams {
+    let params = Ui4Nv12Tile64ToPrimaryXrgbParams {
         nv12_gpu: source.gpu,
         base_gpu: base.gpu,
         dst_gpu: dst.gpu,
@@ -4327,7 +4331,7 @@ pub(crate) fn queue_ui4_compositor_nv12_ytile_to_primary(
     let dst_ok = base_ok
         && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ok
-        && direct_rcs_encode_ui4_nv12_ytile_to_primary_batch(
+        && direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
             state, upload, params, source.bytes, base.bytes, dst.bytes,
         );
     if !batch_ok {
@@ -4363,7 +4367,7 @@ pub(crate) fn queue_ui4_compositor_nv12_ytile_to_primary(
         started_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "nv12-ytile-primary",
+        kernel: "nv12-tile64-primary",
         stats: GpgpuWorklistSubmitStats {
             descs: 1,
             walkers: 1,
@@ -4372,7 +4376,7 @@ pub(crate) fn queue_ui4_compositor_nv12_ytile_to_primary(
         },
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-compositor: queued serial={} native=ytile-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X}\n",
+        "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X}\n",
         serial,
         dst.width,
         dst.height,
@@ -8254,10 +8258,10 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
 
 
 
-fn direct_rcs_encode_ui4_nv12_ytile_to_primary_batch(
+fn direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    params: Ui4Nv12YTileToPrimaryXrgbParams,
+    params: Ui4Nv12Tile64ToPrimaryXrgbParams,
     source_bytes: usize,
     base_bytes: usize,
     dst_bytes: usize,
@@ -9672,7 +9676,7 @@ fn direct_rcs_write_buffer_surface_state(
 fn direct_rcs_write_ui4_nv12_primary_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
-    params: Ui4Nv12YTileToPrimaryXrgbParams,
+    params: Ui4Nv12Tile64ToPrimaryXrgbParams,
 ) -> bool {
     if payload_offset + UI4_NV12_PRIMARY_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;

@@ -400,7 +400,7 @@ pub(crate) async fn ui4_video_playback_task() {
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} carrier_buffers=3 source=ytile-nv12 output=xrgb-primary kernel=nv12-ytile-primary presentation={} playback=playing control=focused-space fallback=none carrier_slot={}\n",
+            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} carrier_buffers=3 source=tile64-nv12 output=xrgb-primary kernel=nv12-tile64-primary presentation={} playback=playing control=focused-space fallback=none carrier_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),

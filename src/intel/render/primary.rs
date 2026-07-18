@@ -812,6 +812,29 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_cove
     )
 }
 
+/// Render a depth-tested retained 4x scene directly into a leased UI4 RGBA
+/// surface. This is Draw3D's live presentation path: resolve completion is the
+/// producer fence, and no CPU readback or full-frame copy is performed.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
+        ResidentSceneRasterQuality::Multisample4x,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::GpuSurface(destination),
+    )
+}
+
 /// UI4-sized depth-tested resident scene with matching 4x color and depth.
 pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with_opaque_depth_msaa4(
     draws: &[ResidentSceneDraw<'_>],

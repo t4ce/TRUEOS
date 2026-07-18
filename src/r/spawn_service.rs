@@ -1319,7 +1319,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled_gated(
         "draw3d-ui4-render",
-        crate::r::readiness::NET_ANY_CONFIGURED,
+        // The UI4 carrier owns a useful static waiting frame before the TCP
+        // scene service has a client (or even a configured network).  Keep
+        // presentation independent from the producer's control plane so this
+        // frame can exercise the complete frame-pool -> direct plane ->
+        // SURFLIVE path by itself.
+        0,
         ap1_ui_core_ready_gate,
         &DRAW3D_UI4_RENDER_STARTED,
         spawn_draw3d_ui4_render,
@@ -1492,10 +1497,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
     ),
-    TaskSpec::enabled_gated(
+    // Keep the native NV12/GuC implementation available to manual video
+    // callers, but do not let the boot demo compete with the static Draw3D
+    // carrier while the compositor path is being proven.
+    TaskSpec::disabled(
         "ui4-video-playback",
         0,
-        intel_media_engine_gate,
         &UI4_VIDEO_PLAYBACK_STARTED,
         spawn_ui4_video_playback_task,
     ),

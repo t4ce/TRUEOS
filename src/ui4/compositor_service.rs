@@ -11,7 +11,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use super::{
     DamageRect, FrameContent, FrameHandle, FramePoolError, FrameReadLease, FrameRgbaView, OutputId,
     WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame, acquire_published_frame,
-    frame_snapshot, published_rgba_view, release_published_frame, visible_windows_for_output,
+    frame_snapshot, published_rgba_view, release_published_frame, retain_published_frame,
+    visible_windows_for_output,
 };
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
@@ -36,6 +37,9 @@ struct Runtime {
     composition: CompositionState,
     pending: Option<PendingFrame>,
     immediate_rescan: bool,
+    /// Exact producer buffers currently owned by overlay scanout. A lease is
+    /// replaced only after the corresponding new SURFLIVE value is observed.
+    live_direct: [Option<FrameReadLease>; 4],
 }
 
 #[derive(Copy, Clone)]
@@ -84,6 +88,7 @@ struct PendingFrame {
     next_plane: usize,
     active: Option<crate::intel::Ui4AsyncComposition>,
     completed: Vec<crate::intel::Ui4AsyncComposition>,
+    direct_leases: [Option<FrameReadLease>; 4],
     flip_submitted: bool,
     started_ns: u64,
 }
@@ -186,6 +191,7 @@ fn initialize() -> Runtime {
         },
         pending: None,
         immediate_rescan: false,
+        live_direct: [None; 4],
     }
 }
 
@@ -211,6 +217,7 @@ fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorE
         }
         Err(error) => {
             crate::intel::cancel_ui4_plane_surface_flip_batch();
+            settle_failed_direct_leases(runtime, &mut pending);
             release_leases(&pending.leases);
             Err(error)
         }
@@ -283,6 +290,7 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
         next_plane: 0,
         active: None,
         completed: Vec::new(),
+        direct_leases: [None; 4],
         flip_submitted: false,
         started_ns: crate::chronos::monotonic_nanos(),
     }))
@@ -472,7 +480,7 @@ fn drive_async_frame(
 }
 
 fn queue_async_plane(
-    pending: &PendingFrame,
+    pending: &mut PendingFrame,
     plan: PlanePlan,
 ) -> Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError> {
     if matches!(plan.target, CompositionTarget::Primary) {
@@ -493,6 +501,52 @@ fn queue_async_plane(
         .zip(views.iter().copied())
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
         .collect();
+    if let CompositionTarget::Overlay(slot) = plan.target {
+        if let Some((window, view)) = selected.as_slice().first().copied()
+            && selected.len() == 1
+            && direct_overlay_eligible(window, view)
+        {
+            let lease_index = pending
+                .windows
+                .iter()
+                .position(|candidate| candidate.id == window.id)
+                .ok_or(Ui4CompositorError::PresentFailed)?;
+            let display_lease = retain_published_frame(pending.leases[lease_index])?;
+            let reason = overlay_async_reason(slot);
+            let queued = crate::intel::queue_ui4_direct_overlay_frame(
+                slot,
+                crate::intel::Ui4DirectRgbaFrame {
+                    phys: view.phys,
+                    byte_len: view.byte_len,
+                    width: view.width,
+                    height: view.height,
+                    pitch_bytes: view.pitch,
+                },
+                window.placement.x as u32,
+                window.placement.y as u32,
+                reason,
+            );
+            match queued {
+                Ok(composition) => {
+                    if pending.direct_leases[slot].is_some() {
+                        let _ = release_published_frame(display_lease);
+                        return Err(Ui4CompositorError::PresentFailed);
+                    }
+                    pending.direct_leases[slot] = Some(display_lease);
+                    return Ok(composition);
+                }
+                Err(_) => {
+                    let _ = release_published_frame(display_lease);
+                    crate::log_trace!(target: "ui4";
+                        "ui4/direct-present: display import unavailable slot={} frame={} buffer={} action=fallback-guc-composition\n",
+                        slot,
+                        display_lease.frame.raw(),
+                        display_lease.buffer_index,
+                    );
+                }
+            }
+        }
+    }
     let pixels: Vec<&[u8]> = selected
         .iter()
         .map(|(_, view)| unsafe {
@@ -536,16 +590,38 @@ fn queue_async_plane(
             "ui4-compositor-primary-async",
         ),
         CompositionTarget::Overlay(slot) => {
-            let reason = match slot {
-                super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
-                super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2-async",
-                super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3-async",
-                _ => "ui4-overlay-async",
-            };
+            let reason = overlay_async_reason(slot);
             crate::intel::queue_ui4_overlay_composition(slot, &tiles, plan.damage, reason)
         }
     };
     queued.map_err(|_| Ui4CompositorError::PresentFailed)
+}
+
+fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
+    let placement = window.placement;
+    let Some((output_width, output_height)) = crate::intel::active_scanout_dimensions() else {
+        return false;
+    };
+    placement.opacity == u8::MAX
+        && placement.x >= 0
+        && placement.y >= 0
+        && placement.width == view.width
+        && placement.height == view.height
+        && (placement.x as u32)
+            .checked_add(view.width)
+            .is_some_and(|right| right <= output_width)
+        && (placement.y as u32)
+            .checked_add(view.height)
+            .is_some_and(|bottom| bottom <= output_height)
+}
+
+const fn overlay_async_reason(slot: usize) -> &'static str {
+    match slot {
+        super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
+        super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2-async",
+        super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3-async",
+        _ => "ui4-overlay-async",
+    }
 }
 
 /// Select the exact native sidecar that belongs to the sole primary video
@@ -611,7 +687,7 @@ fn queue_native_video_primary(
             .map_err(|_| Ui4CompositorError::PresentFailed)?;
         let uv_offset = u32::try_from(publication.source.uv_offset)
             .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        let source = crate::intel::gpgpu::GpgpuNv12YTileSurface::new(
+        let source = crate::intel::gpgpu::GpgpuNv12Tile64Surface::new(
             publication.source.phys,
             publication.source.gpu,
             publication.source.byte_len,
@@ -635,7 +711,7 @@ fn queue_native_video_primary(
     })())
 }
 
-fn commit_async_frame(runtime: &mut Runtime, pending: &PendingFrame) {
+fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
     for plan in pending.plans.iter().copied().filter(|plan| plan.changed) {
         let state = match plan.target {
             CompositionTarget::Primary => &mut runtime.composition.primary,
@@ -670,12 +746,57 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &PendingFrame) {
         }
     }
     super::screenshot::capture_compositor_frame(&pending.windows);
+    commit_direct_leases(runtime, pending);
     release_leases(&pending.leases);
     let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;
+    let direct_planes = pending
+        .completed
+        .iter()
+        .copied()
+        .filter_map(crate::intel::ui4_direct_composition_plane_slot)
+        .count();
+    let guc_jobs = pending.completed.len().saturating_sub(direct_planes);
     crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: frame-retired planes={} windows={} elapsed_us={} ap1_wait_loops=0\n",
-        pending.completed.len(), pending.windows.len(), elapsed_us,
+        "ui4/compositor: frame-retired planes={} direct_planes={} guc_jobs={} windows={} elapsed_us={} ap1_wait_loops=0\n",
+        pending.completed.len(), direct_planes, guc_jobs, pending.windows.len(), elapsed_us,
     );
+}
+
+fn commit_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {
+    for plan in pending.plans.iter().copied().filter(|plan| plan.changed) {
+        let CompositionTarget::Overlay(slot) = plan.target else {
+            continue;
+        };
+        let replacement = pending.direct_leases[slot].take();
+        let previous = core::mem::replace(&mut runtime.live_direct[slot], replacement);
+        if let Some(previous) = previous {
+            let _ = release_published_frame(previous);
+        }
+    }
+}
+
+/// A timed-out multi-plane batch may have latched only some planes. Preserve
+/// the exact producer buffer for every direct plane whose SURFLIVE already
+/// reached the new alias; otherwise its pending retain can be released.
+fn settle_failed_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {
+    for slot in 1..pending.direct_leases.len() {
+        let Some(lease) = pending.direct_leases[slot].take() else {
+            continue;
+        };
+        let latched = pending.flip_submitted
+            && pending.completed.iter().copied().any(|composition| {
+                crate::intel::ui4_direct_composition_plane_slot(composition) == Some(slot)
+                    && crate::intel::ui4_composition_flip_is_live(composition)
+            });
+        if latched {
+            let previous = runtime.live_direct[slot].replace(lease);
+            if let Some(previous) = previous {
+                let _ = release_published_frame(previous);
+            }
+        } else {
+            let _ = release_published_frame(lease);
+        }
+    }
 }
 
 const fn target_plane_slot(target: CompositionTarget) -> usize {

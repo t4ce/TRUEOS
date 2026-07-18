@@ -335,6 +335,27 @@ pub(crate) fn acquire_published_frame(
     })
 }
 
+/// Retain the exact buffer already pinned by `lease`.
+///
+/// A direct-scanout presenter uses this to transfer ownership of a published
+/// front buffer from the compositor transaction to the display plane.  It
+/// must not reacquire `frame.front_buffer`: a streaming producer may have
+/// published a newer buffer while the compositor was waiting for SURFLIVE.
+pub(crate) fn retain_published_frame(
+    lease: FrameReadLease,
+) -> Result<FrameReadLease, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    let index = lease.buffer_index as usize;
+    if index >= frame.buffer_count as usize || frame.readers[index] == 0 {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.readers[index] = frame.readers[index]
+        .checked_add(1)
+        .ok_or(FramePoolError::Busy)?;
+    Ok(lease)
+}
+
 pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView, FramePoolError> {
     let surface = {
         let pool = FRAME_POOL.lock();

@@ -291,7 +291,8 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
     PrimaryPlaneSourceFormat, RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionPoll,
-    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
+    Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll,
+    Ui4PlaneSurfaceFlipPoll,
 };
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
@@ -331,7 +332,7 @@ pub(crate) fn queue_ui4_primary_composition(
 }
 
 pub(crate) fn queue_ui4_primary_native_nv12_composition(
-    source: gpgpu::GpgpuNv12YTileSurface,
+    source: gpgpu::GpgpuNv12Tile64Surface,
     content_dst_x: u32,
     content_dst_y: u32,
     content_width: u32,
@@ -361,6 +362,16 @@ pub(crate) fn queue_ui4_overlay_composition(
     self::display::queue_ui4_overlay_composition(plane_slot, tiles, damage, reason)
 }
 
+pub(crate) fn queue_ui4_direct_overlay_frame(
+    plane_slot: usize,
+    source: Ui4DirectRgbaFrame,
+    pos_x: u32,
+    pos_y: u32,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_direct_overlay_frame(plane_slot, source, pos_x, pos_y, reason)
+}
+
 pub(crate) fn poll_ui4_composition(
     composition: Ui4AsyncComposition,
 ) -> Ui4AsyncCompositionPoll {
@@ -373,6 +384,16 @@ pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bo
 
 pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
     self::display::commit_ui4_composition_flip(composition)
+}
+
+pub(crate) fn ui4_direct_composition_plane_slot(
+    composition: Ui4AsyncComposition,
+) -> Option<usize> {
+    self::display::ui4_direct_composition_plane_slot(composition)
+}
+
+pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> bool {
+    self::display::ui4_composition_flip_is_live(composition)
 }
 
 pub(crate) fn present_ui_surface_to_primary_plane(
