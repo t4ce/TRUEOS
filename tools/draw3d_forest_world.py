@@ -9,7 +9,6 @@ from pathlib import Path
 
 from draw3d_celestial_garden import GardenMesh, add_box, add_octahedron
 from draw3d_grid_world import (
-    BACKGROUND,
     add_cone,
     add_cylinder,
     build_heightfield_chunks,
@@ -200,7 +199,8 @@ def populate(client):
             DEKU_YAW,
         )
 
-    client.start(BACKGROUND)
+    # No explicit clear color: let UI4 compose the scene over its surroundings.
+    client.start()
     return len(terrain), len(details), len(hero_parts), len(deku_parts)
 
 

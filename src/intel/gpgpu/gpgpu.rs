@@ -4205,13 +4205,18 @@ pub(crate) fn fill_rect_worklist_rgba8(
 /// pixels on the CPU. Rectangles are clipped to `dst`; a fully clipped set is
 /// a successful no-op.
 pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolidRect]) -> bool {
+    const INLINE_RECTS: usize = 16;
     if !dst.is_valid() {
         return false;
     }
     if rects.is_empty() {
         return true;
     }
-    let mut descs = Vec::with_capacity(rects.len().min(RECT_WORKLIST_MAX_DESCS));
+    if rects.len() > INLINE_RECTS {
+        return false;
+    }
+    let mut descs = [FillRectWorklistRgba8Desc::default(); INLINE_RECTS];
+    let mut desc_count = 0usize;
     for solid in rects {
         let Some(rect) = clip_gpgpu_rect_to_surface(solid.rect, dst.width, dst.height) else {
             continue;
@@ -4225,19 +4230,18 @@ pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolid
         if rect.width > u16::MAX as u32 || rect.height > u16::MAX as u32 {
             return false;
         }
-        descs.push(FillRectWorklistRgba8Desc {
+        descs[desc_count] = FillRectWorklistRgba8Desc {
             dst_xy: pack_i16_pair_u32(dst_x, dst_y),
             size: pack_u16_pair_u32(rect.width as u16, rect.height as u16),
             color_rgba: solid.color_rgba,
-        });
+        };
+        desc_count += 1;
     }
-    if descs.is_empty() {
+    if desc_count == 0 {
         return true;
     }
-    let expected_descs = descs.len();
-    let expected_submits = expected_descs.div_ceil(RECT_WORKLIST_MAX_DESCS);
-    let stats = fill_rect_worklist_rgba8_stats(dst, descs.as_slice());
-    stats.descs == expected_descs && stats.submits == expected_submits
+    let stats = fill_rect_worklist_rgba8_stats(dst, &descs[..desc_count]);
+    stats.descs == desc_count && stats.submits == 1
 }
 
 pub(crate) fn gradient_rect_worklist_rgba8_stats(

@@ -7,6 +7,7 @@
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 
+use embassy_sync::mutex::Mutex as AsyncMutex;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
@@ -45,9 +46,11 @@ const MIN_ANIMATION_DURATION_MS: u32 = 16;
 const MAX_ANIMATION_DURATION_MS: u32 = 600_000;
 const MIN_SCALE_PERCENT: u32 = 1;
 const MAX_SCALE_PERCENT: u32 = 800;
-const GRIDPAPER_INSTANCE_CAPACITY: usize = 2;
+/// Each Blueprint exposes one local GridPaper document. The kernel leases
+/// those local documents onto this many independent resident service slots.
+const BLUEPRINT_INSTANCE_CAPACITY: usize = 1;
+const GRIDPAPER_POOL_SOFT_CAP: usize = 10;
 const PRIMARY_INSTANCE_ID: u32 = 0;
-const NATIVE_INSTANCE_ID: u32 = 1;
 const NATIVE_SCALE_PERCENT: u16 = 100;
 
 const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
@@ -70,6 +73,7 @@ const DECORATION_INSET_MM: f32 = 0.5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
 const SERVICE_PERIOD_MS: u64 = 16;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
+const INPUT_QUEUE_CAPACITY_PER_INSTANCE: usize = 64;
 const GRID_CURSOR_STROKE_PX: u32 = 3;
 const GRID_CURSOR_RGBA: [u8; 4] = [255, 96, 32, 255];
 const PRINT_REQUEST_CAPACITY: usize = 8;
@@ -83,14 +87,19 @@ const ERROR_NOT_OWNER: i32 = -3;
 const ERROR_TRANSPORT: i32 = -4;
 const ERROR_INVALID_ANIMATION: i32 = -5;
 const ERROR_INVALID_INSTANCE: i32 = -6;
+const ERROR_POOL_FULL: i32 = -7;
 
 static COVERAGE_COMPOSITE_FALLBACK_LOGGED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+static GPU_DIRECT_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 struct SnapshotStore {
     buffers: [[u8; PAGE_BYTES]; 2],
     published: usize,
     owner: Option<u8>,
+    local_instance_id: Option<u32>,
+    lease_epoch: u64,
     producer_connected: bool,
     lifecycle_paused: bool,
     generation: u64,
@@ -106,6 +115,8 @@ impl SnapshotStore {
             buffers: [[0; PAGE_BYTES]; 2],
             published: 0,
             owner: None,
+            local_instance_id: None,
+            lease_epoch: 0,
             producer_connected: false,
             lifecycle_paused: false,
             generation: 0,
@@ -115,31 +126,81 @@ impl SnapshotStore {
             animation_serial: 0,
         }
     }
+
+    fn claim(&mut self, owner: u8, local_instance_id: u32) {
+        let lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
+        self.published = 0;
+        self.owner = Some(owner);
+        self.local_instance_id = Some(local_instance_id);
+        self.lease_epoch = lease_epoch;
+        self.producer_connected = true;
+        self.lifecycle_paused = false;
+        self.generation = 0;
+        self.scale_percent = NATIVE_SCALE_PERCENT;
+        self.serial = 0;
+        self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
+        self.animation_serial = 0;
+    }
+
+    fn release(&mut self) {
+        self.owner = None;
+        self.local_instance_id = None;
+        self.lease_epoch = self.lease_epoch.wrapping_add(1).max(1);
+        self.producer_connected = false;
+        self.lifecycle_paused = false;
+        self.generation = 0;
+        self.serial = 0;
+        self.text_animations = [None; TEXT_ANIMATION_COLOR_SLOTS];
+        self.animation_serial = 0;
+    }
 }
 
-static SNAPSHOTS: Mutex<[SnapshotStore; GRIDPAPER_INSTANCE_CAPACITY]> =
-    Mutex::new([const { SnapshotStore::new() }; GRIDPAPER_INSTANCE_CAPACITY]);
+static SNAPSHOTS: Mutex<[SnapshotStore; GRIDPAPER_POOL_SOFT_CAP]> =
+    Mutex::new([const { SnapshotStore::new() }; GRIDPAPER_POOL_SOFT_CAP]);
 
-fn instance_index(instance_id: u32) -> Result<usize, i32> {
-    let index = usize::try_from(instance_id).map_err(|_| ERROR_INVALID_INSTANCE)?;
-    (index < GRIDPAPER_INSTANCE_CAPACITY)
-        .then_some(index)
-        .ok_or(ERROR_INVALID_INSTANCE)
+fn valid_local_instance(instance_id: u32) -> bool {
+    usize::try_from(instance_id).is_ok_and(|index| index < BLUEPRINT_INSTANCE_CAPACITY)
 }
 
-fn producer_ownership_conflicts(
-    active: Option<u8>,
-    producer_connected: bool,
-    requester: u8,
-) -> bool {
-    producer_connected
-        && active.is_some_and(|active| {
-            if active == requester {
-                return false;
-            }
-            let state = crate::hv::vm_state(active);
-            state.running || state.starting || state.pause_latched
-        })
+fn find_pool_slot(
+    stores: &[SnapshotStore; GRIDPAPER_POOL_SOFT_CAP],
+    owner: u8,
+    local_instance_id: u32,
+) -> Option<usize> {
+    stores.iter().position(|store| {
+        store.owner == Some(owner) && store.local_instance_id == Some(local_instance_id)
+    })
+}
+
+fn resolve_pool_slot(owner: u8, local_instance_id: u32) -> Result<usize, i32> {
+    if !valid_local_instance(local_instance_id) {
+        return Err(ERROR_INVALID_INSTANCE);
+    }
+    let stores = SNAPSHOTS.lock();
+    find_pool_slot(&stores, owner, local_instance_id).ok_or(ERROR_NOT_OWNER)
+}
+
+fn resolve_or_claim_pool_slot(owner: u8, local_instance_id: u32) -> Result<usize, i32> {
+    if !valid_local_instance(local_instance_id) {
+        return Err(ERROR_INVALID_INSTANCE);
+    }
+    let mut stores = SNAPSHOTS.lock();
+    if let Some(slot) = find_pool_slot(&stores, owner, local_instance_id) {
+        return Ok(slot);
+    }
+    let Some(slot) = stores.iter().position(|store| store.owner.is_none()) else {
+        return Err(ERROR_POOL_FULL);
+    };
+    stores[slot].claim(owner, local_instance_id);
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: pool lease claimed slot={} owner={} local_instance={} soft_cap={}\n",
+        slot,
+        owner,
+        local_instance_id,
+        GRIDPAPER_POOL_SOFT_CAP,
+    );
+    Ok(slot)
 }
 
 #[derive(Clone)]
@@ -472,22 +533,20 @@ pub(crate) fn submit_snapshot_for_owner(
     scale_percent: u32,
     raw: &[u8],
 ) -> i32 {
-    let Ok(instance) = instance_index(instance_id) else {
-        return ERROR_INVALID_INSTANCE;
-    };
     if raw.len() != PAGE_BYTES || validate_page(raw).is_err() {
         return ERROR_INVALID_SNAPSHOT;
     }
     if !(MIN_SCALE_PERCENT..=MAX_SCALE_PERCENT).contains(&scale_percent) {
         return ERROR_INVALID_SCALE;
     }
+    let instance = match resolve_or_claim_pool_slot(owner, instance_id) {
+        Ok(instance) => instance,
+        Err(error) => return error,
+    };
 
     let mut stores = SNAPSHOTS.lock();
     let snapshots = &mut stores[instance];
-    if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
-        return ERROR_NOT_OWNER;
-    }
-    if snapshots.owner != Some(owner) || !crate::hv::vm_state(owner).pause_latched {
+    if !crate::hv::vm_state(owner).pause_latched {
         snapshots.lifecycle_paused = false;
     }
     let next = snapshots.published ^ 1;
@@ -504,18 +563,16 @@ pub(crate) fn submit_snapshot_for_owner(
 /// Replace the complete CSS-like text animation table for one producer.
 /// Palette indices 0..16 act as stable selectors for foreground text layers.
 pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw: &[u8]) -> i32 {
-    let Ok(instance) = instance_index(instance_id) else {
-        return ERROR_INVALID_INSTANCE;
-    };
     let Ok(programs) = decode_text_animations(raw) else {
         return ERROR_INVALID_ANIMATION;
     };
+    let instance = match resolve_or_claim_pool_slot(owner, instance_id) {
+        Ok(instance) => instance,
+        Err(error) => return error,
+    };
     let mut stores = SNAPSHOTS.lock();
     let snapshots = &mut stores[instance];
-    if producer_ownership_conflicts(snapshots.owner, snapshots.producer_connected, owner) {
-        return ERROR_NOT_OWNER;
-    }
-    if snapshots.owner != Some(owner) || !crate::hv::vm_state(owner).pause_latched {
+    if !crate::hv::vm_state(owner).pause_latched {
         snapshots.lifecycle_paused = false;
     }
     snapshots.owner = Some(owner);
@@ -524,7 +581,9 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw:
     snapshots.animation_serial = snapshots.animation_serial.wrapping_add(1).max(1);
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: text-animation-table accepted instance={} serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        "gridpaper: text-animation-table accepted pool_slot={} owner={} local_instance={} serial={} programs={} wire_bytes={} ownership=producer-scoped geometry_uploads=0\n",
+        instance,
+        owner,
         instance_id,
         snapshots.animation_serial,
         snapshots.text_animations.iter().flatten().count(),
@@ -533,19 +592,27 @@ pub(crate) fn submit_text_animations_for_owner(owner: u8, instance_id: u32, raw:
     0
 }
 
-/// Relinquish producer authority. The service releases its UI4 presentation,
-/// while the kernel-owned frame and last persistent scene remain resident.
+/// Relinquish producer authority and return its kernel pool slot. Lifecycle
+/// pause is the separate operation that retains a scene for resume.
 pub(crate) fn close_owner(owner: u8, instance_id: u32) -> i32 {
-    let Ok(instance) = instance_index(instance_id) else {
-        return ERROR_INVALID_INSTANCE;
+    let instance = match resolve_pool_slot(owner, instance_id) {
+        Ok(instance) => instance,
+        Err(ERROR_NOT_OWNER) => return 0,
+        Err(error) => return error,
     };
     let mut stores = SNAPSHOTS.lock();
     let snapshots = &mut stores[instance];
     match snapshots.owner {
         Some(active) if active == owner => {
-            snapshots.owner = None;
-            snapshots.producer_connected = false;
-            snapshots.lifecycle_paused = false;
+            snapshots.release();
+            crate::log_info!(
+                target: "gridpaper";
+                "gridpaper: pool lease released slot={} owner={} local_instance={} soft_cap={}\n",
+                instance,
+                owner,
+                instance_id,
+                GRIDPAPER_POOL_SOFT_CAP,
+            );
             0
         }
         Some(_) => ERROR_NOT_OWNER,
@@ -600,10 +667,9 @@ pub(crate) fn resume_owner_lifecycle(owner: u8) -> usize {
     resumed
 }
 
-fn snapshot_after(instance_id: u32, serial: u64) -> Option<OwnedSnapshot> {
-    let instance = instance_index(instance_id).ok()?;
+fn snapshot_after(pool_slot: usize, serial: u64) -> Option<OwnedSnapshot> {
     let stores = SNAPSHOTS.lock();
-    let snapshots = &stores[instance];
+    let snapshots = stores.get(pool_slot)?;
     if snapshots.serial == 0 || snapshots.serial == serial {
         return None;
     }
@@ -616,10 +682,9 @@ fn snapshot_after(instance_id: u32, serial: u64) -> Option<OwnedSnapshot> {
     })
 }
 
-fn text_animations_after(instance_id: u32, serial: u64) -> Option<OwnedTextAnimations> {
-    let instance = instance_index(instance_id).ok()?;
+fn text_animations_after(pool_slot: usize, serial: u64) -> Option<OwnedTextAnimations> {
     let stores = SNAPSHOTS.lock();
-    let snapshots = &stores[instance];
+    let snapshots = stores.get(pool_slot)?;
     if snapshots.animation_serial == serial {
         return None;
     }
@@ -917,6 +982,7 @@ struct GridPaperPresentation {
 }
 
 struct GridPaperSurface {
+    pool_slot: usize,
     instance_id: u32,
     frame: crate::ui4::FrameHandle,
     presentation: Option<GridPaperPresentation>,
@@ -980,7 +1046,10 @@ impl From<crate::ui4::WindowBrokerError> for ServiceError {
     }
 }
 
-fn initialize_surface(instance_id: u32) -> Result<GridPaperSurface, ServiceError> {
+fn initialize_surface(
+    pool_slot: usize,
+    instance_id: u32,
+) -> Result<GridPaperSurface, ServiceError> {
     let (width, height, extent_source) =
         crate::intel::physical_extent_pixels(SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM)
             .map(|(width, height)| (width, height, "edid-physical-mm"))
@@ -996,6 +1065,7 @@ fn initialize_surface(instance_id: u32) -> Result<GridPaperSurface, ServiceError
         base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?;
     Ok(GridPaperSurface {
+        pool_slot,
         instance_id,
         frame,
         presentation: None,
@@ -1005,20 +1075,35 @@ fn initialize_surface(instance_id: u32) -> Result<GridPaperSurface, ServiceError
     })
 }
 
-fn connected_owner(instance_id: u32) -> Option<u8> {
-    let instance = instance_index(instance_id).ok()?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PoolLeaseState {
+    epoch: u64,
+    owner: Option<u8>,
+    local_instance_id: Option<u32>,
+    presentable_owner: Option<u8>,
+}
+
+fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
     let mut stores = SNAPSHOTS.lock();
-    let snapshots = &mut stores[instance];
-    let owner = snapshots.owner?;
-    if snapshots.lifecycle_paused || !snapshots.producer_connected {
-        return None;
-    }
-    let state = crate::hv::vm_state(owner);
-    if state.running || state.starting {
-        Some(owner)
-    } else {
-        snapshots.producer_connected = false;
-        None
+    let snapshots = &mut stores[pool_slot];
+    let owner = snapshots.owner;
+    let presentable_owner = owner.and_then(|owner| {
+        if snapshots.lifecycle_paused || !snapshots.producer_connected {
+            return None;
+        }
+        let state = crate::hv::vm_state(owner);
+        if state.running || state.starting {
+            Some(owner)
+        } else {
+            snapshots.producer_connected = false;
+            None
+        }
+    });
+    PoolLeaseState {
+        epoch: snapshots.lease_epoch,
+        owner,
+        local_instance_id: snapshots.local_instance_id,
+        presentable_owner,
     }
 }
 
@@ -1044,19 +1129,15 @@ fn attach_presentation(
         .saturating_sub(grid_height)
         .saturating_div(2)
         .saturating_sub(surface.height.saturating_sub(grid_height));
-    let gap = 8u32;
-    let x = if surface.instance_id == PRIMARY_INSTANCE_ID {
-        primary_x
-    } else if primary_x >= surface.width.saturating_add(gap) {
-        primary_x - surface.width - gap
-    } else {
-        let right = primary_x.saturating_add(surface.width).saturating_add(gap);
-        if right.saturating_add(surface.width) <= scanout_width {
-            right
-        } else {
-            0
-        }
-    };
+    // Every Blueprint owns one same-sized scene. Cascade separately leased
+    // windows just enough that another instance remains reachable for drag.
+    let cascade = (surface.pool_slot as u32 % 5).saturating_mul(24);
+    let x = primary_x
+        .saturating_add(cascade)
+        .min(scanout_width.saturating_sub(surface.width));
+    let y = y
+        .saturating_add(cascade)
+        .min(scanout_height.saturating_sub(surface.height));
     let window = crate::ui4::create_window(crate::ui4::WindowCreate {
         owner: UI4_OWNER,
         session,
@@ -1177,20 +1258,14 @@ struct TextCell {
     italic: bool,
 }
 
-fn font_preferences(instance_id: u32) -> [GpuFontFace; 3] {
-    if instance_id == NATIVE_INSTANCE_ID {
-        [
-            GpuFontFace::Default,
-            GpuFontFace::NotoSansSc,
-            GpuFontFace::Inconsolata,
-        ]
-    } else {
-        [
-            GpuFontFace::Inconsolata,
-            GpuFontFace::NotoSansSc,
-            GpuFontFace::Default,
-        ]
-    }
+fn font_preferences(_instance_id: u32) -> [GpuFontFace; 3] {
+    // Preserve the former native/100% debug scene as the sole Blueprint
+    // document contract.
+    [
+        GpuFontFace::Default,
+        GpuFontFace::NotoSansSc,
+        GpuFontFace::Inconsolata,
+    ]
 }
 
 fn font_for_glyph(instance_id: u32, glyph: &str) -> GpuFontFace {
@@ -1587,6 +1662,17 @@ fn publish_page(
             return Err(ServiceError::Render(reason));
         }
     };
+    if !GPU_DIRECT_PRESENT_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel) {
+        crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4 size={}x{} pitch={} target_gpu=0x{:X} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1\n",
+            destination.width,
+            destination.height,
+            destination.pitch_bytes,
+            destination.gpu,
+            result.rgba.is_some() as u8,
+        );
+    }
     if let Some(selection) = selection
         && let Some(rects) = grid_cursor_rects(surface, page, selection, input_field)
         && !crate::intel::gpgpu::fill_solid_rects_rgba8(destination, &rects)
@@ -1942,83 +2028,150 @@ impl GridPaperRuntime {
     }
 }
 
-fn attach_presentations(
-    runtimes: &mut [GridPaperRuntime],
-    desired_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY],
-) -> Result<crate::ui4::WindowSessionId, ServiceError> {
-    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
-    for (index, runtime) in runtimes.iter_mut().enumerate() {
-        let Some(producer) = desired_owners[index] else {
-            continue;
-        };
-        if let Err(error) =
-            attach_presentation(&mut runtime.surface, producer, session, runtime.active.is_some())
-        {
-            let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
-            for runtime in runtimes.iter_mut() {
-                runtime.surface.presentation = None;
-            }
-            return Err(error);
+struct InputRoute {
+    window: Option<crate::ui4::WindowId>,
+    events: VecDeque<crate::ui4::Ui4InputEvent>,
+}
+
+impl InputRoute {
+    const fn new() -> Self {
+        Self {
+            window: None,
+            events: VecDeque::new(),
         }
     }
+}
+
+static INPUT_ROUTES: Mutex<[InputRoute; GRIDPAPER_POOL_SOFT_CAP]> =
+    Mutex::new([const { InputRoute::new() }; GRIDPAPER_POOL_SOFT_CAP]);
+static GPU_RENDER_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
+
+fn set_input_route(pool_slot: usize, window: Option<crate::ui4::WindowId>) {
+    let mut routes = INPUT_ROUTES.lock();
+    let route = &mut routes[pool_slot];
+    route.window = window;
+    route.events.clear();
+}
+
+fn input_event_window(event: crate::ui4::Ui4InputEvent) -> crate::ui4::WindowId {
+    match event {
+        crate::ui4::Ui4InputEvent::Pointer(event) => event.window,
+        crate::ui4::Ui4InputEvent::Button(event) => event.window,
+        crate::ui4::Ui4InputEvent::Pan(event) => event.window,
+        crate::ui4::Ui4InputEvent::Resize(event) => event.window,
+        crate::ui4::Ui4InputEvent::Keyboard(event) => event.window,
+        crate::ui4::Ui4InputEvent::Focus(event) => event.window,
+    }
+}
+
+fn route_input_events() {
+    let events = crate::ui4::take_owner_input_events(UI4_OWNER);
+    if events.is_empty() {
+        return;
+    }
+    let mut routes = INPUT_ROUTES.lock();
+    for event in events {
+        let window = input_event_window(event);
+        let Some(route) = routes.iter_mut().find(|route| route.window == Some(window)) else {
+            continue;
+        };
+        if route.events.len() == INPUT_QUEUE_CAPACITY_PER_INSTANCE {
+            route.events.pop_front();
+        }
+        route.events.push_back(event);
+    }
+}
+
+fn take_routed_input_events(pool_slot: usize) -> VecDeque<crate::ui4::Ui4InputEvent> {
+    let mut routes = INPUT_ROUTES.lock();
+    core::mem::take(&mut routes[pool_slot].events)
+}
+
+fn attach_runtime_presentation(
+    runtime: &mut GridPaperRuntime,
+    producer: u8,
+) -> Result<crate::ui4::WindowSessionId, ServiceError> {
+    let session = crate::ui4::begin_window_session(UI4_OWNER)?;
+    if let Err(error) =
+        attach_presentation(&mut runtime.surface, producer, session, runtime.active.is_some())
+    {
+        let _ = crate::ui4::finish_window_session(UI4_OWNER, session);
+        runtime.surface.presentation = None;
+        return Err(error);
+    }
+    set_input_route(runtime.surface.pool_slot, runtime.presented_window());
     Ok(session)
 }
 
-fn release_presentations(runtimes: &mut [GridPaperRuntime], session: crate::ui4::WindowSessionId) {
-    let release = crate::ui4::finish_window_session_with_request(
-        UI4_OWNER,
-        session,
-        crate::ui4::WindowSessionCloseRequest::default().animate(),
-    );
-    for runtime in runtimes {
-        let Some(presentation) = release_presentation(&mut runtime.surface) else {
-            continue;
-        };
-        runtime.reset_detached_input();
-        match release {
-            Ok(closed_windows) => crate::log_info!(
-                target: "gridpaper";
-                "gridpaper: presentation released instance={} producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
-                runtime.surface.instance_id,
-                presentation.producer,
-                presentation.session.raw(),
-                presentation.window.raw(),
-                runtime.surface.frame.raw(),
-                closed_windows,
-            ),
-            Err(error) => crate::log_warn!(
-                target: "gridpaper";
-                "gridpaper: presentation release instance={} producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
-                runtime.surface.instance_id,
-                presentation.producer,
-                presentation.session.raw(),
-                presentation.window.raw(),
-                runtime.surface.frame.raw(),
-                error,
-            ),
-        }
+fn release_runtime_presentation(
+    runtime: &mut GridPaperRuntime,
+    session: crate::ui4::WindowSessionId,
+    retire_frame: bool,
+) -> bool {
+    let close_request = if retire_frame {
+        crate::ui4::WindowSessionCloseRequest::default().animate_and_retire_frames()
+    } else {
+        crate::ui4::WindowSessionCloseRequest::default().animate()
+    };
+    let release = crate::ui4::finish_window_session_with_request(UI4_OWNER, session, close_request);
+    let frame_transferred = retire_frame && release.is_ok();
+    set_input_route(runtime.surface.pool_slot, None);
+    let Some(presentation) = release_presentation(&mut runtime.surface) else {
+        return frame_transferred;
+    };
+    runtime.reset_detached_input();
+    match release {
+        Ok(closed_windows) => crate::log_info!(
+            target: "gridpaper";
+            "gridpaper: presentation released pool_slot={} instance={} producer={} session={} window={} frame={} closed_windows={} retained_gpu_scene=1 retained_frame=1\n",
+            runtime.surface.pool_slot,
+            runtime.surface.instance_id,
+            presentation.producer,
+            presentation.session.raw(),
+            presentation.window.raw(),
+            runtime.surface.frame.raw(),
+            closed_windows,
+        ),
+        Err(error) => crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: presentation release pool_slot={} instance={} producer={} session={} window={} frame={} error={:?} action=consider-detached retained_gpu_scene=1 retained_frame=1\n",
+            runtime.surface.pool_slot,
+            runtime.surface.instance_id,
+            presentation.producer,
+            presentation.session.raw(),
+            presentation.window.raw(),
+            runtime.surface.frame.raw(),
+            error,
+        ),
+    }
+    frame_transferred
+}
+
+fn destroy_runtime(
+    mut runtime: GridPaperRuntime,
+    session: &mut Option<crate::ui4::WindowSessionId>,
+) {
+    let frame_transferred = session.take().is_some_and(|active_session| {
+        release_runtime_presentation(&mut runtime, active_session, true)
+    });
+    set_input_route(runtime.surface.pool_slot, None);
+    if !frame_transferred {
+        let _ = crate::ui4::destroy_frame(runtime.surface.frame);
     }
 }
 
-fn runtime_for_window_mut(
-    runtimes: &mut [GridPaperRuntime],
-    window: crate::ui4::WindowId,
-) -> Option<&mut GridPaperRuntime> {
-    runtimes
-        .iter_mut()
-        .find(|runtime| runtime.presented_window() == Some(window))
-}
-
 fn refresh_runtime(runtime: &mut GridPaperRuntime) {
+    let pool_slot = runtime.surface.pool_slot;
     let instance_id = runtime.surface.instance_id;
-    if let Some(update) = text_animations_after(instance_id, runtime.observed_animation_serial) {
+    if let Some(update) = text_animations_after(pool_slot, runtime.observed_animation_serial) {
         runtime.observed_animation_serial = update.serial;
         runtime.text_animations = update.programs;
         runtime.animation_started_ms = Instant::now().as_millis();
         runtime.animation_dirty = true;
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: text-animation-table activated instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
+            "gridpaper: text-animation-table activated pool_slot={} instance={} serial={} programs={} cadence_ms={} clock=monotonic-elapsed geometry_uploads=0\n",
+            pool_slot,
             instance_id,
             runtime.observed_animation_serial,
             runtime.text_animations.iter().flatten().count(),
@@ -2026,7 +2179,7 @@ fn refresh_runtime(runtime: &mut GridPaperRuntime) {
         );
     }
 
-    if let Some(snapshot) = snapshot_after(instance_id, runtime.observed_serial) {
+    if let Some(snapshot) = snapshot_after(pool_slot, runtime.observed_serial) {
         runtime.observed_serial = snapshot.serial;
         let clamped_pan = runtime.pan.clamped(snapshot.scale_percent);
         if clamped_pan != runtime.pan {
@@ -2201,23 +2354,21 @@ fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent)
     }
 }
 
-fn dispatch_gridpaper_input(runtimes: &mut [GridPaperRuntime], event: crate::ui4::Ui4InputEvent) {
+fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4InputEvent) {
+    if runtime.presented_window() != Some(input_event_window(event)) {
+        return;
+    }
     match event {
         crate::ui4::Ui4InputEvent::Button(event)
             if event.phase == crate::ui4::Ui4ButtonPhase::Down
                 && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>
         {
-            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
-                select_gridpaper_cell(runtime, event.local_x, event.local_y);
-            }
+            select_gridpaper_cell(runtime, event.local_x, event.local_y);
         }
         crate::ui4::Ui4InputEvent::Keyboard(event)
             if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
                 && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
         {
-            let Some(runtime) = runtime_for_window_mut(runtimes, event.window) else {
-                return;
-            };
             if let Some(snapshot) = runtime.latest_snapshot.as_ref()
                 && queue_print_request(runtime.surface.instance_id, snapshot).is_none()
             {
@@ -2225,14 +2376,10 @@ fn dispatch_gridpaper_input(runtimes: &mut [GridPaperRuntime], event: crate::ui4
             }
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) => {
-            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
-                edit_gridpaper_cell(runtime, event.event);
-            }
+            edit_gridpaper_cell(runtime, event.event);
         }
         crate::ui4::Ui4InputEvent::Pan(event) => {
-            if let Some(runtime) = runtime_for_window_mut(runtimes, event.window) {
-                pan_gridpaper(runtime, event);
-            }
+            pan_gridpaper(runtime, event);
         }
         _ => {}
     }
@@ -2269,6 +2416,24 @@ fn build_queued_page(runtime: &mut GridPaperRuntime) {
     }
 }
 
+fn runtime_needs_render(runtime: &GridPaperRuntime, now_ms: u64) -> bool {
+    if runtime.surface.presentation.is_none() {
+        return false;
+    }
+    if runtime.pending.is_some() {
+        return true;
+    }
+    let Some(page) = runtime.active.as_ref() else {
+        return false;
+    };
+    if runtime.pan_dirty || runtime.cursor_dirty || runtime.animation_dirty {
+        return true;
+    }
+    let elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
+    sampled_text_colors(page, &runtime.text_animations, elapsed_ms)
+        != runtime.last_sampled_text_colors
+}
+
 fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     let animation_elapsed_ms = now_ms.saturating_sub(runtime.animation_started_ms);
     let mut published_page_this_tick = false;
@@ -2297,7 +2462,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2366,7 +2531,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
@@ -2384,7 +2549,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
@@ -2411,100 +2576,106 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     }
 }
 
-/// Persistent N-GridPaper scene producer. Every indexed producer owns an
-/// independent snapshot, animation clock, native-DPI UI4 frame, input state,
-/// and resident GPU scene. The service runs away from AP1 so a long scene
-/// render cannot stall input or the authoritative compositor.
-#[embassy_executor::task]
-pub async fn gridpaper_service_task() {
+#[embassy_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
+async fn gridpaper_instance_worker_task(pool_slot: usize) {
     crate::intel::wait_hw_logo_sequence_done().await;
-    let mut runtimes = Vec::with_capacity(GRIDPAPER_INSTANCE_CAPACITY);
-    for instance in 0..GRIDPAPER_INSTANCE_CAPACITY {
-        let instance_id = instance as u32;
-        let mut last_init_error = None;
-        let surface = loop {
-            match initialize_surface(instance_id) {
-                Ok(surface) => break surface,
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: pool worker online pool_slot={} carrier_slot={} render_lane=shared-async-serialized\n",
+        pool_slot,
+        crate::percpu::current_slot(),
+    );
+
+    let mut observed_lease_epoch = 0u64;
+    let mut runtime: Option<GridPaperRuntime> = None;
+    let mut presentation_session = None;
+    let mut last_init_error = None;
+    let mut last_presentation_error = None;
+    loop {
+        let lease = pool_lease_state(pool_slot);
+        if lease.epoch != observed_lease_epoch {
+            if let Some(old_runtime) = runtime.take() {
+                destroy_runtime(old_runtime, &mut presentation_session);
+            }
+            observed_lease_epoch = lease.epoch;
+            last_init_error = None;
+            last_presentation_error = None;
+        }
+
+        let Some(instance_id) = lease.local_instance_id else {
+            Timer::after(EmbassyDuration::from_millis(250)).await;
+            continue;
+        };
+
+        if runtime.is_none() {
+            match initialize_surface(pool_slot, instance_id) {
+                Ok(surface) => {
+                    crate::log_info!(
+                        target: "gridpaper";
+                        "gridpaper: pool runtime activated pool_slot={} owner={} local_instance={} worker_slot={} ui4={}x{} extent_source={} default_scale={}\n",
+                        pool_slot,
+                        lease.owner.unwrap_or(u8::MAX),
+                        instance_id,
+                        crate::percpu::current_slot(),
+                        surface.width,
+                        surface.height,
+                        surface.extent_source,
+                        NATIVE_SCALE_PERCENT,
+                    );
+                    runtime = Some(GridPaperRuntime::new(surface));
+                    last_init_error = None;
+                }
                 Err(error) => {
                     if last_init_error != Some(error) {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: UI4 surface pending instance={} error={:?} action=retry\n",
+                            "gridpaper: UI4 surface pending pool_slot={} instance={} error={:?} action=retry\n",
+                            pool_slot,
                             instance_id,
                             error,
                         );
                         last_init_error = Some(error);
                     }
                     Timer::after(EmbassyDuration::from_millis(250)).await;
+                    continue;
                 }
             }
-        };
-        runtimes.push(GridPaperRuntime::new(surface));
-    }
+        }
 
-    let primary = &runtimes[PRIMARY_INSTANCE_ID as usize].surface;
-    crate::log_info!(
-        target: "gridpaper";
-        "gridpaper: embassy service ready carrier=background-ap2+ current_slot={} instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_path=kernel-font-stamp-default/skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over coverage_ppem=4..2048 optical_bias_px=0.04..0.22 mask_va=unique-resident owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
-        crate::percpu::current_slot(),
-        GRIDPAPER_INSTANCE_CAPACITY,
-        PAGE_BYTES,
-        COLUMNS * ROWS,
-        SCENE_WIDTH,
-        SCENE_HEIGHT,
-        primary.width,
-        primary.height,
-        primary.extent_source,
-        A4_WIDTH_MM,
-        A4_HEIGHT_MM,
-        GRID_WIDTH_MM,
-        GRID_HEIGHT_MM,
-        SURFACE_WIDTH_MM,
-        SURFACE_HEIGHT_MM,
-        RULER_GUTTER_MM,
-        CELL_EDGE_MM,
-        GRIDPAPER_INSTANCE_CAPACITY,
-        NATIVE_INSTANCE_ID,
-        NATIVE_SCALE_PERCENT,
-    );
-
-    let mut presentation_session = None;
-    let mut last_presentation_error = None;
-    loop {
-        let desired_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY] =
-            core::array::from_fn(|index| connected_owner(index as u32));
-        let presented_owners: [Option<u8>; GRIDPAPER_INSTANCE_CAPACITY] =
-            core::array::from_fn(|index| runtimes[index].presented_owner());
-        if desired_owners != presented_owners {
+        let runtime_ref = runtime
+            .as_mut()
+            .expect("leased GridPaper runtime initialized");
+        if lease.presentable_owner != runtime_ref.presented_owner() {
             if let Some(session) = presentation_session.take() {
-                release_presentations(&mut runtimes, session);
+                let _ = release_runtime_presentation(runtime_ref, session, false);
             }
-            if desired_owners.iter().any(Option::is_some) {
-                match attach_presentations(&mut runtimes, desired_owners) {
+            if let Some(producer) = lease.presentable_owner {
+                match attach_runtime_presentation(runtime_ref, producer) {
                     Ok(session) => {
                         presentation_session = Some(session);
-                        for runtime in &runtimes {
-                            let Some(presentation) = runtime.surface.presentation else {
-                                continue;
-                            };
-                            crate::log_info!(
-                                target: "gridpaper";
-                                "gridpaper: presentation attached instance={} producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
-                                runtime.surface.instance_id,
-                                presentation.producer,
-                                presentation.session.raw(),
-                                presentation.window.raw(),
-                                runtime.surface.frame.raw(),
-                                u8::from(runtime.active.is_some()),
-                            );
-                        }
+                        let presentation = runtime_ref
+                            .surface
+                            .presentation
+                            .expect("attached GridPaper presentation");
+                        crate::log_info!(
+                            target: "gridpaper";
+                            "gridpaper: presentation attached pool_slot={} instance={} producer={} session={} window={} frame={} retained_front={} persistent_gpu_scene=1\n",
+                            pool_slot,
+                            runtime_ref.surface.instance_id,
+                            presentation.producer,
+                            presentation.session.raw(),
+                            presentation.window.raw(),
+                            runtime_ref.surface.frame.raw(),
+                            u8::from(runtime_ref.active.is_some()),
+                        );
                         last_presentation_error = None;
                     }
                     Err(error) if last_presentation_error != Some(error) => {
                         crate::log_warn!(
                             target: "gridpaper";
-                            "gridpaper: presentation attach pending requested_instances={} error={:?} action=retry retained_gpu_scenes=1\n",
-                            desired_owners.iter().flatten().count(),
+                            "gridpaper: presentation attach pending pool_slot={} instance={} error={:?} action=retry retained_gpu_scene=1\n",
+                            pool_slot,
+                            runtime_ref.surface.instance_id,
                             error,
                         );
                         last_presentation_error = Some(error);
@@ -2516,27 +2687,95 @@ pub async fn gridpaper_service_task() {
             }
         }
 
-        for runtime in &mut runtimes {
-            refresh_runtime(runtime);
+        refresh_runtime(runtime_ref);
+        for event in take_routed_input_events(pool_slot) {
+            dispatch_gridpaper_input(runtime_ref, event);
         }
-        for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
-            dispatch_gridpaper_input(&mut runtimes, event);
-        }
-        for runtime in &mut runtimes {
-            build_queued_page(runtime);
-        }
+        build_queued_page(runtime_ref);
 
         let now_ms = Instant::now().as_millis();
-        if let Some(request) = PRINT_RENDER_REQUESTS.lock().pop_front() {
-            let primary = &runtimes[PRIMARY_INSTANCE_ID as usize];
-            let elapsed = now_ms.saturating_sub(primary.animation_started_ms);
-            let result = render_print_page(request, &primary.text_animations, elapsed);
-            PRINT_RENDER_RESULTS.lock().push_back(result);
-        }
-        for runtime in &mut runtimes {
-            publish_runtime(runtime, now_ms);
+        if runtime_needs_render(runtime_ref, now_ms) {
+            let _render_lane = GPU_RENDER_LANE.lock().await;
+            if pool_lease_state(pool_slot).epoch == observed_lease_epoch {
+                publish_runtime(runtime_ref, Instant::now().as_millis());
+            }
         }
 
+        Timer::after(EmbassyDuration::from_millis(SERVICE_PERIOD_MS)).await;
+    }
+}
+
+fn spawn_gridpaper_instance_pool() -> usize {
+    let mut spawned = 0usize;
+    for pool_slot in 0..GRIDPAPER_POOL_SOFT_CAP {
+        let Some(spawner) = crate::workers::pick_background_spawner() else {
+            break;
+        };
+        match gridpaper_instance_worker_task(pool_slot) {
+            Ok(token) => {
+                spawner.spawn(token);
+                spawned += 1;
+            }
+            Err(error) => crate::log_warn!(
+                target: "gridpaper";
+                "gridpaper: pool worker spawn failed pool_slot={} error={:?}\n",
+                pool_slot,
+                error,
+            ),
+        }
+    }
+    spawned
+}
+
+/// Kernel controller for the GridPaper Blueprint worker pool. Each Blueprint
+/// contributes one local document; up to ten owner-local leases retain their
+/// own UI4 frame and scene worker. Only the current single physical RCS render
+/// context is serialized across those workers.
+#[embassy_executor::task]
+pub async fn gridpaper_service_task() {
+    crate::intel::wait_hw_logo_sequence_done().await;
+    let spawned = spawn_gridpaper_instance_pool();
+    crate::log_info!(
+        target: "gridpaper";
+        "gridpaper: embassy service ready controller_slot={} pool_workers={} soft_cap={} blueprint_instances=1 page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_active_instance=2 scene={}x{} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} target_cell_mm={} default_scale={} scheduling=ap2+-worker-pool render_lane=single-rcs-async-fair input=window-routed\n",
+        crate::percpu::current_slot(),
+        spawned,
+        GRIDPAPER_POOL_SOFT_CAP,
+        PAGE_BYTES,
+        COLUMNS * ROWS,
+        SCENE_WIDTH,
+        SCENE_HEIGHT,
+        A4_WIDTH_MM,
+        A4_HEIGHT_MM,
+        GRID_WIDTH_MM,
+        GRID_HEIGHT_MM,
+        SURFACE_WIDTH_MM,
+        SURFACE_HEIGHT_MM,
+        CELL_EDGE_MM,
+        NATIVE_SCALE_PERCENT,
+    );
+    if spawned != GRIDPAPER_POOL_SOFT_CAP {
+        crate::log_warn!(
+            target: "gridpaper";
+            "gridpaper: worker pool below soft cap spawned={} requested={} action=serve-available-slots\n",
+            spawned,
+            GRIDPAPER_POOL_SOFT_CAP,
+        );
+    }
+
+    loop {
+        route_input_events();
+        if let Some(request) = PRINT_RENDER_REQUESTS.lock().pop_front() {
+            let animations = SNAPSHOTS
+                .lock()
+                .iter()
+                .find(|snapshot| snapshot.owner.is_some())
+                .map(|snapshot| snapshot.text_animations)
+                .unwrap_or([None; TEXT_ANIMATION_COLOR_SLOTS]);
+            let _render_lane = GPU_RENDER_LANE.lock().await;
+            let result = render_print_page(request, &animations, Instant::now().as_millis());
+            PRINT_RENDER_RESULTS.lock().push_back(result);
+        }
         Timer::after(EmbassyDuration::from_millis(SERVICE_PERIOD_MS)).await;
     }
 }
@@ -2546,24 +2785,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instance_slots_are_bounded_and_independent() {
-        assert_eq!(instance_index(PRIMARY_INSTANCE_ID), Ok(0));
-        assert_eq!(instance_index(NATIVE_INSTANCE_ID), Ok(1));
-        assert_eq!(instance_index(GRIDPAPER_INSTANCE_CAPACITY as u32), Err(ERROR_INVALID_INSTANCE));
+    fn owner_local_documents_lease_independent_pool_slots() {
+        assert!(valid_local_instance(PRIMARY_INSTANCE_ID));
+        assert!(!valid_local_instance(BLUEPRINT_INSTANCE_CAPACITY as u32));
 
-        let mut stores = [const { SnapshotStore::new() }; GRIDPAPER_INSTANCE_CAPACITY];
-        stores[0].scale_percent = 150;
+        let mut stores = [const { SnapshotStore::new() }; GRIDPAPER_POOL_SOFT_CAP];
+        stores[0].claim(3, PRIMARY_INSTANCE_ID);
+        stores[1].claim(7, PRIMARY_INSTANCE_ID);
+        stores[0].scale_percent = 125;
         stores[0].serial = 7;
-        assert_eq!(stores[0].scale_percent, 150);
+        assert_eq!(find_pool_slot(&stores, 3, PRIMARY_INSTANCE_ID), Some(0));
+        assert_eq!(find_pool_slot(&stores, 7, PRIMARY_INSTANCE_ID), Some(1));
+        assert_eq!(stores[0].scale_percent, 125);
         assert_eq!(stores[0].serial, 7);
         assert_eq!(stores[1].scale_percent, NATIVE_SCALE_PERCENT);
         assert_eq!(stores[1].serial, 0);
     }
 
     #[test]
-    fn native_instance_has_its_own_font_preference() {
-        assert_eq!(font_preferences(PRIMARY_INSTANCE_ID)[0], GpuFontFace::Inconsolata);
-        assert_eq!(font_preferences(NATIVE_INSTANCE_ID)[0], GpuFontFace::Default);
+    fn sole_blueprint_instance_keeps_native_font_preference() {
+        assert_eq!(font_preferences(PRIMARY_INSTANCE_ID)[0], GpuFontFace::Default);
     }
 
     #[test]
