@@ -25,6 +25,8 @@ const MIN_NATIVE_FONT_FILL_TOLERANCE: f32 = 0.005;
 const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
 const SMALL_FONT_HINT_MIN_RASTER_PX: f32 = 8.0;
 const SMALL_FONT_HINT_MAX_RASTER_PX: f32 = 32.0;
+const ANALYTICAL_COVERAGE_MIN_RASTER_PX: f32 = 4.0;
+const ANALYTICAL_COVERAGE_MAX_RASTER_PX: f32 = 2_048.0;
 
 /// Original shader color retained by the compatibility submit helpers.
 /// Color is deliberately absent from `ResidentFontMesh`: changing this
@@ -1369,6 +1371,141 @@ pub(crate) fn render_text_once_with_font(
     })
 }
 
+fn render_analytical_font_stamp_readback(
+    request: GpuFontTextRequest<'_>,
+    font: GpuFontFace,
+    bounds: (f32, f32, f32, f32),
+    target_width: u32,
+    target_height: u32,
+    padding_pixels: u32,
+) -> Option<(crate::intel::render::RenderJokerResult, crate::intel::render::FontRenderTargetReadback)>
+{
+    let GpuFontTextRequest::SingleLine(_) = request else {
+        return None;
+    };
+    let width = (bounds.2 - bounds.0).max(1.0);
+    let height = (bounds.3 - bounds.1).max(1.0);
+    let padding_pixels = padding_pixels
+        .min(target_width.saturating_sub(1) / 2)
+        .min(target_height.saturating_sub(1) / 2);
+    let content_width = target_width
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let content_height = target_height
+        .saturating_sub(padding_pixels.saturating_mul(2))
+        .max(1);
+    let pixel_scale = (content_width as f32 / width).min(content_height as f32 / height);
+    let entry = GpuFontJobEntry {
+        text: request,
+        position: [target_width as f32 * 0.5, target_height as f32 * 0.5],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX * pixel_scale,
+        slant: 0.0,
+    };
+    let coverage = match create_gpu_font_centered_coverage_mask_at_raster(
+        core::slice::from_ref(&entry),
+        font,
+        target_width,
+        target_height,
+        target_width,
+        target_height,
+    ) {
+        Ok(coverage) => coverage,
+        Err(reason) => {
+            crate::log_warn!(
+                target: "render";
+                "intel/gpu-font: stamp analytical coverage unavailable font={} target={}x{} ppem={:.2} reason={} action=resident-triangle-fallback\n",
+                font.registry_name(),
+                target_width,
+                target_height,
+                entry.font_pixels,
+                reason,
+            );
+            return None;
+        }
+    };
+    let origin = coverage.origin_px();
+    let draw = crate::intel::render::ResidentSceneCoverageDraw {
+        mask: coverage.surface(),
+        mask_rect: coverage.full_rect(),
+        dst_xy: crate::intel::gpgpu::GpgpuPoint::new(origin[0], origin[1]),
+        rgba: [u8::MAX; 4],
+    };
+    let captured = match crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
+        &[],
+        core::slice::from_ref(&draw),
+        Some([0, 0, 0, 0]),
+        target_width,
+        target_height,
+        false,
+    ) {
+        Ok(captured)
+            if captured.completed_draws == 1
+                && captured.requested_draws == 1
+                && captured.rgba.is_some() => captured,
+        _ => {
+            crate::log_warn!(
+                target: "render";
+                "intel/gpu-font: stamp analytical composite unavailable font={} target={}x{} action=resident-triangle-fallback\n",
+                font.registry_name(),
+                target_width,
+                target_height,
+            );
+            return None;
+        }
+    };
+    Some((
+        crate::intel::render::RenderJokerResult {
+            variant: "gpgpu-font-outline-coverage-r8",
+            submit_name: "font-stamp-analytical",
+            target: "font-stamp-readback",
+            completed: true,
+            vs_counter: false,
+            ps_state_marker: false,
+            raster_packet: false,
+            clip_counter: false,
+            ps_observed: false,
+        },
+        crate::intel::render::FontRenderTargetReadback {
+            width: target_width,
+            height: target_height,
+            pixels: captured.rgba.expect("analytical stamp readback checked"),
+        },
+    ))
+}
+
+fn composite_font_stamp_readback(
+    readback: &mut crate::intel::render::FontRenderTargetReadback,
+    rgba: GpuFontRgba,
+    dst_x: i32,
+    dst_y: i32,
+    stamp_width: u32,
+    stamp_height: u32,
+) -> (bool, u32, u32) {
+    let mut source_width = 0;
+    let mut source_height = 0;
+    let stamped =
+        visible_font_target_bounds(readback.pixels.as_slice(), readback.width, readback.height)
+            .is_some_and(|(_, _, visible_width, visible_height)| {
+                source_width = visible_width;
+                source_height = visible_height;
+                recolor_transient_font_target(readback.pixels.as_mut_slice(), rgba);
+                crate::intel::display::blend_rgba_primary_rect(
+                    readback.pixels.as_slice(),
+                    readback.width,
+                    readback.height,
+                    readback.width as usize * 4,
+                    0,
+                    0,
+                    dst_x,
+                    dst_y,
+                    stamp_width,
+                    stamp_height,
+                    "shell2-font-primary-stamp",
+                )
+            });
+    (stamped, source_width, source_height)
+}
+
 /// Tessellate and render one text request directly at its final stamp extent,
 /// aspect-fit that extent to the requested percentage of the primary scanout,
 /// and alpha-blend the result 1:1 at center. Large stamps use a correspondingly
@@ -1397,7 +1534,7 @@ pub(crate) fn stamp_text_once_with_font_centered(
     };
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: job-stamp-begin font_id={} font={} text_chars={} rows={} size_percent={} scanout={}x{} tessellation=cpu-scanline-per-glyph repeated_glyph_cache=per-call geometry_persistence=0\n",
+        "intel/gpu-font: job-stamp-begin font_id={} font={} text_chars={} rows={} size_percent={} scanout={}x{} preferred_path=skrifa-gpgpu-r8 fallback=resident-triangles layout_bounds=cpu-font-metrics geometry_persistence=0\n",
         font.id(),
         font.registry_name(),
         requested_chars,
@@ -1432,6 +1569,73 @@ pub(crate) fn stamp_text_once_with_font_centered(
         stamp_height,
         NATIVE_FONT_STAMP_PADDING_PIXELS,
     );
+    let dst_x = (scanout_width.saturating_sub(stamp_width) / 2) as i32;
+    let dst_y = (scanout_height.saturating_sub(stamp_height) / 2) as i32;
+    if let Some((render, mut readback)) = render_analytical_font_stamp_readback(
+        request,
+        font,
+        built.bounds,
+        stamp_width,
+        stamp_height,
+        NATIVE_FONT_STAMP_PADDING_PIXELS,
+    ) {
+        let (stamped, source_width, source_height) = composite_font_stamp_readback(
+            &mut readback,
+            rgba,
+            dst_x,
+            dst_y,
+            stamp_width,
+            stamp_height,
+        );
+        recycle_transient_font_readback(core::mem::take(&mut readback.pixels));
+        let summary = built.summaries.pop().ok_or("font-job-summary")?;
+        crate::log_info!(
+            target: "render";
+            "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} path=kernel-font-stamp-default/skrifa-gpgpu-r8 bounds_source=font-layout-only triangles_submitted=0 scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=coverage+composite mask_cache=invocation outline_cache=warmed color_path=cpu-readback-1to1\n",
+            stamped as u8,
+            render.completed as u8,
+            font.id(),
+            font.registry_name(),
+            built.text_chars,
+            built.rows,
+            size_percent,
+            stamp_width,
+            stamp_height,
+            NATIVE_FONT_STAMP_PADDING_PIXELS,
+            scanout_width,
+            scanout_height,
+            source_width,
+            source_height,
+            stamp_width,
+            stamp_height,
+            dst_x,
+            dst_y,
+            rgba.r,
+            rgba.g,
+            rgba.b,
+            rgba.a,
+        );
+        return Ok(GpuFontTextStamp {
+            summary,
+            render,
+            layout,
+            text_chars: built.text_chars,
+            rows: built.rows,
+            stamped,
+            dst_x,
+            dst_y,
+            scanout_width,
+            scanout_height,
+            size_percent,
+            source_width,
+            source_height,
+            render_target_width: stamp_width,
+            render_target_height: stamp_height,
+            tessellation_tolerance: 0.0,
+            stamp_width,
+            stamp_height,
+        });
+    }
     let upload_capacity = crate::intel::render::transient_font_mesh_upload_capacity_bytes();
     let base_upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
         built.vertices.len(),
@@ -1491,30 +1695,8 @@ pub(crate) fn stamp_text_once_with_font_centered(
             NATIVE_FONT_STAMP_PADDING_PIXELS,
             reusable_pixels,
         )?;
-    let mut source_width = 0;
-    let mut source_height = 0;
-    let dst_x = (scanout_width.saturating_sub(stamp_width) / 2) as i32;
-    let dst_y = (scanout_height.saturating_sub(stamp_height) / 2) as i32;
-    let stamped =
-        visible_font_target_bounds(readback.pixels.as_slice(), readback.width, readback.height)
-            .is_some_and(|(_, _, visible_width, visible_height)| {
-                source_width = visible_width;
-                source_height = visible_height;
-                recolor_transient_font_target(readback.pixels.as_mut_slice(), rgba);
-                crate::intel::display::blend_rgba_primary_rect(
-                    readback.pixels.as_slice(),
-                    readback.width,
-                    readback.height,
-                    readback.width as usize * 4,
-                    0,
-                    0,
-                    dst_x,
-                    dst_y,
-                    stamp_width,
-                    stamp_height,
-                    "shell2-font-primary-stamp",
-                )
-            });
+    let (stamped, source_width, source_height) =
+        composite_font_stamp_readback(&mut readback, rgba, dst_x, dst_y, stamp_width, stamp_height);
     recycle_transient_font_readback(core::mem::take(&mut readback.pixels));
 
     let mut summaries = built.summaries;
@@ -1761,6 +1943,65 @@ pub(crate) fn render_font_scene_readback_once(
     if width == 0 || height == 0 {
         return Err("font-scene-empty");
     }
+    // The shared kernel font service prefers the Skrifa -> GPGPU coverage
+    // route at every supported scale.  Consumers of this longstanding
+    // readback API inherit it automatically; triangles remain its transparent
+    // fallback for rows, unsupported ppem, or a failed integrity audit.
+    if let Ok(coverage) = create_gpu_font_scene_coverage_mask_at_raster(
+        job.entries,
+        job.font,
+        width,
+        height,
+        width,
+        height,
+    ) {
+        let origin = coverage.origin_px();
+        let draw = crate::intel::render::ResidentSceneCoverageDraw {
+            mask: coverage.surface(),
+            mask_rect: coverage.full_rect(),
+            dst_xy: crate::intel::gpgpu::GpgpuPoint::new(origin[0], origin[1]),
+            rgba: [u8::MAX; 4],
+        };
+        match crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
+            &[],
+            core::slice::from_ref(&draw),
+            Some([0, 0, 0, 0]),
+            width,
+            height,
+            false,
+        ) {
+            Ok(captured)
+                if captured.completed_draws == captured.requested_draws
+                    && captured.requested_draws == 1
+                    && captured.rgba.is_some() =>
+            {
+                crate::log_info!(
+                    target: "render";
+                    "intel/gpu-font: scene-readback path=kernel-font-stamp-default/skrifa-gpgpu-r8 font={} entries={} target={}x{} mask_gpu=0x{:X} fallback=resident-triangles\n",
+                    job.font.registry_name(),
+                    job.entries.len(),
+                    width,
+                    height,
+                    coverage.surface().gpu,
+                );
+                return Ok(crate::intel::render::FontRenderTargetReadback {
+                    width,
+                    height,
+                    pixels: captured.rgba.expect("coverage readback checked"),
+                });
+            }
+            Ok(_) | Err(_) => {
+                crate::log_warn!(
+                    target: "render";
+                    "intel/gpu-font: scene-readback analytical composite unavailable font={} entries={} target={}x{} action=resident-triangle-fallback\n",
+                    job.font.registry_name(),
+                    job.entries.len(),
+                    width,
+                    height,
+                );
+            }
+        }
+    }
     let built = build_font_job_mesh(job.entries, job.font)?;
     let upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
         built.vertices.len(),
@@ -1858,10 +2099,24 @@ fn gpu_font_raster_quality(
     })
 }
 
-/// True when every entry can use the production small-font coverage path.
-/// Mixed layers deliberately stay on their existing resident triangles; this
-/// gives GridPaper's native 100% and magnified 200% instances a clean A/B.
-pub(crate) fn gpu_font_entries_use_small_coverage(
+fn analytical_coverage_ppem(font_units: f32, quality: GpuFontRasterQuality) -> Option<f32> {
+    if !quality.pixels_per_unit_x.is_finite()
+        || !quality.pixels_per_unit_y.is_finite()
+        || quality.pixels_per_unit_x <= 0.0
+        || quality.pixels_per_unit_y <= 0.0
+    {
+        return None;
+    }
+    let ppem = font_units * quality.pixels_per_unit_y;
+    (ppem.is_finite()
+        && (ANALYTICAL_COVERAGE_MIN_RASTER_PX..=ANALYTICAL_COVERAGE_MAX_RASTER_PX).contains(&ppem))
+    .then_some(ppem)
+}
+
+/// True when every entry can use the production analytical coverage path.
+/// This is the shared font-scene default at both native and magnified scales;
+/// resident triangles remain a correctness fallback rather than a size fork.
+pub(crate) fn gpu_font_entries_use_analytical_coverage(
     entries: &[GpuFontJobEntry<'_>],
     viewport_width: u32,
     viewport_height: u32,
@@ -1876,7 +2131,7 @@ pub(crate) fn gpu_font_entries_use_small_coverage(
     !entries.is_empty()
         && entries.iter().all(|entry| {
             matches!(entry.text, GpuFontTextRequest::SingleLine(_))
-                && small_font_hint_ppem(entry.font_pixels, quality, true).is_some()
+                && analytical_coverage_ppem(entry.font_pixels, quality).is_some()
         })
 }
 
@@ -1910,23 +2165,28 @@ fn include_coverage_point(bounds: &mut Option<(f32, f32, f32, f32)>, x: f32, y: 
     });
 }
 
-fn transform_centered_outline_to_raster(
+fn transform_outline_to_raster(
     source: &[[u32; 8]],
     units_per_em: u16,
     entry: GpuFontJobEntry<'_>,
     quality: GpuFontRasterQuality,
     ppem: f32,
+    positioning: GpuFontJobPositioning,
 ) -> Result<(Vec<[u32; 8]>, (f32, f32, f32, f32)), &'static str> {
     if source.is_empty() || units_per_em == 0 {
         return Err("font-coverage-outline-empty");
     }
     let scale = ppem / f32::from(units_per_em);
+    let baseline_y = match positioning {
+        GpuFontJobPositioning::Origin => ppem,
+        GpuFontJobPositioning::VisualBoundsCenter => 0.0,
+    };
     let mut scaled_bounds = None;
     for op in source {
         let point_words = outline_point_x_words(op[0]).ok_or("font-coverage-outline-op")?;
         for &x_word in point_words {
             let x = f32::from_bits(op[x_word]) * scale;
-            let y = -f32::from_bits(op[x_word + 1]) * scale;
+            let y = baseline_y - f32::from_bits(op[x_word + 1]) * scale;
             if !x.is_finite() || !y.is_finite() {
                 return Err("font-coverage-outline-point");
             }
@@ -1942,7 +2202,7 @@ fn transform_centered_outline_to_raster(
         let point_words = outline_point_x_words(source_op[0]).ok_or("font-coverage-outline-op")?;
         let mut op = *source_op;
         for &x_word in point_words {
-            let y = -f32::from_bits(source_op[x_word + 1]) * scale;
+            let y = baseline_y - f32::from_bits(source_op[x_word + 1]) * scale;
             let x = f32::from_bits(source_op[x_word]) * scale
                 + entry.slant * shear_aspect * (shear_center_y - y);
             op[x_word] = x.to_bits();
@@ -1956,10 +2216,15 @@ fn transform_centered_outline_to_raster(
         entry.position[0] * quality.pixels_per_unit_x,
         entry.position[1] * quality.pixels_per_unit_y,
     ];
-    let origin_px = [
-        libm::roundf(position_px[0] - (local_bounds.0 + local_bounds.2) * 0.5),
-        libm::roundf(position_px[1] - (local_bounds.1 + local_bounds.3) * 0.5),
-    ];
+    let origin_px = match positioning {
+        GpuFontJobPositioning::Origin => {
+            [libm::roundf(position_px[0]), libm::roundf(position_px[1])]
+        }
+        GpuFontJobPositioning::VisualBoundsCenter => [
+            libm::roundf(position_px[0] - (local_bounds.0 + local_bounds.2) * 0.5),
+            libm::roundf(position_px[1] - (local_bounds.1 + local_bounds.3) * 0.5),
+        ],
+    };
     if !origin_px[0].is_finite() || !origin_px[1].is_finite() {
         return Err("font-coverage-origin");
     }
@@ -2025,10 +2290,52 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
     raster_width: u32,
     raster_height: u32,
 ) -> Result<GpuFontCoverageMask, &'static str> {
+    create_gpu_font_coverage_mask_at_raster(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        GpuFontJobPositioning::VisualBoundsCenter,
+    )
+}
+
+/// Build the same default analytical mask for origin-positioned font scenes.
+/// This is the path used by the generic kernel font readback/stamp service and
+/// therefore by the Draw3D TCP waiting scene.
+pub(crate) fn create_gpu_font_scene_coverage_mask_at_raster(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<GpuFontCoverageMask, &'static str> {
+    create_gpu_font_coverage_mask_at_raster(
+        entries,
+        font,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        GpuFontJobPositioning::Origin,
+    )
+}
+
+fn create_gpu_font_coverage_mask_at_raster(
+    entries: &[GpuFontJobEntry<'_>],
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+    positioning: GpuFontJobPositioning,
+) -> Result<GpuFontCoverageMask, &'static str> {
     let quality =
         gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
             .ok_or("font-raster-empty")?;
-    if !gpu_font_entries_use_small_coverage(
+    if !gpu_font_entries_use_analytical_coverage(
         entries,
         viewport_width,
         viewport_height,
@@ -2057,16 +2364,17 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
         let GpuFontTextRequest::SingleLine(text) = entry.text else {
             return Err("font-coverage-layout");
         };
-        let ppem = small_font_hint_ppem(entry.font_pixels, quality, true)
+        let ppem = analytical_coverage_ppem(entry.font_pixels, quality)
             .ok_or("font-coverage-ineligible")?;
         let optical_bias_px = small_font_optical_bias_px(ppem);
         let outline = crate::graphics::font::gpu_outline_for_text(font.registry_name(), text)?;
-        let (ops, bounds) = transform_centered_outline_to_raster(
+        let (ops, bounds) = transform_outline_to_raster(
             outline.ops.as_slice(),
             outline.units_per_em,
             entry,
             quality,
             ppem,
+            positioning,
         )?;
         let rect = coverage_integer_rect(bounds, optical_bias_px)?;
         union_rect = Some(match union_rect {
@@ -2111,15 +2419,45 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
         }
     }
 
+    let audit = storage
+        .nonzero_audit()
+        .ok_or("font-coverage-empty-output")?;
+    let audit_right = u32::try_from(audit.bounds.x)
+        .ok()
+        .and_then(|x| x.checked_add(audit.bounds.width))
+        .ok_or("font-coverage-audit-range")?;
+    let audit_bottom = u32::try_from(audit.bounds.y)
+        .ok()
+        .and_then(|y| y.checked_add(audit.bounds.height))
+        .ok_or("font-coverage-audit-range")?;
+    const EDGE_AUDIT_SLOP_PX: u32 = 3;
+    if audit.bounds.x > EDGE_AUDIT_SLOP_PX as i32
+        || audit.bounds.y > EDGE_AUDIT_SLOP_PX as i32
+        || width.saturating_sub(audit_right) > EDGE_AUDIT_SLOP_PX
+        || height.saturating_sub(audit_bottom) > EDGE_AUDIT_SLOP_PX
+    {
+        return Err("font-coverage-truncated-output");
+    }
+
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: analytical-coverage font={} entries={} mask={}x{} origin={},{} ppem_range={:.2}..={:.2} bias_max_px={:.3} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions=8 fallback=resident-triangles\n",
+        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions=8 va=unique-resident audit=edge-span fallback=resident-triangles\n",
         font.registry_name(),
         prepared.len(),
+        match positioning {
+            GpuFontJobPositioning::Origin => "origin",
+            GpuFontJobPositioning::VisualBoundsCenter => "visual-center",
+        },
         width,
         height,
+        storage.surface().gpu,
         union.0,
         union.1,
+        audit.bounds.x,
+        audit.bounds.y,
+        audit.bounds.width,
+        audit.bounds.height,
+        audit.nonzero_pixels,
         ppem_min,
         ppem_max,
         optical_bias_max_px,
@@ -2130,10 +2468,9 @@ pub(crate) fn create_gpu_font_centered_coverage_mask_at_raster(
     })
 }
 
-/// Build a centered resident font scene with knowledge of the final physical
-/// target. Glyphs at 8..=32 raster pixels are grid-fitted at their actual ppem
-/// and mapped back into scene units; larger glyphs retain the existing warmed,
-/// size-independent outline path.
+/// Build the resident-triangle fallback with knowledge of the final physical
+/// target. The shared analytical mask is the preferred scene path; these
+/// triangles remain available if its generation or composition audit fails.
 pub(crate) fn create_resident_font_centered_scene_mesh_at_raster(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -2910,9 +3247,10 @@ pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'
 #[cfg(test)]
 mod tests {
     use super::{
-        GpuFontJobEntry, GpuFontRasterQuality, GpuFontTextRequest, SMALL_FONT_HINT_MAX_RASTER_PX,
-        SMALL_FONT_HINT_MIN_RASTER_PX, gpu_font_entries_use_small_coverage, small_font_hint_ppem,
-        small_font_optical_bias_px, transform_centered_outline_to_raster,
+        GpuFontJobEntry, GpuFontJobPositioning, GpuFontRasterQuality, GpuFontTextRequest,
+        SMALL_FONT_HINT_MAX_RASTER_PX, SMALL_FONT_HINT_MIN_RASTER_PX,
+        gpu_font_entries_use_analytical_coverage, small_font_hint_ppem, small_font_optical_bias_px,
+        transform_outline_to_raster,
     };
 
     #[test]
@@ -2975,13 +3313,13 @@ mod tests {
             font_pixels: native_scene_em,
             slant: 0.0,
         }];
-        assert!(gpu_font_entries_use_small_coverage(&native, 189, 269, 810, 1_153,));
+        assert!(gpu_font_entries_use_analytical_coverage(&native, 189, 269, 810, 1_153,));
 
         let magnified = [GpuFontJobEntry {
             font_pixels: native_scene_em * 2.0,
             ..native[0]
         }];
-        assert!(!gpu_font_entries_use_small_coverage(&magnified, 189, 269, 810, 1_153,));
+        assert!(gpu_font_entries_use_analytical_coverage(&magnified, 189, 269, 810, 1_153,));
     }
 
     #[test]
@@ -3011,7 +3349,7 @@ mod tests {
             font_pixels: 20.0,
             slant: 0.0,
         };
-        let (_ops, bounds) = transform_centered_outline_to_raster(
+        let (_ops, bounds) = transform_outline_to_raster(
             &source,
             1_000,
             entry,
@@ -3020,6 +3358,7 @@ mod tests {
                 pixels_per_unit_y: 1.0,
             },
             20.0,
+            GpuFontJobPositioning::VisualBoundsCenter,
         )
         .unwrap();
         assert_eq!(bounds, (90.0, 40.0, 110.0, 60.0));

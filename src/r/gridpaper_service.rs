@@ -1223,7 +1223,7 @@ fn build_resident_page(
     use crate::intel::gpu_font::{
         GpuFontJobEntry, GpuFontTextRequest, create_gpu_font_centered_coverage_mask_at_raster,
         create_resident_font_centered_scene_mesh_at_raster, ensure_font_face_available,
-        gpu_font_entries_use_small_coverage,
+        gpu_font_entries_use_analytical_coverage,
     };
 
     ensure_font_face_available(GpuFontFace::Default)?;
@@ -1443,7 +1443,7 @@ fn build_resident_page(
                 raster_width,
                 raster_height,
             )?;
-            let coverage = if gpu_font_entries_use_small_coverage(
+            let coverage = if gpu_font_entries_use_analytical_coverage(
                 &entries,
                 SCENE_WIDTH,
                 SCENE_HEIGHT,
@@ -2278,7 +2278,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_small_path=skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2425,7 +2425,7 @@ pub async fn gridpaper_service_task() {
     let primary = &runtimes[PRIMARY_INSTANCE_ID as usize].surface;
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_small_path=skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over font_small_ppem=8..32 optical_bias_px=0.04..0.22 owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
+        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_path=kernel-font-stamp-default/skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over coverage_ppem=4..2048 optical_bias_px=0.04..0.22 mask_va=unique-resident owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
         GRIDPAPER_INSTANCE_CAPACITY,
         PAGE_BYTES,
         COLUMNS * ROWS,

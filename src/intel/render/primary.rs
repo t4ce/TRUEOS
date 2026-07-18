@@ -811,6 +811,26 @@ fn submit_resident_triangle_scene_capture(
     {
         return Err("draw3d-capture-shape");
     }
+    for (index, draw) in coverage_draws.iter().enumerate() {
+        if !draw.mask.is_valid() {
+            return Err("resident-coverage-mask-shape");
+        }
+        let draw_end = draw
+            .mask
+            .gpu
+            .checked_add(draw.mask.bytes as u64)
+            .ok_or("resident-coverage-mask-range")?;
+        for other in &coverage_draws[..index] {
+            let other_end = other
+                .mask
+                .gpu
+                .checked_add(other.mask.bytes as u64)
+                .ok_or("resident-coverage-mask-range")?;
+            if draw.mask.gpu < other_end && other.mask.gpu < draw_end {
+                return Err("resident-coverage-mask-va-alias");
+            }
+        }
+    }
     let target_pitch = target_width
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("draw3d-capture-shape")?;

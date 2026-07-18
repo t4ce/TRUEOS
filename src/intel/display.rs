@@ -59,6 +59,8 @@ const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
 // Display version 13 exposes one primary plus four sprite planes. TRUEOS uses
 // zero-based indices, so the hardware's top sprite is slot 4.
 const UNIVERSAL_PLANE_SLOTS: usize = crate::ui4::UNIVERSAL_PLANE_COUNT;
+const UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY: usize = UNIVERSAL_PLANE_SLOTS;
+const UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS: u64 = 25_000_000;
 const PRIMARY_PRESENT_DISABLE_PSR_PROBE: bool = true;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
@@ -153,9 +155,44 @@ pub(super) const DISPLAY_FRAME_TARGET_CAPACITY: usize =
 const VIDEO_NV12_HIDE_PARK_BEFORE_DISABLE: bool = true;
 const VIDEO_NV12_HIDE_PARK_SIZE: u32 = 64;
 
+#[derive(Copy, Clone)]
+struct PlaneSurfaceFlip {
+    plane_base: usize,
+    surface_reg: u32,
+}
+
+#[derive(Copy, Clone)]
+struct PlaneSurfaceFlipBatch {
+    active: bool,
+    accepting: bool,
+    len: usize,
+    entries: [Option<PlaneSurfaceFlip>; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
+}
+
+impl PlaneSurfaceFlipBatch {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            accepting: false,
+            len: 0,
+            entries: [None; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum PlaneSurfaceFlipQueueResult {
+    Inactive,
+    Queued,
+    Rejected,
+}
+
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(false);
 static PRIMARY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SOURCE_PROGRAM_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI4_PLANE_SURFACE_FLIP_BATCH_SEQ: AtomicU32 = AtomicU32::new(0);
+static UI4_PLANE_SURFACE_FLIP_BATCH: Mutex<PlaneSurfaceFlipBatch> =
+    Mutex::new(PlaneSurfaceFlipBatch::new());
 static UI_SURFACE_PRIMARY_COPY_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_SURFACES: [Mutex<Option<PrimarySurface>>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(None),
@@ -2681,6 +2718,7 @@ fn program_primary_plane_source_for_pipeline(
         || crate::intel::mmio_read(dev, size_off) != size_want
         || crate::intel::mmio_read(dev, offset_off) != offset_want
         || color_ctl != color_ctl_enabled;
+    let surf_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
     let surf_live_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
     if contract_changed {
         // Plane format, stride and geometry are not surface-flip state. Do not
@@ -2690,6 +2728,35 @@ fn program_primary_plane_source_for_pipeline(
         crate::intel::mmio_write(dev, pipe.primary_plane().surf(), 0);
         let _ = wait_for_pipe_next_frame(dev, pipe);
         let _ = wait_for_primary_plane_live(dev, pipe, 0, 200_000);
+    } else if surf_before == surf_live_before {
+        match queue_ui4_plane_surface_flip(pipe.primary_plane().base(), surface_reg, reason) {
+            PlaneSurfaceFlipQueueResult::Queued => {
+                let program_seq = PRIMARY_SOURCE_PROGRAM_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+                if mapped_now || program_seq <= 8 || program_seq.is_multiple_of(60) {
+                    intel_display_verbose_log!(
+                        "intel/display: primary-plane-source seq={} reason={} pipe={} ok=1 live_ok=deferred mapped={} contract_rearm=0 fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} before=0x{:08X} live=0x{:08X} path=ui4-batched-surf\n",
+                        program_seq,
+                        reason,
+                        pipe.name,
+                        mapped_now as u8,
+                        source.format,
+                        source.src_x,
+                        source.src_y,
+                        source.dst_x,
+                        source.dst_y,
+                        dst_w,
+                        dst_h,
+                        source.pitch_bytes,
+                        surface_reg,
+                        surf_before,
+                        surf_live_before,
+                    );
+                }
+                return true;
+            }
+            PlaneSurfaceFlipQueueResult::Rejected => return false,
+            PlaneSurfaceFlipQueueResult::Inactive => {}
+        }
     }
     crate::intel::mmio_write(dev, pipe.primary_plane().stride(), stride_reg);
     crate::intel::mmio_write(dev, pos_off, pos_want);
@@ -5206,6 +5273,148 @@ fn wait_for_plane_live_for(
     (live, iter)
 }
 
+/// Begin one bounded UI4 display transaction. Stable plane contracts may
+/// stage only their double-buffered SURF address while this transaction is
+/// active; format, geometry, DBUF and watermark changes remain synchronous.
+pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
+    if crate::intel::claimed_device().is_none() {
+        return false;
+    }
+    let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+    if batch.active {
+        return false;
+    }
+    *batch = PlaneSurfaceFlipBatch {
+        active: true,
+        accepting: true,
+        ..PlaneSurfaceFlipBatch::new()
+    };
+    true
+}
+
+fn queue_ui4_plane_surface_flip(
+    plane_base: usize,
+    surface_reg: u32,
+    reason: &str,
+) -> PlaneSurfaceFlipQueueResult {
+    // Do not absorb a concurrent non-UI4 display client merely because UI4
+    // currently has a transaction open on another CPU.
+    if !reason.starts_with("ui4-") {
+        return PlaneSurfaceFlipQueueResult::Inactive;
+    }
+    let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+    if !batch.active {
+        return PlaneSurfaceFlipQueueResult::Inactive;
+    }
+    if !batch.accepting {
+        return PlaneSurfaceFlipQueueResult::Rejected;
+    }
+    for entry in batch.entries[..batch.len].iter().flatten() {
+        if entry.plane_base == plane_base {
+            return if entry.surface_reg == surface_reg {
+                PlaneSurfaceFlipQueueResult::Queued
+            } else {
+                PlaneSurfaceFlipQueueResult::Rejected
+            };
+        }
+    }
+    if batch.len >= batch.entries.len() {
+        return PlaneSurfaceFlipQueueResult::Rejected;
+    }
+    let index = batch.len;
+    batch.entries[index] = Some(PlaneSurfaceFlip {
+        plane_base,
+        surface_reg,
+    });
+    batch.len += 1;
+    PlaneSurfaceFlipQueueResult::Queued
+}
+
+/// Publish every staged SURF address back-to-back, then wait once for the
+/// complete set of SURFLIVE registers. This avoids serially consuming one
+/// scanout-latch wait per changed UI4 plane.
+pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
+    let queued = {
+        let mut batch = UI4_PLANE_SURFACE_FLIP_BATCH.lock();
+        if !batch.active || !batch.accepting {
+            return false;
+        }
+        batch.accepting = false;
+        let queued = *batch;
+        queued
+    };
+    if queued.len == 0 {
+        *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
+        return true;
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
+        return false;
+    };
+
+    for entry in queued.entries[..queued.len].iter().flatten() {
+        crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SURF_OFF, entry.surface_reg);
+    }
+
+    let started_ns = crate::chronos::monotonic_nanos();
+    let mut live = [0u32; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY];
+    let mut live_mask: u32;
+    let mut iterations = 0usize;
+    loop {
+        live_mask = 0;
+        for (index, entry) in queued.entries[..queued.len].iter().flatten().enumerate() {
+            live[index] = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_SURFLIVE_OFF);
+            if live[index] == entry.surface_reg {
+                live_mask |= 1u32 << index;
+            }
+        }
+        let want_mask = (1u32 << queued.len) - 1;
+        if live_mask == want_mask {
+            break;
+        }
+        if iterations.is_multiple_of(256)
+            && crate::chronos::monotonic_nanos().saturating_sub(started_ns)
+                >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS
+        {
+            break;
+        }
+        core::hint::spin_loop();
+        iterations += 1;
+    }
+
+    let want_mask = (1u32 << queued.len) - 1;
+    let committed = live_mask == want_mask;
+    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(started_ns);
+    let seq = UI4_PLANE_SURFACE_FLIP_BATCH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    if !committed || seq <= 8 || seq.is_multiple_of(60) {
+        crate::log!(
+            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} want_mask=0x{:X} wait_iters={} wait_ns={} commit=surf-addresses-together wait=shared\n",
+            seq,
+            committed as u8,
+            queued.len,
+            live_mask,
+            want_mask,
+            iterations,
+            elapsed_ns,
+        );
+    }
+    if !committed {
+        for (index, entry) in queued.entries[..queued.len].iter().flatten().enumerate() {
+            if live[index] != entry.surface_reg {
+                crate::log_warn!(
+                    target: "intel/display";
+                    "intel/display: ui4-plane-surface-flip timeout plane_base=0x{:X} surf=0x{:08X} live=0x{:08X}\n",
+                    entry.plane_base,
+                    entry.surface_reg,
+                    live[index],
+                );
+            }
+        }
+    }
+    *UI4_PLANE_SURFACE_FLIP_BATCH.lock() = PlaneSurfaceFlipBatch::new();
+    committed
+}
+
 fn primary_plane_ctl_enabled(ctl_before: u32) -> u32 {
     let format = match PRIMARY_FORMAT_PROBE_MODE {
         PRIMARY_FORMAT_PROBE_XBGR => PrimaryPlaneSourceFormat::Xbgr8888,
@@ -7387,6 +7596,26 @@ fn flip_overlay_plane_surface(
     let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
+    match queue_ui4_plane_surface_flip(plane_base, surface_reg, reason) {
+        PlaneSurfaceFlipQueueResult::Queued => {
+            mark_overlay_surface_front(surface);
+            let seq = OVERLAY_PRESENT_SEQ.load(Ordering::Relaxed).wrapping_add(1);
+            if seq <= 8 || seq.is_multiple_of(120) {
+                crate::log!(
+                    "intel/display: overlay-surf-only seq={} reason={} pipe={} slot={} buffer={} surf=0x{:08X} live=deferred contract=preserved path=ui4-batched-surf\n",
+                    seq,
+                    reason,
+                    surface.pipe.name,
+                    surface.plane_slot,
+                    surface.buffer_index,
+                    surface_reg,
+                );
+            }
+            return true;
+        }
+        PlaneSurfaceFlipQueueResult::Rejected => return false,
+        PlaneSurfaceFlipQueueResult::Inactive => {}
+    }
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
     let (live, live_iters) = wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
     if live != surface_reg {

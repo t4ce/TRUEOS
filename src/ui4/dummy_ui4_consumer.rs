@@ -466,23 +466,33 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
         return Err(DummyUi4ConsumerError::PresentFailed);
     }
 
-    present_plane_composition(
-        &mut runtime.composition.primary,
-        &windows,
-        CompositionTarget::Primary,
-    )?;
-    present_plane_composition(
-        &mut runtime.composition.solara,
-        &windows,
-        CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
-    )?;
-    present_plane_composition(
-        &mut runtime.composition.draw3d,
-        &windows,
-        CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
-    )?;
+    if !crate::intel::begin_ui4_plane_surface_flip_batch() {
+        return Err(DummyUi4ConsumerError::PresentFailed);
+    }
     let cursor_rects = software_cursor_rects();
-    present_software_cursor_plane(&mut runtime.cursor_plane, &cursor_rects)?;
+    let present_result = (|| {
+        present_plane_composition(
+            &mut runtime.composition.primary,
+            &windows,
+            CompositionTarget::Primary,
+        )?;
+        present_plane_composition(
+            &mut runtime.composition.solara,
+            &windows,
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
+        )?;
+        present_plane_composition(
+            &mut runtime.composition.draw3d,
+            &windows,
+            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
+        )?;
+        present_software_cursor_plane(&mut runtime.cursor_plane, &cursor_rects)
+    })();
+    let flips_committed = crate::intel::finish_ui4_plane_surface_flip_batch();
+    present_result?;
+    if !flips_committed {
+        return Err(DummyUi4ConsumerError::PresentFailed);
+    }
     super::screenshot::capture_compositor_frame(&windows, &cursor_rects);
     Ok(())
 }

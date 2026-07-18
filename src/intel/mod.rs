@@ -298,6 +298,14 @@ pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason
     self::display::set_primary_plane_source_mapped(source, reason)
 }
 
+pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
+    self::display::begin_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
+    self::display::finish_ui4_plane_surface_flip_batch()
+}
+
 pub(crate) fn present_ui_surface_to_primary_plane(
     surface: types::UiSurface,
     phys: u64,

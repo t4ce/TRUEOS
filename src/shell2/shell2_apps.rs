@@ -584,7 +584,10 @@ fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8
             line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
         }
         Ok(true) => match load_vm_task(*spawner, io, vm_id) {
-            Ok(token) => spawner.spawn(token),
+            Ok(token) => {
+                spawner.spawn(token);
+                line(io, alloc::format!("apps: vm{} resume scheduled", vm_id).as_str());
+            }
             Err(_) => {
                 crate::hv::finish_restore(vm_id);
                 line(io, "apps: load task unavailable");

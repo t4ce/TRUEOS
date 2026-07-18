@@ -1006,15 +1006,20 @@ const DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES: usize = 16 * 1024 * 1024;
 // fixed VA; cached translations could then read or write a different layer's
 // physical allocation.  This range is private to the direct-RCS address space
 // (the render context may independently use the same numeric addresses).
-const DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE: u64 = 0x1000_0000;
-const DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT: u64 = 0x1800_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE: u64 = 0x0A00_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT: u64 = 0x0D00_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE: u64 = 0x0E00_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT: u64 = 0x1000_0000;
 const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE.is_multiple_of(4096));
 const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT.is_multiple_of(4096));
+const _: () =
+    assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT);
 const _: () = assert!(
-    DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
+    DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT < DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
 );
 const _: () =
-    assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
+const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_FONT_TESSEL_MARKER: u32 = 0xF07E_5501;
@@ -3778,6 +3783,29 @@ fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
         let aligned = current.checked_add((super::WARM_ALIGN - 1) as u64)?
             & !((super::WARM_ALIGN - 1) as u64);
         let next = aligned.checked_add(bytes)?;
+        if aligned < DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT
+            && next > DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT
+        {
+            let _ = FONT_COVERAGE_GPU_VA_CURSOR.compare_exchange(
+                current,
+                DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            continue;
+        }
+        if (DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT
+            ..DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE)
+            .contains(&aligned)
+        {
+            let _ = FONT_COVERAGE_GPU_VA_CURSOR.compare_exchange(
+                current,
+                DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            continue;
+        }
         if next > DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT {
             return None;
         }
@@ -3791,18 +3819,17 @@ fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
 }
 
 fn recycle_font_coverage_gpu_va(gpu: u64, bytes: usize) {
-    if gpu < DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
-        || gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
-    {
-        return;
-    }
     let Some(bytes) = align_up(bytes, super::WARM_ALIGN).map(|value| value as u64) else {
         return;
     };
     let Some(end) = gpu.checked_add(bytes) else {
         return;
     };
-    if end > DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT {
+    let in_primary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+        && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT;
+    let in_secondary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
+        && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT;
+    if !in_primary && !in_secondary {
         return;
     }
     let mut free = FONT_COVERAGE_GPU_VA_FREE.lock();
@@ -3853,6 +3880,83 @@ pub(crate) fn allocate_font_coverage_mask(
     Some(GpgpuOwnedMask8Surface { surface, virt })
 }
 
+fn run_font_outline_coverage_r8_self_test() -> bool {
+    const WIDTH: u32 = 19;
+    const HEIGHT: u32 = 11;
+    const OPS: [[u32; 8]; 5] = [
+        [0, 2.0f32.to_bits(), 2.0f32.to_bits(), 0, 0, 0, 0, 0],
+        [1, 17.0f32.to_bits(), 2.0f32.to_bits(), 0, 0, 0, 0, 0],
+        [1, 17.0f32.to_bits(), 9.0f32.to_bits(), 0, 0, 0, 0, 0],
+        [1, 2.0f32.to_bits(), 9.0f32.to_bits(), 0, 0, 0, 0, 0],
+        [4, 0, 0, 0, 0, 0, 0, 0],
+    ];
+    let Some(mask) = allocate_font_coverage_mask(WIDTH, HEIGHT) else {
+        return false;
+    };
+    let input_bytes = OPS.len() * core::mem::size_of::<[u32; 8]>();
+    let Some(mapped_bytes) = align_up(input_bytes, super::WARM_ALIGN) else {
+        return false;
+    };
+    let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
+        core::ptr::copy_nonoverlapping(OPS.as_ptr().cast::<u8>(), ops_virt, input_bytes);
+    }
+    super::dma_flush(ops_virt, mapped_bytes);
+    let surface = mask.surface();
+    let params = FontOutlineCoverageR8Params {
+        ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
+        mask_gpu: surface.gpu,
+        op_count: OPS.len() as u32,
+        subdivisions: 1,
+        mask_pitch_bytes: surface.pitch_bytes,
+        mask_width: WIDTH,
+        mask_height: HEIGHT,
+        rect_x: 0,
+        rect_y: 0,
+        rect_width: WIDTH,
+        rect_height: HEIGHT,
+        optical_bias_px: 0.0,
+    };
+    let submitted = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
+    crate::dma::dealloc(ops_virt, mapped_bytes);
+    if !submitted {
+        return false;
+    }
+    let Some(audit) = mask.nonzero_audit() else {
+        return false;
+    };
+    let mut solid_interior = true;
+    for y in 3..8usize {
+        for x in 3..16usize {
+            let offset = y * surface.pitch_bytes as usize + x;
+            let coverage = unsafe { core::ptr::read_volatile(mask.virt.add(offset)) };
+            solid_interior &= coverage == u8::MAX;
+        }
+    }
+    let corner = unsafe { core::ptr::read_volatile(mask.virt) };
+    let ok = solid_interior && corner == 0 && audit.nonzero_pixels >= 65;
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: font-outline-coverage-r8 self-test={} mask_gpu=0x{:X} nonzero={} bounds={},{},{}x{} tail_width={} invariant=solid-interior+empty-corner+unique-va\n",
+        if ok { "pass" } else { "fail" },
+        surface.gpu,
+        audit.nonzero_pixels,
+        audit.bounds.x,
+        audit.bounds.y,
+        audit.bounds.width,
+        audit.bounds.height,
+        WIDTH % FILL_RECT_PIXELS_PER_GROUP_X,
+    );
+    ok
+}
+
+fn font_outline_coverage_r8_self_test() -> bool {
+    *FONT_OUTLINE_COVERAGE_R8_SELF_TEST.call_once(run_font_outline_coverage_r8_self_test)
+}
+
 /// Add one positioned Skrifa outline stream into a persistent R8 mask.
 /// Existing coverage is retained with `max`, allowing bold duplicate runs and
 /// multiple glyphs to share one color-layer mask without CPU mask blending.
@@ -3873,6 +3977,9 @@ pub(crate) fn font_outline_coverage_r8(
         || !optical_bias_px.is_finite()
         || !(0.0..=0.35).contains(&optical_bias_px)
     {
+        return false;
+    }
+    if !font_outline_coverage_r8_self_test() {
         return false;
     }
     let input_bytes = match outline_ops
