@@ -287,6 +287,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32;
+    pub fn trueos_cabi_dns_resolve_ipv4(
+        host: *const u8,
+        host_len: usize,
+        out_octets: *mut u8,
+    ) -> i32;
 
     pub fn trueos_cabi_socket_tcp_open(domain: i32, socket_type: i32, protocol: i32) -> i32;
     pub fn trueos_cabi_socket_tcp_close(socket_id: u32) -> i32;

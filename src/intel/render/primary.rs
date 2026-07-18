@@ -1114,10 +1114,28 @@ fn encode_resident_scene_primary_batch(
     }
     let completion_gpu =
         GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
-    push(MI_STORE_DATA_IMM_GGTT_DW1)?;
+
+    // The frame completion observed by UI4 must also be the display-visibility
+    // fence. Secondary batches retire their individual draws, but a plain MI
+    // store in this primary only proves command ordering; it does not make the
+    // complete render target globally visible to a display GGTT alias.
+    //
+    // Drain every cache that can retain render/depth/tile writes after the
+    // final secondary returns, then publish SCENE_FRAME_DONE with a post-sync
+    // write. Observing that value now proves both rendering and the frame-level
+    // producer-to-scanout visibility transition.
+    push(PIPE_CONTROL_CMD | PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS)?;
+    push(PIPE_CONTROL_BIG_PRE_DRAW_BITS)?;
+    push(0)?;
+    push(0)?;
+    push(0)?;
+    push(0)?;
+    push(PIPE_CONTROL_CMD)?;
+    push(PIPE_CONTROL_POST_DRAW_LIGHT_SYNC_BITS)?;
     push(completion_gpu as u32)?;
     push((completion_gpu >> 32) as u32)?;
     push(RCS_EXEC_RESULT_SCENE_FRAME_DONE)?;
+    push(0)?;
     push(MI_BATCH_BUFFER_END)?;
     push(MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())

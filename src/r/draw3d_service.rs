@@ -31,6 +31,7 @@ const PLACEHOLDER_RENDER_HEIGHT: u32 = 2_160;
 
 static SCENE: Mutex<Option<Scene>> = Mutex::new(None);
 static LAST_SCREENSHOT_FRAME: Mutex<Option<Arc<CapturedSceneFrame>>> = Mutex::new(None);
+static LAST_LIVE_SCREENSHOT_REVISION: AtomicU64 = AtomicU64::new(0);
 static SCENE_REVISION: AtomicU64 = AtomicU64::new(1);
 static SCENE_CAMERA_EPOCH_NS: AtomicU64 = AtomicU64::new(0);
 static LISTENER_QUEUE_FULL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -198,6 +199,10 @@ fn render_and_publish_ui4_scene_frame(
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(Draw3dUi4Error::Render("incomplete-or-stale-gpu-frame"));
     }
+    if let Err(error) = cache_live_ui4_frame(lease, revision) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error);
+    }
     publish_ui4_scene_frame(surface, lease)?;
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
@@ -210,6 +215,69 @@ fn render_and_publish_ui4_scene_frame(
         );
     }
     Ok(result)
+}
+
+/// Preserve one exact completed producer buffer per scene revision.
+///
+/// This deliberately observes the UI4 DMA allocation that will be imported
+/// for scanout; it does not launch a second render into the renderer's scratch
+/// target.  Keeping it revision-scoped avoids putting a full-frame CPU read on
+/// the 60 Hz presentation path while still making RequestRender a useful
+/// boundary probe for render-versus-scanout corruption.
+fn cache_live_ui4_frame(
+    lease: crate::ui4::FrameWriteLease,
+    revision: u64,
+) -> Result<(), Draw3dUi4Error> {
+    if LAST_LIVE_SCREENSHOT_REVISION.load(Ordering::Acquire) == revision {
+        return Ok(());
+    }
+    let view = crate::ui4::writable_rgba_view(lease)?;
+    let row_bytes = usize::try_from(view.width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(Draw3dUi4Error::InvalidFrame)?;
+    let pitch = usize::try_from(view.pitch).map_err(|_| Draw3dUi4Error::InvalidFrame)?;
+    let height = usize::try_from(view.height).map_err(|_| Draw3dUi4Error::InvalidFrame)?;
+    let required = pitch
+        .checked_mul(height)
+        .ok_or(Draw3dUi4Error::InvalidFrame)?;
+    if view.virt.is_null() || pitch < row_bytes || required > view.byte_len {
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+
+    // CLFLUSH invalidates any CPU aliases before the read, so the bytes below
+    // are fetched after the completed GPU render rather than from stale cache.
+    crate::intel::dma_flush(view.virt, required);
+    let mut rgba = Vec::with_capacity(
+        row_bytes
+            .checked_mul(height)
+            .ok_or(Draw3dUi4Error::InvalidFrame)?,
+    );
+    for y in 0..height {
+        let row = unsafe {
+            core::slice::from_raw_parts(view.virt.add(y * pitch) as *const u8, row_bytes)
+        };
+        rgba.extend_from_slice(row);
+    }
+    *LAST_SCREENSHOT_FRAME.lock() = Some(Arc::new(CapturedSceneFrame {
+        width: view.width,
+        height: view.height,
+        rgba,
+    }));
+    LAST_LIVE_SCREENSHOT_REVISION.store(revision, Ordering::Release);
+    crate::log_info!(
+        target: "draw3d";
+        "draw3d: exact live-buffer snapshot cached revision={} buffer={} phys=0x{:X} producer_gpu=0x{:X} size={}x{} pitch={} bytes={} point=after-render-fence-before-ui4-publish extra_render=0\n",
+        revision,
+        lease.buffer_index,
+        view.phys,
+        view.gpu,
+        view.width,
+        view.height,
+        view.pitch,
+        row_bytes * height,
+    );
+    Ok(())
 }
 
 fn projected_draw_pressure(source: &ProjectedMesh) -> (usize, f32) {
@@ -268,12 +336,18 @@ fn cache_screenshot_frame(result: &mut crate::intel::render::ResidentSceneFrameR
 
 fn request_render_image() -> RenderImage {
     let request_started_ns = crate::chronos::monotonic_nanos();
-    let captured = capture_screenshot_view();
+    let captured = LAST_LIVE_SCREENSHOT_REVISION.load(Ordering::Acquire)
+        == SCENE_REVISION.load(Ordering::Acquire);
     let capture_complete_ns = crate::chronos::monotonic_nanos();
-    // A failed fresh capture must not discard the last complete screenshot.
-    // Permanent reset explicitly clears both this cache and presentation
-    // eligibility, so returning the cache here cannot cross scene lifetimes.
-    let latest = LAST_SCREENSHOT_FRAME.lock().clone();
+    // RequestRender now reports the exact completed UI4 producer buffer. A
+    // missing current-revision snapshot must not launch an offscreen render,
+    // because that would erase the diagnostic distinction this endpoint
+    // establishes. Permanent reset clears the cache explicitly.
+    let latest = if captured {
+        LAST_SCREENSHOT_FRAME.lock().clone()
+    } else {
+        None
+    };
     if let Some(frame) = latest {
         let stride = usize::try_from(frame.width)
             .ok()
@@ -345,6 +419,7 @@ fn apply_command(
     let outcome = scene.apply(command)?;
     if permanent_stop {
         *LAST_SCREENSHOT_FRAME.lock() = None;
+        LAST_LIVE_SCREENSHOT_REVISION.store(0, Ordering::Release);
     }
     if outcome.affected != 0 {
         SCENE_REVISION.fetch_add(1, Ordering::AcqRel);
@@ -876,7 +951,7 @@ fn process_data(
                     "draw3d: command=request_render request={} handle={} source={} format={:?} size={}x{} bytes={}\n",
                     request_id,
                     handle.0,
-                    if placeholder { "placeholder" } else { "offscreen-capture" },
+                    if placeholder { "placeholder" } else { "exact-live-ui4-buffer" },
                     image.format,
                     image.width,
                     image.height,

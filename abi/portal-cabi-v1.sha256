@@ -2,4 +2,4 @@
 # crates/trueos-v/src/bp_abi.rs. Existing symbols are immutable; add a new
 # versioned symbol for incompatible changes and update this lock only after an
 # additive-contract review.
-290f224f2ace362ec47d5621a0bfb561047a9c3b88f66aa15808a68e45d68e09
+11116482d764c6ded1ab443e405f85846a9436d06977adeb39109fb84e23812d
