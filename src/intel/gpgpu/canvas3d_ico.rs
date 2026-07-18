@@ -1,4 +1,3 @@
-
 use super::Canvas3dVec3Q16;
 
 pub(crate) const CORNER_COUNT: usize = 30;

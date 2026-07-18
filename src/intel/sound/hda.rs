@@ -2090,9 +2090,15 @@ pub extern "C" fn trueos_tinyaudio_spawn_output_pump(
 ) -> i32 {
     let period_ms = period_ms.max(1);
     let caller_slot = crate::percpu::current_slot() as u32;
-    let spawner = match crate::workers::spawner_for_slot(caller_slot)
-        .or_else(|| crate::workers::spawner_for_slot(0))
-    {
+    if !crate::workers::is_background_worker_slot(caller_slot) {
+        crate::log_error!(
+            target: "audio";
+            "tinyaudio-output-pump: rejected slot={} policy=background-ap2+\n",
+            caller_slot
+        );
+        return -1;
+    }
+    let spawner = match crate::workers::spawner_for_slot(caller_slot) {
         Some(spawner) => spawner,
         None => return -1,
     };

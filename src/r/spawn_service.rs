@@ -576,7 +576,7 @@ fn spawn_truesurfer_parse_pool(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::tst::esynth::tinyaudio_service_task())
+    spawn_on_worker(spawner, |_worker_spawner| crate::tst::esynth::tinyaudio_service_task())
 }
 
 fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
@@ -1547,7 +1547,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled(
         "tinyaudio_service",
-        crate::r::readiness::INTEL_HDA_READY,
+        crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &TINYAUDIO_SERVICE_STARTED,
         spawn_tinyaudio_service,
     ),

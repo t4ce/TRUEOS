@@ -355,8 +355,8 @@ pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x4F, 0x3F, 0x4E, 0xEF, 0x78, 0xDF, 0x2E, 0x66, 0x7B, 0x9F, 0x40, 0x4E, 0x34, 0xA8, 0x22, 0xFB,
 ];
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xDE, 0x7B, 0xAE, 0x1E, 0x85, 0xC0, 0x4F, 0xEE, 0x36, 0xA9, 0xE5, 0xA1, 0x37, 0xFE, 0x3F, 0x75,
-    0xC2, 0x4D, 0xDB, 0x70, 0x77, 0x8D, 0x98, 0x31, 0xD0, 0x0D, 0x4A, 0x3C, 0x19, 0x75, 0xC4, 0xA2,
+    0x0D, 0x23, 0x28, 0xA4, 0x48, 0xA2, 0x1B, 0x73, 0x92, 0x43, 0x0F, 0xA5, 0xA5, 0x35, 0xD5, 0x7E,
+    0x0A, 0x94, 0xCD, 0x49, 0x31, 0xF5, 0x8B, 0xAF, 0xBB, 0x0F, 0xCC, 0x9E, 0xBF, 0x7F, 0x81, 0x21,
 ];
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x8B, 0x17, 0x46, 0x98, 0x4F, 0x74, 0x15, 0x6C, 0xCD, 0xBE, 0xB9, 0x43, 0x1D, 0xF9, 0xD2, 0x50,
@@ -1362,6 +1362,13 @@ pub(crate) const COMPOSITE_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 4;
 pub(crate) const COMPOSITE_WORKLIST_NEUTRAL_COLOR_RGBA: u32 = 0xFFFF_FFFF;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER: u32 = 1 << 0;
 pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC: u32 = 1 << 1;
+pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_CLEAR: u32 = 1 << 2;
+pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_SOURCE_XRGB: u32 = 1 << 3;
+pub(crate) const SPRITE_QUAD_WORKLIST_FLAG_DEST_XRGB: u32 = 1 << 4;
+
+pub(crate) const fn sprite_quad_worklist_max_descs() -> usize {
+    SPRITE_QUAD_WORKLIST_MAX_DESCS
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -2282,6 +2289,28 @@ pub(crate) struct GpgpuWorklistSubmitStats {
     pub(crate) walkers: usize,
     pub(crate) submits: usize,
     pub(crate) submit_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuSubmissionOutcome {
+    /// The request failed before crossing the hardware submission boundary.
+    Unavailable,
+    /// The post marker retired, so all destination writes are complete.
+    Complete,
+    /// Hardware accepted the request but its post marker did not retire.
+    SubmittedIncomplete,
+}
+
+impl Default for GpgpuSubmissionOutcome {
+    fn default() -> Self {
+        Self::Unavailable
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct GpgpuWorklistSubmitResult {
+    pub(crate) stats: GpgpuWorklistSubmitStats,
+    pub(crate) outcome: GpgpuSubmissionOutcome,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -4459,23 +4488,30 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_stats(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
 ) -> GpgpuWorklistSubmitStats {
+    sprite_quad_worklist_rgba8_runs_over_result(dst, runs).stats
+}
+
+pub(crate) fn sprite_quad_worklist_rgba8_runs_over_result(
+    dst: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> GpgpuWorklistSubmitResult {
     if !sprite_quad_worklist_ready() {
-        return GpgpuWorklistSubmitStats::default();
+        return GpgpuWorklistSubmitResult::default();
     }
     let Some(desc_buffer) = sprite_quad_worklist_desc_buffer_once() else {
-        return GpgpuWorklistSubmitStats::default();
+        return GpgpuWorklistSubmitResult::default();
     };
     let total_descs = runs
         .iter()
         .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
     let Some(total_descs) = total_descs else {
-        return GpgpuWorklistSubmitStats::default();
+        return GpgpuWorklistSubmitResult::default();
     };
     if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
-        return GpgpuWorklistSubmitStats::default();
+        return GpgpuWorklistSubmitResult::default();
     }
     if runs.iter().any(|run| run.descs.is_empty()) {
-        return GpgpuWorklistSubmitStats::default();
+        return GpgpuWorklistSubmitResult::default();
     }
 
     let mut stats = GpgpuWorklistSubmitStats::default();
@@ -4494,8 +4530,9 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_stats(
     super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
 
     let submit_start_tick = direct_rcs_now_tick();
-    if !submit_sprite_quad_worklist_runs(dst, desc_buffer, runs) {
-        return stats;
+    let outcome = submit_sprite_quad_worklist_runs(dst, desc_buffer, runs);
+    if outcome != GpgpuSubmissionOutcome::Complete {
+        return GpgpuWorklistSubmitResult { stats, outcome };
     }
     stats.submit_ms = stats
         .submit_ms
@@ -4505,7 +4542,7 @@ pub(crate) fn sprite_quad_worklist_rgba8_runs_over_stats(
         total.saturating_add(sprite_quad_worklist_walker_count(run.descs.len()))
     });
     stats.submits = 1;
-    stats
+    GpgpuWorklistSubmitResult { stats, outcome }
 }
 
 pub(crate) fn alpha_blend_worklist_rgba8_over_submit_stats(
@@ -10193,32 +10230,32 @@ fn submit_sprite_quad_worklist_runs(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
-) -> bool {
+) -> GpgpuSubmissionOutcome {
     if runs.is_empty() {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     }
     let total_descs = runs
         .iter()
         .try_fold(0usize, |total, run| total.checked_add(run.descs.len()));
     let Some(total_descs) = total_descs else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
     if total_descs == 0 || total_descs > SPRITE_QUAD_WORKLIST_MAX_DESCS {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     }
     if runs.iter().any(|run| run.descs.is_empty()) {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     }
 
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
     let Some(upload) = upload_sprite_quad_worklist_rgba8_kernel() else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
+        return GpgpuSubmissionOutcome::Unavailable;
     };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -10279,7 +10316,13 @@ fn submit_sprite_quad_worklist_runs(
             );
         }
     }
-    observed == SPRITE_QUAD_WORKLIST_POST_MARKER
+    if observed == SPRITE_QUAD_WORKLIST_POST_MARKER {
+        GpgpuSubmissionOutcome::Complete
+    } else if submitted {
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    } else {
+        GpgpuSubmissionOutcome::Unavailable
+    }
 }
 
 fn submit_fill_rect_worklist(
@@ -12384,6 +12427,12 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
+        if run_index + 1 < runs.len() {
+            // Later source-over runs read destination pixels written by this
+            // run. MEDIA_STATE_FLUSH retires the walker; the data-port/cache
+            // flush establishes the actual write-to-read dependency.
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+        }
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,

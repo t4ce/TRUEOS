@@ -605,14 +605,25 @@ pub async fn tinyaudio_service_task() {
     CALLBACKS.store(0, Ordering::Release);
     SAMPLES_WRITTEN.store(0, Ordering::Release);
 
+    let slot = crate::percpu::current_slot();
+    if !crate::workers::is_background_worker_slot(slot as u32) {
+        crate::log_error!(
+            target: "audio";
+            "tinyaudio-service: rejected slot={} policy=background-ap2+\n",
+            slot
+        );
+        crate::audio_probe!("tinyaudio-service: rejected slot={} policy=background-ap2+\n", slot);
+        return;
+    }
+
     crate::log_info!(
         target: "audio";
-        "tinyaudio-service: audio task start slot={} policy=ap1-ui-service\n",
-        crate::percpu::current_slot()
+        "tinyaudio-service: audio task start slot={} policy=background-ap2+\n",
+        slot
     );
     crate::audio_probe!(
-        "tinyaudio-service: audio task start slot={} policy=ap1-ui-service\n",
-        crate::percpu::current_slot()
+        "tinyaudio-service: audio task start slot={} policy=background-ap2+\n",
+        slot
     );
     live_pcm_reset(LIVE_PCM_RING_SECONDS);
     if !PIANO_SOURCE_ENABLED {

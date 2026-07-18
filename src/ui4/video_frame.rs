@@ -138,6 +138,7 @@ impl DecodedRgbaProducer {
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static SFC_TARGET_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+static SFC_TARGET_UNAVAILABLE_LOGS: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 
 /// Install the boot player's ordinary UI4 window without decoding a picture.
@@ -378,14 +379,18 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
             }
         }
         Err(error) => {
-            crate::log_warn!(
-                target: "ui4";
-                "ui4 video-frame sfc-target unavailable frame={} buffer={} error={:?} reason={} cpu_fallback=1\n",
-                target.frame().raw(),
-                target.buffer_index(),
-                error,
-                reason,
-            );
+            let count = SFC_TARGET_UNAVAILABLE_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
+            if count <= 4 || count.is_power_of_two() {
+                crate::log_warn!(
+                    target: "ui4";
+                    "ui4 video-frame sfc-target unavailable count={} frame={} buffer={} error={:?} reason={} cpu_fallback=1 log_policy=first4-powers-of-two\n",
+                    count,
+                    target.frame().raw(),
+                    target.buffer_index(),
+                    error,
+                    reason,
+                );
+            }
         }
     }
     Some(target)
