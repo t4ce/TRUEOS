@@ -3755,9 +3755,74 @@ pub(crate) fn resolve_tile64_msaa4_rgba8(
     submit_resolve_tile64_msaa4_2d(src, dst, params)
 }
 
-/// Allocate one persistent linear R8 mask. Every font mask deliberately uses
-/// the same PPGTT virtual address: direct submissions are serialized and remap
-/// that window to the owning allocation before each generation/composite.
+fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
+    let bytes = align_up(bytes, super::WARM_ALIGN)? as u64;
+    {
+        let mut free = FONT_COVERAGE_GPU_VA_FREE.lock();
+        if let Some(index) = free
+            .iter()
+            .position(|(start, end)| end.saturating_sub(*start) >= bytes)
+        {
+            let (start, end) = free[index];
+            let next = start.checked_add(bytes)?;
+            if next == end {
+                free.swap_remove(index);
+            } else {
+                free[index].0 = next;
+            }
+            return Some(start);
+        }
+    }
+    loop {
+        let current = FONT_COVERAGE_GPU_VA_CURSOR.load(Ordering::Acquire);
+        let aligned = current.checked_add((super::WARM_ALIGN - 1) as u64)?
+            & !((super::WARM_ALIGN - 1) as u64);
+        let next = aligned.checked_add(bytes)?;
+        if next > DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT {
+            return None;
+        }
+        if FONT_COVERAGE_GPU_VA_CURSOR
+            .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(aligned);
+        }
+    }
+}
+
+fn recycle_font_coverage_gpu_va(gpu: u64, bytes: usize) {
+    if gpu < DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+        || gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
+    {
+        return;
+    }
+    let Some(bytes) = align_up(bytes, super::WARM_ALIGN).map(|value| value as u64) else {
+        return;
+    };
+    let Some(end) = gpu.checked_add(bytes) else {
+        return;
+    };
+    if end > DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT {
+        return;
+    }
+    let mut free = FONT_COVERAGE_GPU_VA_FREE.lock();
+    free.push((gpu, end));
+    free.sort_unstable_by_key(|range| range.0);
+    let mut write = 0usize;
+    for read in 0..free.len() {
+        let range = free[read];
+        if write != 0 && range.0 <= free[write - 1].1 {
+            free[write - 1].1 = free[write - 1].1.max(range.1);
+        } else {
+            free[write] = range;
+            write += 1;
+        }
+    }
+    free.truncate(write);
+}
+
+/// Allocate one persistent linear R8 mask with its own PPGTT virtual range.
+/// Distinct simultaneously-live masks are never remapped over one another.
 pub(crate) fn allocate_font_coverage_mask(
     width: u32,
     height: u32,
@@ -3768,23 +3833,21 @@ pub(crate) fn allocate_font_coverage_mask(
     let pitch_bytes = u32::try_from(align_up(width as usize, 64)?).ok()?;
     let raw_bytes = (pitch_bytes as usize).checked_mul(height as usize)?;
     let bytes = align_up(raw_bytes, super::WARM_ALIGN)?;
-    if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_WINDOW_BYTES {
+    if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES {
         return None;
     }
     let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
+        crate::dma::dealloc(virt, bytes);
+        return None;
+    };
     unsafe {
         core::ptr::write_bytes(virt, 0, bytes);
     }
     super::dma_flush(virt, bytes);
-    let Some(surface) = GpgpuMask8Surface::new(
-        phys,
-        DIRECT_RCS_GPU_VA_FONT_COVERAGE_MASK_BASE,
-        bytes,
-        width,
-        height,
-        pitch_bytes,
-    ) else {
+    let Some(surface) = GpgpuMask8Surface::new(phys, gpu, bytes, width, height, pitch_bytes) else {
         crate::dma::dealloc(virt, bytes);
+        recycle_font_coverage_gpu_va(gpu, bytes);
         return None;
     };
     Some(GpgpuOwnedMask8Surface { surface, virt })
