@@ -1,0 +1,80 @@
+[package]
+name = "opencl-sys"
+version = "0.6.1"
+authors = ["Ken Barker <ken.barker@via-technology.aero>"]
+description = "OpenCL C FFI bindings for the Rust programming language."
+documentation = "https://docs.rs/opencl-sys/"
+homepage = "https://github.com/kenba/opencl-sys-rs"
+repository = "https://github.com/kenba/opencl-sys-rs"
+readme = "README.md"
+keywords = ["opencl", "gpu", "gpgpu", "ffi", "api"]
+categories = ["api-bindings", "asynchronous", "external-ffi-bindings", "no-std"]
+license = "Apache-2.0"
+edition = "2024"
+build = "build.rs"
+links = "OpenCL"
+
+[features]
+static = []
+
+CL_VERSION_1_1 = []
+CL_VERSION_1_2 = []
+CL_VERSION_2_0 = []
+CL_VERSION_2_1 = []
+CL_VERSION_2_2 = []
+CL_VERSION_3_0 = []
+
+cl_apple_setmemobjectdestructor = []
+cl_apple_contextloggingfunctions = []
+
+cl_khr_icd = []
+cl_khr_il_program = []
+cl_khr_terminate_context = []
+cl_khr_create_command_queue = []
+cl_ext_device_fission = []
+cl_ext_migrate_memobject = []
+cl_qcom_ext_host_ptr = []
+cl_img_use_gralloc_ptr = []
+cl_img_generate_mipmap = []
+cl_khr_subgroups = []
+cl_khr_suggested_local_work_size = []
+cl_khr_external_memory = []
+cl_khr_external_semaphore = []
+cl_khr_external_semaphore_sync_fd = []
+cl_khr_semaphore = []
+cl_arm_import_memory = []
+cl_arm_shared_virtual_memory = []
+cl_intel_accelerator = []
+cl_intel_unified_shared_memory = []
+cl_intel_create_buffer_with_properties = []
+cl_intel_program_scope_host_pipe = []
+cl_ext_image_requirements_info = []
+cl_khr_command_buffer = []
+cl_khr_command_buffer_multi_device = []
+cl_khr_command_buffer_mutable_dispatch = []
+
+cl_khr_gl_sharing = []
+cl_khr_gl_event = []
+cl_khr_egl_image = []
+cl_khr_egl_event = []
+
+cl_khr_dx9_media_sharing = []
+cl_intel_dx9_media_sharing = []
+cl_khr_d3d10_sharing = []
+cl_khr_d3d11_sharing = []
+
+cl_loader_info = []
+cl_pocl_content_size = []
+cl_ext_buffer_device_address = []
+cl_loader_layers = []
+cl_img_cancel_command = []
+cl_qcom_perf_hint = []
+
+[dependencies]
+libc = "0.2"
+
+[lints.clippy]
+enum_glob_use = "deny"
+nursery = "deny"
+pedantic = "deny"
+unwrap_used = "deny"

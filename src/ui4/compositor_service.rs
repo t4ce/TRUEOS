@@ -21,7 +21,7 @@ const PENDING_POLL_PERIOD_MS: u64 = 1;
 const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
-static DRAW3D_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static GPU_AUTHORED_DIRECT_SCANOUT_GATED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -121,7 +121,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor rewire live consumer=draw3d-kernel-service-only composition_ms={} active_plane=slot3 install=fenced-double-buffer-direct-flip per_frame_composition=off slot0=disabled slot1=disabled slot2=disabled slot4=disabled input=disabled screenshots=disabled previews=disabled video=disabled\n",
+        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=slot0+slot1+slot2+slot3 interaction=independent-slot4-service input=ui4-owner-queues plane_contract=bootstrap-immutable-rgba8\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -508,12 +508,6 @@ fn queue_async_plane(
             && selected.len() == 1
             && direct_overlay_eligible(window, view)
         {
-            if view.gpu_authored && !DRAW3D_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel) {
-                crate::log_info!(target: "ui4";
-                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=double action=import-complete-back-buffer-and-direct-flip per_frame_guc_jobs=0\n",
-                    window.frame.raw(), slot,
-                );
-            }
             let lease_index = pending
                 .windows
                 .iter()
@@ -553,6 +547,17 @@ fn queue_async_plane(
                     );
                 }
             }
+        }
+        if let Some((window, view)) = selected.as_slice().first().copied()
+            && selected.len() == 1
+            && view.gpu_authored
+            && direct_overlay_geometry_eligible(window, view)
+            && !GPU_AUTHORED_DIRECT_SCANOUT_GATED_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::log_warn!(target: "ui4";
+                "ui4/direct-present: gated frame={} slot={} reason=gpu-authored-release-fence-unproven action=guc-snapshot-to-display-back-buffer cpu_pixel_copy=0\n",
+                window.frame.raw(), slot,
+            );
         }
     }
     let pixels: Vec<&[u8]> = selected
@@ -606,19 +611,7 @@ fn queue_async_plane(
 }
 
 fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
-    if !direct_overlay_geometry_eligible(window, view) {
-        return false;
-    }
-    if !view.gpu_authored {
-        return true;
-    }
-    if !view.gpu_release_complete {
-        return false;
-    }
-    frame_snapshot(window.frame).is_ok_and(|snapshot| {
-        snapshot.plan.content == FrameContent::RenderScene3d
-            && snapshot.plan.buffering == super::FrameBuffering::Double
-    })
+    !view.gpu_authored && direct_overlay_geometry_eligible(window, view)
 }
 
 fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {

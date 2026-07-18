@@ -143,23 +143,12 @@ const GPU_VA_DRAW3D_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
 // physical storage is allocated lazily at the consumer's actual extent.
 const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;
 const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
-// Draw3D's two linear UI4 back buffers each keep a private render PPGTT VA for
-// their entire lifetime. Retargeting one VA between alternating physical
-// buffers without a render-TLB invalidation can make page groups land in the
-// previous buffer even though the GuC job itself completes. The two 64 MiB
-// slots consume 0x1800_0000..0x2000_0000, immediately below persistent fonts.
-const GPU_VA_DRAW3D_UI4_FRAME_BASE: u64 = 0x1800_0000;
-const GPU_VA_DRAW3D_UI4_FRAME_STRIDE: u64 = 0x0400_0000;
-const DRAW3D_UI4_FRAME_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
-const GPU_VA_DRAW3D_UI4_FRAME_LIMIT: u64 = GPU_VA_DRAW3D_UI4_FRAME_BASE
-    + DRAW3D_UI4_FRAME_BUFFER_COUNT as u64 * GPU_VA_DRAW3D_UI4_FRAME_STRIDE;
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 const GPU_VA_PERSISTENT_FONT_BASE: u64 = 0x2000_0000;
 const GPU_VA_PERSISTENT_FONT_LIMIT: u64 = 0x2800_0000;
-const _: () = assert!(GPU_VA_DRAW3D_UI4_FRAME_LIMIT == GPU_VA_PERSISTENT_FONT_BASE);
 static PERSISTENT_FONT_GPU_VA_CURSOR: AtomicU64 = AtomicU64::new(GPU_VA_PERSISTENT_FONT_BASE);
 static PERSISTENT_TRIANGLE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
     spin::Mutex::new(alloc::vec::Vec::new());

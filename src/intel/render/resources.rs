@@ -120,17 +120,6 @@ fn upload_triangle_shader_pipeline_at(
 
     let vs_gpu = bo_gpu_base + vs.code_offset_bytes as u64;
     let ps_gpu = bo_gpu_base + ps.code_offset_bytes as u64;
-    let ps_simd16_layout = host_simd16.map(|stage| {
-        let code_gpu_addr = bo_gpu_base + stage.code_offset_bytes as u64;
-        TriangleShaderStageLayout {
-            code_offset_bytes: stage.code_offset_bytes as u32,
-            code_gpu_addr,
-            ksp_offset_bytes: host_simd16_pipeline.ps.meta.kernel.ksp_offset_bytes,
-            ksp_gpu_addr: code_gpu_addr
-                + host_simd16_pipeline.ps.meta.kernel.ksp_offset_bytes as u64,
-            code_size_bytes: stage.code_size_bytes as u32,
-        }
-    });
 
     Ok(TriangleShaderLayout {
         vs: TriangleShaderStageLayout {
@@ -147,7 +136,6 @@ fn upload_triangle_shader_pipeline_at(
             ksp_gpu_addr: ps_gpu + pipeline.ps.meta.kernel.ksp_offset_bytes as u64,
             code_size_bytes: ps.code_size_bytes as u32,
         },
-        ps_simd16: ps_simd16_layout,
         state_region_gpu_addr: bo_gpu_base + state_region_offset_bytes as u64,
         state_region_offset_bytes: state_region_offset_bytes as u32,
         used_bytes: used_end as u32,

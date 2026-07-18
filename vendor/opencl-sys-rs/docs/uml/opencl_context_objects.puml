@@ -1,0 +1,51 @@
+@startuml
+'Copyright (c) 2023 Via Technology Ltd. All Rights Reserved.
+
+'title OpenCL packages
+
+package opencl {
+    object cl_platform
+    object cl
+    object cl_ext
+
+    cl_ext -- cl
+    cl -- cl_platform
+}
+
+package graphics {
+
+    package OpenGL {
+        object cl_egl
+        object cl_gl
+    }
+
+    package DirectX-windows {
+        object cl_dx9_media_sharing
+        object cl_d3d10
+        object cl_d3d11
+    }
+
+    cl_dx9_media_sharing -- cl
+    cl_d3d10 -- cl
+    cl_d3d11 -- cl
+}
+
+cl_gl -- cl
+cl_egl -- cl
+
+package loader_layers_extension {
+    object cl_icd
+    object cl_layer
+
+    cl_layer - cl_icd
+    cl_icd -- cl_ext
+
+    cl_icd -- cl_egl
+    cl_icd -- cl_gl
+    cl_icd -- cl_dx9_media_sharing
+    cl_icd -- cl_d3d10
+    cl_icd -- cl_d3d11
+}
+
+
+@enduml

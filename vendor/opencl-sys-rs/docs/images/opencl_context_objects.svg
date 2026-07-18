@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" contentStyleType="text/css" height="457px" preserveAspectRatio="none" style="width:789px;height:457px;background:#FFFFFF;" version="1.1" viewBox="0 0 789 457" width="789px" zoomAndPan="magnify"><defs/><g><!--MD5=[50d0381ff95ec6858f38ddd8307c4999]
+cluster opencl--><g id="cluster_opencl"><path d="M8.5,164 L57.5,164 A3.75,3.75 0 0 1 60,166.5 L67,187.6094 L119.5,187.6094 A2.5,2.5 0 0 1 122,190.1094 L122,447.5 A2.5,2.5 0 0 1 119.5,450 L8.5,450 A2.5,2.5 0 0 1 6,447.5 L6,166.5 A2.5,2.5 0 0 1 8.5,164 " fill="none" style="stroke:#000000;stroke-width:1.5;"/><line style="stroke:#000000;stroke-width:1.5;" x1="6" x2="67" y1="187.6094" y2="187.6094"/><text fill="#000000" font-family="sans-serif" font-size="14" font-weight="bold" lengthAdjust="spacing" textLength="48" x="10" y="180.5332">opencl</text></g><!--MD5=[9b3b0be7614dc0a3d9f034510769d4a1]
+cluster graphics--><g id="cluster_graphics"><path d="M148.5,120 L210.5,120 A3.75,3.75 0 0 1 213,122.5 L220,143.6094 L779.5,143.6094 A2.5,2.5 0 0 1 782,146.1094 L782,275.5 A2.5,2.5 0 0 1 779.5,278 L148.5,278 A2.5,2.5 0 0 1 146,275.5 L146,122.5 A2.5,2.5 0 0 1 148.5,120 " fill="none" style="stroke:#000000;stroke-width:1.5;"/><line style="stroke:#000000;stroke-width:1.5;" x1="146" x2="220" y1="143.6094" y2="143.6094"/><text fill="#000000" font-family="sans-serif" font-size="14" font-weight="bold" lengthAdjust="spacing" textLength="61" x="150" y="136.5332">graphics</text></g><!--MD5=[22d560ffaa7f9c7876a47a00bcdc06b9]
+cluster OpenGL--><g id="cluster_OpenGL"><path d="M598.5,164 L656.5,164 A3.75,3.75 0 0 1 659,166.5 L666,187.6094 L755.5,187.6094 A2.5,2.5 0 0 1 758,190.1094 L758,251.5 A2.5,2.5 0 0 1 755.5,254 L598.5,254 A2.5,2.5 0 0 1 596,251.5 L596,166.5 A2.5,2.5 0 0 1 598.5,164 " fill="none" style="stroke:#000000;stroke-width:1.5;"/><line style="stroke:#000000;stroke-width:1.5;" x1="596" x2="666" y1="187.6094" y2="187.6094"/><text fill="#000000" font-family="sans-serif" font-size="14" font-weight="bold" lengthAdjust="spacing" textLength="57" x="600" y="180.5332">OpenGL</text></g><!--MD5=[9db42502366bcf1fb8df426bf58dd728]
+cluster DirectX-windows--><g id="cluster_DirectX-windows"><path d="M172.5,164 L290.5,164 A3.75,3.75 0 0 1 293,166.5 L300,187.6094 L569.5,187.6094 A2.5,2.5 0 0 1 572,190.1094 L572,251.5 A2.5,2.5 0 0 1 569.5,254 L172.5,254 A2.5,2.5 0 0 1 170,251.5 L170,166.5 A2.5,2.5 0 0 1 172.5,164 " fill="none" style="stroke:#000000;stroke-width:1.5;"/><line style="stroke:#000000;stroke-width:1.5;" x1="170" x2="300" y1="187.6094" y2="187.6094"/><text fill="#000000" font-family="sans-serif" font-size="14" font-weight="bold" lengthAdjust="spacing" textLength="117" x="174" y="180.5332">DirectX-windows</text></g><!--MD5=[efec69d767708f2bf0c80eee1b24ea83]
+cluster loader_layers_extension--><g id="cluster_loader_layers_extension"><path d="M261.5,6 L435.5,6 A3.75,3.75 0 0 1 438,8.5 L445,29.6094 L445.5,29.6094 A2.5,2.5 0 0 1 448,32.1094 L448,93.5 A2.5,2.5 0 0 1 445.5,96 L261.5,96 A2.5,2.5 0 0 1 259,93.5 L259,8.5 A2.5,2.5 0 0 1 261.5,6 " fill="none" style="stroke:#000000;stroke-width:1.5;"/><line style="stroke:#000000;stroke-width:1.5;" x1="259" x2="445" y1="29.6094" y2="29.6094"/><text fill="#000000" font-family="sans-serif" font-size="14" font-weight="bold" lengthAdjust="spacing" textLength="173" x="263" y="22.5332">loader_layers_extension</text></g><g id="elem_cl_platform"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="83" x="22.5" y="396"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="69" x="29.5" y="412.5332">cl_platform</text><line style="stroke:#181818;stroke-width:0.5;" x1="23.5" x2="104.5" y1="417.6094" y2="417.6094"/></g><g id="elem_cl"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="24" x="82" y="298"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="10" x="89" y="314.5332">cl</text><line style="stroke:#181818;stroke-width:0.5;" x1="83" x2="105" y1="319.6094" y2="319.6094"/></g><g id="elem_cl_ext"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="50" x="56" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="36" x="63" y="216.5332">cl_ext</text><line style="stroke:#181818;stroke-width:0.5;" x1="57" x2="105" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_egl"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="51" x="690.5" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="37" x="697.5" y="216.5332">cl_egl</text><line style="stroke:#181818;stroke-width:0.5;" x1="691.5" x2="740.5" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_gl"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="43" x="612.5" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="29" x="619.5" y="216.5332">cl_gl</text><line style="stroke:#181818;stroke-width:0.5;" x1="613.5" x2="654.5" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_dx9_media_sharing"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="155" x="400.5" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="141" x="407.5" y="216.5332">cl_dx9_media_sharing</text><line style="stroke:#181818;stroke-width:0.5;" x1="401.5" x2="554.5" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_d3d10"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="72" x="293" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="58" x="300" y="216.5332">cl_d3d10</text><line style="stroke:#181818;stroke-width:0.5;" x1="294" x2="364" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_d3d11"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="72" x="186" y="200"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="58" x="193" y="216.5332">cl_d3d11</text><line style="stroke:#181818;stroke-width:0.5;" x1="187" x2="257" y1="221.6094" y2="221.6094"/></g><g id="elem_cl_icd"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="50" x="378" y="42"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="36" x="385" y="58.5332">cl_icd</text><line style="stroke:#181818;stroke-width:0.5;" x1="379" x2="427" y1="63.6094" y2="63.6094"/></g><g id="elem_cl_layer"><rect fill="#F1F1F1" height="37.6094" style="stroke:#181818;stroke-width:0.5;" width="63" x="279.5" y="42"/><text fill="#000000" font-family="sans-serif" font-size="14" lengthAdjust="spacing" textLength="49" x="286.5" y="58.5332">cl_layer</text><line style="stroke:#181818;stroke-width:0.5;" x1="280.5" x2="341.5" y1="63.6094" y2="63.6094"/></g><!--MD5=[123b4f512d5b1f643d2c0c4ff3f7d945]
+link cl_ext to cl--><g id="link_cl_ext_cl"><path codeLine="10" d="M83.4452,238.057 C85.7547,255.112 89.2012,280.563 91.522,297.698 " fill="none" id="cl_ext-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[8ee6bb3880df98ef6dc823aa8067bad8]
+link cl to cl_platform--><g id="link_cl_cl_platform"><path codeLine="11" d="M88.3572,336.057 C83.0277,353.112 75.074,378.5631 69.7195,395.6977 " fill="none" id="cl-cl_platform" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[86b337dbd7a6f617f600b9cd045615e7]
+link cl_dx9_media_sharing to cl--><g id="link_cl_dx9_media_sharing_cl"><path codeLine="27" d="M458.229,238.264 C440.114,253.824 411.807,275.311 383,286 C330.86,305.347 154.134,313.622 106.123,315.545 " fill="none" id="cl_dx9_media_sharing-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[0ca81d8ba59c6bcc9ed00cacdaf0a635]
+link cl_d3d10 to cl--><g id="link_cl_d3d10_cl"><path codeLine="28" d="M319.415,238.248 C310.355,253.576 295.286,274.731 276,286 C246.829,303.044 142.105,312.372 106.19,315.125 " fill="none" id="cl_d3d10-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[d3fe364a7822529d9381a57771b908a6]
+link cl_d3d11 to cl--><g id="link_cl_d3d11_cl"><path codeLine="29" d="M197.924,238.057 C170.55,258.588 126.951,291.287 106.004,306.997 " fill="none" id="cl_d3d11-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[d049a78128fc509b1e6f2083bde224fc]
+link cl_gl to cl--><g id="link_cl_gl_cl"><path codeLine="32" d="M622.749,238.176 C611.894,253.904 593.908,275.695 572,286 C528.736,306.35 177.375,314.349 106.451,315.764 " fill="none" id="cl_gl-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[df30bd43129e5e3dd74aee17e4ec5bd6]
+link cl_egl to cl--><g id="link_cl_egl_cl"><path codeLine="33" d="M709.652,238.077 C703.104,253.74 691.25,275.489 673,286 C622.247,315.232 185.175,316.108 106.204,316.026 " fill="none" id="cl_egl-cl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[522f6d5a75ba87fc1de09e9cb39133a4]
+link cl_layer to cl_icd--><g id="link_cl_layer_cl_icd"><path codeLine="39" d="M342.625,61 C354.26,61 365.895,61 377.529,61 " fill="none" id="cl_layer-cl_icd" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[d90d31c19b3b4abaa3e757aa8d35afff]
+link cl_icd to cl_ext--><g id="link_cl_icd_cl_ext"><path codeLine="40" d="M389.596,80.325 C382.001,89.175 371.687,98.95 360,104 C321.207,120.762 207.919,93.344 170,112 C131.621,130.882 103.585,174.753 90.063,199.734 " fill="none" id="cl_icd-cl_ext" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[e3497aafa0b0b357133be7fa5d2aa834]
+link cl_icd to cl_egl--><g id="link_cl_icd_cl_egl"><path codeLine="42" d="M428.105,63.609 C487.699,67.896 635.506,81.414 673,112 C700.084,134.094 710.252,175.91 713.962,199.888 " fill="none" id="cl_icd-cl_egl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[d0465f54658bd3a4a383a3200d31d084]
+link cl_icd to cl_gl--><g id="link_cl_icd_cl_gl"><path codeLine="43" d="M428.267,63.711 C463.805,67.296 529.008,78.316 572,112 C601.368,135.01 619.557,176.095 628.127,199.79 " fill="none" id="cl_icd-cl_gl" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[57dd74bff296364230654806b8b1ccf5]
+link cl_icd to cl_dx9_media_sharing--><g id="link_cl_icd_cl_dx9_media_sharing"><path codeLine="44" d="M411.75,80.2 C426.202,110.26 454.89,169.932 469.305,199.915 " fill="none" id="cl_icd-cl_dx9_media_sharing" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[98f2a5b487a21b2f7c21a192df79217d]
+link cl_icd to cl_d3d10--><g id="link_cl_icd_cl_d3d10"><path codeLine="45" d="M394.366,80.2 C380.107,110.26 351.801,169.932 337.579,199.915 " fill="none" id="cl_icd-cl_d3d10" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[85d41dc5e6fb93480ca59d6be22bcbe3]
+link cl_icd to cl_d3d11--><g id="link_cl_icd_cl_d3d11"><path codeLine="46" d="M389.483,80.072 C381.857,88.853 371.549,98.643 360,104 C342.99,111.89 291.505,101.454 276,112 C245.773,132.559 231.53,175.361 225.618,199.821 " fill="none" id="cl_icd-cl_d3d11" style="stroke:#181818;stroke-width:1.0;"/></g><!--MD5=[da9a60cd925ee6504bf3f652aca69772]
+@startuml
+'Copyright (c) 2023 Via Technology Ltd. All Rights Reserved.
+
+'title OpenCL packages
+
+package opencl {
+    object cl_platform
+    object cl
+    object cl_ext
+
+    cl_ext - - cl
+    cl - - cl_platform
+}
+
+package graphics {
+
+    package OpenGL {
+        object cl_egl
+        object cl_gl
+    }
+
+    package DirectX-windows {
+        object cl_dx9_media_sharing
+        object cl_d3d10
+        object cl_d3d11
+    }
+
+    cl_dx9_media_sharing - - cl
+    cl_d3d10 - - cl
+    cl_d3d11 - - cl
+}
+
+cl_gl - - cl
+cl_egl - - cl
+
+package loader_layers_extension {
+    object cl_icd
+    object cl_layer
+
+    cl_layer - cl_icd
+    cl_icd - - cl_ext
+
+    cl_icd - - cl_egl
+    cl_icd - - cl_gl
+    cl_icd - - cl_dx9_media_sharing
+    cl_icd - - cl_d3d10
+    cl_icd - - cl_d3d11
+}
+
+
+@enduml
+
+@startuml
+
+
+package opencl {
+    object cl_platform
+    object cl
+    object cl_ext
+
+    cl_ext - - cl
+    cl - - cl_platform
+}
+
+package graphics {
+
+    package OpenGL {
+        object cl_egl
+        object cl_gl
+    }
+
+    package DirectX-windows {
+        object cl_dx9_media_sharing
+        object cl_d3d10
+        object cl_d3d11
+    }
+
+    cl_dx9_media_sharing - - cl
+    cl_d3d10 - - cl
+    cl_d3d11 - - cl
+}
+
+cl_gl - - cl
+cl_egl - - cl
+
+package loader_layers_extension {
+    object cl_icd
+    object cl_layer
+
+    cl_layer - cl_icd
+    cl_icd - - cl_ext
+
+    cl_icd - - cl_egl
+    cl_icd - - cl_gl
+    cl_icd - - cl_dx9_media_sharing
+    cl_icd - - cl_d3d10
+    cl_icd - - cl_d3d11
+}
+
+
+@enduml
+
+PlantUML version 1.2022.8(Sun Sep 25 10:00:33 BST 2022)
+(GPL source distribution)
+Java Runtime: Java(TM) SE Runtime Environment
+JVM: Java HotSpot(TM) Client VM
+Default Encoding: Cp1252
+Language: en
+Country: GB
+--></g></svg>

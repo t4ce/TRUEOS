@@ -95,8 +95,6 @@ static TRIANGLE_PIPELINE: TrianglePipeline = TrianglePipeline {
                 code_alignment_bytes: 64,
                 ksp_offset_bytes: 0,
                 dispatch_mode: DispatchMode::Simd8,
-                // The captured variable-dispatch packet maps this SIMD8
-                // executable through KSP2 with DispatchGRFStart=2.
                 grf_start_register: 2,
                 grf_used: 128,
                 push_constant_bytes: 0,
@@ -104,11 +102,7 @@ static TRIANGLE_PIPELINE: TrianglePipeline = TrianglePipeline {
                 sampler_count: 0,
             },
             num_varying_inputs: 0,
-            // The captured Mesa gfx125 packet programs
-            // 3DSTATE_PS.VectorMaskEnable=0 for this executable.  The hardware
-            // A/B also showed that this bit is not the source of the
-            // geometry-local clear-color holes.
-            uses_vmask: false,
+            uses_vmask: true,
             computed_stencil: false,
             persample_dispatch: false,
             computed_depth_mode: 0,
@@ -135,7 +129,7 @@ static TRIANGLE_PIPELINE_SIMD16: TrianglePipeline = TrianglePipeline {
                 sampler_count: 0,
             },
             num_varying_inputs: 0,
-            uses_vmask: false,
+            uses_vmask: true,
             computed_stencil: false,
             persample_dispatch: false,
             computed_depth_mode: 0,
