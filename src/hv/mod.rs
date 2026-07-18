@@ -841,11 +841,19 @@ fn start_with_mode(
         ));
     }
 
-    let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
-    let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
-    if memory::prepare_guest_stack_mb_for_vm(vm_id, active_stack_mb).is_err() {
-        vm.starting.store(false, Ordering::Release);
-        return Err(StartError::GuestMemoryUnavailable);
+    if memory::active_restore_meta(vm_id).is_none() {
+        let requested_stack_mb = stack_mb.unwrap_or(memory::guest_stack_default_mb());
+        let active_stack_mb = memory::clamp_guest_stack_mb(requested_stack_mb);
+        if memory::prepare_guest_stack_mb_for_vm(vm_id, active_stack_mb).is_err() {
+            vm.starting.store(false, Ordering::Release);
+            return Err(StartError::GuestMemoryUnavailable);
+        }
+    } else {
+        hvlogf(format_args!(
+            "hv: vm{} lifecycle: retained restored stack bytes={}",
+            vm_id,
+            memory::active_guest_stack_bytes_for_vm(vm_id)
+        ));
     }
 
     vm.stop_req.store(false, Ordering::Release);
@@ -919,6 +927,12 @@ fn start_with_mode(
 
     match vm_task(vm_id, target.lease) {
         Ok(token) => {
+            if memory::active_restore_meta(vm_id).is_some()
+                && vm.pause_latched.load(Ordering::Acquire)
+            {
+                mark_replicatable_resumed(vm_id);
+                hvlogf(format_args!("hv: vm{} lifecycle: resume committed before VM wake", vm_id));
+            }
             let wake_sent = target.spawner.spawn_and_wake_remote(token);
             hvlogf(format_args!(
                 "hv: vm{} lane spawn submitted: role={} placement={} slot={} wake={}",
@@ -1093,8 +1107,7 @@ fn map_store_restore_error(err: crate::hv::store::VmStoreError) -> RestoreError 
     }
 }
 
-fn vmexit_is_preserve(lr: LaunchResult) -> bool {
-    let vm_id = current_vm_id_for_log();
+fn vmexit_is_preserve(vm_id: u8, lr: LaunchResult) -> bool {
     lr.entered != 0
         && lr.launch_failed == 0
         && vm_slot(vm_id)
@@ -2434,14 +2447,16 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
     let launch_result = vmx_launch_once_with_ept(lineage_record).await;
+    if let Ok(lr) = launch_result {
+        capture_snapshot_meta(vm_id, lr);
+    }
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     let blueprint_crash_state = blueprint_launch_snapshot(vm_id);
     let mut pending_crash = None;
     crate::allocators::with_host_alloc_domain_strong(|| match launch_result {
         Ok(lr) => {
-            capture_snapshot_meta(vm_id, lr);
-            let preserve_exit = vmexit_is_preserve(lr);
+            let preserve_exit = vmexit_is_preserve(vm_id, lr);
             if preserve_exit {
                 snapshot_on_preserve_exit(vm_id);
             } else if let Some(state) = blueprint_crash_state.as_ref() {
@@ -2599,7 +2614,8 @@ async fn vmx_launch_once_with_ept(
         Ok(v) => v,
         Err(e) => return Err(e),
     };
-    if !crate::hv::vmcall::prepare_for_vm(vm_id) {
+    let reset_vmcall_transport = active_restore_meta(vm_id).is_none();
+    if !crate::hv::vmcall::prepare_for_vm(vm_id, reset_vmcall_transport) {
         return Err("vmcall comm page");
     }
     if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
@@ -3321,18 +3337,22 @@ fn setup_vmcs_for_launch(
             let guest_rsp = restored
                 .map(|m| m.guest_rsp)
                 .unwrap_or_else(|| guest_stack_top_for_vm(vm_id));
-            let guest_cr3 = if restored.is_some() {
-                current_guest_cr3_pa().or_else(|_| {
-                    build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)
-                })?
+            // Snapshot page tables describe the old physical stack arena.
+            // Rebuild the deterministic mappings around the restored logical
+            // RIP/RSP so the copied stack and current per-VM backings are used.
+            let guest_cr3 =
+                build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)?;
+            let launch_guest_rflags = if let Some(restored) = restored {
+                crate::hv::vmx::set_guest_registers(restored.guest_registers);
+                restored.guest_rflags
             } else {
-                build_guest_cr3_for_vm_with_mode(vm_id, guest_rip, guest_rsp, boot_mode)?
+                crate::hv::vmx::reset_guest_registers();
+                guest_rflags
             };
-            crate::hv::vmx::reset_guest_registers();
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-            vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+            vmwrite(VMCS_GUEST_RFLAGS, (launch_guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
             vmwrite(VMCS_GUEST_RIP, guest_rip)?;
             vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
             vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -3511,16 +3531,21 @@ fn setup_vmcs_for_launch(
     let guest_rsp = restored
         .map(|m| m.guest_rsp)
         .unwrap_or_else(|| guest_stack_top_for_vm(vm_id));
-    let guest_cr3 = if restored.is_some() {
-        current_guest_cr3_pa().or_else(|_| build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp))?
+    // Never reuse physical addresses embedded in the stored page tables. The
+    // stack was copied into a new arena, so rebuild mappings for current VM
+    // backings while preserving the checkpoint's logical execution state.
+    let guest_cr3 = build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp)?;
+    let launch_guest_rflags = if let Some(restored) = restored {
+        crate::hv::vmx::set_guest_registers(restored.guest_registers);
+        restored.guest_rflags
     } else {
-        build_guest_cr3_for_vm(vm_id, guest_rip, guest_rsp)?
+        crate::hv::vmx::reset_guest_registers();
+        guest_rflags
     };
-    crate::hv::vmx::reset_guest_registers();
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-    vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+    vmwrite(VMCS_GUEST_RFLAGS, (launch_guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, guest_rip)?;
     vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
     vmwrite(VMCS_GUEST_DR7, 0x400)?;

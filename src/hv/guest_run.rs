@@ -173,13 +173,13 @@ fn container_shell_command(raw: &str) -> bool {
                     "vmx-shell: replicatable pause unavailable; use preserve for a raw checkpoint",
                 );
             } else {
-                attached_write_line("vmx-shell: pause returned unexpectedly");
+                attached_write_line("vmx-shell: resumed after replicatable pause");
             }
         }
         "preserve" => {
             attached_write_line("vmx-shell: requesting raw checkpoint-and-stop");
             trueos_vm::vmcall::preserve();
-            attached_write_line("vmx-shell: preserve returned unexpectedly");
+            attached_write_line("vmx-shell: resumed from raw checkpoint");
         }
         _ => attached_write_line("unknown vmx command"),
     }

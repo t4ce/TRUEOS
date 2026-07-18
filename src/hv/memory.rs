@@ -136,6 +136,8 @@ pub struct VmSnapshotMeta {
     pub guest_cr3: u64,
     pub guest_rip: u64,
     pub guest_rsp: u64,
+    pub guest_registers: crate::hv::vmx::GuestRegisters,
+    pub guest_rflags: u64,
     pub code_base: u64,
     pub code_len: u64,
     pub exit_reason: u64,
@@ -410,7 +412,9 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         )?;
     }
 
-    if let Some(backing) = prepare_guest_hull_rw_backing_for_vm(current_vm_id_for_log())? {
+    let vm_id = current_vm_id_for_log();
+    let refresh_hull_rw = active_restore_meta(vm_id).is_none();
+    if let Some(backing) = prepare_guest_hull_rw_backing_for_vm(vm_id, refresh_hull_rw)? {
         if let Some(arena) = backing.arena {
             map_ept_identity_span(
                 pdpt,
@@ -716,6 +720,7 @@ pub fn active_guest_stack_bytes_total() -> usize {
 
 fn prepare_guest_hull_rw_backing_for_vm(
     vm_id: u8,
+    refresh_existing: bool,
 ) -> Result<Option<GuestHullRwBacking>, &'static str> {
     let idx = vm_index(vm_id)?;
     let layout = crate::hv::guest::hull_image_layout();
@@ -735,22 +740,33 @@ fn prepare_guest_hull_rw_backing_for_vm(
             && backing.guest_start == guest_start
             && backing.active_bytes == bytes
         {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    template_arena.virt_start as *const u8,
-                    arena.virt_start as *mut u8,
-                    bytes,
-                );
+            if refresh_existing {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        template_arena.virt_start as *const u8,
+                        arena.virt_start as *mut u8,
+                        bytes,
+                    );
+                }
+                patch_guest_hull_rw_dynamic_state(vm_id, arena.virt_start, guest_start, bytes);
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: hull rw private refreshed guest=0x{:016X}..0x{:016X} phys=0x{:016X} bytes={}",
+                    vm_id,
+                    guest_start,
+                    guest_start.saturating_add(bytes as u64),
+                    arena.phys_start,
+                    bytes
+                ));
+            } else {
+                hvlogf(format_args!(
+                    "hv: vm{} reporting: hull rw private retained for restore guest=0x{:016X}..0x{:016X} phys=0x{:016X} bytes={}",
+                    vm_id,
+                    guest_start,
+                    guest_start.saturating_add(bytes as u64),
+                    arena.phys_start,
+                    bytes
+                ));
             }
-            patch_guest_hull_rw_dynamic_state(vm_id, arena.virt_start, guest_start, bytes);
-            hvlogf(format_args!(
-                "hv: vm{} reporting: hull rw private refreshed guest=0x{:016X}..0x{:016X} phys=0x{:016X} bytes={}",
-                vm_id,
-                guest_start,
-                guest_start.saturating_add(bytes as u64),
-                arena.phys_start,
-                bytes
-            ));
             return Ok(Some(backing));
         }
     }
@@ -1350,6 +1366,8 @@ pub fn build_guest_cr3_for_vm_with_mode(
                 guest_cr3: pml4_pa,
                 guest_rip,
                 guest_rsp,
+                guest_registers: crate::hv::vmx::GuestRegisters::default(),
+                guest_rflags: crate::hv::vmx::RFLAGS_RESERVED_BIT1,
                 code_base: mapped_code_base,
                 code_len: mapped_code_len,
                 exit_reason: 0,

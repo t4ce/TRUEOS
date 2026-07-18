@@ -567,11 +567,7 @@ async fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -
 
 #[embassy_executor::task(pool_size = 4)]
 async fn load_vm_task(spawner: Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
-    let resume_lifecycle = crate::hv::vm_state(vm_id).pause_latched;
-    let started = load_vm(&spawner, io, vm_id).await;
-    if started && resume_lifecycle {
-        crate::hv::mark_replicatable_resumed(vm_id);
-    }
+    let _ = load_vm(&spawner, io, vm_id).await;
     crate::hv::finish_restore(vm_id);
 }
 

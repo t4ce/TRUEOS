@@ -211,12 +211,14 @@ fn host_ptr(vm_id: u8) -> Option<*mut CommPage> {
     Some(unsafe { core::ptr::addr_of_mut!(COMM_PAGES[vm_id as usize].0) as *mut CommPage })
 }
 
-pub fn prepare_for_vm(vm_id: u8) -> bool {
+pub fn prepare_for_vm(vm_id: u8, reset_transport: bool) -> bool {
     let Some(p) = host_ptr(vm_id) else {
         return false;
     };
     unsafe {
-        core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<CommPage>());
+        if reset_transport {
+            core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<CommPage>());
+        }
         core::ptr::write_volatile(
             &mut (*p).response_pad,
             COMM_PAGE_VM_ID_MAGIC | vm_id.saturating_add(1) as u32,

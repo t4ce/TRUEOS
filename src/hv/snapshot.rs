@@ -5,12 +5,15 @@ use crate::hv::memory::*;
 
 pub const VM_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 pub const VM_SNAPSHOT_VERSION_LEGACY: u32 = 1;
-pub const VM_SNAPSHOT_VERSION: u32 = 2;
+pub const VM_SNAPSHOT_VERSION_SPARSE: u32 = 2;
+pub const VM_SNAPSHOT_VERSION: u32 = 3;
+const VM_SNAPSHOT_LEGACY_HEADER_BYTES: usize = 8 + 10 * core::mem::size_of::<u64>();
 pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
 pub const GUEST_SNAPSHOT_PAGE_BITMAP_BYTES: usize = GUEST_SNAPSHOT_PAGE_COUNT.div_ceil(8);
-// Version 2 stores this fixed bitmap immediately after the header, followed by
-// only the 4 KiB page-table pages whose bits are set. Stack and code follow in
-// their original order. Version 1 has no bitmap and stores every table page.
+// Versions 2 and 3 store this fixed bitmap immediately after the header,
+// followed by only the 4 KiB page-table pages whose bits are set. Version 3
+// additionally preserves the live guest GPR/RFLAGS continuation state.
+// Version 1 has no bitmap and stores every table page.
 
 pub fn snapshot_path(vm_id: u8) -> String {
     format!("vm/vm{}.snapshot", vm_id)
@@ -31,7 +34,11 @@ pub struct VmSnapshotHeader {
     pub exit_guest_rip: u64,
     pub guest_stack_bytes: u64,
     pub guest_page_bytes: u64,
+    pub guest_registers: crate::hv::vmx::GuestRegisters,
+    pub guest_rflags: u64,
 }
+
+const _: [(); 216] = [(); core::mem::size_of::<VmSnapshotHeader>()];
 
 #[derive(Copy, Clone, Debug)]
 pub enum SaveError {
@@ -58,6 +65,12 @@ pub fn capture_snapshot_meta(vm_id: u8, lr: crate::hv::vmx::LaunchResult) {
     };
     let mut meta = meta_lock.lock();
     if let Some(mut m) = *meta {
+        m.guest_rip =
+            crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RIP).unwrap_or(lr.guest_rip);
+        m.guest_rsp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(m.guest_rsp);
+        m.guest_registers = crate::hv::vmx::guest_registers();
+        m.guest_rflags = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS)
+            .unwrap_or(crate::hv::vmx::RFLAGS_RESERVED_BIT1);
         m.exit_reason = lr.exit_reason;
         m.exit_qualification = lr.exit_qualification;
         m.exit_guest_rip = lr.guest_rip;
@@ -86,6 +99,8 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
         exit_guest_rip: meta.exit_guest_rip,
         guest_stack_bytes: active_guest_stack_bytes_for_vm(vm_id) as u64,
         guest_page_bytes: PAGE_SIZE_4K as u64,
+        guest_registers: meta.guest_registers,
+        guest_rflags: meta.guest_rflags,
     };
     let guest_stack = guest_stack_slice_for_vm(vm_id).ok_or(SaveError::NoSnapshot)?;
 
@@ -132,13 +147,22 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     let Some(restore_meta_lock) = vm_restore_meta_lock(vm_id) else {
         return Err(RestoreError::UnsupportedVmId);
     };
-    let header_len = core::mem::size_of::<VmSnapshotHeader>();
-    if bytes.len() < header_len {
+    if bytes.len() < VM_SNAPSHOT_LEGACY_HEADER_BYTES {
         return Err(RestoreError::BadSnapshot);
     }
 
-    let header = parse_snapshot_header(&bytes[..header_len])?;
-    let sparse_pages = header.version == VM_SNAPSHOT_VERSION;
+    let version = u32::from_le_bytes(
+        bytes[4..8]
+            .try_into()
+            .map_err(|_| RestoreError::BadSnapshot)?,
+    );
+    let header_len = if version == VM_SNAPSHOT_VERSION {
+        core::mem::size_of::<VmSnapshotHeader>()
+    } else {
+        VM_SNAPSHOT_LEGACY_HEADER_BYTES
+    };
+    let header = parse_snapshot_header(bytes.get(..header_len).ok_or(RestoreError::BadSnapshot)?)?;
+    let sparse_pages = header.version >= VM_SNAPSHOT_VERSION_SPARSE;
     let bitmap_end = if sparse_pages {
         header_len
             .checked_add(GUEST_SNAPSHOT_PAGE_BITMAP_BYTES)
@@ -198,6 +222,8 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
         guest_cr3,
         guest_rip: header.guest_rip,
         guest_rsp: header.guest_rsp,
+        guest_registers: header.guest_registers,
+        guest_rflags: header.guest_rflags,
         code_base: header.code_base,
         code_len: header.code_len,
         exit_reason: header.exit_reason,
@@ -233,8 +259,31 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
     let exit_guest_rip = take_u64(bytes, &mut off)?;
     let guest_stack_bytes = take_u64(bytes, &mut off)?;
     let guest_page_bytes = take_u64(bytes, &mut off)?;
+    let mut guest_registers = crate::hv::vmx::GuestRegisters::default();
+    let mut guest_rflags = crate::hv::vmx::RFLAGS_RESERVED_BIT1;
+    if version == VM_SNAPSHOT_VERSION {
+        guest_registers.rax = take_u64(bytes, &mut off)?;
+        guest_registers.rbx = take_u64(bytes, &mut off)?;
+        guest_registers.rcx = take_u64(bytes, &mut off)?;
+        guest_registers.rdx = take_u64(bytes, &mut off)?;
+        guest_registers.rsi = take_u64(bytes, &mut off)?;
+        guest_registers.rdi = take_u64(bytes, &mut off)?;
+        guest_registers.rbp = take_u64(bytes, &mut off)?;
+        guest_registers.r8 = take_u64(bytes, &mut off)?;
+        guest_registers.r9 = take_u64(bytes, &mut off)?;
+        guest_registers.r10 = take_u64(bytes, &mut off)?;
+        guest_registers.r11 = take_u64(bytes, &mut off)?;
+        guest_registers.r12 = take_u64(bytes, &mut off)?;
+        guest_registers.r13 = take_u64(bytes, &mut off)?;
+        guest_registers.r14 = take_u64(bytes, &mut off)?;
+        guest_registers.r15 = take_u64(bytes, &mut off)?;
+        guest_rflags = take_u64(bytes, &mut off)?;
+    }
     if magic != VM_SNAPSHOT_MAGIC
-        || (version != VM_SNAPSHOT_VERSION && version != VM_SNAPSHOT_VERSION_LEGACY)
+        || !matches!(
+            version,
+            VM_SNAPSHOT_VERSION_LEGACY | VM_SNAPSHOT_VERSION_SPARSE | VM_SNAPSHOT_VERSION
+        )
     {
         return Err(RestoreError::BadSnapshot);
     }
@@ -251,6 +300,8 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
         exit_guest_rip,
         guest_stack_bytes,
         guest_page_bytes,
+        guest_registers,
+        guest_rflags,
     })
 }
 
