@@ -20,7 +20,6 @@ struct OnlineApp {
     archive_name: String,
     sha256: String,
     url: String,
-    display_url: String,
 }
 
 const ONLINE_APPS_URL: &str = "https://trueos.eu/apps";
@@ -29,7 +28,7 @@ const ONLINE_APP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
 const ONLINE_APP_HASH_SEPARATOR: &str = "§§";
 const SHA256_HEX_LEN: usize = 64;
-const ONLINE_HEADERS: &[&str; 4] = &["id", "app", "url", "sha256"];
+const ONLINE_HEADERS: &[&str; 6] = &["id", "app", "sha", "id", "app", "sha"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
     crate::r::net::https::get_bytes_shared(url.as_str(), ONLINE_FETCH_TIMEOUT_MS, max_bytes).await
@@ -140,11 +139,6 @@ fn clean_archive_name(value: &str) -> Option<&str> {
     Some(name)
 }
 
-fn display_url_for_archive(url: &str, archive_name: &str) -> String {
-    let directory_end = url.rfind('/').map_or(0, |index| index + 1);
-    alloc::format!("{}{}", &url[..directory_end], archive_name)
-}
-
 fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
     let mut out = Vec::new();
     let mut rest = html;
@@ -185,7 +179,6 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             name: trim_bp_suffix(archive_name).to_string(),
             archive_name: archive_name.to_string(),
             sha256,
-            display_url: display_url_for_archive(url.as_str(), archive_name),
             url,
         });
         rest = &rest[li_end..];
@@ -198,6 +191,14 @@ async fn online_apps() -> Result<Vec<OnlineApp>, String> {
     let text = core::str::from_utf8(html.as_slice())
         .map_err(|_| String::from("online apps list is not UTF-8"))?;
     Ok(parse_online_apps(text))
+}
+
+fn short_sha256(value: &str) -> String {
+    if value.len() != SHA256_HEX_LEN {
+        return value.to_string();
+    }
+
+    alloc::format!("{}…{}", &value[..4], &value[value.len() - 4..])
 }
 
 fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineApp], prefix: &str) {
@@ -214,28 +215,31 @@ fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineA
         .to_string()
         .len()
         .max(ONLINE_HEADERS[0].len());
-    let app_width = apps
-        .iter()
-        .map(|app| app.name.chars().count())
-        .max()
-        .unwrap_or(ONLINE_HEADERS[1].len())
-        .max(ONLINE_HEADERS[1].len());
-    let sha_width = apps
-        .iter()
-        .map(|app| app.sha256.len())
-        .max()
-        .unwrap_or(ONLINE_HEADERS[3].len())
-        .max(ONLINE_HEADERS[3].len());
+    let sha_width = 9;
     let table = TlbTable::with_width(ONLINE_HEADERS, width.saturating_sub(2))
-        .with_max_col_widths(&[id_width, app_width, 0, sha_width]);
+        .with_max_col_widths(&[id_width, 0, sha_width, id_width, 0, sha_width]);
     table.emit_header(|text| print_matrix_target_line(target, text));
-    for (idx, app) in apps.iter().enumerate() {
-        let id = alloc::format!("{}", idx);
+    for left_idx in (0..apps.len()).step_by(2) {
+        let left_app = &apps[left_idx];
+        let left_id = alloc::format!("{}", left_idx);
+        let left_sha = short_sha256(left_app.sha256.as_str());
+
+        let right_idx = left_idx + 1;
+        let right_app = apps.get(right_idx);
+        let right_id = right_app
+            .map(|_| alloc::format!("{}", right_idx))
+            .unwrap_or_default();
+        let right_name = right_app.map(|app| app.name.as_str()).unwrap_or("");
+        let right_sha = right_app
+            .map(|app| short_sha256(app.sha256.as_str()))
+            .unwrap_or_default();
         let row = [
-            id.as_str(),
-            app.name.as_str(),
-            app.display_url.as_str(),
-            app.sha256.as_str(),
+            left_id.as_str(),
+            left_app.name.as_str(),
+            left_sha.as_str(),
+            right_id.as_str(),
+            right_name,
+            right_sha.as_str(),
         ];
         table.emit_row(&row, |text| print_matrix_target_line(target, text));
     }

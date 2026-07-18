@@ -65,6 +65,13 @@ pub const OP_BP_PRINTER_SNAPSHOT_READ: u32 = 0xBC; // arg0 offset, arg1 cap -> I
 pub const OP_BP_PRINT2D_SUBMIT: u32 = 0xBD; // arg0 document kind,arg1 subject,payload compact document -> job/rc
 pub const OP_BP_PRINT2D_STATUS: u32 = 0xBE; // arg0 job id -> PrintJobState/rc
 pub const OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE: u32 = 0xBF; // arg0 instance, focused F10 request token
+pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN: u32 = 0xC0; // arg0 window,arg1 width/height -> rc
+pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK: u32 = 0xC1; // arg0 window,arg1 byte offset,payload RGB565 -> rc
+pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH: u32 = 0xC2; // arg0 window -> rc
+pub const OP_BP_UI4_SCENE_SKYBOX_RENDER: u32 = 0xC3; // arg0 window,payload render params -> rc
+pub const OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8: u32 = 0xC4; // arg0 window,arg1 byte offset,payload RGBA8 -> rc
+pub const OP_BP_UI4_SCENE_FRAME_SET_POSITION: u32 = 0xC5; // arg0 window,arg1 x/y -> rc
+pub const OP_BP_UI4_SCENE_FRAME_RESIZE: u32 = 0xC6; // arg0 window,arg1 width/height -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -853,6 +860,112 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_close_requested(
                 arg0 as u32,
                 arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN => {
+            let (width, height) = unpack_u32_pair(arg1);
+            let rc = crate::ui4::blueprint_text::begin_skybox_rgb565_upload(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                width,
+                height,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_text::write_skybox_rgb565_upload_chunk(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH => {
+            let rc = crate::ui4::blueprint_text::finish_skybox_rgb565_upload(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SKYBOX_RENDER => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let mut words = [0u32; 15];
+            if payload.len() != words.len() * core::mem::size_of::<u32>() {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
+                *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            }
+            let params = crate::ui4::blueprint_text::TrueosUi4SkyboxRenderParams {
+                right_x: f32::from_bits(words[0]),
+                right_y: f32::from_bits(words[1]),
+                right_z: f32::from_bits(words[2]),
+                up_x: f32::from_bits(words[3]),
+                up_y: f32::from_bits(words[4]),
+                up_z: f32::from_bits(words[5]),
+                forward_x: f32::from_bits(words[6]),
+                forward_y: f32::from_bits(words[7]),
+                forward_z: f32::from_bits(words[8]),
+                aspect_tan_half_fov_y: f32::from_bits(words[9]),
+                tan_half_fov_y: f32::from_bits(words[10]),
+                rect_x: words[11],
+                rect_y: words[12],
+                rect_width: words[13],
+                rect_height: words[14],
+            };
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_skybox_render_rgb565(
+                    arg0 as u32,
+                    &params,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_text::write_opaque_rgba8_chunk(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_SET_POSITION => {
+            let (x, y) = unpack_i32_pair(arg1);
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_position(
+                arg0 as u32,
+                x,
+                y,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_RESIZE => {
+            let (width, height) = unpack_u32_pair(arg1);
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_resize(
+                arg0 as u32,
+                width,
+                height,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

@@ -37,6 +37,26 @@ pub struct TrueosUi4SolaraSceneTextRow {
     pub font_pixels: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4SkyboxRenderParams {
+    pub right_x: f32,
+    pub right_y: f32,
+    pub right_z: f32,
+    pub up_x: f32,
+    pub up_y: f32,
+    pub up_z: f32,
+    pub forward_x: f32,
+    pub forward_y: f32,
+    pub forward_z: f32,
+    pub aspect_tan_half_fov_y: f32,
+    pub tan_half_fov_y: f32,
+    pub rect_x: u32,
+    pub rect_y: u32,
+    pub rect_width: u32,
+    pub rect_height: u32,
+}
+
 unsafe extern "C" {
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
@@ -96,6 +116,24 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
+        window_id: u32,
+        rgba_ptr: *const u8,
+        rgba_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_skybox_upload_rgb565(
+        window_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_skybox_render_rgb565(
+        window_id: u32,
+        params: *const TrueosUi4SkyboxRenderParams,
+    ) -> i32;
 
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);

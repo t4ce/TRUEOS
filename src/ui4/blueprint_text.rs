@@ -1,12 +1,17 @@
-//! Experimental Blueprint transport for Solara's text-only UI4 producer.
+//! Blueprint transport for VM-owned UI4 scene frames.
 //!
 //! The kernel derives window ownership from the active Blueprint VM. Callers
-//! provide text and placement only; frame handles and writable surfaces never
-//! cross the ABI boundary.
+//! provide scene operations and placement only; frame handles, writable
+//! surfaces, and GPU addresses never cross the ABI boundary. Solara's text
+//! producer was the first consumer; shaded scene producers share the same
+//! coherent UI4 frame lifecycle.
 
 use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 
+use crate::intel::gpgpu::{
+    GpgpuRgb565Surface, SkyboxSampleRgb565Params, skybox_sample_rgb565_to_rgba8,
+};
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
     ensure_font_face_available, recycle_font_job_readback, render_font_job_readback_once,
@@ -18,8 +23,9 @@ use super::{
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate, WindowId,
     WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, finish_window_session_with_request, publish_frame_buffer,
-    publish_window_frame, writable_rgba_view,
+    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
+    publish_frame_buffer, publish_window_frame, replace_window_frame, set_window_placement,
+    writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -32,6 +38,15 @@ const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
 const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
+const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
+const UI4_SCENE_SOURCE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const _: () = {
+    assert!(UI4_SCENE_SOURCE_GPU.is_multiple_of(4096));
+    assert!(
+        UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64
+            <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES
+    );
+};
 
 const ERROR_INVALID: i32 = -1;
 const ERROR_CONTEXT: i32 = -2;
@@ -68,7 +83,29 @@ pub struct TrueosUi4SolaraSceneTextRow {
     pub font_pixels: f32,
 }
 
-struct SolaraTextSurface {
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4SkyboxRenderParams {
+    pub right_x: f32,
+    pub right_y: f32,
+    pub right_z: f32,
+    pub up_x: f32,
+    pub up_y: f32,
+    pub up_z: f32,
+    pub forward_x: f32,
+    pub forward_y: f32,
+    pub forward_z: f32,
+    pub aspect_tan_half_fov_y: f32,
+    pub tan_half_fov_y: f32,
+    pub rect_x: u32,
+    pub rect_y: u32,
+    pub rect_width: u32,
+    pub rect_height: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4SkyboxRenderParams>() == 15 * 4);
+
+struct BlueprintSceneSurface {
     owner: WindowOwner,
     session: WindowSessionId,
     frame: FrameHandle,
@@ -76,9 +113,28 @@ struct SolaraTextSurface {
     width: u32,
     height: u32,
     write_lease: Option<FrameWriteLease>,
+    placement: WindowPlacement,
+    skybox: Option<OwnedRgb565Surface>,
+    skybox_upload: Option<Rgb565Upload>,
 }
 
-static SURFACES: Mutex<Vec<SolaraTextSurface>> = Mutex::new(Vec::new());
+#[derive(Copy, Clone)]
+struct OwnedRgb565Surface {
+    surface: GpgpuRgb565Surface,
+    virt: *mut u8,
+    bytes: usize,
+}
+
+unsafe impl Send for OwnedRgb565Surface {}
+unsafe impl Sync for OwnedRgb565Surface {}
+
+struct Rgb565Upload {
+    owned: OwnedRgb565Surface,
+    packed_len: usize,
+    written: usize,
+}
+
+static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 
 /// Enumerate the kernel font service's native render-target sizes.
@@ -155,7 +211,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = match create_frame(FrameSpec {
         output,
-        content: FrameContent::FontScene2d,
+        content: FrameContent::BlueprintScene,
         cadence: FrameCadence::Dirty,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
@@ -176,21 +232,22 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             return 0;
         }
     };
+    let placement = WindowPlacement {
+        x,
+        y,
+        width,
+        height,
+        z: 40,
+        opacity: u8::MAX,
+        visible: true,
+    };
     let window = match create_window(WindowCreate {
         owner,
         session,
         frame,
         output,
         plane: WindowPlane::Universal(super::RGB_OVERLAY_PLANE_SLOT_2 as u8),
-        placement: WindowPlacement {
-            x,
-            y,
-            width,
-            height,
-            z: 40,
-            opacity: u8::MAX,
-            visible: true,
-        },
+        placement,
     }) {
         Ok(window) => window,
         Err(error) => {
@@ -204,7 +261,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
     let mut surfaces = SURFACES.lock();
     if surfaces.len() >= MAX_SURFACES {
         drop(surfaces);
-        release_surface(SolaraTextSurface {
+        release_surface(BlueprintSceneSurface {
             owner,
             session,
             frame,
@@ -212,10 +269,13 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             width,
             height,
             write_lease: None,
+            placement,
+            skybox: None,
+            skybox_upload: None,
         });
         return 0;
     }
-    surfaces.push(SolaraTextSurface {
+    surfaces.push(BlueprintSceneSurface {
         owner,
         session,
         frame,
@@ -223,12 +283,15 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         width,
         height,
         write_lease: None,
+        placement,
+        skybox: None,
+        skybox_upload: None,
     });
-    crate::log_info!(target: "ui4/solara-text"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 plane=slot2 text_path=opaque-glyph-mask\n", owner, window.raw(), width, height);
+    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 plane=slot2 scene=text+shader\n", owner, window.raw(), width, height);
     window.raw()
 }
 
-/// Acquire and clear the non-front UI4 buffer for a new Solara paint pass.
+/// Acquire and clear the non-front UI4 buffer for a new scene paint pass.
 pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return guest_status(
@@ -238,6 +301,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
             &[],
         );
     }
+    reap_retired_frames();
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
@@ -269,6 +333,289 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     crate::intel::dma_flush(view.virt, view.byte_len);
     surface.write_lease = Some(lease);
     0
+}
+
+/// Move a Blueprint scene window without exposing a broker handle.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_POSITION,
+            window_id as u64,
+            pack_i32_pair(x, y),
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let placement = WindowPlacement {
+        x,
+        y,
+        ..surface.placement
+    };
+    if set_window_placement(owner, surface.window, placement).is_err() {
+        return ERROR_UI4;
+    }
+    surface.placement = placement;
+    0
+}
+
+/// Replace the backing frame while retaining the UI4 window and scene assets.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
+    window_id: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_RESIZE,
+            window_id as u64,
+            pack_u32_pair(width, height),
+            &[],
+        );
+    }
+    reap_retired_frames();
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let replacement = match create_frame(FrameSpec {
+        output,
+        content: FrameContent::BlueprintScene,
+        cadence: FrameCadence::Dirty,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(PremultipliedRgba8::TRANSPARENT),
+    }) {
+        Ok(frame) => frame,
+        Err(_) => return ERROR_UI4,
+    };
+
+    let previous = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            let _ = destroy_frame(replacement);
+            return ERROR_NOT_FOUND;
+        };
+        if surface.write_lease.is_some() {
+            let _ = destroy_frame(replacement);
+            return ERROR_STATE;
+        }
+        let previous = surface.frame;
+        if replace_window_frame(owner, surface.window, replacement).is_err() {
+            let _ = destroy_frame(replacement);
+            return ERROR_UI4;
+        }
+        let placement = WindowPlacement {
+            width,
+            height,
+            ..surface.placement
+        };
+        if set_window_placement(owner, surface.window, placement).is_err() {
+            let _ = replace_window_frame(owner, surface.window, previous);
+            let _ = destroy_frame(replacement);
+            return ERROR_UI4;
+        }
+        surface.frame = replacement;
+        surface.width = width;
+        surface.height = height;
+        surface.placement = placement;
+        previous
+    };
+
+    if let Err(error) = destroy_frame(previous) {
+        if error == FramePoolError::Busy {
+            RETIRED_FRAMES.lock().push(previous);
+        }
+    }
+    crate::log_info!(target: "ui4/blueprint-frame"; "frame resize owner={:?} window={} extent={}x{} frame={}\n", owner, window_id, width, height, replacement.raw());
+    0
+}
+
+/// Copy one complete, tightly packed opaque RGBA8 image into the active UI4
+/// write lease. Opaque input is already valid premultiplied RGBA.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
+    window_id: u32,
+    rgba_ptr: *const u8,
+    rgba_len: usize,
+) -> i32 {
+    if rgba_ptr.is_null() || rgba_len == 0 || rgba_len & 3 != 0 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let bytes = unsafe { core::slice::from_raw_parts(rgba_ptr, rgba_len) };
+        let chunk_cap = trueos_vm::vmcall::PAYLOAD_CAP & !3;
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let end = core::cmp::min(offset.saturating_add(chunk_cap), bytes.len());
+            let rc = guest_status(
+                trueos_vm::vmcall::OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8,
+                window_id as u64,
+                offset as u64,
+                &bytes[offset..end],
+            );
+            if rc != 0 {
+                return rc;
+            }
+            offset = end;
+        }
+        return 0;
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let bytes = unsafe { core::slice::from_raw_parts(rgba_ptr, rgba_len) };
+    write_opaque_rgba8_chunk(owner, window_id, 0, bytes)
+}
+
+/// Upload one tightly packed RGB565 equirectangular source owned by this UI4
+/// frame. The guest transport is chunked; the retained host allocation is
+/// released with the frame session.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_upload_rgb565(
+    window_id: u32,
+    width: u32,
+    height: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let Some(expected) = expected_rgb565_len(width, height) else {
+        return ERROR_INVALID;
+    };
+    if data_ptr.is_null() || data_len != expected {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let begin = guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN,
+            window_id as u64,
+            pack_u32_pair(width, height),
+            &[],
+        );
+        if begin != 0 {
+            return begin;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let end =
+                core::cmp::min(offset.saturating_add(trueos_vm::vmcall::PAYLOAD_CAP), bytes.len());
+            let rc = guest_status(
+                trueos_vm::vmcall::OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK,
+                window_id as u64,
+                offset as u64,
+                &bytes[offset..end],
+            );
+            if rc != 0 {
+                return rc;
+            }
+            offset = end;
+        }
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let begin = begin_skybox_rgb565_upload(owner, window_id, width, height);
+    if begin != 0 {
+        return begin;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+    let write = write_skybox_rgb565_upload_chunk(owner, window_id, 0, bytes);
+    if write != 0 {
+        return write;
+    }
+    finish_skybox_rgb565_upload(owner, window_id)
+}
+
+/// Run the existing GPGPU RGB565 skybox sampler into the active UI4 back
+/// buffer. Presentation remains a separate coherent UI4 publish operation.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
+    window_id: u32,
+    params: *const TrueosUi4SkyboxRenderParams,
+) -> i32 {
+    if params.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                params.cast::<u8>(),
+                core::mem::size_of::<TrueosUi4SkyboxRenderParams>(),
+            )
+        };
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SKYBOX_RENDER,
+            window_id as u64,
+            0,
+            payload,
+        );
+    }
+    let params = unsafe { *params };
+    if !valid_skybox_render_params(params) {
+        return ERROR_INVALID;
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let surfaces = SURFACES.lock();
+    let Some(surface) = surfaces
+        .iter()
+        .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
+    else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let Some(skybox) = surface.skybox else {
+        return ERROR_STATE;
+    };
+    let Ok(destination) = gpgpu_rgba_surface(lease) else {
+        return ERROR_UI4;
+    };
+    let rendered = skybox_sample_rgb565_to_rgba8(
+        skybox.surface,
+        destination,
+        SkyboxSampleRgb565Params {
+            sky_gpu: 0,
+            dst_gpu: 0,
+            sky_pitch_bytes: 0,
+            sky_width: 0,
+            sky_height: 0,
+            dst_pitch_bytes: 0,
+            dst_width: 0,
+            dst_height: 0,
+            rect_x: params.rect_x,
+            rect_y: params.rect_y,
+            rect_width: params.rect_width,
+            rect_height: params.rect_height,
+            right_x: params.right_x,
+            right_y: params.right_y,
+            right_z: params.right_z,
+            up_x: params.up_x,
+            up_y: params.up_y,
+            up_z: params.up_z,
+            forward_x: params.forward_x,
+            forward_y: params.forward_y,
+            forward_z: params.forward_z,
+            aspect_tan_half_fov_y: params.aspect_tan_half_fov_y,
+            tan_half_fov_y: params.tan_half_fov_y,
+        },
+    );
+    if rendered { 0 } else { ERROR_UI4 }
 }
 
 /// Render one positioned text-row job through the kernel font service and
@@ -785,6 +1132,238 @@ fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     }
 }
 
+fn expected_rgb565_len(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(core::mem::size_of::<u16>())
+}
+
+pub(crate) fn begin_skybox_rgb565_upload(
+    owner: WindowOwner,
+    window_id: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    let Some(packed_len) = expected_rgb565_len(width, height) else {
+        return ERROR_INVALID;
+    };
+    let Some(row_bytes) = (width as usize).checked_mul(core::mem::size_of::<u16>()) else {
+        return ERROR_INVALID;
+    };
+    let Some(pitch) =
+        crate::intel::align_up(row_bytes, 64).and_then(|pitch| u32::try_from(pitch).ok())
+    else {
+        return ERROR_INVALID;
+    };
+    let Some(raw_bytes) = (pitch as usize).checked_mul(height as usize) else {
+        return ERROR_INVALID;
+    };
+    let Some(bytes) = crate::intel::align_up(raw_bytes, crate::intel::WARM_ALIGN) else {
+        return ERROR_INVALID;
+    };
+    if packed_len == 0
+        || bytes > UI4_SCENE_SOURCE_MAX_BYTES
+        || UI4_SCENE_SOURCE_GPU.saturating_add(bytes as u64)
+            > crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES
+    {
+        return ERROR_INVALID;
+    }
+    let Some((phys, virt)) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN) else {
+        return ERROR_UI4;
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, bytes);
+    }
+    let Some(gpu_surface) =
+        GpgpuRgb565Surface::new(phys, UI4_SCENE_SOURCE_GPU, bytes, width, height, pitch)
+    else {
+        crate::dma::dealloc(virt, bytes);
+        return ERROR_UI4;
+    };
+    let upload = Rgb565Upload {
+        owned: OwnedRgb565Surface {
+            surface: gpu_surface,
+            virt,
+            bytes,
+        },
+        packed_len,
+        written: 0,
+    };
+    let old = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            drop(surfaces);
+            destroy_rgb565_surface(upload.owned);
+            return ERROR_NOT_FOUND;
+        };
+        surface.skybox_upload.replace(upload)
+    };
+    if let Some(old) = old {
+        destroy_rgb565_surface(old.owned);
+    }
+    0
+}
+
+pub(crate) fn write_skybox_rgb565_upload_chunk(
+    owner: WindowOwner,
+    window_id: u32,
+    offset: usize,
+    bytes: &[u8],
+) -> i32 {
+    if bytes.is_empty() {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(upload) = surface.skybox_upload.as_mut() else {
+        return ERROR_STATE;
+    };
+    if offset != upload.written {
+        return ERROR_INVALID;
+    }
+    let Some(end) = offset.checked_add(bytes.len()) else {
+        return ERROR_INVALID;
+    };
+    if end > upload.packed_len {
+        return ERROR_INVALID;
+    }
+    let row_bytes = upload.owned.surface.width as usize * core::mem::size_of::<u16>();
+    let pitch = upload.owned.surface.pitch_bytes as usize;
+    let mut source_offset = 0usize;
+    let mut packed_offset = offset;
+    while source_offset < bytes.len() {
+        let row = packed_offset / row_bytes;
+        let column = packed_offset % row_bytes;
+        let count = core::cmp::min(row_bytes - column, bytes.len() - source_offset);
+        let destination_offset = row * pitch + column;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr().add(source_offset),
+                upload.owned.virt.add(destination_offset),
+                count,
+            );
+        }
+        source_offset += count;
+        packed_offset += count;
+    }
+    upload.written = end;
+    0
+}
+
+pub(crate) fn finish_skybox_rgb565_upload(owner: WindowOwner, window_id: u32) -> i32 {
+    let upload = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.skybox_upload.take()
+    };
+    let Some(upload) = upload else {
+        return ERROR_STATE;
+    };
+    if upload.written < upload.packed_len {
+        destroy_rgb565_surface(upload.owned);
+        return ERROR_INVALID;
+    }
+    crate::intel::dma_flush(upload.owned.virt, upload.owned.bytes);
+    let old = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            drop(surfaces);
+            destroy_rgb565_surface(upload.owned);
+            return ERROR_NOT_FOUND;
+        };
+        surface.skybox.replace(upload.owned)
+    };
+    if let Some(old) = old {
+        destroy_rgb565_surface(old);
+    }
+    crate::log_info!(target: "ui4/blueprint-frame"; "skybox source ready owner={:?} window={} extent={}x{} bytes={} gpu=0x{:X}\n", owner, window_id, upload.owned.surface.width, upload.owned.surface.height, upload.owned.bytes, upload.owned.surface.gpu);
+    0
+}
+
+pub(crate) fn write_opaque_rgba8_chunk(
+    owner: WindowOwner,
+    window_id: u32,
+    offset: usize,
+    bytes: &[u8],
+) -> i32 {
+    if bytes.is_empty()
+        || offset & 3 != 0
+        || bytes.len() & 3 != 0
+        || bytes.chunks_exact(4).any(|pixel| pixel[3] != u8::MAX)
+    {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let Some(expected) = (surface.width as usize)
+        .checked_mul(surface.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return ERROR_INVALID;
+    };
+    let Some(end) = offset.checked_add(bytes.len()) else {
+        return ERROR_INVALID;
+    };
+    if end > expected {
+        return ERROR_INVALID;
+    }
+    let Ok(view) = writable_rgba_view(lease) else {
+        return ERROR_UI4;
+    };
+    let row_bytes = surface.width as usize * 4;
+    let pitch = view.pitch as usize;
+    let mut source_offset = 0usize;
+    let mut packed_offset = offset;
+    while source_offset < bytes.len() {
+        let row = packed_offset / row_bytes;
+        let column = packed_offset % row_bytes;
+        let count = core::cmp::min(row_bytes - column, bytes.len() - source_offset);
+        let destination_offset = row * pitch + column;
+        let destination = unsafe { view.virt.add(destination_offset) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr().add(source_offset), destination, count);
+        }
+        crate::intel::dma_flush(destination, count);
+        source_offset += count;
+        packed_offset += count;
+    }
+    0
+}
+
+fn valid_skybox_render_params(params: TrueosUi4SkyboxRenderParams) -> bool {
+    let floats = [
+        params.right_x,
+        params.right_y,
+        params.right_z,
+        params.up_x,
+        params.up_y,
+        params.up_z,
+        params.forward_x,
+        params.forward_y,
+        params.forward_z,
+        params.aspect_tan_half_fov_y,
+        params.tan_half_fov_y,
+    ];
+    floats.iter().all(|value| value.is_finite())
+        && params.aspect_tan_half_fov_y > 0.0
+        && params.tan_half_fov_y > 0.0
+        && params.rect_width != 0
+        && params.rect_height != 0
+}
+
+fn destroy_rgb565_surface(surface: OwnedRgb565Surface) {
+    crate::dma::dealloc(surface.virt, surface.bytes);
+}
+
 const fn pack_i32_pair(first: i32, second: i32) -> u64 {
     ((first as u32 as u64) << 32) | second as u32 as u64
 }
@@ -798,25 +1377,31 @@ fn blueprint_owner() -> Option<WindowOwner> {
 }
 
 fn surface_mut(
-    surfaces: &mut [SolaraTextSurface],
+    surfaces: &mut [BlueprintSceneSurface],
     owner: WindowOwner,
     window_id: u32,
-) -> Option<&mut SolaraTextSurface> {
+) -> Option<&mut BlueprintSceneSurface> {
     surfaces
         .iter_mut()
         .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
 }
 
-fn release_surface(surface: SolaraTextSurface) {
+fn release_surface(surface: BlueprintSceneSurface) {
     release_surface_with_request(surface, WindowSessionCloseRequest::default());
 }
 
 fn release_surface_with_request(
-    mut surface: SolaraTextSurface,
+    mut surface: BlueprintSceneSurface,
     request: WindowSessionCloseRequest<'_>,
 ) {
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
+    }
+    if let Some(upload) = surface.skybox_upload.take() {
+        destroy_rgb565_surface(upload.owned);
+    }
+    if let Some(skybox) = surface.skybox.take() {
+        destroy_rgb565_surface(skybox);
     }
     let transfer_frame = request.transfers_frame_ownership();
     let close = finish_window_session_with_request(surface.owner, surface.session, request);

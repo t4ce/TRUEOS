@@ -109,6 +109,7 @@ pub(crate) enum FrameContent {
     CopyEngine,
     FontScene2d,
     RenderScene3d,
+    BlueprintScene,
 }
 
 /// Lifetime/update discipline of the pixels handed to scanout.
