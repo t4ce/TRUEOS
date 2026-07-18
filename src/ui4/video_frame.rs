@@ -6,6 +6,7 @@
 //! composition as every other window. The proven linked-NV12 presenter remains
 //! below this function as the caller's fallback when conversion cannot run.
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_time::{Duration, Timer};
@@ -16,7 +17,7 @@ use super::{
     Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
     destroy_frame, finish_window_session, publish_frame_buffer, publish_window_frame,
-    take_owner_input_events, writable_rgba_view,
+    replace_window_frame, take_owner_input_events, writable_rgba_view,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -80,8 +81,13 @@ struct VideoStream {
     window: WindowId,
     source_width: u32,
     source_height: u32,
+    visible_width: u32,
+    visible_height: u32,
     frame_width: u32,
     frame_height: u32,
+    pan_x: u32,
+    pan_y: u32,
+    active_pan_source: Option<super::Ui4CursorSource>,
 }
 
 /// One unpublished UI4 video buffer with its GPU mapping and ownership token.
@@ -136,6 +142,7 @@ impl DecodedRgbaProducer {
 }
 
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
+static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static SFC_TARGET_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 static SFC_TARGET_UNAVAILABLE_LOGS: AtomicU64 = AtomicU64::new(0);
@@ -205,36 +212,218 @@ pub(crate) async fn wait_decoded_video_playback_ready() -> bool {
 }
 
 fn poll_decoded_video_player_input() {
-    let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
+    reap_retired_video_frames();
     for event in take_owner_input_events(VIDEO_OWNER) {
-        let Ui4InputEvent::Keyboard(event) = event else {
-            continue;
-        };
-        if Some(event.window) != window
-            || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-            || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_SPACE
-        {
-            continue;
+        match event {
+            Ui4InputEvent::Keyboard(event) => {
+                let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
+                if Some(event.window) != window
+                    || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                    || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_SPACE
+                {
+                    continue;
+                }
+                let was_paused = VIDEO_PLAYBACK_PAUSED.fetch_xor(true, Ordering::AcqRel);
+                crate::log_info!(
+                    target: "ui4";
+                    "ui4 video-player playback-toggle owner={:?} window={} state={} trigger=focused-space keyboard={}:{}:{} combo={} virtual={}\n",
+                    VIDEO_OWNER,
+                    event.window.raw(),
+                    if was_paused { "playing" } else { "paused" },
+                    event.event.controller_id,
+                    event.event.slot_id,
+                    event.event.ep_target,
+                    event.combo_id,
+                    event.virtual_keyboard as u8,
+                );
+            }
+            Ui4InputEvent::Pan(event) => pan_video_viewport(event),
+            Ui4InputEvent::Resize(event) => {
+                if let Err(reason) = resize_video_viewport(event.window, event.width, event.height)
+                {
+                    crate::log_warn!(
+                        target: "ui4";
+                        "ui4 video-player resize rejected window={} extent={}x{} reason={}\n",
+                        event.window.raw(),
+                        event.width,
+                        event.height,
+                        reason,
+                    );
+                }
+            }
+            _ => {}
         }
-        let was_paused = VIDEO_PLAYBACK_PAUSED.fetch_xor(true, Ordering::AcqRel);
+    }
+}
+
+fn pan_video_viewport(event: super::Ui4PanEvent) {
+    let mut slot = VIDEO_STREAM.lock();
+    let Some(stream) = slot.as_mut() else {
+        return;
+    };
+    if event.window != stream.window {
+        return;
+    }
+    match event.phase {
+        super::Ui4PanPhase::Begin => stream.active_pan_source = Some(event.source),
+        super::Ui4PanPhase::Update if stream.active_pan_source == Some(event.source) => {
+            stream.pan_x = move_crop_origin(
+                stream.pan_x,
+                event.dx,
+                stream.visible_width.saturating_sub(stream.frame_width),
+            );
+            stream.pan_y = move_crop_origin(
+                stream.pan_y,
+                event.dy,
+                stream.visible_height.saturating_sub(stream.frame_height),
+            );
+        }
+        super::Ui4PanPhase::End if stream.active_pan_source == Some(event.source) => {
+            stream.active_pan_source = None;
+            crate::log_info!(
+                target: "ui4";
+                "ui4 video-player pan ended window={} native={}x{} viewport={}x{} crop_origin={},{} scaling=none-1to1\n",
+                stream.window.raw(),
+                stream.visible_width,
+                stream.visible_height,
+                stream.frame_width,
+                stream.frame_height,
+                stream.pan_x,
+                stream.pan_y,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn move_crop_origin(origin: u32, drag_delta: i32, maximum: u32) -> u32 {
+    (i64::from(origin) - i64::from(drag_delta)).clamp(0, i64::from(maximum)) as u32
+}
+
+fn resize_video_viewport(window: WindowId, width: u32, height: u32) -> Result<(), &'static str> {
+    if width == 0 || height == 0 {
+        return Err("empty-extent");
+    }
+    let previous = VIDEO_STREAM
+        .lock()
+        .as_ref()
+        .copied()
+        .filter(|stream| stream.window == window)
+        .ok_or("window-not-active")?;
+    if previous.frame_width == width && previous.frame_height == height {
+        return Ok(());
+    }
+
+    let replacement = create_video_frame(width, height).map_err(|_| "frame-create-failed")?;
+    let write = acquire_frame_buffer(replacement).map_err(|_| {
+        let _ = destroy_frame(replacement);
+        "frame-prime-acquire-failed"
+    })?;
+    if publish_frame_buffer(write).is_err() {
+        let _ = cancel_frame_buffer(write);
+        let _ = destroy_frame(replacement);
+        return Err("frame-prime-publish-failed");
+    }
+    if replace_window_frame(VIDEO_OWNER, window, replacement).is_err() {
+        let _ = destroy_frame(replacement);
+        return Err("window-replace-failed");
+    }
+
+    let updated = {
+        let mut slot = VIDEO_STREAM.lock();
+        match slot.as_mut() {
+            Some(stream) if stream.window == window && stream.frame == previous.frame => {
+                stream.frame = replacement;
+                stream.frame_width = width;
+                stream.frame_height = height;
+                stream.pan_x = centered_crop_origin(stream.visible_width, width);
+                stream.pan_y = centered_crop_origin(stream.visible_height, height);
+                stream.active_pan_source = None;
+                true
+            }
+            _ => false,
+        }
+    };
+    if !updated {
+        let _ = replace_window_frame(VIDEO_OWNER, window, previous.frame);
+        let _ = publish_window_frame(VIDEO_OWNER, window, DamageRect::FULL);
+        retire_video_frame(replacement);
+        return Err("stream-changed");
+    }
+    let _ = publish_window_frame(VIDEO_OWNER, window, DamageRect::FULL);
+    retire_video_frame(previous.frame);
+
+    let stream = VIDEO_STREAM
+        .lock()
+        .as_ref()
+        .copied()
+        .ok_or("stream-disappeared")?;
+    let layout = native_viewport_layout(
+        stream.visible_width,
+        stream.visible_height,
+        width,
+        height,
+        stream.pan_x,
+        stream.pan_y,
+    );
+    if let Some(layout) = layout {
         crate::log_info!(
             target: "ui4";
-            "ui4 video-player playback-toggle owner={:?} window={} state={} trigger=focused-space keyboard={}:{}:{} combo={} virtual={}\n",
-            VIDEO_OWNER,
-            event.window.raw(),
-            if was_paused { "playing" } else { "paused" },
-            event.event.controller_id,
-            event.event.slot_id,
-            event.event.ep_target,
-            event.combo_id,
-            event.virtual_keyboard as u8,
+            "ui4 video-player resize applied window={} frame={} viewport={}x{} native={}x{} source_crop={}x{}@{},{} destination={},{} letterbox={} scaling=none-1to1\n",
+            window.raw(),
+            replacement.raw(),
+            width,
+            height,
+            stream.visible_width,
+            stream.visible_height,
+            layout.width,
+            layout.height,
+            layout.source_x,
+            layout.source_y,
+            layout.destination_x,
+            layout.destination_y,
+            (width > stream.visible_width || height > stream.visible_height) as u8,
+        );
+    } else {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 video-player resize applied window={} frame={} viewport={}x{} native=await-first-frame scaling=none-1to1\n",
+            window.raw(),
+            replacement.raw(),
+            width,
+            height,
         );
     }
+    Ok(())
 }
 
 fn cleanup_uninstalled_stream(stream: VideoStream) {
     let _ = finish_window_session(VIDEO_OWNER, stream.session);
-    let _ = destroy_frame(stream.frame);
+    retire_video_frame(stream.frame);
+}
+
+fn retire_video_frame(frame: FrameHandle) {
+    match destroy_frame(frame) {
+        Ok(()) | Err(super::FramePoolError::InvalidHandle) => {}
+        Err(super::FramePoolError::Busy) => {
+            let mut retired = VIDEO_RETIRED_FRAMES.lock();
+            if !retired.contains(&frame) {
+                retired.push(frame);
+            }
+        }
+        Err(error) => crate::log_warn!(
+            target: "ui4";
+            "ui4 video-frame retire abandoned frame={} error={:?}\n",
+            frame.raw(),
+            error,
+        ),
+    }
+}
+
+fn reap_retired_video_frames() {
+    VIDEO_RETIRED_FRAMES
+        .lock()
+        .retain(|frame| matches!(destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
 pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reason: &str) -> bool {
@@ -249,7 +438,12 @@ pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reaso
         None => return false,
     };
     let destination = target.rgba();
-    if !convert_decoded_ytile_nv12_to_rgba(source, destination) {
+    if !convert_decoded_ytile_nv12_to_rgba(
+        source,
+        destination,
+        target.stream.pan_x,
+        target.stream.pan_y,
+    ) {
         cancel_decoded_rgba_stream_target(target, "cpu-conversion-failed");
         return false;
     }
@@ -268,37 +462,52 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
     if !spec.valid() {
         return None;
     }
-    // Use UI4's default broker extent. The CPU fallback performs aspect-fit
-    // scaling directly while converting NV12, without first materializing a
-    // native-size RGBA frame.
-    let frame_width = super::DEFAULT_FRAME_WIDTH;
-    let frame_height = super::DEFAULT_FRAME_HEIGHT;
-
+    // The frame extent follows the broker window exactly. The decoded picture
+    // is copied into that viewport at 1:1 native resolution, either cropped or
+    // centered with untouched opaque-black letterbox pixels.
     let current = *VIDEO_STREAM.lock();
-    if current.is_some_and(|stream| {
-        stream.source_width != 0
-            && (stream.source_width != spec.coded_width
-                || stream.source_height != spec.coded_height
-                || stream.frame_width != frame_width
-                || stream.frame_height != frame_height)
-    }) {
-        let _ = stop_decoded_nv12_stream("ui4-video-format-change");
-    } else if current.is_some_and(|stream| stream.source_width == 0) {
+    if current.is_some() {
         let mut slot = VIDEO_STREAM.lock();
         if let Some(stream) = slot.as_mut() {
+            let source_changed = stream.source_width != spec.coded_width
+                || stream.source_height != spec.coded_height
+                || stream.visible_width != spec.visible_width
+                || stream.visible_height != spec.visible_height;
             stream.source_width = spec.coded_width;
             stream.source_height = spec.coded_height;
-            crate::log_info!(
-                target: "ui4";
-                "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} playback={}\n",
-                stream.frame.raw(),
-                stream.window.raw(),
-                spec.coded_width,
-                spec.coded_height,
-                spec.visible_width,
-                spec.visible_height,
-                if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
-            );
+            stream.visible_width = spec.visible_width;
+            stream.visible_height = spec.visible_height;
+            if source_changed {
+                stream.pan_x = centered_crop_origin(spec.visible_width, stream.frame_width);
+                stream.pan_y = centered_crop_origin(spec.visible_height, stream.frame_height);
+                let layout = native_viewport_layout(
+                    stream.visible_width,
+                    stream.visible_height,
+                    stream.frame_width,
+                    stream.frame_height,
+                    stream.pan_x,
+                    stream.pan_y,
+                )?;
+                crate::log_info!(
+                    target: "ui4";
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={}\n",
+                    stream.frame.raw(),
+                    stream.window.raw(),
+                    spec.coded_width,
+                    spec.coded_height,
+                    spec.visible_width,
+                    spec.visible_height,
+                    stream.frame_width,
+                    stream.frame_height,
+                    layout.width,
+                    layout.height,
+                    layout.source_x,
+                    layout.source_y,
+                    layout.destination_x,
+                    layout.destination_y,
+                    if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
+                );
+            }
         }
     }
 
@@ -308,7 +517,12 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
     let existing = { *VIDEO_STREAM.lock() };
     let stream = match existing {
         Some(stream) => stream,
-        None => match create_stream(spec, frame_width, frame_height, false) {
+        None => match create_stream(
+            spec,
+            super::DEFAULT_FRAME_WIDTH,
+            super::DEFAULT_FRAME_HEIGHT,
+            false,
+        ) {
             Some(stream) => {
                 *VIDEO_STREAM.lock() = Some(stream);
                 stream
@@ -468,7 +682,7 @@ pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
     let stream = VIDEO_STREAM.lock().take();
     if let Some(stream) = stream {
         let _ = finish_window_session(VIDEO_OWNER, stream.session);
-        let _ = destroy_frame(stream.frame);
+        retire_video_frame(stream.frame);
         crate::log_info!(
             target: "ui4";
             "ui4 video-frame stopped reason={} frame={} window={} plane_mutation=none\n",
@@ -488,19 +702,7 @@ fn create_stream(
     frame_height: u32,
     placeholder: bool,
 ) -> Option<VideoStream> {
-    let frame = create_frame(FrameSpec {
-        output: VIDEO_OUTPUT,
-        content: FrameContent::Video,
-        cadence: FrameCadence::Streaming,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width: frame_width,
-        height: frame_height,
-        // The 16:9 movie is aspect-fitted inside the 3:2 demo frame. Initialize
-        // all three backing buffers once so the untouched letterbox area stays
-        // opaque black without a per-picture clear.
-        base_color: Some(super::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
-    })
-    .ok()?;
+    let frame = create_video_frame(frame_width, frame_height).ok()?;
     let session = match begin_window_session(VIDEO_OWNER) {
         Ok(session) => session,
         Err(_) => {
@@ -534,14 +736,24 @@ fn create_stream(
             return None;
         }
     };
-    // This is an ordinary broker-owned RGBA window.  It must never reprogram
+    // This is an ordinary broker-owned RGBA window. It must never reprogram
     // the retired linked-NV12 slots: slot 2 belongs to Solara and slot 3 to
-    // Draw3D.  Any legacy direct-NV12 fallback owns its own explicit lifetime.
-    let fitted =
-        aspect_fit_rect(spec.visible_width, spec.visible_height, frame_width, frame_height)?;
+    // Draw3D. Any legacy direct-NV12 fallback owns its own explicit lifetime.
+    let visible_width = if placeholder { 0 } else { spec.visible_width };
+    let visible_height = if placeholder { 0 } else { spec.visible_height };
+    let pan_x = centered_crop_origin(visible_width, frame_width);
+    let pan_y = centered_crop_origin(visible_height, frame_height);
+    let layout = native_viewport_layout(
+        spec.visible_width,
+        spec.visible_height,
+        frame_width,
+        frame_height,
+        centered_crop_origin(spec.visible_width, frame_width),
+        centered_crop_origin(spec.visible_height, frame_height),
+    )?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source={} source_size={}x{} frame_size={}x{} fitted_content={}x{}@{},{} scaling=fused-nearest placement={},{} z={} plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
@@ -550,10 +762,12 @@ fn create_stream(
         spec.coded_height,
         frame_width,
         frame_height,
-        fitted.width,
-        fitted.height,
-        fitted.x,
-        fitted.y,
+        layout.width,
+        layout.height,
+        layout.source_x,
+        layout.source_y,
+        layout.destination_x,
+        layout.destination_y,
         placement.x,
         placement.y,
         placement.z,
@@ -564,17 +778,36 @@ fn create_stream(
         window,
         source_width: if placeholder { 0 } else { spec.coded_width },
         source_height: if placeholder { 0 } else { spec.coded_height },
+        visible_width,
+        visible_height,
         frame_width,
         frame_height,
+        pan_x,
+        pan_y,
+        active_pan_source: None,
+    })
+}
+
+fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::FramePoolError> {
+    create_frame(FrameSpec {
+        output: VIDEO_OUTPUT,
+        content: FrameContent::Video,
+        cadence: FrameCadence::Streaming,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        // Initialize all three backing buffers once so native content smaller
+        // than the viewport receives stable opaque-black letterbox pixels.
+        base_color: Some(super::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
     })
 }
 
 fn convert_decoded_ytile_nv12_to_rgba(
     source: DecodedNv12Source,
     destination: super::FrameRgbaView,
+    pan_x: u32,
+    pan_y: u32,
 ) -> bool {
-    let source_width = source.visible_width as usize;
-    let source_height = source.visible_height as usize;
     let destination_width = destination.width as usize;
     let destination_height = destination.height as usize;
     let pitch = destination.pitch as usize;
@@ -583,19 +816,23 @@ fn convert_decoded_ytile_nv12_to_rgba(
     {
         return false;
     }
-    let fitted = match aspect_fit_rect(
+    let layout = match native_viewport_layout(
         source.visible_width,
         source.visible_height,
         destination.width,
         destination.height,
+        pan_x,
+        pan_y,
     ) {
-        Some(fitted) => fitted,
+        Some(layout) => layout,
         None => return false,
     };
-    let fitted_width = fitted.width as usize;
-    let fitted_height = fitted.height as usize;
-    let fitted_x = fitted.x as usize;
-    let fitted_y = fitted.y as usize;
+    let copy_width = layout.width as usize;
+    let copy_height = layout.height as usize;
+    let source_origin_x = layout.source_x as usize;
+    let source_origin_y = layout.source_y as usize;
+    let destination_origin_x = layout.destination_x as usize;
+    let destination_origin_y = layout.destination_y as usize;
     let tiles_per_row = source.pitch_bytes / 128;
     let chroma_row = source.uv_offset / source.pitch_bytes;
     let total_rows = match chroma_row.checked_add(source.height.div_ceil(2) as usize) {
@@ -614,12 +851,12 @@ fn convert_decoded_ytile_nv12_to_rgba(
         return false;
     }
 
-    for output_y in 0..fitted_height {
-        let source_y = output_y.saturating_mul(source_height) / fitted_height;
-        let destination_y = fitted_y + output_y;
+    for output_y in 0..copy_height {
+        let source_y = source_origin_y + output_y;
+        let destination_y = destination_origin_y + output_y;
         let destination_row = unsafe { destination.virt.add(destination_y * pitch) };
-        for output_x in 0..fitted_width {
-            let source_x = output_x.saturating_mul(source_width) / fitted_width;
+        for output_x in 0..copy_width {
+            let source_x = source_origin_x + output_x;
             let y_offset = ytile_8bpp_offset(source_x, source_y, tiles_per_row);
             let uv_x = (source_x / 2) * 2;
             let uv_offset = ytile_8bpp_offset(uv_x, chroma_row + source_y / 2, tiles_per_row);
@@ -635,7 +872,9 @@ fn convert_decoded_ytile_nv12_to_rgba(
             let pixel = u32::from_le_bytes([r, g, b, u8::MAX]);
             unsafe {
                 core::ptr::write_volatile(
-                    destination_row.add((fitted_x + output_x) * 4).cast::<u32>(),
+                    destination_row
+                        .add((destination_origin_x + output_x) * 4)
+                        .cast::<u32>(),
                     pixel,
                 )
             };
@@ -646,51 +885,41 @@ fn convert_decoded_ytile_nv12_to_rgba(
 }
 
 #[derive(Copy, Clone)]
-struct AspectFitRect {
-    x: u32,
-    y: u32,
+struct NativeViewportLayout {
+    source_x: u32,
+    source_y: u32,
+    destination_x: u32,
+    destination_y: u32,
     width: u32,
     height: u32,
 }
 
-/// Fit one pixel extent into another without changing its aspect ratio. The
-/// resulting content dimensions are even when possible so an NV12 producer's
-/// 2x2 chroma samples remain naturally aligned.
-fn aspect_fit_rect(
+const fn centered_crop_origin(source_extent: u32, viewport_extent: u32) -> u32 {
+    source_extent.saturating_sub(viewport_extent) / 2
+}
+
+/// Map native pixels into an equally-sized destination rectangle. A smaller
+/// viewport selects a movable source crop; a larger viewport centers the whole
+/// native picture and leaves the surrounding initialized pixels as letterbox.
+fn native_viewport_layout(
     source_width: u32,
     source_height: u32,
     destination_width: u32,
     destination_height: u32,
-) -> Option<AspectFitRect> {
+    pan_x: u32,
+    pan_y: u32,
+) -> Option<NativeViewportLayout> {
     if source_width == 0 || source_height == 0 || destination_width == 0 || destination_height == 0
     {
         return None;
     }
-
-    let width_limited_height =
-        u64::from(destination_width) * u64::from(source_height) / u64::from(source_width);
-    let (mut width, mut height) = if width_limited_height <= u64::from(destination_height) {
-        (destination_width, u32::try_from(width_limited_height).ok()?)
-    } else {
-        let height_limited_width =
-            u64::from(destination_height) * u64::from(source_width) / u64::from(source_height);
-        (u32::try_from(height_limited_width).ok()?, destination_height)
-    };
-    if width > 1 {
-        width &= !1;
-    }
-    if height > 1 {
-        height &= !1;
-    }
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    Some(AspectFitRect {
-        x: (destination_width - width) / 2,
-        y: (destination_height - height) / 2,
-        width,
-        height,
+    Some(NativeViewportLayout {
+        source_x: pan_x.min(source_width.saturating_sub(destination_width)),
+        source_y: pan_y.min(source_height.saturating_sub(destination_height)),
+        destination_x: destination_width.saturating_sub(source_width) / 2,
+        destination_y: destination_height.saturating_sub(source_height) / 2,
+        width: source_width.min(destination_width),
+        height: source_height.min(destination_height),
     })
 }
 
