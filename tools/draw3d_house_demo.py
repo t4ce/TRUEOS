@@ -102,6 +102,8 @@ class Draw3dClient:
                 raise ValueError("orbit_scale must contain X and Z radii")
             if len(orbit_rotation) != 3:
                 raise ValueError("orbit_rotation must contain XYZ Euler radians")
+            if not math.isfinite(orbit_speed):
+                raise ValueError("orbit_speed must be a finite radians-per-second value")
             payload += struct.pack(
                 "<9f",
                 *target,
@@ -252,7 +254,6 @@ def populate(client):
     for mesh_id, color, mesh in meshes:
         client.mesh(mesh_id, color, mesh.vertices, mesh.faces)
         client.instance(6000 + mesh_id, mesh_id, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
-    client.start((255, 255, 255, 255))
 
 
 def main():
@@ -265,8 +266,11 @@ def main():
     parser.add_argument(
         "--orbit-speed",
         type=float,
-        default=0.18,
-        help="camera-orbit speed in radians per second; use 0 for a static camera",
+        default=math.radians(2.0),
+        help=(
+            "camera-orbit speed in radians per second; default is a deliberately tiny "
+            "2 degrees/second (about 0.000582 rad per 60 Hz frame); use 0 for static"
+        ),
     )
     parser.add_argument("--expect-width", type=int, default=2560)
     parser.add_argument("--expect-height", type=int, default=1440)
@@ -275,7 +279,6 @@ def main():
     client = Draw3dClient(args.host)
     try:
         populate(client)
-        client.stop()
         if args.orbit_speed != 0.0:
             client.camera(
                 (14.0, 2.0, 0.0),
@@ -285,15 +288,16 @@ def main():
                 orbit_rotation=(math.radians(-8.0), 0.0, math.radians(3.0)),
                 orbit_speed=args.orbit_speed,
             )
-        # Starting without RGBA selects the protocol's transparent clear color.
-        client.start()
+        # Publish exactly one final scene setup. The kernel's single UI4 frame
+        # is first exposed only after this camera and opaque clear are active.
+        client.start((255, 255, 255, 255))
         time.sleep(args.settle)
         output, image_format, width, height, image = client.render(args.output)
         mesh_count, instance_count, vertices, edges, faces, mesh_bytes = client.stats()
         print(
             f"scene meshes={mesh_count} instances={instance_count} vertices={vertices} "
             f"edges={edges} faces={faces} mesh_bytes={mesh_bytes} "
-            f"orbit_speed={args.orbit_speed} transparent_background=1"
+            f"orbit_speed={args.orbit_speed:.9f} clear=opaque-white target_hz=60"
         )
         print(
             f"capture format={image_format} size={width}x{height} bytes={len(image)} "

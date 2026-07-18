@@ -597,13 +597,6 @@ fn ui4_compositor_gate() -> bool {
 }
 
 #[inline]
-fn ui4_background_consumer_gate() -> bool {
-    crate::intel::has_claimed_device()
-        && crate::intel::active_scanout_dimensions().is_some()
-        && crate::workers::has_background_worker_slot()
-}
-
-#[inline]
 fn ap1_ui_core_ready_gate() -> bool {
     crate::workers::ap1_ui_core_spawner().is_some()
 }
@@ -1329,10 +1322,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &DRAW3D_UI4_RENDER_STARTED,
         spawn_draw3d_ui4_render,
     ),
-    TaskSpec::enabled_gated(
+    // Compositor-rewire checkpoint: Draw3D is the sole UI4 producer.
+    TaskSpec::disabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_background_consumer_gate,
         &GRIDPAPER_SERVICE_STARTED,
         spawn_gridpaper_service,
     ),
@@ -1387,7 +1380,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_silk_service,
     ),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,
@@ -1455,24 +1448,21 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &MOUSE_MOTION_SERVICE_STARTED,
         spawn_mouse_motion_service_task,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "ui4-input-service",
         0,
-        ap1_ui_core_ready_gate,
         &UI4_INPUT_SERVICE_STARTED,
         spawn_ui4_input_service_task,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "ui4-slot4-service",
         0,
-        ui4_compositor_gate,
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "ui4-screenshot-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_background_consumer_gate,
         &UI4_SCREENSHOT_SERVICE_STARTED,
         spawn_ui4_screenshot_service_task,
     ),
@@ -1483,10 +1473,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_COMPOSITOR_STARTED,
         spawn_ui4_compositor_service_task,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "gpgpu-ui4-preview-consumer-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_background_consumer_gate,
         &GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
         spawn_gpgpu_ui4_preview_consumer_service_task,
     ),

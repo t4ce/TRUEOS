@@ -53,10 +53,12 @@ pub(crate) struct FrameRgbaView {
     pub(crate) height: u32,
     pub(crate) pitch: u32,
     /// This exact buffer has been exposed as a GPU render/compute target since
-    /// it was acquired. Until UI4 has an explicit producer-release fence that
-    /// display can consume, such a publication must be snapshotted into a
-    /// display-owned back buffer instead of imported directly for scanout.
+    /// it was acquired.
     pub(crate) gpu_authored: bool,
+    /// The producer observed completion of all GPU writes before publishing
+    /// this buffer. Direct scanout requires this release plus a non-live back
+    /// buffer; otherwise the compositor must snapshot it.
+    pub(crate) gpu_release_complete: bool,
 }
 
 unsafe impl Send for FrameRgbaView {}
@@ -98,6 +100,7 @@ struct FrameRecord {
     acquired: Option<AcquiredBuffer>,
     readers: [u16; 3],
     gpu_authored: [bool; 3],
+    gpu_release_complete: [bool; 3],
     next_token: u64,
     publish_serial: u64,
 }
@@ -116,6 +119,7 @@ impl FrameRecord {
             acquired: None,
             readers: [0; 3],
             gpu_authored: [false; 3],
+            gpu_release_complete: [false; 3],
             next_token: 0,
             publish_serial: 0,
         }
@@ -138,6 +142,7 @@ impl FrameRecord {
         self.acquired = None;
         self.readers = [0; 3];
         self.gpu_authored = [false; 3];
+        self.gpu_release_complete = [false; 3];
         self.next_token = 0;
         self.publish_serial = 0;
     }
@@ -317,6 +322,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
 
     frame.next_buffer = (index + 1) % count;
     frame.gpu_authored[index as usize] = false;
+    frame.gpu_release_complete[index as usize] = false;
     frame.next_token = next_serial(frame.next_token);
     let acquired = AcquiredBuffer {
         index,
@@ -366,7 +372,7 @@ pub(crate) fn retain_published_frame(
 }
 
 pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView, FramePoolError> {
-    let (surface, gpu_authored) = {
+    let (surface, gpu_authored, gpu_release_complete) = {
         let pool = FRAME_POOL.lock();
         let frame = pool.checked(lease.frame)?;
         if frame.readers[lease.buffer_index as usize] == 0 {
@@ -378,6 +384,7 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         (
             frame.surfaces[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)?,
             frame.gpu_authored[lease.buffer_index as usize],
+            frame.gpu_release_complete[lease.buffer_index as usize],
         )
     };
     let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
@@ -390,6 +397,7 @@ pub(crate) fn published_rgba_view(lease: FrameReadLease) -> Result<FrameRgbaView
         height: access.height,
         pitch: access.pitch,
         gpu_authored,
+        gpu_release_complete,
     })
 }
 
@@ -413,6 +421,7 @@ pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView
         height: access.height,
         pitch: access.pitch,
         gpu_authored: false,
+        gpu_release_complete: false,
     })
 }
 
@@ -473,6 +482,7 @@ pub(crate) fn gpgpu_rgba_surface(
         let index = lease.buffer_index as usize;
         let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
         frame.gpu_authored[index] = true;
+        frame.gpu_release_complete[index] = false;
         surface
     };
     ui_surface::gpgpu_rgba_surface(surface).ok_or(FramePoolError::InvalidLease)
@@ -484,6 +494,31 @@ pub(crate) fn publish_frame_buffer(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
+    publish_acquired_frame(frame, lease)
+}
+
+/// Publish a GPU-authored buffer only after its submission has completed.
+///
+/// This is a producer-release assertion, not an asynchronous fence handle:
+/// callers must have synchronously observed their final completion marker.
+pub(crate) fn publish_completed_gpu_frame_buffer(
+    lease: FrameWriteLease,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if !frame.gpu_authored[index] {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release_complete[index] = true;
+    publish_acquired_frame(frame, lease)
+}
+
+fn publish_acquired_frame(
+    frame: &mut FrameRecord,
+    lease: FrameWriteLease,
+) -> Result<PublishedFrame, FramePoolError> {
     frame.front_buffer = Some(lease.buffer_index);
     frame.acquired = None;
     frame.publish_serial = next_serial(frame.publish_serial);
