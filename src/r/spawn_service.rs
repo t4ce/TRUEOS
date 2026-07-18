@@ -592,6 +592,7 @@ fn intel_cursor_service_gate() -> bool {
 fn ui4_compositor_gate() -> bool {
     crate::intel::has_claimed_device()
         && crate::intel::active_scanout_dimensions().is_some()
+        && crate::intel::ui4_rgba8_plane_stack_is_ready()
         && crate::workers::ap1_ui_core_spawner().is_some()
 }
 
@@ -605,11 +606,6 @@ fn ui4_background_consumer_gate() -> bool {
 #[inline]
 fn ap1_ui_core_ready_gate() -> bool {
     crate::workers::ap1_ui_core_spawner().is_some()
-}
-
-#[inline]
-fn i226_diagnostic_display_gate() -> bool {
-    crate::intel::has_claimed_device() && crate::net::i226::has_primary_snapshot()
 }
 
 #[inline]
@@ -1510,10 +1506,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HW_LOGO_PRESENT_TASK_STARTED,
         spawn_hw_logo_present_task,
     ),
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "i226-diagnostic-display",
         0,
-        i226_diagnostic_display_gate,
         &I226_DIAGNOSTIC_DISPLAY_STARTED,
         spawn_i226_diagnostic_display,
     ),

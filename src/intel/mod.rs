@@ -281,6 +281,10 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
 
+pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
+    self::display::ui4_rgba8_plane_stack_is_ready()
+}
+
 pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
     self::display::physical_extent_pixels(width_mm, height_mm)
 }

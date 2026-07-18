@@ -87,6 +87,12 @@ unsafe extern "C" {
         out_cap: usize,
     ) -> isize;
     pub fn trueos_cabi_ui4_solara_frame_open(x: i32, y: i32, width: u32, height: u32) -> u32;
+    pub fn trueos_cabi_ui4_scene_frame_open_streaming(
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> u32;
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_solara_text_rows(
         window_id: u32,

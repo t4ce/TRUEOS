@@ -54,6 +54,7 @@ const ERROR_NOT_FOUND: i32 = -3;
 const ERROR_STATE: i32 = -4;
 const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
+const ERROR_BUSY: i32 = -7;
 const CLOSE_PERSIST_FINAL_FRAME: u32 = 1 << 0;
 const CLOSE_VALID_FLAGS: u32 = CLOSE_PERSIST_FINAL_FRAME;
 
@@ -112,10 +113,17 @@ struct BlueprintSceneSurface {
     window: WindowId,
     width: u32,
     height: u32,
+    cadence: FrameCadence,
     write_lease: Option<FrameWriteLease>,
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintSurfaceRelease {
+    Animated,
+    AnimatedAndPersistFinalFrame,
 }
 
 #[derive(Copy, Clone)]
@@ -157,10 +165,7 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
     };
     let released = owned.len();
     for surface in owned {
-        release_surface_with_request(
-            surface,
-            WindowSessionCloseRequest::default().animate_and_retire_frames(),
-        );
+        release_surface(surface, BlueprintSurfaceRelease::Animated);
     }
     released
 }
@@ -220,6 +225,35 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             0
         };
     }
+    open_blueprint_frame(x, y, width, height, FrameCadence::Dirty)
+}
+
+/// Create one streaming/triple-buffered UI4 scene frame for an active VM.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_open_streaming(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> u32 {
+    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, window) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING,
+            pack_i32_pair(x, y),
+            pack_u32_pair(width, height),
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            window as u32
+        } else {
+            0
+        };
+    }
+    open_blueprint_frame(x, y, width, height, FrameCadence::Streaming)
+}
+
+fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameCadence) -> u32 {
     reap_retired_frames();
     let Some(owner) = blueprint_owner() else {
         return 0;
@@ -233,14 +267,14 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
             .map(|slot| surfaces.remove(slot))
     };
     if let Some(old) = old {
-        release_surface(old);
+        release_surface(old, BlueprintSurfaceRelease::Animated);
     }
 
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = match create_frame(FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
-        cadence: FrameCadence::Dirty,
+        cadence,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -289,18 +323,22 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
     let mut surfaces = SURFACES.lock();
     if surfaces.len() >= MAX_SURFACES {
         drop(surfaces);
-        release_surface(BlueprintSceneSurface {
-            owner,
-            session,
-            frame,
-            window,
-            width,
-            height,
-            write_lease: None,
-            placement,
-            skybox: None,
-            skybox_upload: None,
-        });
+        release_surface(
+            BlueprintSceneSurface {
+                owner,
+                session,
+                frame,
+                window,
+                width,
+                height,
+                cadence,
+                write_lease: None,
+                placement,
+                skybox: None,
+                skybox_upload: None,
+            },
+            BlueprintSurfaceRelease::Animated,
+        );
         return 0;
     }
     surfaces.push(BlueprintSceneSurface {
@@ -310,12 +348,18 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         window,
         width,
         height,
+        cadence,
         write_lease: None,
         placement,
         skybox: None,
         skybox_upload: None,
     });
-    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence=dirty buffers=2 plane=slot2 scene=text+shader\n", owner, window.raw(), width, height);
+    let (cadence_name, buffer_count) = match cadence {
+        FrameCadence::Dirty => ("dirty", 2),
+        FrameCadence::Streaming => ("streaming", 3),
+        FrameCadence::Immutable => ("immutable", 1),
+    };
+    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} buffers={} plane=slot2 scene=text+shader\n", owner, window.raw(), width, height, cadence_name, buffer_count);
     window.raw()
 }
 
@@ -342,7 +386,11 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     }
     let lease = match acquire_frame_buffer(surface.frame) {
         Ok(lease) => lease,
-        Err(_) => return ERROR_UI4,
+        Err(FramePoolError::Busy) => return ERROR_BUSY,
+        Err(error) => {
+            crate::log_warn!(target: "ui4/blueprint-frame"; "frame begin failed owner={:?} window={} frame={} error={:?}\n", owner, window_id, surface.frame.raw(), error);
+            return ERROR_UI4;
+        }
     };
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
@@ -413,11 +461,21 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
+    let cadence = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.write_lease.is_some() {
+            return ERROR_STATE;
+        }
+        surface.cadence
+    };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let replacement = match create_frame(FrameSpec {
         output,
         content: FrameContent::BlueprintScene,
-        cadence: FrameCadence::Dirty,
+        cadence,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -1004,14 +1062,12 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
         };
         surfaces.remove(slot)
     };
-    let request = if flags & CLOSE_PERSIST_FINAL_FRAME != 0 {
-        WindowSessionCloseRequest::default()
-            .persist_final_frame()
-            .animate_and_retire_frames()
+    let release = if flags & CLOSE_PERSIST_FINAL_FRAME != 0 {
+        BlueprintSurfaceRelease::AnimatedAndPersistFinalFrame
     } else {
-        WindowSessionCloseRequest::default().animate_and_retire_frames()
+        BlueprintSurfaceRelease::Animated
     };
-    release_surface_with_request(surface, request);
+    release_surface(surface, release);
     0
 }
 
@@ -1414,14 +1470,17 @@ fn surface_mut(
         .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
 }
 
-fn release_surface(surface: BlueprintSceneSurface) {
-    release_surface_with_request(surface, WindowSessionCloseRequest::default());
-}
-
-fn release_surface_with_request(
-    mut surface: BlueprintSceneSurface,
-    request: WindowSessionCloseRequest<'_>,
-) {
+fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    let request = match release {
+        BlueprintSurfaceRelease::Animated => {
+            WindowSessionCloseRequest::default().animate_and_retire_frames()
+        }
+        BlueprintSurfaceRelease::AnimatedAndPersistFinalFrame => {
+            WindowSessionCloseRequest::default()
+                .persist_final_frame()
+                .animate_and_retire_frames()
+        }
+    };
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
     }

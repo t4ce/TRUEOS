@@ -1,7 +1,10 @@
 use alloc::{sync::Arc, vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::aud::live_piano::{LivePianoRenderSource, backing_config};
+use crate::aud::{
+    backing_pattern::{BackingPatternRenderSource, backing_config},
+    live_piano::LivePianoRenderSource,
+};
 use embassy_time::{Duration, Timer};
 use spin::Mutex;
 use tinyaudio::prelude::*;
@@ -14,7 +17,8 @@ const CHANNEL_SAMPLE_COUNT: usize = 480;
 const SERVICE_HEARTBEAT_MS: u64 = 30_000;
 const SINE_TABLE_BITS: u32 = 8;
 const SINE_TABLE_SHIFT: u32 = 32 - SINE_TABLE_BITS;
-const PIANO_SOURCE_ENABLED: bool = true;
+const PATTERN_SOURCE_ENABLED: bool = true;
+const PIANO_SOURCE_ENABLED: bool = false;
 const TONE_SOURCE_ENABLED: bool = false;
 const PCM_DUMP_ENABLED: bool = false;
 const PCM_DUMP_SECONDS: usize = 10;
@@ -24,6 +28,7 @@ const BLUEPRINT_PCM_DUMP_SECONDS: usize = 15;
 const BLUEPRINT_PCM_DUMP_PATH: &str = "audio/blueprint-prehda.wav";
 const PCM_DUMP_POLL_MS: u64 = 1_000;
 const LIVE_PCM_RING_SECONDS: usize = 4;
+const PATTERN_PRODUCER_VOLUME: f32 = 1.0;
 const PIANO_PRODUCER_VOLUME: f32 = 1.0;
 const TONE_PRODUCER_VOLUME: f32 = 1.0;
 const BLUEPRINT_PCM_PRODUCER_VOLUME: f32 = 1.0;
@@ -42,9 +47,16 @@ fn sampled_blueprint_overlay_log() -> bool {
 }
 
 struct TinyaudioDemoMixer {
+    pattern: PatternSource,
     piano: PianoSource,
     tone: ToneSource,
     overlay: PcmOverlaySource,
+}
+
+struct PatternSource {
+    live: BackingPatternRenderSource,
+    buffer: Vec<i16>,
+    enabled: bool,
 }
 
 struct PianoSource {
@@ -83,6 +95,7 @@ struct PcmOverlaySource {
 impl TinyaudioDemoMixer {
     fn new(params: OutputDeviceParameters) -> Self {
         Self {
+            pattern: PatternSource::new(params, PATTERN_SOURCE_ENABLED),
             piano: PianoSource::new(params, PIANO_SOURCE_ENABLED),
             tone: ToneSource::new(TONE_HZ, params.sample_rate, VOLUME, TONE_SOURCE_ENABLED),
             overlay: PcmOverlaySource::new(),
@@ -104,6 +117,7 @@ impl TinyaudioDemoMixer {
             return;
         }
 
+        self.pattern.mix_into(data, PATTERN_PRODUCER_VOLUME);
         self.piano.mix_into(data, PIANO_PRODUCER_VOLUME);
         self.tone.mix_into(data, TONE_PRODUCER_VOLUME);
         apply_output_limiter(data);
@@ -242,6 +256,32 @@ pub fn live_pcm_read_since(cursor: u64, out: &mut Vec<i16>, max_samples: usize) 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_tinyaudio_audio_urgent_pending() -> i32 {
     i32::from(crate::aud::pcm_lane::urgent_pending())
+}
+
+impl PatternSource {
+    fn new(params: OutputDeviceParameters, enabled: bool) -> Self {
+        Self {
+            live: BackingPatternRenderSource::new(),
+            buffer: vec![0; params.channel_sample_count * params.channels_count],
+            enabled,
+        }
+    }
+
+    fn mix_into(&mut self, data: &mut [f32], volume: f32) {
+        if !self.enabled || data.len() != self.buffer.len() {
+            return;
+        }
+
+        self.buffer.fill(0);
+        let frames = data.len() / CHANNELS;
+        if !self.live.render_into(self.buffer.as_mut_slice(), frames) {
+            return;
+        }
+
+        for (dst, src) in data.iter_mut().zip(self.buffer.iter().copied()) {
+            *dst += src as f32 / 32_767.0 * volume;
+        }
+    }
 }
 
 impl PianoSource {
@@ -575,6 +615,9 @@ pub async fn tinyaudio_service_task() {
         crate::percpu::current_slot()
     );
     live_pcm_reset(LIVE_PCM_RING_SECONDS);
+    if !PIANO_SOURCE_ENABLED {
+        crate::aud::live_piano::all_notes_off();
+    }
 
     let params = OutputDeviceParameters {
         sample_rate: SAMPLE_RATE,
@@ -584,13 +627,13 @@ pub async fn tinyaudio_service_task() {
     let (backing_enabled, backing_bpm, backing_volume_pct) = backing_config();
     crate::log_info!(
         target: "audio";
-        "tinyaudio-service: config channels={} rate={} frames={} piano={} tone={} backing={} backing_bpm={} backing_vol={}%\n",
+        "tinyaudio-service: config channels={} rate={} frames={} pattern={} piano={} tone={} backing_bpm={} backing_vol={}%\n",
         params.channels_count,
         params.sample_rate,
         params.channel_sample_count,
+        PATTERN_SOURCE_ENABLED && backing_enabled,
         PIANO_SOURCE_ENABLED,
         TONE_SOURCE_ENABLED,
-        backing_enabled,
         backing_bpm,
         backing_volume_pct
     );

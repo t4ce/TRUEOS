@@ -37,6 +37,7 @@ struct Runtime {
 #[derive(Copy, Clone)]
 struct CompositionState {
     primary: PlaneCompositionState,
+    alpha: PlaneCompositionState,
     solara: PlaneCompositionState,
     draw3d: PlaneCompositionState,
 }
@@ -74,7 +75,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=primary+slot2+slot3 interaction=independent-slot4-service input=ui4-owner-queues\n",
+        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=slot0+slot1+slot2+slot3 interaction=independent-slot4-service input=ui4-owner-queues plane_contract=bootstrap-immutable-rgba8\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -117,6 +118,10 @@ fn initialize() -> Runtime {
                 initialized: false,
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
+            alpha: PlaneCompositionState {
+                initialized: false,
+                windows: [None; MAX_COMPOSITION_WINDOWS],
+            },
             solara: PlaneCompositionState {
                 initialized: false,
                 windows: [None; MAX_COMPOSITION_WINDOWS],
@@ -148,6 +153,7 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> 
     if windows.iter().any(|window| {
         let slot = window.plane.slot();
         slot != super::PRIMARY_PLANE_SLOT
+            && slot != super::ALPHA_OVERLAY_PLANE_SLOT
             && slot != super::RGB_OVERLAY_PLANE_SLOT_2
             && slot != super::RGB_OVERLAY_PLANE_SLOT_3
     }) {
@@ -162,6 +168,11 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> 
             &mut runtime.composition.primary,
             &windows,
             CompositionTarget::Primary,
+        )?;
+        present_plane_composition(
+            &mut runtime.composition.alpha,
+            &windows,
+            CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT),
         )?;
         present_plane_composition(
             &mut runtime.composition.solara,
@@ -336,6 +347,7 @@ fn present_plane_composition(
                     }
                     CompositionTarget::Overlay(slot) => {
                         let reason = match slot {
+                            super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1",
                             super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2",
                             super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
                             _ => "ui4-overlay",

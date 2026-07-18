@@ -72,6 +72,7 @@ pub const OP_BP_UI4_SCENE_SKYBOX_RENDER: u32 = 0xC3; // arg0 window,payload rend
 pub const OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8: u32 = 0xC4; // arg0 window,arg1 byte offset,payload RGBA8 -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_POSITION: u32 = 0xC5; // arg0 window,arg1 x/y -> rc
 pub const OP_BP_UI4_SCENE_FRAME_RESIZE: u32 = 0xC6; // arg0 window,arg1 width/height -> rc
+pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 width/height -> window
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -968,6 +969,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 height,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_streaming(
+                x, y, width, height,
+            );
+            write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {

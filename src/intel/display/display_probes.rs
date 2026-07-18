@@ -175,8 +175,6 @@ pub(super) fn probe_primary_present_psr(
         return;
     }
 
-    crate::intel::ggtt_invalidate(dev);
-
     let trans_psr_ctl_off = TRANS_PSR_CTL_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let trans_psr_status_off =
         TRANS_PSR_STATUS_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
@@ -185,21 +183,15 @@ pub(super) fn probe_primary_present_psr(
         TRANS_PSR2_STATUS_A + surface.pipe.slot.saturating_mul(PIPE_MMIO_STRIDE);
     let psr_before = crate::intel::mmio_read(dev, trans_psr_ctl_off);
     let psr2_before = crate::intel::mmio_read(dev, trans_psr2_ctl_off);
-    if PRIMARY_PRESENT_DISABLE_PSR_PROBE {
-        crate::intel::mmio_write(dev, trans_psr_ctl_off, 0);
-        crate::intel::mmio_write(dev, trans_psr2_ctl_off, 0);
-        intel_display_verbose_log!(
-            "intel/display: psr-probe reason={} pipe={} psr_ctl_before=0x{:08X} psr2_ctl_before=0x{:08X} psr_ctl_after=0x{:08X} psr2_ctl_after=0x{:08X} psr_status=0x{:08X} psr2_status=0x{:08X}\n",
-            reason,
-            surface.pipe.name,
-            psr_before,
-            psr2_before,
-            crate::intel::mmio_read(dev, trans_psr_ctl_off),
-            crate::intel::mmio_read(dev, trans_psr2_ctl_off),
-            crate::intel::mmio_read(dev, trans_psr_status_off),
-            crate::intel::mmio_read(dev, trans_psr2_status_off)
-        );
-    }
+    intel_display_verbose_log!(
+        "intel/display: psr-probe reason={} pipe={} mode=read-only psr_ctl=0x{:08X} psr2_ctl=0x{:08X} psr_status=0x{:08X} psr2_status=0x{:08X}\n",
+        reason,
+        surface.pipe.name,
+        psr_before,
+        psr2_before,
+        crate::intel::mmio_read(dev, trans_psr_status_off),
+        crate::intel::mmio_read(dev, trans_psr2_status_off)
+    );
 }
 
 fn log_active_pipe_raw_state(label: &str) {
@@ -1541,6 +1533,15 @@ fn arm_nv12_video_plane_probe_surface(
     let Some(pipe) = active_pipe(dev) else {
         return false;
     };
+    if ui4_rgba8_plane_stack_ready(pipe) {
+        crate::log_warn!(target: "intel/display";
+            "intel/display: nv12-plane-probe rejected probe={} reason={} pipe={} cause=immutable-rgba8-stack\n",
+            probe_name,
+            reason,
+            pipe.name,
+        );
+        return false;
+    }
     if gpu_addr == 0 || coded_width == 0 || coded_height == 0 || pitch_bytes == 0 {
         crate::log!(
             "intel/display: nv12-plane-probe skipped probe={} reason={} owner={} cause=bad-surface gpu=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X}\n",
@@ -1610,8 +1611,6 @@ fn arm_nv12_video_plane_probe_surface(
         true,
         false,
     );
-
-    program_five_rgb_plane_stack_resources(dev, pipe, reason);
 
     let ctl_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let stride_before = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
@@ -1758,6 +1757,15 @@ fn arm_nv12_linked_video_plane_probe_surface(
     let Some(pipe) = active_pipe(dev) else {
         return false;
     };
+    if ui4_rgba8_plane_stack_ready(pipe) {
+        crate::log_warn!(target: "intel/display";
+            "intel/display: nv12-linked-plane-probe rejected probe={} reason={} pipe={} cause=immutable-rgba8-stack\n",
+            probe_name,
+            reason,
+            pipe.name,
+        );
+        return false;
+    }
     if gpu_addr == 0 || coded_width == 0 || coded_height == 0 || pitch_bytes == 0 {
         crate::log!(
             "intel/display: nv12-linked-plane-probe skipped probe={} reason={} owner={} cause=bad-surface gpu=0x{:X} coded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X}\n",
@@ -1818,8 +1826,6 @@ fn arm_nv12_linked_video_plane_probe_surface(
         true,
         true,
     );
-
-    program_five_rgb_plane_stack_resources(dev, pipe, reason);
 
     let uv_ctl_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_CTL_OFF);
     let uv_stride_before = crate::intel::mmio_read(dev, uv_base + UNI_PLANE_STRIDE_OFF);
@@ -2224,6 +2230,15 @@ fn arm_rgb_plane_probe(
     alpha: OverlayAlphaMode,
     reason: &str,
 ) -> bool {
+    if ui4_rgba8_plane_stack_ready(surface.pipe) {
+        crate::log_warn!(target: "intel/display";
+            "intel/display: rgb-plane-probe rejected reason={} pipe={} slot={} cause=immutable-rgba8-stack\n",
+            reason,
+            surface.pipe.name,
+            surface.plane_slot,
+        );
+        return false;
+    }
     let Some((_slot, _width, _height, x, y, _color, name)) =
         rgb_plane_probe_spec(surface.plane_slot.saturating_sub(1))
     else {
