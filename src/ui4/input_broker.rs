@@ -7,6 +7,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use heapless::Vec;
 use spin::Mutex;
@@ -660,7 +661,8 @@ impl InputBroker {
         );
     }
 
-    fn pump(&mut self) {
+    fn pump(&mut self) -> bool {
+        let mut cursor_activity = false;
         let mut cursor_events = [crate::usb2::hid::TrueosHidCursorEvent::default(); CURSOR_BATCH];
         loop {
             let (next, dropped, wrote) = crate::usb2::hid::read_cursor_events_since(
@@ -677,6 +679,7 @@ impl InputBroker {
             if wrote == 0 {
                 break;
             }
+            cursor_activity = true;
             self.cursor_read_seq = next;
             for event in cursor_events.iter().take(wrote).copied() {
                 self.process_cursor(event);
@@ -711,6 +714,7 @@ impl InputBroker {
                 break;
             }
         }
+        cursor_activity
     }
 
     fn software_cursor_visuals(&self) -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
@@ -741,6 +745,7 @@ impl InputBroker {
 
 static INPUT_BROKER: Mutex<InputBroker> = Mutex::new(InputBroker::new());
 static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::new());
+static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
@@ -748,9 +753,15 @@ pub(crate) async fn ui4_input_service_task() {
         "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px selection=primary-button/active-outline screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
     );
     loop {
-        INPUT_BROKER.lock().pump();
+        if INPUT_BROKER.lock().pump() {
+            SLOT4_VISUAL_CHANGE.signal(());
+        }
         Timer::after(Duration::from_millis(INPUT_PUMP_PERIOD_MS)).await;
     }
+}
+
+pub(super) async fn wait_slot4_visual_change() {
+    SLOT4_VISUAL_CHANGE.wait().await;
 }
 
 pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, MAX_OWNER_EVENTS> {

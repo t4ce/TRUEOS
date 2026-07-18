@@ -8,22 +8,13 @@ use alloc::vec::Vec;
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
-use crate::r::mouse_motion_service::{
-    MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
-    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlPrincipal,
-    cursor_is_idle, release_cursor, request_cursor, submit_program,
-};
-
 use super::{
     DamageRect, FrameHandle, FramePoolError, FrameReadLease, FrameRgbaView, OutputId, WindowId,
     WindowPlacement, WindowSnapshot, acknowledge_window_frame, acquire_published_frame,
-    published_rgba_view, release_published_frame, software_cursor_visuals,
-    visible_windows_for_output,
+    published_rgba_view, release_published_frame, visible_windows_for_output,
 };
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
-const HEARTBEAT_REST_FRAMES: u32 = 50;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -39,10 +30,7 @@ impl From<FramePoolError> for Ui4CompositorError {
 }
 
 struct Runtime {
-    heartbeat_cursor: Option<MouseControlCursor>,
-    heartbeat_rest_frames: u32,
     composition: CompositionState,
-    cursor_plane: CursorPlaneState,
 }
 
 #[derive(Copy, Clone)]
@@ -72,13 +60,6 @@ struct CompositionWindowStamp {
     placement: WindowPlacement,
 }
 
-#[derive(Copy, Clone)]
-struct CursorPlaneState {
-    previous_bounds: Option<crate::intel::CompositionDamageRect>,
-    signature: u64,
-    initialized: bool,
-}
-
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_compositor_service_task() {
     crate::log_info!(
@@ -102,48 +83,17 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=primary+slot2+slot3 interaction=slot4 input=ui4-owner-queues heartbeat_vcursor_slot={}\n",
+        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=primary+slot2+slot3 interaction=independent-slot4-service input=ui4-owner-queues\n",
         COMPOSITION_PERIOD_MS,
-        runtime
-            .heartbeat_cursor
-            .map(|cursor| u32::from(cursor.slot_id))
-            .unwrap_or(u32::MAX)
     );
 
     loop {
-        if let Some(cursor) = runtime.heartbeat_cursor {
-            if runtime.heartbeat_rest_frames != 0 {
-                runtime.heartbeat_rest_frames -= 1;
-            } else {
-                match cursor_is_idle(MouseControlPrincipal::KernelApp(1), cursor.handle) {
-                    Ok(true) => {
-                        if let Err(error) = submit_heartbeat_program(cursor) {
-                            crate::log_warn!(target: "ui4";
-                                "ui4 compositor heartbeat-vcursor disabled error={:?}\n",
-                                error,
-                            );
-                            let _ =
-                                release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
-                            runtime.heartbeat_cursor = None;
-                        } else {
-                            runtime.heartbeat_rest_frames = HEARTBEAT_REST_FRAMES;
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(error) => {
-                        crate::log_warn!(target: "ui4";
-                            "ui4 compositor heartbeat-vcursor disabled error={:?}\n",
-                            error,
-                        );
-                        let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
-                        runtime.heartbeat_cursor = None;
-                    }
-                }
-            }
-        }
-
         if let Err(error) = present_composition(&mut runtime) {
-            fail_and_cleanup(runtime, error);
+            crate::log_error!(
+                target: "ui4";
+                "ui4 compositor stopped error={:?}\n",
+                error
+            );
             return;
         }
 
@@ -152,20 +102,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 }
 
 fn initialize() -> Result<Runtime, Ui4CompositorError> {
-    let heartbeat_cursor =
-        match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
-            Ok(cursor) => Some(cursor),
-            Err(error) => {
-                crate::log_warn!(target: "ui4";
-                    "ui4 compositor heartbeat-vcursor unavailable error={:?}\n",
-                    error,
-                );
-                None
-            }
-        };
     let mut runtime = Runtime {
-        heartbeat_cursor,
-        heartbeat_rest_frames: 0,
         composition: CompositionState {
             primary: PlaneCompositionState {
                 initialized: false,
@@ -180,63 +117,12 @@ fn initialize() -> Result<Runtime, Ui4CompositorError> {
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
         },
-        cursor_plane: CursorPlaneState {
-            previous_bounds: None,
-            signature: 0,
-            initialized: false,
-        },
     };
     if let Err(error) = present_composition(&mut runtime) {
-        release_runtime_resources(&runtime);
         return Err(error);
     }
 
     Ok(runtime)
-}
-
-fn submit_heartbeat_program(
-    cursor: MouseControlCursor,
-) -> Result<(), crate::r::mouse_motion_service::MouseControlError> {
-    let teleport = MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
-        flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-        x: 1380,
-        y: 1220,
-        ..MouseControlCommand::default()
-    };
-    let line = |x, y, duration_ms| MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_STROKE,
-        path: MOUSE_CONTROL_PATH_LINE,
-        easing: MOUSE_CONTROL_EASING_FAST_LINEAR,
-        duration_ms,
-        x,
-        y,
-        ..MouseControlCommand::default()
-    };
-    let accent = |x, y, c1x, c1y, c2x, c2y, duration_ms| MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_STROKE,
-        path: MOUSE_CONTROL_PATH_CUBIC,
-        easing: MOUSE_CONTROL_EASING_NATURAL,
-        duration_ms,
-        x,
-        y,
-        control1_x: c1x,
-        control1_y: c1y,
-        control2_x: c2x,
-        control2_y: c2y,
-        ..MouseControlCommand::default()
-    };
-    let program = [
-        teleport,
-        line(1430, 1220, 120),
-        accent(1470, 1192, 1440, 1220, 1456, 1192, 100),
-        accent(1500, 1268, 1480, 1192, 1490, 1268, 110),
-        accent(1535, 1130, 1510, 1268, 1520, 1130, 125),
-        accent(1570, 1220, 1545, 1130, 1555, 1220, 120),
-        line(1640, 1220, 150),
-    ];
-    submit_program(MouseControlPrincipal::KernelApp(1), cursor.handle, &program)?;
-    Ok(())
 }
 
 fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
@@ -267,7 +153,6 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> 
     if !crate::intel::begin_ui4_plane_surface_flip_batch() {
         return Err(Ui4CompositorError::PresentFailed);
     }
-    let cursor_rects = software_cursor_rects();
     let present_result = (|| {
         present_plane_composition(
             &mut runtime.composition.primary,
@@ -283,15 +168,14 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> 
             &mut runtime.composition.draw3d,
             &windows,
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
-        )?;
-        present_software_cursor_plane(&mut runtime.cursor_plane, &cursor_rects)
+        )
     })();
     let flips_committed = crate::intel::finish_ui4_plane_surface_flip_batch();
     present_result?;
     if !flips_committed {
         return Err(Ui4CompositorError::PresentFailed);
     }
-    super::screenshot::capture_compositor_frame(&windows, &cursor_rects);
+    super::screenshot::capture_compositor_frame(&windows);
     Ok(())
 }
 
@@ -474,125 +358,6 @@ fn present_plane_composition(
     Ok(())
 }
 
-fn software_cursor_rects() -> heapless::Vec<crate::intel::LiveOverlayRect, 512> {
-    use crate::graphics::primitives::Rgba8;
-
-    let visuals = software_cursor_visuals();
-    let mut rects: heapless::Vec<crate::intel::LiveOverlayRect, 512> = heapless::Vec::new();
-
-    // Keep selection deliberately trim: four one-pixel edges on the same
-    // topmost interaction plane as its owning cursor, with no filled area to
-    // obscure application content.
-    for visual in &visuals {
-        if let Some(selection) = visual.selection {
-            push_rect_border(&mut rects, selection, 1, visual.color);
-        }
-    }
-
-    for visual in &visuals {
-        let Some((x, y)) = visual.context_menu else {
-            continue;
-        };
-        let (screen_w, screen_h) =
-            crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
-        let menu_w = 196u32;
-        let menu_h = 116u32;
-        let menu_x = x.saturating_add(14).min(screen_w.saturating_sub(menu_w));
-        let menu_y = y.saturating_add(14).min(screen_h.saturating_sub(menu_h));
-        let menu_rect = super::Ui4VisualRect {
-            x: menu_x,
-            y: menu_y,
-            width: menu_w,
-            height: menu_h,
-        };
-        push_overlay_rect(&mut rects, menu_x, menu_y, menu_w, menu_h, Rgba8::new(22, 25, 33, 235));
-        push_rect_border(&mut rects, menu_rect, 2, visual.color);
-        for row in 1..4u32 {
-            push_overlay_rect(
-                &mut rects,
-                menu_x.saturating_add(12),
-                menu_y.saturating_add(row * 27),
-                menu_w.saturating_sub(24),
-                1,
-                Rgba8::new(180, 188, 204, 150),
-            );
-        }
-    }
-
-    // Every source becomes visible only after its first real movement. The
-    // color remains bound to the full HID source identity, not to focus.
-    for visual in &visuals {
-        if !visual.draw_cursor {
-            continue;
-        }
-        let x = visual.x;
-        let y = visual.y;
-        let color = visual.color;
-        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(13), 5, 27, color);
-        push_overlay_rect(&mut rects, x.saturating_sub(13), y.saturating_sub(2), 27, 5, color);
-        push_overlay_rect(
-            &mut rects,
-            x.saturating_sub(4),
-            y.saturating_sub(4),
-            9,
-            9,
-            Rgba8::new(255, 255, 255, 240),
-        );
-        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(2), 5, 5, color);
-    }
-
-    rects
-}
-
-fn present_software_cursor_plane(
-    state: &mut CursorPlaneState,
-    rects: &[crate::intel::LiveOverlayRect],
-) -> Result<(), Ui4CompositorError> {
-    let current_bounds = overlay_rect_bounds(rects);
-    let signature = overlay_rect_signature(rects);
-    if state.initialized && signature == state.signature && current_bounds == state.previous_bounds
-    {
-        return Ok(());
-    }
-    let damage = match (state.previous_bounds, current_bounds) {
-        (Some(previous), Some(current)) => damage_union(previous, current),
-        (Some(previous), None) => previous,
-        (None, Some(current)) => current,
-        (None, None) => return Ok(()),
-    };
-    if crate::intel::present_live_overlay_rects_on_slot_damage(
-        super::INTERACTION_OVERLAY_PLANE_SLOT,
-        rects,
-        damage,
-        "ui4-interaction-slot4",
-    ) {
-        state.previous_bounds = current_bounds;
-        state.signature = signature;
-        state.initialized = true;
-        Ok(())
-    } else {
-        Err(Ui4CompositorError::PresentFailed)
-    }
-}
-
-fn damage_union(
-    a: crate::intel::CompositionDamageRect,
-    b: crate::intel::CompositionDamageRect,
-) -> crate::intel::CompositionDamageRect {
-    let x = a.x.min(b.x);
-    let y = a.y.min(b.y);
-    let right = a.x.saturating_add(a.width).max(b.x.saturating_add(b.width));
-    let bottom =
-        a.y.saturating_add(a.height)
-            .max(b.y.saturating_add(b.height));
-    crate::intel::CompositionDamageRect::new(
-        x,
-        y,
-        right.saturating_sub(x),
-        bottom.saturating_sub(y),
-    )
-}
-
 fn add_placement_damage(
     region: &mut crate::intel::CompositionDamageRegion,
     placement: WindowPlacement,
@@ -697,104 +462,9 @@ fn clipped_output_rect(
     })
 }
 
-fn union_damage(
-    current: Option<crate::intel::CompositionDamageRect>,
-    next: crate::intel::CompositionDamageRect,
-) -> Option<crate::intel::CompositionDamageRect> {
-    Some(
-        current
-            .map(|current| damage_union(current, next))
-            .unwrap_or(next),
-    )
-}
-
-fn overlay_rect_bounds(
-    rects: &[crate::intel::LiveOverlayRect],
-) -> Option<crate::intel::CompositionDamageRect> {
-    rects.iter().fold(None, |bounds, rect| {
-        union_damage(
-            bounds,
-            crate::intel::CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height),
-        )
-    })
-}
-
-fn overlay_rect_signature(rects: &[crate::intel::LiveOverlayRect]) -> u64 {
-    let mut hash = 0xCBF2_9CE4_8422_2325u64;
-    for rect in rects {
-        for value in [
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            u32::from_le_bytes([rect.color.r, rect.color.g, rect.color.b, rect.color.a]),
-        ] {
-            hash ^= u64::from(value);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
-        }
-    }
-    hash ^ rects.len() as u64
-}
-
-fn push_rect_border<const N: usize>(
-    rects: &mut heapless::Vec<crate::intel::LiveOverlayRect, N>,
-    rect: super::Ui4VisualRect,
-    thickness: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    let thickness = thickness.min(rect.width).min(rect.height);
-    push_overlay_rect(rects, rect.x, rect.y, rect.width, thickness, color);
-    push_overlay_rect(
-        rects,
-        rect.x,
-        rect.y.saturating_add(rect.height.saturating_sub(thickness)),
-        rect.width,
-        thickness,
-        color,
-    );
-    push_overlay_rect(rects, rect.x, rect.y, thickness, rect.height, color);
-    push_overlay_rect(
-        rects,
-        rect.x.saturating_add(rect.width.saturating_sub(thickness)),
-        rect.y,
-        thickness,
-        rect.height,
-        color,
-    );
-}
-
-fn push_overlay_rect<const N: usize>(
-    rects: &mut heapless::Vec<crate::intel::LiveOverlayRect, N>,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-    color: crate::graphics::primitives::Rgba8,
-) {
-    if width == 0 || height == 0 {
-        return;
-    }
-    let _ = rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
-}
-
 fn release_leases(leases: &[FrameReadLease]) {
     for lease in leases {
         let _ = release_published_frame(*lease);
-    }
-}
-
-fn fail_and_cleanup(runtime: Runtime, error: Ui4CompositorError) {
-    crate::log_error!(
-        target: "ui4";
-        "ui4 compositor stopped error={:?}\n",
-        error
-    );
-    release_runtime_resources(&runtime);
-}
-
-fn release_runtime_resources(runtime: &Runtime) {
-    if let Some(cursor) = runtime.heartbeat_cursor {
-        let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
     }
 }
 

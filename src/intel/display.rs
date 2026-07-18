@@ -3748,16 +3748,32 @@ pub(crate) fn present_live_overlay_rects_on_slot_damage(
     damage: CompositionDamageRect,
     reason: &str,
 ) -> bool {
+    present_live_overlay_rects_on_slot_damage_region(
+        plane_slot,
+        rects,
+        CompositionDamageRegion::from_rect(damage),
+        reason,
+    )
+}
+
+/// Region-preserving form used by UI4's independent interaction plane. A set
+/// of distant software cursors must not turn into one screen-spanning flush.
+pub(crate) fn present_live_overlay_rects_on_slot_damage_region(
+    plane_slot: usize,
+    rects: &[LiveOverlayRect],
+    damage: CompositionDamageRegion,
+    reason: &str,
+) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
     let (width, height) = active_scanout_dimensions()
         .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
         .unwrap_or((0, 0));
-    let Some(change) = clip_composition_damage(damage, width, height) else {
+    let change = clip_composition_damage_region(damage, width, height);
+    if change.is_empty() {
         return true;
-    };
-    let change = CompositionDamageRegion::from_rect(change);
+    }
     let Some(surface) = ensure_overlay_surface_on_slot(dev, plane_slot, width, height) else {
         return false;
     };

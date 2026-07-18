@@ -167,13 +167,10 @@ fn enqueue_request(request: CaptureRequest) -> Option<usize> {
 
 /// Capture at most one request from this compositor frame.
 ///
-/// `windows` is the immutable broker snapshot used for the frame and `rects`
-/// contains UI4's software-only visual plane. The hardware mouse cursor is
-/// intentionally absent, matching normal screenshot behavior.
-pub(super) fn capture_compositor_frame(
-    windows: &[WindowSnapshot],
-    rects: &[crate::intel::LiveOverlayRect],
-) {
+/// `windows` is the immutable broker snapshot used for the frame. Slot 4 is
+/// sampled from its independent service only after a capture request is
+/// actually consumed. The hardware mouse cursor remains intentionally absent.
+pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     let request = {
         let mut requests = CAPTURE_REQUESTS.lock();
         if requests.is_empty()
@@ -191,8 +188,12 @@ pub(super) fn capture_compositor_frame(
     };
 
     let started_ns = crate::chronos::monotonic_nanos();
+    let rects = match request.selection {
+        CaptureSelection::Composition => super::slot4_service::presented_rects(),
+        CaptureSelection::Window { .. } => heapless::Vec::new(),
+    };
     let result = match request.selection {
-        CaptureSelection::Composition => capture_windows(windows, rects),
+        CaptureSelection::Composition => capture_windows(windows, &rects),
         CaptureSelection::Window { id, plane_slot } => windows
             .iter()
             .copied()

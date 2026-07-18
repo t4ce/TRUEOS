@@ -10,6 +10,7 @@ mod frame_pool;
 mod gpgpu_preview_consumer;
 mod input_broker;
 mod screenshot;
+mod slot4_service;
 mod video_frame;
 mod window_broker;
 
@@ -33,6 +34,7 @@ pub(crate) use input_broker::{
     software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
+pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedRgbaProducer, DecodedRgbaWriteTarget, DecodedVideoFrameSpec,
     acquire_decoded_rgba_stream_target, cancel_decoded_rgba_stream_target,

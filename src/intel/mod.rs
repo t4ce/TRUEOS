@@ -563,6 +563,17 @@ pub(crate) fn present_live_overlay_rects_on_slot_damage(
     self::display::present_live_overlay_rects_on_slot_damage(plane_slot, rects, damage, reason)
 }
 
+pub(crate) fn present_live_overlay_rects_on_slot_damage_region(
+    plane_slot: usize,
+    rects: &[LiveOverlayRect],
+    damage: CompositionDamageRegion,
+    reason: &str,
+) -> bool {
+    self::display::present_live_overlay_rects_on_slot_damage_region(
+        plane_slot, rects, damage, reason,
+    )
+}
+
 pub(crate) fn present_live_overlay_rects_preserving(
     rects: &[LiveOverlayRect],
     preserve: Option<LiveOverlayRect>,
