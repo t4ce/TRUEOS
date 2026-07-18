@@ -72,10 +72,10 @@ define_started_flags!(
     MOUSE_MOTION_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
     UI4_SCREENSHOT_SERVICE_STARTED,
-    DUMMY_UI4_CONSUMER_STARTED,
+    UI4_COMPOSITOR_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
-    DUMMY_UI4_VIDEO_CONSUMER_STARTED,
+    UI4_VIDEO_PLAYBACK_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
@@ -527,10 +527,8 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
 }
 
-fn spawn_dummy_ui4_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        crate::ui4::dummy_ui4_consumer_service_task(worker_spawner.cpu_slot())
-    })
+fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_compositor_service_task())
 }
 
 fn spawn_gpgpu_ui4_preview_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -543,8 +541,8 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
-fn spawn_dummy_ui4_video_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::intel::ui4_dummy_video_consumer_task_spawn())
+fn spawn_ui4_video_playback_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_bsp_spawner| crate::intel::ui4_video_playback_task_spawn())
 }
 
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
@@ -596,7 +594,14 @@ fn intel_cursor_service_gate() -> bool {
 }
 
 #[inline]
-fn ui4_consumer_gate() -> bool {
+fn ui4_compositor_gate() -> bool {
+    crate::intel::has_claimed_device()
+        && crate::intel::active_scanout_dimensions().is_some()
+        && crate::workers::ap1_ui_core_spawner().is_some()
+}
+
+#[inline]
+fn ui4_background_consumer_gate() -> bool {
     crate::intel::has_claimed_device()
         && crate::intel::active_scanout_dimensions().is_some()
         && crate::workers::has_background_worker_slot()
@@ -1425,21 +1430,21 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-screenshot-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_consumer_gate,
+        ui4_background_consumer_gate,
         &UI4_SCREENSHOT_SERVICE_STARTED,
         spawn_ui4_screenshot_service_task,
     ),
     TaskSpec::enabled_gated(
-        "dummy-ui4-consumer-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_consumer_gate,
-        &DUMMY_UI4_CONSUMER_STARTED,
-        spawn_dummy_ui4_consumer_service_task,
+        "ui4-compositor-service",
+        0,
+        ui4_compositor_gate,
+        &UI4_COMPOSITOR_STARTED,
+        spawn_ui4_compositor_service_task,
     ),
     TaskSpec::enabled_gated(
         "gpgpu-ui4-preview-consumer-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ui4_consumer_gate,
+        ui4_background_consumer_gate,
         &GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
         spawn_gpgpu_ui4_preview_consumer_service_task,
     ),
@@ -1451,11 +1456,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_hw_pic_service,
     ),
     TaskSpec::enabled_gated(
-        "dummy-ui4-video-consumer-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        "ui4-video-playback",
+        0,
         intel_media_engine_gate,
-        &DUMMY_UI4_VIDEO_CONSUMER_STARTED,
-        spawn_dummy_ui4_video_consumer_service_task,
+        &UI4_VIDEO_PLAYBACK_STARTED,
+        spawn_ui4_video_playback_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",

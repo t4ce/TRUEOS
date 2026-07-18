@@ -464,7 +464,6 @@ const MANDEL64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     launch: KernelLaunchContract::descriptor_worklist(16),
     consumers: &[
         "intel::init_once upload",
-        "ui4::dummy_ui4_consumer_service_task",
         "ui4::gpgpu_preview_consumer_service_task",
         "gpgpu mandel64 probe",
     ],

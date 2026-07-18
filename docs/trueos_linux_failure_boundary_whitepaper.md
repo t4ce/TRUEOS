@@ -522,7 +522,7 @@ Formal methods can help, but the proof boundary must be honest. The [seL4 verifi
 - UI4 contract: [`src/ui4/mod.rs`](../src/ui4/mod.rs)
 - Frame ownership/leases: [`src/ui4/frame_pool.rs`](../src/ui4/frame_pool.rs)
 - Window/session ownership: [`src/ui4/window_broker.rs`](../src/ui4/window_broker.rs)
-- Current composition consumer: [`src/ui4/dummy_ui4_consumer.rs`](../src/ui4/dummy_ui4_consumer.rs)
+- UI4 compositor service: [`src/ui4/compositor_service.rs`](../src/ui4/compositor_service.rs)
 - Central task registry: [`src/r/spawn_service.rs`](../src/r/spawn_service.rs)
 - VM security state: [`src/hv/security.rs`](../src/hv/security.rs)
 - Guest mapping and shared-state caveats: [`src/hv/guest_run.rs`](../src/hv/guest_run.rs)

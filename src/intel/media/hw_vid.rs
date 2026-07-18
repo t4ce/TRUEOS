@@ -367,13 +367,13 @@ pub(crate) const fn probe_enabled() -> bool {
 }
 
 #[embassy_executor::task]
-pub(crate) async fn ui4_dummy_video_consumer_task() {
+pub(crate) async fn ui4_video_playback_task() {
     if !H264_BOOT_PROBE_ENABLED {
-        crate::log!("intel/hw_vid: ui4-dummy-app2 disabled reason=boot-playback-disabled\n");
+        crate::log!("intel/hw_vid: ui4-video-playback disabled reason=boot-playback-disabled\n");
         return;
     }
     if !crate::intel::has_media_decode_engine() {
-        crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=no-media-decode-engine\n");
+        crate::log!("intel/hw_vid: ui4-video-playback skipped reason=no-media-decode-engine\n");
         return;
     }
 
@@ -381,20 +381,24 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
     if H264_BOOT_PROBE_PLAYBACK_ENABLED {
         if !crate::ui4::prepare_decoded_video_player() {
-            crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=player-window-unavailable\n");
+            crate::log!(
+                "intel/hw_vid: ui4-video-playback skipped reason=player-window-unavailable\n"
+            );
             return;
         }
         crate::log!(
-            "intel/hw_vid: ui4-dummy-app2 armed playback=paused-default control=focused-space asset={} action=click-player-then-space\n",
+            "intel/hw_vid: ui4-video-playback armed playback=paused-default control=focused-space asset={} action=click-player-then-space carrier=bsp\n",
             H264_BOOT_PROBE_STREAM_PATH,
         );
         crate::ui4::wait_decoded_video_playback_ready().await;
-        let Ok(_playback_guard) = h264_try_begin_playback("ui4-dummy-app2") else {
-            crate::log!("intel/hw_vid: ui4-dummy-app2 skipped reason=playback-already-active\n");
+        let Ok(_playback_guard) = h264_try_begin_playback("ui4-video-playback") else {
+            crate::log!(
+                "intel/hw_vid: ui4-video-playback skipped reason=playback-already-active\n"
+            );
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-dummy-app2 probe-demo start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} playback=playing control=focused-space legacy_fallback=0 worker_slot={}\n",
+            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} playback=playing control=focused-space legacy_fallback=0 carrier_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
@@ -419,7 +423,7 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
                 )
                 .await;
                 crate::log!(
-                    "intel/hw_vid: ui4-dummy-app2 lap={} done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} direction={} loop={} final_frame_preserved=1\n",
+                    "intel/hw_vid: ui4-video-playback lap={} done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} direction={} loop={} final_frame_preserved=1\n",
                     lap,
                     report.submitted,
                     report.skipped_unsupported,
@@ -436,7 +440,7 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
             crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
         } else {
             crate::log!(
-                "intel/hw_vid: ui4-dummy-app2 skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
+                "intel/hw_vid: ui4-video-playback skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
                 H264_BOOT_PROBE_STREAM_PATH
             );
         }
@@ -444,7 +448,7 @@ pub(crate) async fn ui4_dummy_video_consumer_task() {
     }
 
     crate::log!(
-        "intel/hw_vid: ui4-dummy-app2 skipped reason=playback-disabled path={}\n",
+        "intel/hw_vid: ui4-video-playback skipped reason=playback-disabled path={}\n",
         H264_BOOT_PROBE_STREAM_PATH
     );
 }

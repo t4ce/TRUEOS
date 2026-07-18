@@ -94,8 +94,8 @@ struct Draw3dUi4Surface {
 
 fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let width = crate::ui4::BOOT_DEMO_FRAME_WIDTH;
-    let height = crate::ui4::BOOT_DEMO_FRAME_HEIGHT;
+    let width = crate::ui4::DEFAULT_FRAME_WIDTH;
+    let height = crate::ui4::DEFAULT_FRAME_HEIGHT;
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,

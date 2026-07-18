@@ -801,9 +801,9 @@ pub(crate) fn hw_logo_present_task()
     self::display::hw_logo_present_task()
 }
 
-pub(crate) fn ui4_dummy_video_consumer_task_spawn()
+pub(crate) fn ui4_video_playback_task_spawn()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::media::hw_vid::ui4_dummy_video_consumer_task()
+    self::media::hw_vid::ui4_video_playback_task()
 }
 
 pub async fn run_media_source_warmup_async() {

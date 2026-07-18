@@ -1,6 +1,6 @@
 //! Shell-controlled GPGPU live previews backed exclusively by UI4 frames.
 //!
-//! This is a trusted kernel app beside the temporary UI4 dummy consumer.  It
+//! This is a trusted kernel app beside the permanent UI4 compositor. It
 //! owns frame/window lifetime and compute cadence, but deliberately knows
 //! nothing about display pipes or universal-plane slots.  Published windows
 //! are ordinary inputs to the existing UI4 compositor.
@@ -20,8 +20,8 @@ use super::{
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::KernelApp(5);
-const PREVIEW_WIDTH: u32 = super::BOOT_DEMO_FRAME_WIDTH;
-const PREVIEW_HEIGHT: u32 = super::BOOT_DEMO_FRAME_HEIGHT;
+const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
+const PREVIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
 const PREVIEW_MARGIN: u32 = 64;
 const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;

@@ -19,8 +19,8 @@ use super::{
     take_owner_input_events, writable_rgba_view,
 };
 
-// Dummy UI4 app 2 owns the decoded-video frame. App 1 is the three-window
-// Mandelbrot carrier; there is deliberately no placeholder app in between.
+// The decoded-video producer owns one ordinary broker window independently of
+// the compositor service.
 const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_INPUT_POLL_MS: u64 = 10;
@@ -157,8 +157,8 @@ pub(crate) fn prepare_decoded_video_player() -> bool {
     };
     let Some(stream) = create_stream(
         placeholder_spec,
-        super::BOOT_DEMO_FRAME_WIDTH,
-        super::BOOT_DEMO_FRAME_HEIGHT,
+        super::DEFAULT_FRAME_WIDTH,
+        super::DEFAULT_FRAME_HEIGHT,
         true,
     ) else {
         return false;
@@ -267,11 +267,11 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
     if !spec.valid() {
         return None;
     }
-    // Keep the boot video on the same broker extent as the Mandelbrot
-    // consumers. The CPU fallback performs aspect-fit scaling directly while
-    // converting NV12, without first materializing a native-size RGBA frame.
-    let frame_width = super::BOOT_DEMO_FRAME_WIDTH;
-    let frame_height = super::BOOT_DEMO_FRAME_HEIGHT;
+    // Use UI4's default broker extent. The CPU fallback performs aspect-fit
+    // scaling directly while converting NV12, without first materializing a
+    // native-size RGBA frame.
+    let frame_width = super::DEFAULT_FRAME_WIDTH;
+    let frame_height = super::DEFAULT_FRAME_HEIGHT;
 
     let current = *VIDEO_STREAM.lock();
     if current.is_some_and(|stream| {

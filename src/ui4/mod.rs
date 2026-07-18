@@ -1,11 +1,11 @@
 //! Kernel-owned UI4 frame contract.
 //!
 //! This module describes what a producer needs from the display path. It does
-//! not expose a guest/userspace ABI and it does not own presentation yet.
+//! not expose a guest/userspace ABI; the compositor service owns presentation.
 
 pub(crate) mod blueprint_text;
+mod compositor_service;
 mod damage;
-mod dummy_ui4_consumer;
 mod frame_pool;
 mod gpgpu_preview_consumer;
 mod input_broker;
@@ -13,8 +13,8 @@ mod screenshot;
 mod video_frame;
 mod window_broker;
 
+pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use damage::{DamageRect, DamageRegion};
-pub(crate) use dummy_ui4_consumer::dummy_ui4_consumer_service_task;
 pub(crate) use frame_pool::{
     FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
     acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
@@ -52,11 +52,10 @@ pub(crate) use window_broker::{
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
 pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 5;
-/// Common window extent for the temporary UI4 boot consumers. Keeping the
-/// Mandelbrot and decoded-video probes on one extent makes their placement and
-/// later interactive-resize work exercise the same broker contract.
-pub(crate) const BOOT_DEMO_FRAME_WIDTH: u32 = 768;
-pub(crate) const BOOT_DEMO_FRAME_HEIGHT: u32 = 512;
+/// Default broker extent for kernel UI4 producers that do not yet negotiate a
+/// size with an external application.
+pub(crate) const DEFAULT_FRAME_WIDTH: u32 = 768;
+pub(crate) const DEFAULT_FRAME_HEIGHT: u32 = 512;
 pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;

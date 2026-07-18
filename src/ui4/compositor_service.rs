@@ -1,13 +1,8 @@
-//! Temporary UI4 consumers used to exercise the kernel frame/window contract.
+//! Permanent kernel UI4 compositor service.
 //!
-//! Two trusted app identities deliberately mimic two future Blueprint
-//! consumers without defining any Blueprint transport or ABI:
-//! - app 1 owns three Mandelbrot windows with immutable/dirty/streaming
-//!   cadence;
-//! - app 2 is the decoded-video/SFC probe consumer in `video_frame`, with one
-//!   ordinary streaming RGBA frame backed by three buffers. The boot demo is
-//!   required to reach this UI4 path and cannot escape to linked display
-//!   planes or direct-primary CPU presentation.
+//! Producers own frames and windows. This service owns the broker snapshot,
+//! per-plane damage history, software-cursor composition, and the atomic plane
+//! surface-flip batch. It intentionally creates no application windows.
 
 use alloc::vec::Vec;
 
@@ -21,101 +16,38 @@ use crate::r::mouse_motion_service::{
 };
 
 use super::{
-    DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameReadLease,
-    FrameRgbaView, FrameSpec, OutputId, PublishedFrame, ScanoutFormat, Ui4ButtonPhase,
-    Ui4InputEvent, Ui4PanPhase, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowPlane, WindowSessionId, WindowSnapshot, acknowledge_window_frame,
-    acquire_frame_buffer, acquire_published_frame, begin_window_session, cancel_frame_buffer,
-    create_frame, create_window, destroy_frame, finish_window_session, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_window_frame, published_rgba_view, release_published_frame,
-    replace_window_frame, software_cursor_visuals, take_owner_input_events,
+    DamageRect, FrameHandle, FramePoolError, FrameReadLease, FrameRgbaView, OutputId, WindowId,
+    WindowPlacement, WindowSnapshot, acknowledge_window_frame, acquire_published_frame,
+    published_rgba_view, release_published_frame, software_cursor_visuals,
     visible_windows_for_output,
 };
 
-const MANDEL_APP_OWNER: WindowOwner = WindowOwner::KernelApp(1);
-const MANDEL_WIDTH: u32 = super::BOOT_DEMO_FRAME_WIDTH;
-const MANDEL_HEIGHT: u32 = super::BOOT_DEMO_FRAME_HEIGHT;
-const STATIC_PARAMETER: u32 = 128;
-const STREAM_PARAMETER_MAX: u32 = 64;
 const COMPOSITION_PERIOD_MS: u64 = 16;
-const MANDEL_STREAM_DIVISOR: u8 = 2;
 const HEARTBEAT_REST_FRAMES: u32 = 50;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
-const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
-
-const STATIC_PLACEMENT: WindowPlacement = WindowPlacement {
-    x: 64,
-    y: 64,
-    width: MANDEL_WIDTH,
-    height: MANDEL_HEIGHT,
-    z: 10,
-    opacity: u8::MAX,
-    visible: true,
-};
-const DIRTY_PLACEMENT: WindowPlacement = WindowPlacement {
-    x: 896,
-    y: 64,
-    width: MANDEL_WIDTH,
-    height: MANDEL_HEIGHT,
-    z: 11,
-    opacity: u8::MAX,
-    visible: true,
-};
-const STREAM_PLACEMENT: WindowPlacement = WindowPlacement {
-    x: 480,
-    y: 640,
-    width: MANDEL_WIDTH,
-    height: MANDEL_HEIGHT,
-    z: 12,
-    opacity: u8::MAX,
-    visible: true,
-};
-const MANDEL_PLACEMENTS: [WindowPlacement; 3] =
-    [STATIC_PLACEMENT, DIRTY_PLACEMENT, STREAM_PLACEMENT];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum DummyUi4ConsumerError {
+enum Ui4CompositorError {
     Frame(FramePoolError),
-    Window(WindowBrokerError),
-    RenderFailed,
     PresentFailed,
     MouseMotion(MouseControlError),
 }
 
-impl From<FramePoolError> for DummyUi4ConsumerError {
+impl From<FramePoolError> for Ui4CompositorError {
     fn from(error: FramePoolError) -> Self {
         Self::Frame(error)
     }
 }
 
-impl From<WindowBrokerError> for DummyUi4ConsumerError {
-    fn from(error: WindowBrokerError) -> Self {
-        Self::Window(error)
-    }
-}
-
-impl From<MouseControlError> for DummyUi4ConsumerError {
+impl From<MouseControlError> for Ui4CompositorError {
     fn from(error: MouseControlError) -> Self {
         Self::MouseMotion(error)
     }
 }
 
-struct MandelPlaceholderApp {
-    owner: WindowOwner,
-    session: WindowSessionId,
-    frames: [FrameHandle; 3],
-    windows: [WindowId; 3],
-    views: [crate::intel::gpgpu::GpgpuRect; 3],
-    pending_pans: [(i32, i32); 3],
-    dirty_parameter: u32,
-    stream_parameter: u32,
-}
-
 struct Runtime {
-    mandel: MandelPlaceholderApp,
     heartbeat_cursor: MouseControlCursor,
     heartbeat_rest_frames: u32,
-    mandel_stream_countdown: u8,
     composition: CompositionState,
     cursor_plane: CursorPlaneState,
 }
@@ -155,11 +87,11 @@ struct CursorPlaneState {
 }
 
 #[embassy_executor::task(pool_size = 1)]
-pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
+pub(crate) async fn ui4_compositor_service_task() {
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer carrier online placement=worker-ap2+ assigned_slot={} current_slot={}\n",
-        worker_slot,
+        "ui4 compositor carrier online placement=ap1-ui-core expected_slot={} current_slot={}\n",
+        crate::workers::AP1_UI_SERVICE_SLOT,
         crate::percpu::current_slot()
     );
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -168,7 +100,7 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
         Err(error) => {
             crate::log_error!(
                 target: "ui4";
-                "ui4 dummy-consumer init failed error={:?}\n",
+                "ui4 compositor init failed error={:?}\n",
                 error
             );
             return;
@@ -177,45 +109,12 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 dummy-consumer live app1=mandel windows=3 mandel_extent={}x{} mandel_buffers=1/2/3 static={} dirty={} stream={}..={} app2=decoded-video-sfc-probe buffers=3 format=rgba8-premultiplied boot_playback=paused/focused-space ui4_probe_required=1 legacy_fallback=0 composition_ms={} plane=primary-compositor input=ui4-owner-queues app1_callbacks=focus,left-click,middle-pan,keyboard app2_callbacks=video-consumer frame_drag=ui4-broker-secondary heartbeat_vcursor_slot={}\n",
-        MANDEL_WIDTH,
-        MANDEL_HEIGHT,
-        STATIC_PARAMETER,
-        runtime.mandel.dirty_parameter,
-        runtime.mandel.stream_parameter,
-        STREAM_PARAMETER_MAX,
+        "ui4 compositor live application_windows=broker-owned composition_ms={} planes=primary+slot2+slot3 interaction=slot4 input=ui4-owner-queues heartbeat_vcursor_slot={}\n",
         COMPOSITION_PERIOD_MS,
         runtime.heartbeat_cursor.slot_id
     );
 
     loop {
-        let (dirty_clicks, last_dirty_click) = match dispatch_ui4_callbacks(&mut runtime) {
-            Ok(result) => result,
-            Err(error) => {
-                fail_and_cleanup(runtime, error);
-                return;
-            }
-        };
-        if dirty_clicks != 0 {
-            runtime.mandel.dirty_parameter =
-                runtime.mandel.dirty_parameter.saturating_add(dirty_clicks);
-            match render_and_publish_mandel(&runtime.mandel, 1, runtime.mandel.dirty_parameter) {
-                Ok(_) => {}
-                Err(error) => {
-                    fail_and_cleanup(runtime, error);
-                    return;
-                }
-            }
-            let (x, y) = last_dirty_click.unwrap_or((0, 0));
-            crate::log_info!(
-                target: "ui4";
-                "ui4 dummy-consumer mandel-dirty-click x={} y={} clicks={} parameter={}\n",
-                x,
-                y,
-                dirty_clicks,
-                runtime.mandel.dirty_parameter
-            );
-        }
         if runtime.heartbeat_rest_frames != 0 {
             runtime.heartbeat_rest_frames -= 1;
         } else {
@@ -238,25 +137,6 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
             }
         }
 
-        if runtime.mandel_stream_countdown == 0 {
-            runtime.mandel.stream_parameter =
-                if runtime.mandel.stream_parameter == STREAM_PARAMETER_MAX {
-                    0
-                } else {
-                    runtime.mandel.stream_parameter + 1
-                };
-            match render_and_publish_mandel(&runtime.mandel, 2, runtime.mandel.stream_parameter) {
-                Ok(_) => {}
-                Err(error) => {
-                    fail_and_cleanup(runtime, error);
-                    return;
-                }
-            }
-            runtime.mandel_stream_countdown = MANDEL_STREAM_DIVISOR.saturating_sub(1);
-        } else {
-            runtime.mandel_stream_countdown -= 1;
-        }
-
         if let Err(error) = present_composition(&mut runtime) {
             fail_and_cleanup(runtime, error);
             return;
@@ -266,22 +146,11 @@ pub(crate) async fn dummy_ui4_consumer_service_task(worker_slot: u32) {
     }
 }
 
-fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
-    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let mandel = initialize_mandel_app(output)?;
-    let heartbeat_cursor =
-        match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
-            Ok(cursor) => cursor,
-            Err(error) => {
-                cleanup_mandel_app(mandel);
-                return Err(error.into());
-            }
-        };
+fn initialize() -> Result<Runtime, Ui4CompositorError> {
+    let heartbeat_cursor = request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat")?;
     let mut runtime = Runtime {
-        mandel,
         heartbeat_cursor,
         heartbeat_rest_frames: 0,
-        mandel_stream_countdown: 0,
         composition: CompositionState {
             primary: PlaneCompositionState {
                 initialized: false,
@@ -303,14 +172,14 @@ fn initialize() -> Result<Runtime, DummyUi4ConsumerError> {
         },
     };
     if let Err(error) = present_composition(&mut runtime) {
-        cleanup_runtime(runtime);
+        release_runtime_resources(&runtime);
         return Err(error);
     }
 
     Ok(runtime)
 }
 
-fn submit_heartbeat_program(cursor: MouseControlCursor) -> Result<(), DummyUi4ConsumerError> {
+fn submit_heartbeat_program(cursor: MouseControlCursor) -> Result<(), Ui4CompositorError> {
     let teleport = MouseControlCommand {
         opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
         flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
@@ -353,93 +222,7 @@ fn submit_heartbeat_program(cursor: MouseControlCursor) -> Result<(), DummyUi4Co
     Ok(())
 }
 
-fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, DummyUi4ConsumerError> {
-    let mut frames = [None; 3];
-    for (slot, cadence) in [
-        FrameCadence::Immutable,
-        FrameCadence::Dirty,
-        FrameCadence::Streaming,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        match create_frame(FrameSpec {
-            output,
-            content: FrameContent::Image,
-            cadence,
-            format: ScanoutFormat::Rgba8888Premultiplied,
-            width: MANDEL_WIDTH,
-            height: MANDEL_HEIGHT,
-            base_color: None,
-        }) {
-            Ok(frame) => frames[slot] = Some(frame),
-            Err(error) => {
-                destroy_optional_frames(frames);
-                return Err(error.into());
-            }
-        }
-    }
-    let frames = [frames[0].unwrap(), frames[1].unwrap(), frames[2].unwrap()];
-    let views = [crate::intel::gpgpu::GpgpuRect::new(0, 0, MANDEL_WIDTH, MANDEL_HEIGHT); 3];
-    let initial_parameters = [STATIC_PARAMETER, 0, 0];
-    for slot in 0..frames.len() {
-        match render_mandel_frame(frames[slot], views[slot], initial_parameters[slot], slot != 1) {
-            Ok(_) => {}
-            Err(error) => {
-                destroy_frames(frames);
-                return Err(error);
-            }
-        }
-    }
-
-    let session = match begin_window_session(MANDEL_APP_OWNER) {
-        Ok(session) => session,
-        Err(error) => {
-            destroy_frames(frames);
-            return Err(error.into());
-        }
-    };
-    let mut windows = [None; 3];
-    for slot in 0..frames.len() {
-        let result = create_window(WindowCreate {
-            owner: MANDEL_APP_OWNER,
-            session,
-            frame: frames[slot],
-            output,
-            plane: WindowPlane::Primary,
-            placement: MANDEL_PLACEMENTS[slot],
-        })
-        .and_then(|window| {
-            publish_window_frame(MANDEL_APP_OWNER, window, DamageRect::FULL)?;
-            Ok(window)
-        });
-        match result {
-            Ok(window) => windows[slot] = Some(window),
-            Err(error) => {
-                let _ = finish_window_session(MANDEL_APP_OWNER, session);
-                destroy_frames(frames);
-                return Err(error.into());
-            }
-        }
-    }
-
-    Ok(MandelPlaceholderApp {
-        owner: MANDEL_APP_OWNER,
-        session,
-        frames,
-        windows: [
-            windows[0].unwrap(),
-            windows[1].unwrap(),
-            windows[2].unwrap(),
-        ],
-        views,
-        pending_pans: [(0, 0); 3],
-        dirty_parameter: 0,
-        stream_parameter: 0,
-    })
-}
-
-fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
+fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     super::advance_window_close_transitions();
     let windows = visible_windows_for_output(output);
@@ -453,21 +236,19 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
             windows.len(),
             MAX_COMPOSITION_WINDOWS,
         );
-        return Err(DummyUi4ConsumerError::PresentFailed);
+        return Err(Ui4CompositorError::PresentFailed);
     }
-    if windows.is_empty()
-        || windows.iter().any(|window| {
-            let slot = window.plane.slot();
-            slot != super::PRIMARY_PLANE_SLOT
-                && slot != super::RGB_OVERLAY_PLANE_SLOT_2
-                && slot != super::RGB_OVERLAY_PLANE_SLOT_3
-        })
-    {
-        return Err(DummyUi4ConsumerError::PresentFailed);
+    if windows.iter().any(|window| {
+        let slot = window.plane.slot();
+        slot != super::PRIMARY_PLANE_SLOT
+            && slot != super::RGB_OVERLAY_PLANE_SLOT_2
+            && slot != super::RGB_OVERLAY_PLANE_SLOT_3
+    }) {
+        return Err(Ui4CompositorError::PresentFailed);
     }
 
     if !crate::intel::begin_ui4_plane_surface_flip_batch() {
-        return Err(DummyUi4ConsumerError::PresentFailed);
+        return Err(Ui4CompositorError::PresentFailed);
     }
     let cursor_rects = software_cursor_rects();
     let present_result = (|| {
@@ -491,7 +272,7 @@ fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerErro
     let flips_committed = crate::intel::finish_ui4_plane_surface_flip_batch();
     present_result?;
     if !flips_committed {
-        return Err(DummyUi4ConsumerError::PresentFailed);
+        return Err(Ui4CompositorError::PresentFailed);
     }
     super::screenshot::capture_compositor_frame(&windows, &cursor_rects);
     Ok(())
@@ -501,7 +282,7 @@ fn present_plane_composition(
     state: &mut PlaneCompositionState,
     all_windows: &[WindowSnapshot],
     target: CompositionTarget,
-) -> Result<(), DummyUi4ConsumerError> {
+) -> Result<(), Ui4CompositorError> {
     let plane_slot = match target {
         CompositionTarget::Primary => super::PRIMARY_PLANE_SLOT,
         CompositionTarget::Overlay(slot) => slot,
@@ -512,7 +293,7 @@ fn present_plane_composition(
         .filter(|window| window.plane.slot() == plane_slot)
         .collect();
     if windows.len() > MAX_COMPOSITION_WINDOWS {
-        return Err(DummyUi4ConsumerError::PresentFailed);
+        return Err(Ui4CompositorError::PresentFailed);
     }
     if windows.is_empty() && !state.initialized {
         return Ok(());
@@ -645,7 +426,7 @@ fn present_plane_composition(
                         crate::intel::present_premultiplied_rgba_primary_tiles_damage(
                             &tiles,
                             damage,
-                            "ui4-dummy-consumer-primary",
+                            "ui4-compositor-primary",
                         )
                     }
                     CompositionTarget::Overlay(slot) => {
@@ -660,7 +441,7 @@ fn present_plane_composition(
                     }
                 };
                 if !presented {
-                    return Err(DummyUi4ConsumerError::PresentFailed);
+                    return Err(Ui4CompositorError::PresentFailed);
                 }
             }
             Ok(())
@@ -749,7 +530,7 @@ fn software_cursor_rects() -> heapless::Vec<crate::intel::LiveOverlayRect, 512> 
 fn present_software_cursor_plane(
     state: &mut CursorPlaneState,
     rects: &[crate::intel::LiveOverlayRect],
-) -> Result<(), DummyUi4ConsumerError> {
+) -> Result<(), Ui4CompositorError> {
     let current_bounds = overlay_rect_bounds(rects);
     let signature = overlay_rect_signature(rects);
     if state.initialized && signature == state.signature && current_bounds == state.previous_bounds
@@ -773,7 +554,7 @@ fn present_software_cursor_plane(
         state.initialized = true;
         Ok(())
     } else {
-        Err(DummyUi4ConsumerError::PresentFailed)
+        Err(Ui4CompositorError::PresentFailed)
     }
 }
 
@@ -985,329 +766,17 @@ fn release_leases(leases: &[FrameReadLease]) {
     }
 }
 
-/// Consume callbacks routed to the Mandel app. The independent video consumer
-/// owns app 2's queue so its focused Space control cannot be stolen here.
-fn dispatch_ui4_callbacks(
-    runtime: &mut Runtime,
-) -> Result<(u32, Option<(u32, u32)>), DummyUi4ConsumerError> {
-    let mut dirty_clicks = 0u32;
-    let mut last_dirty_click = None;
-    for owner in [runtime.mandel.owner] {
-        for event in take_owner_input_events(owner) {
-            match event {
-                Ui4InputEvent::Pointer(_) => {}
-                Ui4InputEvent::Button(event) => {
-                    crate::log_info!(
-                        target: "ui4";
-                        "ui4 dummy-consumer button-callback owner={:?} window={} phase={:?} changed=0x{:X} down=0x{:X} local={},{} cursor={}:{}:{} kind={}\n",
-                        owner,
-                        event.window.raw(),
-                        event.phase,
-                        event.changed_buttons,
-                        event.buttons_down,
-                        event.local_x,
-                        event.local_y,
-                        event.source.controller_id,
-                        event.source.slot_id,
-                        event.source.ep_target,
-                        event.source.hid_kind
-                    );
-                    if owner == runtime.mandel.owner
-                        && event.window == runtime.mandel.windows[1]
-                        && event.phase == Ui4ButtonPhase::Down
-                        && event.changed_buttons & PRIMARY_BUTTON_MASK != 0
-                    {
-                        dirty_clicks = dirty_clicks.saturating_add(1);
-                        last_dirty_click = Some((event.x, event.y));
-                    }
-                }
-                Ui4InputEvent::Pan(event) => {
-                    crate::log_info!(
-                        target: "ui4";
-                        "ui4 dummy-consumer pan-callback owner={:?} window={} phase={:?} dx={} dy={} local={},{} cursor={}:{}:{} kind={} combo={} vcursor={}\n",
-                        owner,
-                        event.window.raw(),
-                        event.phase,
-                        event.dx,
-                        event.dy,
-                        event.local_x,
-                        event.local_y,
-                        event.source.controller_id,
-                        event.source.slot_id,
-                        event.source.ep_target,
-                        event.source.hid_kind,
-                        event.combo_id,
-                        event.vcursor as u8
-                    );
-                    handle_mandel_pan_callback(
-                        runtime,
-                        owner,
-                        event.window,
-                        event.phase,
-                        event.dx,
-                        event.dy,
-                    )?;
-                }
-                Ui4InputEvent::Resize(event) => {
-                    crate::log_info!(
-                        target: "ui4";
-                        "ui4 dummy-consumer resize-callback owner={:?} window={} old={}x{} new={}x{}\n",
-                        owner,
-                        event.window.raw(),
-                        event.old_width,
-                        event.old_height,
-                        event.width,
-                        event.height
-                    );
-                    handle_mandel_resize_callback(
-                        runtime,
-                        owner,
-                        event.window,
-                        event.width,
-                        event.height,
-                    )?;
-                }
-                Ui4InputEvent::Keyboard(event) => {
-                    crate::log_info!(
-                        target: "ui4";
-                        "ui4 dummy-consumer keyboard-callback owner={:?} window={} keyboard={}:{}:{} kind={} codepoint={} combo={} virtual={}\n",
-                        owner,
-                        event.window.raw(),
-                        event.event.controller_id,
-                        event.event.slot_id,
-                        event.event.ep_target,
-                        event.event.kind,
-                        event.event.codepoint,
-                        event.combo_id,
-                        event.virtual_keyboard as u8
-                    );
-                }
-                Ui4InputEvent::Focus(event) => {
-                    crate::log_info!(
-                        target: "ui4";
-                        "ui4 dummy-consumer focus-callback owner={:?} window={} focused={} cursor={}:{}:{} kind={} combo={} vcursor={}\n",
-                        owner,
-                        event.window.raw(),
-                        event.focused as u8,
-                        event.source.controller_id,
-                        event.source.slot_id,
-                        event.source.ep_target,
-                        event.source.hid_kind,
-                        event.combo_id,
-                        event.vcursor as u8
-                    );
-                }
-            }
-        }
-    }
-    Ok((dirty_clicks, last_dirty_click))
-}
-
-fn handle_mandel_resize_callback(
-    runtime: &mut Runtime,
-    owner: WindowOwner,
-    window: WindowId,
-    width: u32,
-    height: u32,
-) -> Result<(), DummyUi4ConsumerError> {
-    if owner != runtime.mandel.owner {
-        return Ok(());
-    }
-    let Some(slot) = runtime
-        .mandel
-        .windows
-        .iter()
-        .position(|candidate| *candidate == window)
-    else {
-        return Ok(());
-    };
-    let cadence = match slot {
-        0 => FrameCadence::Immutable,
-        1 => FrameCadence::Dirty,
-        _ => FrameCadence::Streaming,
-    };
-    let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    let replacement = create_frame(FrameSpec {
-        output,
-        content: FrameContent::Image,
-        cadence,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
-        base_color: None,
-    })?;
-    let view = crate::intel::gpgpu::GpgpuRect::new(0, 0, width, height);
-    let parameter = match slot {
-        0 => STATIC_PARAMETER,
-        1 => runtime.mandel.dirty_parameter,
-        _ => runtime.mandel.stream_parameter,
-    };
-    if let Err(error) = render_mandel_frame(replacement, view, parameter, slot != 1) {
-        let _ = destroy_frame(replacement);
-        return Err(error);
-    }
-
-    let previous = runtime.mandel.frames[slot];
-    if let Err(error) = replace_window_frame(runtime.mandel.owner, window, replacement) {
-        let _ = destroy_frame(replacement);
-        return Err(error.into());
-    }
-    if let Err(error) = publish_window_frame(runtime.mandel.owner, window, DamageRect::FULL) {
-        let _ = replace_window_frame(runtime.mandel.owner, window, previous);
-        let _ = publish_window_frame(runtime.mandel.owner, window, DamageRect::FULL);
-        let _ = destroy_frame(replacement);
-        return Err(error.into());
-    }
-    runtime.mandel.frames[slot] = replacement;
-    runtime.mandel.views[slot] = view;
-    let _ = destroy_frame(previous);
-    crate::log_info!(target: "ui4";
-        "ui4 dummy-consumer mandel-resize-applied window={} slot={} extent={}x{} cadence={:?} parameter={} action=replace-frame+rerender\n",
-        window.raw(),
-        slot,
-        width,
-        height,
-        cadence,
-        parameter,
-    );
-    Ok(())
-}
-
-fn handle_mandel_pan_callback(
-    runtime: &mut Runtime,
-    owner: WindowOwner,
-    window: WindowId,
-    phase: Ui4PanPhase,
-    dx: i32,
-    dy: i32,
-) -> Result<(), DummyUi4ConsumerError> {
-    if owner != runtime.mandel.owner {
-        return Ok(());
-    }
-    let Some(slot) = runtime
-        .mandel
-        .windows
-        .iter()
-        .position(|candidate| *candidate == window)
-    else {
-        return Ok(());
-    };
-    // Only the dirty frame accepts complex-plane pan. The immutable frame is
-    // static, while the streaming frame retains the mirrored half-render.
-    if slot != 1 {
-        return Ok(());
-    }
-
-    match phase {
-        Ui4PanPhase::Begin => runtime.mandel.pending_pans[slot] = (0, 0),
-        Ui4PanPhase::Update => {
-            let pending = &mut runtime.mandel.pending_pans[slot];
-            pending.0 = pending.0.saturating_add(dx);
-            pending.1 = pending.1.saturating_add(dy);
-        }
-        Ui4PanPhase::End => {
-            let (pan_x, pan_y) = runtime.mandel.pending_pans[slot];
-            runtime.mandel.pending_pans[slot] = (0, 0);
-            if pan_x == 0 && pan_y == 0 {
-                return Ok(());
-            }
-
-            // Dragging the canvas right/down moves the sampled complex-plane
-            // interval left/up so the rendered grid follows the pointer.
-            let view = {
-                let view = &mut runtime.mandel.views[slot];
-                view.x = view.x.saturating_sub(pan_x);
-                view.y = view.y.saturating_sub(pan_y);
-                *view
-            };
-            let parameter = runtime.mandel.dirty_parameter;
-            render_and_publish_mandel(&runtime.mandel, slot, parameter)?;
-            crate::log_info!(
-                target: "ui4";
-                "ui4 dummy-consumer mandel-pan-applied window={} slot={} drag={},{} view={},{},{}x{} iterations={}\n",
-                window.raw(),
-                slot,
-                pan_x,
-                pan_y,
-                view.x,
-                view.y,
-                view.width,
-                view.height,
-                parameter
-            );
-        }
-    }
-    Ok(())
-}
-
-fn render_and_publish_mandel(
-    app: &MandelPlaceholderApp,
-    slot: usize,
-    parameter: u32,
-) -> Result<PublishedFrame, DummyUi4ConsumerError> {
-    let published = render_mandel_frame(app.frames[slot], app.views[slot], parameter, slot != 1)?;
-    publish_window_frame(app.owner, app.windows[slot], DamageRect::FULL)?;
-    Ok(published)
-}
-
-fn render_mandel_frame(
-    frame: FrameHandle,
-    view: crate::intel::gpgpu::GpgpuRect,
-    parameter: u32,
-    mirror_at_center: bool,
-) -> Result<PublishedFrame, DummyUi4ConsumerError> {
-    let lease = acquire_frame_buffer(frame)?;
-    let surface = match gpgpu_rgba_surface(lease) {
-        Ok(surface) => surface,
-        Err(error) => {
-            let _ = cancel_frame_buffer(lease);
-            return Err(error.into());
-        }
-    };
-    let rendered = if mirror_at_center {
-        crate::intel::gpgpu::mandel64_worklist_surface_full(surface, parameter)
-    } else {
-        crate::intel::gpgpu::mandel64_worklist_surface_view(surface, view, parameter)
-    }
-    .is_some_and(|result| result.ok);
-    if !rendered {
-        let _ = cancel_frame_buffer(lease);
-        return Err(DummyUi4ConsumerError::RenderFailed);
-    }
-    publish_frame_buffer(lease).map_err(Into::into)
-}
-
-fn fail_and_cleanup(runtime: Runtime, error: DummyUi4ConsumerError) {
+fn fail_and_cleanup(runtime: Runtime, error: Ui4CompositorError) {
     crate::log_error!(
         target: "ui4";
-        "ui4 dummy-consumer stopped dirty={} stream={} error={:?}\n",
-        runtime.mandel.dirty_parameter,
-        runtime.mandel.stream_parameter,
+        "ui4 compositor stopped error={:?}\n",
         error
     );
-    cleanup_runtime(runtime);
+    release_runtime_resources(&runtime);
 }
 
-fn cleanup_runtime(runtime: Runtime) {
+fn release_runtime_resources(runtime: &Runtime) {
     let _ = release_cursor(MouseControlPrincipal::KernelApp(1), runtime.heartbeat_cursor.handle);
-    cleanup_mandel_app(runtime.mandel);
-}
-
-fn cleanup_mandel_app(app: MandelPlaceholderApp) {
-    let _ = finish_window_session(app.owner, app.session);
-    destroy_frames(app.frames);
-}
-
-fn destroy_optional_frames(frames: [Option<FrameHandle>; 3]) {
-    for frame in frames.into_iter().flatten() {
-        let _ = destroy_frame(frame);
-    }
-}
-
-fn destroy_frames(frames: [FrameHandle; 3]) {
-    for frame in frames {
-        let _ = destroy_frame(frame);
-    }
 }
 
 #[cfg(test)]
