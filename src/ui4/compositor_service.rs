@@ -332,6 +332,14 @@ fn present_plane_composition(
                     source_height: view.height,
                     pitch_bytes: view.pitch as usize,
                     pixels,
+                    gpgpu_surface: crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                        view.phys,
+                        view.gpu,
+                        view.byte_len,
+                        view.width,
+                        view.height,
+                        view.pitch,
+                    ),
                     opacity: window.placement.opacity,
                     expected_rgba: None,
                 })

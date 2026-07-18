@@ -1186,6 +1186,7 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
             source_height: captured.height,
             pitch_bytes: captured.width as usize * 4,
             pixels: captured.pixels.as_slice(),
+            gpgpu_surface: None,
             opacity: u8::MAX,
             expected_rgba: if exact_color_check {
                 cell.last_submitted

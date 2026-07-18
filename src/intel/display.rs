@@ -308,6 +308,9 @@ pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) source_height: u32,
     pub(crate) pitch_bytes: usize,
     pub(crate) pixels: &'a [u8],
+    /// GPU-visible source for the UI4 compositor fast path. Legacy/readback
+    /// callers may omit this and retain the CPU fallback.
+    pub(crate) gpgpu_surface: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
     /// Additional whole-tile opacity applied after source alpha.
     pub(crate) opacity: u8,
     pub(crate) expected_rgba: Option<Rgba8>,
@@ -3913,16 +3916,23 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         effective
     };
 
-    for damage in effective.rects() {
-        fill_overlay_rect(surface, damage.x, damage.y, damage.width, damage.height, 0);
-        for tile in tiles {
-            if copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damage).is_none() {
-                return false;
+    let gpu_composed = compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
+        surface, tiles, effective,
+    );
+    if !gpu_composed {
+        for damage in effective.rects() {
+            fill_overlay_rect(surface, damage.x, damage.y, damage.width, damage.height, 0);
+            for tile in tiles {
+                if copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damage)
+                    .is_none()
+                {
+                    return false;
+                }
             }
         }
-    }
-    if !dma_flush_overlay_region(surface, effective) {
-        return false;
+        if !dma_flush_overlay_region(surface, effective) {
+            return false;
+        }
     }
 
     let needs_flip = overlay_plane_needs_rearm(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT);
@@ -3951,13 +3961,14 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         let change_bounds = change.bounding_rect().unwrap_or_default();
         let effective_bounds = effective.bounding_rect().unwrap_or_default();
         crate::log!(
-            "intel/display: rgba-tile-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} tiles={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} scanout={}x{} pitch=0x{:X}\n",
+            "intel/display: rgba-tile-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} compositor={} tiles={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} scanout={}x{} pitch=0x{:X}\n",
             seq,
             reason,
             surface.pipe.name,
             surface.plane_slot,
             surface.buffer_index,
             path,
+            if gpu_composed { "guc-simd16-sprite-quad" } else { "cpu-fallback" },
             tiles.len(),
             change.len(),
             change_bounds.width,
@@ -7142,6 +7153,131 @@ fn copy_rgba_tile_into_overlay(
         }
     }
     Some((contract_pixels, source_mismatches, storage_mismatches))
+}
+
+/// Compose UI4 frame surfaces with the existing GuC-submitted SIMD16
+/// sprite-quad worklist. The display-owned back buffer is both the render
+/// destination and the next universal-plane surface, so no CPU pixel copy or
+/// readback sits between producer completion and scanout.
+fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
+    surface: OverlaySurface,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+) -> bool {
+    let Some(destination) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        surface.phys,
+        surface.gpu,
+        surface.byte_len,
+        surface.width,
+        surface.height,
+        surface.pitch_bytes,
+    ) else {
+        return false;
+    };
+
+    let clear_rects = damage
+        .rects()
+        .iter()
+        .map(|rect| crate::intel::gpgpu::GpgpuSolidRect {
+            rect: crate::intel::gpgpu::GpgpuRect::new(
+                rect.x as i32,
+                rect.y as i32,
+                rect.width,
+                rect.height,
+            ),
+            color_rgba: 0,
+        })
+        .collect::<Vec<_>>();
+    if !crate::intel::gpgpu::fill_solid_rects_rgba8(destination, &clear_rects) {
+        return false;
+    }
+
+    let mut descriptors = Vec::with_capacity(tiles.len());
+    for tile in tiles {
+        let Some(source) = tile.gpgpu_surface else {
+            return false;
+        };
+        if source.width != tile.source_width
+            || source.height != tile.source_height
+            || source.pitch_bytes as usize != tile.pitch_bytes
+            || tile.width == 0
+            || tile.height == 0
+        {
+            return false;
+        }
+
+        let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
+        let mut tile_descriptors = Vec::new();
+        for damaged in damage.rects() {
+            let Some(draw) = intersect_composition_damage(tile_rect, *damaged)
+                .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))
+            else {
+                continue;
+            };
+            let left = draw.x as f32;
+            let top = draw.y as f32;
+            let right = draw.x.saturating_add(draw.width) as f32;
+            let bottom = draw.y.saturating_add(draw.height) as f32;
+            let u0 = draw.x.saturating_sub(tile.x) as f32 / tile.width as f32;
+            let v0 = draw.y.saturating_sub(tile.y) as f32 / tile.height as f32;
+            let u1 = draw
+                .x
+                .saturating_add(draw.width)
+                .saturating_sub(tile.x) as f32
+                / tile.width as f32;
+            let v1 = draw
+                .y
+                .saturating_add(draw.height)
+                .saturating_sub(tile.y) as f32
+                / tile.height as f32;
+            let opacity = tile.opacity;
+            tile_descriptors.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
+                c0_x: left,
+                c0_y: top,
+                c0_u: u0,
+                c0_v: v0,
+                c1_x: right,
+                c1_y: top,
+                c1_u: u1,
+                c1_v: v0,
+                c2_x: right,
+                c2_y: bottom,
+                c2_u: u1,
+                c2_v: v1,
+                c3_x: left,
+                c3_y: bottom,
+                c3_u: u0,
+                c3_v: v1,
+                color_rgba: u32::from_le_bytes([opacity, opacity, opacity, opacity]),
+                flags: crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+                    | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
+            });
+        }
+        descriptors.push((source, tile_descriptors));
+    }
+
+    let expected_descriptors = descriptors
+        .iter()
+        .map(|(_, descriptors)| descriptors.len())
+        .sum::<usize>();
+    if expected_descriptors == 0 {
+        return true;
+    }
+    let runs = descriptors
+        .iter()
+        .filter(|(_, descriptors)| !descriptors.is_empty())
+        .map(
+            |(src, descriptors)| crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
+                src: *src,
+                descs: descriptors,
+            },
+        )
+        .collect::<Vec<_>>();
+    let stats = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_stats(
+        destination,
+        &runs,
+    );
+    stats.descs == expected_descriptors && stats.submits == 1
 }
 
 fn copy_premultiplied_rgba_tile_into_overlay_clipped(
