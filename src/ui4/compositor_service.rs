@@ -11,8 +11,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use crate::r::mouse_motion_service::{
     MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
     MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
-    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlError,
-    MouseControlPrincipal, cursor_is_idle, release_cursor, request_cursor, submit_program,
+    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlPrincipal,
+    cursor_is_idle, release_cursor, request_cursor, submit_program,
 };
 
 use super::{
@@ -30,7 +30,6 @@ const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 enum Ui4CompositorError {
     Frame(FramePoolError),
     PresentFailed,
-    MouseMotion(MouseControlError),
 }
 
 impl From<FramePoolError> for Ui4CompositorError {
@@ -39,14 +38,8 @@ impl From<FramePoolError> for Ui4CompositorError {
     }
 }
 
-impl From<MouseControlError> for Ui4CompositorError {
-    fn from(error: MouseControlError) -> Self {
-        Self::MouseMotion(error)
-    }
-}
-
 struct Runtime {
-    heartbeat_cursor: MouseControlCursor,
+    heartbeat_cursor: Option<MouseControlCursor>,
     heartbeat_rest_frames: u32,
     composition: CompositionState,
     cursor_plane: CursorPlaneState,
@@ -111,29 +104,41 @@ pub(crate) async fn ui4_compositor_service_task() {
         target: "ui4";
         "ui4 compositor live application_windows=broker-owned composition_ms={} planes=primary+slot2+slot3 interaction=slot4 input=ui4-owner-queues heartbeat_vcursor_slot={}\n",
         COMPOSITION_PERIOD_MS,
-        runtime.heartbeat_cursor.slot_id
+        runtime
+            .heartbeat_cursor
+            .map(|cursor| u32::from(cursor.slot_id))
+            .unwrap_or(u32::MAX)
     );
 
     loop {
-        if runtime.heartbeat_rest_frames != 0 {
-            runtime.heartbeat_rest_frames -= 1;
-        } else {
-            let idle = match cursor_is_idle(
-                MouseControlPrincipal::KernelApp(1),
-                runtime.heartbeat_cursor.handle,
-            ) {
-                Ok(idle) => idle,
-                Err(error) => {
-                    fail_and_cleanup(runtime, error.into());
-                    return;
+        if let Some(cursor) = runtime.heartbeat_cursor {
+            if runtime.heartbeat_rest_frames != 0 {
+                runtime.heartbeat_rest_frames -= 1;
+            } else {
+                match cursor_is_idle(MouseControlPrincipal::KernelApp(1), cursor.handle) {
+                    Ok(true) => {
+                        if let Err(error) = submit_heartbeat_program(cursor) {
+                            crate::log_warn!(target: "ui4";
+                                "ui4 compositor heartbeat-vcursor disabled error={:?}\n",
+                                error,
+                            );
+                            let _ =
+                                release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
+                            runtime.heartbeat_cursor = None;
+                        } else {
+                            runtime.heartbeat_rest_frames = HEARTBEAT_REST_FRAMES;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        crate::log_warn!(target: "ui4";
+                            "ui4 compositor heartbeat-vcursor disabled error={:?}\n",
+                            error,
+                        );
+                        let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
+                        runtime.heartbeat_cursor = None;
+                    }
                 }
-            };
-            if idle {
-                if let Err(error) = submit_heartbeat_program(runtime.heartbeat_cursor) {
-                    fail_and_cleanup(runtime, error);
-                    return;
-                }
-                runtime.heartbeat_rest_frames = HEARTBEAT_REST_FRAMES;
             }
         }
 
@@ -147,7 +152,17 @@ pub(crate) async fn ui4_compositor_service_task() {
 }
 
 fn initialize() -> Result<Runtime, Ui4CompositorError> {
-    let heartbeat_cursor = request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat")?;
+    let heartbeat_cursor =
+        match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
+            Ok(cursor) => Some(cursor),
+            Err(error) => {
+                crate::log_warn!(target: "ui4";
+                    "ui4 compositor heartbeat-vcursor unavailable error={:?}\n",
+                    error,
+                );
+                None
+            }
+        };
     let mut runtime = Runtime {
         heartbeat_cursor,
         heartbeat_rest_frames: 0,
@@ -179,7 +194,9 @@ fn initialize() -> Result<Runtime, Ui4CompositorError> {
     Ok(runtime)
 }
 
-fn submit_heartbeat_program(cursor: MouseControlCursor) -> Result<(), Ui4CompositorError> {
+fn submit_heartbeat_program(
+    cursor: MouseControlCursor,
+) -> Result<(), crate::r::mouse_motion_service::MouseControlError> {
     let teleport = MouseControlCommand {
         opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
         flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
@@ -776,7 +793,9 @@ fn fail_and_cleanup(runtime: Runtime, error: Ui4CompositorError) {
 }
 
 fn release_runtime_resources(runtime: &Runtime) {
-    let _ = release_cursor(MouseControlPrincipal::KernelApp(1), runtime.heartbeat_cursor.handle);
+    if let Some(cursor) = runtime.heartbeat_cursor {
+        let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
+    }
 }
 
 #[cfg(test)]

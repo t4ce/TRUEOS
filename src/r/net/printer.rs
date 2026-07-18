@@ -92,10 +92,7 @@ pub fn default_printer() -> Option<PrinterSnapshot> {
 pub fn snapshot_text() -> String {
     let printers = PRINTERS.lock();
     let mut out = String::new();
-    let _ = writeln!(out, "trueos printer snapshot v1");
-    let _ = writeln!(out, "generated_at_ms={}", monotonic_ms());
-    let _ = writeln!(out, "printer_count={}", printers.len());
-    let _ = writeln!(out, "printer\tname\turi\tsecure\tmake_and_model\tformats\tlast_seen_ms");
+    write_snapshot_header(&mut out, monotonic_ms(), printers.len());
     for printer in printers.iter() {
         let model = printer.make_and_model.as_deref().unwrap_or("");
         let formats = printer.formats.join(",");
@@ -111,6 +108,15 @@ pub fn snapshot_text() -> String {
         );
     }
     out
+}
+
+fn write_snapshot_header(out: &mut String, generated_at_ms: u64, printer_count: usize) {
+    let _ = writeln!(out, "trueos printer snapshot v1");
+    let _ = writeln!(out, "generated_at_ms={generated_at_ms}");
+    let _ = writeln!(out, "discovery_interval_ms={DISCOVERY_INTERVAL_MS}");
+    let _ = writeln!(out, "stale_after_ms={PRINTER_STALE_AFTER_MS}");
+    let _ = writeln!(out, "printer_count={printer_count}");
+    let _ = writeln!(out, "printer\tname\turi\tsecure\tmake_and_model\tformats\tlast_seen_ms");
 }
 
 fn sanitize_field(value: &str) -> String {
@@ -668,5 +674,15 @@ mod tests {
     #[test]
     fn snapshot_fields_are_single_line() {
         assert_eq!(sanitize_field("office\tprinter\n"), "office printer ");
+    }
+
+    #[test]
+    fn snapshot_exposes_discovery_freshness_contract() {
+        let mut text = String::new();
+        write_snapshot_header(&mut text, 31_000, 2);
+        assert!(text.contains("generated_at_ms=31000\n"));
+        assert!(text.contains("discovery_interval_ms=15000\n"));
+        assert!(text.contains("stale_after_ms=45000\n"));
+        assert!(text.contains("printer_count=2\n"));
     }
 }

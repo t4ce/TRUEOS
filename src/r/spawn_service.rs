@@ -425,7 +425,7 @@ fn spawn_draw3d_ui4_render(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+    spawn_on_worker(spawner, |_worker_spawner| {
         crate::r::gridpaper_service::gridpaper_service_task()
     })
 }
@@ -1294,8 +1294,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled_gated(
         "gridpaper-service",
-        0,
-        ap1_ui_core_ready_gate,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        ui4_background_consumer_gate,
         &GRIDPAPER_SERVICE_STARTED,
         spawn_gridpaper_service,
     ),

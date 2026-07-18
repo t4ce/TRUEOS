@@ -3738,6 +3738,30 @@ pub(crate) fn copy_rect_rgba8_stats(
     submit_copy_rect_spans_with_stats(src, dst, params, flavor)
 }
 
+/// Copy one rectangle and report success only when every lowered span retired.
+/// This is preferable to treating a partially completed fallback copy as a
+/// publishable frame.
+pub(crate) fn copy_rect_rgba8_complete(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+) -> bool {
+    let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
+        return false;
+    };
+    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
+        return false;
+    };
+    let Some(expected_spans) =
+        copy_rect_span_count(params, flavor.span_pixels, flavor.rows_per_walker)
+    else {
+        return false;
+    };
+    let stats = submit_copy_rect_spans_with_stats(src, dst, params, flavor);
+    stats.spans == expected_spans
+}
+
 /// Resolve one gfx12.5 Tile64 R8G8B8A8 4x-MSAA surface into linear RGBA8.
 ///
 /// This is deliberately a single two-dimensional SIMD16 dispatch: resident
@@ -4172,6 +4196,48 @@ pub(crate) fn fill_rect_worklist_rgba8(
         color_rgba,
     };
     fill_rect_worklist_rgba8_stats(dst, core::slice::from_ref(&desc)).descs
+}
+
+/// Fill a small set of solid rectangles in one worklist submission.
+///
+/// This is the retained-UI overlay path: callers can add cursors and other
+/// simple decorations to a GPU-owned frame without mapping or touching its
+/// pixels on the CPU. Rectangles are clipped to `dst`; a fully clipped set is
+/// a successful no-op.
+pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolidRect]) -> bool {
+    if !dst.is_valid() {
+        return false;
+    }
+    if rects.is_empty() {
+        return true;
+    }
+    let mut descs = Vec::with_capacity(rects.len().min(RECT_WORKLIST_MAX_DESCS));
+    for solid in rects {
+        let Some(rect) = clip_gpgpu_rect_to_surface(solid.rect, dst.width, dst.height) else {
+            continue;
+        };
+        let Ok(dst_x) = i16::try_from(rect.x) else {
+            return false;
+        };
+        let Ok(dst_y) = i16::try_from(rect.y) else {
+            return false;
+        };
+        if rect.width > u16::MAX as u32 || rect.height > u16::MAX as u32 {
+            return false;
+        }
+        descs.push(FillRectWorklistRgba8Desc {
+            dst_xy: pack_i16_pair_u32(dst_x, dst_y),
+            size: pack_u16_pair_u32(rect.width as u16, rect.height as u16),
+            color_rgba: solid.color_rgba,
+        });
+    }
+    if descs.is_empty() {
+        return true;
+    }
+    let expected_descs = descs.len();
+    let expected_submits = expected_descs.div_ceil(RECT_WORKLIST_MAX_DESCS);
+    let stats = fill_rect_worklist_rgba8_stats(dst, descs.as_slice());
+    stats.descs == expected_descs && stats.submits == expected_submits
 }
 
 pub(crate) fn gradient_rect_worklist_rgba8_stats(

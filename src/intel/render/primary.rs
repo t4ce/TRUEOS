@@ -313,6 +313,12 @@ pub(crate) struct ResidentSceneFrameResult {
 }
 
 #[derive(Copy, Clone)]
+enum ResidentSceneFrameOutput {
+    Readback,
+    GpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+}
+
+#[derive(Copy, Clone)]
 struct ResidentSceneDepthAllocation {
     storage_phys: u64,
     storage_virt: *mut u8,
@@ -609,6 +615,7 @@ pub(crate) fn capture_resident_triangle_scene_frame(
         ResidentSceneRasterQuality::SingleSample,
         width,
         height,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -631,6 +638,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth(
         ResidentSceneRasterQuality::SingleSample,
         width,
         height,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -651,6 +659,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_with_opaque_depth_msaa4(
         ResidentSceneRasterQuality::Multisample4x,
         width,
         height,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -676,6 +685,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied(
         ResidentSceneRasterQuality::SingleSample,
         width,
         height,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -701,6 +711,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent(
         ResidentSceneRasterQuality::SingleSample,
         width as usize,
         height as usize,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -722,6 +733,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
         ResidentSceneRasterQuality::SingleSample,
         width as usize,
         height as usize,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -744,6 +756,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa
         ResidentSceneRasterQuality::Multisample4x,
         width as usize,
         height as usize,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -768,6 +781,34 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa
         ResidentSceneRasterQuality::Multisample4x,
         width as usize,
         height as usize,
+        ResidentSceneFrameOutput::Readback,
+    )
+}
+
+/// Render a retained 4x scene directly into a leased UI4 RGBA surface.
+///
+/// The MSAA resolve and analytical coverage passes write the producer's back
+/// buffer themselves. No full-frame CPU readback or staging allocation is
+/// performed. On hardware without the 4x path, the ordinary linear scratch
+/// target is copied as a compatibility fallback.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    coverage_draws: &[ResidentSceneCoverageDraw],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        coverage_draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::Multisample4x,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::GpuSurface(destination),
     )
 }
 
@@ -789,6 +830,7 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
         ResidentSceneRasterQuality::Multisample4x,
         width as usize,
         height as usize,
+        ResidentSceneFrameOutput::Readback,
     )
 }
 
@@ -802,6 +844,7 @@ fn submit_resident_triangle_scene_capture(
     raster_quality: ResidentSceneRasterQuality,
     target_width: usize,
     target_height: usize,
+    frame_output: ResidentSceneFrameOutput,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     const SUBMIT_NAME: &str = "draw3d-scene";
     if target_width == 0
@@ -810,6 +853,13 @@ fn submit_resident_triangle_scene_capture(
         || target_height > DRAW3D_SCENE_TARGET_HEIGHT
     {
         return Err("draw3d-capture-shape");
+    }
+    if let ResidentSceneFrameOutput::GpuSurface(destination) = frame_output
+        && (!destination.is_valid()
+            || destination.width as usize != target_width
+            || destination.height as usize != target_height)
+    {
+        return Err("resident-scene-output-surface-shape");
     }
     for (index, draw) in coverage_draws.iter().enumerate() {
         if !draw.mask.is_valid() {
@@ -1058,7 +1108,7 @@ fn submit_resident_triangle_scene_capture(
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let geometry_complete = completed_draws == draws.len();
-        let output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        let scratch_output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
             warm.streamout_phys,
             GPU_VA_STREAMOUT_BASE,
             warm.streamout_len,
@@ -1067,6 +1117,13 @@ fn submit_resident_triangle_scene_capture(
             target_pitch as u32,
         )
         .ok_or("resident-scene-resolve-surface")?;
+        // On the native 4x path, resolve directly into the UI4 producer back
+        // buffer. The scratch surface remains the compatibility target for
+        // single-sample hardware and for CPU readback consumers.
+        let output = match (frame_output, msaa_color) {
+            (ResidentSceneFrameOutput::GpuSurface(destination), Some(_)) => destination,
+            _ => scratch_output,
+        };
         let resolved = if geometry_complete {
             if let Some(target) = msaa_color {
                 crate::intel::gpgpu::resolve_tile64_msaa4_rgba8(
@@ -1100,11 +1157,27 @@ fn submit_resident_triangle_scene_capture(
             }
         }
         completed_draws = completed_draws.saturating_add(completed_coverage_draws);
-        let frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
-        crate::intel::dma_flush(warm.streamout_virt, target_bytes);
+        let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
+        if frame_complete
+            && let ResidentSceneFrameOutput::GpuSurface(destination) = frame_output
+            && output.gpu != destination.gpu
+        {
+            frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete(
+                output,
+                crate::intel::gpgpu::GpgpuRect::new(
+                    0,
+                    0,
+                    target_width as u32,
+                    target_height as u32,
+                ),
+                destination,
+                crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+            );
+        }
         let mut changed_pixels = 0usize;
         let mut rgba = None;
-        if frame_complete {
+        if frame_complete && matches!(frame_output, ResidentSceneFrameOutput::Readback) {
+            crate::intel::dma_flush(warm.streamout_virt, target_bytes);
             let pixels = unsafe {
                 core::slice::from_raw_parts(
                     warm.streamout_virt as *const u32,
@@ -1132,6 +1205,11 @@ fn submit_resident_triangle_scene_capture(
                 visible_rgba.extend_from_slice(&[r, g, b, a]);
             }
             rgba = Some(visible_rgba);
+        } else if frame_complete {
+            // Direct output deliberately avoids the CPU changed-pixel scan.
+            // The producer publishes full damage, so report the number of
+            // pixels written rather than pretending that no frame changed.
+            changed_pixels = target_width.saturating_mul(target_height);
         }
         Ok(ResidentSceneFrameResult {
             completed_draws,

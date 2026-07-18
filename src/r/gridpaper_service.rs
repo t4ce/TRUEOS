@@ -1553,20 +1553,52 @@ fn publish_page(
     text_animations: &[Option<GpuFontColorProgram>; TEXT_ANIMATION_COLOR_SLOTS],
     animation_elapsed_ms: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, ServiceError> {
+    let presentation = surface
+        .presentation
+        .ok_or(ServiceError::Window(crate::ui4::WindowBrokerError::SessionClosed))?;
+    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
+    let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(error) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(error.into());
+        }
+    };
+    if destination.width != surface.width || destination.height != surface.height {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(ServiceError::InvalidFrame);
+    }
     let viewport_translation_px = [
         page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
         page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
     ];
-    let result = capture_resident_page_frame(
+    let result = match capture_resident_page_frame(
         page,
         text_animations,
         animation_elapsed_ms,
         viewport_translation_px,
         surface.width,
         surface.height,
-    )
-    .map_err(ServiceError::Render)?;
-    publish_pixels(surface, page, selection, input_field, &result)?;
+        Some(destination),
+    ) {
+        Ok(result) => result,
+        Err(reason) => {
+            let _ = crate::ui4::cancel_frame_buffer(lease);
+            return Err(ServiceError::Render(reason));
+        }
+    };
+    if let Some(selection) = selection
+        && let Some(rects) = grid_cursor_rects(surface, page, selection, input_field)
+        && !crate::intel::gpgpu::fill_solid_rects_rgba8(destination, &rects)
+    {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(ServiceError::Render("grid-cursor-overlay"));
+    }
+    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
+        let _ = crate::ui4::cancel_frame_buffer(lease);
+        return Err(error.into());
+    }
+    crate::ui4::publish_window_frame(UI4_OWNER, presentation.window, crate::ui4::DamageRect::FULL)?;
     Ok(result)
 }
 
@@ -1577,6 +1609,7 @@ fn capture_resident_page_frame(
     viewport_translation_px: [f32; 2],
     width: u32,
     height: u32,
+    destination: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
     let triangle_draws = page
         .layers
@@ -1609,16 +1642,29 @@ fn capture_resident_page_frame(
             })
         })
         .collect::<Vec<_>>();
-    let captured = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
-        &triangle_draws,
-        &coverage_draws,
-        Some([0, 0, 0, 0]),
-        width,
-        height,
-        false,
-    );
+    let captured = if let Some(destination) = destination {
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+            &triangle_draws,
+            &coverage_draws,
+            Some([0, 0, 0, 0]),
+            destination,
+            false,
+        )
+    } else {
+        crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
+            &triangle_draws,
+            &coverage_draws,
+            Some([0, 0, 0, 0]),
+            width,
+            height,
+            false,
+        )
+    };
     match captured {
-        Ok(result) if result.completed_draws == result.requested_draws && result.rgba.is_some() => {
+        Ok(result)
+            if result.completed_draws == result.requested_draws
+                && (destination.is_some() || result.rgba.is_some()) =>
+        {
             Ok(result)
         }
         Ok(_) if coverage_draws.is_empty() => Err("incomplete-frame"),
@@ -1646,14 +1692,26 @@ fn capture_resident_page_frame(
                     viewport_translation_px,
                 })
                 .collect::<Vec<_>>();
-            let fallback = crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
-                &fallback_draws,
-                Some([0, 0, 0, 0]),
-                width,
-                height,
-                false,
-            )?;
-            if fallback.completed_draws != fallback.requested_draws || fallback.rgba.is_none() {
+            let fallback = if let Some(destination) = destination {
+                crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+                    &fallback_draws,
+                    &[],
+                    Some([0, 0, 0, 0]),
+                    destination,
+                    false,
+                )
+            } else {
+                crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
+                    &fallback_draws,
+                    Some([0, 0, 0, 0]),
+                    width,
+                    height,
+                    false,
+                )
+            }?;
+            if fallback.completed_draws != fallback.requested_draws
+                || (destination.is_none() && fallback.rgba.is_none())
+            {
                 return Err("incomplete-fallback-frame");
             }
             Ok(fallback)
@@ -1707,6 +1765,7 @@ fn render_print_page(
             [0.0, 0.0],
             PRINT_CAPTURE_WIDTH,
             PRINT_CAPTURE_HEIGHT,
+            None,
         )?;
         let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
         Ok(PrintRasterFrame {
@@ -1737,66 +1796,12 @@ fn sampled_text_colors(
     colors
 }
 
-fn publish_pixels(
-    surface: &GridPaperSurface,
-    page: &ResidentPage,
-    selection: Option<GridCellSelection>,
-    input_field: CellInputField,
-    result: &crate::intel::render::ResidentSceneFrameResult,
-) -> Result<(), ServiceError> {
-    let presentation = surface
-        .presentation
-        .ok_or(ServiceError::Window(crate::ui4::WindowBrokerError::SessionClosed))?;
-    if result.width != surface.width || result.height != surface.height {
-        return Err(ServiceError::InvalidFrame);
-    }
-    let source = result.rgba.as_deref().ok_or(ServiceError::InvalidFrame)?;
-    let source_pitch = surface.width as usize * 4;
-    if source.len() < source_pitch * surface.height as usize {
-        return Err(ServiceError::InvalidFrame);
-    }
-    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
-    let view = match crate::ui4::writable_rgba_view(lease) {
-        Ok(view) => view,
-        Err(error) => {
-            let _ = crate::ui4::cancel_frame_buffer(lease);
-            return Err(error.into());
-        }
-    };
-    if view.width != surface.width
-        || view.height != surface.height
-        || view.pitch < surface.width * 4
-    {
-        let _ = crate::ui4::cancel_frame_buffer(lease);
-        return Err(ServiceError::InvalidFrame);
-    }
-    let destination = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
-    for row in 0..surface.height as usize {
-        let source_start = row * source_pitch;
-        let destination_start = row * view.pitch as usize;
-        destination[destination_start..destination_start + source_pitch]
-            .copy_from_slice(&source[source_start..source_start + source_pitch]);
-    }
-    if let Some(selection) = selection {
-        paint_grid_cursor(destination, view.pitch, surface, page, selection, input_field);
-    }
-    crate::intel::dma_flush(view.virt, view.byte_len);
-    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
-        let _ = crate::ui4::cancel_frame_buffer(lease);
-        return Err(error.into());
-    }
-    crate::ui4::publish_window_frame(UI4_OWNER, presentation.window, crate::ui4::DamageRect::FULL)?;
-    Ok(())
-}
-
-fn paint_grid_cursor(
-    destination: &mut [u8],
-    pitch: u32,
+fn grid_cursor_rects(
     surface: &GridPaperSurface,
     page: &ResidentPage,
     selection: GridCellSelection,
     input_field: CellInputField,
-) {
+) -> Option<[crate::intel::gpgpu::GpgpuSolidRect; 4]> {
     let scale = f32::from(page.scale_percent) / 100.0;
     let scene_units_per_mm_x = SCENE_WIDTH as f32 / SURFACE_WIDTH_MM as f32;
     let scene_units_per_mm_y = SCENE_HEIGHT as f32 / SURFACE_HEIGHT_MM as f32;
@@ -1823,27 +1828,41 @@ fn paint_grid_cursor(
     let clipped_right = right.clamp(0, surface.width as i32) as u32;
     let clipped_bottom = bottom.clamp(0, surface.height as i32) as u32;
     if clipped_left >= clipped_right || clipped_top >= clipped_bottom {
-        return;
+        return None;
     }
     let stroke = GRID_CURSOR_STROKE_PX
         .min(clipped_right - clipped_left)
         .min(clipped_bottom - clipped_top);
-    let pitch = pitch as usize;
-    for y in clipped_top..clipped_bottom {
-        for x in clipped_left..clipped_right {
-            if x - clipped_left >= stroke
-                && clipped_right - x > stroke
-                && y - clipped_top >= stroke
-                && clipped_bottom - y > stroke
-            {
-                continue;
-            }
-            let offset = y as usize * pitch + x as usize * 4;
-            if let Some(pixel) = destination.get_mut(offset..offset + 4) {
-                pixel.copy_from_slice(&GRID_CURSOR_RGBA);
-            }
-        }
-    }
+    let width = clipped_right - clipped_left;
+    let height = clipped_bottom - clipped_top;
+    let color_rgba = u32::from_le_bytes(GRID_CURSOR_RGBA);
+    let solid = |rect| crate::intel::gpgpu::GpgpuSolidRect { rect, color_rgba };
+    Some([
+        solid(crate::intel::gpgpu::GpgpuRect::new(
+            clipped_left as i32,
+            clipped_top as i32,
+            width,
+            stroke,
+        )),
+        solid(crate::intel::gpgpu::GpgpuRect::new(
+            clipped_left as i32,
+            clipped_bottom.saturating_sub(stroke) as i32,
+            width,
+            stroke,
+        )),
+        solid(crate::intel::gpgpu::GpgpuRect::new(
+            clipped_left as i32,
+            clipped_top as i32,
+            stroke,
+            height,
+        )),
+        solid(crate::intel::gpgpu::GpgpuRect::new(
+            clipped_right.saturating_sub(stroke) as i32,
+            clipped_top as i32,
+            stroke,
+            height,
+        )),
+    ])
 }
 
 struct GridPaperRuntime {
@@ -2392,9 +2411,10 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     }
 }
 
-/// Persistent N-GridPaper scene consumer. Every indexed producer owns an
+/// Persistent N-GridPaper scene producer. Every indexed producer owns an
 /// independent snapshot, animation clock, native-DPI UI4 frame, input state,
-/// and resident GPU scene. Pan remains a hot viewport transform per instance.
+/// and resident GPU scene. The service runs away from AP1 so a long scene
+/// render cannot stall input or the authoritative compositor.
 #[embassy_executor::task]
 pub async fn gridpaper_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
@@ -2425,7 +2445,8 @@ pub async fn gridpaper_service_task() {
     let primary = &runtimes[PRIMARY_INSTANCE_ID as usize].surface;
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_path=kernel-font-stamp-default/skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over coverage_ppem=4..2048 optical_bias_px=0.04..0.22 mask_va=unique-resident owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
+        "gridpaper: embassy service ready carrier=background-ap2+ current_slot={} instances={} page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_instance=2 scene={}x{} ui4={}x{} extent_source={} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} ruler_gutter_mm={} target_cell_mm={} font_px_at_100=24 font_path=kernel-font-stamp-default/skrifa-outline->gpgpu-winding-distance-r8->post-resolve-source-over coverage_ppem=4..2048 optical_bias_px=0.04..0.22 mask_va=unique-resident owner=kernel-app-4 input=per-window-left-click+focused-keyboard+middle-pan pan_mode=hot-viewport-transform persistent_gpu_scenes={} presentation=vm-owner-gated initial_presentation=detached native_instance={} native_default_scale={}\n",
+        crate::percpu::current_slot(),
         GRIDPAPER_INSTANCE_CAPACITY,
         PAGE_BYTES,
         COLUMNS * ROWS,
