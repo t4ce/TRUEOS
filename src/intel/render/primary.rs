@@ -284,6 +284,71 @@ pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) viewport_translation_px: [f32; 2],
 }
 
+#[derive(Copy, Clone)]
+struct ResidentSceneBatchState {
+    phys: u64,
+    virt: *mut u8,
+}
+
+unsafe impl Send for ResidentSceneBatchState {}
+
+static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
+static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn resident_scene_batch_state(
+    warm: RenderWarmState,
+) -> Result<ResidentSceneBatchState, &'static str> {
+    let mut resident = RESIDENT_SCENE_BATCH_STATE.lock();
+    if let Some(state) = *resident {
+        return Ok(state);
+    }
+    let Some((phys, virt)) = crate::dma::alloc(DRAW3D_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
+    else {
+        return Err("scene-frame-state-alloc");
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, DRAW3D_SCENE_STATE_BYTES);
+    }
+    crate::intel::dma_flush(virt, DRAW3D_SCENE_STATE_BYTES);
+    if !map_render_ppgtt_range(GPU_VA_DRAW3D_SCENE_STATE_BASE, phys, DRAW3D_SCENE_STATE_BYTES) {
+        crate::dma::dealloc(virt, DRAW3D_SCENE_STATE_BYTES);
+        return Err("scene-frame-state-map");
+    }
+    let state = ResidentSceneBatchState { phys, virt };
+    *resident = Some(state);
+    crate::log_info!(
+        target: "render";
+        "draw3d: resident scene batch state online gpu=0x{:X} bytes=0x{:X} slots={} warm_batch_bytes=0x{:X}\n",
+        GPU_VA_DRAW3D_SCENE_STATE_BASE,
+        DRAW3D_SCENE_STATE_BYTES,
+        DRAW3D_SCENE_MAX_DRAWS + 1,
+        warm.batch_len,
+    );
+    Ok(state)
+}
+
+fn resident_scene_state_warm(
+    state: ResidentSceneBatchState,
+    warm: RenderWarmState,
+    slot: usize,
+) -> Result<(RenderWarmState, u64), &'static str> {
+    if slot > DRAW3D_SCENE_MAX_DRAWS {
+        return Err("scene-frame-state-slot");
+    }
+    let offset = slot
+        .checked_mul(DRAW3D_SCENE_STATE_SLOT_BYTES)
+        .ok_or("scene-frame-state-slot")?;
+    Ok((
+        RenderWarmState {
+            draw_state_phys: state.phys + offset as u64,
+            draw_state_virt: unsafe { state.virt.add(offset) },
+            draw_state_len: DRAW3D_SCENE_STATE_SLOT_BYTES,
+            ..warm
+        },
+        GPU_VA_DRAW3D_SCENE_STATE_BASE + offset as u64,
+    ))
+}
+
 /// One persistent R8 analytical font layer composited after triangle resolve.
 /// The scene renderer submits the complete slice as one GPGPU batch.
 pub(crate) type ResidentSceneCoverageDraw = crate::intel::gpgpu::GpgpuGlyphMaskLayer;
@@ -316,6 +381,7 @@ pub(crate) struct ResidentSceneFrameResult {
 enum ResidentSceneFrameOutput {
     Readback,
     GpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+    DirectGpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
 }
 
 #[derive(Copy, Clone)]
@@ -330,6 +396,7 @@ unsafe impl Send for ResidentSceneDepthAllocation {}
 static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_DIRECT_UI4_TARGET: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -337,6 +404,42 @@ static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 #[derive(Copy, Clone)]
 struct ResidentSceneMsaaColorTarget {
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+}
+
+fn prepare_resident_scene_direct_ui4_target(
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<u64, &'static str> {
+    if !destination.is_valid() || destination.bytes > 64 * 1024 * 1024 {
+        return Err("resident-scene-direct-ui4-shape");
+    }
+    let mut mapping = RESIDENT_SCENE_DIRECT_UI4_TARGET.lock();
+    if *mapping == Some((destination.phys, destination.bytes)) {
+        return Ok(GPU_VA_DRAW3D_UI4_FRAME_BASE);
+    }
+    let previous = *mapping;
+    if let Some((_, bytes)) = previous
+        && !unmap_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, bytes)
+    {
+        return Err("resident-scene-direct-ui4-unmap");
+    }
+    if !map_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, destination.phys, destination.bytes) {
+        if let Some((phys, bytes)) = previous {
+            let _ = map_render_ppgtt_range(GPU_VA_DRAW3D_UI4_FRAME_BASE, phys, bytes);
+        }
+        return Err("resident-scene-direct-ui4-map");
+    }
+    *mapping = Some((destination.phys, destination.bytes));
+    crate::log_info!(
+        target: "render";
+        "draw3d: direct UI4 render target mapped render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} frame_addresses=1\n",
+        GPU_VA_DRAW3D_UI4_FRAME_BASE,
+        destination.phys,
+        destination.bytes,
+        destination.width,
+        destination.height,
+        destination.pitch_bytes,
+    );
+    Ok(GPU_VA_DRAW3D_UI4_FRAME_BASE)
 }
 
 fn prepare_resident_scene_msaa_allocation(
@@ -835,11 +938,10 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
     )
 }
 
-/// Render a depth-tested retained scene through the linear single-sample
-/// target, then copy the complete frame into a leased UI4 RGBA surface on the
-/// GPU. This is the correctness fallback while the gfx12.5 Tile64 4x resolve
-/// is not trusted for live presentation; no framebuffer pixels cross the CPU.
-pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_linear_to_surface(
+/// Render a depth-tested retained scene directly into the one permanent UI4
+/// linear surface used by the compositor-rewire checkpoint. There is no
+/// scratch target, resolve, or post-render compute copy on this path.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -855,7 +957,7 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
         ResidentSceneRasterQuality::SingleSample,
         destination.width as usize,
         destination.height as usize,
-        ResidentSceneFrameOutput::GpuSurface(destination),
+        ResidentSceneFrameOutput::DirectGpuSurface(destination),
     )
 }
 
@@ -881,6 +983,250 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_with
     )
 }
 
+fn stage_resident_scene_secondary(
+    warm: RenderWarmState,
+    state_warm: RenderWarmState,
+    state_gpu: u64,
+    mut draw: TriangleDrawPrep,
+    blend_mode: TriangleBlendProbeMode,
+    depth_config: Option<TriangleDepthConfig>,
+    rgba: [u8; 4],
+    viewport_translation_px: [f32; 2],
+    secondary_index: usize,
+) -> Result<usize, &'static str> {
+    draw.state_gpu_addr = state_gpu;
+    let pipeline = crate::intel::shader::triangle_pipeline();
+    let shader_layout =
+        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
+    let probe_state = write_triangle_probe_state(
+        state_warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        BackendProbeMode::MesaLike,
+        viewport_translation_px,
+    )?;
+    let batch_offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+        .checked_add(
+            secondary_index
+                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .ok_or("scene-frame-batch-slot")?,
+        )
+        .ok_or("scene-frame-batch-slot")?;
+    let batch_end = batch_offset
+        .checked_add(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+        .ok_or("scene-frame-batch-slot")?;
+    if batch_end > warm.batch_len {
+        return Err("scene-frame-batch-capacity");
+    }
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt.add(batch_offset) as *mut u32,
+            DRAW3D_SCENE_SECONDARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    let bytes = encode_triangle_probe_batch(
+        "draw3d-scene",
+        batch,
+        state_warm,
+        draw,
+        blend_mode,
+        depth_config,
+        pipeline,
+        shader_layout,
+        probe_state,
+        GPU_VA_RESULT_BASE,
+        RCS_EXEC_RESULT_DRAW_PRE3D,
+        RCS_EXEC_RESULT_DRAW_POST3D,
+        RCS_EXEC_RESULT_DONE,
+        TriangleBatchMode::Draw,
+        StreamoutProofExperiment::HeaderAndPositionSlots01,
+        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        viewport_translation_px,
+        BackendProbeMode::MesaLike,
+        PostDrawSyncVariant::HeavyAll,
+    )?;
+    crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
+    Ok(bytes)
+}
+
+fn encode_resident_scene_primary_batch(
+    warm: RenderWarmState,
+    secondary_count: usize,
+) -> Result<usize, &'static str> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            warm.batch_virt as *mut u32,
+            DRAW3D_SCENE_PRIMARY_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    let mut cursor = 0usize;
+    let mut push = |value: u32| -> Result<(), &'static str> {
+        let Some(slot) = batch.get_mut(cursor) else {
+            return Err("scene-frame-primary-batch-exhausted");
+        };
+        *slot = value;
+        cursor += 1;
+        Ok(())
+    };
+    for secondary_index in 0..secondary_count {
+        let offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+            .checked_add(
+                secondary_index
+                    .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                    .ok_or("scene-frame-batch-slot")?,
+            )
+            .ok_or("scene-frame-batch-slot")?;
+        let gpu = GPU_VA_BATCH_BASE + offset as u64;
+        push(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GTT | MI_BATCH_2ND_LEVEL)?;
+        push(gpu as u32)?;
+        push((gpu >> 32) as u32)?;
+    }
+    let completion_gpu =
+        GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
+    push(MI_STORE_DATA_IMM_GGTT_DW1)?;
+    push(completion_gpu as u32)?;
+    push((completion_gpu >> 32) as u32)?;
+    push(RCS_EXEC_RESULT_SCENE_FRAME_DONE)?;
+    push(MI_BATCH_BUFFER_END)?;
+    push(MI_NOOP)?;
+    Ok(cursor * core::mem::size_of::<u32>())
+}
+
+fn submit_resident_scene_geometry_batched(
+    dev: crate::intel::Dev,
+    warm: RenderWarmState,
+    draws: &[ResidentSceneDraw<'_>],
+    clear: [u8; 4],
+    opaque_depth_enabled: bool,
+    depth_config: Option<TriangleDepthConfig>,
+    render_target_gpu: u64,
+    render_target_pitch: usize,
+    target_width: usize,
+    target_height: usize,
+) -> Result<bool, &'static str> {
+    const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
+    if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
+        return Err("scene-frame-draw-limit");
+    }
+    let max_secondary_count = draws.len().saturating_add(1);
+    let used_batch_bytes = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
+        .checked_add(
+            max_secondary_count
+                .checked_mul(DRAW3D_SCENE_SECONDARY_BATCH_BYTES)
+                .ok_or("scene-frame-batch-capacity")?,
+        )
+        .ok_or("scene-frame-batch-capacity")?;
+    if used_batch_bytes > warm.batch_len {
+        return Err("scene-frame-batch-capacity");
+    }
+    unsafe {
+        core::ptr::write_bytes(warm.batch_virt, 0, used_batch_bytes);
+        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
+        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
+    }
+    seed_result_debug_slots(warm);
+    crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    let state = resident_scene_batch_state(warm)?;
+
+    let mut clear_depth = depth_config;
+    if let Some(depth) = clear_depth.as_mut() {
+        depth.write_enabled = true;
+        depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+    }
+    let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
+    let clear_draw = prepare_triangle_draw_resources_for_vertex_slice(
+        clear_warm,
+        render_target_gpu,
+        render_target_pitch,
+        target_width,
+        target_height,
+        "draw3d-fullscreen-clear",
+        &CLEAR_TRIANGLE,
+    )
+    .ok_or("target-clear-resources")?;
+    stage_resident_scene_secondary(
+        warm,
+        clear_warm,
+        clear_state_gpu,
+        clear_draw,
+        TriangleBlendProbeMode::MesaZeroedState,
+        clear_depth,
+        clear,
+        [0.0, 0.0],
+        0,
+    )?;
+
+    let mut secondary_count = 1usize;
+    for scene_draw in draws {
+        if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
+            continue;
+        }
+        let (blend_mode, draw_depth) = if opaque_depth_enabled {
+            let write_enabled = scene_draw.rgba[3] == u8::MAX;
+            let mut depth = depth_config.ok_or("scene-frame-depth")?;
+            depth.write_enabled = write_enabled;
+            (
+                if write_enabled {
+                    TriangleBlendProbeMode::MesaZeroedState
+                } else {
+                    TriangleBlendProbeMode::StraightAlpha
+                },
+                Some(depth),
+            )
+        } else {
+            (TriangleBlendProbeMode::StraightAlpha, None)
+        };
+        let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_count)?;
+        let draw = prepare_triangle_draw_resources_for_resident_font_mesh(
+            state_warm,
+            render_target_gpu,
+            render_target_pitch,
+            target_width,
+            target_height,
+            scene_draw.mesh,
+        )
+        .ok_or("scene-frame-resident-draw")?;
+        stage_resident_scene_secondary(
+            warm,
+            state_warm,
+            state_gpu,
+            draw,
+            blend_mode,
+            draw_depth,
+            scene_draw.rgba,
+            scene_draw.viewport_translation_px,
+            secondary_count,
+        )?;
+        secondary_count += 1;
+    }
+
+    let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
+    crate::intel::dma_flush(warm.batch_virt, primary_bytes);
+    crate::intel::dma_flush(warm.batch_virt, used_batch_bytes);
+    if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(
+            target: "render";
+            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{}\n",
+            draws.len(),
+            secondary_count,
+            target_width,
+            target_height,
+        );
+    }
+    let completed = submit_warm_render_batch(
+        dev,
+        warm,
+        RCS_EXEC_RESULT_SCENE_FRAME_DONE,
+        RESULT_SLOT_SCENE_FRAME_DWORD,
+        "draw3d-scene",
+    );
+    if !completed {
+        recover_render_engine_after_nonretired_submit(dev, warm, "draw3d-scene");
+    }
+    Ok(completed)
+}
+
 fn submit_resident_triangle_scene_capture(
     draws: &[ResidentSceneDraw<'_>],
     coverage_draws: &[ResidentSceneCoverageDraw],
@@ -893,7 +1239,6 @@ fn submit_resident_triangle_scene_capture(
     target_height: usize,
     frame_output: ResidentSceneFrameOutput,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    const SUBMIT_NAME: &str = "draw3d-scene";
     if target_width == 0
         || target_height == 0
         || target_width > DRAW3D_SCENE_TARGET_WIDTH
@@ -901,7 +1246,8 @@ fn submit_resident_triangle_scene_capture(
     {
         return Err("draw3d-capture-shape");
     }
-    if let ResidentSceneFrameOutput::GpuSurface(destination) = frame_output
+    if let ResidentSceneFrameOutput::GpuSurface(destination)
+    | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
         && (!destination.is_valid()
             || destination.width as usize != target_width
             || destination.height as usize != target_height)
@@ -1002,8 +1348,17 @@ fn submit_resident_triangle_scene_capture(
         } else {
             None
         };
+        let direct_output = match frame_output {
+            ResidentSceneFrameOutput::DirectGpuSurface(destination) => Some(destination),
+            _ => None,
+        };
         let (render_target_gpu, render_target_pitch) = if let Some(target) = msaa_color {
             (target.surface.gpu, target.surface.pitch_bytes as usize)
+        } else if let Some(destination) = direct_output {
+            (
+                prepare_resident_scene_direct_ui4_target(destination)?,
+                destination.pitch_bytes as usize,
+            )
         } else {
             (GPU_VA_STREAMOUT_BASE, target_pitch)
         };
@@ -1059,102 +1414,28 @@ fn submit_resident_triangle_scene_capture(
                 *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
             }
         }
-        // Clear through the same 3D context as the scene. An oversized clip-
-        // space triangle covers the target with blending disabled, including
-        // transparent clear colors. In Draw3D depth mode the same already-paid
-        // draw writes the far value across D32 with compare ALWAYS.
-        const CLEAR_TRIANGLE: [[f32; 3]; 3] =
-            [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
-        let clear_depth = depth_config.map(|mut depth| {
-            depth.write_enabled = true;
-            depth.compare_function = COMPARE_FUNCTION_ALWAYS;
-            depth
-        });
-        let clear_completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
+        // Clear and every resident draw are second-level batches beneath one
+        // frame-level primary. GuC sees one ordered scene submission and the
+        // CPU waits only for the final scene fence.
+        let geometry_complete = submit_resident_scene_geometry_batched(
             dev,
             warm,
+            draws,
+            clear,
+            opaque_depth_enabled,
+            depth_config,
             render_target_gpu,
             render_target_pitch,
             target_width,
             target_height,
-            TriangleBlendProbeMode::MesaZeroedState,
-            clear_depth,
-            &CLEAR_TRIANGLE,
-            None,
-            None,
-            None,
-            Some(clear),
-            "draw3d-fullscreen-clear",
-            SUBMIT_NAME,
-            TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-            BackendProbeMode::MesaLike,
-            PostDrawSyncVariant::HeavyAll,
-            TriangleBatchMode::Draw,
-            StreamoutProofExperiment::HeaderAndPositionSlots01,
-            [0.0, 0.0],
-            None,
-        );
-        if !clear_completed {
-            return Err("target-clear");
-        }
-
-        let mut completed_draws = 0usize;
-        for draw in draws {
-            if opaque_depth_enabled && draw.rgba[3] == 0 {
-                completed_draws += 1;
-                continue;
-            }
-            let (blend_mode, draw_depth) = if opaque_depth_enabled {
-                let write_enabled = draw.rgba[3] == u8::MAX;
-                let mut draw_depth = depth_config.expect("opaque depth prepared");
-                draw_depth.write_enabled = write_enabled;
-                (
-                    if write_enabled {
-                        TriangleBlendProbeMode::MesaZeroedState
-                    } else {
-                        TriangleBlendProbeMode::StraightAlpha
-                    },
-                    Some(draw_depth),
-                )
-            } else {
-                (TriangleBlendProbeMode::StraightAlpha, None)
-            };
-            let completed = submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
-                dev,
-                warm,
-                render_target_gpu,
-                render_target_pitch,
-                target_width,
-                target_height,
-                blend_mode,
-                draw_depth,
-                &[],
-                None,
-                None,
-                Some(draw.mesh),
-                Some(draw.rgba),
-                "draw3d-resident-instance",
-                SUBMIT_NAME,
-                TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-                BackendProbeMode::MesaLike,
-                PostDrawSyncVariant::HeavyAll,
-                TriangleBatchMode::Draw,
-                StreamoutProofExperiment::HeaderAndPositionSlots01,
-                draw.viewport_translation_px,
-                None,
-            );
-            if !completed {
-                break;
-            }
-            completed_draws += 1;
-        }
+        )?;
+        let mut completed_draws = if geometry_complete { draws.len() } else { 0 };
 
         // A scene is one atomic visual result.  A timed-out draw leaves the
         // shared target partially updated, so never expose it to either the
         // display or request-render cache.  The caller will retry the same
         // revision on the next scene tick while the last complete frame stays
         // visible.
-        let geometry_complete = completed_draws == draws.len();
         let geometry_finished_ns = crate::chronos::monotonic_nanos();
         let scratch_output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
             warm.streamout_phys,
@@ -1170,6 +1451,7 @@ fn submit_resident_triangle_scene_capture(
         // single-sample hardware and for CPU readback consumers.
         let output = match (frame_output, msaa_color) {
             (ResidentSceneFrameOutput::GpuSurface(destination), Some(_)) => destination,
+            (ResidentSceneFrameOutput::DirectGpuSurface(destination), _) => destination,
             _ => scratch_output,
         };
         let resolved = if geometry_complete {
@@ -1228,7 +1510,8 @@ fn submit_resident_triangle_scene_capture(
         let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
         let present_copy_started_ns = crate::chronos::monotonic_nanos();
         if frame_complete
-            && let ResidentSceneFrameOutput::GpuSurface(destination) = frame_output
+            && let ResidentSceneFrameOutput::GpuSurface(destination)
+            | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
             && output.gpu != destination.gpu
         {
             frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete(

@@ -143,6 +143,10 @@ const GPU_VA_DRAW3D_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
 // physical storage is allocated lazily at the consumer's actual extent.
 const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;
 const GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE: u64 = 0x1400_0000;
+// The compositor-rewire checkpoint gives Draw3D one permanent linear UI4
+// allocation. Render maps that physical allocation here and targets it
+// directly, eliminating the former scratch-to-UI4 compute copy.
+const GPU_VA_DRAW3D_UI4_FRAME_BASE: u64 = 0x1800_0000;
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;
