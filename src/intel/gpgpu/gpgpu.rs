@@ -544,6 +544,7 @@ const GPGPU_VFE_DW5_UOS: u32 = 0x0782_0000;
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD16_SELECT: u32 = 1;
 const FILL_RECT_PIXELS_PER_GROUP_X: u32 = 16;
+const COPY_RECT_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const FILL_RECT_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const ALPHA_BLEND_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const RESOLVE_TILE64_MSAA4_COMPLETION_TIMEOUT_MS: u64 = 250;
@@ -1108,6 +1109,7 @@ static COPY_RECT_WALKER_RAN: AtomicBool = AtomicBool::new(false);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_FALLBACK_SEQ: AtomicU64 = AtomicU64::new(0);
+static COPY_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static FILL_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static ALPHA_BLEND_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static RESOLVE_TILE64_MSAA4_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -1836,6 +1838,16 @@ const fn fill_rect_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDisp
     })
 }
 
+const fn copy_rect_2d_dispatch(width: u32, height: u32) -> Option<FillRect2dDispatch> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // copy_rect_rgba8 handles two adjacent pixels per SIMD lane, whereas the
+    // other 2D kernels handle one. Dispatch in work items, not pixels.
+    let work_item_width = width.div_ceil(COPY_RECT_PIXELS_PER_LANE);
+    fill_rect_2d_dispatch(work_item_width, height)
+}
+
 const _: () = {
     let exact = fill_rect_2d_dispatch(16, 1).unwrap();
     assert!(exact.group_x == 1);
@@ -1849,6 +1861,11 @@ const _: () = {
     assert!(scanout.group_x == 160);
     assert!(scanout.group_y == 1440);
     assert!(scanout.right_mask == GPGPU_WALKER_SIMD16_MASK);
+    let copy_exact = copy_rect_2d_dispatch(32, 1).unwrap();
+    assert!(copy_exact.group_x == 1);
+    let copy_tail = copy_rect_2d_dispatch(33, 3).unwrap();
+    assert!(copy_tail.group_x == 2);
+    assert!(copy_tail.group_y == 3);
 };
 
 #[repr(C)]
@@ -3784,9 +3801,8 @@ pub(crate) fn copy_rect_rgba8_stats(
     submit_copy_rect_spans_with_stats(src, dst, params, flavor)
 }
 
-/// Copy one rectangle and report success only when every lowered span retired.
-/// This is preferable to treating a partially completed fallback copy as a
-/// publishable frame.
+/// Copy one rectangle with one two-dimensional submission and report success
+/// only after that dispatch retired.
 pub(crate) fn copy_rect_rgba8_complete(
     src: GpgpuRgba8Surface,
     src_rect: GpgpuRect,
@@ -3796,16 +3812,7 @@ pub(crate) fn copy_rect_rgba8_complete(
     let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
         return false;
     };
-    let Some(flavor) = copy_rect_kernel_flavor_narrow() else {
-        return false;
-    };
-    let Some(expected_spans) =
-        copy_rect_span_count(params, flavor.span_pixels, flavor.rows_per_walker)
-    else {
-        return false;
-    };
-    let stats = submit_copy_rect_spans_with_stats(src, dst, params, flavor);
-    stats.spans == expected_spans
+    submit_copy_rect_2d(src, dst, params)
 }
 
 /// Resolve one gfx12.5 Tile64 R8G8B8A8 4x-MSAA surface into linear RGBA8.
@@ -8754,6 +8761,82 @@ fn present_rect_span_params(
     })
 }
 
+fn submit_copy_rect_2d(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    params: CopyRectRgba8Params,
+) -> bool {
+    if params.width == 0 || params.height == 0 {
+        return false;
+    }
+    let Some(dispatch) = copy_rect_2d_dispatch(params.width, params.height) else {
+        return false;
+    };
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_copy_rect_rgba8_kernel() else {
+        return false;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return false;
+    };
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
+    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let kernel_ppgtt_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let src_ppgtt_ok =
+        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, src.phys, src.bytes);
+    let dst_ppgtt_ok =
+        src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.dst_gpu, dst.phys, dst.bytes);
+    let batch_ok = dst_ppgtt_ok
+        && direct_rcs_encode_copy_rect_2d_batch(state, upload, params, src.bytes, dst.bytes);
+    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
+    let observed = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+            COPY_RECT_2D_COMPLETION_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    let completed = observed == COPY_RECT_POST_MARKER;
+    if !completed {
+        let occurrence = COPY_RECT_2D_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+        if occurrence <= 8 || occurrence.is_multiple_of(20) {
+            let pre_marker = direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT);
+            let potential_reason = if !batch_ok {
+                "batch-prepare"
+            } else if !submitted {
+                "guc-submit"
+            } else if pre_marker != COPY_RECT_PRE_MARKER {
+                "batch-not-started"
+            } else {
+                "walker-not-retired-before-timeout"
+            };
+            crate::log_warn!(
+                target: "intel-gpgpu";
+                "copy_rect_rgba8 2d incomplete occurrence={} rect={}x{} groups={}x{} pre=0x{:08X} post=0x{:08X} timeout_ms={} potential_reason={} action=fail-closed\n",
+                occurrence,
+                params.width,
+                params.height,
+                dispatch.group_x,
+                dispatch.group_y,
+                pre_marker,
+                observed,
+                COPY_RECT_2D_COMPLETION_TIMEOUT_MS,
+                potential_reason,
+            );
+        }
+    }
+    completed
+}
+
 fn submit_fill_rect_2d(dst: GpgpuRgba8Surface, params: FillRectRgba8Params) -> bool {
     if params.width == 0 || params.height == 0 {
         return false;
@@ -13200,6 +13283,61 @@ fn direct_rcs_encode_canvas3d_plane_patch_worklist_batch(
     true
 }
 
+fn direct_rcs_encode_copy_rect_2d_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: CopyRectRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+) -> bool {
+    if params.width == 0
+        || params.height == 0
+        || COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES + COPY_RECT_INDIRECT_BYTES
+            > DIRECT_RCS_BATCH_BYTES
+    {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+
+    if !direct_rcs_write_copy_rect_interface_descriptor_at(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
+    ) || !direct_rcs_write_copy_rect_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+    ) || !direct_rcs_write_copy_rect_payload_at(
+        state,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        params,
+    ) {
+        return false;
+    }
+
+    let Some(dispatch) = copy_rect_2d_dispatch(params.width, params.height) else {
+        return false;
+    };
+    direct_rcs_finish_two_buffer_dispatch_batch(
+        state,
+        upload,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        COPY_RECT_INDIRECT_BYTES,
+        dispatch,
+    )
+}
+
 fn direct_rcs_encode_alpha_blend_2d_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -13728,6 +13866,22 @@ fn direct_rcs_finish_two_buffer_2d_batch(
     let Some(dispatch) = fill_rect_2d_dispatch(width, height) else {
         return false;
     };
+    direct_rcs_finish_two_buffer_dispatch_batch(
+        state,
+        upload,
+        payload_offset,
+        indirect_bytes,
+        dispatch,
+    )
+}
+
+fn direct_rcs_finish_two_buffer_dispatch_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    payload_offset: usize,
+    indirect_bytes: usize,
+    dispatch: FillRect2dDispatch,
+) -> bool {
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;

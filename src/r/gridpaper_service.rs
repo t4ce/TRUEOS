@@ -2046,6 +2046,56 @@ impl InputRoute {
             events: VecDeque::new(),
         }
     }
+
+    fn push_event(&mut self, event: crate::ui4::Ui4InputEvent) {
+        use crate::ui4::Ui4InputEvent;
+
+        // Pointer motion is state-like: only the newest absolute position is
+        // useful before the worker drains this route. Do not let it crowd out
+        // focus, button, or keyboard transitions while a GPU frame is busy.
+        if let Ui4InputEvent::Pointer(next) = event
+            && next.wheel == 0
+            && next.buttons_pressed == 0
+            && next.buttons_released == 0
+            && let Some(Ui4InputEvent::Pointer(previous)) = self.events.back_mut()
+            && previous.window == next.window
+            && previous.source == next.source
+            && previous.buttons_down == next.buttons_down
+            && previous.wheel == 0
+            && previous.buttons_pressed == 0
+            && previous.buttons_released == 0
+        {
+            *previous = next;
+            return;
+        }
+
+        if self.events.len() == INPUT_QUEUE_CAPACITY_PER_INSTANCE {
+            let replaceable = self.events.iter().position(|queued| match queued {
+                Ui4InputEvent::Pointer(pointer) => {
+                    pointer.wheel == 0
+                        && pointer.buttons_pressed == 0
+                        && pointer.buttons_released == 0
+                }
+                Ui4InputEvent::Pan(pan) => pan.phase == crate::ui4::Ui4PanPhase::Update,
+                _ => false,
+            });
+            if let Some(index) = replaceable {
+                self.events.remove(index);
+            } else if matches!(
+                event,
+                Ui4InputEvent::Pointer(_)
+                    | Ui4InputEvent::Pan(crate::ui4::Ui4PanEvent {
+                        phase: crate::ui4::Ui4PanPhase::Update,
+                        ..
+                    })
+            ) {
+                return;
+            } else {
+                self.events.pop_front();
+            }
+        }
+        self.events.push_back(event);
+    }
 }
 
 static INPUT_ROUTES: Mutex<[InputRoute; GRIDPAPER_POOL_SOFT_CAP]> =
@@ -2081,10 +2131,7 @@ fn route_input_events() {
         let Some(route) = routes.iter_mut().find(|route| route.window == Some(window)) else {
             continue;
         };
-        if route.events.len() == INPUT_QUEUE_CAPACITY_PER_INSTANCE {
-            route.events.pop_front();
-        }
-        route.events.push_back(event);
+        route.push_event(event);
     }
 }
 
@@ -2468,7 +2515,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2484,6 +2531,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.geometry_us,
                     result.resolve_us,
                     result.coverage_us,
+                    result.present_copy_us,
                 );
                 let retired = runtime.active.replace(published);
                 drop(retired);
@@ -2542,7 +2590,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
@@ -2554,6 +2602,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                         result.geometry_us,
                         result.resolve_us,
                         result.coverage_us,
+                        result.present_copy_us,
                     );
                 }
             }
@@ -2565,7 +2614,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_us={} resolve_us={} coverage_us={} present_copy_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
@@ -2578,6 +2627,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     result.geometry_us,
                     result.resolve_us,
                     result.coverage_us,
+                    result.present_copy_us,
                 );
             }
             runtime.last_render_error = None;

@@ -306,6 +306,7 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) geometry_us: u64,
     pub(crate) resolve_us: u64,
     pub(crate) coverage_us: u64,
+    pub(crate) present_copy_us: u64,
     pub(crate) coverage_submits: usize,
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
@@ -1178,6 +1179,7 @@ fn submit_resident_triangle_scene_capture(
         let coverage_finished_ns = crate::chronos::monotonic_nanos();
         completed_draws = completed_draws.saturating_add(completed_coverage_draws);
         let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
+        let present_copy_started_ns = crate::chronos::monotonic_nanos();
         if frame_complete
             && let ResidentSceneFrameOutput::GpuSurface(destination) = frame_output
             && output.gpu != destination.gpu
@@ -1194,6 +1196,7 @@ fn submit_resident_triangle_scene_capture(
                 crate::intel::gpgpu::GpgpuPoint::new(0, 0),
             );
         }
+        let present_copy_finished_ns = crate::chronos::monotonic_nanos();
         let mut changed_pixels = 0usize;
         let mut rgba = None;
         if frame_complete && matches!(frame_output, ResidentSceneFrameOutput::Readback) {
@@ -1242,6 +1245,8 @@ fn submit_resident_triangle_scene_capture(
             geometry_us: geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000,
             resolve_us: resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
             coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
+            present_copy_us: present_copy_finished_ns.saturating_sub(present_copy_started_ns)
+                / 1_000,
             coverage_submits,
             coverage_walkers,
             rgba,
