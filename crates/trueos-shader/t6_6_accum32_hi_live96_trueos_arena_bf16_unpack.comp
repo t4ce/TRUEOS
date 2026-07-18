@@ -1,0 +1,64 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer T66Accum32HiLive96TrueosArenaBf16Unpack {
+    uint words[];
+} io;
+
+const uint X_BASE = 0u;
+const uint ROW_BF16_BASE = 2048u;
+const uint ROW_BF16_STRIDE_WORDS = 1024u;
+const uint OUT_BASE = 264192u;
+
+float bf16_to_f32(uint bits)
+{
+    return uintBitsToFloat(bits << 16);
+}
+
+float row_bf16_lane(uint row_word_base, uint lane)
+{
+    uint packed = io.words[row_word_base + (lane >> 1u)];
+    uint bf16 = (lane & 1u) == 0u ? (packed & 0xFFFFu) : (packed >> 16);
+    return bf16_to_f32(bf16);
+}
+
+void main()
+{
+    uint row = gl_LocalInvocationID.x;
+    uint row_word_base = ROW_BF16_BASE + row * ROW_BF16_STRIDE_WORDS;
+    float acc = uintBitsToFloat(io.words[OUT_BASE + row]);
+    acc += uintBitsToFloat(io.words[X_BASE + 64u]) * row_bf16_lane(row_word_base, 64u);
+    acc += uintBitsToFloat(io.words[X_BASE + 65u]) * row_bf16_lane(row_word_base, 65u);
+    acc += uintBitsToFloat(io.words[X_BASE + 66u]) * row_bf16_lane(row_word_base, 66u);
+    acc += uintBitsToFloat(io.words[X_BASE + 67u]) * row_bf16_lane(row_word_base, 67u);
+    acc += uintBitsToFloat(io.words[X_BASE + 68u]) * row_bf16_lane(row_word_base, 68u);
+    acc += uintBitsToFloat(io.words[X_BASE + 69u]) * row_bf16_lane(row_word_base, 69u);
+    acc += uintBitsToFloat(io.words[X_BASE + 70u]) * row_bf16_lane(row_word_base, 70u);
+    acc += uintBitsToFloat(io.words[X_BASE + 71u]) * row_bf16_lane(row_word_base, 71u);
+    acc += uintBitsToFloat(io.words[X_BASE + 72u]) * row_bf16_lane(row_word_base, 72u);
+    acc += uintBitsToFloat(io.words[X_BASE + 73u]) * row_bf16_lane(row_word_base, 73u);
+    acc += uintBitsToFloat(io.words[X_BASE + 74u]) * row_bf16_lane(row_word_base, 74u);
+    acc += uintBitsToFloat(io.words[X_BASE + 75u]) * row_bf16_lane(row_word_base, 75u);
+    acc += uintBitsToFloat(io.words[X_BASE + 76u]) * row_bf16_lane(row_word_base, 76u);
+    acc += uintBitsToFloat(io.words[X_BASE + 77u]) * row_bf16_lane(row_word_base, 77u);
+    acc += uintBitsToFloat(io.words[X_BASE + 78u]) * row_bf16_lane(row_word_base, 78u);
+    acc += uintBitsToFloat(io.words[X_BASE + 79u]) * row_bf16_lane(row_word_base, 79u);
+    acc += uintBitsToFloat(io.words[X_BASE + 80u]) * row_bf16_lane(row_word_base, 80u);
+    acc += uintBitsToFloat(io.words[X_BASE + 81u]) * row_bf16_lane(row_word_base, 81u);
+    acc += uintBitsToFloat(io.words[X_BASE + 82u]) * row_bf16_lane(row_word_base, 82u);
+    acc += uintBitsToFloat(io.words[X_BASE + 83u]) * row_bf16_lane(row_word_base, 83u);
+    acc += uintBitsToFloat(io.words[X_BASE + 84u]) * row_bf16_lane(row_word_base, 84u);
+    acc += uintBitsToFloat(io.words[X_BASE + 85u]) * row_bf16_lane(row_word_base, 85u);
+    acc += uintBitsToFloat(io.words[X_BASE + 86u]) * row_bf16_lane(row_word_base, 86u);
+    acc += uintBitsToFloat(io.words[X_BASE + 87u]) * row_bf16_lane(row_word_base, 87u);
+    acc += uintBitsToFloat(io.words[X_BASE + 88u]) * row_bf16_lane(row_word_base, 88u);
+    acc += uintBitsToFloat(io.words[X_BASE + 89u]) * row_bf16_lane(row_word_base, 89u);
+    acc += uintBitsToFloat(io.words[X_BASE + 90u]) * row_bf16_lane(row_word_base, 90u);
+    acc += uintBitsToFloat(io.words[X_BASE + 91u]) * row_bf16_lane(row_word_base, 91u);
+    acc += uintBitsToFloat(io.words[X_BASE + 92u]) * row_bf16_lane(row_word_base, 92u);
+    acc += uintBitsToFloat(io.words[X_BASE + 93u]) * row_bf16_lane(row_word_base, 93u);
+    acc += uintBitsToFloat(io.words[X_BASE + 94u]) * row_bf16_lane(row_word_base, 94u);
+    acc += uintBitsToFloat(io.words[X_BASE + 95u]) * row_bf16_lane(row_word_base, 95u);
+    io.words[OUT_BASE + row] = floatBitsToUint(acc);
+}

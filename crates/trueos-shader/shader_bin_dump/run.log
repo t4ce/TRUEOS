@@ -1,0 +1,7 @@
+simple_triangle_dump: center=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: up=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: down=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: left=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: right=0xFFFF4000 bytes=[00 40 FF FF]
+simple_triangle_dump: corner=0xFF000000 bytes=[00 00 00 FF]
+simple_triangle_dump: verified=1

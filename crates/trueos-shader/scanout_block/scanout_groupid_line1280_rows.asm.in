@@ -1,0 +1,38 @@
+// Gfx12/Xe-LP primary scanout group-id row artifact source contract.
+//
+// Runtime consumer:
+//   crates/trueos-eu/src/gfx12.rs
+//
+// CPU patch contract:
+//   dword 25: scanout-relative byte address for row-group 0, x segment start
+//   dword 29: 0x00RRGGBB color seed
+//
+// Walker contract:
+//   x_dim = number of rows in this burst
+//   gl_WorkGroupID.x is read from g0.1
+//
+// Address contract:
+//   row_base = base + gl_WorkGroupID.x * 0x2800
+//   repeat x in 0..1280:
+//     store row_base + x * 4
+//
+// This is the first non-CPU-expanded row path: the CPU no longer patches one
+// address and emits one walker per row.  It patches one base and launches one
+// walker for a row burst; the artifact derives each row address internally.
+//
+// Pseudocode in brw_asm terms:
+//
+//   mov(8) g49<1>UD g0.1<0,1,0>UD
+//   mul(8) g28<1>D  g49<0,1,0>D 0x2800D
+//   add(8) g127<1>D g28<8,8,1>D baseD
+//   mov(8) g4<1>UD  color_seed
+//
+//   repeat x in 0..1280:
+//     send(8) nullUD g127UD g4UD
+//       proven scalar HDC1 store shape, bti=1
+//     if (x + 1) % 8 == 0:
+//       add(8) g4<1>D g4<8,8,1>D 0x00010101D
+//     add(8) g127<1>D g127<8,8,1>D 4D
+//
+//   mov(8) g127<1>UD g0<8,8,1>UD
+//   send(8) nullUD g127UD nullUD thread-spawner EOT

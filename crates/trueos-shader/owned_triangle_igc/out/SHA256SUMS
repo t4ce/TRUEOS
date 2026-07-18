@@ -1,0 +1,5 @@
+30512ab1bcd4b709a8095b593b914b703306cc13ee1103208d79e5226d0f0d8b  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/owned_triangle_igc/triangle_owned.cl
+92674ec675253e29e67d957cf3ee092ffbbef03896bf34ecfe52fb8334c88e88  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/owned_triangle_igc/out/ocloc.version.txt
+d76795584d20b2d83ab26414e472c8de6acfefba0f2d7600ccc51c441c3d1397  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/owned_triangle_igc/out/trueos_owned_triangle.bin
+d76795584d20b2d83ab26414e472c8de6acfefba0f2d7600ccc51c441c3d1397  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/owned_triangle_igc/out/trueos_owned_triangle.gen
+cb7bfc2f141f99a2a453eaf849729b420cc38f91a1708b11f4f8be9c8a3f9110  /home/t4ce/REPOS/TRUEOS/crates/trueos-shader/owned_triangle_igc/out/trueos_owned_triangle.spv

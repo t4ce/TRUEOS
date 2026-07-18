@@ -1,0 +1,33 @@
+[package]
+name = "tinyaudio"
+version = "2.0.0"
+edition = "2021"
+license = "MIT"
+description = "TinyAudio is a cross-platform, easy-to-use, low-level, audio output library."
+keywords = ["audio", "output", "lowlevel"]
+categories = ["multimedia::audio"]
+include = [
+    "/src/**/*",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/examples/*",
+    "/wasm-examples/**/*",
+    "/android-examples/**/*"
+]
+homepage = "https://github.com/mrDIMAS/tinyaudio"
+documentation = "https://docs.rs/tinyaudio"
+repository = "https://github.com/mrDIMAS/tinyaudio"
+readme = "README.md"
+rust-version = "1.56"
+
+[workspace]
+
+# Make sure the separate examples (i.e. for Android or WebAssembly) will use the crate optimized.
+[profile.dev.package."*"]
+opt-level = 3
+
+[features]
+default = []
+alsa = []
+pulse = []

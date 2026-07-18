@@ -1,0 +1,58 @@
+572600e69000-572600e6b000 r--p 00000000 103:03 8785148                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/vk_compute_sentinel
+572600e6b000-572600e6d000 r-xp 00002000 103:03 8785148                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/vk_compute_sentinel
+572600e6d000-572600e6e000 r--p 00004000 103:03 8785148                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/vk_compute_sentinel
+572600e6e000-572600e6f000 r--p 00005000 103:03 8785148                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/vk_compute_sentinel
+572600e6f000-572600e70000 rw-p 00006000 103:03 8785148                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/vk_compute_sentinel
+57261d7c0000-57261e33b000 rw-p 00000000 00:00 0                          [heap]
+785948000000-785948021000 rw-p 00000000 00:00 0 
+785948021000-78594c000000 ---p 00000000 00:00 0 
+78594cf7e000-78594d77f000 rw-p 00000000 00:00 0 
+78594d7ff000-78594e000000 rw-p 00000000 00:00 0 
+78594f600000-78594f6a2000 r--p 00000000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+78594f6a2000-78594f7ef000 r-xp 000a2000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+78594f7ef000-78594f877000 r--p 001ef000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+78594f877000-78594f886000 r--p 00276000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+78594f886000-78594f889000 rw-p 00285000 103:03 93226225                  /usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.34
+78594f889000-78594f88d000 rw-p 00000000 00:00 0 
+78594f8f3000-78594f904000 r--p 00000000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+78594f904000-78594f98f000 r-xp 00011000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+78594f98f000-78594f9fe000 r--p 0009c000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+78594f9fe000-78594f9ff000 r--p 0010a000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+78594f9ff000-78594fa00000 rw-p 0010b000 103:03 93194293                  /usr/lib/x86_64-linux-gnu/libm.so.6
+785950b49000-785950b4d000 r--p 00000000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+785950b4d000-785950b70000 r-xp 00004000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+785950b70000-785950b74000 r--p 00027000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+785950b74000-785950b75000 r--p 0002a000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+785950b75000-785950b76000 rw-p 0002b000 103:03 93225759                  /usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+785950c00000-785950c28000 r--p 00000000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+785950c28000-785950dc1000 r-xp 00028000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+785950dc1000-785950e30000 r--p 001c1000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+785950e30000-785950e34000 r--p 0022f000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+785950e34000-785950e36000 rw-p 00233000 103:03 93194290                  /usr/lib/x86_64-linux-gnu/libc.so.6
+785950e36000-785950e43000 rw-p 00000000 00:00 0 
+785950f6f000-785950f75000 r--p 00000000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+785950f75000-785950fc7000 r-xp 00006000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+785950fc7000-785950ffe000 r--p 00058000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+785950ffe000-785950fff000 r--p 0008f000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+785950fff000-785951000000 rw-p 00090000 103:03 93226310                  /usr/lib/x86_64-linux-gnu/libvulkan.so.1.4.321
+785951000000-785951001000 r--p 00000000 103:03 8785147                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/libtrueos_ioctl_trace.so
+785951001000-785951004000 r-xp 00001000 103:03 8785147                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/libtrueos_ioctl_trace.so
+785951004000-785951006000 r--p 00004000 103:03 8785147                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/libtrueos_ioctl_trace.so
+785951006000-785951007000 r--p 00005000 103:03 8785147                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/libtrueos_ioctl_trace.so
+785951007000-785951008000 rw-p 00006000 103:03 8785147                   /home/t4ce/REPOS/TRUEOS/.codex_tmp/intel_userland_oracle/smoke-userland/build/libtrueos_ioctl_trace.so
+785951008000-785951290000 rw-p 00000000 00:00 0 
+785951293000-785951296000 rw-p 00000000 00:00 0 
+7859512b1000-7859512b2000 rw-p 00000000 00:00 0 
+7859512b2000-7859512b3000 rw-p 00000000 00:00 0 
+7859512b3000-7859512b5000 rw-p 00000000 00:00 0 
+7859512b5000-7859512b9000 r--p 00000000 00:00 0                          [vvar]
+7859512b9000-7859512bb000 r--p 00000000 00:00 0                          [vvar_vclock]
+7859512bb000-7859512bd000 r-xp 00000000 00:00 0                          [vdso]
+7859512bd000-7859512be000 r--p 00000000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7859512be000-7859512ec000 r-xp 00001000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7859512ec000-7859512fa000 r--p 0002f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7859512fa000-7859512fc000 r--p 0003d000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7859512fc000-7859512fd000 rw-p 0003f000 103:03 93194287                  /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+7859512fd000-7859512fe000 rw-p 00000000 00:00 0 
+7ffd68381000-7ffd683a3000 rw-p 00000000 00:00 0                          [stack]
+ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]

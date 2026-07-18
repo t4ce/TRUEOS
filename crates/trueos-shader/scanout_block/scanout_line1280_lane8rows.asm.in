@@ -1,0 +1,38 @@
+// Gfx12/Xe-LP primary scanout lane8rows artifact source contract.
+//
+// Runtime consumer:
+//   crates/trueos-eu/src/gfx12.rs
+//
+// Generated artifact:
+//   scanout_line1280_lane8rows.hex
+//
+// CPU patch contract:
+//   dword 15: scanout-relative byte address for the first pixel
+//   dword 19: 0x00RRGGBB color seed
+//
+// One walker dispatches one SIMD8 EU thread.  The eight lanes write the same
+// x position on eight consecutive scanout rows:
+//
+//   addr(lane) = base + lane * 0x2800
+//   color(lane) = addr(lane) + color_seed
+//
+// The body is unrolled for 1280 x positions.  The CPU does not patch per-pixel
+// colors.  It patches one address and one color seed per 1280x8 segment.
+//
+// Pseudocode in brw_asm terms:
+//
+//   mov(8) g1<1>UW 0x76543210V
+//   mov(8) g1<1>D  g1<8,8,1>UW
+//   mul(8) g56<1>D g1<8,8,1>D 0x2800D
+//   add(8) g56<1>D g56<8,8,1>D baseD
+//   add(8) g58<1>D g56<8,8,1>D color_seedD
+//
+//   repeat x in 0..1280:
+//     send(8) nullUD g56UD g58UD
+//       T6.2-derived HDC1 send shape, bti=1, SIMD8, one dword per lane
+//     if (x + 1) % 8 == 0:
+//       add(8) g58<1>D g58<8,8,1>D 0x00010101UD
+//     add(8) g56<1>D g56<8,8,1>D 4D
+//
+//   mov(8) g127<1>UD g0<8,8,1>UD
+//   send(8) nullUD g127UD nullUD thread-spawner EOT

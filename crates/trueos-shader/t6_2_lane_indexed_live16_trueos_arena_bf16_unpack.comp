@@ -1,0 +1,48 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer T62LaneIndexedLive16TrueosArenaBf16Unpack {
+    uint words[];
+} io;
+
+const uint X_BASE = 0u;
+const uint ROW_BF16_BASE = 2048u;
+const uint ROW_BF16_STRIDE_WORDS = 1024u;
+const uint OUT_BASE = 264192u;
+
+float bf16_to_f32(uint bits)
+{
+    return uintBitsToFloat(bits << 16);
+}
+
+float row_bf16_lane(uint row_word_base, uint lane)
+{
+    uint packed = io.words[row_word_base + (lane >> 1u)];
+    uint bf16 = (lane & 1u) == 0u ? (packed & 0xFFFFu) : (packed >> 16);
+    return bf16_to_f32(bf16);
+}
+
+void main()
+{
+    uint row = gl_LocalInvocationID.x;
+    uint row_word_base = ROW_BF16_BASE + row * ROW_BF16_STRIDE_WORDS;
+    float acc = 0.0;
+    acc += uintBitsToFloat(io.words[X_BASE + 0u]) * row_bf16_lane(row_word_base, 0u);
+    acc += uintBitsToFloat(io.words[X_BASE + 1u]) * row_bf16_lane(row_word_base, 1u);
+    acc += uintBitsToFloat(io.words[X_BASE + 2u]) * row_bf16_lane(row_word_base, 2u);
+    acc += uintBitsToFloat(io.words[X_BASE + 3u]) * row_bf16_lane(row_word_base, 3u);
+    acc += uintBitsToFloat(io.words[X_BASE + 4u]) * row_bf16_lane(row_word_base, 4u);
+    acc += uintBitsToFloat(io.words[X_BASE + 5u]) * row_bf16_lane(row_word_base, 5u);
+    acc += uintBitsToFloat(io.words[X_BASE + 6u]) * row_bf16_lane(row_word_base, 6u);
+    acc += uintBitsToFloat(io.words[X_BASE + 7u]) * row_bf16_lane(row_word_base, 7u);
+    acc += uintBitsToFloat(io.words[X_BASE + 8u]) * row_bf16_lane(row_word_base, 8u);
+    acc += uintBitsToFloat(io.words[X_BASE + 9u]) * row_bf16_lane(row_word_base, 9u);
+    acc += uintBitsToFloat(io.words[X_BASE + 10u]) * row_bf16_lane(row_word_base, 10u);
+    acc += uintBitsToFloat(io.words[X_BASE + 11u]) * row_bf16_lane(row_word_base, 11u);
+    acc += uintBitsToFloat(io.words[X_BASE + 12u]) * row_bf16_lane(row_word_base, 12u);
+    acc += uintBitsToFloat(io.words[X_BASE + 13u]) * row_bf16_lane(row_word_base, 13u);
+    acc += uintBitsToFloat(io.words[X_BASE + 14u]) * row_bf16_lane(row_word_base, 14u);
+    acc += uintBitsToFloat(io.words[X_BASE + 15u]) * row_bf16_lane(row_word_base, 15u);
+    io.words[OUT_BASE + row] = floatBitsToUint(acc);
+}

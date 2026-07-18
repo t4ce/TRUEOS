@@ -1,0 +1,11 @@
+artifact=trueos-owned-3-vertex-triangle
+compiler=ocloc
+compiler_path=/home/t4ce/.local/share/Trash/files/bld/intel-tools/root/usr/bin/ocloc-26.18.1
+device=0x4680
+device_name=alder-lake-s-gt1
+stage=igc-compute-proof
+graphics_stage_upload_safe=0
+vertex_count=3
+vertex_stride_bytes=12
+fragment_color_rgba=1.0,0.2,0.1,1.0
+note=IGC-owned source compile proof; not a TRUEOS 3DSTATE_VS/3DSTATE_PS binary contract.
