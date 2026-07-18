@@ -372,10 +372,36 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) resolve_us: u64,
     pub(crate) coverage_us: u64,
     pub(crate) present_copy_us: u64,
+    pub(crate) present_copy_performed: bool,
     pub(crate) coverage_submits: usize,
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
+    /// Present only when the final GPU cache-release packet retired after
+    /// writing directly into the returned UI4 allocation.
+    pub(crate) release_fence: Option<ResidentSceneReleaseFence>,
 }
+
+/// Proof that one exact direct-render allocation is complete and globally
+/// visible to the display consumer. The fields are private so a UI producer
+/// cannot manufacture a release merely from a physical address.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResidentSceneReleaseFence {
+    phys: u64,
+    byte_len: usize,
+    sequence: u64,
+}
+
+impl ResidentSceneReleaseFence {
+    pub(crate) const fn matches(self, phys: u64, byte_len: usize) -> bool {
+        self.phys == phys && self.byte_len == byte_len
+    }
+
+    pub(crate) const fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+static RESIDENT_SCENE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone)]
 enum ResidentSceneFrameOutput {
@@ -1066,7 +1092,10 @@ fn stage_resident_scene_secondary(
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         viewport_translation_px,
         BackendProbeMode::MesaLike,
-        PostDrawSyncVariant::HeavyAll,
+        // All scene secondaries execute below one primary batch. They only
+        // need command-stream ordering here; the primary emits the single
+        // full render/depth/L3 release fence after the final secondary.
+        PostDrawSyncVariant::LightCsNoPostSync,
     )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     Ok(bytes)
@@ -1106,10 +1135,17 @@ fn encode_resident_scene_primary_batch(
     }
     let completion_gpu =
         GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
-    push(MI_STORE_DATA_IMM_GGTT_DW1)?;
+    // This is the producer release fence for the whole scene. A plain
+    // MI_STORE proves command-stream progress but does not make render-target
+    // bytes visible to scanout. Drain the render/depth/tile/HDC/L3 paths once,
+    // then write the completion value from the same PIPE_CONTROL. DEST_GGTT
+    // remains clear because the result allocation is in the render PPGTT.
+    push(PIPE_CONTROL_CMD | PIPE_CONTROL_BIG_PRE_DRAW_HEADER_BITS)?;
+    push(PIPE_CONTROL_BIG_PRE_DRAW_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE)?;
     push(completion_gpu as u32)?;
     push((completion_gpu >> 32) as u32)?;
     push(RCS_EXEC_RESULT_SCENE_FRAME_DONE)?;
+    push(0)?;
     push(MI_BATCH_BUFFER_END)?;
     push(MI_NOOP)?;
     Ok(cursor * core::mem::size_of::<u32>())
@@ -1531,11 +1567,13 @@ fn submit_resident_triangle_scene_capture(
         completed_draws = completed_draws.saturating_add(completed_coverage_draws);
         let mut frame_complete = resolved && completed_coverage_draws == coverage_draws.len();
         let present_copy_started_ns = crate::chronos::monotonic_nanos();
+        let mut present_copy_performed = false;
         if frame_complete
             && let ResidentSceneFrameOutput::GpuSurface(destination)
             | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
             && output.gpu != destination.gpu
         {
+            present_copy_performed = true;
             frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete(
                 output,
                 crate::intel::gpgpu::GpgpuRect::new(
@@ -1586,6 +1624,20 @@ fn submit_resident_triangle_scene_capture(
             // pixels written rather than pretending that no frame changed.
             changed_pixels = target_width.saturating_mul(target_height);
         }
+        let release_fence = if frame_complete
+            && let ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
+            && output.gpu == destination.gpu
+        {
+            Some(ResidentSceneReleaseFence {
+                phys: destination.phys,
+                byte_len: destination.bytes,
+                sequence: RESIDENT_SCENE_RELEASE_SEQUENCE
+                    .fetch_add(1, Ordering::AcqRel)
+                    .saturating_add(1),
+            })
+        } else {
+            None
+        };
         Ok(ResidentSceneFrameResult {
             completed_draws,
             requested_draws: draws.len().saturating_add(coverage_draws.len()),
@@ -1599,9 +1651,11 @@ fn submit_resident_triangle_scene_capture(
             coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
             present_copy_us: present_copy_finished_ns.saturating_sub(present_copy_started_ns)
                 / 1_000,
+            present_copy_performed,
             coverage_submits,
             coverage_walkers,
             rgba,
+            release_fence,
         })
     })();
     PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);

@@ -484,7 +484,10 @@ const RESULT_SLOT_GPGPU_PREFLIGHT_SUM_B_DWORD: usize = 19;
 const RESULT_SLOT_GPGPU_PREFLIGHT_LANES_DWORD: usize = 20;
 const RESULT_SLOT_GPGPU_COMPUTE_WALKER_DWORD: usize = 21;
 const RESULT_SLOT_GPGPU_EU_C_STORE_DWORD: usize = 22;
-const RESULT_SLOT_SCENE_FRAME_DWORD: usize = 23;
+// The scene release is written by PIPE_CONTROL as a QWord post-sync
+// operation. Keep its destination 8-byte aligned even though the low DWORD is
+// the only value the host consumes.
+const RESULT_SLOT_SCENE_FRAME_DWORD: usize = 24;
 const RESULT_OA_REPORT_DWORDS: usize = 64;
 const RESULT_OA_BEGIN_DWORD: usize = 64;
 const RESULT_OA_END_DWORD: usize = RESULT_OA_BEGIN_DWORD + RESULT_OA_REPORT_DWORDS;

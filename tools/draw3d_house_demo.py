@@ -262,6 +262,11 @@ def main():
     parser.add_argument(
         "--output", type=Path, default=Path("bld/draw3d-captures/house-tree-gabled.png")
     )
+    parser.add_argument(
+        "--capture",
+        action="store_true",
+        help="opt in to the separate full-resolution CPU readback/PNG diagnostic",
+    )
     parser.add_argument("--settle", type=float, default=1.5)
     parser.add_argument(
         "--orbit-speed",
@@ -292,22 +297,28 @@ def main():
         # is first exposed only after this camera and opaque clear are active.
         client.start((255, 255, 255, 255))
         time.sleep(args.settle)
-        output, image_format, width, height, image = client.render(args.output)
         mesh_count, instance_count, vertices, edges, faces, mesh_bytes = client.stats()
         print(
             f"scene meshes={mesh_count} instances={instance_count} vertices={vertices} "
             f"edges={edges} faces={faces} mesh_bytes={mesh_bytes} "
             f"orbit_speed={args.orbit_speed:.9f} clear=opaque-white target_hz=60"
         )
-        print(
-            f"capture format={image_format} size={width}x{height} bytes={len(image)} "
-            f"sha256={hashlib.sha256(image).hexdigest()} path={output}"
-        )
-        if image_format != 2 or (width, height) != (args.expect_width, args.expect_height):
-            raise RuntimeError(
-                "live scene did not return the expected "
-                f"{args.expect_width}x{args.expect_height} PNG"
+        if args.capture:
+            output, image_format, width, height, image = client.render(args.output)
+            print(
+                f"capture format={image_format} size={width}x{height} bytes={len(image)} "
+                f"sha256={hashlib.sha256(image).hexdigest()} path={output}"
             )
+            if image_format != 2 or (width, height) != (
+                args.expect_width,
+                args.expect_height,
+            ):
+                raise RuntimeError(
+                    "live scene did not return the expected "
+                    f"{args.expect_width}x{args.expect_height} PNG"
+                )
+        else:
+            print("capture skipped live_test=gpu-direct-present-only cpu_readback=0")
     finally:
         client.close()
 

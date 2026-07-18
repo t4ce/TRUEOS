@@ -392,6 +392,7 @@ const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str
         FramePoolError::ImmutablePublished => "frame-create-immutable-published",
         FramePoolError::NotPublished => "frame-create-not-published",
         FramePoolError::InvalidLease => "frame-create-invalid-lease",
+        FramePoolError::ProducerReleaseRequired => "frame-create-producer-release-required",
     }
 }
 

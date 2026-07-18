@@ -504,16 +504,31 @@ fn queue_async_plane(
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
         .collect();
     if let CompositionTarget::Overlay(slot) = plan.target {
+        let released_draw3d = selected
+            .iter()
+            .any(|(_, view)| view.gpu_release.is_some());
+        if released_draw3d
+            && (slot != super::RGB_OVERLAY_PLANE_SLOT_3
+                || selected.len() != 1
+                || !direct_overlay_eligible(selected[0].0, selected[0].1))
+        {
+            crate::log_warn!(target: "ui4";
+                "ui4/direct-present: released Draw3D frame rejected slot={} windows={} action=retain-front-and-retry no-copy-fallback=1\n",
+                slot,
+                selected.len(),
+            );
+            return Err(Ui4CompositorError::PresentFailed);
+        }
         if let Some((window, view)) = selected.as_slice().first().copied()
             && selected.len() == 1
             && direct_overlay_eligible(window, view)
         {
-            if view.gpu_authored
+            if view.gpu_release.is_some()
                 && !DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=triple action=import-complete-buffer-and-flip per_frame_guc_jobs=0 render_fence=retired-before-publish display_release=surflive\n",
-                    window.frame.raw(), slot,
+                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=triple action=import-complete-buffer-and-flip per_frame_guc_jobs=0 render_release_sequence={} display_release=surflive cpu_frame_copy=0\n",
+                    window.frame.raw(), slot, view.gpu_release.map_or(0, |release| release.sequence()),
                 );
             }
             let lease_index = pending
@@ -547,12 +562,15 @@ fn queue_async_plane(
                 }
                 Err(_) => {
                     let _ = release_published_frame(display_lease);
-                    crate::log_trace!(target: "ui4";
-                        "ui4/direct-present: display import unavailable slot={} frame={} buffer={} action=fallback-guc-composition\n",
+                    crate::log_warn!(target: "ui4";
+                        "ui4/direct-present: display import unavailable slot={} frame={} buffer={} action=retain-front-and-retry no-copy-fallback=1\n",
                         slot,
                         display_lease.frame.raw(),
                         display_lease.buffer_index,
                     );
+                    if view.gpu_release.is_some() {
+                        return Err(Ui4CompositorError::PresentFailed);
+                    }
                 }
             }
         }
@@ -614,11 +632,13 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     if !view.gpu_authored {
         return true;
     }
-    // Draw3D publishes only after its synchronous scene completion. The
-    // compositor read lease then prevents reuse through the SURFLIVE latch.
+    // The renderer's final PIPE_CONTROL release covers the exact allocation.
+    // The compositor read lease then prevents reuse through the SURFLIVE
+    // latch; no copy or CPU cache sweep is part of the transition.
     frame_snapshot(window.frame).is_ok_and(|snapshot| {
         snapshot.plan.content == FrameContent::RenderScene3d
             && snapshot.plan.buffering == super::FrameBuffering::Triple
+            && view.gpu_release.is_some()
     })
 }
 
@@ -770,7 +790,9 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
             let _ = acknowledge_window_frame(window.id, window.publish_serial);
         }
     }
-    super::screenshot::capture_compositor_frame(&pending.windows);
+    // Compositor-rewire has no screenshot consumer. Keeping capture entirely
+    // out of the only supported present path also makes the no-CPU-pixel-read
+    // contract structural rather than dependent on an empty request queue.
     commit_direct_leases(runtime, pending);
     release_leases(&pending.leases);
     let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;
