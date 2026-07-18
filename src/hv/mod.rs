@@ -56,6 +56,7 @@ struct TrueosVmId {
     replicatable: AtomicBool,
     pause_latched: AtomicBool,
     pause_store_seq: AtomicU64,
+    restore_inflight: AtomicBool,
     marker_seen: AtomicBool,
 }
 
@@ -70,6 +71,7 @@ impl TrueosVmId {
             replicatable: AtomicBool::new(false),
             pause_latched: AtomicBool::new(false),
             pause_store_seq: AtomicU64::new(0),
+            restore_inflight: AtomicBool::new(false),
             marker_seen: AtomicBool::new(false),
         }
     }
@@ -397,6 +399,7 @@ pub struct HvVmState {
     pub replicatable: bool,
     pub pause_latched: bool,
     pub pause_snapshot_ready: bool,
+    pub restore_inflight: bool,
 }
 
 #[inline]
@@ -414,6 +417,7 @@ pub fn first_free_vm_id() -> Option<u8> {
         if !slot.running.load(Ordering::Acquire)
             && !slot.starting.load(Ordering::Acquire)
             && !slot.pause_latched.load(Ordering::Acquire)
+            && !slot.restore_inflight.load(Ordering::Acquire)
         {
             return Some(idx as u8);
         }
@@ -463,6 +467,7 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
             replicatable: false,
             pause_latched: false,
             pause_snapshot_ready: false,
+            restore_inflight: false,
         };
     };
     let pause_latched = vm.pause_latched.load(Ordering::Acquire);
@@ -480,6 +485,7 @@ pub fn vm_state(vm_id: u8) -> HvVmState {
         replicatable: vm.replicatable.load(Ordering::Acquire),
         pause_latched,
         pause_snapshot_ready,
+        restore_inflight: vm.restore_inflight.load(Ordering::Acquire),
     }
 }
 
@@ -1022,6 +1028,35 @@ pub fn restore_snapshot(vm_id: u8) -> Result<usize, RestoreError> {
 
     restore_snapshot_bytes(vm_id, bytes.as_slice())?;
     Ok(bytes.len())
+}
+
+pub async fn restore_snapshot_async(vm_id: u8) -> Result<usize, RestoreError> {
+    if vm_slot(vm_id).is_none() {
+        return Err(RestoreError::UnsupportedVmId);
+    }
+
+    let bytes = crate::hv::store::load_bytes_async(vm_id)
+        .await
+        .map_err(map_store_restore_error)?;
+
+    restore_snapshot_bytes(vm_id, bytes.as_slice())?;
+    Ok(bytes.len())
+}
+
+pub fn try_begin_restore(vm_id: u8) -> Result<bool, StopError> {
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StopError::UnsupportedVmId);
+    };
+    Ok(vm
+        .restore_inflight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok())
+}
+
+pub fn finish_restore(vm_id: u8) {
+    if let Some(vm) = vm_slot(vm_id) {
+        vm.restore_inflight.store(false, Ordering::Release);
+    }
 }
 
 fn map_store_save_error(err: crate::hv::store::VmStoreError) -> SaveError {

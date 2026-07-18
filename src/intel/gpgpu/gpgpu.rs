@@ -999,9 +999,22 @@ const DIRECT_RCS_GPU_VA_CANVAS3D_TMP_BASE: u64 = 0x0090_0000;
 const DIRECT_RCS_GPU_VA_PRESENT_STAGING_BASE: u64 = 0x00A0_0000;
 const DIRECT_RCS_GPU_VA_SOLID_RECT_SOURCE_BASE: u64 = 0x0400_0000;
 const DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE: u64 = 0x0440_0000;
-const DIRECT_RCS_GPU_VA_FONT_COVERAGE_MASK_BASE: u64 = 0x0480_0000;
 const DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const DIRECT_RCS_FONT_COVERAGE_MASK_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+const DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES: usize = 16 * 1024 * 1024;
+// Persistent masks must not alias one another in the direct-RCS PPGTT.  The
+// first implementation remapped every simultaneously-live color layer at one
+// fixed VA; cached translations could then read or write a different layer's
+// physical allocation.  This range is private to the direct-RCS address space
+// (the render context may independently use the same numeric addresses).
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE: u64 = 0x1000_0000;
+const DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT: u64 = 0x1800_0000;
+const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE.is_multiple_of(4096));
+const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT.is_multiple_of(4096));
+const _: () = assert!(
+    DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
+);
+const _: () =
+    assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
 const DIRECT_RCS_SMOKE_MARKER: u32 = 0xC0DE_5101;
 const DIRECT_RCS_FONT_TESSEL_MARKER: u32 = 0xF07E_5501;
@@ -1042,6 +1055,10 @@ static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
+    AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
+static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+static FONT_OUTLINE_COVERAGE_R8_SELF_TEST: Once<bool> = Once::new();
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static GPGPU_SHELL_SURFACE: Mutex<Option<GpgpuShellSurface>> = Mutex::new(None);
 static GPGPU_PRESENT_STAGING_SURFACE: Mutex<Option<GpgpuPresentStagingSurface>> = Mutex::new(None);
@@ -2043,6 +2060,12 @@ pub(crate) struct GpgpuOwnedMask8Surface {
     virt: *mut u8,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuMask8Audit {
+    pub(crate) nonzero_pixels: usize,
+    pub(crate) bounds: GpgpuRect,
+}
+
 unsafe impl Send for GpgpuOwnedMask8Surface {}
 unsafe impl Sync for GpgpuOwnedMask8Surface {}
 
@@ -2050,11 +2073,50 @@ impl GpgpuOwnedMask8Surface {
     pub(crate) const fn surface(&self) -> GpgpuMask8Surface {
         self.surface
     }
+
+    /// Read back the persistent mask once after generation.  This is a cold
+    /// path integrity check, not part of frame composition.
+    pub(crate) fn nonzero_audit(&self) -> Option<GpgpuMask8Audit> {
+        if !self.surface.is_valid() || self.virt.is_null() {
+            return None;
+        }
+        super::dma_flush(self.virt, self.surface.bytes);
+        let mut min_x = self.surface.width;
+        let mut min_y = self.surface.height;
+        let mut max_x = 0u32;
+        let mut max_y = 0u32;
+        let mut nonzero_pixels = 0usize;
+        for y in 0..self.surface.height {
+            let row_offset = (y as usize).checked_mul(self.surface.pitch_bytes as usize)?;
+            for x in 0..self.surface.width {
+                let offset = row_offset.checked_add(x as usize)?;
+                let coverage = unsafe { core::ptr::read_volatile(self.virt.add(offset)) };
+                if coverage == 0 {
+                    continue;
+                }
+                nonzero_pixels = nonzero_pixels.saturating_add(1);
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        (nonzero_pixels != 0).then_some(GpgpuMask8Audit {
+            nonzero_pixels,
+            bounds: GpgpuRect::new(
+                min_x as i32,
+                min_y as i32,
+                max_x.saturating_sub(min_x).saturating_add(1),
+                max_y.saturating_sub(min_y).saturating_add(1),
+            ),
+        })
+    }
 }
 
 impl Drop for GpgpuOwnedMask8Surface {
     fn drop(&mut self) {
         crate::dma::dealloc(self.virt, self.surface.bytes);
+        recycle_font_coverage_gpu_va(self.surface.gpu, self.surface.bytes);
     }
 }
 

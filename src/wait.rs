@@ -339,6 +339,10 @@ impl<T> CompletionCell<T> {
         Poll::Pending
     }
 
+    pub async fn join(&self) -> T {
+        core::future::poll_fn(|cx| self.poll_take(cx)).await
+    }
+
     pub fn join_blocking(&self) -> T {
         loop {
             if let Some(value) = self.try_take() {

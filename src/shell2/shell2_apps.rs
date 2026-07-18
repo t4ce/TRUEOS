@@ -62,6 +62,8 @@ fn line(io: &'static dyn ShellBackend2, text: &str) {
 fn vm_state_label(state: crate::hv::HvVmState) -> &'static str {
     if !state.supported {
         "unsupported"
+    } else if state.restore_inflight {
+        "load-pending"
     } else if state.stop_requested {
         "stop-pending"
     } else if state.preserve_requested || state.preserve_exit {
@@ -116,7 +118,9 @@ pub(crate) fn print_status(io: &'static dyn ShellBackend2) {
 }
 
 fn replicatable_state_label(state: crate::hv::HvVmState, stored: bool) -> &'static str {
-    if state.pause_latched && (state.running || state.starting) {
+    if state.restore_inflight {
+        "resuming"
+    } else if state.pause_latched && (state.running || state.starting) {
         "pause-pending"
     } else if state.running {
         "running"
@@ -402,14 +406,14 @@ async fn peer_app_task(
     match crate::r::net::trueos_peer::fetch_peer_vm(&peer, remote_vm_id).await {
         Ok(bytes) => {
             let fetched = bytes.len();
-            match crate::hv::store::save_bytes(local_vm_id, bytes) {
+            match crate::hv::store::save_bytes_async(local_vm_id, bytes).await {
                 Ok(saved) => {
                     print_matrix_target_line(
                         &target,
                         alloc::format!("apps: peer vm{} fetched {} bytes", local_vm_id, saved)
                             .as_str(),
                     );
-                    match crate::hv::restore_snapshot(local_vm_id) {
+                    match crate::hv::restore_snapshot_async(local_vm_id).await {
                         Ok(loaded) => {
                             print_matrix_target_line(
                                 &target,
@@ -535,8 +539,8 @@ fn preserve_selected_or_all(io: &'static dyn ShellBackend2, id: Option<u8>, labe
     }
 }
 
-fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -> bool {
-    match crate::hv::restore_snapshot(vm_id) {
+async fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -> bool {
+    match crate::hv::restore_snapshot_async(vm_id).await {
         Ok(bytes) => {
             line(io, alloc::format!("apps: vm{} loaded {} bytes", vm_id, bytes).as_str());
             match crate::hv::start(vm_id, spawner, io, None) {
@@ -558,6 +562,34 @@ fn load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) -> bool
             line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
             false
         }
+    }
+}
+
+#[embassy_executor::task(pool_size = 4)]
+async fn load_vm_task(spawner: Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
+    let resume_lifecycle = crate::hv::vm_state(vm_id).pause_latched;
+    let started = load_vm(&spawner, io, vm_id).await;
+    if started && resume_lifecycle {
+        crate::hv::mark_replicatable_resumed(vm_id);
+    }
+    crate::hv::finish_restore(vm_id);
+}
+
+fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8) {
+    match crate::hv::try_begin_restore(vm_id) {
+        Ok(false) => {
+            line(io, alloc::format!("apps: vm{} load already pending", vm_id).as_str());
+        }
+        Err(err) => {
+            line(io, alloc::format!("apps: load failed: {:?}", err).as_str());
+        }
+        Ok(true) => match load_vm_task(*spawner, io, vm_id) {
+            Ok(token) => spawner.spawn(token),
+            Err(_) => {
+                crate::hv::finish_restore(vm_id);
+                line(io, "apps: load task unavailable");
+            }
+        },
     }
 }
 
@@ -590,9 +622,7 @@ fn toggle_replicatable_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_
             line(io, alloc::format!("apps: vm{} pause is still latching", vm_id).as_str());
             return;
         }
-        if load_vm(spawner, io, vm_id) {
-            crate::hv::mark_replicatable_resumed(vm_id);
-        }
+        schedule_load_vm(spawner, io, vm_id);
         return;
     }
 
@@ -684,7 +714,7 @@ pub(crate) fn submit(
                 load_remote(io, endpoint, vm_id);
             } else {
                 let vm_id = parse_id(first).unwrap_or(0);
-                let _ = load_vm(spawner, io, vm_id);
+                schedule_load_vm(spawner, io, vm_id);
             }
         }
         AppsPromptMode::Save => {

@@ -167,11 +167,7 @@ fn container_shell_command(raw: &str) -> bool {
             attached_write_line(
                 "vmx-shell: requesting replicatable pause; resume it from F2 pause by vmid",
             );
-            let (status, _) = trueos_vm::vmcall::call(
-                trueos_vm::vmcall::OP_LIFECYCLE_PAUSE,
-                0,
-                0,
-            );
+            let (status, _) = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_LIFECYCLE_PAUSE, 0, 0);
             if status != trueos_vm::vmcall::STATUS_OK {
                 attached_write_line(
                     "vmx-shell: replicatable pause unavailable; use preserve for a raw checkpoint",

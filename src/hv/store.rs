@@ -11,7 +11,7 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::r::net::ports;
-use crate::wait::WaitQueue;
+use crate::wait::{CompletionCell, WaitQueue};
 
 const VM_STORE_PROBE_PATH: &str = "vm/.probe";
 const VM_STORE_MANIFEST_PREFIX: &str = "vm/committed-";
@@ -73,30 +73,26 @@ struct Request {
 }
 
 struct Completion {
-    wait: WaitQueue,
-    result: Mutex<Option<Result<VmStoreResponse, VmStoreError>>>,
+    result: CompletionCell<Result<VmStoreResponse, VmStoreError>>,
 }
 
 impl Completion {
     fn new() -> Self {
         Self {
-            wait: WaitQueue::new(),
-            result: Mutex::new(None),
+            result: CompletionCell::new(),
         }
     }
 
     fn complete(&self, result: Result<VmStoreResponse, VmStoreError>) {
-        *self.result.lock() = Some(result);
-        self.wait.notify_all();
+        let _ = self.result.complete(result);
     }
 
     fn wait_blocking(&self) -> Result<VmStoreResponse, VmStoreError> {
-        loop {
-            if let Some(result) = self.result.lock().take() {
-                return result;
-            }
-            self.wait.wait_for_event_blocking_parked(10);
-        }
+        self.result.join_blocking_parked()
+    }
+
+    async fn wait_async(&self) -> Result<VmStoreResponse, VmStoreError> {
+        self.result.join().await
     }
 }
 
@@ -293,11 +289,34 @@ pub fn save_bytes(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
     }
 }
 
+pub async fn save_bytes_async(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
+    if !vm_id_supported(vm_id) {
+        return Err(VmStoreError::ServiceOffline);
+    }
+    match enqueue(RequestKind::Save(vm_id, bytes))?
+        .wait_async()
+        .await?
+    {
+        VmStoreResponse::Saved(len) => Ok(len),
+        VmStoreResponse::Loaded(_) => Err(VmStoreError::Write(block::Error::Io)),
+    }
+}
+
 pub fn load_bytes(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
     if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);
     }
     match enqueue(RequestKind::Load(vm_id))?.wait_blocking()? {
+        VmStoreResponse::Loaded(bytes) => Ok(bytes),
+        VmStoreResponse::Saved(_) => Err(VmStoreError::Read(block::Error::Io)),
+    }
+}
+
+pub async fn load_bytes_async(vm_id: u8) -> Result<Vec<u8>, VmStoreError> {
+    if !vm_id_supported(vm_id) {
+        return Err(VmStoreError::ServiceOffline);
+    }
+    match enqueue(RequestKind::Load(vm_id))?.wait_async().await? {
         VmStoreResponse::Loaded(bytes) => Ok(bytes),
         VmStoreResponse::Saved(_) => Err(VmStoreError::Read(block::Error::Io)),
     }

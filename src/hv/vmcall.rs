@@ -447,7 +447,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 DispatchOutcome::Resume
             }
-        }
+        },
         OP_PING => {
             write_response(vm_id, seq, STATUS_OK, 0xCAFE_BABE, 0);
             DispatchOutcome::Resume
