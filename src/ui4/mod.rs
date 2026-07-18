@@ -52,6 +52,27 @@ pub(crate) use window_broker::{
     visible_windows_for_output,
 };
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct OwnerReleaseSummary {
+    pub(crate) surfaces: usize,
+    pub(crate) input_routes: usize,
+    pub(crate) input_events: usize,
+}
+
+/// Release all UI4 resources belonging to an application owner.
+///
+/// UI4 deliberately does not infer owner liveness. The application lifecycle
+/// calls this operation when an owner ceases to exist.
+pub(crate) fn release_owner_resources(owner: WindowOwner) -> OwnerReleaseSummary {
+    let surfaces = blueprint_text::release_owner_resources(owner);
+    let (input_routes, input_events) = input_broker::release_owner(owner);
+    OwnerReleaseSummary {
+        surfaces,
+        input_routes,
+        input_events,
+    }
+}
+
 pub(crate) const OUTPUT_COUNT: usize = 4;
 pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 5;
 /// Default broker extent for kernel UI4 producers that do not yet negotiate a

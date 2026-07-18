@@ -874,6 +874,15 @@ pub(crate) fn matrix_target_for_slot_name(output_mask: u8, requested: &str) -> M
     }
 }
 
+pub(crate) fn submit_online_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    args: Vec<AllocString>,
+) -> Result<(), embassy_executor::SpawnError> {
+    let width = line_width_for_output(target.output_mask);
+    shell2_dl::submit_online_to_target(spawner, target, width, args)
+}
+
 pub(crate) fn matrix_target_for_slot_name_selected(
     output_mask: u8,
     requested: &str,

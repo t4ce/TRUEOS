@@ -872,6 +872,7 @@ struct BlueprintAutostart {
     enabled: bool,
     label: &'static str,
     archive: &'static str,
+    online_selector: Option<&'static str>,
     slot: &'static str,
     args: &'static [&'static str],
     settle_ms: u64,
@@ -879,9 +880,19 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
+        enabled: true,
+        label: "swarm",
+        archive: "swarm.bp",
+        online_selector: Some("swarm"),
+        slot: "swm",
+        args: &[],
+        settle_ms: 250,
+    },
+    BlueprintAutostart {
         enabled: false,
         label: "horizon",
         archive: "horizon.bp",
+        online_selector: None,
         slot: "hor",
         args: &[],
         settle_ms: 250,
@@ -890,6 +901,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "mandelbrot",
         archive: "mandelbrot.bp",
+        online_selector: None,
         slot: "man",
         args: &[],
         settle_ms: 750,
@@ -898,6 +910,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "flags",
         archive: "flags.bp",
+        online_selector: None,
         slot: "flg",
         args: &[],
         settle_ms: 750,
@@ -906,6 +919,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "weather",
         archive: "weather.bp",
+        online_selector: None,
         slot: "wth",
         args: &[],
         settle_ms: 750,
@@ -914,6 +928,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "chart",
         archive: "chart.bp",
+        online_selector: None,
         slot: "chr",
         args: &[],
         settle_ms: 750,
@@ -922,6 +937,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "hello_world",
         archive: "hello_world.bp",
+        online_selector: None,
         slot: "h_w",
         args: &[],
         settle_ms: 750,
@@ -930,6 +946,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "chatserver",
         archive: "chatserver.bp",
+        online_selector: None,
         slot: "cht",
         args: &[],
         settle_ms: 750,
@@ -938,6 +955,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "file-system",
         archive: "file-system.bp",
+        online_selector: None,
         slot: "fs",
         args: &[],
         settle_ms: 750,
@@ -946,6 +964,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         enabled: false,
         label: "bat",
         archive: "bat.bp",
+        online_selector: None,
         slot: "bat",
         args: &["--help"],
         settle_ms: 750,
@@ -953,7 +972,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
 ];
 
 #[embassy_executor::task]
-async fn bp_autostart_task() {
+async fn bp_autostart_task(spawner: Spawner) {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
     for config in BP_AUTOSTARTS {
@@ -982,6 +1001,28 @@ async fn bp_autostart_task() {
             config.archive,
             config.slot
         );
+
+        if let Some(selector) = config.online_selector {
+            let mut args = Vec::with_capacity(config.args.len().saturating_add(1));
+            args.push(String::from(selector));
+            args.extend(config.args.iter().map(|arg| String::from(*arg)));
+            match crate::shell2::submit_online_to_target(&spawner, target, args) {
+                Ok(()) => crate::log!(
+                    "spawn-svc: bp-autostart submitted label={} selector={} slot={} source=online\n",
+                    config.label,
+                    selector,
+                    config.slot
+                ),
+                Err(err) => crate::log!(
+                    "spawn-svc: bp-autostart skipped label={} selector={} slot={} source=online err={:?}\n",
+                    config.label,
+                    selector,
+                    config.slot,
+                    err
+                ),
+            }
+            continue;
+        }
 
         match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
             target,
@@ -1015,7 +1056,7 @@ async fn bp_autostart_task() {
 }
 
 fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| bp_autostart_task())
+    spawn_local(spawner, |spawner| bp_autostart_task(spawner))
 }
 
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {

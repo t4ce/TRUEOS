@@ -304,6 +304,31 @@ impl InputBroker {
         }
     }
 
+    fn release_owner(&mut self, owner: WindowOwner) -> usize {
+        let mut released = 0usize;
+        for route in &mut self.cursors {
+            let owned_focus = route.focus.is_some_and(|target| target.owner == owner);
+            let owned_capture = route.capture.is_some_and(|target| target.owner == owner);
+            if !owned_focus && !owned_capture {
+                continue;
+            }
+            if owned_focus {
+                route.focus = None;
+            }
+            if owned_capture {
+                route.capture = None;
+            }
+            route.secondary_anchor = None;
+            route.secondary_start_placement = None;
+            route.secondary_dragged = false;
+            route.maximize_rearm_origin = None;
+            route.context_menu = None;
+            route.selection_anchor = None;
+            released = released.saturating_add(1);
+        }
+        released
+    }
+
     fn process_cursor(&mut self, event: crate::usb2::hid::TrueosHidCursorEvent) {
         let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
             return;
@@ -772,6 +797,24 @@ pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, 
     let mut out = Vec::new();
     core::mem::swap(&mut out, &mut queue.events);
     out
+}
+
+pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
+    let routes = INPUT_BROKER.lock().release_owner(owner);
+    let queued_events = {
+        let mut queues = OWNER_QUEUES.lock();
+        if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
+            let queued_events = queues[index].events.len();
+            queues.remove(index);
+            queued_events
+        } else {
+            0
+        }
+    };
+    if routes != 0 || queued_events != 0 {
+        SLOT4_VISUAL_CHANGE.signal(());
+    }
+    (routes, queued_events)
 }
 
 pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {

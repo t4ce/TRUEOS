@@ -137,6 +137,34 @@ struct Rgb565Upload {
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 
+/// Revoke every Blueprint scene resource held for an owner.
+///
+/// The caller owns the application lifecycle decision. UI4 only applies the
+/// owner-scoped resource revocation and does not inspect VM state.
+pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
+    let owned = {
+        let mut surfaces = SURFACES.lock();
+        let mut owned = Vec::new();
+        let mut index = 0;
+        while index < surfaces.len() {
+            if surfaces[index].owner == owner {
+                owned.push(surfaces.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        owned
+    };
+    let released = owned.len();
+    for surface in owned {
+        release_surface_with_request(
+            surface,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        );
+    }
+    released
+}
+
 /// Enumerate the kernel font service's native render-target sizes.
 ///
 /// A null output with zero capacity is a size query. The return value is the

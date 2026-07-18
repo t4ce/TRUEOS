@@ -2,7 +2,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use embassy_executor::Spawner;
+use embassy_executor::{SpawnError, Spawner};
 use embassy_time::Duration as EmbassyDuration;
 use sha2::{Digest, Sha256};
 
@@ -448,17 +448,31 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
     set_matrix_target_active(&target, false);
 }
 
+pub(crate) fn submit_online_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    width: usize,
+    args: Vec<String>,
+) -> Result<(), SpawnError> {
+    set_matrix_target_active(&target, true);
+    match online_run_task(target.clone(), width, args) {
+        Ok(token) => {
+            spawner.spawn(token);
+            Ok(())
+        }
+        Err(err) => {
+            set_matrix_target_active(&target, false);
+            Err(err)
+        }
+    }
+}
+
 pub(crate) fn submit_online(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
     let target = matrix_target_for_backend(io);
     let width = line_width_for_backend(io);
-    set_matrix_target_active(&target, true);
     let args = submitted.split_whitespace().map(String::from).collect();
-    match online_run_task(target.clone(), width, args) {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => {
-            set_matrix_target_active(&target, false);
-            print_shell_line(io, "apps: online task unavailable");
-        }
+    if submit_online_to_target(spawner, target, width, args).is_err() {
+        print_shell_line(io, "apps: online task unavailable");
     }
 }
 
