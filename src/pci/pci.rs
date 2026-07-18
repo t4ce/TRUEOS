@@ -1,6 +1,4 @@
-#[cfg(target_arch = "x86_64")]
 use core::arch::asm;
-#[cfg(target_arch = "x86_64")]
 use x86_64::instructions::interrupts;
 
 use heapless::Vec;
@@ -317,27 +315,10 @@ fn cfg_address(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
 
 #[inline(always)]
 fn with_legacy_cfg_lock<R>(f: impl FnOnce() -> R) -> R {
-    #[cfg(target_arch = "x86_64")]
-    {
-        interrupts::without_interrupts(|| {
-            let _guard = LEGACY_CFG_LOCK.lock();
-            f()
-        })
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
+    interrupts::without_interrupts(|| {
         let _guard = LEGACY_CFG_LOCK.lock();
         f()
-    }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-#[cold]
-fn legacy_cfg_unsupported() -> ! {
-    panic!(
-        "pci: legacy CF8/CFC config access is only supported on x86_64; non-x86 needs ECAM/platform PCI glue"
-    )
+    })
 }
 
 fn read_u16(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
@@ -387,15 +368,7 @@ fn read_u32(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
 
 fn read_u32_unlocked(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
     debug_assert_eq!(offset & 0x03, 0);
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let _ = (bus, slot, function, offset);
-        legacy_cfg_unsupported();
-    }
-
-    #[cfg(target_arch = "x86_64")]
     let addr = cfg_address(bus, slot, function, offset);
-    #[cfg(target_arch = "x86_64")]
     unsafe {
         outl(CFG_ADDR, addr);
         inl(CFG_DATA)
@@ -409,15 +382,7 @@ fn write_u32(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
 
 fn write_u32_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
     debug_assert_eq!(offset & 0x03, 0);
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let _ = (bus, slot, function, offset, value);
-        legacy_cfg_unsupported();
-    }
-
-    #[cfg(target_arch = "x86_64")]
     let addr = cfg_address(bus, slot, function, offset);
-    #[cfg(target_arch = "x86_64")]
     unsafe {
         outl(CFG_ADDR, addr);
         outl(CFG_DATA, value);
@@ -860,13 +825,11 @@ pub fn alloc_hotplug_mmio_base(target_bus: u8, size: u64, align: u64) -> Option<
 }
 
 #[inline(always)]
-#[cfg(target_arch = "x86_64")]
 unsafe fn outl(port: u16, val: u32) {
     asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
 }
 
 #[inline(always)]
-#[cfg(target_arch = "x86_64")]
 unsafe fn inl(port: u16) -> u32 {
     let val: u32;
     asm!("in eax, dx", in("dx") port, out("eax") val, options(nomem, nostack, preserves_flags));

@@ -1,5 +1,4 @@
 use core::alloc::{GlobalAlloc, Layout};
-#[cfg(target_arch = "x86_64")]
 use core::arch::asm;
 use core::mem::{align_of, size_of};
 use core::ptr::{NonNull, null_mut};
@@ -75,7 +74,6 @@ unsafe fn read_return_address(depth: usize) -> usize {
         return 0;
     }
 
-    #[cfg(target_arch = "x86_64")]
     {
         #[inline]
         fn plausible_frame_ptr(ptr: usize) -> bool {
@@ -111,15 +109,6 @@ unsafe fn read_return_address(depth: usize) -> usize {
         };
     }
 
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        // ARMTODO: allocator trace return-address recovery currently walks an
-        // x86 frame chain via `rbp`. Non-x86 builds keep tracing enabled but
-        // report unknown callers until a platform-appropriate unwind/frame
-        // strategy is added.
-        let _ = depth;
-        0
-    }
 }
 
 #[inline]

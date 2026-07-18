@@ -34,27 +34,19 @@ consumer_b task
   does 1 s work
 */
 // this is our apic helper
-#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{__cpuid, _rdtsc};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use spin::Mutex;
-#[cfg(target_arch = "x86_64")]
 use x86_64::registers::model_specific::Msr;
-#[cfg(target_arch = "x86_64")]
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 pub(crate) const CHRONOS_TIMER_VECTOR: u8 = 0x40;
 
-#[cfg(target_arch = "x86_64")]
 const MSR_IA32_X2APIC_EOI: u32 = 0x0000_080B;
-#[cfg(target_arch = "x86_64")]
 const MSR_IA32_X2APIC_LVT_TIMER: u32 = 0x0000_0832;
-#[cfg(target_arch = "x86_64")]
 const MSR_IA32_TSC_DEADLINE: u32 = 0x0000_06E0;
-#[cfg(target_arch = "x86_64")]
 const X2APIC_LVT_TIMER_MASKED: u64 = 1 << 16;
-#[cfg(target_arch = "x86_64")]
 const X2APIC_LVT_TIMER_TSC_DEADLINE: u64 = 0b10 << 17;
 
 static CHRONOS_AWAKE: AtomicBool = AtomicBool::new(false);
@@ -82,18 +74,7 @@ impl TimeSnapshot {
 
 #[inline]
 fn read_cycle_counter() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        return unsafe { _rdtsc() };
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        // ARMTODO: Non-x86 builds still track monotonic time; a real ARM port
-        // can wire this up to CNTVCT_EL0 or another platform cycle counter
-        // later.
-        0
-    }
+    unsafe { _rdtsc() }
 }
 
 #[inline]
@@ -133,7 +114,6 @@ pub fn best_effort_unix_time_seconds() -> Option<u64> {
     crate::r::net::ntp::current_unix_seconds().or_else(crate::time::unix_time_seconds)
 }
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
     idt[CHRONOS_TIMER_VECTOR].set_handler_fn(CHRONOS_TIMER);
 }
@@ -154,7 +134,6 @@ pub fn latest_snapshot() -> TimeSnapshot {
     *LATEST_SNAPSHOT.lock()
 }
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) fn arm_local_tsc_deadline_after_ticks(ticks: u64) -> bool {
     if ticks == 0 || ticks == u64::MAX {
         return false;
@@ -178,18 +157,11 @@ pub(crate) fn arm_local_tsc_deadline_after_ticks(ticks: u64) -> bool {
     true
 }
 
-#[cfg(target_arch = "x86_64")]
 fn local_tsc_deadline_supported() -> bool {
     let cpuid = __cpuid(1);
     (cpuid.ecx & (1 << 24)) != 0
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn arm_local_tsc_deadline_after_ticks(_ticks: u64) -> bool {
-    false
-}
-
-#[cfg(target_arch = "x86_64")]
 pub(crate) fn disarm_local_timer() {
     unsafe {
         Msr::new(MSR_IA32_TSC_DEADLINE).write(0);
@@ -198,11 +170,7 @@ pub(crate) fn disarm_local_timer() {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn disarm_local_timer() {}
-
 #[allow(non_snake_case)]
-#[cfg(target_arch = "x86_64")]
 pub(crate) extern "x86-interrupt" fn CHRONOS_TIMER(_stack_frame: InterruptStackFrame) {
     let seq = WATCH_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
     let _ = refresh_snapshot(seq);

@@ -115,7 +115,7 @@ submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
 ### C Tools
 ```
 sudo apt update && sudo apt upgrade
-sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+sudo apt install graphviz npm git gh make rustup autoconf automake mtools nasm xorriso qemu-system gdb build-essential konsole
 ```
 
 ### Rust Tools 
@@ -127,12 +127,6 @@ cargo install cargo-edit --locked
 cargo install cargo-depgraph
 
 ```
-### Vars
-```
-export CC_aarch64_unknown_none=aarch64-linux-gnu-gcc
-export AR_aarch64_unknown_none=aarch64-linux-gnu-ar
-```
-
 ## on MAC
 > [!TIP]
 > We were able to build, with a MAC Laptop aswell.

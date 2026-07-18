@@ -1,11 +1,9 @@
-#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::_rdtsc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Waker;
 
 use embassy_time_driver::{Driver, TICK_HZ};
 use heapless::Vec;
-#[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
 use spin::{Mutex, Once};
 
@@ -24,16 +22,7 @@ static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
 
 #[inline]
 fn read_cycle_counter() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        return unsafe { _rdtsc() };
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        // ARMTODO: wire this to a real platform cycle counter for non-x86.
-        0
-    }
+    unsafe { _rdtsc() }
 }
 
 #[inline]
@@ -75,12 +64,6 @@ fn init_once() {
 }
 
 fn detect_tsc_hz() -> u64 {
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        return TICK_HZ.max(1);
-    }
-
-    #[cfg(target_arch = "x86_64")]
     if let Some(hpet) = crate::efi::acpi::hpet::ensure()
         && let Some(calibrated_hz) = calibrate_tsc_hz_with_hpet(hpet)
     {
@@ -90,13 +73,9 @@ fn detect_tsc_hz() -> u64 {
         return calibrated_hz;
     }
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        detect_tsc_hz_from_cpuid()
-    }
+    detect_tsc_hz_from_cpuid()
 }
 
-#[cfg(target_arch = "x86_64")]
 fn detect_tsc_hz_from_cpuid() -> u64 {
     let cpuid = CpuId::new();
     let tsc = cpuid.get_tsc_info();
@@ -145,7 +124,6 @@ fn detect_tsc_hz_from_cpuid() -> u64 {
     1_000_000_000
 }
 
-#[cfg(target_arch = "x86_64")]
 fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64> {
     let hpet_hz = hpet.frequency_hz();
     if hpet_hz == 0 {

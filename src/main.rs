@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![feature(abi_x86_interrupt)]
 #![feature(f16)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -28,20 +28,12 @@ mod disc;
 pub mod dma;
 mod efi;
 mod efi_img;
-#[cfg(target_arch = "x86_64")]
-mod exceptions;
-#[cfg(not(target_arch = "x86_64"))]
-#[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod executor_cache;
 mod gb_demo;
 mod gpu;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
-#[cfg(target_arch = "x86_64")]
-mod hv;
-#[cfg(not(target_arch = "x86_64"))]
-#[path = "hv_disabled.rs"]
 mod hv;
 mod intel;
 #[path = "intel/sound/intel_hda_audio_demo.rs"]
@@ -60,10 +52,6 @@ mod percpu;
 mod phys;
 mod pmu;
 mod portio;
-#[cfg(target_arch = "x86_64")]
-mod power;
-#[cfg(not(target_arch = "x86_64"))]
-#[path = "power/power_disabled.rs"]
 mod power;
 mod r;
 mod ram_probe;
@@ -82,7 +70,6 @@ mod trueos_gboi;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
-#[cfg(target_arch = "x86_64")]
 mod uart1_com1;
 mod ui4;
 mod unix_abi_shim;
@@ -121,7 +108,6 @@ static mut BSP_BOOT_STACK: BootStack = BootStack {
 };
 
 // only the person that deeply understands the root complex, is allowed to touch this fn
-#[cfg(target_arch = "x86_64")]
 #[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub unsafe extern "C" fn _start() -> ! {
@@ -136,29 +122,6 @@ pub unsafe extern "C" fn _start() -> ! {
         "ud2",
         stack = sym BSP_BOOT_STACK,
         stack_size = const BSP_BOOT_STACK_BYTES,
-        main = sym kmain,
-    );
-}
-
-#[cfg(target_arch = "aarch64")]
-#[unsafe(no_mangle)]
-#[unsafe(naked)]
-pub unsafe extern "C" fn _start() -> ! {
-    core::arch::naked_asm!(
-        "adrp x0, {stack}",
-        "add x0, x0, :lo12:{stack}",
-        "movz x1, #{stack_size_0}",
-        "movk x1, #{stack_size_16}, lsl #16",
-        "movk x1, #{stack_size_32}, lsl #32",
-        "add x0, x0, x1",
-        "and x0, x0, #0xfffffffffffffff0",
-        "mov sp, x0",
-        "bl {main}",
-        "brk #0",
-        stack = sym BSP_BOOT_STACK,
-        stack_size_0 = const (BSP_BOOT_STACK_BYTES & 0xffff),
-        stack_size_16 = const ((BSP_BOOT_STACK_BYTES >> 16) & 0xffff),
-        stack_size_32 = const ((BSP_BOOT_STACK_BYTES >> 32) & 0xffff),
         main = sym kmain,
     );
 }

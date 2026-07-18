@@ -2,7 +2,6 @@
 // atleast for my cpus, if the mainboards are
 // not updated, cpus will be now - intel mop update loader
 // because bios updates dont arrive magically usually
-#[cfg(target_arch = "x86_64")]
 mod imp {
     use core::arch::x86_64::__cpuid;
     use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -494,59 +493,6 @@ mod imp {
             let day = (self.0 >> 16) & 0xFF;
             let year = self.0 & 0xFFFF;
             write!(f, "0x{:08X}({:04X}-{:02X}-{:02X})", self.0, year, month, day)
-        }
-    }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-mod imp {
-    #[derive(Clone, Copy)]
-    pub(crate) struct EmbeddedSource {
-        pub(crate) name: &'static str,
-        pub(crate) len: usize,
-    }
-
-    #[derive(Clone, Copy)]
-    pub(crate) struct FmsName(pub(crate) u32);
-
-    impl core::fmt::Display for FmsName {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let _ = self;
-            write!(f, "--")
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    pub(crate) struct Snapshot {
-        pub(crate) intel: bool,
-        pub(crate) target_name: &'static str,
-        pub(crate) signature: u32,
-        pub(crate) fms: FmsName,
-        pub(crate) platform_mask: u32,
-        pub(crate) current_revision: u32,
-        pub(crate) selected_revision: u32,
-        pub(crate) selected_len: usize,
-        pub(crate) embedded_sources: [EmbeddedSource; 3],
-    }
-
-    pub fn init_from_limine_bsp() {}
-    pub fn apply_selected_to_current_cpu(_tag: &str) {}
-
-    pub(crate) fn snapshot() -> Snapshot {
-        Snapshot {
-            intel: false,
-            target_name: "non-x86",
-            signature: 0,
-            fms: FmsName(0),
-            platform_mask: 0,
-            current_revision: 0,
-            selected_revision: 0,
-            selected_len: 0,
-            embedded_sources: [
-                EmbeddedSource { name: "-", len: 0 },
-                EmbeddedSource { name: "-", len: 0 },
-                EmbeddedSource { name: "-", len: 0 },
-            ],
         }
     }
 }

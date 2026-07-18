@@ -1,24 +1,13 @@
 use crate::limine::MpCpu as LimineCpu;
 use crate::{exceptions, percpu, runtime};
 use alloc::vec::Vec;
-#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use embassy_executor::Spawner;
 use embassy_time::{Duration as EmbassyDuration, Timer};
-#[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
-#[cfg(target_arch = "x86_64")]
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
-
-// ARMTODO: `cpu.rs` now keeps the portable profile/slot bookkeeping, but a
-// real non-x86 bring-up still needs platform-specific replacements for four
-// larger concepts that are currently x86-shaped here:
-// 1. hardware CPU identity (`lapic_id` and LAPIC-based slot lookup)
-// 2. core classification (`CPUID` perf/eff hints)
-// 3. AP startup / restart wiring (`ap_start`, `percpu::init_ap` expectations)
-// 4. early CPU feature enable (`enable_sse`) and mode checks (`long_mode_active`)
 
 const AP_HEARTBEAT_TASK_POOL: usize = 256;
 static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
@@ -43,9 +32,7 @@ impl CpuProfileRecord {
 static CPU_PROFILE_PTR: AtomicPtr<CpuProfileRecord> = AtomicPtr::new(null_mut());
 static CPU_PROFILE_LEN: AtomicUsize = AtomicUsize::new(0);
 static CPU_PROFILE_INIT: spin::Once<()> = spin::Once::new();
-#[cfg(target_arch = "x86_64")]
 static XSAVE_AVX_ENABLED: AtomicBool = AtomicBool::new(false);
-#[cfg(target_arch = "x86_64")]
 static XSAVE_AVX_REASON: AtomicU8 = AtomicU8::new(SimdReason::NotProbed as u8);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +45,6 @@ pub enum SimdReason {
     MissingAvx2 = 4,
     MissingFma = 5,
     Xcr0MissingYmm = 6,
-    NonX86 = 7,
 }
 
 impl SimdReason {
@@ -71,7 +57,6 @@ impl SimdReason {
             Self::MissingAvx2 => "cpuid-missing-avx2",
             Self::MissingFma => "cpuid-missing-fma",
             Self::Xcr0MissingYmm => "xcr0-missing-ymm",
-            Self::NonX86 => "non-x86",
         }
     }
 
@@ -83,7 +68,6 @@ impl SimdReason {
             4 => Self::MissingAvx2,
             5 => Self::MissingFma,
             6 => Self::Xcr0MissingYmm,
-            7 => Self::NonX86,
             _ => Self::NotProbed,
         }
     }
@@ -317,7 +301,6 @@ pub(crate) fn intel_core_kind_hint() -> u8 {
     detect_current_core_kind()
 }
 
-#[cfg(target_arch = "x86_64")]
 fn detect_current_core_kind() -> u8 {
     let r0 = __cpuid(0);
     let max = r0.eax;
@@ -331,11 +314,6 @@ fn detect_current_core_kind() -> u8 {
         0x20 => crate::workers::CORE_KIND_EFF,
         _ => crate::workers::CORE_KIND_UNKNOWN,
     }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn detect_current_core_kind() -> u8 {
-    crate::workers::CORE_KIND_UNKNOWN
 }
 
 fn profile_record(slot: usize) -> Option<&'static CpuProfileRecord> {
@@ -357,7 +335,6 @@ fn store_profile(profile: CpuProfile) {
     rec.registered.store(1, Ordering::Release);
 }
 
-#[cfg(target_arch = "x86_64")]
 pub unsafe fn enable_sse() {
     let mut cr0 = Cr0::read();
     cr0.remove(Cr0Flags::EMULATE_COPROCESSOR);
@@ -402,7 +379,6 @@ pub unsafe fn enable_sse() {
     );
 }
 
-#[cfg(target_arch = "x86_64")]
 pub fn simd_status() -> SimdStatus {
     let avx_state_enabled = XSAVE_AVX_ENABLED.load(Ordering::Acquire);
     let avx_state_reason = SimdReason::from_u8(XSAVE_AVX_REASON.load(Ordering::Acquire));
@@ -419,17 +395,6 @@ pub fn simd_status() -> SimdStatus {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-pub fn simd_status() -> SimdStatus {
-    SimdStatus {
-        avx_state_enabled: false,
-        avx_state_reason: SimdReason::NonX86,
-        avx2_fma_ready: false,
-        avx2_fma_reason: SimdReason::NonX86,
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
 fn probe_xsave_avx_state() -> SimdReason {
     let Some(features) = CpuId::new().get_feature_info() else {
         return SimdReason::MissingXsave;
@@ -443,7 +408,6 @@ fn probe_xsave_avx_state() -> SimdReason {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn probe_avx2_fma() -> SimdReason {
     let cpuid = CpuId::new();
     let Some(features) = cpuid.get_feature_info() else {
@@ -467,7 +431,6 @@ fn probe_avx2_fma() -> SimdReason {
     SimdReason::Enabled
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn xsetbv(xcr: u32, value: u64) {
     let eax = value as u32;
@@ -483,7 +446,6 @@ unsafe fn xsetbv(xcr: u32, value: u64) {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 unsafe fn xgetbv(xcr: u32) -> u64 {
     let eax: u32;
@@ -500,24 +462,11 @@ unsafe fn xgetbv(xcr: u32) -> u64 {
     ((edx as u64) << 32) | eax as u64
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-pub unsafe fn enable_sse() {
-    // ARMTODO: non-x86 bring-up will want platform-specific FP/SIMD enable
-    // logic here if the early runtime requires it.
-}
-
 #[inline(always)]
-#[cfg(target_arch = "x86_64")]
 pub(crate) fn long_mode_active() -> bool {
     use x86_64::registers::model_specific::Msr;
     const IA32_EFER: u32 = 0xC000_0080;
     const EFER_LMA_BIT: u64 = 1 << 10;
     let efer = unsafe { Msr::new(IA32_EFER).read() };
     (efer & EFER_LMA_BIT) != 0
-}
-
-#[inline(always)]
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn long_mode_active() -> bool {
-    false
 }
