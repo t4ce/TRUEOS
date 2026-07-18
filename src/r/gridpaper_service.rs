@@ -1665,12 +1665,14 @@ fn publish_page(
     if !GPU_DIRECT_PRESENT_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4 size={}x{} pitch={} target_gpu=0x{:X} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1\n",
+            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4 size={}x{} pitch={} target_gpu=0x{:X} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={}\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
             destination.gpu,
             result.rgba.is_some() as u8,
+            result.coverage_submits,
+            result.coverage_walkers,
         );
     }
     if let Some(selection) = selection
@@ -1724,7 +1726,11 @@ fn capture_resident_page_frame(
                     origin[0].saturating_add(pan_px[0]),
                     origin[1].saturating_add(pan_px[1]),
                 ),
-                rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
+                color_rgba: u32::from_le_bytes(resident_layer_color(
+                    layer,
+                    text_animations,
+                    animation_elapsed_ms,
+                )),
             })
         })
         .collect::<Vec<_>>();
@@ -2462,7 +2468,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     .count();
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: frame published instance={} serial={} generation={} scale={} pan_scene={:.3},{:.3} layers={} coverage_masks={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} font_path=kernel-font-stamp-default/skrifa-gpgpu-r8-or-triangle-fallback persistence=resident-until-next-snapshot pan_transform=sf-viewport frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     published.serial,
                     published.generation,
@@ -2471,6 +2477,8 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                     published.pan.y,
                     published.layers.len(),
                     coverage_masks,
+                    result.coverage_submits,
+                    result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
                 );
@@ -2531,11 +2539,13 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
                 if runtime.hot_pan_frames <= 8 || runtime.hot_pan_frames.is_multiple_of(120) {
                     crate::log_info!(
                         target: "gridpaper";
-                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                        "gridpaper: hot-pan-frame instance={} seq={} pan_scene={:.3},{:.3} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 transform=sf-viewport preclip=translated-bypass final_clip=scissor frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                         runtime.surface.instance_id,
                         runtime.hot_pan_frames,
                         page.pan.x,
                         page.pan.y,
+                        result.coverage_submits,
+                        result.coverage_walkers,
                         result.changed_pixels,
                         result.frame_us,
                     );
@@ -2549,12 +2559,14 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
             {
                 crate::log_info!(
                     target: "gridpaper";
-                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
+                    "gridpaper: text-animation-frame instance={} seq={} animation_serial={} elapsed_ms={} programs={} coverage_submits={} coverage_walkers={} changed_pixels={} frame_us={} geometry_uploads=0 resident_mesh_rebuilds=0 frame_path=gpu-direct cpu_readback=0 cpu_frame_copy=0\n",
                     runtime.surface.instance_id,
                     runtime.animation_frames,
                     runtime.observed_animation_serial,
                     animation_elapsed_ms,
                     runtime.text_animations.iter().flatten().count(),
+                    result.coverage_submits,
+                    result.coverage_walkers,
                     result.changed_pixels,
                     result.frame_us,
                 );

@@ -1430,7 +1430,7 @@ fn render_analytical_font_stamp_readback(
         mask: coverage.surface(),
         mask_rect: coverage.full_rect(),
         dst_xy: crate::intel::gpgpu::GpgpuPoint::new(origin[0], origin[1]),
-        rgba: [u8::MAX; 4],
+        color_rgba: u32::from_le_bytes([u8::MAX; 4]),
     };
     let captured = match crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
         &[],
@@ -1962,7 +1962,7 @@ pub(crate) fn render_font_scene_readback_once(
             mask: coverage.surface(),
             mask_rect: coverage.full_rect(),
             dst_xy: crate::intel::gpgpu::GpgpuPoint::new(origin[0], origin[1]),
-            rgba: [u8::MAX; 4],
+            color_rgba: u32::from_le_bytes([u8::MAX; 4]),
         };
         match crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4_with_coverage(
             &[],

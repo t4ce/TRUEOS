@@ -285,14 +285,8 @@ pub(crate) struct ResidentSceneDraw<'a> {
 }
 
 /// One persistent R8 analytical font layer composited after triangle resolve.
-/// The mask is colorless; animated RGBA and integer scene pan are supplied for
-/// each frame without rebuilding the Skrifa/GPGPU coverage artifact.
-pub(crate) struct ResidentSceneCoverageDraw {
-    pub(crate) mask: crate::intel::gpgpu::GpgpuMask8Surface,
-    pub(crate) mask_rect: crate::intel::gpgpu::GpgpuRect,
-    pub(crate) dst_xy: crate::intel::gpgpu::GpgpuPoint,
-    pub(crate) rgba: [u8; 4],
-}
+/// The scene renderer submits the complete slice as one GPGPU batch.
+pub(crate) type ResidentSceneCoverageDraw = crate::intel::gpgpu::GpgpuGlyphMaskLayer;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ResidentSceneRasterQuality {
@@ -309,6 +303,8 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) frame_us: u64,
+    pub(crate) coverage_submits: usize,
+    pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
 }
 
@@ -1139,21 +1135,39 @@ fn submit_resident_triangle_scene_capture(
             false
         };
         let mut completed_coverage_draws = 0usize;
+        let mut coverage_submits = 0usize;
+        let mut coverage_walkers = 0usize;
         if resolved {
-            for draw in coverage_draws {
-                let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d(
-                    crate::intel::gpgpu::GpgpuGlyphMaskBlit {
-                        mask: draw.mask,
-                        mask_rect: draw.mask_rect,
-                        dst: output,
-                        dst_xy: draw.dst_xy,
-                        color_rgba: u32::from_le_bytes(draw.rgba),
-                    },
-                );
-                if !completed {
-                    break;
+            let batch = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d(coverage_draws, output);
+            coverage_submits = batch.submits;
+            coverage_walkers = batch.active_walkers;
+            if batch.ok && batch.requested_layers == coverage_draws.len() {
+                completed_coverage_draws = coverage_draws.len();
+            } else if !batch.submitted {
+                // Preparation/mapping failures have not touched the target and
+                // can safely use the established one-mask submission path.
+                // Once a batch was submitted, fail closed: the caller clears
+                // and rerenders the whole scene instead of double-blending a
+                // possibly partial result.
+                coverage_submits = 0;
+                coverage_walkers = 0;
+                for draw in coverage_draws {
+                    let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d(
+                        crate::intel::gpgpu::GpgpuGlyphMaskBlit {
+                            mask: draw.mask,
+                            mask_rect: draw.mask_rect,
+                            dst: output,
+                            dst_xy: draw.dst_xy,
+                            color_rgba: draw.color_rgba,
+                        },
+                    );
+                    if !completed {
+                        break;
+                    }
+                    completed_coverage_draws += 1;
+                    coverage_submits += 1;
+                    coverage_walkers += 1;
                 }
-                completed_coverage_draws += 1;
             }
         }
         completed_draws = completed_draws.saturating_add(completed_coverage_draws);
@@ -1219,6 +1233,8 @@ fn submit_resident_triangle_scene_capture(
             width: target_width as u32,
             height: target_height as u32,
             frame_us: crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000,
+            coverage_submits,
+            coverage_walkers,
             rgba,
         })
     })();

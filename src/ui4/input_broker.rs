@@ -391,7 +391,7 @@ impl InputBroker {
                     match super::set_window_placement(target.owner, target.id, next) {
                         Ok(()) => {
                             target.placement = next;
-                            crate::log_info!(target: "ui4";
+                            crate::log_trace!(target: "ui4";
                                 "ui4/input: frame-drag owner={:?} window={} plane={} dx={} dy={} placement={},{} trigger=secondary-button\n",
                                 target.owner,
                                 target.id.raw(),
