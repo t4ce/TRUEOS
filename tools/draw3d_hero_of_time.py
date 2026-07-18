@@ -19,7 +19,6 @@ from draw3d_house_demo import Draw3dClient
 from draw3d_poly_trees import place_tree, upload_tree_kit
 
 
-BACKGROUND = (5, 8, 23, 255)
 IDENTITY_LOCATION = (0.0, 0.0, 0.0)
 IDENTITY_SCALE = (1.0, 1.0, 1.0)
 HERO_GROUP_LOCATION = (1.65, 0.0, 0.0)
@@ -576,7 +575,9 @@ def populate(client):
             scale,
             yaw,
         )
-    client.start(BACKGROUND)
+    # Empty StartScene is the protocol's transparent-background form.  UI4
+    # receives the renderer's premultiplied RGBA output on alpha-enabled slot 3.
+    client.start()
 
 
 def capture_view(client, name, output_dir, settle):

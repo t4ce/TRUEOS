@@ -274,8 +274,8 @@ struct WindowSessionFinish {
     immediate_retire_frames: Vec<FrameHandle>,
 }
 
-const CLOSE_TRANSITION_DURATION_MS: u64 = 240;
-const CLOSE_TRANSITION_SHRINK_PER_MILLE: u64 = 180;
+const CLOSE_TRANSITION_DURATION_MS: u64 = 300;
+const CLOSE_TRANSITION_SHRINK_PER_MILLE: u64 = 900;
 
 #[derive(Copy, Clone)]
 struct SessionRecord {
@@ -658,14 +658,14 @@ pub(crate) fn finish_window_session_with_request(
     if request.animate {
         crate::log_info!(
             target: "ui4";
-            "ui4 close-transition started owner={:?} session={} windows={} animated={} skipped={} duration_ms={} shrink_percent={} retire_frames={} persist_final_frame={}\n",
+            "ui4 close-transition started owner={:?} session={} windows={} animated={} skipped={} duration_ms={} final_scale_percent={} retire_frames={} persist_final_frame={}\n",
             owner,
             session.raw(),
             finish.closed,
             finish.animated,
             finish.animation_skipped,
             CLOSE_TRANSITION_DURATION_MS,
-            CLOSE_TRANSITION_SHRINK_PER_MILLE / 10,
+            (1_000 - CLOSE_TRANSITION_SHRINK_PER_MILLE) / 10,
             request.retire_frames as u8,
             request.persist_final_frame as u8,
         );
@@ -877,13 +877,21 @@ fn close_transition_placement(initial: WindowPlacement, elapsed_ms: u64) -> Wind
         .checked_div(CLOSE_TRANSITION_DURATION_MS)
         .unwrap_or(1_000)
         .min(1_000);
-    // Smoothstep gives the close a calm start and avoids a hard final snap.
-    let eased = linear
+    // Fade across the full duration, while an ease-out curve gets most of the
+    // much stronger scale-down done early enough to remain visually legible.
+    let fade_eased = linear
         .saturating_mul(linear)
         .saturating_mul(3_000u64.saturating_sub(linear.saturating_mul(2)))
         / 1_000_000;
-    let scale =
-        1_000u64.saturating_sub(CLOSE_TRANSITION_SHRINK_PER_MILLE.saturating_mul(eased) / 1_000);
+    let scale_remaining = 1_000u64.saturating_sub(linear);
+    let scale_eased = 1_000u64.saturating_sub(
+        scale_remaining
+            .saturating_mul(scale_remaining)
+            .saturating_mul(scale_remaining)
+            / 1_000_000,
+    );
+    let scale = 1_000u64
+        .saturating_sub(CLOSE_TRANSITION_SHRINK_PER_MILLE.saturating_mul(scale_eased) / 1_000);
     let width = ((u64::from(initial.width).saturating_mul(scale) + 500) / 1_000)
         .max(1)
         .min(u64::from(u32::MAX)) as u32;
@@ -892,8 +900,8 @@ fn close_transition_placement(initial: WindowPlacement, elapsed_ms: u64) -> Wind
         .min(u64::from(u32::MAX)) as u32;
     let x = centered_shrink_coordinate(initial.x, initial.width, width);
     let y = centered_shrink_coordinate(initial.y, initial.height, height);
-    let opacity =
-        (u64::from(initial.opacity).saturating_mul(1_000u64.saturating_sub(eased)) / 1_000) as u8;
+    let opacity = (u64::from(initial.opacity).saturating_mul(1_000u64.saturating_sub(fade_eased))
+        / 1_000) as u8;
     WindowPlacement {
         x,
         y,
