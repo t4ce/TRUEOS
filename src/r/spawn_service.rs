@@ -63,9 +63,6 @@ define_started_flags!(
     LAN_DISCOVERY_STARTED,
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
-    ESP_GATE_REGISTRY_STARTED,
-    ESP_PIANO_AUDIO_STARTED,
-    ESP_PIANO_UDP_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
@@ -475,18 +472,6 @@ fn spawn_printer_discovery(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_printer_spooler(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::printer::printer_spooler_task())
-}
-
-fn spawn_esp_gate_registry(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::esp::esp_gate_registry_task())
-}
-
-fn spawn_esp_piano_udp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::esp::esp_piano_udp_task())
-}
-
-fn spawn_esp_piano_audio(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |_worker_spawner| crate::aud::live_piano::task())
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -1206,7 +1191,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 65 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 62 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1390,14 +1375,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &PRINTER_SPOOLER_STARTED,
         spawn_printer_spooler,
-    ),
-    TaskSpec::disabled("esp-gate-registry", 0, &ESP_GATE_REGISTRY_STARTED, spawn_esp_gate_registry),
-    TaskSpec::disabled("esp-piano-audio", 0, &ESP_PIANO_AUDIO_STARTED, spawn_esp_piano_audio),
-    TaskSpec::enabled(
-        "esp-piano-udp",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &ESP_PIANO_UDP_STARTED,
-        spawn_esp_piano_udp,
     ),
     TaskSpec::disabled(
         "ftp-server",

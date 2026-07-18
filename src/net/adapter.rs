@@ -2590,6 +2590,69 @@ impl NetService {
         Some(Ok(()))
     }
 
+    fn send_loopback_udp(
+        &mut self,
+        handle: NetHandle,
+        remote: NetEndpoint,
+        data: Vec<u8>,
+    ) -> Option<Result<(), ()>> {
+        if !is_ipv4_loopback(remote.addr) {
+            return None;
+        }
+
+        let Some(source_idx) = self
+            .records
+            .iter()
+            .position(|record| record.handle == handle)
+        else {
+            return Some(Err(()));
+        };
+        if self.records[source_idx].kind != SocketKind::Udp {
+            return Some(Err(()));
+        }
+        let source_socket = self.records[source_idx].socket;
+        let source_port = self
+            .sockets
+            .get_mut::<udp::Socket>(source_socket)
+            .endpoint()
+            .port;
+
+        let mut destination = None;
+        for idx in 0..self.records.len() {
+            let (kind, socket_handle, destination_owner, destination_handle) = {
+                let record = &self.records[idx];
+                (record.kind, record.socket, record.owner, record.handle)
+            };
+            if kind != SocketKind::Udp {
+                continue;
+            }
+            let port = self
+                .sockets
+                .get_mut::<udp::Socket>(socket_handle)
+                .endpoint()
+                .port;
+            if port == remote.port {
+                destination = Some((destination_owner, destination_handle));
+                break;
+            }
+        }
+
+        if let Some((destination_owner, destination_handle)) = destination {
+            let _ = push_event(
+                destination_owner,
+                NetEvent::UdpPacket {
+                    handle: destination_handle,
+                    from: NetEndpoint {
+                        addr: [127, 0, 0, 1],
+                        port: source_port,
+                    },
+                    data,
+                },
+            );
+        }
+        Some(Ok(()))
+    }
+
     fn close_loopback_tcp(&mut self, handle: NetHandle) -> bool {
         let Some(idx) = self.records.iter().position(|r| r.handle == handle) else {
             return false;
@@ -3754,6 +3817,12 @@ impl NetService {
                 remote,
                 data,
             } => {
+                if let Some(result) = self.send_loopback_udp(handle, remote, data.clone()) {
+                    if result.is_err() {
+                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
+                    }
+                    return;
+                }
                 if !self.link_up() {
                     let _ = push_event(owner, NetEvent::Error { msg: "link down" });
                     return;

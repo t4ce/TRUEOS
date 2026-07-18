@@ -208,6 +208,7 @@ static PRIMARY_PLANE_SOURCE_BINDINGS: [Mutex<Option<PrimaryPlaneSourceBinding>>;
     Mutex::new(None),
 ];
 static OVERLAY_PRESENT_SEQ: AtomicU32 = AtomicU32::new(0);
+static OVERLAY_IN_PLACE_FALLBACK_SEQ: AtomicU32 = AtomicU32::new(0);
 static DISPLAY_PIPELINE_SELECTION_SIGNATURE: AtomicU32 = AtomicU32::new(u32::MAX);
 static OVERLAY_SURFACES_SLOT_1: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(OverlaySurfacePool::new()),
@@ -6877,7 +6878,49 @@ fn ensure_overlay_surface_for_pipe(
         );
         return None;
     }
-    let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
+    let (phys, virt) = match crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) {
+        Some(allocation) => allocation,
+        None => {
+            let in_place_front = {
+                let pool = surface_pool.lock();
+                pool.matches(width, height, pipe)
+                    .then(|| {
+                        pool.front_index
+                            .and_then(|front_index| pool.surfaces[front_index])
+                    })
+                    .flatten()
+            };
+            let Some(front) = in_place_front else {
+                crate::log_warn!(
+                    target: "intel/display";
+                    "intel/display: overlay-surface allocation failed pipeline={} slot={} buffer={} size={}x{} bytes=0x{:X} fallback=unavailable\n",
+                    DisplayPipelineId::from_pipe(pipe)?.name(),
+                    plane_slot,
+                    buffer_index,
+                    width,
+                    height,
+                    byte_len,
+                );
+                return None;
+            };
+            let seq = OVERLAY_IN_PLACE_FALLBACK_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+            if seq <= 3 || seq.is_multiple_of(600) {
+                crate::log_warn!(
+                    target: "intel/display";
+                    "intel/display: overlay double-buffer allocation unavailable seq={} pipeline={} slot={} requested_buffer={} live_buffer={} size={}x{} bytes=0x{:X} action=update-live-front-in-place retry=next-frame tearing_possible=1\n",
+                    seq,
+                    DisplayPipelineId::from_pipe(pipe)?.name(),
+                    plane_slot,
+                    buffer_index,
+                    front.buffer_index,
+                    width,
+                    height,
+                    byte_len,
+                );
+            }
+            return Some(front);
+        }
+    };
     fill_surface_color(virt, pitch_bytes as usize, width, height, 0);
     crate::intel::dma_flush(virt, byte_len);
 

@@ -1,6 +1,31 @@
+use alloc::vec::Vec;
+
 use embassy_time::{Duration, Timer};
 
 use super::VNet;
+
+const SWARM_DISCOVERY_RELAY_MAGIC: &[u8; 4] = b"SRD1";
+
+fn relay_discovery_packet(
+    vnet: &VNet,
+    udp_handle: v::vnet::NetHandle,
+    from: v::vnet::EndpointV4,
+    payload: &[u8],
+) {
+    let mut frame = Vec::with_capacity(10usize.saturating_add(payload.len()));
+    frame.extend_from_slice(SWARM_DISCOVERY_RELAY_MAGIC);
+    frame.extend_from_slice(&from.addr);
+    frame.extend_from_slice(&from.port.to_be_bytes());
+    frame.extend_from_slice(payload);
+    let _ = vnet.submit(v::vnet::Command::SendUdp {
+        handle: udp_handle,
+        remote: v::vnet::EndpointV4::new(
+            [127, 0, 0, 1],
+            crate::r::net::ports::SWARM_BLUEPRINT_RELAY_UDP_PORT,
+        ),
+        data: v::vnet::ByteBuf::from_slice_trunc(frame.as_slice()),
+    });
+}
 
 #[embassy_executor::task]
 pub async fn lan_discovery_task() {
@@ -35,9 +60,8 @@ pub async fn lan_discovery_task() {
                     v::vnet::Event::UdpPacket { handle, from, data }
                         if udp_handle == Some(handle) =>
                     {
-                        if data.as_slice() == trueos_esp::gate::ESP_SWARM_HEARTBEAT {
-                            crate::r::net::esp::publish_swarm_heartbeat_v4(from);
-                        } else if let Some(advertisement) =
+                        relay_discovery_packet(&vnet, handle, from, data.as_slice());
+                        if let Some(advertisement) =
                             crate::r::net::trueos_peer::parse_peer_advertisement(
                                 from,
                                 data.as_slice(),

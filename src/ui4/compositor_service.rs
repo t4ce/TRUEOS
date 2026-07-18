@@ -16,6 +16,7 @@ use super::{
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
+const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -69,17 +70,7 @@ pub(crate) async fn ui4_compositor_service_task() {
         crate::percpu::current_slot()
     );
     crate::intel::wait_hw_logo_sequence_done().await;
-    let mut runtime = match initialize() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            crate::log_error!(
-                target: "ui4";
-                "ui4 compositor init failed error={:?}\n",
-                error
-            );
-            return;
-        }
-    };
+    let mut runtime = initialize();
 
     crate::log_info!(
         target: "ui4";
@@ -87,22 +78,40 @@ pub(crate) async fn ui4_compositor_service_task() {
         COMPOSITION_PERIOD_MS,
     );
 
+    let mut consecutive_failures = 0u32;
     loop {
-        if let Err(error) = present_composition(&mut runtime) {
-            crate::log_error!(
-                target: "ui4";
-                "ui4 compositor stopped error={:?}\n",
-                error
-            );
-            return;
+        match present_composition(&mut runtime) {
+            Ok(()) => {
+                if consecutive_failures != 0 {
+                    crate::log_info!(
+                        target: "ui4";
+                        "ui4 compositor recovered failures={} action=continue\n",
+                        consecutive_failures
+                    );
+                    consecutive_failures = 0;
+                }
+            }
+            Err(error) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                if consecutive_failures <= 3
+                    || consecutive_failures.is_multiple_of(PRESENT_FAILURE_LOG_INTERVAL)
+                {
+                    crate::log_error!(
+                        target: "ui4";
+                        "ui4 compositor present failed error={:?} consecutive={} action=retry\n",
+                        error,
+                        consecutive_failures
+                    );
+                }
+            }
         }
 
         Timer::after(EmbassyDuration::from_millis(COMPOSITION_PERIOD_MS)).await;
     }
 }
 
-fn initialize() -> Result<Runtime, Ui4CompositorError> {
-    let mut runtime = Runtime {
+fn initialize() -> Runtime {
+    Runtime {
         composition: CompositionState {
             primary: PlaneCompositionState {
                 initialized: false,
@@ -117,12 +126,7 @@ fn initialize() -> Result<Runtime, Ui4CompositorError> {
                 windows: [None; MAX_COMPOSITION_WINDOWS],
             },
         },
-    };
-    if let Err(error) = present_composition(&mut runtime) {
-        return Err(error);
     }
-
-    Ok(runtime)
 }
 
 fn present_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {

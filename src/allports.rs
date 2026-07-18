@@ -44,6 +44,8 @@ pub mod services {
     pub const FTP_SERVER_PASV_MAX: u16 = 40_127;
     pub const VM_STORE_REPL_PORT: u16 = 32_123;
     pub const TRUEOS_DISCOVERY_UDP_PORT: u16 = 32_343;
+    /// Loopback handoff from the shared LAN listener to the Swarm Blueprint.
+    pub const SWARM_BLUEPRINT_RELAY_UDP_PORT: u16 = 32_345;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;
@@ -66,6 +68,7 @@ pub mod mail {
 
 pub mod esp {
     pub const UDP_BROADCAST_PORT: u16 = super::services::TRUEOS_DISCOVERY_UDP_PORT;
+    pub const BLUEPRINT_RELAY_UDP_PORT: u16 = super::services::SWARM_BLUEPRINT_RELAY_UDP_PORT;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
     pub const TRUEOS_PEER_TCP_PORT: u16 = 32_344;
 }

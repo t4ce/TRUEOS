@@ -6,7 +6,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 pub mod cli;
 pub mod discovery;
 pub mod dns;
-pub mod esp;
 pub mod https;
 pub mod ipp_print;
 pub mod mail_config;
