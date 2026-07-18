@@ -84,8 +84,6 @@ mod tst;
 mod tst_audio_live_http;
 #[path = "tst/http_trueosfs.rs"]
 mod tst_http_trueosfs;
-#[path = "tst/net_tcp_shell.rs"]
-mod tst_net_tcp_shell;
 #[path = "tst/tactics_srv.rs"]
 mod tst_tactics_srv;
 #[path = "tst/ws_time.rs"]

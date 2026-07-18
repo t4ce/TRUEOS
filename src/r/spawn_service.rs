@@ -412,7 +412,7 @@ fn spawn_sntp_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_net_shell(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::tst_net_tcp_shell::net_shell_task())
+    spawn_local(spawner, |_spawner| crate::shell2::backends::net_tcp_shell::net_shell_task())
 }
 
 fn spawn_draw3d_service(spawner: Spawner) -> SpawnAttempt {
