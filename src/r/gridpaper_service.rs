@@ -1776,7 +1776,11 @@ fn attach_presentations(
 }
 
 fn release_presentations(runtimes: &mut [GridPaperRuntime], session: crate::ui4::WindowSessionId) {
-    let release = crate::ui4::finish_window_session(UI4_OWNER, session);
+    let release = crate::ui4::finish_window_session_with_request(
+        UI4_OWNER,
+        session,
+        crate::ui4::WindowSessionCloseRequest::default().animate(),
+    );
     for runtime in runtimes {
         let Some(presentation) = release_presentation(&mut runtime.surface) else {
             continue;

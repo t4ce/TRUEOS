@@ -258,10 +258,17 @@ impl LiveOverlayRect {
 pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) x: u32,
     pub(crate) y: u32,
+    /// Destination extent in output coordinates.
     pub(crate) width: u32,
     pub(crate) height: u32,
+    /// Published source extent. A differing destination extent is sampled
+    /// with nearest-neighbour scaling by the compositor.
+    pub(crate) source_width: u32,
+    pub(crate) source_height: u32,
     pub(crate) pitch_bytes: usize,
     pub(crate) pixels: &'a [u8],
+    /// Additional whole-tile opacity applied after source alpha.
+    pub(crate) opacity: u8,
     pub(crate) expected_rgba: Option<Rgba8>,
 }
 
@@ -6436,14 +6443,16 @@ fn blend_premultiplied_rgba_tile_into_primary_clipped(
     if surface.virt.is_null()
         || tile.width == 0
         || tile.height == 0
-        || tile.pitch_bytes < tile.width as usize * 4
+        || tile.source_width == 0
+        || tile.source_height == 0
+        || tile.pitch_bytes < tile.source_width as usize * 4
     {
         return false;
     }
     let Some(required) = tile
         .pitch_bytes
-        .checked_mul(tile.height as usize - 1)
-        .and_then(|bytes| bytes.checked_add(tile.width as usize * 4))
+        .checked_mul(tile.source_height as usize - 1)
+        .and_then(|bytes| bytes.checked_add(tile.source_width as usize * 4))
     else {
         return false;
     };
@@ -6459,11 +6468,16 @@ fn blend_premultiplied_rgba_tile_into_primary_clipped(
     };
     let copy_w = draw.width as usize;
     let copy_h = draw.height as usize;
-    let src_x = draw.x.saturating_sub(tile.x) as usize;
-    let src_y = draw.y.saturating_sub(tile.y) as usize;
+    let destination_x = draw.x.saturating_sub(tile.x);
+    let destination_y = draw.y.saturating_sub(tile.y);
 
     for row in 0..copy_h {
-        let src_row = &tile.pixels[(src_y + row) * tile.pitch_bytes + src_x * 4..];
+        let source_y = tile_source_coordinate(
+            u64::from(destination_y).saturating_add(row as u64),
+            tile.source_height,
+            tile.height,
+        );
+        let src_row = &tile.pixels[source_y * tile.pitch_bytes..];
         let dst_row = unsafe {
             surface
                 .virt
@@ -6475,11 +6489,16 @@ fn blend_premultiplied_rgba_tile_into_primary_clipped(
                 .cast::<u32>()
         };
         for col in 0..copy_w {
-            let offset = col * 4;
-            let r = src_row[offset];
-            let g = src_row[offset + 1];
-            let b = src_row[offset + 2];
-            let a = src_row[offset + 3];
+            let source_x = tile_source_coordinate(
+                u64::from(destination_x).saturating_add(col as u64),
+                tile.source_width,
+                tile.width,
+            );
+            let offset = source_x * 4;
+            let r = apply_tile_opacity(src_row[offset], tile.opacity);
+            let g = apply_tile_opacity(src_row[offset + 1], tile.opacity);
+            let b = apply_tile_opacity(src_row[offset + 2], tile.opacity);
+            let a = apply_tile_opacity(src_row[offset + 3], tile.opacity);
             let dst = unsafe { core::ptr::read_volatile(dst_row.add(col)) }.to_le_bytes();
             let inverse_alpha = u16::from(u8::MAX - a);
             let blend = |src: u8, under: u8| -> u8 {
@@ -6872,8 +6891,10 @@ fn copy_rgba_tile_into_overlay(
 ) -> Option<(u64, u64, u64)> {
     if tile.width == 0
         || tile.height == 0
-        || tile.pitch_bytes < tile.width as usize * 4
-        || tile.pixels.len() < tile.pitch_bytes.saturating_mul(tile.height as usize)
+        || tile.source_width == 0
+        || tile.source_height == 0
+        || tile.pitch_bytes < tile.source_width as usize * 4
+        || tile.pixels.len() < tile.pitch_bytes.saturating_mul(tile.source_height as usize)
     {
         return None;
     }
@@ -6887,13 +6908,15 @@ fn copy_rgba_tile_into_overlay(
     let mut source_mismatches = 0u64;
     let mut storage_mismatches = 0u64;
     for row in 0..copy_h as usize {
-        let src_row_off = row.saturating_mul(tile.pitch_bytes);
+        let source_y = tile_source_coordinate(row as u64, tile.source_height, tile.height);
+        let src_row_off = source_y.saturating_mul(tile.pitch_bytes);
         let dst_row_off = (tile.y as usize + row)
             .saturating_mul(dst_pitch)
             .saturating_add(tile.x as usize * 4);
         let dst_row = unsafe { surface.virt.add(dst_row_off) as *mut u32 };
         for col in 0..copy_w as usize {
-            let src_off = src_row_off.saturating_add(col.saturating_mul(4));
+            let source_x = tile_source_coordinate(col as u64, tile.source_width, tile.width);
+            let src_off = src_row_off.saturating_add(source_x.saturating_mul(4));
             let Some(pixel) = tile.pixels.get(src_off..src_off.saturating_add(4)) else {
                 return None;
             };
@@ -6906,8 +6929,13 @@ fn copy_rgba_tile_into_overlay(
                     source_mismatches = source_mismatches.saturating_add(1);
                 }
             }
-            let premultiplied =
-                u32::from_le_bytes([premul_u8(b, a), premul_u8(g, a), premul_u8(r, a), a]);
+            let alpha = apply_tile_opacity(a, tile.opacity);
+            let premultiplied = u32::from_le_bytes([
+                premul_u8(b, alpha),
+                premul_u8(g, alpha),
+                premul_u8(r, alpha),
+                alpha,
+            ]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), premultiplied);
                 if core::ptr::read_volatile(dst_row.add(col)) != premultiplied {
@@ -6927,14 +6955,16 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
     if surface.virt.is_null()
         || tile.width == 0
         || tile.height == 0
-        || tile.pitch_bytes < tile.width as usize * 4
+        || tile.source_width == 0
+        || tile.source_height == 0
+        || tile.pitch_bytes < tile.source_width as usize * 4
     {
         return None;
     }
     let required = tile
         .pitch_bytes
-        .checked_mul(tile.height as usize - 1)?
-        .checked_add(tile.width as usize * 4)?;
+        .checked_mul(tile.source_height as usize - 1)?
+        .checked_add(tile.source_width as usize * 4)?;
     if tile.pixels.len() < required {
         return None;
     }
@@ -6944,22 +6974,30 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
     else {
         return Some((0, 0, 0));
     };
-    let src_x = draw.x.saturating_sub(tile.x) as usize;
-    let src_y = draw.y.saturating_sub(tile.y) as usize;
+    let destination_x = draw.x.saturating_sub(tile.x);
+    let destination_y = draw.y.saturating_sub(tile.y);
     let dst_pitch = surface.pitch_bytes as usize;
     let mut contract_pixels = 0u64;
     let mut source_mismatches = 0u64;
     let mut storage_mismatches = 0u64;
     for row in 0..draw.height as usize {
-        let src_row_off = (src_y + row)
-            .saturating_mul(tile.pitch_bytes)
-            .saturating_add(src_x.saturating_mul(4));
+        let source_y = tile_source_coordinate(
+            u64::from(destination_y).saturating_add(row as u64),
+            tile.source_height,
+            tile.height,
+        );
+        let src_row_off = source_y.saturating_mul(tile.pitch_bytes);
         let dst_row_off = (draw.y as usize + row)
             .saturating_mul(dst_pitch)
             .saturating_add(draw.x as usize * 4);
         let dst_row = unsafe { surface.virt.add(dst_row_off).cast::<u32>() };
         for col in 0..draw.width as usize {
-            let src_off = src_row_off.saturating_add(col.saturating_mul(4));
+            let source_x = tile_source_coordinate(
+                u64::from(destination_x).saturating_add(col as u64),
+                tile.source_width,
+                tile.width,
+            );
+            let src_off = src_row_off.saturating_add(source_x.saturating_mul(4));
             let pixel = tile.pixels.get(src_off..src_off.saturating_add(4))?;
             let (r, g, b, a) = (pixel[0], pixel[1], pixel[2], pixel[3]);
             if let Some(expected) = tile.expected_rgba
@@ -6970,10 +7008,14 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
                     source_mismatches = source_mismatches.saturating_add(1);
                 }
             }
-            // UI4 producers already publish premultiplied RGBA. The universal
-            // plane storage is BGRA, so this is only a channel swizzle; doing
-            // premul_u8() here again made translucent content fade each frame.
-            let bgra = u32::from_le_bytes([b, g, r, a]);
+            // UI4 producers already publish premultiplied RGBA. Apply only the
+            // independent window opacity, then swizzle into BGRA plane storage.
+            let bgra = u32::from_le_bytes([
+                apply_tile_opacity(b, tile.opacity),
+                apply_tile_opacity(g, tile.opacity),
+                apply_tile_opacity(r, tile.opacity),
+                apply_tile_opacity(a, tile.opacity),
+            ]);
             unsafe {
                 core::ptr::write_volatile(dst_row.add(col), bgra);
                 if tile.expected_rgba.is_some()
@@ -6985,6 +7027,27 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
         }
     }
     Some((contract_pixels, source_mismatches, storage_mismatches))
+}
+
+#[inline]
+fn tile_source_coordinate(destination: u64, source_extent: u32, destination_extent: u32) -> usize {
+    if source_extent == destination_extent {
+        return destination.min(u64::from(source_extent.saturating_sub(1))) as usize;
+    }
+    (destination
+        .saturating_mul(u64::from(source_extent))
+        .checked_div(u64::from(destination_extent))
+        .unwrap_or(0))
+    .min(u64::from(source_extent.saturating_sub(1))) as usize
+}
+
+#[inline]
+fn apply_tile_opacity(channel: u8, opacity: u8) -> u8 {
+    if opacity == u8::MAX {
+        channel
+    } else {
+        premul_u8(channel, opacity)
+    }
 }
 
 #[inline]

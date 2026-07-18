@@ -630,9 +630,11 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
         surfaces.remove(slot)
     };
     let request = if flags & CLOSE_PERSIST_FINAL_FRAME != 0 {
-        WindowSessionCloseRequest::default().persist_final_frame()
-    } else {
         WindowSessionCloseRequest::default()
+            .persist_final_frame()
+            .animate_and_retire_frames()
+    } else {
+        WindowSessionCloseRequest::default().animate_and_retire_frames()
     };
     release_surface_with_request(surface, request);
     0
@@ -816,7 +818,11 @@ fn release_surface_with_request(
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
     }
-    let _ = finish_window_session_with_request(surface.owner, surface.session, request);
+    let transfer_frame = request.transfers_frame_ownership();
+    let close = finish_window_session_with_request(surface.owner, surface.session, request);
+    if transfer_frame && close.is_ok() {
+        return;
+    }
     if let Err(error) = destroy_frame(surface.frame) {
         if error == FramePoolError::Busy {
             RETIRED_FRAMES.lock().push(surface.frame);

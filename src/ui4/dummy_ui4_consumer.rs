@@ -441,6 +441,7 @@ fn initialize_mandel_app(output: OutputId) -> Result<MandelPlaceholderApp, Dummy
 
 fn present_composition(runtime: &mut Runtime) -> Result<(), DummyUi4ConsumerError> {
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    super::advance_window_close_transitions();
     let windows = visible_windows_for_output(output);
     if windows.len() > MAX_COMPOSITION_WINDOWS {
         // `ui4` deliberately has no narrower LogArea, so log-os routes this
@@ -588,10 +589,13 @@ fn present_plane_composition(
                 .map(|((window, view), pixels)| crate::intel::RgbaOverlayTile {
                     x: window.placement.x.max(0) as u32,
                     y: window.placement.y.max(0) as u32,
-                    width: view.width.min(window.placement.width),
-                    height: view.height.min(window.placement.height),
+                    width: window.placement.width,
+                    height: window.placement.height,
+                    source_width: view.width,
+                    source_height: view.height,
                     pitch_bytes: view.pitch as usize,
                     pixels,
+                    opacity: window.placement.opacity,
                     expected_rgba: None,
                 })
                 .collect();

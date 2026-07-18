@@ -100,6 +100,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_poll_once();
     pub fn trueos_cabi_sleep_ms(ms: u64);
     pub fn trueos_cabi_thread_current_id() -> usize;
+    pub fn trueos_cabi_wls_current_slot() -> u32;
     pub fn trueos_time_monotonic_nanos() -> u64;
     pub fn trueos_time_unix_seconds() -> u64;
     pub fn trueos_time_unix_nanos() -> u64;

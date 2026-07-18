@@ -11,7 +11,7 @@ use embassy_time::{Duration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
-use super::{OutputId, WindowId, WindowOwner, WindowPlacement, WindowSnapshot};
+use super::{OutputId, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState};
 
 const MAX_CURSOR_ROUTES: usize = 32;
 const MAX_OWNER_QUEUES: usize = 64;
@@ -971,6 +971,7 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
     let output = OutputId::from_slot(0)?;
     super::visible_windows_for_output(output)
         .into_iter()
+        .filter(|window| window.state == WindowState::Ready)
         .filter(|window| placement_contains(window.placement, x, y))
         // Plane slot is the hardware pipe-local stacking boundary. Only z
         // order windows against peers in the same slot; a later slot remains
@@ -985,7 +986,11 @@ fn window_snapshot_for_target(target: WindowTarget) -> Option<WindowSnapshot> {
         };
         if let Some(window) = super::visible_windows_for_output(output)
             .into_iter()
-            .find(|window| window.id == target.window && window.owner == target.owner)
+            .find(|window| {
+                window.state == WindowState::Ready
+                    && window.id == target.window
+                    && window.owner == target.owner
+            })
         {
             return Some(window);
         }

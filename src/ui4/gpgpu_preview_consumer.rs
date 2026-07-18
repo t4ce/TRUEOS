@@ -13,10 +13,10 @@ use spin::Mutex;
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
     OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer,
-    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
-    finish_window_session, gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame,
-    replace_window_frame, take_owner_input_events,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
+    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
+    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
+    publish_frame_buffer, publish_window_frame, replace_window_frame, take_owner_input_events,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::KernelApp(5);
@@ -253,7 +253,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
         let desired = PREVIEW_CONTROL.lock().desired;
         if desired.serial != applied_serial {
             if let Some(previous) = active.take() {
-                stop_active_preview(previous, &mut retired_frames, "command-replaced");
+                stop_active_preview(previous, "command-replaced");
             }
             applied_serial = desired.serial;
             if desired.running {
@@ -309,7 +309,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             if let Some(finished) = active.take() {
                 let serial = finished.request_serial;
                 let metrics = finished.metrics;
-                stop_active_preview(finished, &mut retired_frames, "duration-complete");
+                stop_active_preview(finished, "duration-complete");
                 mark_duration_complete(serial, metrics);
             }
         }
@@ -626,13 +626,9 @@ fn resize_preview(
     Ok(())
 }
 
-fn stop_active_preview(
-    preview: ActivePreview,
-    retired_frames: &mut Vec<FrameHandle>,
-    reason: &'static str,
-) {
-    let _ = finish_window_session(PREVIEW_OWNER, preview.session);
-    retired_frames.push(preview.frame);
+fn stop_active_preview(preview: ActivePreview, reason: &'static str) {
+    let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
+    let _ = finish_window_session_with_request(PREVIEW_OWNER, preview.session, close);
     crate::log_info!(
         target: "ui4";
         "ui4 gpgpu-preview stopped request={} preset={} frame={} window={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",

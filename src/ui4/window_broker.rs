@@ -54,6 +54,7 @@ impl WindowSessionId {
 pub(crate) enum WindowState {
     Pending,
     Ready,
+    Closing,
     Closed,
 }
 
@@ -161,6 +162,8 @@ pub(crate) struct WindowCreate {
 pub(crate) struct WindowSessionCloseRequest<'a> {
     persist_final_frame: bool,
     final_frame_name: Option<&'a str>,
+    animate: bool,
+    retire_frames: bool,
 }
 
 impl<'a> WindowSessionCloseRequest<'a> {
@@ -175,6 +178,24 @@ impl<'a> WindowSessionCloseRequest<'a> {
         self.persist_final_frame = true;
         self.final_frame_name = Some(name);
         self
+    }
+
+    /// Keep each published window alive as a compositor-owned exit visual.
+    /// The producer retains ownership of the underlying frames.
+    pub(crate) const fn animate(mut self) -> Self {
+        self.animate = true;
+        self
+    }
+
+    /// Animate the close and transfer the detached frame lifetime to UI4.
+    pub(crate) const fn animate_and_retire_frames(mut self) -> Self {
+        self.animate = true;
+        self.retire_frames = true;
+        self
+    }
+
+    pub(crate) const fn transfers_frame_ownership(self) -> bool {
+        self.retire_frames
     }
 }
 
@@ -227,7 +248,34 @@ struct WindowRecord {
     publish_serial: u64,
     damage: Option<DamageRect>,
     restore_placement: Option<WindowPlacement>,
+    close_transition: Option<WindowCloseTransition>,
 }
+
+#[derive(Copy, Clone)]
+struct WindowCloseTransition {
+    lease: super::FrameReadLease,
+    initial: WindowPlacement,
+    started_ms: u64,
+    retire_frame: bool,
+}
+
+#[derive(Copy, Clone)]
+struct WindowTransitionRetirement {
+    lease: super::FrameReadLease,
+    frame: FrameHandle,
+    retire_frame: bool,
+}
+
+struct WindowSessionFinish {
+    closed: usize,
+    animated: usize,
+    animation_skipped: usize,
+    final_frames: Vec<WindowSnapshot>,
+    immediate_retire_frames: Vec<FrameHandle>,
+}
+
+const CLOSE_TRANSITION_DURATION_MS: u64 = 240;
+const CLOSE_TRANSITION_SHRINK_PER_MILLE: u64 = 180;
 
 #[derive(Copy, Clone)]
 struct SessionRecord {
@@ -249,7 +297,11 @@ impl WindowBroker {
         }
     }
 
-    fn begin_session(&mut self, owner: WindowOwner) -> Result<WindowSessionId, WindowBrokerError> {
+    fn begin_session(
+        &mut self,
+        owner: WindowOwner,
+    ) -> (Result<WindowSessionId, WindowBrokerError>, Vec<WindowTransitionRetirement>) {
+        let mut retirements = Vec::new();
         for session in &mut self.sessions {
             if session.active && session.owner == owner {
                 session.active = false;
@@ -257,6 +309,13 @@ impl WindowBroker {
         }
         for window in &mut self.windows {
             if window.state != WindowState::Closed && window.owner == owner {
+                if let Some(transition) = window.close_transition.take() {
+                    retirements.push(WindowTransitionRetirement {
+                        lease: transition.lease,
+                        frame: window.frame,
+                        retire_frame: transition.retire_frame,
+                    });
+                }
                 window.state = WindowState::Closed;
                 window.damage = None;
                 window.revision = next_serial(window.revision);
@@ -272,10 +331,10 @@ impl WindowBroker {
             session.generation = next_generation(session.generation);
             session.owner = owner;
             session.active = true;
-            return Ok(WindowSessionId(pack_handle(slot, session.generation)?));
+            return (pack_handle(slot, session.generation).map(WindowSessionId), retirements);
         }
         if self.sessions.len() >= MAX_SESSIONS {
-            return Err(WindowBrokerError::Capacity);
+            return (Err(WindowBrokerError::Capacity), retirements);
         }
         let slot = self.sessions.len();
         self.sessions.push(SessionRecord {
@@ -283,7 +342,7 @@ impl WindowBroker {
             owner,
             active: true,
         });
-        Ok(WindowSessionId(pack_handle(slot, 1)?))
+        (pack_handle(slot, 1).map(WindowSessionId), retirements)
     }
 
     fn checked_session(
@@ -377,8 +436,10 @@ impl WindowBroker {
         if window.owner != owner {
             return Err(WindowBrokerError::OwnerMismatch);
         }
-        if window.state == WindowState::Closed {
-            return Err(WindowBrokerError::Closed);
+        match window.state {
+            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+            WindowState::Closed => return Err(WindowBrokerError::Closed),
+            WindowState::Pending | WindowState::Ready => {}
         }
         Ok(window)
     }
@@ -388,12 +449,18 @@ impl WindowBroker {
         owner: WindowOwner,
         id: WindowSessionId,
         capture_final_frames: bool,
-    ) -> Result<(usize, Vec<WindowSnapshot>), WindowBrokerError> {
+        animate: bool,
+        retire_frames: bool,
+        started_ms: u64,
+    ) -> Result<WindowSessionFinish, WindowBrokerError> {
         self.checked_session(owner, id)?;
         let (slot, _) = unpack_handle(id.0)?;
         self.sessions[slot].active = false;
         let mut closed = 0;
+        let mut animated = 0;
+        let mut animation_skipped = 0;
         let mut final_frames = Vec::new();
+        let mut immediate_retire_frames = Vec::new();
         for (window_slot, window) in self.windows.iter_mut().enumerate() {
             if window.state != WindowState::Closed && window.session == id {
                 if capture_final_frames
@@ -402,15 +469,75 @@ impl WindowBroker {
                 {
                     final_frames.push(snapshot);
                 }
-                window.state = WindowState::Closed;
-                window.damage = None;
+                let transition = if animate && window.state == WindowState::Ready {
+                    super::acquire_published_frame(window.frame)
+                        .ok()
+                        .map(|lease| WindowCloseTransition {
+                            lease,
+                            initial: window.placement,
+                            started_ms,
+                            retire_frame: retire_frames,
+                        })
+                } else {
+                    None
+                };
+                if let Some(transition) = transition {
+                    window.state = WindowState::Closing;
+                    window.close_transition = Some(transition);
+                    window.damage = Some(DamageRect::FULL);
+                    animated += 1;
+                } else {
+                    if animate {
+                        animation_skipped += 1;
+                    }
+                    window.state = WindowState::Closed;
+                    window.damage = None;
+                    if retire_frames {
+                        immediate_retire_frames.push(window.frame);
+                    }
+                }
                 window.revision = next_serial(window.revision);
                 closed += 1;
             }
         }
         final_frames
             .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
-        Ok((closed, final_frames))
+        Ok(WindowSessionFinish {
+            closed,
+            animated,
+            animation_skipped,
+            final_frames,
+            immediate_retire_frames,
+        })
+    }
+
+    fn advance_close_transitions(&mut self, now_ms: u64) -> Vec<WindowTransitionRetirement> {
+        let mut retirements = Vec::new();
+        for window in &mut self.windows {
+            let Some(transition) = window.close_transition else {
+                continue;
+            };
+            let elapsed_ms = now_ms.saturating_sub(transition.started_ms);
+            if elapsed_ms >= CLOSE_TRANSITION_DURATION_MS {
+                window.close_transition = None;
+                window.state = WindowState::Closed;
+                window.damage = None;
+                window.revision = next_serial(window.revision);
+                retirements.push(WindowTransitionRetirement {
+                    lease: transition.lease,
+                    frame: window.frame,
+                    retire_frame: transition.retire_frame,
+                });
+                continue;
+            }
+            let placement = close_transition_placement(transition.initial, elapsed_ms);
+            if placement != window.placement {
+                window.placement = placement;
+                window.damage = Some(DamageRect::FULL);
+                window.revision = next_serial(window.revision);
+            }
+        }
+        retirements
     }
 
     fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {
@@ -419,7 +546,7 @@ impl WindowBroker {
             .iter()
             .enumerate()
             .filter(|(_, window)| {
-                window.state == WindowState::Ready
+                matches!(window.state, WindowState::Ready | WindowState::Closing)
                     && window.placement.visible
                     && window.output == output
             })
@@ -437,7 +564,7 @@ impl WindowBroker {
             return false;
         };
         if window.generation != generation
-            || window.state != WindowState::Ready
+            || !matches!(window.state, WindowState::Ready | WindowState::Closing)
             || window.publish_serial != publish_serial
         {
             return false;
@@ -462,6 +589,7 @@ impl WindowRecord {
             publish_serial: 0,
             damage: None,
             restore_placement: None,
+            close_transition: None,
         }
     }
 
@@ -484,11 +612,14 @@ impl WindowRecord {
 }
 
 static WINDOW_BROKER: Mutex<WindowBroker> = Mutex::new(WindowBroker::new());
+static TRANSITION_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 
 pub(crate) fn begin_window_session(
     owner: WindowOwner,
 ) -> Result<WindowSessionId, WindowBrokerError> {
-    WINDOW_BROKER.lock().begin_session(owner)
+    let (result, retirements) = WINDOW_BROKER.lock().begin_session(owner);
+    complete_transition_retirements(retirements);
+    result
 }
 
 pub(crate) fn finish_window_session(
@@ -497,8 +628,8 @@ pub(crate) fn finish_window_session(
 ) -> Result<usize, WindowBrokerError> {
     WINDOW_BROKER
         .lock()
-        .finish_session(owner, session, false)
-        .map(|(closed, _)| closed)
+        .finish_session(owner, session, false, false, false, 0)
+        .map(|finish| finish.closed)
 }
 
 pub(crate) fn finish_window_session_with_request(
@@ -506,19 +637,96 @@ pub(crate) fn finish_window_session_with_request(
     session: WindowSessionId,
     request: WindowSessionCloseRequest<'_>,
 ) -> Result<usize, WindowBrokerError> {
-    let (closed, final_frames) =
-        WINDOW_BROKER
-            .lock()
-            .finish_session(owner, session, request.persist_final_frame)?;
+    let started_ms = embassy_time::Instant::now().as_millis();
+    let finish = WINDOW_BROKER.lock().finish_session(
+        owner,
+        session,
+        request.persist_final_frame,
+        request.animate,
+        request.retire_frames,
+        started_ms,
+    )?;
     if request.persist_final_frame {
         super::screenshot::capture_final_session_frames(
             owner,
             session,
-            final_frames.as_slice(),
+            finish.final_frames.as_slice(),
             request.final_frame_name,
         );
     }
-    Ok(closed)
+    retire_transferred_frames(finish.immediate_retire_frames);
+    if request.animate {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 close-transition started owner={:?} session={} windows={} animated={} skipped={} duration_ms={} shrink_percent={} retire_frames={} persist_final_frame={}\n",
+            owner,
+            session.raw(),
+            finish.closed,
+            finish.animated,
+            finish.animation_skipped,
+            CLOSE_TRANSITION_DURATION_MS,
+            CLOSE_TRANSITION_SHRINK_PER_MILLE / 10,
+            request.retire_frames as u8,
+            request.persist_final_frame as u8,
+        );
+    }
+    Ok(finish.closed)
+}
+
+/// Advance compositor-owned close visuals. This runs at the UI4 composition
+/// cadence so transition geometry and presentation stay in one clock domain.
+pub(crate) fn advance_window_close_transitions() {
+    reap_transition_retired_frames();
+    let now_ms = embassy_time::Instant::now().as_millis();
+    let retirements = WINDOW_BROKER.lock().advance_close_transitions(now_ms);
+    if retirements.is_empty() {
+        return;
+    }
+    let completed = retirements.len();
+    complete_transition_retirements(retirements);
+    crate::log_info!(
+        target: "ui4";
+        "ui4 close-transition completed windows={} duration_ms={}\n",
+        completed,
+        CLOSE_TRANSITION_DURATION_MS,
+    );
+}
+
+fn complete_transition_retirements(retirements: Vec<WindowTransitionRetirement>) {
+    let mut frames = Vec::new();
+    for retirement in retirements {
+        let _ = super::release_published_frame(retirement.lease);
+        if retirement.retire_frame {
+            frames.push(retirement.frame);
+        }
+    }
+    retire_transferred_frames(frames);
+}
+
+fn retire_transferred_frames(frames: Vec<FrameHandle>) {
+    for frame in frames {
+        match super::destroy_frame(frame) {
+            Ok(()) | Err(super::FramePoolError::InvalidHandle) => {}
+            Err(super::FramePoolError::Busy) => {
+                let mut retired = TRANSITION_RETIRED_FRAMES.lock();
+                if !retired.contains(&frame) {
+                    retired.push(frame);
+                }
+            }
+            Err(error) => crate::log_warn!(
+                target: "ui4";
+                "ui4 close-transition frame retire abandoned frame={} error={:?}\n",
+                frame.raw(),
+                error,
+            ),
+        }
+    }
+}
+
+fn reap_transition_retired_frames() {
+    TRANSITION_RETIRED_FRAMES
+        .lock()
+        .retain(|frame| matches!(super::destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
@@ -661,6 +869,44 @@ pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot
 /// damage remains pending.
 pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> bool {
     WINDOW_BROKER.lock().acknowledge(id, publish_serial)
+}
+
+fn close_transition_placement(initial: WindowPlacement, elapsed_ms: u64) -> WindowPlacement {
+    let linear = elapsed_ms
+        .saturating_mul(1_000)
+        .checked_div(CLOSE_TRANSITION_DURATION_MS)
+        .unwrap_or(1_000)
+        .min(1_000);
+    // Smoothstep gives the close a calm start and avoids a hard final snap.
+    let eased = linear
+        .saturating_mul(linear)
+        .saturating_mul(3_000u64.saturating_sub(linear.saturating_mul(2)))
+        / 1_000_000;
+    let scale =
+        1_000u64.saturating_sub(CLOSE_TRANSITION_SHRINK_PER_MILLE.saturating_mul(eased) / 1_000);
+    let width = ((u64::from(initial.width).saturating_mul(scale) + 500) / 1_000)
+        .max(1)
+        .min(u64::from(u32::MAX)) as u32;
+    let height = ((u64::from(initial.height).saturating_mul(scale) + 500) / 1_000)
+        .max(1)
+        .min(u64::from(u32::MAX)) as u32;
+    let x = centered_shrink_coordinate(initial.x, initial.width, width);
+    let y = centered_shrink_coordinate(initial.y, initial.height, height);
+    let opacity =
+        (u64::from(initial.opacity).saturating_mul(1_000u64.saturating_sub(eased)) / 1_000) as u8;
+    WindowPlacement {
+        x,
+        y,
+        width,
+        height,
+        opacity,
+        ..initial
+    }
+}
+
+fn centered_shrink_coordinate(origin: i32, initial: u32, current: u32) -> i32 {
+    let centered = i64::from(origin) + i64::from(initial.saturating_sub(current) / 2);
+    centered.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 fn next_generation(generation: u16) -> u16 {
