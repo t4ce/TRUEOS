@@ -2264,14 +2264,7 @@ fn transform_outline_to_raster(
     quality: GpuFontRasterQuality,
     ppem: f32,
     positioning: GpuFontJobPositioning,
-) -> Result<
-    (
-        Vec<[u32; 8]>,
-        (f32, f32, f32, f32),
-        (f32, f32, f32, f32),
-    ),
-    &'static str,
-> {
+) -> Result<(Vec<[u32; 8]>, (f32, f32, f32, f32), (f32, f32, f32, f32)), &'static str> {
     if source.is_empty() || units_per_em == 0 {
         return Err("font-coverage-outline-empty");
     }
@@ -2339,10 +2332,8 @@ fn transform_outline_to_raster(
         }
     }
     let conservative_bounds = bounds.ok_or("font-coverage-outline-bounds")?;
-    let flattened_bounds = flattened_outline_bounds(
-        transformed.as_slice(),
-        ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
-    )?;
+    let flattened_bounds =
+        flattened_outline_bounds(transformed.as_slice(), ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS)?;
     Ok((transformed, conservative_bounds, flattened_bounds))
 }
 
@@ -3495,20 +3486,11 @@ mod tests {
         let f = f32::to_bits;
         let ops = [
             [0, f(0.0), f(0.0), 0, 0, 0, 0, 0],
-            [
-                3,
-                f(100.0),
-                f(0.0),
-                f(100.0),
-                f(100.0),
-                f(0.0),
-                f(100.0),
-                0,
-            ],
+            [3, f(100.0), f(0.0), f(100.0), f(100.0), f(0.0), f(100.0), 0],
             [4, 0, 0, 0, 0, 0, 0, 0],
         ];
-        let bounds = flattened_outline_bounds(&ops, ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS)
-            .unwrap();
+        let bounds =
+            flattened_outline_bounds(&ops, ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS).unwrap();
         assert_eq!(bounds, (0.0, 0.0, 75.0, 100.0));
     }
 }
