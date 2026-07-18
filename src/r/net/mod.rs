@@ -9,6 +9,7 @@ pub mod dns;
 pub mod https;
 pub mod ipp_print;
 pub mod mail_config;
+pub mod midi_udp;
 pub mod ports;
 pub mod printer;
 pub mod pwg_raster;

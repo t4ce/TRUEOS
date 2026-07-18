@@ -46,6 +46,8 @@ pub mod services {
     pub const TRUEOS_DISCOVERY_UDP_PORT: u16 = 32_343;
     /// Loopback handoff from the shared LAN listener to the Swarm Blueprint.
     pub const SWARM_BLUEPRINT_RELAY_UDP_PORT: u16 = 32_345;
+    /// Network MIDI piano state ingress consumed by the kernel audio mixer.
+    pub const MIDI_PIANO_UDP_PORT: u16 = 9_696;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;

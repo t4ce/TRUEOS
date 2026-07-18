@@ -1,4 +1,4 @@
-//! Live ESP piano synth service.
+//! Live network-MIDI piano synth service.
 //!
 //! UDP note edges update shared key state; this task turns that state into a
 //! steady HDA PCM stream with a local polyphonic synth engine.
@@ -23,9 +23,11 @@ const INIT_RETRY_MS: u64 = 500;
 const BACKING_ENABLED: bool = true;
 const BACKING_BPM: u32 = 174;
 const BACKING_VOLUME_PCT: i32 = 33;
-const BACKING_BEAT_SAMPLES: u32 = (SAMPLE_RATE * 60) / BACKING_BPM;
-const BACKING_SIXTEENTH_SAMPLES: u32 = BACKING_BEAT_SAMPLES / 4;
-const BACKING_BAR_SAMPLES: u32 = BACKING_BEAT_SAMPLES * 4;
+const BACKING_STEPS_PER_BEAT: u32 = 4;
+const BACKING_CLOCK_INCREMENT: u32 = BACKING_BPM * BACKING_STEPS_PER_BEAT;
+const BACKING_CLOCK_DENOMINATOR: u32 = SAMPLE_RATE * 60;
+const BACKING_STEP_SAMPLES_ROUNDED: u32 =
+    (BACKING_CLOCK_DENOMINATOR + BACKING_CLOCK_INCREMENT / 2) / BACKING_CLOCK_INCREMENT;
 const BACKING_FRAC_BITS: u32 = 16;
 const BACKING_TABLE_SIZE: u32 = 256;
 const BACKING_NO_BASS_STEP: u8 = u8::MAX;
@@ -268,8 +270,40 @@ fn finish_pending_releases(
     }
 }
 
+#[derive(Clone, Copy)]
+struct BackingClock {
+    phase: u32,
+    step: u8,
+    step_age: u32,
+}
+
+impl BackingClock {
+    const fn new() -> Self {
+        Self {
+            phase: 0,
+            step: 0,
+            step_age: 0,
+        }
+    }
+
+    const fn position(&self) -> (u8, u32) {
+        (self.step, self.step_age)
+    }
+
+    fn advance(&mut self) {
+        self.phase += BACKING_CLOCK_INCREMENT;
+        if self.phase >= BACKING_CLOCK_DENOMINATOR {
+            self.phase -= BACKING_CLOCK_DENOMINATOR;
+            self.step = (self.step + 1) & 0x0f;
+            self.step_age = 0;
+        } else {
+            self.step_age = self.step_age.saturating_add(1);
+        }
+    }
+}
+
 struct BackingGroove {
-    sample_pos: u64,
+    clock: BackingClock,
     bass_phase: u32,
     bass_step: u8,
     noise: u16,
@@ -278,7 +312,7 @@ struct BackingGroove {
 impl BackingGroove {
     const fn new() -> Self {
         Self {
-            sample_pos: 0,
+            clock: BackingClock::new(),
             bass_phase: 0,
             bass_step: BACKING_NO_BASS_STEP,
             noise: 0xace1,
@@ -287,9 +321,7 @@ impl BackingGroove {
 
     fn render_into(&mut self, buffer: &mut [i16], frames: usize) {
         for frame in 0..frames {
-            let bar_pos = (self.sample_pos % BACKING_BAR_SAMPLES as u64) as u32;
-            let step = ((bar_pos / BACKING_SIXTEENTH_SAMPLES) & 0x0f) as u8;
-            let step_age = bar_pos % BACKING_SIXTEENTH_SAMPLES;
+            let (step, step_age) = self.clock.position();
 
             let mut sample = 0i32;
             sample += self.render_kick(step, step_age);
@@ -300,7 +332,7 @@ impl BackingGroove {
 
             let idx = frame * CHANNELS as usize;
             mix_mono(buffer, idx, sample);
-            self.sample_pos = self.sample_pos.wrapping_add(1);
+            self.clock.advance();
         }
     }
 
@@ -311,7 +343,7 @@ impl BackingGroove {
             14 => 1_500,
             _ => return 0,
         };
-        let len = BACKING_SIXTEENTH_SAMPLES / 2;
+        let len = BACKING_STEP_SAMPLES_ROUNDED / 2;
         let env = decay(age, len, amp);
         if env == 0 {
             return 0;
@@ -330,7 +362,7 @@ impl BackingGroove {
         }
 
         let noise = self.noise_sample();
-        let body = noise * decay(age, BACKING_SIXTEENTH_SAMPLES / 2, 3_400) / 32_767;
+        let body = noise * decay(age, BACKING_STEP_SAMPLES_ROUNDED / 2, 3_400) / 32_767;
         let flam1 = noise * delayed_decay(age, 520, 1_300, 1_100) / 32_767;
         let flam2 = noise * delayed_decay(age, 1_040, 1_400, 800) / 32_767;
         body + flam1 + flam2
@@ -354,7 +386,7 @@ impl BackingGroove {
             self.bass_phase = 0;
         }
 
-        let gate_len = (BACKING_SIXTEENTH_SAMPLES * 3) / 4;
+        let gate_len = (BACKING_STEP_SAMPLES_ROUNDED * 3) / 4;
         let env = decay(age, gate_len, 4_800);
         if env == 0 {
             return 0;
@@ -429,7 +461,7 @@ pub async fn task() {
             Err(err) => {
                 if init_warn_count < 4 {
                     init_warn_count = init_warn_count.saturating_add(1);
-                    crate::log_warn!(target: "audio"; "esp-piano-audio: hda init pending err={}\n", err);
+                    crate::log_warn!(target: "audio"; "midi-piano-audio: hda init pending err={}\n", err);
                 }
                 Timer::after(Duration::from_millis(INIT_RETRY_MS)).await;
             }
@@ -438,7 +470,7 @@ pub async fn task() {
 
     crate::log_info!(
         target: "audio";
-        "esp-piano-audio: live synth ready voices={} chunk_ms={} rate={} backing_bpm={} backing_vol={}%\n",
+        "midi-piano-audio: live synth ready voices={} chunk_ms={} rate={} backing_bpm={} backing_vol={}%\n",
         super::synth::MAX_VOICES,
         RENDER_MS,
         SAMPLE_RATE,
@@ -480,7 +512,7 @@ pub async fn task() {
         if !active_audio {
             if stream.is_started() {
                 stream.stop_reset();
-                crate::log_info!(target: "audio"; "esp-piano-audio: stream idle stop/reset\n");
+                crate::log_info!(target: "audio"; "midi-piano-audio: stream idle stop/reset\n");
             }
             Timer::after(Duration::from_millis(1)).await;
             continue;
@@ -517,7 +549,7 @@ pub async fn task() {
         if let Err(err) = stream.push_samples(buffer.as_slice()) {
             if !logged_push_err {
                 logged_push_err = true;
-                crate::log_warn!(target: "audio"; "esp-piano-audio: hda push err={}\n", err);
+                crate::log_warn!(target: "audio"; "midi-piano-audio: hda push err={}\n", err);
             }
             Timer::after(Duration::from_millis(INIT_RETRY_MS)).await;
             continue;
@@ -525,5 +557,47 @@ pub async fn task() {
         logged_push_err = false;
 
         Timer::after(Duration::from_millis(RENDER_MS as u64)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backing_clock_has_one_exact_step_zero_per_bar() {
+        let mut clock = BackingClock::new();
+        let mut step_lengths = [0u32; 16];
+        let mut transitions = 0u32;
+
+        while transitions < 16 {
+            let (step, _) = clock.position();
+            step_lengths[step as usize] += 1;
+            clock.advance();
+            if clock.step != step {
+                transitions += 1;
+            }
+        }
+
+        assert_eq!(clock.position(), (0, 0));
+        assert_eq!(step_lengths.iter().sum::<u32>(), 66_207);
+        assert!(step_lengths.iter().all(|len| matches!(*len, 4_137 | 4_138)));
+    }
+
+    #[test]
+    fn backing_clock_advances_exactly_174_beats_per_minute() {
+        let mut clock = BackingClock::new();
+        let mut step_transitions = 0u32;
+
+        for _ in 0..BACKING_CLOCK_DENOMINATOR {
+            let step = clock.step;
+            clock.advance();
+            if clock.step != step {
+                step_transitions += 1;
+            }
+        }
+
+        assert_eq!(step_transitions, BACKING_BPM * BACKING_STEPS_PER_BEAT);
+        assert_eq!(clock.phase, 0);
     }
 }

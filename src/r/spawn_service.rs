@@ -61,6 +61,7 @@ define_started_flags!(
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
     LAN_DISCOVERY_STARTED,
+    MIDI_PIANO_UDP_STARTED,
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
@@ -472,6 +473,10 @@ fn spawn_printer_discovery(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_printer_spooler(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::printer::printer_spooler_task())
+}
+
+fn spawn_midi_piano_udp(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::net::midi_udp::midi_piano_udp_task())
 }
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
@@ -1191,7 +1196,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 62 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 63 + cfg!(feature = "trueos_rdp") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1363,6 +1368,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &LAN_DISCOVERY_STARTED,
         spawn_lan_discovery,
+    ),
+    TaskSpec::enabled(
+        "midi-piano-udp",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &MIDI_PIANO_UDP_STARTED,
+        spawn_midi_piano_udp,
     ),
     TaskSpec::enabled(
         "printer-discovery",
