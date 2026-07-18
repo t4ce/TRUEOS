@@ -15,16 +15,36 @@ struct PixelShaderDispatchContract {
 /// Resolve the gfx12 fragment-width packet contract without relying on the
 /// shader metadata logger as a proxy for the dwords that are actually sent.
 ///
-/// On gfx12, a single fragment program occupies KSP0. The compositor-rewire
-/// scene deliberately uses the older strict-SIMD8 contract here: it was the
-/// last single-width packet that retired before variable dispatch was added.
+/// The resident scene uses the paired variable-dispatch program captured from
+/// Mesa; explicit probe modes may still request one width for diagnostics.
 fn pixel_shader_dispatch_contract(
     backend_probe_mode: BackendProbeMode,
     dispatch_mode: crate::intel::shader::DispatchMode,
     uses_vmask: bool,
     ps_ksp_base: u32,
     grf_start: u8,
+    simd16_pair: Option<(u32, u8)>,
 ) -> PixelShaderDispatchContract {
+    // This is the complete packet carried by the captured gfx125 Vulkan
+    // fragment program, not a width-selection experiment.  Mesa uploads the
+    // SIMD16 executable first and the SIMD8 executable second, enables both
+    // widths, and maps them through KSP0 and KSP2 respectively.  KSP1 is not
+    // enabled by this dispatch combination but Mesa still repeats KSP0 there.
+    // The RT-write execution mask is consumed with VectorMaskEnable set.
+    if matches!(backend_probe_mode, BackendProbeMode::MesaLike)
+        && matches!(dispatch_mode, crate::intel::shader::DispatchMode::Simd8)
+    {
+        if let Some((simd16_ksp, simd16_grf_start)) = simd16_pair {
+            return PixelShaderDispatchContract {
+                dispatch_8: 1,
+                dispatch_16: 1,
+                dispatch_32: 0,
+                vector_mask_enable: true,
+                grf_start_dw: (u32::from(simd16_grf_start) << 16) | u32::from(grf_start),
+                ksp: [simd16_ksp, simd16_ksp, ps_ksp_base],
+            };
+        }
+    }
     let stage_dispatch = match dispatch_mode {
         crate::intel::shader::DispatchMode::Simd8 => (1, 0, 0),
         crate::intel::shader::DispatchMode::Simd16 => (0, 1, 0),
@@ -39,10 +59,10 @@ fn pixel_shader_dispatch_contract(
     };
     let (dispatch_8, dispatch_16, dispatch_32) = requested_dispatch;
     let vector_mask_enable = uses_vmask;
-    // Reproduce the last pre-variable-dispatch SIMD8 packet exactly. Only
-    // KSP0 is enabled; the duplicated inactive-slot values are retained so
-    // this proof changes no other 3DSTATE_PS field from that baseline. The
-    // shader metadata carries the captured host packet's VectorMaskEnable=0.
+    // Reproduce the single-width packet carried alongside the executable.
+    // Only KSP0 is enabled; all dispatch-start fields retain the metadata
+    // value so this proof changes no other 3DSTATE_PS field. The captured
+    // host packet also has VectorMaskEnable=0.
     let grf_start_dw = u32::from(grf_start)
         | (u32::from(grf_start) << 8)
         | (u32::from(grf_start) << 16);
@@ -94,6 +114,7 @@ mod pixel_shader_dispatch_contract_tests {
                 false,
                 0xC0,
                 2,
+                None,
             ),
             PixelShaderDispatchContract {
                 dispatch_8: 0,
@@ -107,7 +128,7 @@ mod pixel_shader_dispatch_contract_tests {
     }
 
     #[test]
-    fn mesa_like_simd8_replays_the_pre_pair_single_width_packet() {
+    fn mesa_like_simd8_replays_the_executables_recorded_grf_start() {
         assert_eq!(
             pixel_shader_dispatch_contract(
                 BackendProbeMode::MesaLike,
@@ -115,6 +136,7 @@ mod pixel_shader_dispatch_contract_tests {
                 false,
                 0x100,
                 2,
+                None,
             ),
             PixelShaderDispatchContract {
                 dispatch_8: 1,
@@ -135,9 +157,32 @@ mod pixel_shader_dispatch_contract_tests {
             true,
             0xC0,
             2,
+            None,
         );
         assert_eq!((contract.dispatch_8, contract.dispatch_16, contract.dispatch_32), (0, 1, 0));
         assert_eq!(contract.ksp, [0xC0, 0, 0]);
+    }
+
+    #[test]
+    fn mesa_like_static_fragment_pair_matches_captured_gfx125_packet() {
+        assert_eq!(
+            pixel_shader_dispatch_contract(
+                BackendProbeMode::MesaLike,
+                DispatchMode::Simd8,
+                false,
+                0x100,
+                2,
+                Some((0xC0, 2)),
+            ),
+            PixelShaderDispatchContract {
+                dispatch_8: 1,
+                dispatch_16: 1,
+                dispatch_32: 0,
+                vector_mask_enable: true,
+                grf_start_dw: 0x0002_0002,
+                ksp: [0xC0, 0xC0, 0x100],
+            }
+        );
     }
 }
 
@@ -1090,6 +1135,13 @@ fn encode_triangle_probe_batch(
             && !matches!(backend_probe_mode, BackendProbeMode::WmNormalDispatch)))
         && !backend_probe_mode.suppress_forced_wm_thread_dispatch();
     let wm_dw1 = (1 << 31)
+        | if matches!(backend_probe_mode, BackendProbeMode::MesaLike) {
+            // Bit-for-bit match for the captured application draw's WM
+            // packet.  This is part of the paired PS launch baseline.
+            1 << 6
+        } else {
+            0
+        }
         | if batch_mode.point_raster() && !backend_probe_mode.suppress_wm_point_rule() {
             1 << 2
         } else {
@@ -1321,6 +1373,16 @@ fn encode_triangle_probe_batch(
         pipeline.ps.meta.uses_vmask,
         ps_ksp_base,
         ps_grf_start,
+        shader_layout.ps_simd16.map(|stage| {
+            (
+                (stage.code_offset_bytes + stage.ksp_offset_bytes) & !0x3F,
+                crate::intel::shader::triangle_pipeline_simd16()
+                    .ps
+                    .meta
+                    .kernel
+                    .grf_start_register,
+            )
+        }),
     );
     let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = (
         ps_dispatch_contract.dispatch_8,

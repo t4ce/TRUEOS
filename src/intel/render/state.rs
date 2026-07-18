@@ -154,6 +154,10 @@ struct TriangleShaderStageLayout {
 struct TriangleShaderLayout {
     vs: TriangleShaderStageLayout,
     ps: TriangleShaderStageLayout,
+    /// Mesa's gfx125 fragment program is a variable-dispatch pair.  When
+    /// present, this is the SIMD16 executable selected through PS KSP0 while
+    /// the SIMD8 executable above is selected through KSP2.
+    ps_simd16: Option<TriangleShaderStageLayout>,
     state_region_gpu_addr: u64,
     state_region_offset_bytes: u32,
     used_bytes: u32,
@@ -819,7 +823,7 @@ impl BackendProbeMode {
     }
 
     fn sample_mask_dw(self) -> u32 {
-        if self.force_sample_generation() {
+        if self.force_sample_generation() || matches!(self, Self::MesaLike) {
             0xFFFF
         } else {
             1

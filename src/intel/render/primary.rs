@@ -1017,11 +1017,17 @@ fn stage_resident_scene_secondary(
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    // Reproduce the last pre-variable-dispatch scene contract: only the SIMD8
-    // fragment executable in KSP0 is enabled by 3DSTATE_PS.
+    // Reproduce the complete captured gfx125 fragment contract.  The upload
+    // carries SIMD16 and SIMD8 together and 3DSTATE_PS maps them through KSP0
+    // and KSP2; neither width is a standalone replacement for this program.
     let pipeline = crate::intel::shader::triangle_pipeline();
+    // Coverage-proof build: secondary zero is the full-screen clear triangle,
+    // so it must retain its requested clear color.  Every actual scene mesh
+    // uses the exact host-extracted SIMD8 executable; those meshes are
+    // intentionally rendered with the shader's baked constant color.
+    let draw_rgba = (secondary_index == 0).then_some(rgba);
     let shader_layout =
-        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
+        upload_triangle_shader_pipeline_at(state_warm, pipeline, draw_rgba, state_gpu)?;
     let probe_state = write_triangle_probe_state(
         state_warm,
         draw,
@@ -1231,7 +1237,7 @@ fn submit_resident_scene_geometry_batched(
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=strict-simd8-host-vmask0 simd8=ksp0 grf_start_dw7=0x00020202 dispatch=100 vector_mask=0\n",
+            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=captured-gfx125-simd8+16-pair mesh_specialization=off clear_specialization=on ksp0=simd16 ksp2=simd8 grf_start_dw7=0x00020002 dispatch=110 vector_mask=1 sample_mask=0xFFFF wm=0x80000040\n",
             draws.len(),
             secondary_count,
             target_width,
