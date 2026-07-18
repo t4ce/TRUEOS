@@ -3916,9 +3916,8 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         effective
     };
 
-    let gpu_composed = compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
-        surface, tiles, effective,
-    );
+    let gpu_composed =
+        compose_premultiplied_rgba_tiles_into_overlay_gpgpu(surface, tiles, effective);
     if !gpu_composed {
         for damage in effective.rects() {
             fill_overlay_rect(surface, damage.x, damage.y, damage.width, damage.height, 0);
@@ -3968,7 +3967,11 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
             surface.plane_slot,
             surface.buffer_index,
             path,
-            if gpu_composed { "guc-simd16-sprite-quad" } else { "cpu-fallback" },
+            if gpu_composed {
+                "guc-simd16-sprite-quad"
+            } else {
+                "cpu-fallback"
+            },
             tiles.len(),
             change.len(),
             change_bounds.width,
@@ -7220,15 +7223,9 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
             let bottom = draw.y.saturating_add(draw.height) as f32;
             let u0 = draw.x.saturating_sub(tile.x) as f32 / tile.width as f32;
             let v0 = draw.y.saturating_sub(tile.y) as f32 / tile.height as f32;
-            let u1 = draw
-                .x
-                .saturating_add(draw.width)
-                .saturating_sub(tile.x) as f32
-                / tile.width as f32;
-            let v1 = draw
-                .y
-                .saturating_add(draw.height)
-                .saturating_sub(tile.y) as f32
+            let u1 =
+                draw.x.saturating_add(draw.width).saturating_sub(tile.x) as f32 / tile.width as f32;
+            let v1 = draw.y.saturating_add(draw.height).saturating_sub(tile.y) as f32
                 / tile.height as f32;
             let opacity = tile.opacity;
             tile_descriptors.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc {
@@ -7266,17 +7263,12 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     let runs = descriptors
         .iter()
         .filter(|(_, descriptors)| !descriptors.is_empty())
-        .map(
-            |(src, descriptors)| crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-                src: *src,
-                descs: descriptors,
-            },
-        )
+        .map(|(src, descriptors)| crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
+            src: *src,
+            descs: descriptors,
+        })
         .collect::<Vec<_>>();
-    let stats = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_stats(
-        destination,
-        &runs,
-    );
+    let stats = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_stats(destination, &runs);
     stats.descs == expected_descriptors && stats.submits == 1
 }
 
