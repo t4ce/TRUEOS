@@ -108,7 +108,6 @@ unsafe fn read_return_address(depth: usize) -> usize {
             *frame.add(1)
         };
     }
-
 }
 
 #[inline]

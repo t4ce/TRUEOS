@@ -1,5 +1,3 @@
-
-#[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::_rdtsc;
 use core::ffi::{c_char, c_void};
 
@@ -108,29 +106,12 @@ fn log_seek(stage: &str, got: isize, expected: isize) -> bool {
 }
 
 fn probe_cycles() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        return unsafe { _rdtsc() };
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        embassy_time_driver::now()
-    }
+    unsafe { _rdtsc() }
 }
 
 fn probe_cycles_to_us(cycles: u64) -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let hz = crate::time::tsc_hz().max(1);
-        return ((cycles as u128) * 1_000_000u128 / (hz as u128)).min(u64::MAX as u128) as u64;
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let hz = embassy_time_driver::TICK_HZ.max(1);
-        cycles.saturating_mul(1_000_000) / hz
-    }
+    let hz = crate::time::tsc_hz().max(1);
+    ((cycles as u128) * 1_000_000u128 / (hz as u128)).min(u64::MAX as u128) as u64
 }
 
 fn log_api_stage(stage: &str) -> u64 {

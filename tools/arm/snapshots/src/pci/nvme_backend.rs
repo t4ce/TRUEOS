@@ -128,6 +128,7 @@ struct DmaBuffer {
 
 #[inline]
 fn nvme_dma_cache_flush(ptr: *const u8, len: usize) {
+    #[cfg(target_arch = "x86_64")]
     unsafe {
         use core::arch::x86_64::{_mm_clflush, _mm_mfence};
 

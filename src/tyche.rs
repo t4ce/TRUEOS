@@ -7,7 +7,6 @@ use rand_core::{RngCore, SeedableRng};
 use spin::Mutex;
 use zeroize::Zeroize;
 
-#[cfg(target_arch = "x86_64")]
 use rdrand::{RdRand, RdSeed};
 
 const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -90,29 +89,16 @@ pub fn soft_rng() -> SoftRng {
     SoftRng::new()
 }
 
-#[cfg(target_arch = "x86_64")]
 pub fn rdrand_u64() -> Option<u64> {
     let rng = RdRand::new().ok()?;
     rng.try_next_u64().ok()
 }
 
-#[cfg(target_arch = "x86_64")]
 pub fn rdseed_u64() -> Option<u64> {
     let rng = RdSeed::new().ok()?;
     rng.try_next_u64().ok()
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-pub fn rdrand_u64() -> Option<u64> {
-    None
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-pub fn rdseed_u64() -> Option<u64> {
-    None
-}
-
-#[cfg(target_arch = "x86_64")]
 fn hw_seed_32() -> Option<[u8; 32]> {
     let mut seed = [0u8; 32];
     for chunk in seed.chunks_mut(8) {
@@ -120,11 +106,6 @@ fn hw_seed_32() -> Option<[u8; 32]> {
         chunk.copy_from_slice(&v.to_le_bytes());
     }
     Some(seed)
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn hw_seed_32() -> Option<[u8; 32]> {
-    None
 }
 
 fn virtio_seed_32() -> Option<[u8; 32]> {

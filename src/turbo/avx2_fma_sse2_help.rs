@@ -1,4 +1,3 @@
-
 #[inline]
 pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
@@ -65,18 +64,12 @@ pub(crate) enum Bf16MatvecError {
 }
 
 pub(crate) fn selected_bf16_matvec_lane() -> Bf16MatvecLane {
-    #[cfg(target_arch = "x86_64")]
     {
         if crate::cpu::simd_status().avx2_fma_ready {
             Bf16MatvecLane::Avx2Fma
         } else {
             Bf16MatvecLane::Sse2
         }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        Bf16MatvecLane::Scalar
     }
 }
 
@@ -126,22 +119,12 @@ pub(crate) fn matvec_rowmajor_bf16_dispatch(
         Bf16MatvecLane::Scalar => {
             matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
         }
-        Bf16MatvecLane::Sse2 => {
-            #[cfg(target_arch = "x86_64")]
-            unsafe {
-                matvec_rows_bf16_sse2(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
-        }
-        Bf16MatvecLane::Avx2Fma => {
-            #[cfg(target_arch = "x86_64")]
-            unsafe {
-                matvec_rows_bf16_avx2_fma(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
-            }
-            #[cfg(not(target_arch = "x86_64"))]
-            matvec_rows_bf16_scalar(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
-        }
+        Bf16MatvecLane::Sse2 => unsafe {
+            matvec_rows_bf16_sse2(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        },
+        Bf16MatvecLane::Avx2Fma => unsafe {
+            matvec_rows_bf16_avx2_fma(x, w_rowmajor_bf16, k_dim, out, row_start, row_end);
+        },
     }
     Ok(lane)
 }
@@ -202,7 +185,6 @@ pub(crate) fn exercise_bf16_helpers_once() -> Bf16HelperSmoke {
         ..Bf16HelperSmoke::default()
     };
 
-    #[cfg(target_arch = "x86_64")]
     {
         unsafe {
             matvec_rows_bf16_sse2(&x, &w, K_DIM, &mut sse2, 0, ROWS);
@@ -293,7 +275,6 @@ pub(crate) fn matvec_rows_bf16_scalar(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
     x: &[f32],
@@ -459,7 +440,6 @@ pub(crate) unsafe fn matvec_rows_bf16_avx2_fma(
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 pub(crate) unsafe fn matvec_rows_bf16_sse2(
     x: &[f32],

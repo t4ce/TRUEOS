@@ -1,4 +1,3 @@
-
 extern crate alloc;
 
 #[path = "copy/blt.rs"]
@@ -1086,7 +1085,6 @@ pub(crate) fn empty() -> Buf {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 fn dma_flush_cache_lines(ptr: *mut u8, len: usize) {
     unsafe {
         use core::arch::x86_64::_mm_clflush;
@@ -1102,19 +1100,12 @@ fn dma_flush_cache_lines(ptr: *mut u8, len: usize) {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-fn dma_flush_cache_lines(_ptr: *mut u8, _len: usize) {}
-
-#[cfg(target_arch = "x86_64")]
 fn dma_flush_fence() {
     unsafe {
         use core::arch::x86_64::_mm_mfence;
         _mm_mfence();
     }
 }
-
-#[cfg(not(target_arch = "x86_64"))]
-fn dma_flush_fence() {}
 
 pub(crate) fn dma_flush(ptr: *mut u8, len: usize) {
     dma_flush_cache_lines(ptr, len);

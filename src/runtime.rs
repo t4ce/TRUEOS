@@ -72,7 +72,6 @@ fn try_sti_hlt(sleep_ticks: u64) -> bool {
     }
 
     crate::smp::mark_current_hlt_state(true);
-    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
@@ -87,7 +86,6 @@ fn try_sti_hlt(sleep_ticks: u64) -> bool {
 
 #[inline(always)]
 fn disable_interrupts() {
-    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
     }
