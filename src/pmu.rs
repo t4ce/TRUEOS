@@ -1,4 +1,3 @@
-#[cfg(target_arch = "x86_64")]
 mod imp {
     use raw_cpuid::CpuId;
     use x86_64::registers::model_specific::Msr;
@@ -129,46 +128,6 @@ mod imp {
                 pmc0: None,
             }
         }
-    }
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-mod imp {
-    #[derive(Clone, Copy, Debug)]
-    pub(crate) struct Snapshot {
-        pub(crate) arch_perfmon: bool,
-        pub(crate) version: u8,
-        pub(crate) gp_counter_count: u8,
-        pub(crate) gp_counter_bits: u8,
-        pub(crate) event_mask_len: u8,
-        pub(crate) unavailable_events: u32,
-        pub(crate) fixed_counter_count: u8,
-        pub(crate) fixed_counter_bits: u8,
-        pub(crate) perf_global_ctrl: Option<u64>,
-        pub(crate) fixed_ctr_ctrl: Option<u64>,
-        pub(crate) fixed_ctr: [Option<u64>; 3],
-        pub(crate) pmc0: Option<u64>,
-    }
-
-    pub(crate) fn snapshot() -> Snapshot {
-        Snapshot {
-            arch_perfmon: false,
-            version: 0,
-            gp_counter_count: 0,
-            gp_counter_bits: 0,
-            event_mask_len: 0,
-            unavailable_events: 0,
-            fixed_counter_count: 0,
-            fixed_counter_bits: 0,
-            perf_global_ctrl: None,
-            fixed_ctr_ctrl: None,
-            fixed_ctr: [None, None, None],
-            pmc0: None,
-        }
-    }
-
-    pub(crate) fn ensure_liveness_source() -> bool {
-        false
     }
 }
 

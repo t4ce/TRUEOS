@@ -1,5 +1,4 @@
 use core::fmt;
-#[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicBool, Ordering};
 
 extern crate alloc;
@@ -107,9 +106,7 @@ pub(crate) mod flags {
 }
 
 static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
-#[cfg(target_arch = "x86_64")]
 static UART_LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
-#[cfg(target_arch = "x86_64")]
 static EMULATOR_UART_LOGGING: AtomicBool = AtomicBool::new(false);
 
 struct TcpLogSink;
@@ -137,10 +134,8 @@ impl log_os_core::GlobalLogSink for TcpLogSink {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 struct EmulatorUartLogSink;
 
-#[cfg(target_arch = "x86_64")]
 impl log_os_core::GlobalLogSink for EmulatorUartLogSink {
     fn spec(&self) -> log_os_core::GlobalLogSinkSpec {
         log_os_core::GlobalLogSinkSpec::new(
@@ -169,13 +164,9 @@ impl log_os_core::GlobalLogSink for EmulatorUartLogSink {
 }
 
 static TCP_LOG_SINK: TcpLogSink = TcpLogSink;
-#[cfg(target_arch = "x86_64")]
 static EMULATOR_UART_LOG_SINK: EmulatorUartLogSink = EmulatorUartLogSink;
-#[cfg(target_arch = "x86_64")]
 static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 2] =
     [&TCP_LOG_SINK, &EMULATOR_UART_LOG_SINK];
-#[cfg(not(target_arch = "x86_64"))]
-static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 1] = [&TCP_LOG_SINK];
 static TRUEOS_LOG_ROUTER: log_os_core::GlobalLogRouter =
     log_os_core::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
 static KERNEL_LOG_FACADE: log_os_core::GlobalLogFacade<log_os_core::GlobalLogRouter> =
@@ -387,7 +378,6 @@ fn write_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Argum
     let _ = fmt::write(&mut writer, args);
 }
 
-#[cfg(target_arch = "x86_64")]
 fn write_uart_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::Arguments<'_>) {
     let _guard = UART_LOG_WRITE_LOCK.lock();
     crate::uart1_com1::write_fmt(format_args!("[{}] ", log_os_core::area_tag(area)));
@@ -397,16 +387,12 @@ fn write_uart_with_tags(area: flags::LogArea, purpose: Option<&str>, args: fmt::
     crate::uart1_com1::write_fmt(args);
 }
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) fn set_emulator_uart_logging(enabled: bool) {
     if enabled {
         crate::uart1_com1::init();
     }
     EMULATOR_UART_LOGGING.store(enabled, Ordering::Release);
 }
-
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) fn set_emulator_uart_logging(_enabled: bool) {}
 
 pub fn log_with_area_level(area: flags::LogArea, level: log::Level, args: fmt::Arguments<'_>) {
     log_os_core::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);

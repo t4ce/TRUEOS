@@ -55,22 +55,14 @@ impl MachineOpArtifact {
 
 #[inline(always)]
 fn machine_add_u64(lhs: u64, rhs: u64) -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let mut value = lhs;
-        unsafe {
-            core::arch::asm!(
-                "add {0}, {1}",
-                inout(reg) value,
-                in(reg) rhs,
-                options(nomem, nostack)
-            );
-        }
-        value
+    let mut value = lhs;
+    unsafe {
+        core::arch::asm!(
+            "add {0}, {1}",
+            inout(reg) value,
+            in(reg) rhs,
+            options(nomem, nostack)
+        );
     }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        lhs.wrapping_add(rhs)
-    }
+    value
 }

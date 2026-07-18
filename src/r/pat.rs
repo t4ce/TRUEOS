@@ -1,10 +1,7 @@
-#[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicU8, Ordering};
 use memchr::{memchr, memmem};
-#[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
 
-#[cfg(target_arch = "x86_64")]
 static SSE42_SUPPORTED: AtomicU8 = AtomicU8::new(0);
 
 /// Lightweight string search primitive mirroring a subset of `std::str::pattern`.
@@ -30,7 +27,6 @@ pub fn find_str(haystack: &str, needle: &str) -> Option<usize> {
         return Some(0);
     }
 
-    #[cfg(target_arch = "x86_64")]
     if let Some(idx) = find_str_sse42(haystack, needle) {
         return Some(idx);
     }
@@ -38,19 +34,11 @@ pub fn find_str(haystack: &str, needle: &str) -> Option<usize> {
     memmem::find(haystack.as_bytes(), needle.as_bytes())
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline]
 pub fn sse42_available() -> bool {
     sse42_supported()
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-#[inline]
-pub fn sse42_available() -> bool {
-    false
-}
-
-#[cfg(target_arch = "x86_64")]
 #[inline]
 fn find_str_sse42(haystack: &str, needle: &str) -> Option<usize> {
     let haystack = haystack.as_bytes();
@@ -62,7 +50,6 @@ fn find_str_sse42(haystack: &str, needle: &str) -> Option<usize> {
     unsafe { find_bytes_sse42(haystack, needle) }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline]
 fn sse42_supported() -> bool {
     match SSE42_SUPPORTED.load(Ordering::Acquire) {
@@ -79,7 +66,6 @@ fn sse42_supported() -> bool {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 unsafe fn find_bytes_sse42(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     use core::arch::x86_64::{

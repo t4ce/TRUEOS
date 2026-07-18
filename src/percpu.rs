@@ -1,24 +1,17 @@
-#[cfg(target_arch = "x86_64")]
 use core::arch::asm;
-#[cfg(not(target_arch = "x86_64"))]
-use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use embassy_executor::raw::Executor as RawExecutor;
-#[cfg(target_arch = "x86_64")]
 use x86_64::registers::model_specific::Msr;
 
-#[cfg(target_arch = "x86_64")]
 const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
 static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static CPU_SLOT_TABLE: core::sync::atomic::AtomicPtr<CpuSlot> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 static CPU_SLOT_LEN: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static PERCPU_READY: AtomicBool = AtomicBool::new(false);
-#[cfg(not(target_arch = "x86_64"))]
-static CURRENT_CPU_PTR: AtomicPtr<PerCpu> = AtomicPtr::new(core::ptr::null_mut());
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -69,14 +62,7 @@ impl PerCpu {
 }
 
 pub fn init_bsp() {
-    #[cfg(target_arch = "x86_64")]
     let lapic_id = read_lapic_id_via_cpuid();
-
-    #[cfg(not(target_arch = "x86_64"))]
-    let lapic_id = cpu_slot_table()
-        .first()
-        .map(|slot| slot.lapic_id)
-        .unwrap_or(0);
 
     init_with(lapic_id, 0, "bsp")
 }
@@ -187,14 +173,10 @@ fn init_with(lapic_id: u32, cpu_index: u32, _tag: &str) {
 
     let _leaked: &'static mut PerCpu = Box::leak(percpu);
 
-    #[cfg(target_arch = "x86_64")]
     {
         let mut gs_base = Msr::new(MSR_IA32_GS_BASE);
         unsafe { gs_base.write(ptr as u64) };
     }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    CURRENT_CPU_PTR.store(ptr, Ordering::Release);
 
     let _ = crate::remote_work_wake::enable_local_apic_for_this_cpu();
 
@@ -215,7 +197,6 @@ pub fn try_this_cpu_ptr() -> *mut PerCpu {
     if !PERCPU_READY.load(Ordering::Acquire) {
         return core::ptr::null_mut();
     }
-    #[cfg(target_arch = "x86_64")]
     {
         let gs_base = unsafe { Msr::new(MSR_IA32_GS_BASE).read() };
         if gs_base == 0 {
@@ -235,22 +216,7 @@ pub fn try_this_cpu_ptr() -> *mut PerCpu {
 
 #[inline(always)]
 pub fn current_lapic_id_via_cpuid() -> u32 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        return read_lapic_id_via_cpuid();
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        let ptr = CURRENT_CPU_PTR.load(Ordering::Acquire);
-        if !ptr.is_null() {
-            return unsafe { (*ptr).lapic_id() };
-        }
-        cpu_slot_table()
-            .first()
-            .map(|slot| slot.lapic_id)
-            .unwrap_or(0)
-    }
+    read_lapic_id_via_cpuid()
 }
 
 #[inline(always)]
@@ -269,26 +235,17 @@ pub(crate) fn current_slot_via_cpuid() -> usize {
 
 #[inline(always)]
 pub fn this_cpu_ptr() -> *mut PerCpu {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let ptr: *mut PerCpu;
-        unsafe {
-            asm!(
-                "mov {0}, gs:0",
-                out(reg) ptr,
-                options(nostack, preserves_flags)
-            );
-        }
-        ptr
+    let ptr: *mut PerCpu;
+    unsafe {
+        asm!(
+            "mov {0}, gs:0",
+            out(reg) ptr,
+            options(nostack, preserves_flags)
+        );
     }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        CURRENT_CPU_PTR.load(Ordering::Acquire)
-    }
+    ptr
 }
 
-#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn read_lapic_id_via_cpuid() -> u32 {
     let cpuid = raw_cpuid::CpuId::new();

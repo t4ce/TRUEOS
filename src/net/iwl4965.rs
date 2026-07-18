@@ -51,13 +51,9 @@ fn map_mmio(phys: u64, size: usize) -> Result<usize, ()> {
 
 #[inline]
 fn io_delay() {
-    #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!("out dx, al", in("dx") 0x80u16, in("al") 0u8, options(nomem, nostack));
     }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    core::hint::spin_loop();
 }
 
 // ============================================================================

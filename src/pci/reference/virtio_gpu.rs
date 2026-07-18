@@ -1790,10 +1790,7 @@ pub fn present_dirty_rects(rects: &[(u32, u32, u32, u32)]) {
                 for y in 0..copy_h {
                     let src = bb.add(y * fb_w as usize);
                     let dst = gpu_ptr.add(y * gpu_w as usize);
-                    #[cfg(target_arch = "x86_64")]
                     crate::graphics::simd::copy_row_sse2(dst, src, copy_w);
-                    #[cfg(not(target_arch = "x86_64"))]
-                    core::ptr::copy_nonoverlapping(src, dst, copy_w);
                 }
             }
         }
