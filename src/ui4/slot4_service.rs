@@ -28,6 +28,13 @@ struct Slot4State {
     signature: u64,
     initialized: bool,
     consecutive_present_failures: u64,
+    pending: Option<PendingSlot4Present>,
+}
+
+struct PendingSlot4Present {
+    flip: crate::intel::Ui4LiveOverlayFlip,
+    rects: Slot4Rects,
+    signature: u64,
 }
 
 impl Slot4State {
@@ -37,6 +44,7 @@ impl Slot4State {
             signature: 0,
             initialized: false,
             consecutive_present_failures: 0,
+            pending: None,
         }
     }
 }
@@ -76,28 +84,40 @@ pub(crate) async fn ui4_slot4_service_task() {
             next_heartbeat_check_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
         }
 
-        if visual_dirty && now_ms >= next_present_ms {
-            let rects = software_cursor_rects();
-            if !present_slot4(&mut state, &rects) {
-                state.consecutive_present_failures =
-                    state.consecutive_present_failures.saturating_add(1);
-                if state.consecutive_present_failures <= 4
-                    || state.consecutive_present_failures.is_power_of_two()
-                {
-                    crate::log_warn!(target: "ui4/slot4";
-                        "ui4/slot4: present deferred reason=display-transaction-busy rects={} consecutive={} retry_ms={}\n",
-                        rects.len(),
-                        state.consecutive_present_failures,
-                        SLOT4_PRESENT_PERIOD_MS,
-                    );
+        if let Some(pending) = state.pending.take() {
+            match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
+                crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
+                    state.pending = Some(pending);
                 }
-                visual_dirty = true;
-                next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
-            } else {
-                state.consecutive_present_failures = 0;
-                visual_dirty = false;
-                next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
+                crate::intel::Ui4LiveOverlayFlipPoll::Complete => {
+                    commit_presented_slot4(&mut state, pending.rects, pending.signature);
+                    state.consecutive_present_failures = 0;
+                }
+                crate::intel::Ui4LiveOverlayFlipPoll::Failed => {
+                    note_present_failure(&mut state, pending.rects.len());
+                    visual_dirty = true;
+                    next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
+                }
             }
+        }
+
+        if state.pending.is_none() && visual_dirty && now_ms >= next_present_ms {
+            let rects = software_cursor_rects();
+            match queue_slot4(&mut state, &rects) {
+                Ok(Some(pending)) => {
+                    state.pending = Some(pending);
+                    visual_dirty = false;
+                }
+                Ok(None) => {
+                    state.consecutive_present_failures = 0;
+                    visual_dirty = false;
+                }
+                Err(()) => {
+                    note_present_failure(&mut state, rects.len());
+                    visual_dirty = true;
+                }
+            }
+            next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
         }
 
         let now_ms = Instant::now().as_millis();
@@ -107,7 +127,8 @@ pub(crate) async fn ui4_slot4_service_task() {
         } else {
             u64::MAX
         };
-        let wait_ms = heartbeat_wait.min(present_wait).max(1);
+        let flip_wait = if state.pending.is_some() { 1 } else { u64::MAX };
+        let wait_ms = heartbeat_wait.min(present_wait).min(flip_wait).max(1);
         if with_timeout(
             Duration::from_millis(wait_ms),
             super::input_broker::wait_slot4_visual_change(),
@@ -200,32 +221,52 @@ fn submit_heartbeat_program(
     submit_program(MouseControlPrincipal::KernelApp(1), cursor.handle, &program)
 }
 
-fn present_slot4(state: &mut Slot4State, rects: &Slot4Rects) -> bool {
+fn queue_slot4(
+    state: &mut Slot4State,
+    rects: &Slot4Rects,
+) -> Result<Option<PendingSlot4Present>, ()> {
     let signature = overlay_rect_signature(rects);
     if state.initialized && signature == state.signature {
-        return true;
+        return Ok(None);
     }
     let damage = changed_rect_damage(&state.previous_rects, rects);
     if damage.is_empty() {
-        state.previous_rects = rects.clone();
-        state.signature = signature;
-        state.initialized = true;
-        *PRESENTED_RECTS.lock() = rects.clone();
-        return true;
+        commit_presented_slot4(state, rects.clone(), signature);
+        return Ok(None);
     }
-    if !crate::intel::present_live_overlay_rects_on_slot_damage_region(
+    let flip = crate::intel::queue_ui4_live_overlay_rects_on_slot_damage_region(
         super::INTERACTION_OVERLAY_PLANE_SLOT,
         rects,
         damage,
         "ui4-slot4-interaction",
-    ) {
-        return false;
-    }
+    )
+    .ok_or(())?;
+    Ok(Some(PendingSlot4Present {
+        flip,
+        rects: rects.clone(),
+        signature,
+    }))
+}
+
+fn commit_presented_slot4(state: &mut Slot4State, rects: Slot4Rects, signature: u64) {
     state.previous_rects = rects.clone();
     state.signature = signature;
     state.initialized = true;
-    *PRESENTED_RECTS.lock() = rects.clone();
-    true
+    *PRESENTED_RECTS.lock() = rects;
+}
+
+fn note_present_failure(state: &mut Slot4State, rect_count: usize) {
+    state.consecutive_present_failures = state.consecutive_present_failures.saturating_add(1);
+    if state.consecutive_present_failures <= 4
+        || state.consecutive_present_failures.is_power_of_two()
+    {
+        crate::log_warn!(target: "ui4/slot4";
+            "ui4/slot4: present deferred reason=display-transaction-busy rects={} consecutive={} retry_ms={}\n",
+            rect_count,
+            state.consecutive_present_failures,
+            SLOT4_PRESENT_PERIOD_MS,
+        );
+    }
 }
 
 fn changed_rect_damage(

@@ -17,11 +17,10 @@ mod window_broker;
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{
-    FramePoolError, FrameReadLease, FrameRgbaView, FrameSnapshot, FrameWriteLease, PublishedFrame,
-    acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
-    destroy_frame, frame_snapshot, gpgpu_rgba_surface, import_native_nv12_frame,
-    publish_frame_buffer, published_native_nv12_view, published_rgba_view, release_published_frame,
-    writable_native_nv12_view, writable_rgba_view,
+    FramePoolError, FrameReadLease, FrameRgbaView, FrameWriteLease, acquire_frame_buffer,
+    acquire_published_frame, cancel_frame_buffer, create_frame, destroy_frame, frame_snapshot,
+    gpgpu_rgba_surface, publish_frame_buffer, published_rgba_view, release_published_frame,
+    writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -36,10 +35,8 @@ pub(crate) use input_broker::{
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
-    DecodedNv12Source, DecodedRgbaProducer, DecodedRgbaWriteTarget, DecodedVideoFrameSpec,
-    acquire_decoded_rgba_stream_target, cancel_decoded_rgba_stream_target,
-    prepare_decoded_video_player, present_decoded_nv12_stream_frame,
-    publish_decoded_rgba_stream_target, stop_decoded_nv12_stream,
+    DecodedNv12Source, acknowledge_native_video_publication, native_video_publication,
+    prepare_decoded_video_player, present_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
     wait_decoded_video_playback_ready,
 };
 
@@ -87,8 +84,9 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// broker windows so cursors, selection outlines and context menus never
 /// become part of an application composition surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
-// Compatibility aliases for the parked legacy direct-NV12 experiment. Normal
-// UI4 video is converted into RGBA and does not reserve these plane roles.
+// Compatibility aliases for the parked linked-NV12 display-plane experiment.
+// Normal UI4 video is converted directly into the primary back buffer by the
+// GuC compositor and does not reserve either of these plane roles.
 pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
 pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
 

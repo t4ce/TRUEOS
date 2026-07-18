@@ -17,16 +17,17 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
     diagnostics: false,
     noreset_lite: true,
     loop_playback: true,
-    presentation: H264PresentationPolicy::Ui4ProbeRequired,
+    presentation: H264PresentationPolicy::Ui4BootRequired,
 };
 // Cached reverse frames still use the retired primary-surface presentation
 // path instead of the ordinary UI4 window. Keep that ABI parked until reverse
-// presentation is converted to the same UI4 RGBA producer as forward playback.
+// presentation is converted to the native UI4/GuC producer used by forward
+// playback.
 const H264_REVERSE_PLAYBACK_ENABLED: bool = false;
-// The old direct linked-plane and primary-surface fallbacks escape UI4 frame
-// ownership. Leave their call sites in place for bring-up archaeology, but do
-// not let playback enter them while the ABI is parked.
-const H264_LEGACY_PRESENTATION_ABI_ENABLED: bool = false;
+// Cached reverse-frame diagnostics have not yet been migrated to UI4. Keep
+// their old primary-surface presenter disabled independently from the live
+// forward playback path.
+const H264_REVERSE_PRIMARY_PRESENTATION_ENABLED: bool = false;
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
 const H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
@@ -99,19 +100,20 @@ pub(crate) struct H264PlaybackOptions {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum H264PresentationPolicy {
-    /// The boot demo must exercise the ordinary UI4 triple-buffered RGBA path.
-    /// A failed acquire/convert/publish is a failed probe, not permission to
-    /// consume linked display planes or write the primary surface directly.
-    Ui4ProbeRequired,
-    /// Interactive/manual playback retains the proven migration fallback.
-    Ui4WithLegacyFallback,
+    /// The boot demo waits for its UI4 window before decoding. A failed native
+    /// publication is a failed probe, not permission to consume linked display
+    /// planes, run a CPU converter, or write the primary surface directly.
+    Ui4BootRequired,
+    /// Interactive/manual playback uses the same native UI4/GuC path without
+    /// the boot-only readiness wait.
+    Ui4Interactive,
 }
 
 impl H264PresentationPolicy {
     const fn name(self) -> &'static str {
         match self {
-            Self::Ui4ProbeRequired => "ui4-probe-required",
-            Self::Ui4WithLegacyFallback => "ui4-with-legacy-fallback",
+            Self::Ui4BootRequired => "ui4-boot-required",
+            Self::Ui4Interactive => "ui4-interactive",
         }
     }
 }
@@ -136,7 +138,7 @@ impl H264PlaybackOptions {
             diagnostics,
             noreset_lite,
             loop_playback,
-            presentation: H264PresentationPolicy::Ui4WithLegacyFallback,
+            presentation: H264PresentationPolicy::Ui4Interactive,
         }
     }
 
@@ -398,7 +400,7 @@ pub(crate) async fn ui4_video_playback_task() {
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} buffers=3 format=rgba8-premultiplied source=ytile-nv12 presentation={} playback=playing control=focused-space legacy_fallback=0 carrier_slot={}\n",
+            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} carrier_buffers=3 source=ytile-nv12 output=xrgb-primary kernel=nv12-ytile-primary presentation={} playback=playing control=focused-space fallback=none carrier_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
@@ -2698,7 +2700,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
     for unit in access_units {
-        if mode.presentation() == H264PresentationPolicy::Ui4ProbeRequired
+        if mode.presentation() == H264PresentationPolicy::Ui4BootRequired
             && crate::ui4::wait_decoded_video_playback_ready().await
         {
             next_frame_deadline = EmbassyInstant::now();
@@ -2939,6 +2941,7 @@ async fn h264_submit_wait_probe_frame(
     let present_start = EmbassyInstant::now();
     let stored = if present_output {
         h264_present_probe_output(phase, playback_frame, stream_idr_index, &output, presentation)
+            .await
     } else {
         false
     };
@@ -3751,7 +3754,7 @@ async fn h264_read_stream_range(
     Some(out)
 }
 
-fn h264_present_probe_output(
+async fn h264_present_probe_output(
     phase: &str,
     playback_frame: usize,
     stream_idr_index: usize,
@@ -3788,8 +3791,6 @@ fn h264_present_probe_output(
         && output.byte_len != 0
         && output.virt_addr != 0
     {
-        let src =
-            unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
         let reason = format!(
             "h264-decoded-nv12:{}:frame{}:idr{}:id{}",
             phase, playback_frame, stream_idr_index, output.id
@@ -3806,11 +3807,12 @@ fn h264_present_probe_output(
             pitch_bytes: output.pitch_bytes,
             uv_offset: output.uv_offset,
         };
-        let ui4_presented = crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str());
-        if presentation == H264PresentationPolicy::Ui4ProbeRequired {
+        let ui4_presented =
+            crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str()).await;
+        if presentation == H264PresentationPolicy::Ui4BootRequired {
             if !ui4_presented {
                 crate::log!(
-                    "intel/hw_vid: h264-present ui4-probe failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame legacy_fallback=0\n",
+                    "intel/hw_vid: h264-present ui4-boot failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame fallback=none\n",
                     phase,
                     playback_frame,
                     stream_idr_index,
@@ -3822,48 +3824,14 @@ fn h264_present_probe_output(
         if ui4_presented {
             return true;
         }
-        if !H264_LEGACY_PRESENTATION_ABI_ENABLED {
-            crate::log!(
-                "intel/hw_vid: h264-present ui4 failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame legacy_presentation_abi=disabled\n",
-                phase,
-                playback_frame,
-                stream_idr_index,
-                output.id
-            );
-            return false;
-        }
-        // Keep the already-proven linked-plane path as a migration fallback.
-        // It is reached only if UI4 could not allocate, lease, convert or
-        // publish its normal triple-buffered RGBA window.
-        let direct_presented = crate::intel::display::arm_decoded_nv12_overlay_plane_probe(
-            reason.as_str(),
-            output.gpu_addr,
-            output.phys_addr,
-            output.virt_addr,
-            output.width,
-            output.height,
-            output.visible_width,
-            output.visible_height,
-            output.pitch_bytes,
-            output.uv_offset,
-            output.byte_len,
+        crate::log!(
+            "intel/hw_vid: h264-present ui4 failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame fallback=none\n",
+            phase,
+            playback_frame,
+            stream_idr_index,
+            output.id
         );
-        if direct_presented
-            && crate::intel::display::decoded_nv12_overlay_plane_probe_replaces_cpu_present()
-        {
-            return true;
-        }
-        crate::intel::display::present_ytile_nv12_surface_center(
-            src,
-            output.width,
-            output.height,
-            0,
-            0,
-            output.visible_width,
-            output.visible_height,
-            output.pitch_bytes,
-            output.uv_offset,
-        )
+        false
     } else {
         false
     }
@@ -3913,7 +3881,7 @@ fn h264_capture_probe_output(output: &super::hw_pic::HwPicOutput) -> Option<H264
 }
 
 fn h264_present_decoded_frame(frame: &H264DecodedFrame) -> bool {
-    if !H264_LEGACY_PRESENTATION_ABI_ENABLED || frame.bytes.is_empty() {
+    if !H264_REVERSE_PRIMARY_PRESENTATION_ENABLED || frame.bytes.is_empty() {
         return false;
     }
     crate::intel::display::present_ytile_nv12_surface_center(

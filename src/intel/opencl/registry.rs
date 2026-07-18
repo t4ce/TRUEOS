@@ -67,6 +67,7 @@ const SPRITE64_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
 const SPRITE64_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: u32 = 128;
 const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: u32 = 96;
+const UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES: u32 = 128;
 const GLYPH_MASK_CROSS_THREAD_BYTES: u32 = 128;
 const PRESENT_CROSS_THREAD_BYTES: u32 = 128;
 const CANVAS3D_PROJECT_CROSS_THREAD_BYTES: u32 = 96;
@@ -142,6 +143,23 @@ const SPRITE_QUAD_DESC_FIELDS: &[DescriptorField<'_>] = &[
 ];
 const SPRITE_QUAD_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("SpriteQuadDesc", 18, Some(256), SPRITE_QUAD_DESC_FIELDS);
+
+const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
+    DescriptorField::new("src_gpu", 0, 2),
+    DescriptorField::new("src_pitch_bytes", 2, 1),
+    DescriptorField::new("src_width", 3, 1),
+    DescriptorField::new("src_height", 4, 1),
+    DescriptorField::new("dst_xy", 5, 2),
+    DescriptorField::new("dst_extent", 7, 2),
+    DescriptorField::new("opacity", 9, 1),
+    DescriptorField::new("flags", 10, 1),
+];
+const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> = DescriptorLayout::new(
+    "Ui4ComposeLayerDesc",
+    12,
+    Some(32),
+    UI4_COMPOSE_LAYER_DESC_FIELDS,
+);
 
 const MANDEL64_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_xy", 0, 1),
@@ -222,6 +240,7 @@ const GRADIENT_RECT_DESCS: &[DescriptorLayout<'_>] = &[GRADIENT_RECT_DESC];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
 const SPRITE64_DESCS: &[DescriptorLayout<'_>] = &[SPRITE64_DESC];
 const SPRITE_QUAD_DESCS: &[DescriptorLayout<'_>] = &[SPRITE_QUAD_DESC];
+const UI4_COMPOSE_LAYER_DESCS: &[DescriptorLayout<'_>] = &[UI4_COMPOSE_LAYER_DESC];
 const MANDEL64_DESCS: &[DescriptorLayout<'_>] = &[MANDEL64_DESC];
 const PATCH_DESCS: &[DescriptorLayout<'_>] = &[PATCH_DESC];
 
@@ -447,6 +466,36 @@ const SPRITE_QUAD_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: SPRITE_QUAD_DESCS,
     launch: KernelLaunchContract::descriptor_worklist(16),
     consumers: &["intel::init_once upload", "explicit sprite batches"],
+};
+
+const UI4_COMPOSE_LAYERS_ARGS: &[KernelCallArg<'_>] = &[
+    ro_buf!(0, "base_xrgb", "__global const uint*", 0, 12),
+    rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
+    ro_buf!(2, "layers", "__global const uint*", 2, 16),
+    u32_arg!(3, "base_pitch_bytes", 18),
+    u32_arg!(4, "dst_pitch_bytes", 19),
+    u32_arg!(5, "dst_width", 20),
+    u32_arg!(6, "dst_height", 21),
+    u32_arg!(7, "damage_x", 22),
+    u32_arg!(8, "damage_y", 23),
+    u32_arg!(9, "damage_width", 24),
+    u32_arg!(10, "damage_height", 25),
+    u32_arg!(11, "layer_count", 26),
+    u32_arg!(12, "flags", 27),
+];
+const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
+    source_path: "src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.cl",
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: TEXT_OFFSET,
+    cross_thread_bytes: UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 3,
+    args: UI4_COMPOSE_LAYERS_ARGS,
+    descriptor_layouts: UI4_COMPOSE_LAYER_DESCS,
+    launch: KernelLaunchContract::nd_range_2d(None),
+    consumers: &["ui4 persistent GuC compositor"],
 };
 
 const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
@@ -898,6 +947,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_sprite_quad_worklist_rgba8_kernel,
         status: gpgpu::sprite_quad_worklist_rgba8_upload_status,
         role: KnownKernelRole::Sprite,
+    },
+    KnownAotKernel {
+        name: gpgpu::UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
+        artifact: &gpgpu::UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT,
+        contract: &UI4_COMPOSE_LAYERS_CONTRACT,
+        upload: gpgpu::upload_ui4_compose_layers_rgba8_kernel,
+        status: gpgpu::ui4_compose_layers_rgba8_upload_status,
+        role: KnownKernelRole::Present,
     },
     KnownAotKernel {
         name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,

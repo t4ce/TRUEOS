@@ -1,10 +1,10 @@
 //! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder remains a native Y-tiled NV12 producer. This boundary converts
-//! each decoded picture into one of three ordinary premultiplied-RGBA UI4
-//! buffers, so video participates in the same broker ordering and primary
-//! composition as every other window. The proven linked-NV12 presenter remains
-//! below this function as the caller's fallback when conversion cannot run.
+//! The decoder remains a native Y-tiled NV12 producer.  The broker publishes a
+//! lightweight frame serial while the compositor consumes the native decoder
+//! surface directly.  One GuC dispatch rebuilds the primary back buffer from
+//! the immutable desktop base and that NV12 picture; the decoder surface is
+//! retained until the resulting scanout flip is acknowledged.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,7 +17,7 @@ use super::{
     Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
     destroy_frame, finish_window_session, publish_frame_buffer, publish_window_frame,
-    replace_window_frame, take_owner_input_events, writable_rgba_view,
+    replace_window_frame, take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -26,6 +26,7 @@ const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
 const VIDEO_PLAYBACK_AUTOSTART: bool = true;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_INPUT_POLL_MS: u64 = 10;
+const VIDEO_PRESENT_ACK_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -41,16 +42,36 @@ pub(crate) struct DecodedNv12Source {
     pub(crate) uv_offset: usize,
 }
 
-/// Dimensions available before a decode submission.  The VD-to-SFC path will
-/// reserve a UI4 buffer from this description, bind it into the media PPGTT,
-/// and retain its write lease until the complete VDBOX+SFC job retires.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeViewportLayout {
+    pub(crate) source_x: u32,
+    pub(crate) source_y: u32,
+    pub(crate) destination_x: u32,
+    pub(crate) destination_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+/// Exact native producer record corresponding to one broker frame serial.
+/// The compositor must match both fields before using the decoder surface.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeVideoPublication {
+    pub(crate) source: DecodedNv12Source,
+    pub(crate) frame: FrameHandle,
+    pub(crate) frame_publish_serial: u64,
+    pub(crate) layout: NativeViewportLayout,
+    pub(crate) sequence: u64,
+}
+
+/// Dimensions used to bind one decoded picture to its UI4 viewport.  Pixel
+/// storage stays decoder-owned; the UI4 frame is only the broker serial and
+/// cadence carrier for the native publication.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVideoFrameSpec {
     pub(crate) coded_width: u32,
     pub(crate) coded_height: u32,
     pub(crate) visible_width: u32,
     pub(crate) visible_height: u32,
-    pub(crate) progressive: bool,
 }
 
 impl DecodedVideoFrameSpec {
@@ -60,8 +81,6 @@ impl DecodedVideoFrameSpec {
             coded_height: source.height,
             visible_width: source.visible_width,
             visible_height: source.visible_height,
-            // The current live AVC milestone rejects field and MBAFF input.
-            progressive: true,
         }
     }
 
@@ -91,62 +110,11 @@ struct VideoStream {
     active_pan_source: Option<super::Ui4CursorSource>,
 }
 
-/// One unpublished UI4 video buffer with its GPU mapping and ownership token.
-/// This value is intentionally not `Copy`: exactly one commit or cancel must
-/// consume the target.
-pub(crate) struct DecodedRgbaWriteTarget {
-    stream: VideoStream,
-    write: super::FrameWriteLease,
-    surface: super::FrameRgbaView,
-}
-
-impl DecodedRgbaWriteTarget {
-    pub(crate) const fn frame(&self) -> FrameHandle {
-        self.stream.frame
-    }
-
-    pub(crate) const fn buffer_index(&self) -> u8 {
-        self.write.buffer_index
-    }
-
-    pub(crate) const fn rgba(&self) -> super::FrameRgbaView {
-        self.surface
-    }
-
-    pub(crate) const fn sfc_output_surface(
-        &self,
-    ) -> crate::intel::xelp_media_sfc::SfcRgbaOutputSurface {
-        crate::intel::xelp_media_sfc::SfcRgbaOutputSurface {
-            gpu_addr: self.surface.gpu,
-            phys_addr: self.surface.phys,
-            byte_len: self.surface.byte_len,
-            width: self.surface.width,
-            height: self.surface.height,
-            pitch_bytes: self.surface.pitch,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DecodedRgbaProducer {
-    CpuNv12Converter,
-    VdboxSfc,
-}
-
-impl DecodedRgbaProducer {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::CpuNv12Converter => "cpu-nv12-converter",
-            Self::VdboxSfc => "vdbox-sfc",
-        }
-    }
-}
-
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
-static SFC_TARGET_READY_LOGGED: AtomicBool = AtomicBool::new(false);
-static SFC_TARGET_UNAVAILABLE_LOGS: AtomicU64 = AtomicU64::new(0);
+static VIDEO_NATIVE_PUBLICATION: Mutex<Option<NativeVideoPublication>> = Mutex::new(None);
+static VIDEO_NATIVE_ACK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 
 /// Install the boot player's ordinary UI4 window without decoding a picture.
@@ -162,7 +130,6 @@ pub(crate) fn prepare_decoded_video_player() -> bool {
         coded_height: 9,
         visible_width: 16,
         visible_height: 9,
-        progressive: true,
     };
     let Some(stream) = create_stream(
         placeholder_spec,
@@ -428,47 +395,149 @@ fn reap_retired_video_frames() {
         .retain(|frame| matches!(destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
-pub(crate) fn present_decoded_nv12_stream_frame(source: DecodedNv12Source, reason: &str) -> bool {
+pub(crate) fn native_video_publication(
+    frame: FrameHandle,
+    frame_publish_serial: u64,
+) -> Option<NativeVideoPublication> {
+    VIDEO_NATIVE_PUBLICATION
+        .lock()
+        .filter(|publication| {
+            publication.frame == frame
+                && publication.frame_publish_serial == frame_publish_serial
+        })
+}
+
+pub(crate) fn acknowledge_native_video_publication(sequence: u64) {
+    VIDEO_NATIVE_ACK.fetch_max(sequence, Ordering::AcqRel);
+}
+
+fn clear_native_video_publication(sequence: u64) {
+    let mut publication = VIDEO_NATIVE_PUBLICATION.lock();
+    if publication
+        .as_ref()
+        .is_some_and(|publication| publication.sequence == sequence)
+    {
+        *publication = None;
+    }
+}
+
+/// Publish a native decoder surface and retain it until the compositor has
+/// completed both the GuC job and the display-plane flip.  This backpressure is
+/// what makes reuse of the decoder's small DPB ring safe.
+pub(crate) async fn present_decoded_nv12_stream_frame(
+    source: DecodedNv12Source,
+    reason: &str,
+) -> bool {
     if !valid_source(source) {
         return false;
     }
-    let target = match acquire_decoded_rgba_stream_target(
+    let Some(stream) = bind_decoded_source_stream(
         DecodedVideoFrameSpec::from_nv12_source(source),
         reason,
-    ) {
-        Some(target) => target,
-        None => return false,
-    };
-    let destination = target.rgba();
-    if !convert_decoded_ytile_nv12_to_rgba(
-        source,
-        destination,
-        target.stream.pan_x,
-        target.stream.pan_y,
-    ) {
-        cancel_decoded_rgba_stream_target(target, "cpu-conversion-failed");
+    ) else {
         return false;
-    }
-    publish_decoded_rgba_stream_target(
-        target,
+    };
+    let Some(layout) = native_viewport_layout(
+        stream.visible_width,
+        stream.visible_height,
+        stream.frame_width,
+        stream.frame_height,
+        stream.pan_x,
+        stream.pan_y,
+    ) else {
+        return false;
+    };
+    let write = match acquire_frame_buffer(stream.frame) {
+        Ok(write) => write,
+        Err(error) => {
+            crate::log_warn!(target: "ui4";
+                "ui4 video-frame acquire failed reason={} error={:?}\n", reason, error,
+            );
+            return false;
+        }
+    };
+    let published = match publish_frame_buffer(write) {
+        Ok(published) => published,
+        Err(error) => {
+            let _ = cancel_frame_buffer(write);
+            crate::log_warn!(target: "ui4";
+                "ui4 video-frame native publish failed frame={} buffer={} error={:?} reason={}\n",
+                stream.frame.raw(), write.buffer_index, error, reason,
+            );
+            return false;
+        }
+    };
+    let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    let publication = NativeVideoPublication {
         source,
-        DecodedRgbaProducer::CpuNv12Converter,
-        reason,
-    )
+        frame: stream.frame,
+        frame_publish_serial: published.publish_serial,
+        layout,
+        sequence,
+    };
+
+    // Publish the sidecar first: the compositor must never observe a new
+    // broker serial without the exact native source record that belongs to it.
+    *VIDEO_NATIVE_PUBLICATION.lock() = Some(publication);
+    let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
+        Ok(serial) => serial,
+        Err(error) => {
+            clear_native_video_publication(sequence);
+            crate::log_warn!(target: "ui4";
+                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={}\n",
+                stream.frame.raw(), stream.window.raw(), error, reason,
+            );
+            return false;
+        }
+    };
+    if sequence <= 8 || sequence.is_multiple_of(120) {
+        crate::log_info!(target: "ui4";
+            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-direct-primary source=ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X}\n",
+            sequence,
+            stream.frame.raw(),
+            stream.window.raw(),
+            published.buffer_index,
+            published.publish_serial,
+            window_serial,
+            source.width,
+            source.height,
+            source.visible_width,
+            source.visible_height,
+            layout.width,
+            layout.height,
+            layout.source_x,
+            layout.source_y,
+            layout.destination_x,
+            layout.destination_y,
+            source.gpu,
+        );
+    }
+
+    let deadline = embassy_time::Instant::now()
+        + Duration::from_millis(VIDEO_PRESENT_ACK_TIMEOUT_MS);
+    while VIDEO_NATIVE_ACK.load(Ordering::Acquire) < sequence {
+        if embassy_time::Instant::now() >= deadline {
+            clear_native_video_publication(sequence);
+            crate::log_warn!(target: "ui4";
+                "ui4 video-frame present timeout seq={} frame={} window={} reason={} action=drop-after-retain-timeout\n",
+                sequence, stream.frame.raw(), stream.window.raw(), reason,
+            );
+            return false;
+        }
+        Timer::after(Duration::from_millis(1)).await;
+    }
+    clear_native_video_publication(sequence);
+    true
 }
 
-pub(crate) fn acquire_decoded_rgba_stream_target(
+fn bind_decoded_source_stream(
     spec: DecodedVideoFrameSpec,
     reason: &str,
-) -> Option<DecodedRgbaWriteTarget> {
+) -> Option<VideoStream> {
     if !spec.valid() {
         return None;
     }
-    // The frame extent follows the broker window exactly. The decoded picture
-    // is copied into that viewport at 1:1 native resolution, either cropped or
-    // centered with untouched opaque-black letterbox pixels.
-    let current = *VIDEO_STREAM.lock();
-    if current.is_some() {
+    {
         let mut slot = VIDEO_STREAM.lock();
         if let Some(stream) = slot.as_mut() {
             let source_changed = stream.source_width != spec.coded_width
@@ -490,9 +559,8 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
                     stream.pan_x,
                     stream.pan_y,
                 )?;
-                crate::log_info!(
-                    target: "ui4";
-                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={}\n",
+                crate::log_info!(target: "ui4";
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-native-nv12-direct-primary reason={}\n",
                     stream.frame.raw(),
                     stream.window.raw(),
                     spec.coded_width,
@@ -508,179 +576,26 @@ pub(crate) fn acquire_decoded_rgba_stream_target(
                     layout.destination_x,
                     layout.destination_y,
                     if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
-                );
-            }
-        }
-    }
-
-    // Do not match directly on the lock expression: the scrutinee temporary
-    // otherwise lives through the selected arm, and the `None` arm deadlocks
-    // when it installs the newly-created stream by taking this mutex again.
-    let existing = { *VIDEO_STREAM.lock() };
-    let stream = match existing {
-        Some(stream) => stream,
-        None => match create_stream(
-            spec,
-            super::DEFAULT_FRAME_WIDTH,
-            super::DEFAULT_FRAME_HEIGHT,
-            false,
-        ) {
-            Some(stream) => {
-                *VIDEO_STREAM.lock() = Some(stream);
-                stream
-            }
-            None => return None,
-        },
-    };
-
-    let write = match acquire_frame_buffer(stream.frame) {
-        Ok(write) => write,
-        Err(error) => {
-            crate::log_warn!(
-                target: "ui4";
-                "ui4 video-frame acquire failed reason={} error={:?}\n",
-                reason,
-                error
-            );
-            return None;
-        }
-    };
-    let destination = match writable_rgba_view(write) {
-        Ok(surface) => surface,
-        Err(error) => {
-            let _ = cancel_frame_buffer(write);
-            crate::log_warn!(
-                target: "ui4";
-                "ui4 video-frame view failed reason={} error={:?}\n",
-                reason,
-                error
-            );
-            return None;
-        }
-    };
-
-    let target = DecodedRgbaWriteTarget {
-        stream,
-        write,
-        surface: destination,
-    };
-    let sfc_input = crate::intel::xelp_media_sfc::SfcAvcInputFrame {
-        coded_width: spec.coded_width,
-        coded_height: spec.coded_height,
-        visible_width: spec.visible_width,
-        visible_height: spec.visible_height,
-        progressive: spec.progressive,
-    };
-    match crate::intel::xelp_media_sfc::plan_avc_ui4_visible_output(
-        sfc_input,
-        target.sfc_output_surface(),
-    ) {
-        Ok(plan) => {
-            if !SFC_TARGET_READY_LOGGED.swap(true, Ordering::AcqRel) {
-                crate::log_info!(
-                        target: "ui4";
-                    "ui4 video-frame sfc-target planned frame={} buffer={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} pitch=0x{:X} commands={} scratch=0x{:X} scaling={} avs_coefficients={} mode=shadow-disabled reason={}\n",
-                        target.frame().raw(),
-                        target.buffer_index(),
-                        plan.output.gpu_addr,
-                        plan.output.phys_addr,
-                        plan.output.byte_len,
-                        plan.output.pitch_bytes,
-                    plan.command_dwords,
-                    plan.scratch.page_aligned_total_bytes,
-                    plan.scaling_enabled as u8,
-                    plan.avs_coefficients_required as u8,
                     reason,
                 );
             }
-        }
-        Err(error) => {
-            let count = SFC_TARGET_UNAVAILABLE_LOGS.fetch_add(1, Ordering::Relaxed) + 1;
-            if count <= 4 || count.is_power_of_two() {
-                crate::log_warn!(
-                    target: "ui4";
-                    "ui4 video-frame sfc-target unavailable count={} frame={} buffer={} error={:?} reason={} cpu_fallback=1 log_policy=first4-powers-of-two\n",
-                    count,
-                    target.frame().raw(),
-                    target.buffer_index(),
-                    error,
-                    reason,
-                );
-            }
+            return Some(*stream);
         }
     }
-    Some(target)
-}
-
-pub(crate) fn publish_decoded_rgba_stream_target(
-    target: DecodedRgbaWriteTarget,
-    source: DecodedNv12Source,
-    producer: DecodedRgbaProducer,
-    reason: &str,
-) -> bool {
-    let destination = target.surface;
-    let stream = target.stream;
-    let write = target.write;
-    let published = match publish_frame_buffer(write) {
-        Ok(published) => published,
-        Err(error) => {
-            let _ = cancel_frame_buffer(write);
-            crate::log_warn!(
-                target: "ui4";
-                "ui4 video-frame publish failed frame={} buffer={} producer={} error={:?} reason={}\n",
-                stream.frame.raw(),
-                write.buffer_index,
-                producer.label(),
-                error,
-                reason,
-            );
-            return false;
-        }
-    };
-    let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
-        Ok(serial) => serial,
-        Err(_) => return false,
-    };
-
-    let seq = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    if seq <= 8 || seq.is_multiple_of(120) {
-        crate::log_info!(
-            target: "ui4";
-            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer={} source=ytile-nv12 {}x{} visible={}x{} output=rgba8-premultiplied {}x{} output_gpu=0x{:X} source_gpu=0x{:X}\n",
-            seq,
-            stream.frame.raw(),
-            stream.window.raw(),
-            published.buffer_index,
-            published.publish_serial,
-            window_serial,
-            producer.label(),
-            source.width,
-            source.height,
-            source.visible_width,
-            source.visible_height,
-            destination.width,
-            destination.height,
-            destination.gpu,
-            source.gpu,
-        );
-    }
-    true
-}
-
-pub(crate) fn cancel_decoded_rgba_stream_target(target: DecodedRgbaWriteTarget, reason: &str) {
-    if let Err(error) = cancel_frame_buffer(target.write) {
-        crate::log_warn!(
-            target: "ui4";
-            "ui4 video-frame cancel failed frame={} buffer={} error={:?} reason={}\n",
-            target.frame().raw(),
-            target.buffer_index(),
-            error,
-            reason,
-        );
-    }
+    let stream = create_stream(
+        spec,
+        super::DEFAULT_FRAME_WIDTH,
+        super::DEFAULT_FRAME_HEIGHT,
+        false,
+    )?;
+    *VIDEO_STREAM.lock() = Some(stream);
+    Some(stream)
 }
 
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
+    if let Some(publication) = VIDEO_NATIVE_PUBLICATION.lock().take() {
+        acknowledge_native_video_publication(publication.sequence);
+    }
     let stream = VIDEO_STREAM.lock().take();
     if let Some(stream) = stream {
         let _ = finish_window_session(VIDEO_OWNER, stream.session);
@@ -798,102 +713,11 @@ fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::Fra
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        // Initialize all three backing buffers once so native content smaller
-        // than the viewport receives stable opaque-black letterbox pixels.
+        // These small broker-managed surfaces carry frame ownership and serials
+        // only. The one-pass compositor sources letterbox pixels from the
+        // immutable primary base rather than reading them as video content.
         base_color: Some(super::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
     })
-}
-
-fn convert_decoded_ytile_nv12_to_rgba(
-    source: DecodedNv12Source,
-    destination: super::FrameRgbaView,
-    pan_x: u32,
-    pan_y: u32,
-) -> bool {
-    let destination_width = destination.width as usize;
-    let destination_height = destination.height as usize;
-    let pitch = destination.pitch as usize;
-    if pitch < destination_width.saturating_mul(4)
-        || destination.byte_len < pitch.saturating_mul(destination_height)
-    {
-        return false;
-    }
-    let layout = match native_viewport_layout(
-        source.visible_width,
-        source.visible_height,
-        destination.width,
-        destination.height,
-        pan_x,
-        pan_y,
-    ) {
-        Some(layout) => layout,
-        None => return false,
-    };
-    let copy_width = layout.width as usize;
-    let copy_height = layout.height as usize;
-    let source_origin_x = layout.source_x as usize;
-    let source_origin_y = layout.source_y as usize;
-    let destination_origin_x = layout.destination_x as usize;
-    let destination_origin_y = layout.destination_y as usize;
-    let tiles_per_row = source.pitch_bytes / 128;
-    let chroma_row = source.uv_offset / source.pitch_bytes;
-    let total_rows = match chroma_row.checked_add(source.height.div_ceil(2) as usize) {
-        Some(rows) => rows,
-        None => return false,
-    };
-    let required_source = match total_rows
-        .div_ceil(32)
-        .checked_mul(tiles_per_row)
-        .and_then(|tiles| tiles.checked_mul(4096))
-    {
-        Some(bytes) => bytes,
-        None => return false,
-    };
-    if tiles_per_row == 0 || source.byte_len < required_source {
-        return false;
-    }
-
-    for output_y in 0..copy_height {
-        let source_y = source_origin_y + output_y;
-        let destination_y = destination_origin_y + output_y;
-        let destination_row = unsafe { destination.virt.add(destination_y * pitch) };
-        for output_x in 0..copy_width {
-            let source_x = source_origin_x + output_x;
-            let y_offset = ytile_8bpp_offset(source_x, source_y, tiles_per_row);
-            let uv_x = (source_x / 2) * 2;
-            let uv_offset = ytile_8bpp_offset(uv_x, chroma_row + source_y / 2, tiles_per_row);
-            if y_offset >= source.byte_len || uv_offset.saturating_add(1) >= source.byte_len {
-                return false;
-            }
-            let luma =
-                unsafe { core::ptr::read_volatile((source.virt as *const u8).add(y_offset)) };
-            let u = unsafe { core::ptr::read_volatile((source.virt as *const u8).add(uv_offset)) };
-            let v =
-                unsafe { core::ptr::read_volatile((source.virt as *const u8).add(uv_offset + 1)) };
-            let [r, g, b] = nv12_to_rgb(luma, u, v);
-            let pixel = u32::from_le_bytes([r, g, b, u8::MAX]);
-            unsafe {
-                core::ptr::write_volatile(
-                    destination_row
-                        .add((destination_origin_x + output_x) * 4)
-                        .cast::<u32>(),
-                    pixel,
-                )
-            };
-        }
-    }
-    crate::intel::dma_flush(destination.virt, destination.byte_len);
-    true
-}
-
-#[derive(Copy, Clone)]
-struct NativeViewportLayout {
-    source_x: u32,
-    source_y: u32,
-    destination_x: u32,
-    destination_y: u32,
-    width: u32,
-    height: u32,
 }
 
 const fn centered_crop_origin(source_extent: u32, viewport_extent: u32) -> u32 {
@@ -923,29 +747,6 @@ fn native_viewport_layout(
         width: source_width.min(destination_width),
         height: source_height.min(destination_height),
     })
-}
-
-#[inline(always)]
-fn ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
-    let tile_col = byte_x / 128;
-    let tile_row = row_y / 32;
-    let in_x = byte_x % 128;
-    let in_y = row_y % 32;
-    let within_tile = (in_x / 16) * 512 + in_y * 16 + in_x % 16;
-    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
-}
-
-#[inline(always)]
-fn nv12_to_rgb(y: u8, u: u8, v: u8) -> [u8; 3] {
-    let c = (i32::from(y) - 16).max(0);
-    let d = i32::from(u) - 128;
-    let e = i32::from(v) - 128;
-    let clamp = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u8;
-    [
-        clamp(298 * c + 409 * e),
-        clamp(298 * c - 100 * d - 208 * e),
-        clamp(298 * c + 516 * d),
-    ]
 }
 
 fn valid_source(source: DecodedNv12Source) -> bool {

@@ -749,7 +749,11 @@ pub async fn draw3d_ui4_render_task() {
     let mut jobs = Vec::new();
     let mut rendered_revision = 0u64;
     let mut was_running = false;
-    let mut waiting_pending = false;
+    // Publish once more from the long-lived task after initialization.  The
+    // first publication proves allocation/font readiness; this second broker
+    // serial guarantees the compositor observes the waiting surface after its
+    // own plane-stack startup, even when both services race at boot.
+    let mut waiting_pending = true;
     let mut retry_frame = false;
     let mut last_sync_error = None;
     let mut last_render_error = None;
@@ -830,6 +834,13 @@ pub async fn draw3d_ui4_render_task() {
                 Ok(()) => {
                     waiting_pending = false;
                     last_render_error = None;
+                    crate::log_info!(
+                        target: "draw3d";
+                        "draw3d: UI4 waiting frame published frame={} window={} plane_slot={} content=waiting-for-tcp-start\n",
+                        surface.frame.raw(),
+                        surface.window.raw(),
+                        UI4_PLANE_SLOT,
+                    );
                 }
                 Err(error) if last_render_error != Some(error) => {
                     crate::log_warn!(
