@@ -5,12 +5,17 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 const DPI: u32 = 300;
-const A4_WIDTH_TENTH_MM: u32 = 2_100;
-const A4_HEIGHT_TENTH_MM: u32 = 2_970;
-const SURFACE_LEFT_TENTH_MM: u32 = 85;
-const SURFACE_TOP_TENTH_MM: u32 = 120;
-const SURFACE_WIDTH_TENTH_MM: u32 = 1_890;
-const SURFACE_HEIGHT_TENTH_MM: u32 = 2_690;
+const A4_WIDTH_TENTH_MM: u32 = crate::r::gridpaper_service::A4_WIDTH_MM * 10;
+const A4_HEIGHT_TENTH_MM: u32 = crate::r::gridpaper_service::A4_HEIGHT_MM * 10;
+const GRID_WIDTH_TENTH_MM: u32 = crate::r::gridpaper_service::GRID_WIDTH_MM * 10;
+const GRID_HEIGHT_TENTH_MM: u32 = crate::r::gridpaper_service::GRID_HEIGHT_MM * 10;
+const RULER_GUTTER_TENTH_MM: u32 = crate::r::gridpaper_service::RULER_GUTTER_MM * 10;
+const SURFACE_LEFT_TENTH_MM: u32 =
+    (A4_WIDTH_TENTH_MM - GRID_WIDTH_TENTH_MM) / 2 - RULER_GUTTER_TENTH_MM;
+const SURFACE_TOP_TENTH_MM: u32 =
+    (A4_HEIGHT_TENTH_MM - GRID_HEIGHT_TENTH_MM) / 2 - RULER_GUTTER_TENTH_MM;
+const SURFACE_WIDTH_TENTH_MM: u32 = GRID_WIDTH_TENTH_MM + RULER_GUTTER_TENTH_MM;
+const SURFACE_HEIGHT_TENTH_MM: u32 = GRID_HEIGHT_TENTH_MM + RULER_GUTTER_TENTH_MM;
 const PAGE_HEADER_BYTES: usize = 1_796;
 const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
 
@@ -213,6 +218,21 @@ mod tests {
         assert_eq!(&header[372..376], &2480u32.to_be_bytes());
         assert_eq!(&header[376..380], &3508u32.to_be_bytes());
         assert_eq!(&header[400..404], &19u32.to_be_bytes());
+    }
+
+    #[test]
+    fn expanded_grid_stays_centered_on_a4_with_ruler_gutter() {
+        assert_eq!((GRID_WIDTH_TENTH_MM, GRID_HEIGHT_TENTH_MM), (1_950, 2_750));
+        assert_eq!((SURFACE_LEFT_TENTH_MM, SURFACE_TOP_TENTH_MM), (35, 70));
+        assert_eq!((SURFACE_WIDTH_TENTH_MM, SURFACE_HEIGHT_TENTH_MM), (1_990, 2_790));
+        assert_eq!(
+            SURFACE_LEFT_TENTH_MM + RULER_GUTTER_TENTH_MM,
+            (A4_WIDTH_TENTH_MM - GRID_WIDTH_TENTH_MM) / 2,
+        );
+        assert_eq!(
+            SURFACE_TOP_TENTH_MM + RULER_GUTTER_TENTH_MM,
+            (A4_HEIGHT_TENTH_MM - GRID_HEIGHT_TENTH_MM) / 2,
+        );
     }
 
     #[test]

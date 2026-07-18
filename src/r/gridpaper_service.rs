@@ -17,8 +17,8 @@ use crate::intel::gpu_font::{
     GpuFontFace, GpuFontRgba,
 };
 
-const COLUMNS: usize = 37;
-const ROWS: usize = 53;
+const COLUMNS: usize = 39;
+const ROWS: usize = 55;
 const GLYPH_UTF8_CAPACITY: usize = 4;
 const CELL_BYTES: usize = 13;
 const PAGE_BYTES: usize = COLUMNS * ROWS * CELL_BYTES;
@@ -54,12 +54,12 @@ const PRIMARY_INSTANCE_ID: u32 = 0;
 const NATIVE_SCALE_PERCENT: u16 = 100;
 
 const DEFAULT_REGULAR_ROW_FONT_PIXELS: f32 = 24.0;
-const A4_WIDTH_MM: u32 = 210;
-const A4_HEIGHT_MM: u32 = 297;
+pub(crate) const A4_WIDTH_MM: u32 = 210;
+pub(crate) const A4_HEIGHT_MM: u32 = 297;
 const CELL_EDGE_MM: u32 = 5;
-const GRID_WIDTH_MM: u32 = COLUMNS as u32 * CELL_EDGE_MM;
-const GRID_HEIGHT_MM: u32 = ROWS as u32 * CELL_EDGE_MM;
-const RULER_GUTTER_MM: u32 = 4;
+pub(crate) const GRID_WIDTH_MM: u32 = COLUMNS as u32 * CELL_EDGE_MM;
+pub(crate) const GRID_HEIGHT_MM: u32 = ROWS as u32 * CELL_EDGE_MM;
+pub(crate) const RULER_GUTTER_MM: u32 = 4;
 const SURFACE_WIDTH_MM: u32 = RULER_GUTTER_MM + GRID_WIDTH_MM;
 const SURFACE_HEIGHT_MM: u32 = RULER_GUTTER_MM + GRID_HEIGHT_MM;
 // The retained scene uses millimetres as its coordinate space. This makes the
@@ -2881,15 +2881,15 @@ mod tests {
     #[test]
     fn fixed_wire_size_matches_a4_gridpaper() {
         assert_eq!(CELL_BYTES, 13);
-        assert_eq!(PAGE_BYTES, 25_493);
-        assert_eq!((COLUMNS, ROWS), (37, 53));
-        assert_eq!(COLUMNS * ROWS, 1_961);
+        assert_eq!(PAGE_BYTES, 27_885);
+        assert_eq!((COLUMNS, ROWS), (39, 55));
+        assert_eq!(COLUMNS * ROWS, 2_145);
         assert_eq!((A4_WIDTH_MM, A4_HEIGHT_MM), (210, 297));
-        assert_eq!(COLUMNS as u32 * CELL_EDGE_MM, 185);
-        assert_eq!(ROWS as u32 * CELL_EDGE_MM, 265);
-        assert_eq!((GRID_WIDTH_MM, GRID_HEIGHT_MM), (185, 265));
-        assert_eq!((SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM), (189, 269));
-        assert_eq!((SCENE_WIDTH, SCENE_HEIGHT), (189, 269));
+        assert_eq!(COLUMNS as u32 * CELL_EDGE_MM, 195);
+        assert_eq!(ROWS as u32 * CELL_EDGE_MM, 275);
+        assert_eq!((GRID_WIDTH_MM, GRID_HEIGHT_MM), (195, 275));
+        assert_eq!((SURFACE_WIDTH_MM, SURFACE_HEIGHT_MM), (199, 279));
+        assert_eq!((SCENE_WIDTH, SCENE_HEIGHT), (199, 279));
     }
 
     #[test]
@@ -2903,14 +2903,14 @@ mod tests {
     #[test]
     fn middle_pan_tracks_drag_and_clamps_to_scaled_document() {
         let mut pan = ScenePan::ZERO;
-        assert!(!pan.drag_pixels(100, 100, 810, 1_153, 150));
-        assert!(pan.drag_pixels(-10_000, -10_000, 810, 1_153, 150));
+        assert!(!pan.drag_pixels(100, 100, 853, 1_196, 150));
+        assert!(pan.drag_pixels(-10_000, -10_000, 853, 1_196, 150));
         assert_eq!(pan.x, -(SCENE_WIDTH as f32 * 0.5));
         assert_eq!(pan.y, -(SCENE_HEIGHT as f32 * 0.5));
-        assert!(pan.drag_pixels(10_000, 10_000, 810, 1_153, 150));
+        assert!(pan.drag_pixels(10_000, 10_000, 853, 1_196, 150));
         assert_eq!(pan, ScenePan::ZERO);
 
-        assert!(!pan.drag_pixels(-100, -100, 810, 1_153, 100));
+        assert!(!pan.drag_pixels(-100, -100, 853, 1_196, 100));
         assert_eq!(pan, ScenePan::ZERO);
     }
 
