@@ -102,7 +102,11 @@ static TRIANGLE_PIPELINE: TrianglePipeline = TrianglePipeline {
                 sampler_count: 0,
             },
             num_varying_inputs: 0,
-            uses_vmask: true,
+            // The captured Mesa gfx125 packet programs
+            // 3DSTATE_PS.VectorMaskEnable=0 for this executable.  Treating
+            // the RT-write execution mask as a separate PS vector mask drops
+            // otherwise covered SIMD8 lanes and exposes the clear color.
+            uses_vmask: false,
             computed_stencil: false,
             persample_dispatch: false,
             computed_depth_mode: 0,
@@ -129,7 +133,7 @@ static TRIANGLE_PIPELINE_SIMD16: TrianglePipeline = TrianglePipeline {
                 sampler_count: 0,
             },
             num_varying_inputs: 0,
-            uses_vmask: true,
+            uses_vmask: false,
             computed_stencil: false,
             persample_dispatch: false,
             computed_depth_mode: 0,

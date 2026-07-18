@@ -10,7 +10,7 @@
   "grf_used": 0,
   "num_varying_inputs": 0,
   "flat_inputs": 0,
-  "uses_vmask": true,
+  "uses_vmask": false,
   "computed_depth_mode": 0,
   "computed_stencil": false,
   "persample_dispatch": false

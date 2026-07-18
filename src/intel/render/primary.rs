@@ -1017,6 +1017,8 @@ fn stage_resident_scene_secondary(
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
+    // Reproduce the last pre-variable-dispatch scene contract: only the SIMD8
+    // fragment executable in KSP0 is enabled by 3DSTATE_PS.
     let pipeline = crate::intel::shader::triangle_pipeline();
     let shader_layout =
         upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
@@ -1229,7 +1231,7 @@ fn submit_resident_scene_geometry_batched(
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{}\n",
+            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=strict-simd8-host-vmask0 simd8=ksp0 grf_start_dw7=0x00020202 dispatch=100 vector_mask=0\n",
             draws.len(),
             secondary_count,
             target_width,
@@ -6104,9 +6106,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     };
     let ps_ksp1 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot1
-            | BackendProbeMode::PsDispatchAllKspSlots
-            | BackendProbeMode::PsSimd16
+        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
     ) {
         ps_ksp_base
     } else {

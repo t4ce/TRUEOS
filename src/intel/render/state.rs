@@ -632,8 +632,11 @@ impl BackendProbeMode {
 
     fn ps_dispatch_slot(self) -> Option<u8> {
         match self {
-            Self::PsDispatchSlot0 => Some(0),
-            Self::PsDispatchSlot1 | Self::PsSimd16 => Some(1),
+            // Gfx12 uses KSP0 when SIMD16 is the only enabled fragment
+            // width. KSP2 carries SIMD16 only when another width is enabled
+            // alongside it (Mesa's brw_fs_simd_width_for_ksp mapping).
+            Self::PsDispatchSlot0 | Self::PsSimd16 => Some(0),
+            Self::PsDispatchSlot1 => Some(1),
             Self::PsDispatchSlot2 => Some(2),
             _ => None,
         }
