@@ -1,6 +1,5 @@
 //! Game Boy Cartridge — ROM parsing + MBC (Memory Bank Controller)
 //! Supports MBC0 (no mapper), MBC1, MBC3
-#![allow(dead_code)]
 
 use alloc::vec;
 use alloc::vec::Vec;

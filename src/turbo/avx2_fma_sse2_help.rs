@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 #[inline]
 pub(crate) fn bf16_to_f32(bits: u16) -> f32 {
@@ -273,7 +272,6 @@ fn max_abs_delta(a: &[f32], b: &[f32]) -> f32 {
     max
 }
 
-#[allow(dead_code)]
 pub(crate) fn matvec_rows_bf16_scalar(
     x: &[f32],
     w_rowmajor_bf16: &[u8],

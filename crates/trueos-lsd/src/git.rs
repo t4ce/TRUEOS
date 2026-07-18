@@ -1,7 +1,6 @@
 use crate::meta::git_file_status::GitFileStatus;
 use tokio::path::{Path, PathBuf};
 
-#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum GitStatus {
     /// No status info

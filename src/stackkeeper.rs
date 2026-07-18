@@ -31,7 +31,6 @@ pub(crate) const BLUEPRINT_THREAD_CARRIER_TAG: u32 = 1 << 31;
 const _: () = assert!(WLS_BLUEPRINT_THREAD_SLOTS_PER_VM % 2 == 0);
 
 #[repr(align(64))]
-#[allow(dead_code)]
 struct LaneScratch([u8; TOKIO_LANE_SCRATCH_BYTES]);
 
 static mut TOKIO_LANE_SCRATCHES: [LaneScratch; TOKIO_LANE_COUNT] =
@@ -465,12 +464,10 @@ fn try_acquire_tokio_lane_for_domain(
     None
 }
 
-#[allow(dead_code)]
 pub fn active_tokio_lane0_tag() -> LaneTag {
     active_tokio_lane_tag(0)
 }
 
-#[allow(dead_code)]
 pub fn active_tokio_lane_tag(lane_id: usize) -> LaneTag {
     let lane_id = lane_id.min(TOKIO_LANE_COUNT - 1);
     LaneTag {

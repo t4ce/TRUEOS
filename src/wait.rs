@@ -410,7 +410,6 @@ pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
 }
 
 #[inline]
-#[allow(dead_code)]
 pub fn platform_wait(key: u64, timeout_ms: u64) -> bool {
     let observed = platform_wait_observe(key);
     platform_wait_after(key, observed, timeout_ms)

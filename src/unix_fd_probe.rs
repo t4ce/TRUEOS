@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::_rdtsc;

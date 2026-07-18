@@ -1,6 +1,5 @@
 //! Game Boy CPU — Sharp LR35902 (Z80-like)
 //! All 245 regular opcodes + 256 CB-prefixed bit operations
-#![allow(dead_code)]
 
 pub const FLAG_Z: u8 = 0x80;
 pub const FLAG_N: u8 = 0x40;

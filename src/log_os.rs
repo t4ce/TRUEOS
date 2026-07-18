@@ -421,7 +421,6 @@ pub fn log_with_area_purpose(
     log_os_core::log_with_area_purpose(&TRUEOS_LOG_ROUTER, area, level, purpose, args);
 }
 
-#[allow(dead_code)]
 pub fn log_with_target_purpose(
     target: &str,
     level: log::Level,

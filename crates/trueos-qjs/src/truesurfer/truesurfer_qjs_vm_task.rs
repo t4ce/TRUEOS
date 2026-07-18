@@ -1,5 +1,4 @@
 #![cfg(feature = "trueos")]
-#![allow(dead_code)]
 
 extern crate alloc;
 

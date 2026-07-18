@@ -104,7 +104,6 @@ pub struct CpuProfile {
     core_kind: u8,
 }
 
-#[allow(dead_code)]
 impl CpuProfile {
     pub const fn new(slot: u32, lapic_id: u32, core_kind: u8) -> Self {
         Self {

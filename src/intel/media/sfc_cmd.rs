@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 //! Mechanical VD-to-SFC bring-up contract for Xe-LP media.
 //!

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 #[inline]
 pub fn client_count() -> u32 {

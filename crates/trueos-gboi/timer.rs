@@ -1,5 +1,4 @@
 //! Game Boy Timer — DIV, TIMA, TMA, TAC with overflow interrupt
-#![allow(dead_code)]
 
 pub struct Timer {
     pub div: u16,        // Internal 16-bit divider (upper byte readable at $FF04)

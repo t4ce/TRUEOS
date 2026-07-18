@@ -88,7 +88,6 @@ unsafe impl Send for KernelCursorSurface {}
 unsafe impl Sync for KernelCursorSurface {}
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-#[allow(dead_code)]
 enum CursorProbeKind {
     CurPosOnly,
     CurBaseOnly,

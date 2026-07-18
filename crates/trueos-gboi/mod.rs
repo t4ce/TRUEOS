@@ -1,6 +1,5 @@
 //! Game Boy Emulator — Orchestrator with desktop integration
 //! Ties CPU, GPU, Timer, Cartridge together via BusAdapter pattern
-#![allow(dead_code)]
 
 use alloc::vec;
 use alloc::vec::Vec;

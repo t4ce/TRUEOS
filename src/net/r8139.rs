@@ -3,7 +3,6 @@
 //! Driver for Realtek RTL8139 NICs.
 //! Common in older VirtualBox and QEMU configurations.
 
-#![allow(dead_code)]
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;

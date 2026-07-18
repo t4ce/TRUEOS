@@ -11,7 +11,6 @@ pub(crate) struct EmbeddedModule {
 include!(concat!(env!("OUT_DIR"), "/embedded_qjs/embedded_modules.rs"));
 
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn find(path: &[u8]) -> Option<&'static EmbeddedModule> {
     // Linear scan is fine at this scale.
     for m in EMBEDDED {

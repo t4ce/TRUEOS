@@ -1,6 +1,5 @@
 //! NES PPU (Picture Processing Unit) — 2C02 emulation
 //! Scanline-accurate rendering: background tiles, sprites, scrolling, palettes
-#![allow(dead_code)]
 
 use super::cartridge::Cartridge;
 use alloc::vec;

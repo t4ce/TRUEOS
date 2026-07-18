@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use super::{DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;

@@ -1,6 +1,5 @@
 //! TrustNES — NES Emulator for TrustOS
 //! Full 6502 CPU + 2C02 PPU emulation with mappers 0/1/2/3
-#![allow(dead_code)]
 
 pub mod cartridge;
 pub mod cpu;

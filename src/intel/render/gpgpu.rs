@@ -1049,7 +1049,6 @@ fn read_gpgpu_threads_dispatched(dev: crate::intel::Dev) -> u64 {
 // example DG2); the current baremetal target is 8086:4680 ADL-S GT1/UHD 770,
 // a GFX12.0 part.  Submitting this path on that device pins at CFE_STATE before
 // any EU thread starts, so runtime dispatch intentionally never calls it.
-#[allow(dead_code)]
 fn encode_gfx125_compute_walker_probe_batch(
     batch_dwords: &mut [u32],
     store_surface: GpgpuStoreSurfaceState,
@@ -1329,7 +1328,6 @@ fn encode_gfx125_compute_walker_probe_batch(
     Ok(command_bytes)
 }
 
-#[allow(dead_code)]
 fn encode_gfx12_gpgpu_walker_probe_batch(
     warm: RenderWarmState,
     batch_dwords: &mut [u32],

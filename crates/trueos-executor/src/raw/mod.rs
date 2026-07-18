@@ -285,7 +285,6 @@ impl<F: Future + 'static> TaskStorage<F> {
     }
 
     #[doc(hidden)]
-    #[allow(dead_code)]
     fn _assert_sync(self) {
         fn assert_sync<T: Sync>(_: T) {}
 

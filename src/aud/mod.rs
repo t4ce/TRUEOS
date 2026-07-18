@@ -8,7 +8,6 @@
 //! Architecture:
 //!   SynthEngine → render samples → write to HDA buffer → DMA playback
 
-#![allow(dead_code)]
 
 #[cfg(target_os = "trueos")]
 pub mod alsa_trueos_backend;

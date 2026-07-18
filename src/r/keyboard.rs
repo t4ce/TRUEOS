@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use heapless::Vec;
 use spin::Mutex;

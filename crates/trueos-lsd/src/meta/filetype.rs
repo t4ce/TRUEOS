@@ -2,7 +2,6 @@ use super::metadata::{FileKind, Metadata};
 use crate::color::{ColoredString, Colors, Elem};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
-#[cfg_attr(windows, allow(dead_code))]
 pub enum FileType {
     BlockDevice,
     CharDevice,

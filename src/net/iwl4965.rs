@@ -15,7 +15,6 @@
 //!
 //! Reference: Intel iwlwifi driver (Linux), iwl4965 datasheet
 
-#![allow(dead_code)]
 
 use alloc::boxed::Box;
 use alloc::string::String;

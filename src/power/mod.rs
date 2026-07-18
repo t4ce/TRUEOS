@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 pub(crate) mod rapl;
 pub(crate) mod thermal;

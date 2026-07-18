@@ -1,6 +1,5 @@
 //! NES Cartridge — iNES ROM parsing + Mapper implementations
 //! Supports Mapper 0 (NROM), Mapper 1 (MMC1), Mapper 2 (UxROM), Mapper 3 (CNROM)
-#![allow(dead_code)]
 
 use alloc::vec;
 use alloc::vec::Vec;

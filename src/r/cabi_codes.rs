@@ -6,10 +6,8 @@ pub const FS_ERR_BAD_PATH: i32 = -6;
 pub const FS_ERR_TOO_LARGE: i32 = -7;
 pub const FS_ERR_NOT_FOUND: i32 = -8;
 pub const FS_ERR_ALREADY_EXISTS: i32 = -9;
-#[allow(dead_code)]
 pub const FS_ERR_TIMEOUT: i32 = -14;
 
-#[allow(dead_code)]
 // Contract limit for C ABI FS path parameters used by kernel + QJS.
 pub const QJS_ASYNC_FS_MAX_PATH: usize = 1024;
 

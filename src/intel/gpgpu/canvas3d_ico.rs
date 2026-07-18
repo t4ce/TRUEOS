@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use super::Canvas3dVec3Q16;
 

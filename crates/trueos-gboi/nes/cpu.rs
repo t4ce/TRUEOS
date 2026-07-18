@@ -1,5 +1,4 @@
 //! NES CPU — MOS 6502 emulation (all 151 official opcodes + common unofficial)
-#![allow(dead_code)]
 
 // Status register flags
 const FLAG_C: u8 = 0x01; // Carry

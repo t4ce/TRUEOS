@@ -215,7 +215,6 @@ pub mod _export {
         Align536870912: 536870912,
     );
 
-    #[allow(dead_code)]
     pub trait HasOutput {
         type Output;
     }
@@ -224,7 +223,6 @@ pub mod _export {
         type Output = O;
     }
 
-    #[allow(dead_code)]
     pub type Never = <fn() -> ! as HasOutput>::Output;
 }
 
@@ -241,7 +239,6 @@ pub mod _export {
     impl TaskReturnValue for () {}
     impl TaskReturnValue for Never {}
 
-    #[allow(dead_code)]
     pub trait HasOutput {
         type Output;
     }
@@ -250,6 +247,5 @@ pub mod _export {
         type Output = O;
     }
 
-    #[allow(dead_code)]
     pub type Never = <fn() -> ! as HasOutput>::Output;
 }

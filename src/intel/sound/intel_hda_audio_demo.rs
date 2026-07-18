@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use alloc::vec::Vec;
 use embassy_time::{Duration as EmbassyDuration, Timer};

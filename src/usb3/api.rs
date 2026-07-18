@@ -52,7 +52,6 @@ impl ClaimedInterface<'_> {
             .await
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn endpoint_isochronous_in(
         &mut self,
         address: u8,

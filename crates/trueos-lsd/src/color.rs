@@ -9,7 +9,6 @@ use crate::print_output;
 use crate::theme::{Theme, color::ColorTheme};
 use jiff::{Span, SpanTotal, Timestamp, ToSpan, Unit};
 
-#[allow(dead_code)]
 #[derive(Hash, Debug, Eq, PartialEq, Clone)]
 pub enum Elem {
     /// Node type

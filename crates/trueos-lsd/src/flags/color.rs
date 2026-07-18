@@ -38,7 +38,6 @@ pub enum ThemeOption {
     NoColor,
     #[default]
     Default,
-    #[allow(dead_code)]
     NoLscolors,
     CustomLegacy(String),
     Custom,

@@ -744,7 +744,6 @@ struct CompatibilityPipelineSelection {
 }
 
 #[derive(Copy, Clone)]
-#[allow(dead_code)]
 pub(super) struct PrimarySurfaceGpgpuTarget {
     pub(super) pipeline: DisplayPipelineId,
     pub(super) width: u32,
@@ -1672,7 +1671,6 @@ fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
     pipe_bottom_color_u0_10(red, green, blue)
 }
 
-#[allow(dead_code)]
 pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
     let target = primary_display_output_target()?.pipeline_target;
     Some((target.width, target.height))
@@ -1712,7 +1710,6 @@ pub(super) fn display_output_target(output: DisplayOutputId) -> Option<DisplayOu
 /// route so current single-monitor behavior remains unchanged. Additional
 /// complete scanout routes fill D02-D04 in stable pipeline order; incomplete
 /// secondary routes are intentionally not exposed as monitors.
-#[allow(dead_code)]
 pub(super) fn display_output_targets() -> [Option<DisplayOutputTarget>; DISPLAY_OUTPUT_COUNT] {
     let Some(dev) = crate::intel::claimed_device() else {
         return [None; DISPLAY_OUTPUT_COUNT];
@@ -1728,7 +1725,6 @@ pub(super) fn display_output_targets() -> [Option<DisplayOutputTarget>; DISPLAY_
 /// Returns the currently programmed target for a stable A-D pipeline slot.
 /// Connector discovery remains a separate layer; callers never need to infer
 /// ownership from whichever pipe happened to be discovered first.
-#[allow(dead_code)]
 pub(super) fn display_pipeline_target(
     pipeline: DisplayPipelineId,
 ) -> Option<DisplayPipelineTarget> {
@@ -1738,7 +1734,6 @@ pub(super) fn display_pipeline_target(
 
 /// Four-slot topology view for compositor policy. An empty entry means no
 /// usable mode is currently programmed on that hardware pipeline.
-#[allow(dead_code)]
 pub(super) fn display_pipeline_targets() -> [Option<DisplayPipelineTarget>; DISPLAY_PIPELINE_COUNT]
 {
     let Some(dev) = crate::intel::claimed_device() else {
@@ -1749,7 +1744,6 @@ pub(super) fn display_pipeline_targets() -> [Option<DisplayPipelineTarget>; DISP
 
 /// Full hardware topology view. Unlike `display_pipeline_targets`, inactive
 /// or partially programmed slots remain visible to routing policy.
-#[allow(dead_code)]
 pub(super) fn display_pipeline_snapshots()
 -> [Option<DisplayPipelineSnapshot>; DISPLAY_PIPELINE_COUNT] {
     let Some(dev) = crate::intel::claimed_device() else {
@@ -2008,7 +2002,6 @@ fn select_compatibility_pipeline(dev: crate::intel::Dev) -> Option<Compatibility
     Some(selection)
 }
 
-#[allow(dead_code)]
 pub(crate) fn primary_surface_gpu_addr() -> Option<u64> {
     active_primary_surface().map(|surface| surface.gpu)
 }
@@ -2461,7 +2454,6 @@ pub(super) fn primary_surface_gpgpu_marker_target() -> Option<PrimarySurfaceGpgp
 /// The compatibility helper above preserves today's single-monitor callers;
 /// compositor and diagnostic owners can use this entry point without racing a
 /// later change in which pipeline is considered active.
-#[allow(dead_code)]
 pub(super) fn primary_surface_gpgpu_marker_target_for_pipeline(
     pipeline: DisplayPipelineId,
 ) -> Option<PrimarySurfaceGpgpuTarget> {
@@ -2535,7 +2527,6 @@ pub(crate) fn set_primary_plane_source_mapped(source: PrimaryPlaneSource, reason
     set_primary_plane_source_inner(pipeline, source, reason, true)
 }
 
-#[allow(dead_code)]
 pub(super) fn set_primary_plane_source_for_pipeline(
     pipeline: DisplayPipelineId,
     source: PrimaryPlaneSource,
@@ -2544,7 +2535,6 @@ pub(super) fn set_primary_plane_source_for_pipeline(
     set_primary_plane_source_inner(pipeline, source, reason, false)
 }
 
-#[allow(dead_code)]
 pub(super) fn set_primary_plane_source_mapped_for_pipeline(
     pipeline: DisplayPipelineId,
     source: PrimaryPlaneSource,
@@ -3916,6 +3906,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         effective
     };
 
+    let composition_started_ns = crate::chronos::monotonic_nanos();
     let gpu_composed =
         compose_premultiplied_rgba_tiles_into_overlay_gpgpu(surface, tiles, effective);
     if !gpu_composed {
@@ -3933,6 +3924,8 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
             return false;
         }
     }
+    let composition_us =
+        crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
 
     let needs_flip = overlay_plane_needs_rearm(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT);
     let (presented, path) = (
@@ -3960,7 +3953,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         let change_bounds = change.bounding_rect().unwrap_or_default();
         let effective_bounds = effective.bounding_rect().unwrap_or_default();
         crate::log!(
-            "intel/display: rgba-tile-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} compositor={} tiles={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} scanout={}x{} pitch=0x{:X}\n",
+            "intel/display: rgba-tile-overlay-damage-present seq={} reason={} pipe={} slot={} buffer={} path={} compositor={} composition_us={} tiles={} damage_rects={} damage_bounds={}x{}@{},{} effective_rects={} effective_bounds={}x{}@{},{} scanout={}x{} pitch=0x{:X}\n",
             seq,
             reason,
             surface.pipe.name,
@@ -3972,6 +3965,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
             } else {
                 "cpu-fallback"
             },
+            composition_us,
             tiles.len(),
             change.len(),
             change_bounds.width,

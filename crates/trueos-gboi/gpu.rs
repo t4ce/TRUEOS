@@ -1,6 +1,5 @@
 //! Game Boy GPU (LCD Controller) — PPU with background, window, sprite rendering
 //! Output: 160×144 pixels, 4-shade palette
-#![allow(dead_code)]
 
 use alloc::vec;
 use alloc::vec::Vec;

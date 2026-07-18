@@ -59,7 +59,6 @@ pub mod features {
 /// VirtIO GPU control command types
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum GpuCtrlType {
     // 2D commands
     CmdGetDisplayInfo = 0x0100,
@@ -107,7 +106,6 @@ pub enum GpuCtrlType {
 /// Pixel formats
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
 pub enum GpuFormat {
     B8G8R8A8Unorm = 1,
     B8G8R8X8Unorm = 2,
@@ -1957,7 +1955,6 @@ pub struct GpuCtxAttachResource {
 }
 
 /// VIRGL bind targets
-#[allow(dead_code)]
 pub mod virgl_bind {
     pub const DEPTH_STENCIL: u32 = 1 << 0;
     pub const RENDER_TARGET: u32 = 1 << 1;
@@ -1969,7 +1966,6 @@ pub mod virgl_bind {
 }
 
 /// VIRGL resource targets
-#[allow(dead_code)]
 pub mod virgl_target {
     pub const BUFFER: u32 = 0;
     pub const TEXTURE_1D: u32 = 1;

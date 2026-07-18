@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 

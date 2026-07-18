@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 

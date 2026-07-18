@@ -3777,7 +3777,6 @@ pub(crate) fn fill_rect_rgba8_stats(
     submit_fill_rect_2d_with_stats(dst, params)
 }
 
-#[allow(dead_code)]
 pub(crate) fn copy_rect_rgba8(
     src: GpgpuRgba8Surface,
     src_rect: GpgpuRect,
@@ -5491,7 +5490,6 @@ pub(crate) fn glyph_mask_rgba8_over_primary_stats(
     Some(stats)
 }
 
-#[allow(dead_code)]
 pub(crate) fn blit_glyph_rgba8(blit: GpgpuGlyphBlit) -> usize {
     blit_glyph_rgba8_stats(blit).spans
 }
@@ -5500,7 +5498,6 @@ pub(crate) fn blit_glyph_rgba8_stats(blit: GpgpuGlyphBlit) -> GpgpuSubmitStats {
     copy_rect_rgba8_stats(blit.atlas, blit.glyph_rect, blit.dst, blit.dst_xy)
 }
 
-#[allow(dead_code)]
 pub(crate) fn copy_rects_rgba8(copies: &[GpgpuCopyRect]) -> usize {
     copy_rects_rgba8_stats(copies).spans
 }

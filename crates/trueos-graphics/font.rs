@@ -61,7 +61,6 @@ struct TrueosFsFontSpec {
     path: &'static str,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FontWarmSummary {
     pub(crate) status: &'static str,
@@ -105,7 +104,6 @@ pub(crate) struct FontRegistrySummary {
     pub(crate) resident_bytes: usize,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct FontTesselSummary {
     pub(crate) status: &'static str,

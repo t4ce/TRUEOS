@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 //! Small Intel NEO dispatch definition leaves translated from compute-runtime.
 
