@@ -632,8 +632,10 @@ impl BackendProbeMode {
 
     fn ps_dispatch_slot(self) -> Option<u8> {
         match self {
-            Self::PsDispatchSlot0 => Some(0),
-            Self::PsDispatchSlot1 | Self::PsSimd16 => Some(1),
+            // With SIMD16 as the only enabled width gfx12 selects KSP0.
+            // KSP2 carries SIMD16 only in a variable-width combination.
+            Self::PsDispatchSlot0 | Self::PsSimd16 => Some(0),
+            Self::PsDispatchSlot1 => Some(1),
             Self::PsDispatchSlot2 => Some(2),
             _ => None,
         }

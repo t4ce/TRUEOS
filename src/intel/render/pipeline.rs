@@ -2,6 +2,160 @@ const CPS_STATE_DWORDS_PER_VIEWPORT: usize = 8;
 const CPS_STATE_VIEWPORTS: usize = 16;
 const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPORTS;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct PixelShaderDispatchContract {
+    dispatch_8: u32,
+    dispatch_16: u32,
+    dispatch_32: u32,
+    vector_mask_enable: bool,
+    grf_start_dw: u32,
+    ksp: [u32; 3],
+}
+
+/// Resolve the gfx12 variable-pixel-dispatch mapping into the exact
+/// 3DSTATE_PS fields we emit.
+///
+/// A single enabled SIMD16 executable belongs in KSP0. With SIMD8+SIMD16,
+/// variable pixel dispatch maps SIMD8 to KSP0 and SIMD16 to KSP2. Keep the
+/// captured Mesa pair when the base pipeline supplies both executables, but do
+/// not accidentally turn every MesaLike fixed-function draw into a mixed-width
+/// fragment launch.
+fn pixel_shader_dispatch_contract(
+    backend_probe_mode: BackendProbeMode,
+    dispatch_mode: crate::intel::shader::DispatchMode,
+    uses_vmask: bool,
+    ps_ksp_base: u32,
+    grf_start: u8,
+    simd16_pair: Option<(u32, u8)>,
+) -> PixelShaderDispatchContract {
+    if matches!(backend_probe_mode, BackendProbeMode::MesaLike)
+        && matches!(dispatch_mode, crate::intel::shader::DispatchMode::Simd8)
+    {
+        if let Some((simd16_ksp, simd16_grf_start)) = simd16_pair {
+            return PixelShaderDispatchContract {
+                dispatch_8: 1,
+                dispatch_16: 1,
+                dispatch_32: 0,
+                vector_mask_enable: true,
+                grf_start_dw: (u32::from(simd16_grf_start) << 16) | u32::from(grf_start),
+                // KSP1 has no active width in an 8+16 pair. Mesa writes the
+                // program base there; its GRF-start field remains zero.
+                ksp: [ps_ksp_base, ps_ksp_base, simd16_ksp],
+            };
+        }
+    }
+
+    let stage_dispatch = match dispatch_mode {
+        crate::intel::shader::DispatchMode::Simd8 => (1, 0, 0),
+        crate::intel::shader::DispatchMode::Simd16 => (0, 1, 0),
+        crate::intel::shader::DispatchMode::Simd32 => (0, 0, 1),
+    };
+    let (dispatch_8, dispatch_16, dispatch_32) = match backend_probe_mode {
+        BackendProbeMode::PsDispatchSlot0 => (1, 0, 0),
+        BackendProbeMode::PsDispatchSlot1 => (0, 1, 0),
+        BackendProbeMode::PsDispatchSlot2 => (0, 0, 1),
+        BackendProbeMode::PsDispatchAllKspSlots => (1, 1, 1),
+        _ => stage_dispatch,
+    };
+    let ksp0 = if matches!(backend_probe_mode.ps_dispatch_slot(), Some(1 | 2)) {
+        0
+    } else {
+        ps_ksp_base
+    };
+    let ksp1 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let ksp2 = if matches!(
+        backend_probe_mode,
+        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
+    ) {
+        ps_ksp_base
+    } else {
+        0
+    };
+    let grf_start_dw = (u32::from(ksp0 != 0) * u32::from(grf_start))
+        | ((u32::from(ksp1 != 0) * u32::from(grf_start)) << 8)
+        | ((u32::from(ksp2 != 0) * u32::from(grf_start)) << 16);
+
+    PixelShaderDispatchContract {
+        dispatch_8,
+        dispatch_16,
+        dispatch_32,
+        vector_mask_enable: uses_vmask,
+        grf_start_dw,
+        ksp: [ksp0, ksp1, ksp2],
+    }
+}
+
+#[cfg(test)]
+mod pixel_shader_dispatch_contract_tests {
+    use super::{BackendProbeMode, PixelShaderDispatchContract, pixel_shader_dispatch_contract};
+    use crate::intel::shader::DispatchMode;
+
+    #[test]
+    fn diagnostic_simd16_is_exclusive_and_uses_ksp0() {
+        assert_eq!(
+            pixel_shader_dispatch_contract(
+                BackendProbeMode::MesaLike,
+                DispatchMode::Simd16,
+                true,
+                0xC0,
+                2,
+                None,
+            ),
+            PixelShaderDispatchContract {
+                dispatch_8: 0,
+                dispatch_16: 1,
+                dispatch_32: 0,
+                vector_mask_enable: true,
+                grf_start_dw: 0x0000_0002,
+                ksp: [0xC0, 0, 0],
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_simd16_probe_uses_the_same_single_width_mapping() {
+        let contract = pixel_shader_dispatch_contract(
+            BackendProbeMode::PsSimd16,
+            DispatchMode::Simd16,
+            true,
+            0xC0,
+            2,
+            None,
+        );
+        assert_eq!((contract.dispatch_8, contract.dispatch_16, contract.dispatch_32), (0, 1, 0));
+        assert_eq!(contract.ksp, [0xC0, 0, 0]);
+    }
+
+    #[test]
+    fn captured_simd8_simd16_pair_keeps_its_variable_dispatch_mapping() {
+        assert_eq!(
+            pixel_shader_dispatch_contract(
+                BackendProbeMode::MesaLike,
+                DispatchMode::Simd8,
+                false,
+                0xC0,
+                2,
+                Some((0x100, 2)),
+            ),
+            PixelShaderDispatchContract {
+                dispatch_8: 1,
+                dispatch_16: 1,
+                dispatch_32: 0,
+                vector_mask_enable: true,
+                grf_start_dw: 0x0002_0002,
+                ksp: [0xC0, 0xC0, 0x100],
+            }
+        );
+    }
+}
+
 fn log_render_buffer_layout(warm: RenderWarmState, rt_gpu_addr: Option<u64>) {
     if !crate::log_os::flags::INTEL_RENDER_NGIN_LOGS || crate::log_os::flags::INTEL_STAGE1_LOGS {
         return;
@@ -466,14 +620,6 @@ fn encode_triangle_probe_batch(
         count as u32
     }
 
-    fn stage_dispatch_bits(mode: crate::intel::shader::DispatchMode) -> (u32, u32, u32) {
-        match mode {
-            crate::intel::shader::DispatchMode::Simd8 => (1, 0, 0),
-            crate::intel::shader::DispatchMode::Simd16 => (0, 1, 0),
-            crate::intel::shader::DispatchMode::Simd32 => (0, 0, 1),
-        }
-    }
-
     fn push_pipe_control(
         batch_dwords: &mut [u32],
         cursor: &mut usize,
@@ -776,13 +922,6 @@ fn encode_triangle_probe_batch(
         | (u32::from(front_end_contract.force_sbe_read_offset) << 28)
         | (u32::from(front_end_contract.force_sbe_read_length) << 29)
         | (sbe_vertex_read_length << 11);
-    let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = match backend_probe_mode {
-        BackendProbeMode::PsDispatchSlot0 => (1, 0, 0),
-        BackendProbeMode::PsDispatchSlot1 => (0, 1, 0),
-        BackendProbeMode::PsDispatchSlot2 => (0, 0, 1),
-        BackendProbeMode::PsDispatchAllKspSlots => (1, 1, 1),
-        _ => stage_dispatch_bits(pipeline.ps.meta.kernel.dispatch_mode),
-    };
     let mesa_simple_rect_stack = backend_probe_mode.mesa_simple_rect_stack();
     // The MesaLike probe is the direct replay contract for the verified host
     // Vulkan draw.  These are the last effective CLIP/SF/RASTER payloads in
@@ -1182,10 +1321,6 @@ fn encode_triangle_probe_batch(
         } else {
             ps_binding_table_entry_count
         };
-    let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
-        | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
-        | (u32::from(pipeline.ps.meta.uses_vmask || mesa_host_fixed_function)
-            * PS_VECTOR_MASK_ENABLE);
     let ps_push_constant_enable = pipeline.ps.meta.kernel.push_constant_bytes > 0
         || matches!(backend_probe_mode, BackendProbeMode::PsPayloadPushConstant);
     let ps_max_threads_per_psd = backend_probe_mode
@@ -1194,52 +1329,37 @@ fn encode_triangle_probe_batch(
     let ps_grf_start = backend_probe_mode
         .ps_grf_start_override()
         .unwrap_or(pipeline.ps.meta.kernel.grf_start_register);
-    let ps_dw6 = (if mesa_host_fixed_function { 1 } else { ps_dispatch_8 })
-        | ((if mesa_host_fixed_function { 1 } else { ps_dispatch_16 }) << 1)
+    let ps_ksp_base = ps_ksp_offset & !0x3F;
+    let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
+    let host_simd16_pair = (pipeline.ps.code.as_ptr()
+        == crate::intel::shader::triangle_pipeline().ps.code.as_ptr())
+    .then_some((
+        host_simd16_pipeline.ps.meta.kernel.code_offset_bytes & !0x3F,
+        host_simd16_pipeline.ps.meta.kernel.grf_start_register,
+    ));
+    let ps_dispatch_contract = pixel_shader_dispatch_contract(
+        backend_probe_mode,
+        pipeline.ps.meta.kernel.dispatch_mode,
+        pipeline.ps.meta.uses_vmask,
+        ps_ksp_base,
+        ps_grf_start,
+        host_simd16_pair,
+    );
+    let (ps_dispatch_8, ps_dispatch_16, ps_dispatch_32) = (
+        ps_dispatch_contract.dispatch_8,
+        ps_dispatch_contract.dispatch_16,
+        ps_dispatch_contract.dispatch_32,
+    );
+    let ps_dw3 = (binding_table_entry_count_encoding(ps_binding_table_entry_count) << 18)
+        | (sampler_count_encoding(pipeline.ps.meta.kernel.sampler_count) << 27)
+        | (u32::from(ps_dispatch_contract.vector_mask_enable) * PS_VECTOR_MASK_ENABLE);
+    let ps_dw6 = ps_dispatch_8
+        | (ps_dispatch_16 << 1)
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 = if mesa_host_fixed_function {
-        0x0002_0002
-    } else {
-        (ps_grf_start as u32) | ((ps_grf_start as u32) << 8) | ((ps_grf_start as u32) << 16)
-    };
-    let ps_ksp_base = ps_ksp_offset & !0x3F;
-    let host_simd16_ksp = crate::intel::shader::triangle_pipeline_simd16()
-        .ps
-        .meta
-        .kernel
-        .code_offset_bytes
-        & !0x3F;
-    let ps_ksp0 = if mesa_host_fixed_function {
-        host_simd16_ksp
-    } else if matches!(backend_probe_mode.ps_dispatch_slot(), Some(1 | 2)) {
-        0
-    } else {
-        ps_ksp_base
-    };
-    let ps_ksp1 = if mesa_host_fixed_function {
-        host_simd16_ksp
-    } else if matches!(
-        backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot1
-            | BackendProbeMode::PsDispatchAllKspSlots
-            | BackendProbeMode::PsSimd16
-    ) {
-        ps_ksp_base
-    } else {
-        0
-    };
-    let ps_ksp2 = if mesa_host_fixed_function {
-        ps_ksp_base
-    } else if matches!(
-        backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot2 | BackendProbeMode::PsDispatchAllKspSlots
-    ) {
-        ps_ksp_base
-    } else {
-        0
-    };
+    let ps_dw7 = ps_dispatch_contract.grf_start_dw;
+    let [ps_ksp0, ps_ksp1, ps_ksp2] = ps_dispatch_contract.ksp;
     let ps_scratch_space_buffer = 0u32;
     let ps_extra_attribute_enable =
         pipeline.ps.meta.num_varying_inputs > 0 || backend_probe_mode.force_ps_attribute_payload();

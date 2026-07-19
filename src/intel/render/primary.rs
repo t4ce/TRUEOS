@@ -1046,7 +1046,11 @@ fn stage_resident_scene_secondary(
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    let pipeline = crate::intel::shader::triangle_pipeline();
+    // The cache extractor now identifies this executable from the GEN
+    // assembly's mov(16)/sendc(16), rather than assuming the first fragment
+    // slice was SIMD16.  With SIMD16 as the only enabled width, variable pixel
+    // dispatch selects this executable through KSP0.
+    let pipeline = crate::intel::shader::triangle_pipeline_simd16();
     let shader_layout =
         upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
     let probe_state = write_triangle_probe_state(
@@ -1280,7 +1284,7 @@ fn submit_resident_scene_geometry_batched(
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
-            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{}\n",
+            "draw3d: frame launch path=one-guc-scene-batch draws={} secondaries={} render_submits=1 per_mesh_context_rebuilds=0 target={}x{} fragment_contract=standalone-simd16-corrected dispatch=010 ksp0=simd16 ksp1=off ksp2=off vector_mask=1 color=specialized-per-draw\n",
             draws.len(),
             secondary_count,
             target_width,
@@ -6181,9 +6185,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
     };
     let ps_ksp1 = if matches!(
         backend_probe_mode,
-        BackendProbeMode::PsDispatchSlot1
-            | BackendProbeMode::PsDispatchAllKspSlots
-            | BackendProbeMode::PsSimd16
+        BackendProbeMode::PsDispatchSlot1 | BackendProbeMode::PsDispatchAllKspSlots
     ) {
         ps_ksp_base
     } else {

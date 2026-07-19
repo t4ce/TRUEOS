@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 OFFSET_RE = re.compile(r"^0x([0-9a-fA-F]+):\s+(.*)$")
+EXEC_WIDTH_RE = re.compile(r"\b(?:mov|sendc?|send)\((8|16|32)\)")
 
 
 @dataclass
@@ -17,6 +18,7 @@ class ExecutableSlice:
     stage: str
     start: int
     size: int
+    simd_width: int
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,13 +50,26 @@ def parse_assembly(path: Path) -> ExecutableSlice:
     start = offsets[0][0]
     last_off, last_text = offsets[-1]
     end = last_off + last_instruction_size(last_text)
+    widths = {
+        int(match.group(1))
+        for _, text in offsets
+        if (match := EXEC_WIDTH_RE.search(text)) is not None
+    }
+    if len(widths) != 1:
+        raise SystemExit(f"could not determine one SIMD width from {path}: {sorted(widths)}")
 
     parts = path.name.split("_")
     if len(parts) < 4:
         raise SystemExit(f"unexpected executable dump filename: {path.name}")
     stage = parts[1]
     name = path.stem
-    return ExecutableSlice(name=name, stage=stage, start=start, size=end - start)
+    return ExecutableSlice(
+        name=name,
+        stage=stage,
+        start=start,
+        size=end - start,
+        simd_width=widths.pop(),
+    )
 
 
 def stage_enum(stage: str) -> int:
@@ -127,6 +142,7 @@ def main() -> None:
         f"fragment combined blob: off=0x{fs_off:X} size={len(fs_blob)} -> triangle_ps_combined.bin"
     )
 
+    seen_fragment_widths: set[int] = set()
     for exe in fragment_execs:
         rel_off = exe.start - frag_base
         rel_end = rel_off + exe.size
@@ -134,19 +150,19 @@ def main() -> None:
             raise SystemExit(
                 f"fragment executable slice out of range: {exe.name} rel_off={rel_off} size={exe.size}"
             )
-        variant_name = "triangle_ps.bin"
-        if "SIMD16" in exe.name or "fragment_01_GEN_Assembly" not in exe.name:
-            if exe.start != frag_base:
-                variant_name = "triangle_ps_simd8.bin"
-            else:
-                variant_name = "triangle_ps_simd16.bin"
-        if exe.start == frag_base:
-            variant_name = "triangle_ps_simd16.bin"
-        elif rel_off == 64:
+        if exe.simd_width in seen_fragment_widths:
+            raise SystemExit(f"duplicate fragment SIMD{exe.simd_width} executable")
+        seen_fragment_widths.add(exe.simd_width)
+        if exe.simd_width == 8:
             variant_name = "triangle_ps.bin"
+        elif exe.simd_width == 16:
+            variant_name = "triangle_ps_simd16.bin"
+        else:
+            variant_name = f"triangle_ps_simd{exe.simd_width}.bin"
         write_bytes(args.out_dir / variant_name, fs_blob[rel_off:rel_end])
         print(
-            f"fragment slice: {exe.name} rel_off=0x{rel_off:X} size={exe.size} -> {variant_name}"
+            f"fragment slice: {exe.name} SIMD{exe.simd_width} "
+            f"rel_off=0x{rel_off:X} size={exe.size} -> {variant_name}"
         )
 
 

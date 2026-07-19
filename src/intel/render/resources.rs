@@ -214,19 +214,19 @@ fn specialize_uploaded_triangle_ps_color(
     let constant_color_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
     let simd8_contract = pipeline.ps.code.as_ptr() == constant_color_pipeline.ps.code.as_ptr()
         && pipeline.ps.code.len() == 12
-        && pipeline.ps.code[0] == 0xA07E_0061
-        && pipeline.ps.code[2] == 0xA078_0061
-        && pipeline.ps.code[4] == 0xA07A_0061
-        && pipeline.ps.code[6] == 0xA07C_0061
-        && pipeline.ps.code[8..] == [0x0004_0132, 0x0000_0004, 0x5000_7E14, 0x00C4_7834];
-    let simd16_contract = pipeline.ps.code.as_ptr()
-        == constant_color_simd16_pipeline.ps.code.as_ptr()
-        && pipeline.ps.code.len() == 12
         && pipeline.ps.code[0] == 0xA17F_0061
         && pipeline.ps.code[2] == 0xA17C_0061
         && pipeline.ps.code[4] == 0xA17D_0061
         && pipeline.ps.code[6] == 0xA17E_0061
         && pipeline.ps.code[8..] == [0x0003_0132, 0x0000_0004, 0x5800_7F0C, 0x00C4_7C1C];
+    let simd16_contract = pipeline.ps.code.as_ptr()
+        == constant_color_simd16_pipeline.ps.code.as_ptr()
+        && pipeline.ps.code.len() == 12
+        && pipeline.ps.code[0] == 0xA07E_0061
+        && pipeline.ps.code[2] == 0xA078_0061
+        && pipeline.ps.code[4] == 0xA07A_0061
+        && pipeline.ps.code[6] == 0xA07C_0061
+        && pipeline.ps.code[8..] == [0x0004_0132, 0x0000_0004, 0x5000_7E14, 0x00C4_7834];
     if (!simd8_contract && !simd16_contract)
         || encode_compacted_float_immediate(0) != pipeline.ps.code[1]
         || encode_compacted_float_immediate(64) != pipeline.ps.code[3]
