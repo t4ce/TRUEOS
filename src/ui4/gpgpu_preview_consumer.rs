@@ -19,7 +19,7 @@ use super::{
     publish_frame_buffer, publish_window_frame, replace_window_frame, take_owner_input_events,
 };
 
-const PREVIEW_OWNER: WindowOwner = WindowOwner::KernelApp(5);
+const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
 const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
 const PREVIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
 const PREVIEW_MARGIN: u32 = 64;
@@ -348,6 +348,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             opacity: u8::MAX,
             visible: true,
         },
+        interaction: super::WindowInteraction::APPLICATION,
     }) {
         Ok(window) => window,
         Err(_) => {

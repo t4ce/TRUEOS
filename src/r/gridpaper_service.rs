@@ -70,7 +70,7 @@ const SMALL_TICK_LENGTH_MM: f32 = 1.25;
 const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
 const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
 const DECORATION_INSET_MM: f32 = 0.5;
-const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(4);
+const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::GRIDPAPER_SERVICE;
 const SERVICE_PERIOD_MS: u64 = 16;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const INPUT_QUEUE_CAPACITY_PER_INSTANCE: usize = 64;
@@ -1153,6 +1153,7 @@ fn attach_presentation(
             opacity: u8::MAX,
             visible: true,
         },
+        interaction: crate::ui4::WindowInteraction::APPLICATION,
     })?;
 
     if expose_retained_front

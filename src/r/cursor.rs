@@ -249,6 +249,22 @@ pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), 
 
 pub fn preferred_kernel_hw_cursor_snapshot_with_slot_buttons() -> Option<(u32, f64, f64, u32)> {
     let guard = CURSOR_SNAPSHOTS.lock();
+
+    // A real mouse is the reference source for the dual-cursor checkpoint.
+    // Snapshot insertion order is stable, so this deliberately selects the
+    // first registered mouse even if a later tablet or eyetracker is present.
+    if let Some(snapshot) = guard
+        .iter()
+        .find(|snapshot| snapshot.hid_kind == HID_KIND_MOUSE)
+    {
+        return Some((
+            snapshot.slot_id,
+            snapshot.x,
+            snapshot.y,
+            snapshot.buttons_down,
+        ));
+    }
+
     let mut best: Option<(u8, usize, &CursorSnapshot)> = None;
 
     for (idx, snapshot) in guard.iter().enumerate() {

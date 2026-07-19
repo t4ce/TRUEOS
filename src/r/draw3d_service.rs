@@ -39,7 +39,7 @@ static UI4_GPU_DIRECT_FRAME_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS: f32 = 1.75;
 const UI4_FRAME_PERIOD_US: u64 = 16_667;
-const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::KernelApp(3);
+const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::DRAW3D_SERVICE;
 const UI4_PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_3;
 const _: () = assert!(UI4_PLANE_SLOT == 3);
 
@@ -147,6 +147,10 @@ fn publish_ui4_scene_frame(
                 opacity: u8::MAX,
                 visible: true,
             },
+            // The scene service has no UI4 event consumer yet. UI4 owns frame
+            // translation, while the render target remains fixed-size and the
+            // TCP protocol continues to own camera/scene input.
+            interaction: crate::ui4::WindowInteraction::MOVABLE_FRAME,
         })?);
     }
     crate::ui4::publish_window_frame(

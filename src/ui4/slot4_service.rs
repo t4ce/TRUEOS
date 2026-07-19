@@ -8,15 +8,7 @@
 use embassy_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
 
-use crate::r::mouse_motion_service::{
-    MOUSE_CONTROL_EASING_FAST_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-    MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT, MOUSE_CONTROL_PATH_CUBIC,
-    MOUSE_CONTROL_PATH_LINE, MouseControlCommand, MouseControlCursor, MouseControlPrincipal,
-    cursor_is_idle, release_cursor, request_cursor, submit_program,
-};
-
 const SLOT4_PRESENT_PERIOD_MS: u64 = 16;
-const HEARTBEAT_REST_MS: u64 = 50 * SLOT4_PRESENT_PERIOD_MS;
 const SLOT4_RECT_CAPACITY: usize = 512;
 
 type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
@@ -52,38 +44,17 @@ impl Slot4State {
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
-    let mut heartbeat_cursor =
-        match request_cursor(MouseControlPrincipal::KernelApp(1), "ui4-heartbeat") {
-            Ok(cursor) => Some(cursor),
-            Err(error) => {
-                crate::log_warn!(target: "ui4/slot4";
-                    "ui4/slot4: heartbeat-vcursor unavailable error={:?}\n",
-                    error,
-                );
-                None
-            }
-        };
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors+selection-outline+context-menu present_ms={} wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 heartbeat_vcursor_slot={}\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+context-menu hardware-cursor=preferred-physical-source/concurrent present_ms={} wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic_motion=off\n",
         SLOT4_PRESENT_PERIOD_MS,
-        heartbeat_cursor
-            .map(|cursor| u32::from(cursor.slot_id))
-            .unwrap_or(u32::MAX),
     );
 
     let mut state = Slot4State::new();
     let mut visual_dirty = true;
     let mut next_present_ms = 0u64;
-    let mut next_heartbeat_check_ms = 0u64;
-    let mut heartbeat_rest_until_ms = 0u64;
 
     loop {
         let now_ms = Instant::now().as_millis();
-        if now_ms >= next_heartbeat_check_ms {
-            service_heartbeat(&mut heartbeat_cursor, now_ms, &mut heartbeat_rest_until_ms);
-            next_heartbeat_check_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
-        }
-
         if let Some(pending) = state.pending.take() {
             match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
                 crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
@@ -121,14 +92,18 @@ pub(crate) async fn ui4_slot4_service_task() {
         }
 
         let now_ms = Instant::now().as_millis();
-        let heartbeat_wait = next_heartbeat_check_ms.saturating_sub(now_ms);
+        if state.pending.is_none() && !visual_dirty {
+            super::input_broker::wait_slot4_visual_change().await;
+            visual_dirty = true;
+            continue;
+        }
         let present_wait = if visual_dirty {
             next_present_ms.saturating_sub(now_ms)
         } else {
             u64::MAX
         };
         let flip_wait = if state.pending.is_some() { 1 } else { u64::MAX };
-        let wait_ms = heartbeat_wait.min(present_wait).min(flip_wait).max(1);
+        let wait_ms = present_wait.min(flip_wait).max(1);
         if with_timeout(
             Duration::from_millis(wait_ms),
             super::input_broker::wait_slot4_visual_change(),
@@ -139,86 +114,6 @@ pub(crate) async fn ui4_slot4_service_task() {
             visual_dirty = true;
         }
     }
-}
-
-fn service_heartbeat(
-    heartbeat_cursor: &mut Option<MouseControlCursor>,
-    now_ms: u64,
-    rest_until_ms: &mut u64,
-) {
-    let Some(cursor) = *heartbeat_cursor else {
-        return;
-    };
-    if now_ms < *rest_until_ms {
-        return;
-    }
-    match cursor_is_idle(MouseControlPrincipal::KernelApp(1), cursor.handle) {
-        Ok(true) => {
-            if let Err(error) = submit_heartbeat_program(cursor) {
-                crate::log_warn!(target: "ui4/slot4";
-                    "ui4/slot4: heartbeat-vcursor disabled error={:?}\n",
-                    error,
-                );
-                let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
-                *heartbeat_cursor = None;
-            } else {
-                *rest_until_ms = now_ms.saturating_add(HEARTBEAT_REST_MS);
-            }
-        }
-        Ok(false) => {}
-        Err(error) => {
-            crate::log_warn!(target: "ui4/slot4";
-                "ui4/slot4: heartbeat-vcursor disabled error={:?}\n",
-                error,
-            );
-            let _ = release_cursor(MouseControlPrincipal::KernelApp(1), cursor.handle);
-            *heartbeat_cursor = None;
-        }
-    }
-}
-
-fn submit_heartbeat_program(
-    cursor: MouseControlCursor,
-) -> Result<(), crate::r::mouse_motion_service::MouseControlError> {
-    let teleport = MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
-        flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-        x: 1380,
-        y: 1220,
-        ..MouseControlCommand::default()
-    };
-    let line = |x, y, duration_ms| MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_STROKE,
-        path: MOUSE_CONTROL_PATH_LINE,
-        easing: MOUSE_CONTROL_EASING_FAST_LINEAR,
-        duration_ms,
-        x,
-        y,
-        ..MouseControlCommand::default()
-    };
-    let accent = |x, y, c1x, c1y, c2x, c2y, duration_ms| MouseControlCommand {
-        opcode: MOUSE_CONTROL_OPCODE_STROKE,
-        path: MOUSE_CONTROL_PATH_CUBIC,
-        easing: MOUSE_CONTROL_EASING_NATURAL,
-        duration_ms,
-        x,
-        y,
-        control1_x: c1x,
-        control1_y: c1y,
-        control2_x: c2x,
-        control2_y: c2y,
-        ..MouseControlCommand::default()
-    };
-    let program = [
-        teleport,
-        line(1430, 1220, 120),
-        accent(1470, 1192, 1440, 1220, 1456, 1192, 100),
-        accent(1500, 1268, 1480, 1192, 1490, 1268, 110),
-        accent(1535, 1130, 1510, 1268, 1520, 1130, 125),
-        accent(1570, 1220, 1545, 1130, 1555, 1220, 120),
-        line(1640, 1220, 150),
-    ];
-    submit_program(MouseControlPrincipal::KernelApp(1), cursor.handle, &program)
 }
 
 fn queue_slot4(

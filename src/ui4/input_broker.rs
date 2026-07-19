@@ -24,6 +24,10 @@ const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
+// The screenshot worker remains intentionally parked during frame/window
+// reintegration. Do not consume F1 or side buttons into an undrained capture
+// queue; this switch can move with the worker when that producer returns.
+const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_CURSOR_REARM_TRAVEL_PX: u32 = 48;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
@@ -340,14 +344,19 @@ impl InputBroker {
         let index = self.cursor_index(source, x, y);
         let previous_buttons = self.cursors[index].buttons_down;
         let screenshot_pressed = event.buttons_down & !previous_buttons & SCREENSHOT_BUTTON_MASK;
-        if screenshot_pressed != 0 {
+        if INTERACTIVE_SCREENSHOT_ENABLED && screenshot_pressed != 0 {
             // Coalesce a simultaneous button-4/button-5 transition into one
             // global capture request. Side buttons are consumed by UI4 and do
             // not change application focus or pointer capture.
             super::screenshot::request_capture(screenshot_pressed.trailing_zeros() as u8 + 1);
         }
-        let buttons_down = event.buttons_down & !SCREENSHOT_BUTTON_MASK;
-        let previous_routed_buttons = previous_buttons & !SCREENSHOT_BUTTON_MASK;
+        let routed_button_mask = if INTERACTIVE_SCREENSHOT_ENABLED {
+            !SCREENSHOT_BUTTON_MASK
+        } else {
+            u32::MAX
+        };
+        let buttons_down = event.buttons_down & routed_button_mask;
+        let previous_routed_buttons = previous_buttons & routed_button_mask;
         let pressed = buttons_down & !previous_routed_buttons;
         let released = previous_routed_buttons & !buttons_down;
         let dx = signed_delta(x, self.cursors[index].x);
@@ -397,9 +406,17 @@ impl InputBroker {
         }
 
         if previous_routed_buttons == 0 && pressed != 0 {
-            let focus = hit.map(WindowTarget::from);
+            let focus = hit
+                .filter(|window| window.interaction.receives_input)
+                .map(WindowTarget::from);
             self.set_focus(index, focus, combo_id, vcursor);
-            self.cursors[index].capture = focus;
+            self.cursors[index].capture = hit
+                .filter(|window| {
+                    window.interaction.movable
+                        || window.interaction.maximizable
+                        || window.interaction.receives_input
+                })
+                .map(WindowTarget::from);
         }
 
         let target = self.cursors[index]
@@ -407,14 +424,15 @@ impl InputBroker {
             .and_then(window_snapshot_for_target)
             .or(hit);
         if let Some(mut target) = target {
-            if buttons_down & SECONDARY_BUTTON_MASK != 0
+            if target.interaction.movable
+                && buttons_down & SECONDARY_BUTTON_MASK != 0
                 && self.cursors[index].secondary_dragged
                 && (dx != 0 || dy != 0)
             {
                 if let Some(next) =
                     translated_frame_placement(target.placement, dx, dy, width, height)
                 {
-                    match super::set_window_placement(target.owner, target.id, next) {
+                    match super::move_window(target.owner, target.id, next) {
                         Ok(()) => {
                             target.placement = next;
                             crate::log_trace!(target: "ui4";
@@ -439,7 +457,8 @@ impl InputBroker {
                     }
                 }
             }
-            let maximize_latched = secondary_drop
+            let maximize_latched = target.interaction.maximizable
+                && secondary_drop
                 && self.cursors[index].maximize_rearm_origin.is_none()
                 && (target.maximized || maximize_latch_contains(x, y, width, height));
             if maximize_latched {
@@ -485,107 +504,109 @@ impl InputBroker {
                     }
                 }
             }
-            let local_x = signed_local(x, target.placement.x);
-            let local_y = signed_local(y, target.placement.y);
-            enqueue_owner_event(
-                target.owner,
-                Ui4InputEvent::Pointer(Ui4PointerEvent {
-                    source,
-                    window: target.id,
-                    x,
-                    y,
-                    local_x,
-                    local_y,
-                    dx,
-                    dy,
-                    wheel: event.wheel,
-                    buttons_down,
-                    buttons_pressed: pressed,
-                    buttons_released: released,
-                    combo_id,
-                    vcursor,
-                }),
-            );
-            if pressed != 0 {
+            if target.interaction.receives_input {
+                let local_x = signed_local(x, target.placement.x);
+                let local_y = signed_local(y, target.placement.y);
                 enqueue_owner_event(
                     target.owner,
-                    Ui4InputEvent::Button(Ui4ButtonEvent {
+                    Ui4InputEvent::Pointer(Ui4PointerEvent {
                         source,
                         window: target.id,
-                        phase: Ui4ButtonPhase::Down,
-                        changed_buttons: pressed,
-                        buttons_down,
                         x,
                         y,
                         local_x,
                         local_y,
+                        dx,
+                        dy,
+                        wheel: event.wheel,
+                        buttons_down,
+                        buttons_pressed: pressed,
+                        buttons_released: released,
                         combo_id,
                         vcursor,
                     }),
                 );
-            }
-            if released != 0 {
-                enqueue_owner_event(
-                    target.owner,
-                    Ui4InputEvent::Button(Ui4ButtonEvent {
+                if pressed != 0 {
+                    enqueue_owner_event(
+                        target.owner,
+                        Ui4InputEvent::Button(Ui4ButtonEvent {
+                            source,
+                            window: target.id,
+                            phase: Ui4ButtonPhase::Down,
+                            changed_buttons: pressed,
+                            buttons_down,
+                            x,
+                            y,
+                            local_x,
+                            local_y,
+                            combo_id,
+                            vcursor,
+                        }),
+                    );
+                }
+                if released != 0 {
+                    enqueue_owner_event(
+                        target.owner,
+                        Ui4InputEvent::Button(Ui4ButtonEvent {
+                            source,
+                            window: target.id,
+                            phase: Ui4ButtonPhase::Up,
+                            changed_buttons: released,
+                            buttons_down,
+                            x,
+                            y,
+                            local_x,
+                            local_y,
+                            combo_id,
+                            vcursor,
+                        }),
+                    );
+                }
+                if pressed & MIDDLE_BUTTON_MASK != 0 {
+                    enqueue_pan_event(
+                        target,
                         source,
-                        window: target.id,
-                        phase: Ui4ButtonPhase::Up,
-                        changed_buttons: released,
-                        buttons_down,
+                        Ui4PanPhase::Begin,
                         x,
                         y,
                         local_x,
                         local_y,
+                        0,
+                        0,
                         combo_id,
                         vcursor,
-                    }),
-                );
-            }
-            if pressed & MIDDLE_BUTTON_MASK != 0 {
-                enqueue_pan_event(
-                    target,
-                    source,
-                    Ui4PanPhase::Begin,
-                    x,
-                    y,
-                    local_x,
-                    local_y,
-                    0,
-                    0,
-                    combo_id,
-                    vcursor,
-                );
-            }
-            if buttons_down & MIDDLE_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
-                enqueue_pan_event(
-                    target,
-                    source,
-                    Ui4PanPhase::Update,
-                    x,
-                    y,
-                    local_x,
-                    local_y,
-                    dx,
-                    dy,
-                    combo_id,
-                    vcursor,
-                );
-            }
-            if released & MIDDLE_BUTTON_MASK != 0 {
-                enqueue_pan_event(
-                    target,
-                    source,
-                    Ui4PanPhase::End,
-                    x,
-                    y,
-                    local_x,
-                    local_y,
-                    0,
-                    0,
-                    combo_id,
-                    vcursor,
-                );
+                    );
+                }
+                if buttons_down & MIDDLE_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
+                    enqueue_pan_event(
+                        target,
+                        source,
+                        Ui4PanPhase::Update,
+                        x,
+                        y,
+                        local_x,
+                        local_y,
+                        dx,
+                        dy,
+                        combo_id,
+                        vcursor,
+                    );
+                }
+                if released & MIDDLE_BUTTON_MASK != 0 {
+                    enqueue_pan_event(
+                        target,
+                        source,
+                        Ui4PanPhase::End,
+                        x,
+                        y,
+                        local_x,
+                        local_y,
+                        0,
+                        0,
+                        combo_id,
+                        vcursor,
+                    );
+                }
             }
         }
 
@@ -602,7 +623,8 @@ impl InputBroker {
 
     fn process_keyboard(&self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
-        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        if INTERACTIVE_SCREENSHOT_ENABLED
+            && event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
             && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F1
         {
             let route = self
@@ -744,9 +766,6 @@ impl InputBroker {
 
     fn software_cursor_visuals(&self) -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
         let mut visuals = Vec::new();
-        let hardware_cursor_slot =
-            crate::r::cursor::preferred_kernel_hw_cursor_snapshot_with_slot_buttons()
-                .map(|(slot_id, _, _, _)| slot_id);
         for route in &self.cursors {
             if !route.visible_after_motion {
                 continue;
@@ -756,7 +775,10 @@ impl InputBroker {
                 x: route.x,
                 y: route.y,
                 color: route.color,
-                draw_cursor: hardware_cursor_slot != Some(route.source.slot_id),
+                // Slot 4 draws every active source. The preferred physical
+                // source is intentionally duplicated by the hardware cursor
+                // for a direct software-versus-hardware motion comparison.
+                draw_cursor: true,
                 context_menu: route.context_menu,
                 selection: route.selection_anchor.and_then(|anchor| {
                     (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
@@ -775,7 +797,7 @@ static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signa
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback virtual=vcursor frame_drag=secondary-button/broker-placement maximize=top-center-drop/restore-next-drop/per-cursor-rearm-48px selection=primary-button/active-outline screenshot=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition\n"
+        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback cursor=slot4-software/all-active-sources hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/broker-move-policy maximize=interaction-capability-gated selection=primary-button/active-outline owner_events=interaction-capability-gated screenshot=parked\n"
     );
     loop {
         if INPUT_BROKER.lock().pump() {

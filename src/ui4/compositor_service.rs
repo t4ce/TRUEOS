@@ -122,7 +122,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor rewire live consumer=draw3d-kernel-service-only composition_ms={} active_plane=slot3 present=triple-direct-import per_frame_guc_composition=off per_frame_display_flip=on slot0=disabled slot1=disabled slot2=disabled slot4=disabled input=disabled screenshots=disabled previews=disabled video=disabled\n",
+        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand draw3d=slot3-triple-direct-import per_frame_draw3d_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=parked video=parked\n",
         COMPOSITION_PERIOD_MS,
     );
 

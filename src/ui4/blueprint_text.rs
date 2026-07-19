@@ -310,6 +310,10 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         output,
         plane: WindowPlane::Universal(super::RGB_OVERLAY_PLANE_SLOT_2 as u8),
         placement,
+        // Blueprint frame transport does not yet drain the native UI4 owner
+        // queue. Keep broker-level motion available without accumulating
+        // callbacks in a VM-owned queue.
+        interaction: super::WindowInteraction::MOVABLE_FRAME,
     }) {
         Ok(window) => window,
         Err(error) => {

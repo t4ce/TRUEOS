@@ -22,6 +22,16 @@ pub(crate) enum WindowOwner {
     Vm(u8),
 }
 
+impl WindowOwner {
+    /// Stable trusted identities for the kernel producers currently mapped
+    /// into the UI4 frame/window model. Keep these assignments in one place so
+    /// newly reactivated producers cannot silently collide.
+    pub(crate) const VIDEO_PLAYER: Self = Self::KernelApp(2);
+    pub(crate) const DRAW3D_SERVICE: Self = Self::KernelApp(3);
+    pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
+    pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
 pub(crate) struct WindowId(u32);
@@ -103,6 +113,37 @@ impl WindowPlacement {
     }
 }
 
+/// Broker-owned interaction policy for one window.
+///
+/// Moving frame geometry is a UI4 operation and does not imply that the
+/// producer implements an input callback queue or dynamic resize. This keeps
+/// simple GPU producers such as Draw3D movable without feeding them events
+/// they cannot consume or changing the render-target extent behind them.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowInteraction {
+    pub(crate) movable: bool,
+    pub(crate) maximizable: bool,
+    pub(crate) receives_input: bool,
+}
+
+impl WindowInteraction {
+    /// UI4 may translate the frame, while its producer remains independent of
+    /// pointer/keyboard delivery and keeps a fixed pixel extent.
+    pub(crate) const MOVABLE_FRAME: Self = Self {
+        movable: true,
+        maximizable: false,
+        receives_input: false,
+    };
+
+    /// Full broker interaction for producers which drain owner events and can
+    /// replace their frame allocation after a resize notification.
+    pub(crate) const APPLICATION: Self = Self {
+        movable: true,
+        maximizable: true,
+        receives_input: true,
+    };
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowCreate {
     pub(crate) owner: WindowOwner,
@@ -111,6 +152,7 @@ pub(crate) struct WindowCreate {
     pub(crate) output: OutputId,
     pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
+    pub(crate) interaction: WindowInteraction,
 }
 
 /// Optional work performed while a session still owns coherent published
@@ -165,6 +207,7 @@ pub(crate) struct WindowSnapshot {
     pub(crate) output: OutputId,
     pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
+    pub(crate) interaction: WindowInteraction,
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
     pub(crate) publish_serial: u64,
@@ -187,6 +230,7 @@ pub(crate) enum WindowBrokerError {
     EmptyExtent,
     EmptyDamage,
     InvalidPlane,
+    InteractionDenied,
     Capacity,
     Closed,
 }
@@ -200,6 +244,7 @@ struct WindowRecord {
     output: OutputId,
     plane: WindowPlane,
     placement: WindowPlacement,
+    interaction: WindowInteraction,
     state: WindowState,
     revision: u64,
     publish_serial: u64,
@@ -541,6 +586,7 @@ impl WindowRecord {
             output: request.output,
             plane: request.plane,
             placement: request.placement,
+            interaction: request.interaction,
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
@@ -559,6 +605,7 @@ impl WindowRecord {
             output: self.output,
             plane: self.plane,
             placement: self.placement,
+            interaction: self.interaction,
             state: self.state,
             revision: self.revision,
             publish_serial: self.publish_serial,
@@ -716,12 +763,14 @@ pub(crate) fn set_window_placement(
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
+    let notify_resize = window.interaction.receives_input
+        && (previous.width != placement.width || previous.height != placement.height);
     if window.placement != placement {
         window.placement = placement;
         window.revision = next_serial(window.revision);
     }
     drop(broker);
-    if previous.width != placement.width || previous.height != placement.height {
+    if notify_resize {
         super::input_broker::enqueue_window_resize(
             owner,
             id,
@@ -730,6 +779,33 @@ pub(crate) fn set_window_placement(
             placement.width,
             placement.height,
         );
+    }
+    Ok(())
+}
+
+/// Translate a window through UI4's frame interaction policy.
+///
+/// Unlike the owner-facing placement setter, this entry point cannot resize a
+/// producer surface and rejects windows which did not opt into frame motion.
+pub(crate) fn move_window(
+    owner: WindowOwner,
+    id: WindowId,
+    placement: WindowPlacement,
+) -> Result<(), WindowBrokerError> {
+    if !placement.valid() {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    if !window.interaction.movable
+        || placement.width != window.placement.width
+        || placement.height != window.placement.height
+    {
+        return Err(WindowBrokerError::InteractionDenied);
+    }
+    if window.placement != placement {
+        window.placement = placement;
+        window.revision = next_serial(window.revision);
     }
     Ok(())
 }
@@ -750,6 +826,9 @@ pub(crate) fn toggle_window_maximized(
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    if !window.interaction.maximizable {
+        return Err(WindowBrokerError::InteractionDenied);
+    }
     let previous = window.placement;
     let (placement, maximized) = if let Some(restore) = window.restore_placement.take() {
         (restore, false)
@@ -770,8 +849,10 @@ pub(crate) fn toggle_window_maximized(
         window.placement = placement;
         window.revision = next_serial(window.revision);
     }
+    let notify_resize = window.interaction.receives_input
+        && (previous.width != placement.width || previous.height != placement.height);
     drop(broker);
-    if previous.width != placement.width || previous.height != placement.height {
+    if notify_resize {
         super::input_broker::enqueue_window_resize(
             owner,
             id,

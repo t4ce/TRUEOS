@@ -1388,6 +1388,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &GPU_COMPLETION_REAPER_STARTED,
         spawn_gpu_completion_reaper,
     ),
+    // The first/preferred physical cursor drives the dedicated hardware
+    // cursor while UI4 also renders its software peer on slot 4. Keeping both
+    // visible makes their latency and coordinate agreement directly testable.
     TaskSpec::enabled_gated(
         "intel-cursor-service",
         0,
@@ -1402,15 +1405,17 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &MOUSE_MOTION_SERVICE_STARTED,
         spawn_mouse_motion_service_task,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled_gated(
         "ui4-input-service",
         0,
+        ui4_compositor_gate,
         &UI4_INPUT_SERVICE_STARTED,
         spawn_ui4_input_service_task,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled_gated(
         "ui4-slot4-service",
         0,
+        ui4_compositor_gate,
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
     ),

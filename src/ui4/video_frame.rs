@@ -22,7 +22,7 @@ use super::{
 
 // The decoded-video producer owns one ordinary broker window independently of
 // the compositor service.
-const VIDEO_OWNER: WindowOwner = WindowOwner::KernelApp(2);
+const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
 const VIDEO_PLAYBACK_AUTOSTART: bool = true;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_INPUT_POLL_MS: u64 = 10;
@@ -645,6 +645,7 @@ fn create_stream(
         output: VIDEO_OUTPUT,
         plane: super::WindowPlane::Primary,
         placement,
+        interaction: super::WindowInteraction::APPLICATION,
     }) {
         Ok(window) => window,
         Err(_) => {
