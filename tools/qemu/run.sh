@@ -71,3 +71,4 @@ exec env -i \
     -device hda-duplex,audiodev=snd0,bus=hda0.0 \
     -drive file="${QEMU_NVME_IMG}",format=raw,if=none,id=nvme \
     -device nvme,serial=deadbeef,drive=nvme 
+#last state had usb stack here, just revert 1
