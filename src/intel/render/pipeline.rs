@@ -310,6 +310,45 @@ fn write_triangle_probe_state(
     backend_probe_mode: BackendProbeMode,
     viewport_translation_px: [f32; 2],
 ) -> Result<TriangleProbeStateLayout, &'static str> {
+    write_triangle_probe_state_with_flush(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        viewport_translation_px,
+        true,
+    )
+}
+
+fn write_triangle_probe_state_unflushed(
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    shader_layout: TriangleShaderLayout,
+    blend_mode: TriangleBlendProbeMode,
+    backend_probe_mode: BackendProbeMode,
+    viewport_translation_px: [f32; 2],
+) -> Result<TriangleProbeStateLayout, &'static str> {
+    write_triangle_probe_state_with_flush(
+        warm,
+        draw,
+        shader_layout,
+        blend_mode,
+        backend_probe_mode,
+        viewport_translation_px,
+        false,
+    )
+}
+
+fn write_triangle_probe_state_with_flush(
+    warm: RenderWarmState,
+    draw: TriangleDrawPrep,
+    shader_layout: TriangleShaderLayout,
+    blend_mode: TriangleBlendProbeMode,
+    backend_probe_mode: BackendProbeMode,
+    viewport_translation_px: [f32; 2],
+    flush_state: bool,
+) -> Result<TriangleProbeStateLayout, &'static str> {
     const BLEND_FACTOR_ONE: u32 = 0x01;
     const BLEND_FACTOR_SRC_ALPHA: u32 = 0x03;
     const BLEND_FACTOR_INV_SRC_ALPHA: u32 = 0x13;
@@ -502,14 +541,16 @@ fn write_triangle_probe_state(
         slice_hash.copy_from_slice(&packed);
     }
 
-    let flush_ptr = unsafe {
-        warm.draw_state_virt
-            .add(shader_layout.state_region_offset_bytes as usize)
-    };
-    crate::intel::dma_flush(
-        flush_ptr,
-        end_offset - shader_layout.state_region_offset_bytes as usize,
-    );
+    if flush_state {
+        let flush_ptr = unsafe {
+            warm.draw_state_virt
+                .add(shader_layout.state_region_offset_bytes as usize)
+        };
+        crate::intel::dma_flush(
+            flush_ptr,
+            end_offset - shader_layout.state_region_offset_bytes as usize,
+        );
+    }
 
     Ok(TriangleProbeStateLayout {
         binding_table_offset_bytes: binding_table_offset as u32,
@@ -523,6 +564,7 @@ fn write_triangle_probe_state(
         push_constant_offset_bytes: 0,
         cps_state_offset_bytes: cps_state_offset as u32,
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
+        used_bytes: end_offset as u32,
     })
 }
 

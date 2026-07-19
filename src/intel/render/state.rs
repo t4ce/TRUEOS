@@ -172,6 +172,9 @@ struct TriangleProbeStateLayout {
     push_constant_offset_bytes: u32,
     cps_state_offset_bytes: u32,
     slice_hash_table_offset_bytes: u32,
+    /// Exclusive CPU-written end of this state slot. Scene staging uses this
+    /// to publish shader and fixed-function state with one cache flush/fence.
+    used_bytes: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -7743,6 +7743,16 @@ struct Ui4CompositionProof {
 }
 
 static UI4_COMPOSITION_PROOF_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Direct scanout is the ordinary Draw3D frame path, so lifecycle proof logs
+// must not become per-frame work. Keep enough checkpoints to diagnose buffer
+// rotation and release ordering without feeding thousands of formatted lines
+// through the kernel logger during a performance run.
+static UI4_DIRECT_QUEUE_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static UI4_DIRECT_SCANOUT_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
+    sequence <= 8 || sequence.is_multiple_of(120)
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum Ui4AsyncCompositionPoll {
@@ -8045,23 +8055,27 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         source.width,
         source.height,
     ));
-    crate::log_trace!(target: "ui4";
-        "ui4/direct-present: queued reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
-        reason,
-        plane_slot,
-        alias_index,
-        source.producer_frame,
-        source.producer_buffer_index,
-        source.producer_publish_serial,
-        source.producer_release_sequence,
-        source.phys,
-        gpu,
-        source.width,
-        source.height,
-        pos_x,
-        pos_y,
-        source.pitch_bytes,
-    );
+    let queue_sequence = UI4_DIRECT_QUEUE_LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    if should_log_ui4_direct_checkpoint(queue_sequence) {
+        crate::log_trace!(target: "ui4";
+            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
+            queue_sequence,
+            reason,
+            plane_slot,
+            alias_index,
+            source.producer_frame,
+            source.producer_buffer_index,
+            source.producer_publish_serial,
+            source.producer_release_sequence,
+            source.phys,
+            gpu,
+            source.width,
+            source.height,
+            pos_x,
+            pos_y,
+            source.pitch_bytes,
+        );
+    }
     Ok(Ui4AsyncComposition {
         gpu: None,
         target: Ui4AsyncCompositionTarget::DirectOverlay { surface },
@@ -8294,22 +8308,27 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
-        crate::log_info!(target: "ui4";
-            "ui4/direct-present: scanout-ready reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",
-            composition.reason,
-            surface.plane_slot,
-            surface.alias_index,
-            surface.producer_frame,
-            surface.producer_buffer_index,
-            surface.producer_publish_serial,
-            surface.producer_release_sequence,
-            surface.phys,
-            surface.gpu,
-            surface.width,
-            surface.height,
-            surface.pitch_bytes,
-            elapsed_us,
-        );
+        let scanout_sequence =
+            UI4_DIRECT_SCANOUT_LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+        if should_log_ui4_direct_checkpoint(scanout_sequence) {
+            crate::log_info!(target: "ui4";
+                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",
+                scanout_sequence,
+                composition.reason,
+                surface.plane_slot,
+                surface.alias_index,
+                surface.producer_frame,
+                surface.producer_buffer_index,
+                surface.producer_publish_serial,
+                surface.producer_release_sequence,
+                surface.phys,
+                surface.gpu,
+                surface.width,
+                surface.height,
+                surface.pitch_bytes,
+                elapsed_us,
+            );
+        }
     } else {
         crate::log_trace!(target: "ui4";
             "ui4/guc-compositor: scanout-ready reason={} tiles={} effective_rects={} effective_bounds={}x{}@{},{} elapsed_us={}\n",

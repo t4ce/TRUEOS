@@ -369,6 +369,13 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) height: u32,
     pub(crate) frame_us: u64,
     pub(crate) geometry_us: u64,
+    /// CPU time spent constructing and publishing scene state/batches before
+    /// handing the already-resident workload to GuC.
+    pub(crate) geometry_prepare_us: u64,
+    /// Time spent waiting for the RCS release cookie after GuC accepted the
+    /// submission. This excludes CPU batch preparation and LRC setup.
+    pub(crate) gpu_poll_us: u64,
+    pub(crate) gpu_poll_iters: u64,
     pub(crate) resolve_us: u64,
     pub(crate) coverage_us: u64,
     pub(crate) present_copy_us: u64,
@@ -405,6 +412,7 @@ impl ResidentSceneReleaseFence {
 }
 
 static RESIDENT_SCENE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static RESIDENT_SCENE_PERF_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone)]
 enum ResidentSceneFrameOutput {
@@ -1051,9 +1059,14 @@ fn stage_resident_scene_secondary(
     // slice was SIMD16.  With SIMD16 as the only enabled width, variable pixel
     // dispatch selects this executable through KSP0.
     let pipeline = crate::intel::shader::triangle_pipeline_simd16();
-    let shader_layout =
-        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu)?;
-    let probe_state = write_triangle_probe_state(
+    let shader_layout = upload_triangle_shader_pipeline_at(
+        state_warm,
+        pipeline,
+        Some(rgba),
+        state_gpu,
+        false,
+    )?;
+    let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
         shader_layout,
@@ -1061,6 +1074,10 @@ fn stage_resident_scene_secondary(
         BackendProbeMode::MesaLike,
         viewport_translation_px,
     )?;
+    // Shader bytes and all fixed-function structures occupy one compact
+    // prefix. Publish it once, after every CPU write, instead of three
+    // independent CLFLUSH+MFENCE passes over partly overlapping state.
+    crate::intel::dma_flush(state_warm.draw_state_virt, probe_state.used_bytes as usize);
     let batch_offset = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_index
@@ -1170,6 +1187,14 @@ fn encode_resident_scene_primary_batch(
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
+#[derive(Copy, Clone)]
+struct ResidentSceneGeometryResult {
+    completed: bool,
+    prepare_us: u64,
+    gpu_poll_us: u64,
+    gpu_poll_iters: u64,
+}
+
 fn submit_resident_scene_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
@@ -1181,7 +1206,8 @@ fn submit_resident_scene_geometry_batched(
     render_target_pitch: usize,
     target_width: usize,
     target_height: usize,
-) -> Result<bool, &'static str> {
+) -> Result<ResidentSceneGeometryResult, &'static str> {
+    let prepare_started_ns = crate::chronos::monotonic_nanos();
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
@@ -1198,8 +1224,6 @@ fn submit_resident_scene_geometry_batched(
         return Err("scene-frame-batch-capacity");
     }
     unsafe {
-        core::ptr::write_bytes(warm.batch_virt, 0, used_batch_bytes);
-        core::ptr::write_bytes(warm.ring_virt, 0, warm.ring_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
     }
     seed_result_debug_slots(warm);
@@ -1212,7 +1236,7 @@ fn submit_resident_scene_geometry_batched(
         depth.compare_function = COMPARE_FUNCTION_ALWAYS;
     }
     let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
-    let clear_draw = prepare_triangle_draw_resources_for_vertex_slice(
+    let clear_draw = prepare_triangle_draw_resources_for_scene_vertex_slice(
         clear_warm,
         render_target_gpu,
         render_target_pitch,
@@ -1255,7 +1279,7 @@ fn submit_resident_scene_geometry_batched(
             (TriangleBlendProbeMode::StraightAlpha, None)
         };
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_count)?;
-        let draw = prepare_triangle_draw_resources_for_resident_font_mesh(
+        let draw = prepare_triangle_draw_resources_for_scene_resident_mesh(
             state_warm,
             render_target_gpu,
             render_target_pitch,
@@ -1280,7 +1304,6 @@ fn submit_resident_scene_geometry_batched(
 
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
-    crate::intel::dma_flush(warm.batch_virt, used_batch_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "render";
@@ -1291,6 +1314,9 @@ fn submit_resident_scene_geometry_batched(
             target_height,
         );
     }
+    let prepare_us = crate::chronos::monotonic_nanos()
+        .saturating_sub(prepare_started_ns)
+        / 1_000;
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -1301,7 +1327,13 @@ fn submit_resident_scene_geometry_batched(
     if !completed {
         recover_render_engine_after_nonretired_submit(dev, warm, "draw3d-scene");
     }
-    Ok(completed)
+    let (gpu_poll_us, gpu_poll_iters) = draw3d_last_gpu_poll_profile();
+    Ok(ResidentSceneGeometryResult {
+        completed,
+        prepare_us,
+        gpu_poll_us,
+        gpu_poll_iters,
+    })
 }
 
 fn submit_resident_triangle_scene_capture(
@@ -1494,7 +1526,7 @@ fn submit_resident_triangle_scene_capture(
         // Clear and every resident draw are second-level batches beneath one
         // frame-level primary. GuC sees one ordered scene submission and the
         // CPU waits only for the final scene fence.
-        let geometry_complete = submit_resident_scene_geometry_batched(
+        let geometry = submit_resident_scene_geometry_batched(
             dev,
             warm,
             draws,
@@ -1506,6 +1538,7 @@ fn submit_resident_triangle_scene_capture(
             target_width,
             target_height,
         )?;
+        let geometry_complete = geometry.completed;
         let mut completed_draws = if geometry_complete { draws.len() } else { 0 };
 
         // A scene is one atomic visual result.  A timed-out draw leaves the
@@ -1665,6 +1698,25 @@ fn submit_resident_triangle_scene_capture(
         } else {
             None
         };
+        let frame_us = crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000;
+        let geometry_us = geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000;
+        let perf_sequence = RESIDENT_SCENE_PERF_SEQUENCE
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        if perf_sequence == 1 || perf_sequence.is_multiple_of(256) {
+            crate::log_info!(
+                target: "render";
+                "draw3d-perf: seq={} draws={} frame_us={} geometry_us={} prepare_us={} gpu_poll_us={} gpu_poll_iters={} geometry_other_us={} note=geometry_other_includes_lock-forcewake-lrc-guc-submit-result-handoff\n",
+                perf_sequence,
+                draws.len(),
+                frame_us,
+                geometry_us,
+                geometry.prepare_us,
+                geometry.gpu_poll_us,
+                geometry.gpu_poll_iters,
+                geometry_us.saturating_sub(geometry.prepare_us).saturating_sub(geometry.gpu_poll_us),
+            );
+        }
         Ok(ResidentSceneFrameResult {
             completed_draws,
             requested_draws: draws.len().saturating_add(coverage_draws.len()),
@@ -1672,8 +1724,11 @@ fn submit_resident_triangle_scene_capture(
             presented: false,
             width: target_width as u32,
             height: target_height as u32,
-            frame_us: crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000,
-            geometry_us: geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000,
+            frame_us,
+            geometry_us,
+            geometry_prepare_us: geometry.prepare_us,
+            gpu_poll_us: geometry.gpu_poll_us,
+            gpu_poll_iters: geometry.gpu_poll_iters,
             resolve_us: resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
             coverage_us: coverage_finished_ns.saturating_sub(resolve_finished_ns) / 1_000,
             present_copy_us: present_copy_finished_ns.saturating_sub(present_copy_started_ns)

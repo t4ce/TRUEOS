@@ -3,7 +3,13 @@ fn upload_triangle_shader_pipeline(
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
 ) -> Result<TriangleShaderLayout, &'static str> {
-    upload_triangle_shader_pipeline_at(warm, pipeline, draw_rgba, GPU_VA_DRAW_STATE_BASE)
+    upload_triangle_shader_pipeline_at(
+        warm,
+        pipeline,
+        draw_rgba,
+        GPU_VA_DRAW_STATE_BASE,
+        true,
+    )
 }
 
 /// Upload the proven triangle shaders into a caller-owned state slot.
@@ -17,6 +23,7 @@ fn upload_triangle_shader_pipeline_at(
     pipeline: &'static crate::intel::shader::TrianglePipeline,
     draw_rgba: Option<[u8; 4]>,
     bo_gpu_base: u64,
+    flush_upload: bool,
 ) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
@@ -110,7 +117,9 @@ fn upload_triangle_shader_pipeline_at(
         }
     }
 
-    crate::intel::dma_flush(warm.draw_state_virt, used_end);
+    if flush_upload {
+        crate::intel::dma_flush(warm.draw_state_virt, used_end);
+    }
 
     let state_region_offset_bytes =
         crate::intel::align_up(used_end, crate::intel::WARM_ALIGN).ok_or("state-region-align")?;
@@ -540,6 +549,52 @@ fn prepare_triangle_draw_resources_for_vertex_slice(
     label: &'static str,
     vertices: &[[f32; 3]],
 ) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        label,
+        vertices,
+        true,
+    )
+}
+
+/// Scene state is completely overwritten by shader/state staging immediately
+/// after resource preparation, so clearing and publishing the whole 8 KiB
+/// slot here would only duplicate that later visibility operation.
+fn prepare_triangle_draw_resources_for_scene_vertex_slice(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    vertices: &[[f32; 3]],
+) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        label,
+        vertices,
+        false,
+    )
+}
+
+fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    label: &'static str,
+    vertices: &[[f32; 3]],
+    clear_state: bool,
+) -> Option<TriangleDrawPrep> {
     let target_w = u32::try_from(rect_w).ok()?;
     let target_h = u32::try_from(rect_h).ok()?;
     let rt_pitch = u32::try_from(pitch).ok()?;
@@ -555,10 +610,12 @@ fn prepare_triangle_draw_resources_for_vertex_slice(
 
     let vertex_proof = write_triangle_vertex_slice(warm, label, vertices)?;
 
-    unsafe {
-        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    if clear_state {
+        unsafe {
+            core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+        }
+        crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
     }
-    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
     Some(TriangleDrawPrep {
         vertex_count: vertex_proof.vertex_count,
@@ -931,6 +988,45 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh(
     rect_h: usize,
     mesh: &ResidentFontMesh,
 ) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        mesh,
+        true,
+    )
+}
+
+fn prepare_triangle_draw_resources_for_scene_resident_mesh(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    mesh: &ResidentFontMesh,
+) -> Option<TriangleDrawPrep> {
+    prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
+        warm,
+        dst_gpu_addr,
+        pitch,
+        rect_w,
+        rect_h,
+        mesh,
+        false,
+    )
+}
+
+fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
+    warm: RenderWarmState,
+    dst_gpu_addr: u64,
+    pitch: usize,
+    rect_w: usize,
+    rect_h: usize,
+    mesh: &ResidentFontMesh,
+    clear_state: bool,
+) -> Option<TriangleDrawPrep> {
     if mesh.vertex_count < 3
         || mesh.index_count < 3
         || !mesh.index_count.is_multiple_of(3)
@@ -939,10 +1035,12 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh(
     {
         return None;
     }
-    unsafe {
-        core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+    if clear_state {
+        unsafe {
+            core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
+        }
+        crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
     }
-    crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
     Some(TriangleDrawPrep {
         vertex_count: mesh.index_count,
         vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,

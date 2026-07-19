@@ -20,7 +20,7 @@ pub(crate) use frame_pool::{
     FramePoolError, FrameReadLease, FrameRgbaView, FrameWriteLease, acquire_frame_buffer,
     acquire_published_frame, cancel_frame_buffer, create_frame, destroy_frame, frame_snapshot,
     gpgpu_rgba_surface, publish_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
-    release_published_frame, retain_published_frame, writable_rgba_view,
+    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,

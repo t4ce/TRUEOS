@@ -6,6 +6,7 @@
 //! address.
 
 use alloc::vec::Vec;
+use embassy_sync::signal::Signal;
 use spin::Mutex;
 
 use crate::graphics::primitives::{Error as SurfaceError, UiSurfaceFormat};
@@ -17,6 +18,11 @@ use super::{
 };
 
 const MAX_FRAMES: usize = 64;
+
+/// Coalesced notification for the single supported streaming producer.  The
+/// frame handle lets an awakened producer ignore releases belonging to another
+/// logical frame without polling the pool.
+static FRAME_BUFFER_RELEASED: Signal<crate::wait::EmbassySpinRawMutex, FrameHandle> = Signal::new();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FramePoolError {
@@ -458,7 +464,24 @@ pub(crate) fn release_published_frame(lease: FrameReadLease) -> Result<(), Frame
         return Err(FramePoolError::InvalidLease);
     }
     *readers -= 1;
+    let became_available = *readers == 0 && frame.front_buffer != Some(lease.buffer_index);
+    drop(pool);
+    if became_available {
+        FRAME_BUFFER_RELEASED.signal(lease.frame);
+    }
     Ok(())
+}
+
+/// Wait until a reader releases a non-front buffer of `handle`.
+///
+/// The signal is deliberately coalescing: a producer only needs to know that
+/// retrying acquisition may now succeed, not how many read leases retired.
+pub(crate) async fn wait_frame_buffer_release(handle: FrameHandle) {
+    loop {
+        if FRAME_BUFFER_RELEASED.wait().await == handle {
+            return;
+        }
+    }
 }
 
 pub(crate) fn cancel_frame_buffer(lease: FrameWriteLease) -> Result<(), FramePoolError> {

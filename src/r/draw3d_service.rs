@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer, with_timeout};
 use spin::Mutex;
 use trueos_draw3d::{
     Command, FrameDecoder, ImageFormat, ProjectedMesh, RenderImage, Response, ResponseError, Scene,
@@ -159,11 +159,11 @@ fn publish_ui4_scene_frame(
 
 fn render_and_publish_ui4_scene_frame(
     surface: &mut Draw3dUi4Surface,
+    lease: crate::ui4::FrameWriteLease,
     draws: &[crate::intel::render::ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     revision: u64,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, Draw3dUi4Error> {
-    let lease = crate::ui4::acquire_frame_buffer(surface.frame)?;
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination) => destination,
         Err(error) => {
@@ -590,9 +590,13 @@ pub async fn draw3d_ui4_render_task() {
     let mut last_render_error = None;
     let mut next_frame = Instant::now();
     let mut submitted_frames = 0u64;
+    let mut backpressure_events = 0u64;
+    let mut backpressure_wakes = 0u64;
+    let mut backpressure_timeouts = 0u64;
 
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
+        let mut wait_for_buffer_release = false;
         let revision = SCENE_REVISION.load(Ordering::Acquire);
         let (running, orbit_moving) = with_scene(|scene| {
             (
@@ -620,13 +624,68 @@ pub async fn draw3d_ui4_render_task() {
         }
 
         if running && (revision != rendered_revision || orbit_moving || retry_frame) {
-            let now_ns = crate::chronos::monotonic_nanos();
-            let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
-            let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f64 / 1_000_000_000.0;
             if surface.width == 0 || surface.height == 0 {
                 Timer::at(next_frame).await;
                 continue;
             }
+            let lease = match crate::ui4::acquire_frame_buffer(surface.frame) {
+                Ok(lease) => Some(lease),
+                Err(crate::ui4::FramePoolError::Busy) => {
+                    retry_frame = true;
+                    wait_for_buffer_release = true;
+                    backpressure_events = backpressure_events.saturating_add(1);
+                    if backpressure_events <= 4 || backpressure_events.is_power_of_two() {
+                        crate::log_trace!(
+                            target: "draw3d";
+                            "draw3d: UI4 producer backpressure frame={} revision={} busy_events={} action=coalesce-until-buffer-release-or-16ms-deadline cpu_projection=skipped guc_submit=0\n",
+                            surface.frame.raw(),
+                            revision,
+                            backpressure_events,
+                        );
+                    }
+                    None
+                }
+                Err(error) => {
+                    retry_frame = true;
+                    let error = Draw3dUi4Error::Frame(error);
+                    if last_render_error != Some(error) {
+                        crate::log_warn!(
+                            target: "draw3d";
+                            "draw3d: UI4 frame acquire pending revision={} error={:?} action=retry-at-frame-deadline\n",
+                            revision,
+                            error,
+                        );
+                        last_render_error = Some(error);
+                    }
+                    None
+                }
+            };
+            let Some(lease) = lease else {
+                was_running = running;
+                if wait_for_buffer_release {
+                    if with_timeout(
+                        EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US),
+                        crate::ui4::wait_frame_buffer_release(surface.frame),
+                    )
+                    .await
+                    .is_ok()
+                    {
+                        backpressure_wakes = backpressure_wakes.saturating_add(1);
+                    } else {
+                        backpressure_timeouts = backpressure_timeouts.saturating_add(1);
+                    }
+                    // A release wake is permission to retry immediately.  A
+                    // deadline timeout bounds recovery if a notification is
+                    // coalesced with an earlier release.
+                    next_frame = Instant::now();
+                } else {
+                    Timer::at(next_frame).await;
+                }
+                continue;
+            };
+            let now_ns = crate::chronos::monotonic_nanos();
+            let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
+            let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f64 / 1_000_000_000.0;
             let aspect = surface.width as f32 / surface.height as f32;
             let (projected, clear_rgba) = with_scene(|scene| {
                 let angle = scene
@@ -651,6 +710,7 @@ pub async fn draw3d_ui4_render_task() {
                         .collect::<Vec<_>>();
                     match render_and_publish_ui4_scene_frame(
                         &mut surface,
+                        lease,
                         &draws,
                         clear_rgba,
                         revision,
@@ -663,7 +723,7 @@ pub async fn draw3d_ui4_render_task() {
                             if submitted_frames <= 8 || submitted_frames.is_multiple_of(120) {
                                 crate::log_trace!(
                                     target: "draw3d";
-                                    "draw3d: UI4 triple frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish=1 ui4_compositor_jobs=0 ui4_display_flip=1 cpu_readback=0 cpu_frame_copy=0 plane_slot={}\n",
+                                    "draw3d: UI4 triple frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish=1 ui4_compositor_jobs=0 ui4_display_flip=1 cpu_readback=0 cpu_frame_copy=0 plane_slot={} backpressure_busy={} release_wakes={} deadline_timeouts={}\n",
                                     submitted_frames,
                                     revision,
                                     result.completed_draws,
@@ -675,6 +735,9 @@ pub async fn draw3d_ui4_render_task() {
                                     result.resolve_us,
                                     result.present_copy_us,
                                     UI4_PLANE_SLOT,
+                                    backpressure_events,
+                                    backpressure_wakes,
+                                    backpressure_timeouts,
                                 );
                             }
                         }
@@ -694,6 +757,7 @@ pub async fn draw3d_ui4_render_task() {
                     }
                 }
                 Err(reason) => {
+                    let _ = crate::ui4::cancel_frame_buffer(lease);
                     retry_frame = true;
                     if last_sync_error != Some(reason) {
                         crate::log_warn!(

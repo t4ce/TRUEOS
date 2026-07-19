@@ -39,6 +39,7 @@ struct Runtime {
     composition: CompositionState,
     pending: Option<PendingFrame>,
     immediate_rescan: bool,
+    retired_frames: u64,
     /// Exact producer buffers currently owned by overlay scanout. A lease is
     /// replaced only after the corresponding new SURFLIVE value is observed.
     live_direct: [Option<FrameReadLease>; 4],
@@ -193,6 +194,7 @@ fn initialize() -> Runtime {
         },
         pending: None,
         immediate_rescan: false,
+        retired_frames: 0,
         live_direct: [None; 4],
     }
 }
@@ -809,10 +811,14 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         .filter_map(crate::intel::ui4_direct_composition_plane_slot)
         .count();
     let guc_jobs = pending.completed.len().saturating_sub(direct_planes);
-    crate::log_trace!(target: "ui4";
-        "ui4/compositor: frame-retired planes={} direct_planes={} guc_jobs={} windows={} elapsed_us={} ap1_wait_loops=0\n",
-        pending.completed.len(), direct_planes, guc_jobs, pending.windows.len(), elapsed_us,
-    );
+    runtime.retired_frames = runtime.retired_frames.saturating_add(1);
+    if runtime.retired_frames <= 8 || runtime.retired_frames.is_multiple_of(120) {
+        crate::log_trace!(target: "ui4";
+            "ui4/compositor: frame-retired seq={} planes={} direct_planes={} guc_jobs={} windows={} elapsed_us={} ap1_wait_loops=0 telemetry=first8+every120\n",
+            runtime.retired_frames, pending.completed.len(), direct_planes, guc_jobs,
+            pending.windows.len(), elapsed_us,
+        );
+    }
 }
 
 fn commit_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {

@@ -15,10 +15,22 @@ fn submit_warm_render_batch(
     expected_result_slot_dword: usize,
     submit_name: &'static str,
 ) -> bool {
+    let draw3d_scene_submit = submit_name == "draw3d-scene";
+    if draw3d_scene_submit {
+        // Early submission failures must not leak the preceding frame's
+        // profile into scene telemetry.
+        DRAW3D_LAST_GPU_POLL_US.store(0, Ordering::Release);
+        DRAW3D_LAST_GPU_POLL_ITERS.store(0, Ordering::Release);
+    }
     // The MMIO counters visible here still belong to the outgoing context.
     // Every probe below rebuilds a zeroed LRC image before ELSP submission, so
     // the incoming context's counter baseline is zero, not this snapshot.
-    let stats_outgoing_context = capture_triangle_stage_stats(dev);
+    let triangle_debug_submit = is_triangle_debug_submit_name(submit_name);
+    let stats_outgoing_context = if triangle_debug_submit {
+        capture_triangle_stage_stats(dev)
+    } else {
+        TriangleStageStats::default()
+    };
     let stats_context_baseline = TriangleStageStats::default();
     let surface_samples_before =
         if is_surface_draw_submit_name(submit_name) && !is_scratch_rt_submit_name(submit_name) {
@@ -26,7 +38,7 @@ fn submit_warm_render_batch(
         } else {
             None
         };
-    if is_triangle_debug_submit_name(submit_name) {
+    if triangle_debug_submit {
         log_triangle_stage_stats(
             submit_name,
             "before-submit-outgoing-context",
@@ -50,7 +62,9 @@ fn submit_warm_render_batch(
         return false;
     }
     let (context_desc_lo, context_desc_hi) = build_guc_context_descriptor(GPU_VA_CONTEXT_BASE);
-    write_lrc_ring_tail(warm, ring_tail_bytes as u32);
+    // init_gen12_lrc_context_image() already encoded this exact ring tail and
+    // published the complete LRC image. Rewriting it here used to CLFLUSH all
+    // 88 KiB of context storage a second time before every submission.
     log_lrc_ring_image(warm, submit_name);
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -87,7 +101,6 @@ fn submit_warm_render_batch(
 
     let mut completed = false;
     let mut iter = 0usize;
-    let draw3d_scene_submit = submit_name == "draw3d-scene";
     let poll_limit = if draw3d_scene_submit {
         // This is a safety ceiling only. Native scanout rendering is judged
         // by elapsed time below rather than by CPU-dependent spin counts.
@@ -103,6 +116,30 @@ fn submit_warm_render_batch(
     let poll_started_ns = crate::chronos::monotonic_nanos();
     const DRAW3D_POLL_TIMEOUT_NS: u64 = 50_000_000;
     while iter < poll_limit {
+        if draw3d_scene_submit {
+            // The production scene has one authoritative completion value: a
+            // QWord release cookie. Reading fourteen unrelated diagnostic
+            // slots on every spin multiplied CPU/memory traffic without
+            // strengthening the ownership proof.
+            let release_lo = read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
+            let release_hi = read_result_dword(warm, RESULT_SLOT_SCENE_FRAME_DWORD + 1);
+            if release_lo == expected_result
+                && release_hi == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI
+            {
+                completed = true;
+                break;
+            }
+            if iter.is_multiple_of(256)
+                && crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns)
+                    >= DRAW3D_POLL_TIMEOUT_NS
+            {
+                break;
+            }
+            core::hint::spin_loop();
+            iter += 1;
+            continue;
+        }
+
         let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
         let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);
         let result2 = read_result_dword(warm, RESULT_SLOT_FINAL_DWORD);
@@ -157,13 +194,6 @@ fn submit_warm_render_batch(
                     == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI);
         if expected_marker_observed {
             completed = true;
-            break;
-        }
-        if draw3d_scene_submit
-            && iter.is_multiple_of(256)
-            && crate::chronos::monotonic_nanos().saturating_sub(poll_started_ns)
-                >= DRAW3D_POLL_TIMEOUT_NS
-        {
             break;
         }
         if should_log_primary_probe_detail()
@@ -2040,23 +2070,6 @@ fn execlist_submit_port_push(
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI, context0_hi);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO + 8, context1_lo);
     crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI + 8, context1_hi);
-}
-
-fn write_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) {
-    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
-    const LRC_RING_TAIL_VALUE_DW: usize = 7;
-
-    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
-    if total_dwords <= LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW {
-        return;
-    }
-
-    let dwords =
-        unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
-    let ctx_ctl = dwords[LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW];
-    dwords[LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
-    dwords[LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW] = ctx_ctl;
-    crate::intel::dma_flush(warm.context_virt, warm.context_len);
 }
 
 fn log_lrc_ring_image(warm: RenderWarmState, submit_name: &str) {
