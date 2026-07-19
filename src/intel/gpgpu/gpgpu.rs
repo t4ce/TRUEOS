@@ -6316,12 +6316,13 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     skybox: GpgpuRgb565Surface,
     dst: GpgpuRgba8Surface,
     mut params: SkyboxSampleRgb565Params,
-) -> bool {
+) -> GpgpuRgba8KernelResult {
+    let started = direct_rcs_now_tick();
     if !skybox.is_valid() || !dst.is_valid() || params.rect_width == 0 || params.rect_height == 0 {
-        return false;
+        return GpgpuRgba8KernelResult::default();
     }
     if params.rect_x >= dst.width || params.rect_y >= dst.height {
-        return false;
+        return GpgpuRgba8KernelResult::default();
     }
     params.sky_gpu = skybox.gpu;
     params.dst_gpu = dst.gpu;
@@ -6352,33 +6353,27 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
         );
     }
 
-    let Some(_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
-        if trace {
-            crate::log_info!(
-                target: "gpgpu";
-                "intel/gpgpu: skybox-sample-rgb565 direct submit busy seq={} fallback=cpu\n",
-                seq
-            );
-        }
-        return false;
-    };
+    // The skybox owns one UI4 write lease. Queue behind the shared RCS lane
+    // instead of converting transient engine contention into a permanent CPU
+    // fallback for the Blueprint.
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         if trace {
             crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 no claimed device seq={}\n", seq);
         }
-        return false;
+        return GpgpuRgba8KernelResult::default();
     };
     let Some(upload) = upload_skybox_sample_rgb565_kernel() else {
         if trace {
             crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 kernel upload unavailable seq={}\n", seq);
         }
-        return false;
+        return GpgpuRgba8KernelResult::default();
     };
     let Some(state) = direct_rcs_state_once(dev) else {
         if trace {
             crate::log_info!(target: "gpgpu"; "intel/gpgpu: skybox-sample-rgb565 direct state unavailable seq={}\n", seq);
         }
-        return false;
+        return GpgpuRgba8KernelResult::default();
     };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -6389,7 +6384,7 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     let sky_ppgtt_ok = kernel_ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, skybox.gpu, skybox.phys, skybox.bytes);
     let dst_ppgtt_ok =
-        sky_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+        sky_ppgtt_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_skybox_sample_rgb565_batch(
             state,
@@ -6404,7 +6399,7 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
             state,
             SKYBOX_SAMPLE_POST_MARKER_SLOT,
             SKYBOX_SAMPLE_POST_MARKER,
-            50,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
         )
     } else {
         0
@@ -6445,7 +6440,13 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
             dst.bytes
         );
     }
-    ok
+    GpgpuRgba8KernelResult {
+        ok,
+        submitted,
+        marker: observed,
+        submit_ms: direct_rcs_elapsed_ms_since(started),
+        release: ok.then(|| gpgpu_rgba8_release(dst)),
+    }
 }
 
 fn submit_chart_sine_rgba8(

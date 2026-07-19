@@ -126,6 +126,44 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     })
 }
 
+/// Replace the complete producer ring after UI4's top-edge maximize/restore
+/// gesture changes the requested window extent. The old ring remains alive
+/// until the compositor releases its exact SURFLIVE-backed read lease.
+fn resize_ui4_surface_frame(
+    surface: &mut Draw3dUi4Surface,
+    width: u32,
+    height: u32,
+) -> Result<crate::ui4::FrameHandle, Draw3dUi4Error> {
+    let (max_width, max_height) = crate::intel::render::resident_scene_target_dimensions();
+    if width == 0
+        || height == 0
+        || width as usize > max_width
+        || height as usize > max_height
+    {
+        return Err(Draw3dUi4Error::InvalidFrame);
+    }
+    let window = surface.window.ok_or(Draw3dUi4Error::InvalidFrame)?;
+    let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let replacement = crate::ui4::create_frame(crate::ui4::FrameSpec {
+        output,
+        content: crate::ui4::FrameContent::RenderScene3d,
+        cadence: crate::ui4::FrameCadence::Streaming,
+        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
+    })?;
+    let previous = surface.frame;
+    if let Err(error) = crate::ui4::replace_window_frame(UI4_OWNER, window, replacement) {
+        let _ = crate::ui4::destroy_frame(replacement);
+        return Err(error.into());
+    }
+    surface.frame = replacement;
+    surface.width = width;
+    surface.height = height;
+    Ok(previous)
+}
+
 fn publish_ui4_scene_frame(
     surface: &mut Draw3dUi4Surface,
     lease: crate::ui4::FrameWriteLease,
@@ -158,10 +196,10 @@ fn publish_ui4_scene_frame(
                 opacity: u8::MAX,
                 visible: true,
             },
-            // The scene service has no UI4 event consumer yet. UI4 owns frame
-            // translation, while the render target remains fixed-size and the
-            // TCP protocol continues to own camera/scene input.
-            interaction: crate::ui4::WindowInteraction::MOVABLE_FRAME,
+            // UI4 owns frame motion and maximize/restore. Draw3D consumes only
+            // the resize callback to replace its complete triple-buffer ring;
+            // the TCP protocol continues to own camera and scene input.
+            interaction: crate::ui4::WindowInteraction::APPLICATION,
         })?);
     }
     crate::ui4::publish_window_frame(
@@ -608,9 +646,17 @@ pub async fn draw3d_ui4_render_task() {
     let mut backpressure_events = 0u64;
     let mut backpressure_wakes = 0u64;
     let mut backpressure_timeouts = 0u64;
+    let mut retired_frames = Vec::new();
+    let mut pending_resize = None;
 
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
+        retired_frames.retain(|frame| {
+            matches!(
+                crate::ui4::destroy_frame(*frame),
+                Err(crate::ui4::FramePoolError::Busy)
+            )
+        });
         let mut wait_for_buffer_release = false;
         let revision = SCENE_REVISION.load(Ordering::Acquire);
         let (running, orbit_moving) = with_scene(|scene| {
@@ -621,6 +667,57 @@ pub async fn draw3d_ui4_render_task() {
                     .is_some_and(|orbit| orbit.angular_speed != 0.0),
             )
         });
+        for event in crate::ui4::take_owner_input_events(UI4_OWNER) {
+            let crate::ui4::Ui4InputEvent::Resize(event) = event else {
+                continue;
+            };
+            if surface.window != Some(event.window) {
+                continue;
+            }
+            pending_resize = Some(event);
+            if !running {
+                crate::log_info!(
+                    target: "draw3d";
+                    "draw3d: UI4 maximize/restore resize deferred window={} old={}x{} new={}x{} action=retain-surflive-frame-until-scene-start\n",
+                    event.window.raw(),
+                    event.old_width,
+                    event.old_height,
+                    event.width,
+                    event.height,
+                );
+            }
+        }
+        if let Some(event) = running.then(|| pending_resize.take()).flatten() {
+            match resize_ui4_surface_frame(&mut surface, event.width, event.height) {
+                Ok(previous) => {
+                    retired_frames.push(previous);
+                    rendered_revision = 0;
+                    retry_frame = running;
+                    last_render_error = None;
+                    crate::log_info!(
+                        target: "draw3d";
+                        "draw3d: UI4 maximize/restore resize window={} old={}x{} new={}x{} frame={} action=replace-triple-buffer+rerender old_release=surflive running={}\n",
+                        event.window.raw(),
+                        event.old_width,
+                        event.old_height,
+                        event.width,
+                        event.height,
+                        surface.frame.raw(),
+                        running as u8,
+                    );
+                }
+                Err(error) => {
+                    crate::log_warn!(
+                        target: "draw3d";
+                        "draw3d: UI4 maximize/restore resize rejected window={} requested={}x{} error={:?} action=retain-current-frame\n",
+                        event.window.raw(),
+                        event.width,
+                        event.height,
+                        error,
+                    );
+                }
+            }
+        }
         if was_running && !running {
             rendered_revision = 0;
             retry_frame = false;

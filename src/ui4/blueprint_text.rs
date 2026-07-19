@@ -10,7 +10,8 @@ use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
-    GpgpuRgb565Surface, SkyboxSampleRgb565Params, skybox_sample_rgb565_to_rgba8,
+    GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, SkyboxSampleRgb565Params,
+    skybox_sample_rgb565_to_rgba8,
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
@@ -24,8 +25,8 @@ use super::{
     WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
     destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_window_frame, replace_window_frame, set_window_placement,
-    writable_rgba_view,
+    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_window_frame, replace_window_frame, set_window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -115,6 +116,8 @@ struct BlueprintSceneSurface {
     height: u32,
     cadence: FrameCadence,
     write_lease: Option<FrameWriteLease>,
+    pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
+    gpu_submission_unretired: bool,
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
@@ -144,6 +147,10 @@ struct Rgb565Upload {
 
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
+// An accepted GPU submission whose marker never retired may still reference
+// both its destination ring and retained source. Those allocations are never
+// recycled into another owner; recovery belongs to a future engine reset.
+static QUARANTINED_SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 
 /// Revoke every Blueprint scene resource held for an owner.
 ///
@@ -303,12 +310,17 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         opacity: u8::MAX,
         visible: true,
     };
+    let plane_slot = if cadence == FrameCadence::Streaming {
+        super::ALPHA_OVERLAY_PLANE_SLOT
+    } else {
+        super::RGB_OVERLAY_PLANE_SLOT_2
+    };
     let window = match create_window(WindowCreate {
         owner,
         session,
         frame,
         output,
-        plane: WindowPlane::Universal(super::RGB_OVERLAY_PLANE_SLOT_2 as u8),
+        plane: WindowPlane::Universal(plane_slot as u8),
         placement,
         // Blueprint frame transport does not yet drain the native UI4 owner
         // queue. Keep broker-level motion available without accumulating
@@ -337,6 +349,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 height,
                 cadence,
                 write_lease: None,
+                pending_gpu_release: None,
+                gpu_submission_unretired: false,
                 placement,
                 skybox: None,
                 skybox_upload: None,
@@ -354,6 +368,8 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         height,
         cadence,
         write_lease: None,
+        pending_gpu_release: None,
+        gpu_submission_unretired: false,
         placement,
         skybox: None,
         skybox_upload: None,
@@ -363,7 +379,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         FrameCadence::Streaming => ("streaming", 3),
         FrameCadence::Immutable => ("immutable", 1),
     };
-    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} buffers={} plane=slot2 scene=text+shader\n", owner, window.raw(), width, height, cadence_name, buffer_count);
+    crate::log_info!(target: "ui4/blueprint-frame"; "frame open owner={:?} window={} extent={}x{} cadence={} buffers={} plane=slot{} scene=text+shader\n", owner, window.raw(), width, height, cadence_name, buffer_count, plane_slot);
     window.raw()
 }
 
@@ -388,6 +404,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     if surface.write_lease.is_some() {
         return ERROR_STATE;
     }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
     let lease = match acquire_frame_buffer(surface.frame) {
         Ok(lease) => lease,
         Err(FramePoolError::Busy) => return ERROR_BUSY,
@@ -403,14 +422,21 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
             return ERROR_UI4;
         }
     };
-    let [r, g, b, a] = clear_rgba.to_le_bytes();
-    let pixel = PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes();
-    // SAFETY: the write lease makes this entire UI4 allocation producer-owned.
-    let bytes = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
-    for chunk in bytes.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&pixel);
+    // A retained streaming skybox is required to shade the complete target,
+    // so clearing and flushing every CPU-visible cache line first is redundant.
+    // Dirty/text frames retain the ordinary clear contract.
+    let gpu_full_frame = surface.cadence == FrameCadence::Streaming && surface.skybox.is_some();
+    if !gpu_full_frame {
+        let [r, g, b, a] = clear_rgba.to_le_bytes();
+        let pixel = PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes();
+        // SAFETY: the write lease makes this entire UI4 allocation producer-owned.
+        let bytes = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
+        for chunk in bytes.chunks_exact_mut(4) {
+            chunk.copy_from_slice(&pixel);
+        }
+        crate::intel::dma_flush(view.virt, view.byte_len);
     }
-    crate::intel::dma_flush(view.virt, view.byte_len);
+    surface.pending_gpu_release = None;
     surface.write_lease = Some(lease);
     0
 }
@@ -660,19 +686,35 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let surfaces = SURFACES.lock();
-    let Some(surface) = surfaces
-        .iter()
-        .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
-    else {
-        return ERROR_NOT_FOUND;
+    let (lease, skybox, frame_width, frame_height, cadence) = {
+        let surfaces = SURFACES.lock();
+        let Some(surface) = surfaces
+            .iter()
+            .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
+        else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.gpu_submission_unretired {
+            return ERROR_BUSY;
+        }
+        let Some(lease) = surface.write_lease else {
+            return ERROR_STATE;
+        };
+        let Some(skybox) = surface.skybox else {
+            return ERROR_STATE;
+        };
+        (lease, skybox, surface.width, surface.height, surface.cadence)
     };
-    let Some(lease) = surface.write_lease else {
-        return ERROR_STATE;
-    };
-    let Some(skybox) = surface.skybox else {
-        return ERROR_STATE;
-    };
+    // Streaming skyboxes skip the CPU clear at frame-begin, which is safe only
+    // when the shader overwrites the complete allocation.
+    if cadence == FrameCadence::Streaming
+        && (params.rect_x != 0
+            || params.rect_y != 0
+            || params.rect_width != frame_width
+            || params.rect_height != frame_height)
+    {
+        return ERROR_INVALID;
+    }
     let Ok(destination) = gpgpu_rgba_surface(lease) else {
         return ERROR_UI4;
     };
@@ -705,7 +747,35 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
             tan_half_fov_y: params.tan_half_fov_y,
         },
     );
-    if rendered { 0 } else { ERROR_UI4 }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease != Some(lease) {
+        return ERROR_STATE;
+    }
+    if rendered.ok {
+        let Some(release) = rendered.release else {
+            return ERROR_UI4;
+        };
+        surface.pending_gpu_release = Some(release);
+        return 0;
+    }
+    if rendered.submitted {
+        surface.gpu_submission_unretired = true;
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "skybox producer quarantined owner={:?} window={} frame={} buffer={} marker=0x{:08X} submit_ms={} reason=accepted-submission-not-retired action=no-cpu-fallback+retain-source+retain-ring\n",
+            owner,
+            window_id,
+            lease.frame.raw(),
+            lease.buffer_index,
+            rendered.marker,
+            rendered.submit_ms,
+        );
+        ERROR_BUSY
+    } else {
+        ERROR_UI4
+    }
 }
 
 /// Render one positioned text-row job through the kernel font service and
@@ -1024,7 +1094,18 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     let Some(lease) = surface.write_lease.take() else {
         return ERROR_STATE;
     };
-    if publish_frame_buffer(lease).is_err() {
+    if surface.gpu_submission_unretired {
+        surface.write_lease = Some(lease);
+        return ERROR_BUSY;
+    }
+    let release = surface.pending_gpu_release.take();
+    let publish = match release {
+        Some(release) => publish_gpgpu_scene_frame_buffer(lease, release),
+        None => publish_frame_buffer(lease),
+    };
+    if publish.is_err() {
+        surface.write_lease = Some(lease);
+        surface.pending_gpu_release = release;
         return ERROR_UI4;
     }
     if damage.width == 0
@@ -1392,6 +1473,9 @@ pub(crate) fn write_opaque_rgba8_chunk(
     let Some(lease) = surface.write_lease else {
         return ERROR_STATE;
     };
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
     let Some(expected) = (surface.width as usize)
         .checked_mul(surface.height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
@@ -1407,6 +1491,10 @@ pub(crate) fn write_opaque_rgba8_chunk(
     let Ok(view) = writable_rgba_view(lease) else {
         return ERROR_UI4;
     };
+    if mark_frame_buffer_cpu_authored(lease).is_err() {
+        return ERROR_UI4;
+    }
+    surface.pending_gpu_release = None;
     let row_bytes = surface.width as usize * 4;
     let pitch = view.pitch as usize;
     let mut source_offset = 0usize;
@@ -1475,6 +1563,17 @@ fn surface_mut(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    if surface.gpu_submission_unretired {
+        let _ = finish_window_session(surface.owner, surface.session);
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "frame quarantine retained owner={:?} window={} frame={} action=close-window+retain-frame-ring+retain-skybox-until-engine-reset\n",
+            surface.owner,
+            surface.window.raw(),
+            surface.frame.raw(),
+        );
+        QUARANTINED_SURFACES.lock().push(surface);
+        return;
+    }
     let request = match release {
         BlueprintSurfaceRelease::Animated => {
             WindowSessionCloseRequest::default().animate_and_retire_frames()

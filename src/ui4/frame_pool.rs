@@ -548,12 +548,30 @@ pub(crate) fn publish_frame_buffer(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
-    if frame.plan.content == FrameContent::RenderScene3d
+    if matches!(
+        frame.plan.content,
+        FrameContent::RenderScene3d | FrameContent::BlueprintScene
+    )
         && frame.gpu_authored[lease.buffer_index as usize]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
     }
     publish_checked_frame(frame, lease)
+}
+
+/// Reclassify a leased RGBA allocation for a complete CPU overwrite path. This
+/// is used only when a compute dispatch was never admitted; an accepted GPU
+/// submission must instead retire or quarantine its exact allocation.
+pub(crate) fn mark_frame_buffer_cpu_authored(
+    lease: FrameWriteLease,
+) -> Result<(), FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    frame.gpu_authored[index] = false;
+    frame.gpu_release[index] = None;
+    Ok(())
 }
 
 /// Publish one GPU-authored resident-scene allocation only after its actual
@@ -593,6 +611,32 @@ pub(crate) fn publish_gpgpu_frame_buffer(
     let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::Image
         || frame.plan.buffering != super::FrameBuffering::Double
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
+    publish_checked_frame(frame, lease)
+}
+
+/// Publish one triple-buffered Blueprint scene shaded directly by a compute
+/// kernel. The release binds the completed shader write to this exact Frame
+/// allocation; display ownership still ends only at SURFLIVE.
+pub(crate) fn publish_gpgpu_scene_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::BlueprintScene
+        || frame.plan.buffering != super::FrameBuffering::Triple
         || !frame.gpu_authored[index]
     {
         return Err(FramePoolError::ProducerReleaseRequired);

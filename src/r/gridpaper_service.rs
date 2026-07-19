@@ -1167,7 +1167,7 @@ fn attach_presentation(
             opacity: u8::MAX,
             visible: true,
         },
-        interaction: crate::ui4::WindowInteraction::APPLICATION,
+        interaction: crate::ui4::WindowInteraction::APPLICATION_FIXED_FRAME,
     })?;
 
     if expose_retained_front

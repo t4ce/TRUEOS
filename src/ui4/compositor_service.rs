@@ -23,7 +23,7 @@ const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 static RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
-static COMPUTE_DOUBLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -261,7 +261,7 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
             return Err(error.into());
         }
     };
-    let plans = [
+    let mut plans = [
         build_plane_plan(
             &runtime.composition.primary,
             &windows,
@@ -287,6 +287,15 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
         ),
     ];
+    // A maximizable direct producer replaces its complete Frame ring after
+    // receiving the broker resize callback. Keep the old exact scanout live
+    // during that short handoff instead of copying/scaling it or reporting a
+    // failed present for the temporary placement/source mismatch.
+    for plan in &mut plans {
+        if plan.changed && direct_resize_handoff_pending(*plan, &windows, &views) {
+            plan.changed = false;
+        }
+    }
     if !plans.iter().any(|plan| plan.changed) {
         release_leases(&leases);
         return Ok(None);
@@ -559,8 +568,12 @@ fn queue_async_plane(
                         !RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
                     ),
                     FrameGpuRelease::Compute(_) => (
-                        "double",
-                        !COMPUTE_DOUBLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
+                        match frame_snapshot(window.frame)?.plan.buffering {
+                            super::FrameBuffering::Single => "single",
+                            super::FrameBuffering::Double => "double",
+                            super::FrameBuffering::Triple => "triple",
+                        },
+                        !COMPUTE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
                     ),
                 };
                 if first_for_producer {
@@ -764,9 +777,11 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                     super::ALPHA_OVERLAY_PLANE_SLOT
                         | super::RGB_OVERLAY_PLANE_SLOT_2
                         | super::RGB_OVERLAY_PLANE_SLOT_3
+                ) && matches!(
+                    (snapshot.plan.content, snapshot.plan.buffering),
+                    (FrameContent::Image, super::FrameBuffering::Double)
+                        | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
                 )
-                    && snapshot.plan.content == FrameContent::Image
-                    && snapshot.plan.buffering == super::FrameBuffering::Double
             }
         }
     })
@@ -794,6 +809,30 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
         && (placement.y as u32)
             .checked_add(placement.height)
             .is_some_and(|bottom| bottom <= output_height)
+}
+
+fn direct_resize_handoff_pending(
+    plan: PlanePlan,
+    windows: &[WindowSnapshot],
+    views: &[FrameRgbaView],
+) -> bool {
+    let CompositionTarget::Overlay(slot) = plan.target else {
+        return false;
+    };
+    let mut selected = windows
+        .iter()
+        .copied()
+        .zip(views.iter().copied())
+        .filter(|(window, _)| window.plane.slot() == slot);
+    let Some((window, view)) = selected.next() else {
+        return false;
+    };
+    selected.next().is_none()
+        && window.state == super::WindowState::Ready
+        && window.interaction.maximizable
+        && window.interaction.receives_input
+        && view.gpu_release.is_some_and(|release| release.matches(view.phys, view.byte_len))
+        && (window.placement.width != view.width || window.placement.height != view.height)
 }
 
 const fn overlay_async_reason(slot: usize) -> &'static str {

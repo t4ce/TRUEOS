@@ -138,6 +138,14 @@ impl WindowInteraction {
         receives_input: false,
     };
 
+    /// The producer consumes application input, but its native frame extent is
+    /// fixed and therefore cannot participate in maximize/restore replacement.
+    pub(crate) const APPLICATION_FIXED_FRAME: Self = Self {
+        movable: true,
+        maximizable: false,
+        receives_input: true,
+    };
+
     /// Full broker interaction for producers which drain owner events and can
     /// replace their frame allocation after a resize notification.
     pub(crate) const APPLICATION: Self = Self {
