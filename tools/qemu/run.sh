@@ -70,8 +70,4 @@ exec env -i \
     -device ich9-intel-hda,id=hda0,bus=pcie.0,addr=0x7 \
     -device hda-duplex,audiodev=snd0,bus=hda0.0 \
     -drive file="${QEMU_NVME_IMG}",format=raw,if=none,id=nvme \
-    -device nvme,serial=deadbeef,drive=nvme \
-    -device qemu-xhci,id=xhci,p2=8,p3=8,bus=pcie.0,addr=0x5 \
-    -device usb-mouse,bus=xhci.0,port=1,id=usbmouse \
-    -device usb-tablet,bus=xhci.0,port=2,id=usbtablet \
-    -device usb-kbd,bus=xhci.0,port=3,id=usbkbd
+    -device nvme,serial=deadbeef,drive=nvme 
