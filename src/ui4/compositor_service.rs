@@ -10,10 +10,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
 use super::{
-    DamageRect, FrameContent, FrameHandle, FramePoolError, FrameReadLease, FrameRgbaView, OutputId,
-    WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame, acquire_published_frame,
-    frame_snapshot, published_rgba_view, release_published_frame, retain_published_frame,
-    visible_windows_for_output,
+    DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
+    FrameRgbaView, OutputId, WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame,
+    acquire_published_frame, frame_snapshot, published_rgba_view, release_published_frame,
+    retain_published_frame, visible_windows_for_output,
 };
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
@@ -23,6 +23,7 @@ const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static COMPUTE_DOUBLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -126,7 +127,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand draw3d=slot3-triple-direct-import per_frame_draw3d_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-double video=parked\n",
+        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import draw3d=slot3-triple-direct-import per_frame_draw3d_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=parked\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -533,16 +534,15 @@ fn queue_async_plane(
         );
     }
     if let CompositionTarget::Overlay(slot) = plan.target {
-        let released_draw3d = selected
+        let released_gpu = selected
             .iter()
             .any(|(_, view)| view.gpu_release.is_some());
-        if released_draw3d
-            && (slot != super::RGB_OVERLAY_PLANE_SLOT_3
-                || selected.len() != 1
+        if released_gpu
+            && (selected.len() != 1
                 || !direct_overlay_eligible(selected[0].0, selected[0].1))
         {
             crate::log_warn!(target: "ui4";
-                "ui4/direct-present: released Draw3D frame rejected slot={} windows={} action=retain-front-and-retry no-copy-fallback=1\n",
+                "ui4/direct-present: released GPU frame rejected slot={} windows={} action=retain-front-and-retry no-copy-fallback=1\n",
                 slot,
                 selected.len(),
             );
@@ -552,13 +552,23 @@ fn queue_async_plane(
             && selected.len() == 1
             && direct_overlay_eligible(window, view)
         {
-            if view.gpu_release.is_some()
-                && !DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
-            {
-                crate::log_info!(target: "ui4";
-                    "ui4/direct-present: compositor-rewire frame={} slot={} producer=draw3d-gpu-authored buffering=triple action=import-complete-buffer-and-flip per_frame_guc_jobs=0 render_release_sequence={} display_release=surflive cpu_frame_copy=0\n",
-                    window.frame.raw(), slot, view.gpu_release.map_or(0, |release| release.sequence()),
-                );
+            if let Some(release) = view.gpu_release {
+                let (buffering, first_for_producer) = match release {
+                    FrameGpuRelease::Draw3d(_) => (
+                        "triple",
+                        !DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
+                    ),
+                    FrameGpuRelease::Compute(_) => (
+                        "double",
+                        !COMPUTE_DOUBLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
+                    ),
+                };
+                if first_for_producer {
+                    crate::log_info!(target: "ui4";
+                        "ui4/direct-present: compositor-rewire frame={} slot={} producer={} gpu_authored=1 buffering={} action=import-complete-buffer-and-flip per_frame_guc_jobs=0 producer_release_sequence={} display_release=surflive cpu_frame_copy=0\n",
+                        window.frame.raw(), slot, release.producer_label(), buffering, release.sequence(),
+                    );
+                }
             }
             let lease_index = pending
                 .windows
@@ -726,13 +736,33 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     if !view.gpu_authored {
         return true;
     }
-    // The renderer's final PIPE_CONTROL release covers the exact allocation.
-    // The compositor read lease then prevents reuse through the SURFLIVE
-    // latch; no copy or CPU cache sweep is part of the transition.
+    let Some(release) = view.gpu_release else {
+        return false;
+    };
+    if !release.matches(view.phys, view.byte_len) {
+        return false;
+    }
+    // Each producer's final PIPE_CONTROL release covers this exact allocation.
+    // The compositor read lease then prevents reuse through the SURFLIVE latch;
+    // no copy or CPU cache sweep is part of either transition.
     frame_snapshot(window.frame).is_ok_and(|snapshot| {
-        snapshot.plan.content == FrameContent::RenderScene3d
-            && snapshot.plan.buffering == super::FrameBuffering::Triple
-            && view.gpu_release.is_some()
+        match release {
+            FrameGpuRelease::Draw3d(_) => {
+                window.plane.slot() == super::RGB_OVERLAY_PLANE_SLOT_3
+                    && snapshot.plan.content == FrameContent::RenderScene3d
+                    && snapshot.plan.buffering == super::FrameBuffering::Triple
+            }
+            FrameGpuRelease::Compute(_) => {
+                matches!(
+                    window.plane.slot(),
+                    super::ALPHA_OVERLAY_PLANE_SLOT
+                        | super::RGB_OVERLAY_PLANE_SLOT_2
+                        | super::RGB_OVERLAY_PLANE_SLOT_3
+                )
+                    && snapshot.plan.content == FrameContent::Image
+                    && snapshot.plan.buffering == super::FrameBuffering::Double
+            }
+        }
     })
 }
 

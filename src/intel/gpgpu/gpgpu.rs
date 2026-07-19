@@ -889,6 +889,15 @@ const PIXEL_PLASMA_PRE_MARKER_SLOT: usize = 31;
 const PIXEL_PLASMA_POST_MARKER_SLOT: usize = 30;
 const PIXEL_PLASMA_PRE_MARKER: u32 = 0xC0DE_A801;
 const PIXEL_PLASMA_POST_MARKER: u32 = 0xC0DE_A802;
+
+// A UI4 compute producer may be queued behind the compositor on RCS0. In
+// particular, the first use of each primary swap buffer seeds and composes a
+// full scanout-sized surface, which is deliberately allowed to take much
+// longer than one 33 ms preview cadence. This timeout proves retirement and
+// ownership transfer; it is not a frame-time target. Returning early after a
+// successful submit would let UI4 cancel/reuse a lease while the GPU can still
+// write it.
+const UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS: u64 = 1_000;
 const FONT_OUTLINE_MESH_IDD_OFFSET_BYTES: usize = 0x4E00;
 const FONT_OUTLINE_MESH_BINDING_TABLE_OFFSET_BYTES: usize = 0x4E40;
 const FONT_OUTLINE_MESH_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x4E80;
@@ -1075,7 +1084,7 @@ const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
 
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
-const DIRECT_RCS_TIMEOUT_POLL_ITERS: usize = 65_536;
+const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;
 
 
 
@@ -1132,6 +1141,8 @@ static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
+static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
@@ -2238,6 +2249,7 @@ pub(crate) struct GpgpuSolidRect {
 pub(crate) struct GpgpuShellMandel64WorklistResult {
     pub(crate) ok: bool,
     pub(crate) submitted: bool,
+    pub(crate) marker: u32,
     pub(crate) requested: usize,
     pub(crate) descriptors: usize,
     pub(crate) walkers: usize,
@@ -2246,6 +2258,9 @@ pub(crate) struct GpgpuShellMandel64WorklistResult {
     pub(crate) desc_gpu: u64,
     pub(crate) last_src_xy: GpgpuPoint,
     pub(crate) last_dst_xy: GpgpuPoint,
+    /// Present only for a complete direct-scanout render whose final
+    /// PIPE_CONTROL and post-sync marker retired for this exact allocation.
+    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
 }
 
 /// Common result for a full-surface compute node that does not own
@@ -2256,6 +2271,37 @@ pub(crate) struct GpgpuRgba8KernelResult {
     pub(crate) submitted: bool,
     pub(crate) marker: u32,
     pub(crate) submit_ms: u64,
+    /// Exact-surface producer release, minted only after the kernel's final
+    /// cache-draining PIPE_CONTROL and post-sync marker have retired.
+    pub(crate) release: Option<GpgpuRgba8ReleaseFence>,
+}
+
+/// Proof that one full-surface compute dispatch retired its producer-release
+/// packet for one exact allocation. The fields stay private so consumers
+/// cannot manufacture display eligibility from an address alone.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GpgpuRgba8ReleaseFence {
+    phys: u64,
+    byte_len: usize,
+    sequence: u64,
+}
+
+impl GpgpuRgba8ReleaseFence {
+    pub(crate) const fn matches(self, phys: u64, byte_len: usize) -> bool {
+        self.phys == phys && self.byte_len == byte_len
+    }
+
+    pub(crate) const fn sequence(self) -> u64 {
+        self.sequence
+    }
+}
+
+static GPGPU_RGBA8_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Copy, Clone, Debug, Default)]
+struct DirectRcsDispatchOutcome {
+    submitted: bool,
+    observed: u32,
 }
 
 
@@ -4635,14 +4681,15 @@ pub(crate) async fn gpu_completion_reaper_task() {
 
 
 
-/// Render a complete Mandelbrot image into an arbitrary trusted RGBA surface.
-/// Parameter zero is a real zero state: the GPU clears the frame to opaque
-/// black. Parameters 1..=512 use the existing Mandel worklist artifact.
+/// Render a complete Mandelbrot image into a trusted UI4 direct-scanout
+/// surface. Parameters 1..=512 retain the existing descriptor worklist and
+/// GuC submission; only the destination mapping and ownership result use the
+/// display handoff contract.
 pub(crate) fn mandel64_worklist_surface_full(
     dst: GpgpuRgba8Surface,
     iterations: u32,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
-    mandel64_worklist_surface_view_mode(dst, dst.bounds(), iterations, true)
+    mandel64_worklist_surface_view_mode(dst, dst.bounds(), iterations, true, true)
 }
 
 /// Render the analytical chart node into an arbitrary trusted RGBA surface.
@@ -4656,12 +4703,14 @@ pub(crate) fn chart_sine_rgba8_surface_full(
     let mut params = ChartSineRgba8Params::scope_defaults(phase, flags);
     params.rect_width = dst.width;
     params.rect_height = dst.height;
-    let marker = submit_chart_sine_rgba8(dst, params).unwrap_or(0);
+    let outcome = submit_chart_sine_rgba8(dst, params);
+    let ok = outcome.observed == CHART_SINE_POST_MARKER;
     GpgpuRgba8KernelResult {
-        ok: marker == CHART_SINE_POST_MARKER,
-        submitted: marker == CHART_SINE_POST_MARKER,
-        marker,
+        ok,
+        submitted: outcome.submitted,
+        marker: outcome.observed,
         submit_ms: direct_rcs_elapsed_ms_since(start_tick),
+        release: ok.then(|| gpgpu_rgba8_release(dst)),
     }
 }
 
@@ -4676,12 +4725,26 @@ pub(crate) fn pixel_plasma_rgba8_surface_full(
     let mut params = PixelPlasmaRgba8Params::demo_defaults(time, flags);
     params.rect_width = dst.width;
     params.rect_height = dst.height;
-    let marker = submit_pixel_plasma_rgba8(dst, params).unwrap_or(0);
+    let outcome = submit_pixel_plasma_rgba8(dst, params);
+    let ok = outcome.observed == PIXEL_PLASMA_POST_MARKER;
     GpgpuRgba8KernelResult {
-        ok: marker == PIXEL_PLASMA_POST_MARKER,
-        submitted: marker == PIXEL_PLASMA_POST_MARKER,
-        marker,
+        ok,
+        submitted: outcome.submitted,
+        marker: outcome.observed,
         submit_ms: direct_rcs_elapsed_ms_since(start_tick),
+        release: ok.then(|| gpgpu_rgba8_release(dst)),
+    }
+}
+
+fn gpgpu_rgba8_release(dst: GpgpuRgba8Surface) -> GpgpuRgba8ReleaseFence {
+    let sequence = GPGPU_RGBA8_RELEASE_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    GpgpuRgba8ReleaseFence {
+        phys: dst.phys,
+        byte_len: dst.bytes,
+        sequence,
     }
 }
 
@@ -4692,12 +4755,20 @@ fn mandel64_worklist_surface_view_mode(
     view: GpgpuRect,
     iterations: u32,
     mirror_at_center: bool,
+    direct_scanout: bool,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
     if !dst.is_valid()
         || dst.width < MANDEL64_WORKLIST_CELL_PIXELS
         || dst.height < MANDEL64_WORKLIST_CELL_PIXELS
         || view.is_empty()
     {
+        return None;
+    }
+
+    if iterations == 0 && direct_scanout {
+        // Direct publication requires an exact producer-release token. The
+        // preview never requests zero iterations, and the ordinary fill path
+        // deliberately does not manufacture one.
         return None;
     }
 
@@ -4740,6 +4811,7 @@ fn mandel64_worklist_surface_view_mode(
     let mut desc_gpu = 0u64;
     let mut last_src_xy = GpgpuPoint::new(0, 0);
     let mut last_dst_xy = GpgpuPoint::new(0, 0);
+    let mut last_marker = 0u32;
     let mut submitted_tiles = 0usize;
     let mut index = 0usize;
     while index < count {
@@ -4770,7 +4842,11 @@ fn mandel64_worklist_surface_view_mode(
             });
         }
 
-        let result = mandel64_worklist_surface(dst, placements.as_slice())?;
+        let result = mandel64_worklist_surface_with_policy(
+            dst,
+            placements.as_slice(),
+            direct_scanout,
+        )?;
         submitted &= result.submitted;
         submitted_tiles = submitted_tiles.saturating_add(result.requested);
         descriptors = descriptors.saturating_add(result.descriptors);
@@ -4780,15 +4856,20 @@ fn mandel64_worklist_surface_view_mode(
         desc_gpu = result.desc_gpu;
         last_src_xy = result.last_src_xy;
         last_dst_xy = result.last_dst_xy;
+        last_marker = result.marker;
         if !result.ok {
             break;
         }
         index = end;
     }
 
+    let ok = submitted
+        && submitted_tiles == count
+        && last_marker == MANDEL64_WORKLIST_POST_MARKER;
     Some(GpgpuShellMandel64WorklistResult {
-        ok: submitted && submitted_tiles == count,
+        ok,
         submitted,
+        marker: last_marker,
         requested: count,
         descriptors,
         walkers,
@@ -4797,7 +4878,7 @@ fn mandel64_worklist_surface_view_mode(
         desc_gpu,
         last_src_xy,
         last_dst_xy,
-        ..GpgpuShellMandel64WorklistResult::default()
+        release: (ok && direct_scanout).then(|| gpgpu_rgba8_release(dst)),
     })
 }
 
@@ -4806,6 +4887,14 @@ fn mandel64_worklist_surface_view_mode(
 pub(crate) fn mandel64_worklist_surface(
     dst: GpgpuRgba8Surface,
     placements: &[GpgpuMandel64Placement],
+) -> Option<GpgpuShellMandel64WorklistResult> {
+    mandel64_worklist_surface_with_policy(dst, placements, false)
+}
+
+fn mandel64_worklist_surface_with_policy(
+    dst: GpgpuRgba8Surface,
+    placements: &[GpgpuMandel64Placement],
+    direct_scanout: bool,
 ) -> Option<GpgpuShellMandel64WorklistResult> {
     if !dst.is_valid()
         || dst.width < MANDEL64_WORKLIST_CELL_PIXELS
@@ -4922,12 +5011,14 @@ pub(crate) fn mandel64_worklist_surface(
     let walkers = mandel64_worklist_walker_count(desc_count);
 
     let submit_start_tick = direct_rcs_now_tick();
-    let submitted = submit_mandel64_worklist(dst, desc, params);
+    let outcome = submit_mandel64_worklist(dst, desc, params, direct_scanout);
     let submit_ms = direct_rcs_elapsed_ms_since(submit_start_tick);
+    let ok = outcome.observed == MANDEL64_WORKLIST_POST_MARKER;
 
     Some(GpgpuShellMandel64WorklistResult {
-        ok: submitted,
-        submitted,
+        ok,
+        submitted: outcome.submitted,
+        marker: outcome.observed,
         requested: count,
         descriptors: desc_count,
         walkers,
@@ -4936,6 +5027,7 @@ pub(crate) fn mandel64_worklist_surface(
         desc_gpu: desc.gpu,
         last_src_xy,
         last_dst_xy,
+        release: None,
     })
 }
 
@@ -6223,7 +6315,7 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
 fn submit_chart_sine_rgba8(
     dst: GpgpuRgba8Surface,
     mut params: ChartSineRgba8Params,
-) -> Option<u32> {
+) -> DirectRcsDispatchOutcome {
     if !dst.is_valid()
         || params.rect_width == 0
         || params.rect_height == 0
@@ -6232,10 +6324,10 @@ fn submit_chart_sine_rgba8(
         || !params.amplitude.is_finite()
         || !params.line_width_px.is_finite()
     {
-        return None;
+        return DirectRcsDispatchOutcome::default();
     }
     if params.rect_x >= dst.width || params.rect_y >= dst.height {
-        return None;
+        return DirectRcsDispatchOutcome::default();
     }
     params.dst_gpu = dst.gpu;
     params.dst_pitch_bytes = dst.pitch_bytes;
@@ -6254,18 +6346,22 @@ fn submit_chart_sine_rgba8(
             target: "gpgpu";
             "intel/gpgpu: chart-sine-rgba8 submit rejected reason=no-claimed-device\n"
         );
-        return None;
+        return DirectRcsDispatchOutcome::default();
     };
-    let upload = upload_chart_sine_rgba8_kernel()?;
-    let state = direct_rcs_state_once(dev)?;
+    let Some(upload) = upload_chart_sine_rgba8_kernel() else {
+        return DirectRcsDispatchOutcome::default();
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return DirectRcsDispatchOutcome::default();
+    };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok =
         dst_ppgtt_ok && direct_rcs_encode_chart_sine_rgba8_batch(state, upload, params, dst.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
@@ -6274,12 +6370,15 @@ fn submit_chart_sine_rgba8(
             state,
             CHART_SINE_POST_MARKER_SLOT,
             CHART_SINE_POST_MARKER,
-            50,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
         )
     } else {
         0
     };
     if observed != CHART_SINE_POST_MARKER {
+        if submitted {
+            quarantine_direct_rcs_context("chart-sine-marker-timeout");
+        }
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: chart-sine-rgba8 failed forcewake={} mapped={} ppgtt={} kernel={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} size={}x{} kernel_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -6297,15 +6396,21 @@ fn submit_chart_sine_rgba8(
             upload.gpu,
             dst.gpu
         );
-        return None;
+        return DirectRcsDispatchOutcome {
+            submitted,
+            observed,
+        };
     }
-    Some(observed)
+    DirectRcsDispatchOutcome {
+        submitted,
+        observed,
+    }
 }
 
 fn submit_pixel_plasma_rgba8(
     dst: GpgpuRgba8Surface,
     mut params: PixelPlasmaRgba8Params,
-) -> Option<u32> {
+) -> DirectRcsDispatchOutcome {
     if !dst.is_valid()
         || params.rect_width == 0
         || params.rect_height == 0
@@ -6313,10 +6418,10 @@ fn submit_pixel_plasma_rgba8(
         || !params.spatial_scale.is_finite()
         || !params.intensity.is_finite()
     {
-        return None;
+        return DirectRcsDispatchOutcome::default();
     }
     if params.rect_x >= dst.width || params.rect_y >= dst.height {
-        return None;
+        return DirectRcsDispatchOutcome::default();
     }
     params.dst_gpu = dst.gpu;
     params.dst_pitch_bytes = dst.pitch_bytes;
@@ -6332,25 +6437,29 @@ fn submit_pixel_plasma_rgba8(
             target: "gpgpu";
             "intel/gpgpu: pixel-plasma-rgba8 submit rejected reason=direct-submit-busy\n"
         );
-        return None;
+        return DirectRcsDispatchOutcome::default();
     };
     let Some(dev) = super::claimed_device() else {
         crate::log_warn!(
             target: "gpgpu";
             "intel/gpgpu: pixel-plasma-rgba8 submit rejected reason=no-claimed-device\n"
         );
-        return None;
+        return DirectRcsDispatchOutcome::default();
     };
-    let upload = upload_pixel_plasma_rgba8_kernel()?;
-    let state = direct_rcs_state_once(dev)?;
+    let Some(upload) = upload_pixel_plasma_rgba8_kernel() else {
+        return DirectRcsDispatchOutcome::default();
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return DirectRcsDispatchOutcome::default();
+    };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_pixel_plasma_rgba8_batch(state, upload, params, dst.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
@@ -6359,12 +6468,15 @@ fn submit_pixel_plasma_rgba8(
             state,
             PIXEL_PLASMA_POST_MARKER_SLOT,
             PIXEL_PLASMA_POST_MARKER,
-            50,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
         )
     } else {
         0
     };
     if observed != PIXEL_PLASMA_POST_MARKER {
+        if submitted {
+            quarantine_direct_rcs_context("pixel-plasma-marker-timeout");
+        }
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: pixel-plasma-rgba8 failed forcewake={} mapped={} ppgtt={} kernel={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} size={}x{} kernel_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -6382,9 +6494,15 @@ fn submit_pixel_plasma_rgba8(
             upload.gpu,
             dst.gpu
         );
-        return None;
+        return DirectRcsDispatchOutcome {
+            submitted,
+            observed,
+        };
     }
-    Some(observed)
+    DirectRcsDispatchOutcome {
+        submitted,
+        observed,
+    }
 }
 
 pub(crate) fn shell_font_outline_probe(
@@ -6843,19 +6961,20 @@ fn submit_mandel64_worklist(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,
     params: Mandel64WorklistRgba8Params,
-) -> bool {
+    direct_scanout: bool,
+) -> DirectRcsDispatchOutcome {
     if params.desc_count == 0 || params.desc_count as usize > MANDEL64_WORKLIST_MAX_DESCS {
-        return false;
+        return DirectRcsDispatchOutcome::default();
     }
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
-        return false;
+        return DirectRcsDispatchOutcome::default();
     };
     let Some(upload) = upload_mandel64_worklist_rgba8_kernel() else {
-        return false;
+        return DirectRcsDispatchOutcome::default();
     };
     let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
+        return DirectRcsDispatchOutcome::default();
     };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -6863,14 +6982,25 @@ fn submit_mandel64_worklist(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && if direct_scanout {
+            direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+        } else {
+            direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes)
+        };
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
         && direct_rcs_encode_mandel64_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
+    let observed = if submitted && direct_scanout {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            RECT_WORKLIST_POST_MARKER_SLOT,
+            MANDEL64_WORKLIST_POST_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        )
+    } else if submitted {
         direct_rcs_poll_result_slot(
             state,
             RECT_WORKLIST_POST_MARKER_SLOT,
@@ -6879,7 +7009,31 @@ fn submit_mandel64_worklist(
     } else {
         0
     };
-    observed == MANDEL64_WORKLIST_POST_MARKER
+    if observed != MANDEL64_WORKLIST_POST_MARKER {
+        if submitted && direct_scanout {
+            quarantine_direct_rcs_context("mandel64-worklist-marker-timeout");
+        }
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: mandel64-worklist failed direct_scanout={} mapped={} ppgtt={} kernel={} dst={} desc={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} descs={} dst_gpu=0x{:X}\n",
+            direct_scanout as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ppgtt_ok as u8,
+            dst_ppgtt_ok as u8,
+            desc_ppgtt_ok as u8,
+            batch_ok as u8,
+            submitted as u8,
+            observed,
+            MANDEL64_WORKLIST_POST_MARKER,
+            params.desc_count,
+            dst.gpu,
+        );
+    }
+    DirectRcsDispatchOutcome {
+        submitted,
+        observed,
+    }
 }
 
 
@@ -7467,6 +7621,34 @@ fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
 fn direct_rcs_map_ppgtt_kernel(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
     let ok = direct_rcs_map_ppgtt_region(state, gpu, phys, len, direct_rcs_ppgtt_pte_flags());
     ok && direct_rcs_flush_ppgtt_pte_range(state, gpu, len)
+}
+
+/// Map a full-surface compute destination that will transfer directly to the
+/// display engine. PAT3/UC is the same producer-side cache contract used by
+/// Draw3D direct targets; ordinary kernels and resources remain PAT0/WB.
+fn direct_rcs_map_ppgtt_scanout(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+) -> bool {
+    if !super::gen12_integrated_pat_ready() {
+        return false;
+    }
+    let pte_present_rw_pat3_uc =
+        direct_rcs_ppgtt_pte_flags() | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
+    let ok = direct_rcs_map_ppgtt_region(state, gpu, phys, len, pte_present_rw_pat3_uc)
+        && direct_rcs_flush_ppgtt_pte_range(state, gpu, len);
+    if ok && !DIRECT_RCS_SCANOUT_PPGTT_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: direct-rgba8 scanout target mapped gpu=0x{:X} phys=0x{:X} bytes=0x{:X} ppgtt_pat=3 ppgtt_cache=uc ordinary_resources=pat0-wb\n",
+            gpu,
+            phys,
+            len,
+        );
+    }
+    ok
 }
 
 /// Publish only the PTEs changed by one mapping. The PML4/PDP/PD topology is
@@ -11057,8 +11239,24 @@ fn direct_rcs_push_sba_size(
 }
 
 fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
+    if DIRECT_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire) {
+        return false;
+    }
     let mut runtime = DIRECT_RCS_SUBMIT_RUNTIME.lock();
     direct_rcs_submit_batch_for(dev, state, &mut runtime, crate::gpu::vgpu::KernelClient::Gpgpu)
+}
+
+fn quarantine_direct_rcs_context(reason: &'static str) {
+    if DIRECT_RCS_CONTEXT_QUARANTINED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: direct-rcs context quarantined reason={} action=reject-future-direct-submits-until-reboot late-batch-reuse=forbidden\n",
+            reason,
+        );
+    }
 }
 
 fn direct_rcs_submit_batch_for(
@@ -11185,27 +11383,28 @@ fn direct_rcs_poll_result_slot_timeout_ms(
     if log_probe {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: marker-poll begin slot={} expected=0x{:08X} timeout_ms={} poll_limit={} cache_flush_bytes=4 worker_slot={}\n",
+            "intel/gpgpu: marker-poll begin slot={} expected=0x{:08X} timeout_ms={} completion_limit=deadline cache_flush_bytes=4 pause_iters={} worker_slot={}\n",
             slot,
             expected,
             timeout_ms,
-            DIRECT_RCS_TIMEOUT_POLL_ITERS,
+            DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS,
             crate::percpu::current_slot(),
         );
     }
-    let mut observed = 0;
     let mut iterations = 0usize;
-    for _ in 0..DIRECT_RCS_TIMEOUT_POLL_ITERS {
+    let observed = loop {
         iterations = iterations.saturating_add(1);
-        observed = direct_rcs_read_result_slot(state, slot);
+        let observed = direct_rcs_read_result_slot(state, slot);
         if observed == expected {
-            break;
+            break observed;
         }
         if direct_rcs_now_tick() >= deadline {
-            break;
+            break observed;
         }
-        core::hint::spin_loop();
-    }
+        for _ in 0..DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS {
+            core::hint::spin_loop();
+        }
+    };
     if log_probe {
         crate::log_info!(
             target: "gpgpu";

@@ -17,7 +17,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu preview start <static|static30|mandelbrot|chart|plasma> [duration_ms] [cadence_ms] [publish_every]",
+        "gpgpu preview start [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
@@ -42,24 +42,6 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         return;
     };
     if action.eq_ignore_ascii_case("start") {
-        let Some(preset_name) = args.next() else {
-            usage(io);
-            return;
-        };
-        let preset = if preset_name.eq_ignore_ascii_case("static") {
-            crate::ui4::GpgpuPreviewPreset::Static
-        } else if preset_name.eq_ignore_ascii_case("static30") {
-            crate::ui4::GpgpuPreviewPreset::Static30
-        } else if preset_name.eq_ignore_ascii_case("mandelbrot") {
-            crate::ui4::GpgpuPreviewPreset::Mandelbrot
-        } else if preset_name.eq_ignore_ascii_case("chart") {
-            crate::ui4::GpgpuPreviewPreset::Chart
-        } else if preset_name.eq_ignore_ascii_case("plasma") {
-            crate::ui4::GpgpuPreviewPreset::Plasma
-        } else {
-            usage(io);
-            return;
-        };
         let duration_ms = match args.next() {
             Some(raw) => match raw.parse::<u64>() {
                 Ok(value) => value,
@@ -93,6 +75,7 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         if !expect_no_more(io, args) {
             return;
         }
+        let preset = crate::ui4::GpgpuPreviewPreset::All;
         let config = crate::ui4::GpgpuPreviewConfig {
             preset,
             duration_ms,
@@ -105,9 +88,8 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 buffering={} plane_layout={} interaction=movable-fixed-size",
+                        "gpgpu preview start: queued=1 request={} demos=mandelbrot+chart+plasma service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 frames=3 windows=3 buffering={} plane_layout={} slot_policy=fixed-per-window/no-round-robin interaction=movable-fixed-size",
                         serial,
-                        preset.label(),
                         status.online as u8,
                         duration_ms,
                         cadence_ms,
@@ -145,7 +127,7 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} buffering={} plane_layout={} interaction=movable-fixed-size error={}",
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} buffering={} plane_layout={} interaction=movable-fixed-size error={}",
             status.online as u8,
             status.phase.label(),
             status.desired_running as u8,
@@ -165,15 +147,36 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             status.metrics.failed,
             status.metrics.late,
             status.metrics.elapsed_ms,
-            status.metrics.last_iterations,
-            status.metrics.last_marker,
-            status.metrics.last_submit_ms,
             status.config.preset.buffering_label(),
             status.config.preset.plane_layout_label(),
             status.last_error,
         )
         .as_str(),
     );
+    for member in status.members {
+        print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu preview member: preset={} slot={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} engine_ready_boundary=surflive",
+                member.preset.label(),
+                member.plane_slot,
+                member.frame.map(|frame| frame.raw()).unwrap_or(0),
+                member.window.map(|window| window.raw()).unwrap_or(0),
+                member.metrics.attempted,
+                member.metrics.submitted,
+                member.metrics.completed,
+                member.metrics.published,
+                member.metrics.dropped_busy,
+                member.metrics.failed,
+                member.metrics.late,
+                member.metrics.elapsed_ms,
+                member.metrics.last_iterations,
+                member.metrics.last_marker,
+                member.metrics.last_submit_ms,
+            )
+            .as_str(),
+        );
+    }
 }
 
 fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {

@@ -50,6 +50,38 @@ pub(crate) struct FrameReadLease {
     pub(crate) buffer_index: u8,
 }
 
+/// Trusted producer-release proof carried with one published GPU-authored
+/// allocation. Each variant is minted by the engine that performed the final
+/// write, and both bind the proof to the exact physical surface.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FrameGpuRelease {
+    Draw3d(crate::intel::render::ResidentSceneReleaseFence),
+    Compute(crate::intel::gpgpu::GpgpuRgba8ReleaseFence),
+}
+
+impl FrameGpuRelease {
+    pub(crate) const fn matches(self, phys: u64, byte_len: usize) -> bool {
+        match self {
+            Self::Draw3d(release) => release.matches(phys, byte_len),
+            Self::Compute(release) => release.matches(phys, byte_len),
+        }
+    }
+
+    pub(crate) const fn sequence(self) -> u64 {
+        match self {
+            Self::Draw3d(release) => release.sequence(),
+            Self::Compute(release) => release.sequence(),
+        }
+    }
+
+    pub(crate) const fn producer_label(self) -> &'static str {
+        match self {
+            Self::Draw3d(_) => "draw3d",
+            Self::Compute(_) => "gpgpu-compute",
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct FrameRgbaView {
     pub(crate) phys: u64,
@@ -62,9 +94,9 @@ pub(crate) struct FrameRgbaView {
     /// This exact buffer has been exposed as a GPU render/compute target since
     /// it was acquired. Direct scanout additionally requires `gpu_release`.
     pub(crate) gpu_authored: bool,
-    /// Retired render release for this exact allocation. GPU-authored Draw3D
-    /// frames are not eligible for publication or scanout without it.
-    pub(crate) gpu_release: Option<crate::intel::render::ResidentSceneReleaseFence>,
+    /// Retired producer release for this exact allocation. Released GPU
+    /// frames may direct-scan only through their producer-specific contract.
+    pub(crate) gpu_release: Option<FrameGpuRelease>,
 }
 
 unsafe impl Send for FrameRgbaView {}
@@ -106,7 +138,7 @@ struct FrameRecord {
     acquired: Option<AcquiredBuffer>,
     readers: [u16; 3],
     gpu_authored: [bool; 3],
-    gpu_release: [Option<crate::intel::render::ResidentSceneReleaseFence>; 3],
+    gpu_release: [Option<FrameGpuRelease>; 3],
     next_token: u64,
     publish_serial: u64,
 }
@@ -543,7 +575,34 @@ pub(crate) fn publish_gpu_frame_buffer(
     if !release.matches(access.phys, access.byte_len) {
         return Err(FramePoolError::InvalidLease);
     }
-    frame.gpu_release[index] = Some(release);
+    frame.gpu_release[index] = Some(FrameGpuRelease::Draw3d(release));
+    publish_checked_frame(frame, lease)
+}
+
+/// Publish one full-surface compute allocation only after its final
+/// PIPE_CONTROL and post-sync marker retired. This is the double-buffered
+/// counterpart to Draw3D publication: metadata changes ownership, while the
+/// CPU neither reads nor copies the pixels.
+pub(crate) fn publish_gpgpu_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::Image
+        || frame.plan.buffering != super::FrameBuffering::Double
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
     publish_checked_frame(frame, lease)
 }
 

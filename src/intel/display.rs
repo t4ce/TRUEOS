@@ -8326,7 +8326,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         .saturating_add(1);
     if should_log_ui4_direct_checkpoint(queue_sequence) {
         crate::log_trace!(target: "ui4";
-            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
+            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
             queue_sequence,
             reason,
             plane_slot,
@@ -8593,7 +8593,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
             .saturating_add(1);
         if should_log_ui4_direct_checkpoint(scanout_sequence) {
             crate::log_info!(target: "ui4";
-                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",
+                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 engine_output_ready=surflive ownership=display-live elapsed_us={}\n",
                 scanout_sequence,
                 composition.reason,
                 surface.plane_slot,
