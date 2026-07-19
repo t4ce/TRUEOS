@@ -205,6 +205,9 @@ struct PlaneSurfaceFlip {
     plane_base: usize,
     surface_reg: u32,
     geometry: Option<PlaneSurfaceGeometry>,
+    /// Hardware plane opacity. `None` is used by the opaque primary plane;
+    /// overlays always stage an explicit value with the SURF transaction.
+    constant_alpha: Option<u8>,
 }
 
 #[derive(Copy, Clone)]
@@ -894,6 +897,7 @@ struct Ui4DirectOverlaySurface {
     alias_index: usize,
     pos_x: u32,
     pos_y: u32,
+    opacity: u8,
     producer_frame: u64,
     producer_buffer_index: u8,
     producer_publish_serial: u64,
@@ -2853,6 +2857,7 @@ fn program_primary_plane_source_for_pipeline(
         match queue_ui4_plane_surface_flip(
             pipe.primary_plane().base(),
             surface_reg,
+            None,
             None,
             reason,
         ) {
@@ -5600,9 +5605,9 @@ fn wait_for_plane_live_for(
     (live, iter)
 }
 
-/// Begin one bounded UI4 display transaction. Plane format, DBUF, watermarks,
-/// alpha and color state remain fixed; a plane may stage its linear RGBA
-/// geometry together with the double-buffered SURF address.
+/// Begin one bounded UI4 display transaction. Plane format, DBUF, watermarks
+/// and pixel-alpha interpretation remain fixed. An overlay may stage its
+/// constant opacity together with linear RGBA geometry and the SURF address.
 pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
     if crate::intel::claimed_device().is_none() {
         return false;
@@ -5627,6 +5632,7 @@ fn queue_ui4_plane_surface_flip(
     plane_base: usize,
     surface_reg: u32,
     geometry: Option<PlaneSurfaceGeometry>,
+    constant_alpha: Option<u8>,
     reason: &str,
 ) -> PlaneSurfaceFlipQueueResult {
     // This transaction belongs exclusively to the application compositor.
@@ -5653,7 +5659,10 @@ fn queue_ui4_plane_surface_flip(
     }
     for entry in batch.entries[..batch.len].iter().flatten() {
         if entry.plane_base == plane_base {
-            return if entry.surface_reg == surface_reg && entry.geometry == geometry {
+            return if entry.surface_reg == surface_reg
+                && entry.geometry == geometry
+                && entry.constant_alpha == constant_alpha
+            {
                 PlaneSurfaceFlipQueueResult::Queued
             } else {
                 PlaneSurfaceFlipQueueResult::Rejected
@@ -5668,6 +5677,7 @@ fn queue_ui4_plane_surface_flip(
         plane_base,
         surface_reg,
         geometry,
+        constant_alpha,
     });
     batch.len += 1;
     PlaneSurfaceFlipQueueResult::Queued
@@ -5708,6 +5718,9 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
                 geometry.offset_reg,
             );
         }
+        if let Some(alpha) = entry.constant_alpha {
+            program_overlay_plane_constant_alpha(dev, entry.plane_base, alpha);
+        }
         crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SURF_OFF, entry.surface_reg);
     }
     true
@@ -5727,10 +5740,16 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     batch.polls = batch.polls.saturating_add(1);
     let mut live = [0u32; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY];
     let mut live_mask = 0u32;
+    let mut alpha_mask = 0u32;
     for (index, entry) in batch.entries[..batch.len].iter().flatten().enumerate() {
         live[index] = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_SURFLIVE_OFF);
         if live[index] == entry.surface_reg {
             live_mask |= 1u32 << index;
+        }
+        if entry.constant_alpha.is_none_or(|alpha| {
+            overlay_plane_constant_alpha_matches(dev, entry.plane_base, alpha)
+        }) {
+            alpha_mask |= 1u32 << index;
         }
     }
     let want_mask = if batch.len == 0 {
@@ -5739,7 +5758,7 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         (1u32 << batch.len) - 1
     };
     let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(batch.submitted_ns);
-    let committed = live_mask == want_mask;
+    let committed = live_mask == want_mask && alpha_mask == want_mask;
     let timed_out = !committed && elapsed_ns >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS;
     if !committed && !timed_out {
         return Ui4PlaneSurfaceFlipPoll::Pending;
@@ -5748,11 +5767,12 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     let seq = UI4_PLANE_SURFACE_FLIP_BATCH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if timed_out || seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surf-addresses-together wait=async\n",
+            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} alpha_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surface+plane-alpha-together wait=async\n",
             seq,
             committed as u8,
             batch.len,
             live_mask,
+            alpha_mask,
             want_mask,
             batch.polls,
             elapsed_ns,
@@ -5760,13 +5780,18 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     }
     if timed_out {
         for (index, entry) in batch.entries[..batch.len].iter().flatten().enumerate() {
-            if live[index] != entry.surface_reg {
+            let alpha_ok = entry.constant_alpha.is_none_or(|alpha| {
+                overlay_plane_constant_alpha_matches(dev, entry.plane_base, alpha)
+            });
+            if live[index] != entry.surface_reg || !alpha_ok {
                 crate::log_warn!(
                     target: "intel/display";
-                    "intel/display: ui4-plane-surface-flip timeout plane_base=0x{:X} surf=0x{:08X} live=0x{:08X}\n",
+                    "intel/display: ui4-plane-surface-flip timeout plane_base=0x{:X} surf=0x{:08X} live=0x{:08X} plane_opacity={} alpha_ok={}\n",
                     entry.plane_base,
                     entry.surface_reg,
                     live[index],
+                    entry.constant_alpha.map_or(u8::MAX, |alpha| alpha),
+                    alpha_ok as u8,
                 );
             }
         }
@@ -5859,6 +5884,38 @@ fn plane_keymsk_alpha(alpha: u8) -> u32 {
     } else {
         0
     }
+}
+
+fn overlay_plane_constant_alpha_matches(
+    dev: crate::intel::Dev,
+    plane_base: usize,
+    alpha: u8,
+) -> bool {
+    crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF)
+        == plane_keymsk_alpha(alpha)
+        && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF)
+            == plane_keymax_alpha(alpha)
+}
+
+fn overlay_plane_constant_alpha_is_valid(dev: crate::intel::Dev, plane_base: usize) -> bool {
+    let keymax = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF);
+    let alpha = ((keymax & PLANE_KEYMAX_ALPHA_MASK) >> 24) as u8;
+    keymax == plane_keymax_alpha(alpha)
+        && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF)
+            == plane_keymsk_alpha(alpha)
+}
+
+fn program_overlay_plane_constant_alpha(dev: crate::intel::Dev, plane_base: usize, alpha: u8) {
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_KEYMSK_OFF,
+        plane_keymsk_alpha(alpha),
+    );
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_KEYMAX_OFF,
+        plane_keymax_alpha(alpha),
+    );
 }
 
 pub(super) fn decoded_nv12_overlay_plane_alpha() -> u8 {
@@ -8229,6 +8286,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     source: Ui4DirectRgbaFrame,
     pos_x: u32,
     pos_y: u32,
+    opacity: u8,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
@@ -8310,6 +8368,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         alias_index,
         pos_x,
         pos_y,
+        opacity,
         producer_frame: source.producer_frame,
         producer_buffer_index: source.producer_buffer_index,
         producer_publish_serial: source.producer_publish_serial,
@@ -8326,7 +8385,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         .saturating_add(1);
     if should_log_ui4_direct_checkpoint(queue_sequence) {
         crate::log_trace!(target: "ui4";
-            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
+            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0\n",
             queue_sequence,
             reason,
             plane_slot,
@@ -8342,6 +8401,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
             pos_x,
             pos_y,
             source.pitch_bytes,
+            opacity,
         );
     }
     Ok(Ui4AsyncComposition {
@@ -8593,7 +8653,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
             .saturating_add(1);
         if should_log_ui4_direct_checkpoint(scanout_sequence) {
             crate::log_info!(target: "ui4";
-                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 engine_output_ready=surflive ownership=display-live elapsed_us={}\n",
+                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0 engine_output_ready=surflive ownership=display-live elapsed_us={}\n",
                 scanout_sequence,
                 composition.reason,
                 surface.plane_slot,
@@ -8607,6 +8667,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
                 surface.width,
                 surface.height,
                 surface.pitch_bytes,
+                surface.opacity,
                 elapsed_us,
             );
         }
@@ -9621,6 +9682,7 @@ fn overlay_plane_needs_rearm(
         || surf != want_surf
         || surf_live != want_surf
         || color_ctl != want_color_ctl
+        || !overlay_plane_constant_alpha_matches(dev, plane_base, u8::MAX)
 }
 
 fn overlay_plane_surface_flip_guard(
@@ -9703,8 +9765,7 @@ fn overlay_plane_dynamic_flip_guard(
         return Err("plane-color-alpha");
     }
     if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYVAL_OFF) != 0
-        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF) != 0
-        || crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF) != 0xFF00_0000
+        || !overlay_plane_constant_alpha_is_valid(dev, plane_base)
     {
         return Err("plane-color-key");
     }
@@ -9750,8 +9811,9 @@ fn program_overlay_plane_geometry(
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_OFFSET_OFF, geometry.offset_reg);
 }
 
-/// Fast path for the stable RGBA plane contract. Format, alpha, DBUF and
-/// watermarks remain untouched; linear stride/geometry latch with SURF.
+/// Fast path for the stable RGBA plane contract. Format, pixel-alpha mode,
+/// DBUF and watermarks remain untouched; opaque plane alpha and geometry latch
+/// with SURF.
 fn flip_overlay_plane_surface(
     dev: crate::intel::Dev,
     surface: OverlaySurface,
@@ -9783,7 +9845,13 @@ fn flip_overlay_plane_surface(
     ) else {
         return false;
     };
-    match queue_ui4_plane_surface_flip(plane_base, surface_reg, Some(geometry), reason) {
+    match queue_ui4_plane_surface_flip(
+        plane_base,
+        surface_reg,
+        Some(geometry),
+        Some(u8::MAX),
+        reason,
+    ) {
         PlaneSurfaceFlipQueueResult::Queued => {
             mark_overlay_surface_front(surface);
             let seq = OVERLAY_PRESENT_SEQ.load(Ordering::Relaxed).wrapping_add(1);
@@ -9804,6 +9872,7 @@ fn flip_overlay_plane_surface(
         PlaneSurfaceFlipQueueResult::Inactive => {}
     }
     program_overlay_plane_geometry(dev, plane_base, geometry);
+    program_overlay_plane_constant_alpha(dev, plane_base, u8::MAX);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
     let (live, live_iters) = wait_for_plane_live_for(dev, plane_base, surface_reg, 25_000_000);
     if live != surface_reg {
@@ -9848,7 +9917,13 @@ fn stage_overlay_plane_surface_flip(
     ) else {
         return false;
     };
-    queue_ui4_plane_surface_flip(plane_base, surface_reg, Some(geometry), reason)
+    queue_ui4_plane_surface_flip(
+        plane_base,
+        surface_reg,
+        Some(geometry),
+        Some(u8::MAX),
+        reason,
+    )
         == PlaneSurfaceFlipQueueResult::Queued
 }
 
@@ -9895,6 +9970,7 @@ fn stage_ui4_direct_overlay_flip(
         overlay_plane_base(surface.pipe, surface.plane_slot),
         surface_reg,
         Some(geometry),
+        Some(surface.opacity),
         reason,
     ) == PlaneSurfaceFlipQueueResult::Queued
 }

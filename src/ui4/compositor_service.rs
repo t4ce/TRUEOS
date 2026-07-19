@@ -594,6 +594,7 @@ fn queue_async_plane(
                 },
                 window.placement.x as u32,
                 window.placement.y as u32,
+                window.placement.opacity,
                 reason,
             );
             match queued {
@@ -771,8 +772,7 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
     let Some((output_width, output_height)) = crate::intel::active_scanout_dimensions() else {
         return false;
     };
-    placement.opacity == u8::MAX
-        && placement.x >= 0
+    placement.x >= 0
         && placement.y >= 0
         && placement.width == view.width
         && placement.height == view.height

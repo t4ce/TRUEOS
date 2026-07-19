@@ -165,6 +165,7 @@ pub(crate) struct WindowSessionCloseRequest<'a> {
     persist_final_frame: bool,
     final_frame_name: Option<&'a str>,
     animate: bool,
+    shrink: bool,
     retire_frames: bool,
 }
 
@@ -186,12 +187,24 @@ impl<'a> WindowSessionCloseRequest<'a> {
     /// The producer retains ownership of the underlying frames.
     pub(crate) const fn animate(mut self) -> Self {
         self.animate = true;
+        self.shrink = true;
         self
     }
 
     /// Animate the close and transfer the detached frame lifetime to UI4.
     pub(crate) const fn animate_and_retire_frames(mut self) -> Self {
         self.animate = true;
+        self.shrink = true;
+        self.retire_frames = true;
+        self
+    }
+
+    /// Fade a direct plane by changing only its constant alpha. The exact
+    /// published allocation and its source geometry remain unchanged until
+    /// the final SURFLIVE-backed retirement.
+    pub(crate) const fn fade_and_retire_frames(mut self) -> Self {
+        self.animate = true;
+        self.shrink = false;
         self.retire_frames = true;
         self
     }
@@ -261,6 +274,7 @@ struct WindowCloseTransition {
     lease: super::FrameReadLease,
     initial: WindowPlacement,
     started_ms: u64,
+    shrink: bool,
     retire_frame: bool,
 }
 
@@ -455,6 +469,7 @@ impl WindowBroker {
         id: WindowSessionId,
         capture_final_frames: bool,
         animate: bool,
+        shrink: bool,
         retire_frames: bool,
         started_ms: u64,
     ) -> Result<WindowSessionFinish, WindowBrokerError> {
@@ -481,6 +496,7 @@ impl WindowBroker {
                             lease,
                             initial: window.placement,
                             started_ms,
+                            shrink,
                             retire_frame: retire_frames,
                         })
                 } else {
@@ -535,7 +551,11 @@ impl WindowBroker {
                 });
                 continue;
             }
-            let placement = close_transition_placement(transition.initial, elapsed_ms);
+            let placement = close_transition_placement(
+                transition.initial,
+                elapsed_ms,
+                transition.shrink,
+            );
             if placement != window.placement {
                 window.placement = placement;
                 window.damage = Some(DamageRegion::FULL);
@@ -635,7 +655,7 @@ pub(crate) fn finish_window_session(
 ) -> Result<usize, WindowBrokerError> {
     WINDOW_BROKER
         .lock()
-        .finish_session(owner, session, false, false, false, 0)
+        .finish_session(owner, session, false, false, false, false, 0)
         .map(|finish| finish.closed)
 }
 
@@ -650,6 +670,7 @@ pub(crate) fn finish_window_session_with_request(
         session,
         request.persist_final_frame,
         request.animate,
+        request.shrink,
         request.retire_frames,
         started_ms,
     )?;
@@ -665,14 +686,19 @@ pub(crate) fn finish_window_session_with_request(
     if request.animate {
         crate::log_info!(
             target: "ui4";
-            "ui4 close-transition started owner={:?} session={} windows={} animated={} skipped={} duration_ms={} final_scale_percent={} retire_frames={} persist_final_frame={}\n",
+            "ui4 close-transition started owner={:?} session={} windows={} animated={} skipped={} duration_ms={} mode={} final_scale_percent={} retire_frames={} persist_final_frame={}\n",
             owner,
             session.raw(),
             finish.closed,
             finish.animated,
             finish.animation_skipped,
             CLOSE_TRANSITION_DURATION_MS,
-            (1_000 - CLOSE_TRANSITION_SHRINK_PER_MILLE) / 10,
+            if request.shrink { "shrink+fade" } else { "direct-plane-fade" },
+            if request.shrink {
+                (1_000 - CLOSE_TRANSITION_SHRINK_PER_MILLE) / 10
+            } else {
+                100
+            },
             request.retire_frames as u8,
             request.persist_final_frame as u8,
         );
@@ -959,7 +985,11 @@ pub(crate) fn acknowledge_window_frame(id: WindowId, publish_serial: u64) -> boo
     WINDOW_BROKER.lock().acknowledge(id, publish_serial)
 }
 
-fn close_transition_placement(initial: WindowPlacement, elapsed_ms: u64) -> WindowPlacement {
+fn close_transition_placement(
+    initial: WindowPlacement,
+    elapsed_ms: u64,
+    shrink: bool,
+) -> WindowPlacement {
     let linear = elapsed_ms
         .saturating_mul(1_000)
         .checked_div(CLOSE_TRANSITION_DURATION_MS)
@@ -971,15 +1001,20 @@ fn close_transition_placement(initial: WindowPlacement, elapsed_ms: u64) -> Wind
         .saturating_mul(linear)
         .saturating_mul(3_000u64.saturating_sub(linear.saturating_mul(2)))
         / 1_000_000;
-    let scale_remaining = 1_000u64.saturating_sub(linear);
-    let scale_eased = 1_000u64.saturating_sub(
-        scale_remaining
-            .saturating_mul(scale_remaining)
-            .saturating_mul(scale_remaining)
-            / 1_000_000,
-    );
-    let scale = 1_000u64
-        .saturating_sub(CLOSE_TRANSITION_SHRINK_PER_MILLE.saturating_mul(scale_eased) / 1_000);
+    let scale = if shrink {
+        let scale_remaining = 1_000u64.saturating_sub(linear);
+        let scale_eased = 1_000u64.saturating_sub(
+            scale_remaining
+                .saturating_mul(scale_remaining)
+                .saturating_mul(scale_remaining)
+                / 1_000_000,
+        );
+        1_000u64.saturating_sub(
+            CLOSE_TRANSITION_SHRINK_PER_MILLE.saturating_mul(scale_eased) / 1_000,
+        )
+    } else {
+        1_000
+    };
     let width = ((u64::from(initial.width).saturating_mul(scale) + 500) / 1_000)
         .max(1)
         .min(u64::from(u32::MAX)) as u32;

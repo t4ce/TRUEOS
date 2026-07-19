@@ -13,11 +13,11 @@ use spin::Mutex;
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
-    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionId, acquire_frame_buffer,
-    begin_window_session, cancel_frame_buffer, create_frame, create_window, destroy_frame,
-    finish_window_session, gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_window_frame, publish_window_frames, replace_window_frame, take_owner_input_events,
-    writable_rgba_view,
+    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
+    WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
+    create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
+    gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer, publish_window_frame,
+    publish_window_frames, replace_window_frame, take_owner_input_events, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -1313,14 +1313,28 @@ fn stop_active_previews(
     let Some(first) = previews.first() else {
         return;
     };
-    // Exact GPU-release surfaces are deliberately detached without UI4's
-    // geometry/opacity close animation. Their allocations are retired only
-    // after the compositor drops the display leases held through SURFLIVE.
-    let _ = finish_window_session(PREVIEW_OWNER, first.session);
+    // One source per hardware slot can fade by staging plane constant alpha
+    // beside a fresh GGTT alias for the same exact allocation. Geometry never
+    // changes, no composition target is created, and ownership transfers to
+    // UI4 until the final SURFLIVE-backed plane replacement releases it.
+    let direct_fade = previews_support_direct_fade(&previews);
+    let frame_lifecycle_transferred = if direct_fade {
+        finish_window_session_with_request(
+            PREVIEW_OWNER,
+            first.session,
+            WindowSessionCloseRequest::default().fade_and_retire_frames(),
+        )
+        .is_ok()
+    } else {
+        false
+    };
+    if !frame_lifecycle_transferred {
+        let _ = finish_window_session(PREVIEW_OWNER, first.session);
+    }
     let metrics = aggregate_preview_metrics(&previews);
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview stopped request={} preset=compute-trio frames={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} teardown=broker-detach-no-animation frame_retire=after-surflive-display-lease-drain plane_mutation=none\n",
+        "ui4 gpgpu-preview stopped request={} preset=compute-trio frames={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} teardown={} frame_retire=after-surflive-display-lease-drain source_buffer_mutation=none\n",
         first.request_serial,
         previews.len(),
         previews.iter().map(preview_surface_count).sum::<usize>(),
@@ -1332,6 +1346,11 @@ fn stop_active_previews(
         metrics.late,
         metrics.elapsed_ms,
         reason,
+        if frame_lifecycle_transferred {
+            "direct-plane-alpha-fade"
+        } else {
+            "broker-detach-no-animation"
+        },
     );
     for preview in previews {
         crate::log_info!(
@@ -1351,15 +1370,36 @@ fn stop_active_previews(
             preview.metrics.elapsed_ms,
             reason,
         );
-        if !retired_frames.contains(&preview.frame) {
-            retired_frames.push(preview.frame);
-        }
-        for surface in preview.extra_surfaces {
-            if !retired_frames.contains(&surface.frame) {
-                retired_frames.push(surface.frame);
+        if !frame_lifecycle_transferred {
+            if !retired_frames.contains(&preview.frame) {
+                retired_frames.push(preview.frame);
+            }
+            for surface in preview.extra_surfaces {
+                if !retired_frames.contains(&surface.frame) {
+                    retired_frames.push(surface.frame);
+                }
             }
         }
     }
+}
+
+fn previews_support_direct_fade(previews: &[ActivePreview]) -> bool {
+    let mut slots = 0u8;
+    for preview in previews {
+        if !preview.extra_surfaces.is_empty() {
+            return false;
+        }
+        let slot = preview_plane_slot(preview.config.preset);
+        if !(1..=3).contains(&slot) {
+            return false;
+        }
+        let bit = 1u8 << slot;
+        if slots & bit != 0 {
+            return false;
+        }
+        slots |= bit;
+    }
+    !previews.is_empty()
 }
 
 fn retire_frames(frames: &mut Vec<FrameHandle>) {
