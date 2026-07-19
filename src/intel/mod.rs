@@ -24,7 +24,11 @@ pub(crate) mod stats;
 pub(crate) mod types;
 mod uc_fw;
 
-pub(crate) use self::blt::submit_guc_bcs0_fast_copy_probe_now;
+pub(crate) use self::blt::{
+    GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError, GucBcs0RgbaCopy,
+    GucBcs0RgbaSurface, poll_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_copies,
+    submit_guc_bcs0_fast_copy_probe_now,
+};
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
 pub(crate) use self::media::sfc_cmd as xelp_media_sfc;
@@ -325,8 +329,8 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
 
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
-    PrimaryPlaneSourceFormat, RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionPoll,
-    Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll,
+    PrimaryPlaneSourceFormat, RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError,
+    Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll,
     Ui4PlaneSurfaceFlipPoll,
 };
 
@@ -413,6 +417,20 @@ pub(crate) fn queue_ui4_static_overlay_composition_cpu(
     self::display::queue_ui4_static_overlay_composition_cpu(plane_slot, tiles, damage, reason)
 }
 
+pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_static_overlay_composition_bcs0(
+        plane_slot,
+        tiles,
+        damage,
+        reason,
+    )
+}
+
 pub(crate) fn queue_ui4_direct_overlay_frame(
     plane_slot: usize,
     source: Ui4DirectRgbaFrame,
@@ -441,6 +459,10 @@ pub(crate) fn ui4_direct_composition_plane_slot(
     composition: Ui4AsyncComposition,
 ) -> Option<usize> {
     self::display::ui4_direct_composition_plane_slot(composition)
+}
+
+pub(crate) fn ui4_composition_has_guc_work(composition: Ui4AsyncComposition) -> bool {
+    self::display::ui4_composition_has_guc_work(composition)
 }
 
 pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> bool {

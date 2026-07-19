@@ -52,6 +52,8 @@ const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_PPGTT: u32 = 0;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
+const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
+const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const MI_ARB_CHECK: u32 = 0x0500_0005;
 
 const DIRECT_BLT_RING_BYTES: usize = 4096;
@@ -59,8 +61,14 @@ const DIRECT_BLT_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_BLT_BATCH_BYTES: usize = 4096;
 const DIRECT_BLT_RESULT_BYTES: usize = 4096;
 const DIRECT_BLT_COPY_BYTES: usize = 4096;
-const DIRECT_BLT_PPGTT_PT_COUNT: usize = 16;
+// Match the direct-RCS address envelope so BCS can consume the same stable,
+// allocation-owned producer and compositor aliases. Reusing one small alias
+// for different physical surfaces would require an explicit Gen12 TLB
+// invalidation between jobs and is not a safe frame contract.
+const DIRECT_BLT_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_BLT_PPGTT_BYTES: usize = (3 + DIRECT_BLT_PPGTT_PT_COUNT) * 4096;
+const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 =
+    DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
 const DIRECT_BLT_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_BLT_GPU_VA_RING_BASE: u64 = 0x00B0_0000;
 const DIRECT_BLT_GPU_VA_CONTEXT_BASE: u64 = 0x00B1_0000;
@@ -68,6 +76,8 @@ const DIRECT_BLT_GPU_VA_BATCH_BASE: u64 = 0x00B4_0000;
 const DIRECT_BLT_GPU_VA_RESULT_BASE: u64 = 0x00B5_0000;
 const DIRECT_BLT_GPU_VA_SRC_BASE: u64 = 0x00B6_0000;
 const DIRECT_BLT_GPU_VA_DST_BASE: u64 = 0x00B7_0000;
+const GUC_BLT_UI4_MAX_COPIES: usize = 64;
+const GUC_BLT_UI4_TIMEOUT_MS: u64 = 250;
 const DIRECT_BLT_SMOKE_MARKER: u32 = 0xC0DE_BC50;
 const DIRECT_BLT_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_BLT_COPY_WIDTH: u32 = 4;
@@ -85,6 +95,9 @@ static DIRECT_BLT_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_BLT_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(1);
 static GUC_BLT_PROBE: Mutex<GucBltProbeRuntime> = Mutex::new(GucBltProbeRuntime::new());
+static GUC_BLT_UI4: Mutex<GucBltUi4Runtime> = Mutex::new(GucBltUi4Runtime::new());
+static GUC_BLT_RING: Mutex<GucBltRingRuntime> = Mutex::new(GucBltRingRuntime::new());
+static GUC_BLT_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug)]
 struct DirectBltState {
@@ -133,6 +146,84 @@ impl GucBcs0FastCopyProbe {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucBcs0RgbaSurface {
+    pub(crate) phys: u64,
+    pub(crate) gpu: u64,
+    pub(crate) bytes: usize,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) pitch_bytes: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucBcs0RgbaCopy {
+    pub(crate) source: GucBcs0RgbaSurface,
+    pub(crate) source_x: u32,
+    pub(crate) source_y: u32,
+    pub(crate) destination_x: u32,
+    pub(crate) destination_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GucBcs0CopySubmission {
+    sequence: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GucBcs0CopySubmitError {
+    Unavailable,
+    Busy,
+    InvalidRequest,
+    SubmitFailed,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GucBcs0CopyCompletion {
+    Pending,
+    Complete,
+    Failed,
+    InvalidSubmission,
+}
+
+struct GucBltUi4Runtime {
+    pending: Option<crate::gpu::executor::KernelSubmission>,
+    sequence: u32,
+    expected_marker: u32,
+    started_tick: u64,
+    copies: usize,
+    bytes: u64,
+}
+
+impl GucBltUi4Runtime {
+    const fn new() -> Self {
+        Self {
+            pending: None,
+            sequence: 0,
+            expected_marker: 0,
+            started_tick: 0,
+            copies: 0,
+            bytes: 0,
+        }
+    }
+}
+
+struct GucBltRingRuntime {
+    tail_bytes: usize,
+    context_initialized: bool,
+}
+
+impl GucBltRingRuntime {
+    const fn new() -> Self {
+        Self {
+            tail_bytes: 0,
+            context_initialized: false,
+        }
+    }
+}
+
 struct GucBltProbeRuntime {
     pending: Option<crate::gpu::executor::KernelSubmission>,
     started_tick: u64,
@@ -172,6 +263,12 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
     if runtime.pending.is_some() {
         return guc_blt_poll_and_retire(state, &mut runtime);
     }
+    if GUC_BLT_LANE_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return GucBcs0FastCopyProbe::default();
+    }
 
     let forcewake = direct_blt_forcewake(dev);
     let ggtt = forcewake && direct_blt_map_state(dev, state);
@@ -182,8 +279,13 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
         ([0; 4], [0; 4])
     };
     let batch = ppgtt && direct_blt_encode_fast_copy_batch(state);
-    let prepared = batch && guc_blt_prepare_context(state);
-    if !prepared {
+    let prepared_tail = if batch {
+        guc_blt_prepare_context(state)
+    } else {
+        None
+    };
+    let Some(old_tail) = prepared_tail else {
+        GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
         return GucBcs0FastCopyProbe {
             forcewake,
             ggtt,
@@ -191,7 +293,7 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
             batch,
             ..GucBcs0FastCopyProbe::default()
         };
-    }
+    };
 
     let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
     let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
@@ -208,6 +310,8 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
     ) {
         Ok(submission) => submission,
         Err(error) => {
+            guc_blt_rollback_context_tail(state, old_tail);
+            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
             crate::log!(
                 "intel/blt: guc-bcs0-fast-copy submitted=0 error={:?} path=guc direct_elsp=0 legacy_fallback=0\n",
                 error
@@ -228,19 +332,34 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
     guc_blt_poll_and_retire(state, &mut runtime)
 }
 
-fn guc_blt_prepare_context(state: DirectBltState) -> bool {
-    let Some(ring_tail_bytes) = direct_blt_build_ring_batch_start(state) else {
-        return false;
-    };
+fn guc_blt_prepare_context(state: DirectBltState) -> Option<usize> {
+    let mut runtime = GUC_BLT_RING.lock();
+    let old_tail_bytes = runtime.tail_bytes;
+    let ring_tail_bytes = guc_blt_append_ring_batch_start(state, old_tail_bytes);
     let Some(ring_ctl) = direct_blt_ring_ctl_value(DIRECT_BLT_RING_BYTES) else {
-        return false;
+        return None;
     };
-    direct_blt_init_context_image(
-        state,
-        DIRECT_BLT_GPU_VA_RING_BASE as u32,
-        ring_tail_bytes as u32,
-        ring_ctl,
-    )
+    if !runtime.context_initialized {
+        if !direct_blt_init_context_image(
+            state,
+            DIRECT_BLT_GPU_VA_RING_BASE as u32,
+            ring_tail_bytes as u32,
+            ring_ctl,
+        ) {
+            return None;
+        }
+        runtime.context_initialized = true;
+    } else {
+        guc_blt_write_lrc_ring_tail(state, ring_tail_bytes as u32);
+    }
+    runtime.tail_bytes = ring_tail_bytes;
+    Some(old_tail_bytes)
+}
+
+fn guc_blt_rollback_context_tail(state: DirectBltState, old_tail_bytes: usize) {
+    let mut runtime = GUC_BLT_RING.lock();
+    runtime.tail_bytes = old_tail_bytes;
+    guc_blt_write_lrc_ring_tail(state, old_tail_bytes as u32);
 }
 
 fn guc_blt_poll_and_retire(
@@ -256,6 +375,7 @@ fn guc_blt_poll_and_retire(
                 crate::gpu::executor::complete_kernel_submission(submission, true).is_some();
             if timeline_retired {
                 runtime.pending.take();
+                GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
             }
         }
     }
@@ -303,6 +423,142 @@ fn guc_blt_poll_and_retire(
     report
 }
 
+/// Queue one ordered set of unscaled RGBA rectangle copies through GuC BCS0.
+///
+/// Source and destination GPU addresses are stable allocation-owned aliases.
+/// The caller retains those allocations until
+/// `poll_guc_bcs0_rgba_copies` reports completion.
+pub(crate) fn queue_guc_bcs0_rgba_copies(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    let Some(dev) = super::claimed_device() else {
+        return Err(GucBcs0CopySubmitError::Unavailable);
+    };
+    let Some(state) = direct_blt_state_once() else {
+        return Err(GucBcs0CopySubmitError::Unavailable);
+    };
+    if !guc_blt_valid_surface(destination)
+        || copies.is_empty()
+        || copies.len() > GUC_BLT_UI4_MAX_COPIES
+    {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    if GUC_BLT_UI4.lock().pending.is_some()
+        || GUC_BLT_LANE_BUSY
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return Err(GucBcs0CopySubmitError::Busy);
+    }
+
+    let prepared = (|| {
+        let forcewake = direct_blt_forcewake(dev);
+        let ggtt = forcewake && direct_blt_map_state(dev, state);
+        let ppgtt = ggtt && direct_blt_init_ppgtt(state);
+        if !ppgtt || !guc_blt_map_ui4_surfaces(state, destination, copies) {
+            return None;
+        }
+        let sequence = DIRECT_BLT_SUBMIT_COUNTER.fetch_add(1, Ordering::Relaxed).max(1);
+        let marker = 0xBC50_0000 | (sequence & 0xFFFF);
+        let (copy_count, copied_bytes) =
+            guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?;
+        let old_tail = guc_blt_prepare_context(state)?;
+        Some((sequence, marker, copy_count, copied_bytes, old_tail))
+    })();
+    let Some((sequence, marker, copy_count, copied_bytes, old_tail)) = prepared else {
+        GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    };
+
+    let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
+    let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
+        engine: crate::gpu::physical::EngineClass::Copy,
+        hwlrca_lo,
+        hwlrca_hi,
+        gpuvm_root_phys: state.ppgtt_phys,
+    };
+    super::ggtt_invalidate(dev);
+    core::sync::atomic::fence(Ordering::SeqCst);
+    let submission = match crate::gpu::executor::submit_kernel_context(
+        crate::gpu::vgpu::KernelClient::Ui4Blitter,
+        descriptor,
+    ) {
+        Ok(submission) => submission,
+        Err(crate::gpu::vgpu::VgpuError::Busy) => {
+            guc_blt_rollback_context_tail(state, old_tail);
+            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+            return Err(GucBcs0CopySubmitError::Busy);
+        }
+        Err(error) => {
+            guc_blt_rollback_context_tail(state, old_tail);
+            GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+            crate::log_error!(target: "gfx";
+                "intel/blt: ui4-bcs0 submitted=0 error={:?} copies={} path=guc direct_elsp=0 legacy_fallback=0\n",
+                error, copy_count,
+            );
+            return Err(GucBcs0CopySubmitError::SubmitFailed);
+        }
+    };
+    let mut runtime = GUC_BLT_UI4.lock();
+    runtime.pending = Some(submission);
+    runtime.sequence = sequence;
+    runtime.expected_marker = marker;
+    runtime.started_tick = direct_blt_now_tick();
+    runtime.copies = copy_count;
+    runtime.bytes = copied_bytes;
+    crate::log_trace!(target: "ui4";
+        "ui4/blt: queued sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} destination={}x{} pitch=0x{:X} direct_elsp=0 legacy_fallback=0\n",
+        sequence, copy_count, copied_bytes, marker, destination.width,
+        destination.height, destination.pitch_bytes,
+    );
+    Ok(GucBcs0CopySubmission { sequence })
+}
+
+pub(crate) fn poll_guc_bcs0_rgba_copies(
+    submission: GucBcs0CopySubmission,
+) -> GucBcs0CopyCompletion {
+    let Some(state) = direct_blt_state_once() else {
+        return GucBcs0CopyCompletion::Failed;
+    };
+    let mut runtime = GUC_BLT_UI4.lock();
+    if runtime.pending.is_none() || runtime.sequence != submission.sequence {
+        return GucBcs0CopyCompletion::InvalidSubmission;
+    }
+    super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
+    let observed = unsafe { core::ptr::read_volatile(state.result_virt.cast::<u32>()) };
+    if observed != runtime.expected_marker {
+        if direct_blt_elapsed_ms_since(runtime.started_tick) < GUC_BLT_UI4_TIMEOUT_MS {
+            return GucBcs0CopyCompletion::Pending;
+        }
+        if let Some(pending) = runtime.pending.take() {
+            let _ = crate::gpu::executor::complete_kernel_submission(pending, false);
+        }
+        GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+        crate::log_error!(target: "gfx";
+            "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} observed=0x{:08X} expected=0x{:08X} timeout_ms={}\n",
+            runtime.sequence, runtime.copies, runtime.bytes, observed,
+            runtime.expected_marker, GUC_BLT_UI4_TIMEOUT_MS,
+        );
+        return GucBcs0CopyCompletion::Failed;
+    }
+    let Some(pending) = runtime.pending.take() else {
+        return GucBcs0CopyCompletion::InvalidSubmission;
+    };
+    let timeline_retired =
+        crate::gpu::executor::complete_kernel_submission(pending, true).is_some();
+    GUC_BLT_LANE_BUSY.store(false, Ordering::Release);
+    if !timeline_retired {
+        return GucBcs0CopyCompletion::Failed;
+    }
+    crate::log_trace!(target: "ui4";
+        "ui4/blt: retired sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} elapsed_ms={} timeline_retired=1\n",
+        runtime.sequence, runtime.copies, runtime.bytes, observed,
+        direct_blt_elapsed_ms_since(runtime.started_tick),
+    );
+    GucBcs0CopyCompletion::Complete
+}
+
 fn guc_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
     let mut observed = 0;
     for _ in 0..DIRECT_BLT_SMOKE_POLL_ITERS {
@@ -316,6 +572,8 @@ fn guc_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
     observed
 }
 
+/// Keep the complete GuC/vGPU descriptor stable across submissions so the
+/// broker reuses one registered context while the saved ring tail advances.
 fn guc_blt_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let descriptor = base
@@ -656,6 +914,181 @@ fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
     true
 }
 
+fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
+    if surface.phys == 0
+        || !surface.phys.is_multiple_of(super::WARM_ALIGN as u64)
+        || surface.gpu == 0
+        || !surface.gpu.is_multiple_of(super::WARM_ALIGN as u64)
+        || surface.width == 0
+        || surface.height == 0
+        || surface.pitch_bytes < surface.width.saturating_mul(4)
+        || !surface.pitch_bytes.is_multiple_of(4)
+        || surface.pitch_bytes >= (1 << 18)
+    {
+        return false;
+    }
+    let allocation_valid = (surface.height as usize)
+        .checked_sub(1)
+        .and_then(|row| row.checked_mul(surface.pitch_bytes as usize))
+        .and_then(|last_row| last_row.checked_add(surface.width as usize * 4))
+        .is_some_and(|required| required <= surface.bytes);
+    let gpu_range_valid = u64::try_from(surface.bytes)
+        .ok()
+        .and_then(|bytes| surface.gpu.checked_add(bytes))
+        .is_some_and(|end| end <= DIRECT_BLT_PPGTT_LIMIT_BYTES);
+    allocation_valid && gpu_range_valid
+}
+
+fn guc_blt_valid_copy(
+    destination: GucBcs0RgbaSurface,
+    copy: GucBcs0RgbaCopy,
+) -> bool {
+    guc_blt_valid_surface(copy.source)
+        && !guc_blt_physical_ranges_overlap(destination, copy.source)
+        && copy.width != 0
+        && copy.height != 0
+        && copy
+            .source_x
+            .checked_add(copy.width)
+            .is_some_and(|right| right <= copy.source.width && right <= u16::MAX as u32)
+        && copy
+            .source_y
+            .checked_add(copy.height)
+            .is_some_and(|bottom| bottom <= copy.source.height && bottom <= u16::MAX as u32)
+        && copy
+            .destination_x
+            .checked_add(copy.width)
+            .is_some_and(|right| right <= destination.width && right <= u16::MAX as u32)
+        && copy
+            .destination_y
+            .checked_add(copy.height)
+            .is_some_and(|bottom| bottom <= destination.height && bottom <= u16::MAX as u32)
+}
+
+fn guc_blt_map_ui4_surfaces(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> bool {
+    let pte_present_rw_wb = super::GEN8_PAGE_PRESENT | (1 << 1);
+    // PAT3 is the system-memory UC contract used by render-to-scanout targets.
+    // BCS completion therefore releases into memory visible to the display,
+    // rather than requiring a post-copy CPU sweep of the destination.
+    let pte_present_rw_scanout_uc = pte_present_rw_wb | (1 << 3) | (1 << 4);
+    if !direct_blt_map_ppgtt_region(
+            state,
+            destination.gpu,
+            destination.phys,
+            destination.bytes,
+            pte_present_rw_scanout_uc,
+        )
+    {
+        return false;
+    }
+
+    for copy in copies.iter().copied() {
+        if !guc_blt_valid_copy(destination, copy) {
+            return false;
+        }
+        if !direct_blt_map_ppgtt_region(
+                state,
+                copy.source.gpu,
+                copy.source.phys,
+                copy.source.bytes,
+                pte_present_rw_wb,
+            )
+        {
+            return false;
+        }
+    }
+    super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
+    true
+}
+
+fn guc_blt_encode_ui4_copy_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    marker: u32,
+) -> Option<(usize, u64)> {
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(
+            state.batch_virt.cast::<u32>(),
+            DIRECT_BLT_BATCH_BYTES / core::mem::size_of::<u32>(),
+        )
+    };
+    batch.fill(0);
+    unsafe {
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
+    }
+    let mut cursor = 0usize;
+    let mut copied_bytes = 0u64;
+    for copy in copies.iter().copied() {
+        if !guc_blt_valid_copy(destination, copy) || cursor.saturating_add(10) > batch.len() {
+            return None;
+        }
+        let destination_right = copy.destination_x.checked_add(copy.width)?;
+        let destination_bottom = copy.destination_y.checked_add(copy.height)?;
+        batch[cursor] = XY_FAST_COPY_BLT_CMD;
+        batch[cursor + 1] = destination.pitch_bytes
+            | XY_FAST_COPY_COLOR_DEPTH_32
+            | XY_FAST_COPY_DST_SYSTEM_MEM
+            | XY_FAST_COPY_SRC_SYSTEM_MEM;
+        batch[cursor + 2] = copy.destination_x | (copy.destination_y << 16);
+        batch[cursor + 3] = destination_right | (destination_bottom << 16);
+        batch[cursor + 4] = destination.gpu as u32;
+        batch[cursor + 5] = (destination.gpu >> 32) as u32;
+        batch[cursor + 6] = copy.source_x | (copy.source_y << 16);
+        batch[cursor + 7] = copy.source.pitch_bytes;
+        batch[cursor + 8] = copy.source.gpu as u32;
+        batch[cursor + 9] = (copy.source.gpu >> 32) as u32;
+        cursor += 10;
+        copied_bytes = copied_bytes.saturating_add(
+            u64::from(copy.width)
+                .saturating_mul(u64::from(copy.height))
+                .saturating_mul(4),
+        );
+    }
+
+    // MI_FLUSH_DW's post-sync immediate is the completion cookie. Unlike a
+    // later plain store, it is ordered after the preceding BCS writes. The
+    // compositor will not stage PLANE_SURF until this exact cookie retires.
+    if cursor.saturating_add(8) > batch.len() {
+        return None;
+    }
+    batch[cursor] = MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE;
+    batch[cursor + 1] = DIRECT_BLT_GPU_VA_RESULT_BASE as u32;
+    batch[cursor + 2] = (DIRECT_BLT_GPU_VA_RESULT_BASE >> 32) as u32;
+    batch[cursor + 3] = marker;
+    batch[cursor + 4] = 0;
+    batch[cursor + 5] = MI_ARB_CHECK;
+    batch[cursor + 6] = MI_BATCH_BUFFER_END;
+    batch[cursor + 7] = MI_NOOP;
+    cursor += 8;
+    super::dma_flush(
+        state.batch_virt,
+        cursor.saturating_mul(core::mem::size_of::<u32>()),
+    );
+    super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
+    Some((copies.len(), copied_bytes))
+}
+
+fn guc_blt_physical_ranges_overlap(
+    left: GucBcs0RgbaSurface,
+    right: GucBcs0RgbaSurface,
+) -> bool {
+    let left_end = u64::try_from(left.bytes)
+        .ok()
+        .and_then(|bytes| left.phys.checked_add(bytes));
+    let right_end = u64::try_from(right.bytes)
+        .ok()
+        .and_then(|bytes| right.phys.checked_add(bytes));
+    match (left_end, right_end) {
+        (Some(left_end), Some(right_end)) => left.phys < right_end && right.phys < left_end,
+        _ => true,
+    }
+}
+
 fn direct_blt_seed_fast_copy_buffers(state: DirectBltState) -> ([u32; 4], [u32; 4]) {
     let expected_src = direct_blt_fast_copy_src_expected();
     let expected_dst = direct_blt_fast_copy_dst_expected_before();
@@ -774,6 +1207,31 @@ fn direct_blt_build_ring_batch_start(state: DirectBltState) -> Option<usize> {
     let tail_bytes = 4 * core::mem::size_of::<u32>();
     super::dma_flush(state.ring_virt, DIRECT_BLT_RING_BYTES);
     Some(tail_bytes)
+}
+
+fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> usize {
+    const ENTRY_DWORDS: usize = 4;
+    debug_assert_eq!(tail_bytes % (ENTRY_DWORDS * core::mem::size_of::<u32>()), 0);
+    debug_assert!(tail_bytes < DIRECT_BLT_RING_BYTES);
+    let start = tail_bytes / core::mem::size_of::<u32>();
+    unsafe {
+        let dwords = state.ring_virt.cast::<u32>();
+        core::ptr::write_volatile(
+            dwords.add(start),
+            MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT,
+        );
+        core::ptr::write_volatile(dwords.add(start + 1), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
+        core::ptr::write_volatile(
+            dwords.add(start + 2),
+            (DIRECT_BLT_GPU_VA_BATCH_BASE >> 32) as u32,
+        );
+        core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);
+        super::dma_flush(
+            state.ring_virt.add(tail_bytes),
+            ENTRY_DWORDS * core::mem::size_of::<u32>(),
+        );
+    }
+    (tail_bytes + ENTRY_DWORDS * core::mem::size_of::<u32>()) % DIRECT_BLT_RING_BYTES
 }
 
 fn direct_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
@@ -902,6 +1360,19 @@ fn direct_blt_init_context_image(
 
     super::dma_flush(state.context_virt, DIRECT_BLT_CONTEXT_BYTES);
     true
+}
+
+fn guc_blt_write_lrc_ring_tail(state: DirectBltState, ring_tail: u32) {
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+    let total_dwords = DIRECT_BLT_CONTEXT_BYTES / core::mem::size_of::<u32>();
+    if total_dwords <= DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW {
+        return;
+    }
+    let dwords = unsafe {
+        core::slice::from_raw_parts_mut(state.context_virt.cast::<u32>(), total_dwords)
+    };
+    dwords[DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
+    super::dma_flush(state.context_virt, DIRECT_BLT_CONTEXT_BYTES);
 }
 
 fn direct_blt_init_csb_pointers(dev: super::Dev, hwsp_virt: *mut u8) {

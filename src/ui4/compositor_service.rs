@@ -25,6 +25,7 @@ const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
+static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -509,8 +510,9 @@ fn queue_async_plane(
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
         .collect();
     // Immutable single-buffer images are already complete rectangles. They do
-    // not need a per-output-pixel layer search: the sparse painter clears only
-    // damage and draws current rectangles in broker order. Plane slots are
+    // not need a per-output-pixel layer search: the first pristine backbuffer
+    // is painted by one ordered BCS batch, while the CPU fallback still owns
+    // non-pristine damage until a BCS clear is activated. Plane slots are
     // independent scanout inputs, so overlap is considered only inside this
     // already slot-filtered selection.
     let sparse_static_painter = matches!(plan.target, CompositionTarget::Overlay(_))
@@ -653,17 +655,36 @@ fn queue_async_plane(
         CompositionTarget::Overlay(slot) => {
             let reason = overlay_async_reason(slot);
             if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED {
-                if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
-                    crate::log_warn!(target: "ui4";
-                        "ui4/static-painter-baseline: backend=cpu-sparse-copy buffering=single content=image plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 source_binding_switches=0 damage=old+new flip=ui4-batched reason=multi-frame-correctness-first log=once\n"
-                    );
-                }
-                crate::intel::queue_ui4_static_overlay_composition_cpu(
+                let bcs = crate::intel::queue_ui4_static_overlay_composition_bcs0(
                     slot,
                     &tiles,
                     plan.damage,
                     reason,
-                )
+                );
+                match bcs {
+                    Ok(composition) => {
+                        if !STATIC_SINGLE_BCS0_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
+                            crate::log_info!(target: "ui4";
+                                "ui4/static-painter: backend=guc-bcs0-fast-copy buffering=single content=image plane_isolation=slot-local batch=one-per-changed-plane completion=mi-flush-dw-post-sync flip=after-retire cpu_pixel_copy=0 shader_dispatches=0 clear=fresh-transparent-only log=once\n"
+                            );
+                        }
+                        Ok(composition)
+                    }
+                    Err(crate::intel::Ui4AsyncCompositionError::Unavailable) => {
+                        if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
+                            crate::log_warn!(target: "ui4";
+                                "ui4/static-painter-fallback: backend=cpu-sparse-copy reason=non-pristine-or-bcs-unavailable buffering=single content=image plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 damage=old+new flip=ui4-batched log=once\n"
+                            );
+                        }
+                        crate::intel::queue_ui4_static_overlay_composition_cpu(
+                            slot,
+                            &tiles,
+                            plan.damage,
+                            reason,
+                        )
+                    }
+                    Err(error) => Err(error),
+                }
             } else {
                 crate::intel::queue_ui4_overlay_composition(
                     slot,
@@ -875,7 +896,12 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         .copied()
         .filter_map(crate::intel::ui4_direct_composition_plane_slot)
         .count();
-    let guc_jobs = pending.completed.len().saturating_sub(direct_planes);
+    let guc_jobs = pending
+        .completed
+        .iter()
+        .copied()
+        .filter(|composition| crate::intel::ui4_composition_has_guc_work(*composition))
+        .count();
     runtime.retired_frames = runtime.retired_frames.saturating_add(1);
     if runtime.retired_frames <= 8 || runtime.retired_frames.is_multiple_of(120) {
         crate::log_trace!(target: "ui4";
