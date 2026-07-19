@@ -437,6 +437,117 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
     })
 }
 
+fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
+    let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
+    let (output_width, output_height) = crate::intel::active_scanout_dimensions()
+        .unwrap_or((PREVIEW_WIDTH.saturating_mul(2), PREVIEW_HEIGHT.saturating_mul(2)));
+    let cell_width = (output_width / STATIC30_COLUMNS).max(1);
+    let cell_height = (output_height / STATIC30_ROWS).max(1);
+    let mut sessions = Vec::with_capacity(STATIC30_PLANE_COUNT);
+    let mut frames = Vec::with_capacity(STATIC30_FRAME_COUNT);
+    let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
+
+    for _ in 0..STATIC30_PLANE_COUNT {
+        match begin_window_session(PREVIEW_OWNER) {
+            Ok(session) => sessions.push(session),
+            Err(_) => {
+                abandon_static30_initialization(&sessions, &frames);
+                return Err("static30-session-create-failed");
+            }
+        }
+    }
+
+    for index in 0..STATIC30_FRAME_COUNT {
+        let index_u32 = index as u32;
+        let plane_slot = index % STATIC30_PLANE_COUNT + 1;
+        let plane_offset = plane_slot as u32 * 4;
+        let inset = 8u32.saturating_add(plane_offset);
+        let width = cell_width
+            .saturating_sub(inset.saturating_mul(2))
+            .min(STATIC30_MAX_WIDTH)
+            .max(1);
+        let height = cell_height
+            .saturating_sub(inset.saturating_mul(2))
+            .min(STATIC30_MAX_HEIGHT)
+            .max(1);
+        let x = (index_u32 % STATIC30_COLUMNS)
+            .saturating_mul(cell_width)
+            .saturating_add(inset);
+        let y = (index_u32 / STATIC30_COLUMNS)
+            .saturating_mul(cell_height)
+            .saturating_add(inset);
+        let frame = match create_static30_frame(output, width, height) {
+            Ok(frame) => frame,
+            Err(_) => {
+                abandon_static30_initialization(&sessions, &frames);
+                return Err("static30-frame-create-failed");
+            }
+        };
+        frames.push(frame);
+        let window = match create_window(WindowCreate {
+            owner: PREVIEW_OWNER,
+            session: sessions[plane_slot - 1],
+            frame,
+            output,
+            plane: WindowPlane::Universal(plane_slot as u8),
+            placement: WindowPlacement {
+                x: x as i32,
+                y: y as i32,
+                width,
+                height,
+                z: PREVIEW_Z.saturating_add(index as i32),
+                opacity: u8::MAX,
+                visible: true,
+            },
+            interaction: super::WindowInteraction::MOVABLE_FRAME,
+        }) {
+            Ok(window) => window,
+            Err(_) => {
+                abandon_static30_initialization(&sessions, &frames);
+                return Err("static30-window-create-failed");
+            }
+        };
+        surfaces.push(StaticPreviewSurface {
+            frame,
+            window,
+            scheme: index as u8,
+        });
+    }
+
+    let first = surfaces[0];
+    let now = Instant::now();
+    Ok(ActivePreview {
+        request_serial: desired.serial,
+        config: desired.config,
+        session: sessions[0],
+        frame: first.frame,
+        window: first.window,
+        width: cell_width
+            .saturating_sub(24)
+            .min(STATIC30_MAX_WIDTH)
+            .max(1),
+        height: cell_height
+            .saturating_sub(24)
+            .min(STATIC30_MAX_HEIGHT)
+            .max(1),
+        started: now,
+        next_render: now,
+        static_needs_publish: true,
+        extra_sessions: sessions.iter().copied().skip(1).collect(),
+        extra_surfaces: surfaces.iter().copied().skip(1).collect(),
+        metrics: GpgpuPreviewMetrics::default(),
+    })
+}
+
+fn abandon_static30_initialization(sessions: &[WindowSessionId], frames: &[FrameHandle]) {
+    for session in sessions.iter().copied() {
+        let _ = finish_window_session(PREVIEW_OWNER, session);
+    }
+    for frame in frames.iter().copied() {
+        let _ = destroy_frame(frame);
+    }
+}
+
 const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str {
     match error {
         FramePoolError::InvalidPlan(FramePlanError::EmptyExtent) => {
@@ -482,7 +593,28 @@ fn create_preview_frame(
     })
 }
 
+fn create_static30_frame(
+    output: OutputId,
+    width: u32,
+    height: u32,
+) -> Result<FrameHandle, FramePoolError> {
+    create_frame(FrameSpec {
+        output,
+        content: FrameContent::Image,
+        // Every test card is written and published exactly once. A single
+        // buffer is the honest contract and keeps the 30-frame probe small.
+        cadence: FrameCadence::Immutable,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+    })
+}
+
 fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
+    if preview.config.preset == GpgpuPreviewPreset::Static30 {
+        return render_static30_frames(preview);
+    }
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
     let publish_this_frame =
         (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
@@ -498,7 +630,7 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         }
     };
     if preview.config.preset == GpgpuPreviewPreset::Static {
-        if let Err(reason) = fill_static_preview_frame(lease) {
+        if let Err(reason) = fill_static_preview_frame(lease, 0) {
             let _ = cancel_frame_buffer(lease);
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
             return Err(reason);
