@@ -723,7 +723,7 @@ pub async fn draw3d_ui4_render_task() {
                             if submitted_frames <= 8 || submitted_frames.is_multiple_of(120) {
                                 crate::log_trace!(
                                     target: "draw3d";
-                                    "draw3d: UI4 triple frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish=1 ui4_compositor_jobs=0 ui4_display_flip=1 cpu_readback=0 cpu_frame_copy=0 plane_slot={} backpressure_busy={} release_wakes={} deadline_timeouts={}\n",
+                                    "draw3d: UI4 triple frame updated seq={} revision={} draws={} changed_pixels={} render={}x{} frame_us={} geometry_us={} prepare_us={} gpu_poll_us={} gpu_poll_iters={} resolve_us={} present_copy_us={} guc_scene_submits=1 ui4_publish=1 ui4_compositor_jobs=0 ui4_display_flip=1 cpu_readback=0 cpu_frame_copy=0 plane_slot={} backpressure_busy={} release_wakes={} deadline_timeouts={}\n",
                                     submitted_frames,
                                     revision,
                                     result.completed_draws,
@@ -732,6 +732,9 @@ pub async fn draw3d_ui4_render_task() {
                                     result.height,
                                     result.frame_us,
                                     result.geometry_us,
+                                    result.geometry_prepare_us,
+                                    result.gpu_poll_us,
+                                    result.gpu_poll_iters,
                                     result.resolve_us,
                                     result.present_copy_us,
                                     UI4_PLANE_SLOT,

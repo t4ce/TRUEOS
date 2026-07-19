@@ -8055,7 +8055,9 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         source.width,
         source.height,
     ));
-    let queue_sequence = UI4_DIRECT_QUEUE_LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    let queue_sequence = UI4_DIRECT_QUEUE_LOG_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
     if should_log_ui4_direct_checkpoint(queue_sequence) {
         crate::log_trace!(target: "ui4";
             "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} guc_jobs=0\n",
@@ -8308,8 +8310,9 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
-        let scanout_sequence =
-            UI4_DIRECT_SCANOUT_LOG_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+        let scanout_sequence = UI4_DIRECT_SCANOUT_LOG_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
         if should_log_ui4_direct_checkpoint(scanout_sequence) {
             crate::log_info!(target: "ui4";
                 "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} render_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} guc_jobs=0 elapsed_us={}\n",

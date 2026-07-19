@@ -71,6 +71,7 @@ define_started_flags!(
     UI4_INPUT_SERVICE_STARTED,
     UI4_SLOT4_SERVICE_STARTED,
     UI4_SCREENSHOT_SERVICE_STARTED,
+    UI4_H264_ENCODE_PROBE_STARTED,
     UI4_COMPOSITOR_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
@@ -520,6 +521,13 @@ fn spawn_ui4_slot4_service_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
+}
+
+#[cfg(feature = "trueos_h264_encode_probe")]
+fn spawn_ui4_h264_encode_probe_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+        crate::ui4::ui4_h264_encode_probe_task()
+    })
 }
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1169,7 +1177,9 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 63 + cfg!(feature = "trueos_rdp") as usize;
+const TASK_COUNT: usize = 63
+    + cfg!(feature = "trueos_rdp") as usize
+    + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1409,6 +1419,14 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &UI4_SCREENSHOT_SERVICE_STARTED,
         spawn_ui4_screenshot_service_task,
+    ),
+    #[cfg(feature = "trueos_h264_encode_probe")]
+    TaskSpec::enabled_gated(
+        "ui4-h264-encode-probe",
+        0,
+        ap1_ui_core_ready_gate,
+        &UI4_H264_ENCODE_PROBE_STARTED,
+        spawn_ui4_h264_encode_probe_task,
     ),
     TaskSpec::enabled_gated(
         "ui4-compositor-service",

@@ -8,6 +8,8 @@ mod compositor_service;
 mod damage;
 mod frame_pool;
 mod gpgpu_preview_consumer;
+#[cfg(feature = "trueos_h264_encode_probe")]
+mod h264_encode_probe;
 mod input_broker;
 mod screenshot;
 mod slot4_service;
@@ -28,6 +30,8 @@ pub(crate) use gpgpu_preview_consumer::{
     gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_gpgpu_preview_start,
     request_gpgpu_preview_stop,
 };
+#[cfg(feature = "trueos_h264_encode_probe")]
+pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4CursorSource, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4VisualRect,
     software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
