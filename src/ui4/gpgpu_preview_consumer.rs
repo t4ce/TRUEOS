@@ -16,8 +16,8 @@ use super::{
     WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
     create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
-    gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame, replace_window_frame,
-    take_owner_input_events, writable_rgba_view,
+    gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame, publish_window_frames,
+    replace_window_frame, take_owner_input_events, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -705,7 +705,7 @@ fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static st
     });
     surfaces.extend(preview.extra_surfaces.iter().copied());
 
-    for surface in surfaces {
+    for surface in &surfaces {
         preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
         let lease = match acquire_frame_buffer(surface.frame) {
             Ok(lease) => lease,
@@ -729,12 +729,20 @@ fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static st
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
             return Err("static30-frame-publish-failed");
         }
-        if publish_window_frame(PREVIEW_OWNER, surface.window, DamageRect::FULL).is_err() {
-            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("static30-window-publish-failed");
-        }
-        preview.metrics.published = preview.metrics.published.saturating_add(1);
     }
+
+    let publications = surfaces
+        .iter()
+        .map(|surface| (surface.window, DamageRect::FULL))
+        .collect::<Vec<_>>();
+    if publish_window_frames(PREVIEW_OWNER, &publications).is_err() {
+        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+        return Err("static30-window-publish-failed");
+    }
+    preview.metrics.published = preview
+        .metrics
+        .published
+        .saturating_add(publications.len() as u64);
 
     preview.static_needs_publish = false;
     crate::log_info!(

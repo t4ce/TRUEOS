@@ -84,6 +84,7 @@ static DIRECT_BLT_STATE: Mutex<Option<DirectBltState>> = Mutex::new(None);
 static DIRECT_BLT_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_BLT_SMOKE_RAN: AtomicBool = AtomicBool::new(false);
 static DIRECT_BLT_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(1);
+static GUC_BLT_PROBE: Mutex<GucBltProbeRuntime> = Mutex::new(GucBltProbeRuntime::new());
 
 #[derive(Copy, Clone, Debug)]
 struct DirectBltState {
@@ -105,6 +106,224 @@ struct DirectBltState {
 
 unsafe impl Send for DirectBltState {}
 unsafe impl Sync for DirectBltState {}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GucBcs0FastCopyProbe {
+    pub(crate) forcewake: bool,
+    pub(crate) ggtt: bool,
+    pub(crate) ppgtt: bool,
+    pub(crate) batch: bool,
+    pub(crate) submitted: bool,
+    pub(crate) pending: bool,
+    pub(crate) retired: bool,
+    pub(crate) timeline_retired: bool,
+    pub(crate) copy_ok: bool,
+    pub(crate) src_preserved: bool,
+    pub(crate) marker: u32,
+    pub(crate) retire_ms: u64,
+}
+
+impl GucBcs0FastCopyProbe {
+    pub(crate) const fn passed(self) -> bool {
+        self.submitted
+            && self.retired
+            && self.timeline_retired
+            && self.copy_ok
+            && self.src_preserved
+    }
+}
+
+struct GucBltProbeRuntime {
+    pending: Option<crate::gpu::executor::KernelSubmission>,
+    started_tick: u64,
+    src_before: [u32; 4],
+    dst_before: [u32; 4],
+    completed: Option<GucBcs0FastCopyProbe>,
+}
+
+impl GucBltProbeRuntime {
+    const fn new() -> Self {
+        Self {
+            pending: None,
+            started_tick: 0,
+            src_before: [0; 4],
+            dst_before: [0; 4],
+            completed: None,
+        }
+    }
+}
+
+/// Submit one 4x4 XY_FAST_COPY_BLT through the mediated GuC BCS0 lane.
+///
+/// This intentionally has no direct-execlist fallback. If the marker does not
+/// retire during this call, the exact executor token and all backing storage
+/// remain live; a later probe call only observes that same submission.
+pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
+    let Some(dev) = super::claimed_device() else {
+        return GucBcs0FastCopyProbe::default();
+    };
+    let Some(state) = direct_blt_state_once() else {
+        return GucBcs0FastCopyProbe::default();
+    };
+    let mut runtime = GUC_BLT_PROBE.lock();
+    if let Some(completed) = runtime.completed {
+        return completed;
+    }
+    if runtime.pending.is_some() {
+        return guc_blt_poll_and_retire(state, &mut runtime);
+    }
+
+    let forcewake = direct_blt_forcewake(dev);
+    let ggtt = forcewake && direct_blt_map_state(dev, state);
+    let ppgtt = ggtt && direct_blt_init_ppgtt(state);
+    let (src_before, dst_before) = if ppgtt {
+        direct_blt_seed_fast_copy_buffers(state)
+    } else {
+        ([0; 4], [0; 4])
+    };
+    let batch = ppgtt && direct_blt_encode_fast_copy_batch(state);
+    let prepared = batch && guc_blt_prepare_context(state);
+    if !prepared {
+        return GucBcs0FastCopyProbe {
+            forcewake,
+            ggtt,
+            ppgtt,
+            batch,
+            ..GucBcs0FastCopyProbe::default()
+        };
+    }
+
+    let (hwlrca_lo, hwlrca_hi) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
+    let descriptor = crate::gpu::physical::PhysicalContextDescriptor {
+        engine: crate::gpu::physical::EngineClass::Copy,
+        hwlrca_lo,
+        hwlrca_hi,
+        gpuvm_root_phys: state.ppgtt_phys,
+    };
+    super::ggtt_invalidate(dev);
+    core::sync::atomic::fence(Ordering::SeqCst);
+    let submission = match crate::gpu::executor::submit_kernel_context(
+        crate::gpu::vgpu::KernelClient::Ui4Blitter,
+        descriptor,
+    ) {
+        Ok(submission) => submission,
+        Err(error) => {
+            crate::log!(
+                "intel/blt: guc-bcs0-fast-copy submitted=0 error={:?} path=guc direct_elsp=0 legacy_fallback=0\n",
+                error
+            );
+            return GucBcs0FastCopyProbe {
+                forcewake,
+                ggtt,
+                ppgtt,
+                batch,
+                ..GucBcs0FastCopyProbe::default()
+            };
+        }
+    };
+    runtime.pending = Some(submission);
+    runtime.started_tick = direct_blt_now_tick();
+    runtime.src_before = src_before;
+    runtime.dst_before = dst_before;
+    guc_blt_poll_and_retire(state, &mut runtime)
+}
+
+fn guc_blt_prepare_context(state: DirectBltState) -> bool {
+    let Some(ring_tail_bytes) = direct_blt_build_ring_batch_start(state) else {
+        return false;
+    };
+    let Some(ring_ctl) = direct_blt_ring_ctl_value(DIRECT_BLT_RING_BYTES) else {
+        return false;
+    };
+    direct_blt_init_context_image(
+        state,
+        DIRECT_BLT_GPU_VA_RING_BASE as u32,
+        ring_tail_bytes as u32,
+        ring_ctl,
+    )
+}
+
+fn guc_blt_poll_and_retire(
+    state: DirectBltState,
+    runtime: &mut GucBltProbeRuntime,
+) -> GucBcs0FastCopyProbe {
+    let observed = guc_blt_poll_result(state, DIRECT_BLT_SMOKE_MARKER);
+    let retired = observed == DIRECT_BLT_SMOKE_MARKER;
+    let mut timeline_retired = false;
+    if retired {
+        if let Some(submission) = runtime.pending {
+            timeline_retired =
+                crate::gpu::executor::complete_kernel_submission(submission, true).is_some();
+            if timeline_retired {
+                runtime.pending.take();
+            }
+        }
+    }
+    let (src_after, dst_after) = direct_blt_read_fast_copy_buffers(state);
+    let src_preserved = src_after == runtime.src_before;
+    let copy_ok = dst_after == runtime.src_before;
+    let report = GucBcs0FastCopyProbe {
+        forcewake: true,
+        ggtt: true,
+        ppgtt: true,
+        batch: true,
+        submitted: true,
+        pending: runtime.pending.is_some(),
+        retired,
+        timeline_retired,
+        copy_ok,
+        src_preserved,
+        marker: observed,
+        retire_ms: direct_blt_elapsed_ms_since(runtime.started_tick),
+    };
+    crate::log_info!(
+        target: "gfx";
+        "intel/blt: guc-bcs0-fast-copy forcewake={} ggtt={} ppgtt={} batch={} submitted={} pending={} retired={} timeline_retired={} copy_ok={} src_preserved={} dst_before_poisoned={} retire_ms={} observed=0x{:08X} expected=0x{:08X} engine=bcs0 class=3 instance=0 rect={}x{} pitch={} path=guc direct_elsp=0 legacy_fallback=0 cmd=xy-fast-copy-blt\n",
+        report.forcewake as u8,
+        report.ggtt as u8,
+        report.ppgtt as u8,
+        report.batch as u8,
+        report.submitted as u8,
+        report.pending as u8,
+        report.retired as u8,
+        report.timeline_retired as u8,
+        report.copy_ok as u8,
+        report.src_preserved as u8,
+        (runtime.dst_before == direct_blt_fast_copy_dst_expected_before()) as u8,
+        report.retire_ms,
+        report.marker,
+        DIRECT_BLT_SMOKE_MARKER,
+        DIRECT_BLT_COPY_WIDTH,
+        DIRECT_BLT_COPY_HEIGHT,
+        DIRECT_BLT_COPY_PITCH_BYTES,
+    );
+    if retired && timeline_retired {
+        runtime.completed = Some(report);
+    }
+    report
+}
+
+fn guc_blt_poll_result(state: DirectBltState, expected: u32) -> u32 {
+    let mut observed = 0;
+    for _ in 0..DIRECT_BLT_SMOKE_POLL_ITERS {
+        super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
+        observed = unsafe { core::ptr::read_volatile(state.result_virt as *const u32) };
+        if observed == expected {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    observed
+}
+
+fn guc_blt_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+    let base = (context_gpu_addr as u32) & 0xFFFF_F000;
+    let descriptor = base
+        | CTX_DESC_VALID
+        | CTX_DESC_PRIVILEGE
+        | (INTEL_LEGACY_64B_CONTEXT << CTX_DESC_ADDRESSING_MODE_SHIFT);
+    (descriptor, (context_gpu_addr >> 32) as u32)
+}
 
 pub(crate) fn submit_bcs0_mi_smoke_once() -> bool {
     if DIRECT_BLT_SMOKE_RAN.swap(true, Ordering::AcqRel) {

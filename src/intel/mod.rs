@@ -24,6 +24,7 @@ pub(crate) mod stats;
 pub(crate) mod types;
 mod uc_fw;
 
+pub(crate) use self::blt::submit_guc_bcs0_fast_copy_probe_now;
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
 pub(crate) use self::media::sfc_cmd as xelp_media_sfc;
@@ -401,6 +402,15 @@ pub(crate) fn queue_ui4_overlay_composition(
         sparse_static_painter,
         reason,
     )
+}
+
+pub(crate) fn queue_ui4_static_overlay_composition_cpu(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_static_overlay_composition_cpu(plane_slot, tiles, damage, reason)
 }
 
 pub(crate) fn queue_ui4_direct_overlay_frame(

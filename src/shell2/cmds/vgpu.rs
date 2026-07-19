@@ -6,7 +6,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vgpu status");
-    print_shell_line(io, "vgpu test broker|abi|guc|compute|font|all");
+    print_shell_line(io, "vgpu test broker|abi|guc|compute|blit|font|all");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -19,14 +19,16 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
                 test if test.eq_ignore_ascii_case("abi") => test_abi(io),
                 test if test.eq_ignore_ascii_case("guc") => test_guc(io),
                 test if test.eq_ignore_ascii_case("compute") => test_compute(io),
+                test if test.eq_ignore_ascii_case("blit") => test_blit(io),
                 test if test.eq_ignore_ascii_case("font") => test_font(io),
                 test if test.eq_ignore_ascii_case("all") => {
                     let broker = test_broker(io);
                     let abi = test_abi(io);
                     let guc = test_guc(io);
                     let compute = test_compute(io);
+                    let blit = test_blit(io);
                     let font = test_font(io);
-                    broker && abi && guc && compute && font
+                    broker && abi && guc && compute && blit && font
                 }
                 _ => {
                     usage(io);
@@ -96,6 +98,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_kernel_timeline(io, "render/font", KernelClient::Render);
     print_kernel_timeline(io, "gpgpu", KernelClient::Gpgpu);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
+    print_kernel_timeline(io, "ui4-blitter", KernelClient::Ui4Blitter);
 }
 
 fn print_kernel_timeline(io: &'static dyn ShellBackend2, name: &str, client: KernelClient) {
@@ -229,6 +232,41 @@ fn test_compute(io: &'static dyn ShellBackend2) -> bool {
         .as_str(),
     );
     dispatch && timeline
+}
+
+fn test_blit(io: &'static dyn ShellBackend2) -> bool {
+    let before = vgpu::kernel_timeline(KernelClient::Ui4Blitter).unwrap_or_default();
+    let probe = crate::intel::submit_guc_bcs0_fast_copy_probe_now();
+    let after = vgpu::kernel_timeline(KernelClient::Ui4Blitter).unwrap_or_default();
+    let timeline = after.submitted > 0
+        && after.submitted >= before.submitted
+        && after.completed == after.submitted
+        && after.failures == 0;
+    print_shell_line(
+        io,
+        format!(
+            "vgpu blit: engine=bcs0 path=guc forcewake={} ggtt={} ppgtt={} batch={} submitted={} pending={} retired={} timeline_retired={} copy_ok={} src_preserved={} marker=0x{:08X} retire_ms={} timeline={} points={}->{} completed={} physical_serial={} legacy_fallback=0",
+            probe.forcewake as u8,
+            probe.ggtt as u8,
+            probe.ppgtt as u8,
+            probe.batch as u8,
+            probe.submitted as u8,
+            probe.pending as u8,
+            probe.retired as u8,
+            probe.timeline_retired as u8,
+            probe.copy_ok as u8,
+            probe.src_preserved as u8,
+            probe.marker,
+            probe.retire_ms,
+            timeline as u8,
+            before.submitted,
+            after.submitted,
+            after.completed,
+            after.last_physical_serial,
+        )
+        .as_str(),
+    );
+    probe.passed() && timeline
 }
 
 fn test_font(io: &'static dyn ShellBackend2) -> bool {

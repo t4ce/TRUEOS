@@ -4145,7 +4145,15 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    if !dst.is_valid() || !sprite_quad_worklist_ready() {
+    // Do not call `sprite_quad_worklist_ready()` here. That helper runs the
+    // legacy synchronous smoke probe and polls its marker on the caller's CPU.
+    // UI4 calls this entry point from an Embassy task and owns an asynchronous
+    // GuC completion path below; making admission depend on the synchronous
+    // probe can time out a successfully admitted GuC request, poison the
+    // one-shot readiness flag, and prevent the real compositor request from
+    // ever being queued. Preparing and admitting this request is the capability
+    // check; its marker is validated by `poll_ui4_compositor_submission()`.
+    if !dst.is_valid() {
         return Err(Ui4CompositorSubmitError::Unavailable);
     }
     let total_descs = runs

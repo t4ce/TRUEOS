@@ -890,6 +890,55 @@ pub(crate) fn publish_window_frame(
     Ok(window.publish_serial)
 }
 
+/// Publish a coherent set of already-complete producer frames as one broker
+/// transaction. The validation pass changes nothing; only after every handle
+/// and damage rectangle is accepted do all records become Ready under the same
+/// lock. A compositor snapshot therefore observes either the old set or the
+/// complete new set, never a prefix of a multi-window scene.
+pub(crate) fn publish_window_frames(
+    owner: WindowOwner,
+    publications: &[(WindowId, DamageRect)],
+) -> Result<(), WindowBrokerError> {
+    if publications.iter().any(|(_, damage)| !damage.valid()) {
+        return Err(WindowBrokerError::EmptyDamage);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    for (index, (id, _)) in publications.iter().copied().enumerate() {
+        if publications[..index]
+            .iter()
+            .any(|(previous, _)| *previous == id)
+        {
+            return Err(WindowBrokerError::InvalidHandle);
+        }
+        let (slot, generation) = unpack_handle(id.0)?;
+        let window = broker
+            .windows
+            .get(slot)
+            .ok_or(WindowBrokerError::InvalidHandle)?;
+        if window.generation != generation {
+            return Err(WindowBrokerError::InvalidHandle);
+        }
+        if window.owner != owner {
+            return Err(WindowBrokerError::OwnerMismatch);
+        }
+        match window.state {
+            WindowState::Pending | WindowState::Ready => {}
+            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+            WindowState::Closed => return Err(WindowBrokerError::Closed),
+        }
+    }
+    for (id, damage) in publications.iter().copied() {
+        let (slot, _) = unpack_handle(id.0)?;
+        let window = &mut broker.windows[slot];
+        window.state = WindowState::Ready;
+        window.publish_serial = next_serial(window.publish_serial);
+        window.revision = next_serial(window.revision);
+        let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
+        pending.add(damage);
+    }
+    Ok(())
+}
+
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;

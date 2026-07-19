@@ -49,8 +49,8 @@ pub(crate) use window_broker::{
     WindowPlane, WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
     acknowledge_window_frame, advance_window_close_transitions, begin_window_session, close_window,
     create_window, finish_window_session, finish_window_session_with_request, move_window,
-    publish_window_frame, replace_window_frame, set_window_placement, toggle_window_maximized,
-    visible_windows_for_output,
+    publish_window_frame, publish_window_frames, replace_window_frame, set_window_placement,
+    toggle_window_maximized, visible_windows_for_output,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

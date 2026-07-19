@@ -19,10 +19,12 @@ use super::{
 const COMPOSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
 const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
+const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
+static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -650,13 +652,27 @@ fn queue_async_plane(
         ),
         CompositionTarget::Overlay(slot) => {
             let reason = overlay_async_reason(slot);
-            crate::intel::queue_ui4_overlay_composition(
-                slot,
-                &tiles,
-                plan.damage,
-                sparse_static_painter,
-                reason,
-            )
+            if sparse_static_painter && STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED {
+                if !STATIC_SINGLE_CPU_BASELINE_LOGGED.swap(true, Ordering::AcqRel) {
+                    crate::log_warn!(target: "ui4";
+                        "ui4/static-painter-baseline: backend=cpu-sparse-copy buffering=single content=image plane_isolation=slot-local guc_jobs=0 shader_dispatches=0 source_binding_switches=0 damage=old+new flip=ui4-batched reason=multi-frame-correctness-first log=once\n"
+                    );
+                }
+                crate::intel::queue_ui4_static_overlay_composition_cpu(
+                    slot,
+                    &tiles,
+                    plan.damage,
+                    reason,
+                )
+            } else {
+                crate::intel::queue_ui4_overlay_composition(
+                    slot,
+                    &tiles,
+                    plan.damage,
+                    sparse_static_painter,
+                    reason,
+                )
+            }
         }
     };
     queued.map_err(|_| Ui4CompositorError::PresentFailed)

@@ -1,4 +1,4 @@
-//! GuC-owned physical scheduling for TRUEOS RCS contexts.
+//! GuC-owned physical scheduling for TRUEOS engine contexts.
 //!
 //! This module deliberately knows nothing about users, guests, WebGPU, or
 //! presentation policy.  It owns the GuC context-id namespace and turns an
@@ -20,8 +20,31 @@ const GUC_CONTEXT_DISABLE: u32 = 0;
 const GUC_CONTEXT_ENABLE: u32 = 1;
 const CONTEXT_REGISTRATION_FLAG_KMD: u32 = 1;
 const GUC_RENDER_CLASS: u32 = 0;
-const RCS0_SUBMIT_MASK: u32 = 1;
-const MAX_GUC_RCS_CONTEXTS: usize = 32;
+const GUC_BLITTER_CLASS: u32 = 3;
+const ENGINE_INSTANCE_0_SUBMIT_MASK: u32 = 1;
+const MAX_GUC_CONTEXTS: usize = 32;
+
+#[derive(Copy, Clone)]
+struct GucEngineAbi {
+    class: u32,
+    submit_mask: u32,
+    name: &'static str,
+}
+
+const fn guc_engine_abi(engine: crate::gpu::physical::EngineClass) -> GucEngineAbi {
+    match engine {
+        crate::gpu::physical::EngineClass::RenderCompute => GucEngineAbi {
+            class: GUC_RENDER_CLASS,
+            submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
+            name: "rcs0",
+        },
+        crate::gpu::physical::EngineClass::Copy => GucEngineAbi {
+            class: GUC_BLITTER_CLASS,
+            submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
+            name: "bcs0",
+        },
+    }
+}
 
 /// Generation-tagged reference to one GuC context registration.
 ///
@@ -99,6 +122,7 @@ pub(crate) struct GucSchedulerStatus {
 pub(crate) struct GucContextStatus {
     pub(crate) token: GucContextToken,
     pub(crate) context_id: u32,
+    pub(crate) engine: crate::gpu::physical::EngineClass,
     pub(crate) enabled: bool,
     pub(crate) hwlrca_lo: u32,
     pub(crate) hwlrca_hi: u32,
@@ -106,20 +130,22 @@ pub(crate) struct GucContextStatus {
 }
 
 #[derive(Copy, Clone)]
-struct RcsContextState {
+struct GucContextState {
     registered: bool,
     enabled: bool,
     generation: u32,
+    engine: crate::gpu::physical::EngineClass,
     hwlrca_lo: u32,
     hwlrca_hi: u32,
     submissions: u64,
 }
 
-impl RcsContextState {
+impl GucContextState {
     const EMPTY: Self = Self {
         registered: false,
         enabled: false,
         generation: 0,
+        engine: crate::gpu::physical::EngineClass::RenderCompute,
         hwlrca_lo: 0,
         hwlrca_hi: 0,
         submissions: 0,
@@ -130,16 +156,16 @@ impl RcsContextState {
     }
 }
 
-struct RcsSubmissionState {
-    contexts: [RcsContextState; MAX_GUC_RCS_CONTEXTS],
+struct GucSubmissionState {
+    contexts: [GucContextState; MAX_GUC_CONTEXTS],
     serial: u64,
     registrations: u64,
     deregistrations: u64,
     failures: u64,
 }
 
-static RCS: Mutex<RcsSubmissionState> = Mutex::new(RcsSubmissionState {
-    contexts: [RcsContextState::EMPTY; MAX_GUC_RCS_CONTEXTS],
+static CONTEXTS: Mutex<GucSubmissionState> = Mutex::new(GucSubmissionState {
+    contexts: [GucContextState::EMPTY; MAX_GUC_CONTEXTS],
     serial: 0,
     registrations: 0,
     deregistrations: 0,
@@ -159,10 +185,11 @@ impl IntelGucScheduler {
     pub(crate) fn register(
         &self,
         dev: crate::intel::Dev,
+        engine: crate::gpu::physical::EngineClass,
         hwlrca_lo: u32,
         hwlrca_hi: u32,
     ) -> Result<GucContextToken, GucSubmissionError> {
-        register_rcs_context(dev, hwlrca_lo, hwlrca_hi)
+        register_context(dev, engine, hwlrca_lo, hwlrca_hi)
     }
 
     pub(crate) fn submit(
@@ -170,7 +197,7 @@ impl IntelGucScheduler {
         dev: crate::intel::Dev,
         token: GucContextToken,
     ) -> Result<GucPhysicalSubmission, GucSubmissionError> {
-        submit_rcs_context(dev, token)
+        submit_context(dev, token)
     }
 
     pub(crate) fn destroy(
@@ -178,7 +205,7 @@ impl IntelGucScheduler {
         dev: crate::intel::Dev,
         token: GucContextToken,
     ) -> Result<(), GucSubmissionError> {
-        destroy_rcs_context(dev, token)
+        destroy_context(dev, token)
     }
 
     pub(crate) fn status(&self) -> GucSchedulerStatus {
@@ -196,8 +223,9 @@ pub(crate) fn ready() -> bool {
 
 /// Register one stable HWLRCA with GuC and return its physical context token.
 /// Re-registering the same live HWLRCA is idempotent.
-pub(crate) fn register_rcs_context(
+pub(crate) fn register_context(
     dev: crate::intel::Dev,
+    engine: crate::gpu::physical::EngineClass,
     hwlrca_lo: u32,
     hwlrca_hi: u32,
 ) -> Result<GucContextToken, GucSubmissionError> {
@@ -205,7 +233,8 @@ pub(crate) fn register_rcs_context(
         return Err(GucSubmissionError::TransportNotReady);
     }
 
-    let mut state = RCS.lock();
+    let engine_abi = guc_engine_abi(engine);
+    let mut state = CONTEXTS.lock();
     if let Some((slot, context)) =
         state
             .contexts
@@ -214,6 +243,7 @@ pub(crate) fn register_rcs_context(
             .enumerate()
             .find(|(_, context)| {
                 context.registered
+                    && context.engine == engine
                     && context.hwlrca_lo == hwlrca_lo
                     && context.hwlrca_hi == hwlrca_hi
             })
@@ -237,8 +267,8 @@ pub(crate) fn register_rcs_context(
         &[
             CONTEXT_REGISTRATION_FLAG_KMD,
             context_id,
-            GUC_RENDER_CLASS,
-            RCS0_SUBMIT_MASK,
+            engine_abi.class,
+            engine_abi.submit_mask,
             0,
             0,
             0,
@@ -251,8 +281,11 @@ pub(crate) fn register_rcs_context(
     if !register.accepted {
         state.failures = state.failures.saturating_add(1);
         crate::log!(
-            "intel/guc-submit: register accepted=0 engine=rcs0 context_id={} hwlrca=0x{:08X}:0x{:08X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
+            "intel/guc-submit: register accepted=0 engine={} context_id={} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
+            engine_abi.name,
             context_id,
+            engine_abi.class,
+            engine_abi.submit_mask,
             hwlrca_hi,
             hwlrca_lo,
             register.response,
@@ -263,10 +296,11 @@ pub(crate) fn register_rcs_context(
         return Err(GucSubmissionError::RegisterRejected);
     }
 
-    state.contexts[slot] = RcsContextState {
+    state.contexts[slot] = GucContextState {
         registered: true,
         enabled: false,
         generation,
+        engine,
         hwlrca_lo,
         hwlrca_hi,
         submissions: 0,
@@ -274,11 +308,12 @@ pub(crate) fn register_rcs_context(
     state.registrations = state.registrations.saturating_add(1);
     let token = GucContextToken::new(slot, generation);
     crate::log!(
-        "intel/guc-submit: register accepted=1 engine=rcs0 context_id={} token=0x{:X} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} abi=v1 single_lrc=1\n",
+        "intel/guc-submit: register accepted=1 engine={} context_id={} token=0x{:X} class={} submit_mask=0x{:X} hwlrca=0x{:08X}:0x{:08X} abi=v1 single_lrc=1\n",
+        engine_abi.name,
         context_id,
         token.raw(),
-        GUC_RENDER_CLASS,
-        RCS0_SUBMIT_MASK,
+        engine_abi.class,
+        engine_abi.submit_mask,
         hwlrca_hi,
         hwlrca_lo
     );
@@ -290,7 +325,7 @@ pub(crate) fn register_rcs_context(
 /// The caller has already written/flushed the LRC and ring.  GuC acceptance is
 /// a physical admission serial, not GPU completion; the broker completes its
 /// virtual timeline only when the caller's marker/fence retires.
-pub(crate) fn submit_rcs_context(
+pub(crate) fn submit_context(
     dev: crate::intel::Dev,
     token: GucContextToken,
 ) -> Result<GucPhysicalSubmission, GucSubmissionError> {
@@ -298,7 +333,7 @@ pub(crate) fn submit_rcs_context(
         return Err(GucSubmissionError::TransportNotReady);
     }
 
-    let mut state = RCS.lock();
+    let mut state = CONTEXTS.lock();
     let (slot, generation) = token.parts().ok_or(GucSubmissionError::InvalidContext)?;
     let Some(context) = state.contexts.get(slot).copied() else {
         return Err(GucSubmissionError::InvalidContext);
@@ -306,6 +341,7 @@ pub(crate) fn submit_rcs_context(
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
     }
+    let engine_abi = guc_engine_abi(context.engine);
     let context_id = (slot + 1) as u32;
     let (action, args): (u32, &[u32]) = if context.enabled {
         (INTEL_GUC_ACTION_SCHED_CONTEXT, core::slice::from_ref(&context_id))
@@ -319,7 +355,12 @@ pub(crate) fn submit_rcs_context(
         );
         if !scheduled.accepted {
             state.failures = state.failures.saturating_add(1);
-            log_schedule_rejected(context_id, INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET, scheduled);
+            log_schedule_rejected(
+                engine_abi.name,
+                context_id,
+                INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET,
+                scheduled,
+            );
             return Err(GucSubmissionError::ScheduleRejected);
         }
         state.contexts[slot].enabled = true;
@@ -328,7 +369,8 @@ pub(crate) fn submit_rcs_context(
         let serial = state.serial;
         crate::log_info!(
             target: "gpgpu";
-            "intel/guc-submit: schedule enqueued=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request completion_event=sched-context-mode-done submission_owner=guc\n",
+            "intel/guc-submit: schedule enqueued=1 engine={} context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request completion_event=sched-context-mode-done submission_owner=guc\n",
+            engine_abi.name,
             context_id,
             token.raw(),
             serial,
@@ -342,7 +384,7 @@ pub(crate) fn submit_rcs_context(
     let scheduled = crate::intel::guc_ctb::send_hxg_fast_action(dev, action, args);
     if !scheduled.accepted {
         state.failures = state.failures.saturating_add(1);
-        log_schedule_rejected(context_id, action, scheduled);
+        log_schedule_rejected(engine_abi.name, context_id, action, scheduled);
         return Err(GucSubmissionError::ScheduleRejected);
     }
 
@@ -351,7 +393,8 @@ pub(crate) fn submit_rcs_context(
     let serial = state.serial;
     crate::log_trace!(
         target: "gpgpu";
-        "intel/guc-submit: schedule enqueued=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request submission_owner=guc\n",
+        "intel/guc-submit: schedule enqueued=1 engine={} context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request submission_owner=guc\n",
+        engine_abi.name,
         context_id,
         token.raw(),
         serial,
@@ -365,11 +408,11 @@ pub(crate) fn submit_rcs_context(
 
 /// Disable and unregister one GuC context.  If either GuC action fails the
 /// slot remains live, preventing its ID from being unsafely reused.
-pub(crate) fn destroy_rcs_context(
+pub(crate) fn destroy_context(
     dev: crate::intel::Dev,
     token: GucContextToken,
 ) -> Result<(), GucSubmissionError> {
-    let mut state = RCS.lock();
+    let mut state = CONTEXTS.lock();
     let (slot, generation) = token.parts().ok_or(GucSubmissionError::InvalidContext)?;
     let Some(context) = state.contexts.get(slot).copied() else {
         return Err(GucSubmissionError::InvalidContext);
@@ -377,6 +420,7 @@ pub(crate) fn destroy_rcs_context(
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
     }
+    let engine_abi = guc_engine_abi(context.engine);
     let context_id = (slot + 1) as u32;
     if context.enabled {
         let disabled = crate::intel::guc_ctb::send_hxg_fast_action(
@@ -401,13 +445,14 @@ pub(crate) fn destroy_rcs_context(
     }
 
     let retained_generation = state.contexts[slot].generation;
-    state.contexts[slot] = RcsContextState {
+    state.contexts[slot] = GucContextState {
         generation: retained_generation,
-        ..RcsContextState::EMPTY
+        ..GucContextState::EMPTY
     };
     state.deregistrations = state.deregistrations.saturating_add(1);
     crate::log!(
-        "intel/guc-submit: deregister accepted=1 engine=rcs0 context_id={} token=0x{:X}\n",
+        "intel/guc-submit: deregister accepted=1 engine={} context_id={} token=0x{:X}\n",
+        engine_abi.name,
         context_id,
         token.raw()
     );
@@ -415,9 +460,9 @@ pub(crate) fn destroy_rcs_context(
 }
 
 pub(crate) fn scheduler_status() -> GucSchedulerStatus {
-    let state = RCS.lock();
+    let state = CONTEXTS.lock();
     GucSchedulerStatus {
-        capacity: MAX_GUC_RCS_CONTEXTS,
+        capacity: MAX_GUC_CONTEXTS,
         registered: state
             .contexts
             .iter()
@@ -436,7 +481,7 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
 }
 
 pub(crate) fn context_status() -> Vec<GucContextStatus> {
-    let state = RCS.lock();
+    let state = CONTEXTS.lock();
     state
         .contexts
         .iter()
@@ -446,6 +491,7 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
         .map(|(slot, context)| GucContextStatus {
             token: context.token(slot),
             context_id: (slot + 1) as u32,
+            engine: context.engine,
             enabled: context.enabled,
             hwlrca_lo: context.hwlrca_lo,
             hwlrca_hi: context.hwlrca_hi,
@@ -455,12 +501,14 @@ pub(crate) fn context_status() -> Vec<GucContextStatus> {
 }
 
 fn log_schedule_rejected(
+    engine: &'static str,
     context_id: u32,
     action: u32,
     scheduled: crate::intel::guc_ctb::CtbSendResult,
 ) {
     crate::log!(
-        "intel/guc-submit: schedule enqueued=0 engine=rcs0 context_id={} action=0x{:04X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
+        "intel/guc-submit: schedule enqueued=0 engine={} context_id={} action=0x{:04X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
+        engine,
         context_id,
         action,
         scheduled.response,

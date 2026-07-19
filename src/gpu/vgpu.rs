@@ -67,6 +67,10 @@ pub(crate) enum KernelClient {
     /// frame in flight while video conversion, fonts, and application compute
     /// continue to submit through `Gpgpu`.
     Ui4Compositor,
+    /// Persistent GuC-owned BCS0 lane for UI4 copies and composition staging.
+    /// Keeping it separate from the RCS compositor lane gives copy work its
+    /// own backpressure and completion timeline.
+    Ui4Blitter,
 }
 
 impl KernelClient {
@@ -75,6 +79,7 @@ impl KernelClient {
             Self::Render => "kernel-render",
             Self::Gpgpu => "kernel-gpgpu",
             Self::Ui4Compositor => "kernel-ui4-compositor",
+            Self::Ui4Blitter => "kernel-ui4-blitter",
         }
     }
 
@@ -83,6 +88,7 @@ impl KernelClient {
             Self::Render => Principal::KernelRender,
             Self::Gpgpu => Principal::KernelGpgpu,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
+            Self::Ui4Blitter => Principal::KernelUi4Blitter,
         }
     }
 
@@ -91,6 +97,7 @@ impl KernelClient {
             Self::Render => QueueClass::Render,
             Self::Gpgpu => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
+            Self::Ui4Blitter => QueueClass::Copy,
         }
     }
 }
@@ -100,6 +107,7 @@ pub(crate) enum Principal {
     KernelRender,
     KernelGpgpu,
     KernelUi4Compositor,
+    KernelUi4Blitter,
     HostRuntime,
     HullGuest(u16),
     RuntimeTest(u16),
@@ -111,6 +119,7 @@ impl Principal {
             Self::KernelRender => "kernel-render",
             Self::KernelGpgpu => "kernel-gpgpu",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
+            Self::KernelUi4Blitter => "kernel-ui4-blitter",
             Self::HostRuntime => "host-runtime",
             Self::HullGuest(_) => "hull-guest",
             Self::RuntimeTest(_) => "runtime-test",
@@ -1072,7 +1081,8 @@ fn allowed_capabilities(
     match principal {
         Principal::KernelRender
         | Principal::KernelGpgpu
-        | Principal::KernelUi4Compositor => caps
+        | Principal::KernelUi4Compositor
+        | Principal::KernelUi4Blitter => caps
             .union(Capabilities::PRESENT)
             .union(Capabilities::KERNEL_CONTEXT),
         Principal::HostRuntime | Principal::HullGuest(_) | Principal::RuntimeTest(_) => caps,
@@ -1083,7 +1093,8 @@ const fn quota_for(principal: Principal) -> Quota {
     match principal {
         Principal::KernelRender
         | Principal::KernelGpgpu
-        | Principal::KernelUi4Compositor => Quota::KERNEL,
+        | Principal::KernelUi4Compositor
+        | Principal::KernelUi4Blitter => Quota::KERNEL,
         Principal::HostRuntime => Quota::HOST,
         Principal::HullGuest(_) => Quota::GUEST,
         Principal::RuntimeTest(_) => Quota::TEST,
@@ -1110,9 +1121,12 @@ fn ensure_kernel_device(
     if root_phys == 0 {
         return Err(VgpuError::Physical(PhysicalGpuError::InvalidGpuVm));
     }
-    let capabilities = Capabilities::CLIENT_BASE
+    let mut capabilities = Capabilities::CLIENT_BASE
         .union(Capabilities::PRESENT)
         .union(Capabilities::KERNEL_CONTEXT);
+    if client == KernelClient::Ui4Blitter {
+        capabilities = capabilities.union(Capabilities::COPY);
+    }
     let record = VirtualDevice {
         principal,
         capabilities,

@@ -920,6 +920,11 @@ struct OverlaySurfacePool {
     front_index: Option<usize>,
     surfaces: [Option<OverlaySurface>; OVERLAY_SWAP_BUFFER_COUNT],
     damage_debt: [CompositionDamageRegion; OVERLAY_SWAP_BUFFER_COUNT],
+    /// False means the allocation still contains the transparent zero fill
+    /// performed by `ensure_overlay_surface_for_pipe` and has never been used
+    /// as a composition destination. Sparse immutable painters can use that
+    /// known base directly instead of launching a fullscreen clear.
+    content_initialized: [bool; OVERLAY_SWAP_BUFFER_COUNT],
     /// Previous-size surface retained only until the replacement is proven
     /// live. It is not a render target and must be reclaimed after the latch.
     retiring_front: Option<OverlaySurface>,
@@ -976,6 +981,7 @@ impl OverlaySurfacePool {
             front_index: None,
             surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
             damage_debt: [CompositionDamageRegion::EMPTY; OVERLAY_SWAP_BUFFER_COUNT],
+            content_initialized: [false; OVERLAY_SWAP_BUFFER_COUNT],
             retiring_front: None,
         }
     }
@@ -4225,6 +4231,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
         effective,
         false,
         false,
+        false,
     );
     let compositor = match gpu_composed {
         GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
@@ -6810,6 +6817,7 @@ fn mark_overlay_surface_front(surface: OverlaySurface) {
             return;
         }
         pool.front_index = Some(surface.buffer_index);
+        pool.content_initialized[surface.buffer_index] = true;
         pool.retiring_front.take()
     };
     if let Some(retiring) = retiring {
@@ -6820,6 +6828,23 @@ fn mark_overlay_surface_front(surface: OverlaySurface) {
         if !release_detached_overlay_surface(dev, retiring, "replacement-proven-live") {
             surface_pool.lock().retiring_front = Some(retiring);
         }
+    }
+}
+
+fn mark_overlay_surface_content_initialized(surface: OverlaySurface) {
+    let Some(surface_pool) = overlay_surface_pool(surface.pipe, surface.plane_slot) else {
+        return;
+    };
+    let mut pool = surface_pool.lock();
+    if pool.matches(surface.width, surface.height, surface.pipe)
+        && pool
+            .surfaces
+            .get(surface.buffer_index)
+            .copied()
+            .flatten()
+            .is_some_and(|owned| owned.gpu == surface.gpu)
+    {
+        pool.content_initialized[surface.buffer_index] = true;
     }
 }
 
@@ -7412,6 +7437,7 @@ fn ensure_overlay_surface_for_pipe(
                 front_index: None,
                 surfaces: [None; OVERLAY_SWAP_BUFFER_COUNT],
                 damage_debt: [CompositionDamageRegion::EMPTY; OVERLAY_SWAP_BUFFER_COUNT],
+                content_initialized: [false; OVERLAY_SWAP_BUFFER_COUNT],
                 retiring_front: resize_guard.map(|(_, _, _, _, surface)| surface),
             };
         }
@@ -7925,13 +7951,13 @@ pub(crate) fn queue_ui4_overlay_composition(
     }
     let surface = ensure_overlay_surface_on_slot(dev, plane_slot, width, height)
         .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let effective = {
+    let (effective, destination_fresh_transparent) = {
         let surface_pool = overlay_surface_pool(surface.pipe, surface.plane_slot)
             .ok_or(Ui4AsyncCompositionError::Unavailable)?;
         let pool = surface_pool.lock();
         let mut effective = pool.damage_debt[surface.buffer_index];
         effective.add_region(change);
-        effective
+        (effective, !pool.content_initialized[surface.buffer_index])
     };
     let proof = prepare_ui4_composition_proof(
         tiles,
@@ -7940,26 +7966,143 @@ pub(crate) fn queue_ui4_overlay_composition(
         surface.height,
         false,
     );
+    let content_change = if sparse_static_painter && destination_fresh_transparent {
+        let mut painted = CompositionDamageRegion::EMPTY;
+        for tile in tiles {
+            if let Some(rect) = clip_composition_damage(
+                CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height),
+                surface.width,
+                surface.height,
+            ) {
+                painted.add(rect);
+            }
+        }
+        painted
+    } else {
+        change
+    };
     match compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         surface,
         tiles,
         effective,
         true,
         sparse_static_painter,
+        destination_fresh_transparent,
     ) {
-        GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
-            gpu: Some(gpu),
-            target: Ui4AsyncCompositionTarget::Overlay { surface },
-            proof,
-            change,
-            effective,
-            tile_count: tiles.len(),
-            queued_ns: crate::chronos::monotonic_nanos(),
-            reason,
-        }),
+        GpgpuCompositionResult::Queued(gpu) => {
+            // The accepted GPU request now owns this destination. A later
+            // flip retry must no longer treat it as the pristine zero-filled
+            // allocation even though it has not become scanout front yet.
+            mark_overlay_surface_content_initialized(surface);
+            Ok(Ui4AsyncComposition {
+                gpu: Some(gpu),
+                target: Ui4AsyncCompositionTarget::Overlay { surface },
+                proof,
+                // A pristine destination was already transparent outside the
+                // static rectangles. Only those painted rectangles become
+                // debt on the other swap buffer, not the broker's conservative
+                // first-scene fullscreen invalidation.
+                change: content_change,
+                effective,
+                tile_count: tiles.len(),
+                queued_ns: crate::chronos::monotonic_nanos(),
+                reason,
+            })
+        }
         GpgpuCompositionResult::SubmittedIncomplete => Err(Ui4AsyncCompositionError::Busy),
         _ => Err(Ui4AsyncCompositionError::Failed),
     }
+}
+
+/// Correctness-first composition backend for immutable single-buffer Frames.
+///
+/// This deliberately contains no shader, GuC submission, source binding-table
+/// switch, marker, or CPU readback. Producer pixels are painted directly into
+/// the display-owned back buffer over slot-local damage, after which the
+/// ordinary UI4 batched plane flip owns presentation.
+pub(crate) fn queue_ui4_static_overlay_composition_cpu(
+    plane_slot: usize,
+    tiles: &[RgbaOverlayTile<'_>],
+    damage: CompositionDamageRegion,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
+    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let (width, height) = active_scanout_dimensions()
+        .or_else(|| active_primary_surface().map(|primary| (primary.width, primary.height)))
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let change = clip_composition_damage_region(damage, width, height);
+    if change.is_empty() || tiles.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let surface = ensure_overlay_surface_on_slot(dev, plane_slot, width, height)
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let (effective, destination_fresh_transparent) = {
+        let surface_pool = overlay_surface_pool(surface.pipe, surface.plane_slot)
+            .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+        let pool = surface_pool.lock();
+        let mut effective = pool.damage_debt[surface.buffer_index];
+        effective.add_region(change);
+        (effective, !pool.content_initialized[surface.buffer_index])
+    };
+
+    // A fresh allocation was zero-filled and flushed before mapping. Only the
+    // rectangles painted now differ from that transparent base; carrying the
+    // broker's conservative first-scene fullscreen damage into the other back
+    // buffer would recreate the very avalanche this baseline is meant to cut.
+    let mut painted = CompositionDamageRegion::EMPTY;
+    for tile in tiles {
+        if let Some(rect) = clip_composition_damage(
+            CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height),
+            surface.width,
+            surface.height,
+        ) {
+            painted.add(rect);
+        }
+    }
+    if painted.is_empty() {
+        return Err(Ui4AsyncCompositionError::Unavailable);
+    }
+    let work_damage = if destination_fresh_transparent {
+        painted
+    } else {
+        effective
+    };
+
+    for damaged in work_damage.rects() {
+        if !destination_fresh_transparent {
+            fill_overlay_rect(
+                surface,
+                damaged.x,
+                damaged.y,
+                damaged.width,
+                damaged.height,
+                0,
+            );
+        }
+        for tile in tiles {
+            copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damaged)
+                .ok_or(Ui4AsyncCompositionError::Failed)?;
+        }
+    }
+    if !dma_flush_overlay_region(surface, work_damage) {
+        return Err(Ui4AsyncCompositionError::Failed);
+    }
+    mark_overlay_surface_content_initialized(surface);
+
+    Ok(Ui4AsyncComposition {
+        gpu: None,
+        target: Ui4AsyncCompositionTarget::Overlay { surface },
+        proof: None,
+        change: if destination_fresh_transparent {
+            painted
+        } else {
+            change
+        },
+        effective: work_damage,
+        tile_count: tiles.len(),
+        queued_ns: crate::chronos::monotonic_nanos(),
+        reason,
+    })
 }
 
 /// Import one already-rendered UI4 frame into a display-owned GGTT alias.
@@ -8340,8 +8483,14 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
             );
         }
     } else {
+        let backend = if composition.gpu.is_some() {
+            "guc"
+        } else {
+            "cpu-sparse-copy"
+        };
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: scanout-ready reason={} tiles={} effective_rects={} effective_bounds={}x{}@{},{} elapsed_us={}\n",
+            "ui4/compositor: scanout-ready backend={} reason={} tiles={} effective_rects={} effective_bounds={}x{}@{},{} elapsed_us={}\n",
+            backend,
             composition.reason,
             composition.tile_count,
             composition.effective.len(),
@@ -8704,6 +8853,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     damage: CompositionDamageRegion,
     asynchronous: bool,
     sparse_static_painter: bool,
+    destination_fresh_transparent: bool,
 ) -> GpgpuCompositionResult {
     if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || (!asynchronous
@@ -8782,27 +8932,31 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         };
     }
 
-    // Clear and composition live in one ordered batch. This avoids a second
-    // submit/poll and makes the submission boundary unambiguous for fallback.
-    let clear_descriptors = damage
-        .rects()
-        .iter()
-        .copied()
-        .map(|rect| {
-            composition_quad_descriptor(
-                rect,
-                0,
-                0,
-                surface.width,
-                surface.height,
-                u8::MAX,
-                crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_CLEAR,
-            )
-        })
-        .collect::<Vec<_>>();
-    if clear_descriptors.is_empty() {
-        return GpgpuCompositionResult::Complete;
-    }
+    // New overlay allocations are synchronously zero-filled and cache-flushed
+    // before they are mapped. For the immutable sparse painter that is already
+    // the required transparent base, so its first composition must not launch
+    // an otherwise redundant 2560x1440 clear. Once a destination has carried
+    // content, ordinary damage-local clears remain in the same ordered batch.
+    let clear_descriptors = if sparse_static_painter && destination_fresh_transparent {
+        Vec::new()
+    } else {
+        damage
+            .rects()
+            .iter()
+            .copied()
+            .map(|rect| {
+                composition_quad_descriptor(
+                    rect,
+                    0,
+                    0,
+                    surface.width,
+                    surface.height,
+                    u8::MAX,
+                    crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_CLEAR,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
 
     let mut descriptors = Vec::with_capacity(tiles.len());
     for tile in tiles {
@@ -8852,12 +9006,14 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
     let mut runs = Vec::with_capacity(descriptors.len().saturating_add(1));
-    runs.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-        // CLEAR descriptors never sample this binding; using the destination
-        // keeps the run fully valid without another allocation or VA.
-        src: destination,
-        descs: &clear_descriptors,
-    });
+    if !clear_descriptors.is_empty() {
+        runs.push(crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
+            // CLEAR descriptors never sample this binding; using the
+            // destination keeps the run valid without another allocation.
+            src: destination,
+            descs: &clear_descriptors,
+        });
+    }
     runs.extend(
         descriptors
             .iter()
@@ -8867,6 +9023,9 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
                 descs: descriptors,
             }),
     );
+    if runs.is_empty() {
+        return GpgpuCompositionResult::Complete;
+    }
     if asynchronous {
         return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
             destination,
