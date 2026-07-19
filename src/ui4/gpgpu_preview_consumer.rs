@@ -27,6 +27,12 @@ const PREVIEW_MARGIN: u32 = 64;
 const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;
 const COMMAND_POLL_MAX_MS: u64 = 10;
+const STATIC30_FRAME_COUNT: usize = 30;
+const STATIC30_PLANE_COUNT: usize = 3;
+const STATIC30_COLUMNS: u32 = 6;
+const STATIC30_ROWS: u32 = 5;
+const STATIC30_MAX_WIDTH: u32 = 320;
+const STATIC30_MAX_HEIGHT: u32 = 180;
 
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
@@ -37,6 +43,7 @@ pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
     Static,
+    Static30,
     Mandelbrot,
     Chart,
     Plasma,
@@ -46,6 +53,7 @@ impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Static => "static",
+            Self::Static30 => "static30",
             Self::Mandelbrot => "mandelbrot",
             Self::Chart => "chart",
             Self::Plasma => "plasma",
@@ -197,7 +205,16 @@ struct ActivePreview {
     started: Instant,
     next_render: Instant,
     static_needs_publish: bool,
+    extra_sessions: Vec<WindowSessionId>,
+    extra_surfaces: Vec<StaticPreviewSurface>,
     metrics: GpgpuPreviewMetrics,
+}
+
+#[derive(Copy, Clone)]
+struct StaticPreviewSurface {
+    frame: FrameHandle,
+    window: WindowId,
+    scheme: u8,
 }
 
 pub(crate) fn request_gpgpu_preview_start(config: GpgpuPreviewConfig) -> Result<u64, &'static str> {
@@ -266,20 +283,22 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     Ok(preview) => {
                         crate::log_info!(
                             target: "ui4";
-                            "ui4 gpgpu-preview start request={} preset={} producer={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering=double release={} plane_slot={} plane_mutation=none\n",
+                            "ui4 gpgpu-preview start request={} preset={} producer={} owner={:?} frame={} window={} windows={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering={} release={} plane_layout={} plane_mutation=none\n",
                             desired.serial,
                             preview.config.preset.label(),
                             preview_producer_label(preview.config.preset),
                             PREVIEW_OWNER,
                             preview.frame.raw(),
                             preview.window.raw(),
+                            preview_surface_count(&preview),
                             preview.width,
                             preview.height,
                             preview.config.cadence_ms,
                             preview.config.publish_every,
                             preview.config.duration_ms,
+                            preview_buffering_label(preview.config.preset),
                             preview_release_label(preview.config.preset),
-                            preview_plane(preview.config.preset).slot(),
+                            preview_plane_layout(preview.config.preset),
                         );
                         publish_active_status(&preview, GpgpuPreviewPhase::Running, "none");
                         active = Some(preview);
@@ -352,6 +371,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 }
 
 fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
+    if desired.config.preset == GpgpuPreviewPreset::Static30 {
+        return initialize_static30_preview(desired);
+    }
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
     let frame = create_preview_frame(output, PREVIEW_WIDTH, PREVIEW_HEIGHT)
         .map_err(preview_frame_create_error_label)?;
@@ -409,6 +431,8 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         started: now,
         next_render: now,
         static_needs_publish: true,
+        extra_sessions: Vec::new(),
+        extra_surfaces: Vec::new(),
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
