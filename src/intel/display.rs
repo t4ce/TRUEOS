@@ -4219,8 +4219,13 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
     };
 
     let composition_started_ns = crate::chronos::monotonic_nanos();
-    let gpu_composed =
-        compose_premultiplied_rgba_tiles_into_overlay_gpgpu(surface, tiles, effective, false);
+    let gpu_composed = compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
+        surface,
+        tiles,
+        effective,
+        false,
+        false,
+    );
     let compositor = match gpu_composed {
         GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
         GpgpuCompositionResult::Unavailable => {
@@ -7907,6 +7912,7 @@ pub(crate) fn queue_ui4_overlay_composition(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
@@ -7939,6 +7945,7 @@ pub(crate) fn queue_ui4_overlay_composition(
         tiles,
         effective,
         true,
+        sparse_static_painter,
     ) {
         GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
             gpu: Some(gpu),
@@ -8696,6 +8703,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
     asynchronous: bool,
+    sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
     if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
         || (!asynchronous
@@ -8718,7 +8726,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     };
 
-    if asynchronous {
+    if asynchronous && !sparse_static_painter {
         let Some(bounds) = damage
             .bounding_rect()
             .and_then(|rect| clip_composition_damage(rect, surface.width, surface.height))

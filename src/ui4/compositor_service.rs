@@ -22,6 +22,7 @@ const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
 static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -505,6 +506,28 @@ fn queue_async_plane(
         .zip(views.iter().copied())
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
         .collect();
+    // Immutable single-buffer images are already complete rectangles. They do
+    // not need a per-output-pixel layer search: the sparse painter clears only
+    // damage and draws current rectangles in broker order. Plane slots are
+    // independent scanout inputs, so overlap is considered only inside this
+    // already slot-filtered selection.
+    let sparse_static_painter = matches!(plan.target, CompositionTarget::Overlay(_))
+        && !selected.is_empty()
+        && selected.iter().all(|(window, _)| {
+            frame_snapshot(window.frame).is_ok_and(|snapshot| {
+                snapshot.plan.content == FrameContent::Image
+                    && snapshot.plan.buffering == super::FrameBuffering::Single
+            })
+        });
+    if sparse_static_painter
+        && same_slot_windows_overlap(&selected)
+        && !STATIC_SINGLE_OVERLAP_WARNED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_warn!(target: "ui4";
+            "ui4/static-painter: same-slot overlap detected slot={} windows={} needs_threadment=1 action=painter-order-baseline zstack-specialization=deferred log=once\n",
+            target_plane_slot(plan.target), selected.len(),
+        );
+    }
     if let CompositionTarget::Overlay(slot) = plan.target {
         let released_draw3d = selected
             .iter()
@@ -627,10 +650,36 @@ fn queue_async_plane(
         ),
         CompositionTarget::Overlay(slot) => {
             let reason = overlay_async_reason(slot);
-            crate::intel::queue_ui4_overlay_composition(slot, &tiles, plan.damage, reason)
+            crate::intel::queue_ui4_overlay_composition(
+                slot,
+                &tiles,
+                plan.damage,
+                sparse_static_painter,
+                reason,
+            )
         }
     };
     queued.map_err(|_| Ui4CompositorError::PresentFailed)
+}
+
+fn same_slot_windows_overlap(selected: &[(WindowSnapshot, FrameRgbaView)]) -> bool {
+    selected.iter().enumerate().any(|(left_index, (left, _))| {
+        selected
+            .iter()
+            .skip(left_index.saturating_add(1))
+            .any(|(right, _)| placements_overlap(left.placement, right.placement))
+    })
+}
+
+fn placements_overlap(left: WindowPlacement, right: WindowPlacement) -> bool {
+    let left_x = i64::from(left.x);
+    let left_y = i64::from(left.y);
+    let right_x = i64::from(right.x);
+    let right_y = i64::from(right.y);
+    left_x < right_x.saturating_add(i64::from(right.width))
+        && right_x < left_x.saturating_add(i64::from(left.width))
+        && left_y < right_y.saturating_add(i64::from(right.height))
+        && right_y < left_y.saturating_add(i64::from(left.height))
 }
 
 fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {

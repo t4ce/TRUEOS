@@ -105,13 +105,15 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 buffering=double interaction=movable-fixed-size",
+                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 buffering={} plane_layout={} interaction=movable-fixed-size",
                         serial,
                         preset.label(),
                         status.online as u8,
                         duration_ms,
                         cadence_ms,
                         publish_every,
+                        preset.buffering_label(),
+                        preset.plane_layout_label(),
                     )
                     .as_str(),
                 );
@@ -143,7 +145,7 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} buffering=double interaction=movable-fixed-size error={}",
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} buffering={} plane_layout={} interaction=movable-fixed-size error={}",
             status.online as u8,
             status.phase.label(),
             status.desired_running as u8,
@@ -166,6 +168,8 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             status.metrics.last_iterations,
             status.metrics.last_marker,
             status.metrics.last_submit_ms,
+            status.config.preset.buffering_label(),
+            status.config.preset.plane_layout_label(),
             status.last_error,
         )
         .as_str(),

@@ -391,9 +391,16 @@ pub(crate) fn queue_ui4_overlay_composition(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
     damage: CompositionDamageRegion,
+    sparse_static_painter: bool,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_overlay_composition(plane_slot, tiles, damage, reason)
+    self::display::queue_ui4_overlay_composition(
+        plane_slot,
+        tiles,
+        damage,
+        sparse_static_painter,
+        reason,
+    )
 }
 
 pub(crate) fn queue_ui4_direct_overlay_frame(

@@ -59,6 +59,23 @@ impl PerCpu {
     pub fn leave_executor_poll(&self) {
         self.executor_polling.store(false, Ordering::Release);
     }
+
+    /// True while this CPU is inside its Embassy executor poll.
+    ///
+    /// Synchronous adapters which make progress by recursively polling the
+    /// local executor must not be entered from this context: the executor's
+    /// re-entry guard intentionally rejects that poll and the adapter would
+    /// wait forever for work which cannot run.
+    #[inline(always)]
+    pub fn is_executor_polling(&self) -> bool {
+        self.executor_polling.load(Ordering::Acquire)
+    }
+}
+
+#[inline(always)]
+pub fn in_executor_poll() -> bool {
+    let ptr = try_this_cpu_ptr();
+    !ptr.is_null() && unsafe { (*ptr).is_executor_polling() }
 }
 
 pub fn init_bsp() {

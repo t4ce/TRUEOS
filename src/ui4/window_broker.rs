@@ -10,7 +10,10 @@ use spin::Mutex;
 use super::{DamageRect, DamageRegion, FrameHandle, OutputId};
 
 const MAX_WINDOWS: usize = 256;
-const MAX_WINDOWS_PER_SESSION: usize = 16;
+// Temporary static30 composition probe: one trusted app session owns all 30
+// test windows. Plane assignment is independent of session ownership, while
+// the global active-window cap remains the hard system bound.
+const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
 pub(super) const MAX_ACTIVE_WINDOWS: usize = 64;
 

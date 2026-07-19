@@ -59,6 +59,21 @@ impl GpgpuPreviewPreset {
             Self::Plasma => "plasma",
         }
     }
+
+    pub(crate) const fn buffering_label(self) -> &'static str {
+        match self {
+            Self::Static30 => "single",
+            _ => "double",
+        }
+    }
+
+    pub(crate) const fn plane_layout_label(self) -> &'static str {
+        match self {
+            Self::Static => "slot1-direct",
+            Self::Static30 => "slots1+2+3/10-each",
+            _ => "primary",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -205,7 +220,6 @@ struct ActivePreview {
     started: Instant,
     next_render: Instant,
     static_needs_publish: bool,
-    extra_sessions: Vec<WindowSessionId>,
     extra_surfaces: Vec<StaticPreviewSurface>,
     metrics: GpgpuPreviewMetrics,
 }
@@ -296,9 +310,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                             preview.config.cadence_ms,
                             preview.config.publish_every,
                             preview.config.duration_ms,
-                            preview_buffering_label(preview.config.preset),
+                            preview.config.preset.buffering_label(),
                             preview_release_label(preview.config.preset),
-                            preview_plane_layout(preview.config.preset),
+                            preview.config.preset.plane_layout_label(),
                         );
                         publish_active_status(&preview, GpgpuPreviewPhase::Running, "none");
                         active = Some(preview);
@@ -431,7 +445,6 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         started: now,
         next_render: now,
         static_needs_publish: true,
-        extra_sessions: Vec::new(),
         extra_surfaces: Vec::new(),
         metrics: GpgpuPreviewMetrics::default(),
     })
@@ -443,19 +456,10 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         .unwrap_or((PREVIEW_WIDTH.saturating_mul(2), PREVIEW_HEIGHT.saturating_mul(2)));
     let cell_width = (output_width / STATIC30_COLUMNS).max(1);
     let cell_height = (output_height / STATIC30_ROWS).max(1);
-    let mut sessions = Vec::with_capacity(STATIC30_PLANE_COUNT);
     let mut frames = Vec::with_capacity(STATIC30_FRAME_COUNT);
     let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
-
-    for _ in 0..STATIC30_PLANE_COUNT {
-        match begin_window_session(PREVIEW_OWNER) {
-            Ok(session) => sessions.push(session),
-            Err(_) => {
-                abandon_static30_initialization(&sessions, &frames);
-                return Err("static30-session-create-failed");
-            }
-        }
-    }
+    let session = begin_window_session(PREVIEW_OWNER)
+        .map_err(|_| "static30-session-create-failed")?;
 
     for index in 0..STATIC30_FRAME_COUNT {
         let index_u32 = index as u32;
@@ -479,14 +483,14 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         let frame = match create_static30_frame(output, width, height) {
             Ok(frame) => frame,
             Err(_) => {
-                abandon_static30_initialization(&sessions, &frames);
+                abandon_static30_initialization(session, &frames);
                 return Err("static30-frame-create-failed");
             }
         };
         frames.push(frame);
         let window = match create_window(WindowCreate {
             owner: PREVIEW_OWNER,
-            session: sessions[plane_slot - 1],
+            session,
             frame,
             output,
             plane: WindowPlane::Universal(plane_slot as u8),
@@ -502,8 +506,17 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
             interaction: super::WindowInteraction::MOVABLE_FRAME,
         }) {
             Ok(window) => window,
-            Err(_) => {
-                abandon_static30_initialization(&sessions, &frames);
+            Err(error) => {
+                crate::log_warn!(
+                    target: "ui4";
+                    "ui4 gpgpu-preview static30 window admission failed index={} plane_slot={} session={} active_frames={} error={:?}\n",
+                    index,
+                    plane_slot,
+                    session.raw(),
+                    frames.len(),
+                    error,
+                );
+                abandon_static30_initialization(session, &frames);
                 return Err("static30-window-create-failed");
             }
         };
@@ -519,7 +532,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
     Ok(ActivePreview {
         request_serial: desired.serial,
         config: desired.config,
-        session: sessions[0],
+        session,
         frame: first.frame,
         window: first.window,
         width: cell_width
@@ -533,16 +546,13 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         started: now,
         next_render: now,
         static_needs_publish: true,
-        extra_sessions: sessions.iter().copied().skip(1).collect(),
         extra_surfaces: surfaces.iter().copied().skip(1).collect(),
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
 
-fn abandon_static30_initialization(sessions: &[WindowSessionId], frames: &[FrameHandle]) {
-    for session in sessions.iter().copied() {
-        let _ = finish_window_session(PREVIEW_OWNER, session);
-    }
+fn abandon_static30_initialization(session: WindowSessionId, frames: &[FrameHandle]) {
+    let _ = finish_window_session(PREVIEW_OWNER, session);
     for frame in frames.iter().copied() {
         let _ = destroy_frame(frame);
     }
@@ -925,21 +935,6 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     }
 }
 
-const fn preview_buffering_label(preset: GpgpuPreviewPreset) -> &'static str {
-    match preset {
-        GpgpuPreviewPreset::Static30 => "single",
-        _ => "double",
-    }
-}
-
-const fn preview_plane_layout(preset: GpgpuPreviewPreset) -> &'static str {
-    match preset {
-        GpgpuPreviewPreset::Static => "slot1-direct",
-        GpgpuPreviewPreset::Static30 => "slots1+2+3/10-each",
-        _ => "primary",
-    }
-}
-
 fn preview_surface_count(preview: &ActivePreview) -> usize {
     1usize.saturating_add(preview.extra_surfaces.len())
 }
@@ -1039,9 +1034,6 @@ fn resize_preview(
 fn stop_active_preview(preview: ActivePreview, reason: &'static str) {
     let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
     let _ = finish_window_session_with_request(PREVIEW_OWNER, preview.session, close);
-    for session in preview.extra_sessions.iter().copied() {
-        let _ = finish_window_session_with_request(PREVIEW_OWNER, session, close);
-    }
     crate::log_info!(
         target: "ui4";
         "ui4 gpgpu-preview stopped request={} preset={} frame={} window={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",

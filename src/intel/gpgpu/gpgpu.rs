@@ -531,6 +531,7 @@ const PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH: u32 = 1 << 12;
 // marker to retire while data-port writes were still only partially visible to
 // the next GuC context.
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH: u32 = 1 << 9;
+const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
 const PIPE_CONTROL_L3_FABRIC_FLUSH: u32 = 1 << 30;
 const PIPE_CONTROL_TLB_INVALIDATE: u32 = 1 << 18;
@@ -4125,6 +4126,7 @@ pub(crate) fn queue_ui4_compositor_layers(
             submits: 1,
             submit_ms: 0,
         },
+        overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
         "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} context=isolated persistent=1 wait=none\n",
@@ -4255,6 +4257,7 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
             submits: 1,
             submit_ms: 0,
         },
+        overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
         "ui4/guc-compositor: queued serial={} descs={} dst_gpu=0x{:X} context=isolated persistent=1 wait=none\n",
@@ -4403,6 +4406,7 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
             submits: 1,
             submit_ms: 0,
         },
+        overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
         "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X}\n",
@@ -4477,20 +4481,25 @@ pub(crate) fn poll_ui4_compositor_submission(
         return completion;
     }
     if direct_rcs_elapsed_ms_since(pending.started_tick) >= FAILURE_TIMEOUT_MS {
-        runtime.pending = None;
-        runtime.submit.pending = None;
-        let completion = Ui4CompositorCompletion::Failed;
-        runtime.last_completion = Some((submission, completion));
-        drop(runtime);
-        let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
-        crate::log_error!(target: "ui4";
-            "ui4/guc-compositor: completion timeout serial={} observed=0x{:08X} want=0x{:08X} timeout_ms={}\n",
-            pending.submission.serial,
-            observed,
-            pending.marker_value,
-            FAILURE_TIMEOUT_MS,
-        );
-        return completion;
+        // A software timeout is not a GuC cancellation. Releasing this token
+        // would let the next request overwrite the same batch/result storage
+        // while the old context can still execute, and its shared marker could
+        // then falsely retire the replacement request. Keep ownership pinned
+        // until the marker arrives or a future real context-reset path proves
+        // that execution stopped.
+        if !pending.overdue_logged {
+            pending.overdue_logged = true;
+            runtime.pending = Some(pending);
+            drop(runtime);
+            crate::log_error!(target: "ui4";
+                "ui4/guc-compositor: completion overdue serial={} observed=0x{:08X} want=0x{:08X} threshold_ms={} action=keep-pending-no-reuse cancellation=unavailable log=once\n",
+                pending.submission.serial,
+                observed,
+                pending.marker_value,
+                FAILURE_TIMEOUT_MS,
+            );
+        }
+        return Ui4CompositorCompletion::Pending;
     }
     Ui4CompositorCompletion::Pending
 }
@@ -6917,43 +6926,70 @@ fn upload_artifact_from_sources(
     gpu: u64,
     strict_runtime_artifact: bool,
 ) -> Option<UploadedKernelArtifact> {
-    match read_runtime_artifact_bytes(artifact.name) {
-        Ok(Some(bytes)) if !bytes.is_empty() => {
-            let path = runtime_artifact_display_path(artifact.name);
-            let spv_bytes = read_runtime_spv_len(artifact.name).unwrap_or(artifact.spv.len());
-            return upload_artifact_bytes(
-                dev,
-                artifact,
-                gpu,
-                bytes.as_slice(),
-                "fs",
-                path.as_str(),
-                spv_bytes,
-            );
-        }
-        Ok(Some(_)) => {
-            crate::log_info!(
-                target: "gpgpu";
-                "intel/gpgpu: {} runtime artifact rejected reason=empty path={}\n",
-                artifact.name,
-                runtime_artifact_display_path(artifact.name)
-            );
-            if strict_runtime_artifact {
-                return None;
+    // `kfs::read_file` is a synchronous wrapper around a future queued on the
+    // current executor. Calling it from an Embassy task cannot make progress:
+    // the executor re-entry guard rejects the recursive poll. UI4 reaches
+    // first-use uploads from its compositor and producer tasks, so those paths
+    // must use the build-embedded artifact instead of freezing the whole UI
+    // core. Runtime-artifact overrides remain available to callers outside an
+    // executor poll; a strict reload attempted inside one is rejected instead
+    // of deadlocking and must eventually be exposed through an async loader.
+    if !crate::percpu::in_executor_poll() {
+        match read_runtime_artifact_bytes(artifact.name) {
+            Ok(Some(bytes)) if !bytes.is_empty() => {
+                let path = runtime_artifact_display_path(artifact.name);
+                let spv_bytes = read_runtime_spv_len(artifact.name).unwrap_or(artifact.spv.len());
+                return upload_artifact_bytes(
+                    dev,
+                    artifact,
+                    gpu,
+                    bytes.as_slice(),
+                    "fs",
+                    path.as_str(),
+                    spv_bytes,
+                );
+            }
+            Ok(Some(_)) => {
+                crate::log_info!(
+                    target: "gpgpu";
+                    "intel/gpgpu: {} runtime artifact rejected reason=empty path={}\n",
+                    artifact.name,
+                    runtime_artifact_display_path(artifact.name)
+                );
+                if strict_runtime_artifact {
+                    return None;
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                crate::log_info!(
+                    target: "gpgpu";
+                    "intel/gpgpu: {} runtime artifact read failed path={} err={:?}\n",
+                    artifact.name,
+                    runtime_artifact_display_path(artifact.name),
+                    err
+                );
+                if strict_runtime_artifact {
+                    return None;
+                }
             }
         }
-        Ok(None) => {}
-        Err(err) => {
+    } else if strict_runtime_artifact {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} runtime artifact reload rejected reason=executor-context-would-deadlock path={}\n",
+            artifact.name,
+            runtime_artifact_display_path(artifact.name),
+        );
+        return None;
+    } else {
+        static EXECUTOR_EMBEDDED_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
+        if !EXECUTOR_EMBEDDED_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
             crate::log_info!(
                 target: "gpgpu";
-                "intel/gpgpu: {} runtime artifact read failed path={} err={:?}\n",
+                "intel/gpgpu: runtime artifact lookup bypassed kernel={} reason=executor-context-would-deadlock fallback=embedded\n",
                 artifact.name,
-                runtime_artifact_display_path(artifact.name),
-                err
             );
-            if strict_runtime_artifact {
-                return None;
-            }
         }
     }
 
@@ -7226,6 +7262,7 @@ struct Ui4CompositorPending {
     marker_value: u32,
     kernel: &'static str,
     stats: GpgpuWorklistSubmitStats,
+    overdue_logged: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -8180,8 +8217,15 @@ fn direct_rcs_push_gpgpu_dispatch_epilogue(
     post_marker_slot: usize,
     post_marker: u32,
 ) -> bool {
+    // The CPU and display must not infer dispatch completion from a later
+    // MI_STORE_DATA_IMM.  That store can become observable independently of
+    // the dataport/cache release which makes the destination usable.  Keep the
+    // full Gen12 HDC/L3 drain as a separate producer release, then make its
+    // retirement cookie the post-sync write of an ordered PIPE_CONTROL.  The
+    // result allocation is addressed through this context's PPGTT, so
+    // PIPE_CONTROL_DEST_GGTT deliberately remains clear.
     direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_FLUSH_BITS)
-        && direct_rcs_push_store_marker_at(
+        && direct_rcs_push_pipe_control_post_sync_marker_at(
             batch,
             cursor,
             result_gpu,
@@ -10777,6 +10821,33 @@ fn direct_rcs_push_pipe_control(batch: &mut [u32], cursor: &mut usize, flags: u3
         PIPE_CONTROL_HDC_PIPELINE_FLUSH,
         flags,
     )
+}
+
+fn direct_rcs_push_pipe_control_post_sync_marker_at(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    result_gpu: u64,
+    slot: usize,
+    value: u32,
+) -> bool {
+    // PIPE_CONTROL post-sync writes a QWord. Keep the destination naturally
+    // aligned and reserve the following result slot for its high DWORD.
+    if slot & 1 != 0 {
+        return false;
+    }
+    let dst = result_gpu + (slot as u64) * core::mem::size_of::<u32>() as u64;
+    direct_rcs_push(batch, cursor, PIPE_CONTROL_CMD)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            PIPE_CONTROL_FLUSH_ENABLE
+                | PIPE_CONTROL_CS_STALL
+                | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
+        )
+        && direct_rcs_push(batch, cursor, dst as u32)
+        && direct_rcs_push(batch, cursor, (dst >> 32) as u32)
+        && direct_rcs_push(batch, cursor, value)
+        && direct_rcs_push(batch, cursor, 0)
 }
 
 
