@@ -17,7 +17,7 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu preview start <static|mandelbrot|chart|plasma> [duration_ms] [cadence_ms] [publish_every]",
+        "gpgpu preview start <static|static30|mandelbrot|chart|plasma> [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
@@ -48,6 +48,8 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         };
         let preset = if preset_name.eq_ignore_ascii_case("static") {
             crate::ui4::GpgpuPreviewPreset::Static
+        } else if preset_name.eq_ignore_ascii_case("static30") {
+            crate::ui4::GpgpuPreviewPreset::Static30
         } else if preset_name.eq_ignore_ascii_case("mandelbrot") {
             crate::ui4::GpgpuPreviewPreset::Mandelbrot
         } else if preset_name.eq_ignore_ascii_case("chart") {

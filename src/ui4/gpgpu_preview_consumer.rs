@@ -686,11 +686,62 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
     Ok(())
 }
 
+fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'static str> {
+    let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
+    surfaces.push(StaticPreviewSurface {
+        frame: preview.frame,
+        window: preview.window,
+        scheme: 0,
+    });
+    surfaces.extend(preview.extra_surfaces.iter().copied());
+
+    for surface in surfaces {
+        preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
+        let lease = match acquire_frame_buffer(surface.frame) {
+            Ok(lease) => lease,
+            Err(FramePoolError::Busy) => {
+                preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-frame-busy");
+            }
+            Err(_) => {
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("static30-frame-acquire-failed");
+            }
+        };
+        if let Err(reason) = fill_static_preview_frame(lease, surface.scheme) {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err(reason);
+        }
+        preview.metrics.completed = preview.metrics.completed.saturating_add(1);
+        if publish_frame_buffer(lease).is_err() {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("static30-frame-publish-failed");
+        }
+        if publish_window_frame(PREVIEW_OWNER, surface.window, DamageRect::FULL).is_err() {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("static30-window-publish-failed");
+        }
+        preview.metrics.published = preview.metrics.published.saturating_add(1);
+    }
+
+    preview.static_needs_publish = false;
+    crate::log_info!(
+        target: "ui4";
+        "ui4 gpgpu-preview static30 published request={} frames={} windows={} slots=1+2+3 per_slot=10 submitted=0 marker=0 producer=cpu cadence=immutable/single publish_passes=1\n",
+        preview.request_serial,
+        preview.metrics.published,
+        preview_surface_count(preview),
+    );
+    Ok(())
+}
+
 /// Paint one unmistakable CPU-authored frame. This path deliberately does not
 /// request a GPGPU surface, upload a kernel, submit through GuC, or poll a GPU
 /// completion marker. The cache release is the only producer-side operation
 /// between the CPU writes and ordinary UI4 publication.
-fn fill_static_preview_frame(lease: FrameWriteLease) -> Result<(), &'static str> {
+fn fill_static_preview_frame(lease: FrameWriteLease, scheme: u8) -> Result<(), &'static str> {
     let view = writable_rgba_view(lease).map_err(|_| "static-rgba-view-unavailable")?;
     let row_bytes = (view.width as usize)
         .checked_mul(4)
@@ -703,11 +754,35 @@ fn fill_static_preview_frame(lease: FrameWriteLease) -> Result<(), &'static str>
         return Err("static-rgba-layout-invalid");
     }
 
-    let navy = PremultipliedRgba8::from_straight_rgba(8, 24, 64, u8::MAX).to_native_bytes();
-    let blue = PremultipliedRgba8::from_straight_rgba(24, 104, 224, u8::MAX).to_native_bytes();
-    let cyan = PremultipliedRgba8::from_straight_rgba(16, 224, 208, u8::MAX).to_native_bytes();
-    let magenta =
-        PremultipliedRgba8::from_straight_rgba(224, 48, 160, u8::MAX).to_native_bytes();
+    let seed = u16::from(scheme);
+    let navy = PremultipliedRgba8::from_straight_rgba(
+        (8 + seed * 17 % 40) as u8,
+        (16 + seed * 29 % 48) as u8,
+        (40 + seed * 13 % 64) as u8,
+        u8::MAX,
+    )
+    .to_native_bytes();
+    let blue = PremultipliedRgba8::from_straight_rgba(
+        (32 + seed * 53 % 192) as u8,
+        (32 + seed * 97 % 192) as u8,
+        (32 + seed * 151 % 192) as u8,
+        u8::MAX,
+    )
+    .to_native_bytes();
+    let cyan = PremultipliedRgba8::from_straight_rgba(
+        (48 + seed * 71 % 176) as u8,
+        (48 + seed * 113 % 176) as u8,
+        (48 + seed * 37 % 176) as u8,
+        u8::MAX,
+    )
+    .to_native_bytes();
+    let magenta = PremultipliedRgba8::from_straight_rgba(
+        (48 + seed * 131 % 176) as u8,
+        (48 + seed * 43 % 176) as u8,
+        (48 + seed * 83 % 176) as u8,
+        u8::MAX,
+    )
+    .to_native_bytes();
     let white = PremultipliedRgba8::from_straight_rgba(240, 248, 255, u8::MAX).to_native_bytes();
     let width = view.width as usize;
     let height = view.height as usize;
@@ -755,7 +830,7 @@ fn dispatch_preview_kernel(
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> PreviewDispatchResult {
     match preview.config.preset {
-        GpgpuPreviewPreset::Static => PreviewDispatchResult {
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => PreviewDispatchResult {
             ok: false,
             submitted: false,
             iterations: 0,
@@ -827,28 +902,53 @@ fn dispatch_preview_kernel(
 const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::Static => "cpu-static",
+        GpgpuPreviewPreset::Static30 => "cpu-static30",
         _ => "guc-compute",
     }
 }
 
 const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
+            "clflush-mfence-before-publish"
+        }
         _ => "completion-marker-before-publish",
     }
 }
 
 const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
-        GpgpuPreviewPreset::Static => {
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
         }
         _ => WindowPlane::Primary,
     }
 }
 
+const fn preview_buffering_label(preset: GpgpuPreviewPreset) -> &'static str {
+    match preset {
+        GpgpuPreviewPreset::Static30 => "single",
+        _ => "double",
+    }
+}
+
+const fn preview_plane_layout(preset: GpgpuPreviewPreset) -> &'static str {
+    match preset {
+        GpgpuPreviewPreset::Static => "slot1-direct",
+        GpgpuPreviewPreset::Static30 => "slots1+2+3/10-each",
+        _ => "primary",
+    }
+}
+
+fn preview_surface_count(preview: &ActivePreview) -> usize {
+    1usize.saturating_add(preview.extra_surfaces.len())
+}
+
 fn preview_needs_render(preview: &ActivePreview) -> bool {
-    preview.config.preset != GpgpuPreviewPreset::Static || preview.static_needs_publish
+    !matches!(
+        preview.config.preset,
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30
+    ) || preview.static_needs_publish
 }
 
 fn schedule_next_render(preview: &mut ActivePreview) {
@@ -939,13 +1039,17 @@ fn resize_preview(
 fn stop_active_preview(preview: ActivePreview, reason: &'static str) {
     let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
     let _ = finish_window_session_with_request(PREVIEW_OWNER, preview.session, close);
+    for session in preview.extra_sessions.iter().copied() {
+        let _ = finish_window_session_with_request(PREVIEW_OWNER, session, close);
+    }
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview stopped request={} preset={} frame={} window={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",
+        "ui4 gpgpu-preview stopped request={} preset={} frame={} window={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} plane_mutation=none\n",
         preview.request_serial,
         preview.config.preset.label(),
         preview.frame.raw(),
         preview.window.raw(),
+        preview_surface_count(&preview),
         preview.metrics.attempted,
         preview.metrics.completed,
         preview.metrics.published,
