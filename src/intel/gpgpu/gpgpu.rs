@@ -1074,6 +1074,7 @@ const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
 
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
+const DIRECT_RCS_TIMEOUT_POLL_ITERS: usize = 65_536;
 
 
 
@@ -1167,6 +1168,7 @@ static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
 
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
+static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuActivitySnapshot {
@@ -11096,9 +11098,26 @@ fn direct_rcs_poll_result_slot_timeout_ms(
     expected: u32,
     timeout_ms: u64,
 ) -> u32 {
-    let deadline = direct_rcs_now_tick().saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
+    let started = direct_rcs_now_tick();
+    let deadline = started.saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
+    let log_probe = DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok();
+    if log_probe {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: marker-poll begin slot={} expected=0x{:08X} timeout_ms={} poll_limit={} cache_flush_bytes=4 worker_slot={}\n",
+            slot,
+            expected,
+            timeout_ms,
+            DIRECT_RCS_TIMEOUT_POLL_ITERS,
+            crate::percpu::current_slot(),
+        );
+    }
     let mut observed = 0;
-    for _ in 0..DIRECT_RCS_SMOKE_POLL_ITERS {
+    let mut iterations = 0usize;
+    for _ in 0..DIRECT_RCS_TIMEOUT_POLL_ITERS {
+        iterations = iterations.saturating_add(1);
         observed = direct_rcs_read_result_slot(state, slot);
         if observed == expected {
             break;
@@ -11107,6 +11126,18 @@ fn direct_rcs_poll_result_slot_timeout_ms(
             break;
         }
         core::hint::spin_loop();
+    }
+    if log_probe {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: marker-poll end slot={} observed=0x{:08X} expected=0x{:08X} matched={} iterations={} elapsed_ms={}\n",
+            slot,
+            observed,
+            expected,
+            (observed == expected) as u8,
+            iterations,
+            direct_rcs_elapsed_ms_since(started),
+        );
     }
     complete_direct_rcs_submission(observed == expected);
     observed
@@ -11127,8 +11158,13 @@ fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
     if offset + core::mem::size_of::<u32>() > DIRECT_RCS_RESULT_BYTES {
         return 0;
     }
-    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
-    unsafe { core::ptr::read_volatile(state.result_virt.add(offset) as *const u32) }
+    let marker = unsafe { state.result_virt.add(offset) };
+    // CLFLUSH rounds to a cache-line boundary. Invalidating this one marker is
+    // sufficient; flushing the full 4 KiB result page on every poll multiplied
+    // each check into 64 CLFLUSH operations plus an MFENCE and starved sibling
+    // tasks on the same executor core.
+    super::dma_flush(marker, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(marker as *const u32) }
 }
 
 fn direct_rcs_now_tick() -> u64 {

@@ -12,11 +12,12 @@ use spin::Mutex;
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
-    OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
-    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    publish_frame_buffer, publish_window_frame, replace_window_frame, take_owner_input_events,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
+    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
+    WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
+    create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
+    gpgpu_rgba_surface, publish_frame_buffer, publish_window_frame, replace_window_frame,
+    take_owner_input_events, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -35,6 +36,7 @@ pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
+    Static,
     Mandelbrot,
     Chart,
     Plasma,
@@ -43,6 +45,7 @@ pub(crate) enum GpgpuPreviewPreset {
 impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::Static => "static",
             Self::Mandelbrot => "mandelbrot",
             Self::Chart => "chart",
             Self::Plasma => "plasma",
@@ -193,6 +196,7 @@ struct ActivePreview {
     height: u32,
     started: Instant,
     next_render: Instant,
+    static_needs_publish: bool,
     metrics: GpgpuPreviewMetrics,
 }
 
@@ -262,9 +266,10 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     Ok(preview) => {
                         crate::log_info!(
                             target: "ui4";
-                            "ui4 gpgpu-preview start request={} preset={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering=double compute_release=completion-marker-before-publish plane_mutation=none\n",
+                            "ui4 gpgpu-preview start request={} preset={} producer={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering=double release={} plane_slot={} plane_mutation=none\n",
                             desired.serial,
                             preview.config.preset.label(),
+                            preview_producer_label(preview.config.preset),
                             PREVIEW_OWNER,
                             preview.frame.raw(),
                             preview.window.raw(),
@@ -273,6 +278,8 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                             preview.config.cadence_ms,
                             preview.config.publish_every,
                             preview.config.duration_ms,
+                            preview_release_label(preview.config.preset),
+                            preview_plane(preview.config.preset).slot(),
                         );
                         publish_active_status(&preview, GpgpuPreviewPhase::Running, "none");
                         active = Some(preview);
@@ -299,7 +306,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             preview.metrics.elapsed_ms = now.saturating_duration_since(preview.started).as_millis();
             duration_expired = preview.config.duration_ms != 0
                 && preview.metrics.elapsed_ms >= preview.config.duration_ms;
-            if !duration_expired && now >= preview.next_render {
+            if !duration_expired && preview_needs_render(preview) && now >= preview.next_render {
                 match render_preview_frame(preview) {
                     Ok(()) => {
                         schedule_next_render(preview);
@@ -363,7 +370,12 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         session,
         frame,
         output,
-        plane: WindowPlane::Primary,
+        // The static checkpoint must not accidentally invoke the compute
+        // compositor. A sole opaque CPU-authored window on slot 1 is eligible
+        // for UI4's direct GGTT-import + hardware-plane-flip path. Animated
+        // presets retain their existing primary composition path until that
+        // shader path is repaired independently.
+        plane: preview_plane(desired.config.preset),
         placement: WindowPlacement {
             x,
             y: PREVIEW_MARGIN as i32,
@@ -396,6 +408,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         height: PREVIEW_HEIGHT,
         started: now,
         next_render: now,
+        static_needs_publish: true,
         metrics: GpgpuPreviewMetrics::default(),
     })
 }
@@ -460,26 +473,34 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
             return Err("frame-acquire-failed");
         }
     };
-    let surface = match gpgpu_rgba_surface(lease) {
-        Ok(surface) => surface,
-        Err(_) => {
+    if preview.config.preset == GpgpuPreviewPreset::Static {
+        if let Err(reason) = fill_static_preview_frame(lease) {
             let _ = cancel_frame_buffer(lease);
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            return Err("gpgpu-surface-unavailable");
+            return Err(reason);
         }
-    };
+    } else {
+        let surface = match gpgpu_rgba_surface(lease) {
+            Ok(surface) => surface,
+            Err(_) => {
+                let _ = cancel_frame_buffer(lease);
+                preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+                return Err("gpgpu-surface-unavailable");
+            }
+        };
 
-    let result = dispatch_preview_kernel(preview, surface);
-    preview.metrics.last_iterations = result.iterations;
-    preview.metrics.last_marker = result.marker;
-    if result.submitted {
-        preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
-    }
-    preview.metrics.last_submit_ms = result.submit_ms;
-    if !result.ok {
-        let _ = cancel_frame_buffer(lease);
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err(result.error);
+        let result = dispatch_preview_kernel(preview, surface);
+        preview.metrics.last_iterations = result.iterations;
+        preview.metrics.last_marker = result.marker;
+        if result.submitted {
+            preview.metrics.submitted = preview.metrics.submitted.saturating_add(1);
+        }
+        preview.metrics.last_submit_ms = result.submit_ms;
+        if !result.ok {
+            let _ = cancel_frame_buffer(lease);
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err(result.error);
+        }
     }
     preview.metrics.completed = preview.metrics.completed.saturating_add(1);
 
@@ -496,6 +517,70 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         return Err("window-publish-failed");
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
+    if preview.config.preset == GpgpuPreviewPreset::Static {
+        preview.static_needs_publish = false;
+        crate::log_info!(
+            target: "ui4";
+            "ui4 gpgpu-preview static frame published request={} frame={} window={} submitted=0 marker=0 producer=cpu release=clflush-mfence\n",
+            preview.request_serial,
+            preview.frame.raw(),
+            preview.window.raw(),
+        );
+    }
+    Ok(())
+}
+
+/// Paint one unmistakable CPU-authored frame. This path deliberately does not
+/// request a GPGPU surface, upload a kernel, submit through GuC, or poll a GPU
+/// completion marker. The cache release is the only producer-side operation
+/// between the CPU writes and ordinary UI4 publication.
+fn fill_static_preview_frame(lease: FrameWriteLease) -> Result<(), &'static str> {
+    let view = writable_rgba_view(lease).map_err(|_| "static-rgba-view-unavailable")?;
+    let row_bytes = (view.width as usize)
+        .checked_mul(4)
+        .ok_or("static-rgba-layout-invalid")?;
+    let pitch = view.pitch as usize;
+    let required = pitch
+        .checked_mul(view.height as usize)
+        .ok_or("static-rgba-layout-invalid")?;
+    if pitch < row_bytes || required > view.byte_len {
+        return Err("static-rgba-layout-invalid");
+    }
+
+    let navy = PremultipliedRgba8::from_straight_rgba(8, 24, 64, u8::MAX).to_native_bytes();
+    let blue = PremultipliedRgba8::from_straight_rgba(24, 104, 224, u8::MAX).to_native_bytes();
+    let cyan = PremultipliedRgba8::from_straight_rgba(16, 224, 208, u8::MAX).to_native_bytes();
+    let magenta =
+        PremultipliedRgba8::from_straight_rgba(224, 48, 160, u8::MAX).to_native_bytes();
+    let white = PremultipliedRgba8::from_straight_rgba(240, 248, 255, u8::MAX).to_native_bytes();
+    let width = view.width as usize;
+    let height = view.height as usize;
+    let half_width = width / 2;
+    let half_height = height / 2;
+
+    // SAFETY: the write lease exclusively owns this allocation, and the
+    // checked pitch/height product is contained by `byte_len`.
+    let bytes = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
+    for y in 0..height {
+        let row = &mut bytes[y * pitch..y * pitch + row_bytes];
+        for x in 0..width {
+            let border = x < 8 || y < 8 || x + 8 >= width || y + 8 >= height;
+            let grid = x % 64 < 2 || y % 64 < 2;
+            let pixel = if border {
+                white
+            } else if grid {
+                cyan
+            } else if x < half_width && y < half_height {
+                blue
+            } else if x >= half_width && y >= half_height {
+                magenta
+            } else {
+                navy
+            };
+            row[x * 4..x * 4 + 4].copy_from_slice(&pixel);
+        }
+    }
+    crate::intel::dma_flush(view.virt, view.byte_len);
     Ok(())
 }
 
@@ -514,6 +599,14 @@ fn dispatch_preview_kernel(
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> PreviewDispatchResult {
     match preview.config.preset {
+        GpgpuPreviewPreset::Static => PreviewDispatchResult {
+            ok: false,
+            submitted: false,
+            iterations: 0,
+            marker: 0,
+            submit_ms: 0,
+            error: "static-preset-entered-gpu-dispatch",
+        },
         GpgpuPreviewPreset::Mandelbrot => {
             let iterations = 32 + ((preview.metrics.attempted - 1) % 97) as u32;
             match crate::intel::gpgpu::mandel64_worklist_surface_full(surface, iterations) {
@@ -575,6 +668,33 @@ fn dispatch_preview_kernel(
     }
 }
 
+const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
+    match preset {
+        GpgpuPreviewPreset::Static => "cpu-static",
+        _ => "guc-compute",
+    }
+}
+
+const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
+    match preset {
+        GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
+        _ => "completion-marker-before-publish",
+    }
+}
+
+const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
+    match preset {
+        GpgpuPreviewPreset::Static => {
+            WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
+        }
+        _ => WindowPlane::Primary,
+    }
+}
+
+fn preview_needs_render(preview: &ActivePreview) -> bool {
+    preview.config.preset != GpgpuPreviewPreset::Static || preview.static_needs_publish
+}
+
 fn schedule_next_render(preview: &mut ActivePreview) {
     let period = Duration::from_millis(preview.config.cadence_ms);
     let scheduled = preview.next_render + period;
@@ -588,6 +708,9 @@ fn schedule_next_render(preview: &mut ActivePreview) {
 }
 
 fn next_poll_ms(preview: &ActivePreview) -> u64 {
+    if !preview_needs_render(preview) {
+        return COMMAND_POLL_MAX_MS;
+    }
     let now = Instant::now();
     if preview.next_render <= now {
         return 1;
@@ -643,6 +766,7 @@ fn resize_preview(
     preview.width = width;
     preview.height = height;
     preview.next_render = Instant::now();
+    preview.static_needs_publish = true;
     retired_frames.push(previous);
     crate::log_info!(
         target: "ui4";
