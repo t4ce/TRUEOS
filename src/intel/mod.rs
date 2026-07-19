@@ -436,9 +436,21 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     source: Ui4DirectRgbaFrame,
     pos_x: u32,
     pos_y: u32,
+    dest_width: u32,
+    dest_height: u32,
+    opacity: u8,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_direct_overlay_frame(plane_slot, source, pos_x, pos_y, reason)
+    self::display::queue_ui4_direct_overlay_frame(
+        plane_slot,
+        source,
+        pos_x,
+        pos_y,
+        dest_width,
+        dest_height,
+        opacity,
+        reason,
+    )
 }
 
 pub(crate) fn poll_ui4_composition(

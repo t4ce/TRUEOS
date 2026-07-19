@@ -22,7 +22,7 @@ const UI4_ISOLATED_ASYNC_GUC_COMPOSITOR_ENABLED: bool = true;
 const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
-static DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static COMPUTE_DOUBLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -127,7 +127,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import draw3d=slot3-triple-direct-import per_frame_draw3d_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=parked\n",
+        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=parked\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -554,9 +554,9 @@ fn queue_async_plane(
         {
             if let Some(release) = view.gpu_release {
                 let (buffering, first_for_producer) = match release {
-                    FrameGpuRelease::Draw3d(_) => (
+                    FrameGpuRelease::ResidentScene(_) => (
                         "triple",
-                        !DRAW3D_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
+                        !RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
                     ),
                     FrameGpuRelease::Compute(_) => (
                         "double",
@@ -594,6 +594,8 @@ fn queue_async_plane(
                 },
                 window.placement.x as u32,
                 window.placement.y as u32,
+                window.placement.width,
+                window.placement.height,
                 window.placement.opacity,
                 reason,
             );
@@ -748,8 +750,11 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     // no copy or CPU cache sweep is part of either transition.
     frame_snapshot(window.frame).is_ok_and(|snapshot| {
         match release {
-            FrameGpuRelease::Draw3d(_) => {
-                window.plane.slot() == super::RGB_OVERLAY_PLANE_SLOT_3
+            FrameGpuRelease::ResidentScene(_) => {
+                matches!(
+                    window.plane.slot(),
+                    super::RGB_OVERLAY_PLANE_SLOT_2 | super::RGB_OVERLAY_PLANE_SLOT_3
+                )
                     && snapshot.plan.content == FrameContent::RenderScene3d
                     && snapshot.plan.buffering == super::FrameBuffering::Triple
             }
@@ -772,23 +777,30 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
     let Some((output_width, output_height)) = crate::intel::active_scanout_dimensions() else {
         return false;
     };
+    let exact_size = placement.width == view.width && placement.height == view.height;
+    let scaler_safe_close = window.state == super::WindowState::Closing
+        && placement.width >= 8
+        && placement.height >= 8
+        && placement.width <= view.width
+        && placement.height <= view.height
+        && u64::from(view.width) < u64::from(placement.width).saturating_mul(3)
+        && u64::from(view.height) < u64::from(placement.height).saturating_mul(3);
     placement.x >= 0
         && placement.y >= 0
-        && placement.width == view.width
-        && placement.height == view.height
+        && (exact_size || scaler_safe_close)
         && (placement.x as u32)
-            .checked_add(view.width)
+            .checked_add(placement.width)
             .is_some_and(|right| right <= output_width)
         && (placement.y as u32)
-            .checked_add(view.height)
+            .checked_add(placement.height)
             .is_some_and(|bottom| bottom <= output_height)
 }
 
 const fn overlay_async_reason(slot: usize) -> &'static str {
     match slot {
         super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1-async",
-        super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2-async",
-        super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3-async",
+        super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-rgb-slot2-async",
+        super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-rgb-slot3-async",
         _ => "ui4-overlay-async",
     }
 }
@@ -1211,8 +1223,8 @@ fn present_plane_composition(
                     CompositionTarget::Overlay(slot) => {
                         let reason = match slot {
                             super::ALPHA_OVERLAY_PLANE_SLOT => "ui4-alpha-slot1",
-                            super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-solara-slot2",
-                            super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-draw3d-slot3",
+                            super::RGB_OVERLAY_PLANE_SLOT_2 => "ui4-rgb-slot2",
+                            super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-rgb-slot3",
                             _ => "ui4-overlay",
                         };
                         crate::intel::present_premultiplied_rgba_overlay_tiles_on_slot_damage(

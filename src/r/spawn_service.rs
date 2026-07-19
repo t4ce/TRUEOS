@@ -1275,8 +1275,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &DRAW3D_UI4_RENDER_STARTED,
         spawn_draw3d_ui4_render,
     ),
-    // Compositor-rewire checkpoint: Draw3D is the sole UI4 producer.
-    TaskSpec::disabled(
+    // The two resident-scene consumers now use independent direct planes and
+    // the same triple-buffer release -> SURFLIVE ownership contract.
+    TaskSpec::enabled(
         "gridpaper-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &GRIDPAPER_SERVICE_STARTED,

@@ -55,28 +55,28 @@ pub(crate) struct FrameReadLease {
 /// write, and both bind the proof to the exact physical surface.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum FrameGpuRelease {
-    Draw3d(crate::intel::render::ResidentSceneReleaseFence),
+    ResidentScene(crate::intel::render::ResidentSceneReleaseFence),
     Compute(crate::intel::gpgpu::GpgpuRgba8ReleaseFence),
 }
 
 impl FrameGpuRelease {
     pub(crate) const fn matches(self, phys: u64, byte_len: usize) -> bool {
         match self {
-            Self::Draw3d(release) => release.matches(phys, byte_len),
+            Self::ResidentScene(release) => release.matches(phys, byte_len),
             Self::Compute(release) => release.matches(phys, byte_len),
         }
     }
 
     pub(crate) const fn sequence(self) -> u64 {
         match self {
-            Self::Draw3d(release) => release.sequence(),
+            Self::ResidentScene(release) => release.sequence(),
             Self::Compute(release) => release.sequence(),
         }
     }
 
     pub(crate) const fn producer_label(self) -> &'static str {
         match self {
-            Self::Draw3d(_) => "draw3d",
+            Self::ResidentScene(_) => "resident-scene",
             Self::Compute(_) => "gpgpu-compute",
         }
     }
@@ -556,9 +556,9 @@ pub(crate) fn publish_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
-/// Publish one GPU-authored Draw3D allocation only after the renderer's final
-/// release packet has retired. No pixel is read, copied, or cache-flushed by
-/// the CPU here; this transfers ownership metadata to UI4.
+/// Publish one GPU-authored resident-scene allocation only after its actual
+/// final writer's release packet has retired. No pixel is read, copied, or
+/// cache-flushed by the CPU here; this transfers ownership metadata to UI4.
 pub(crate) fn publish_gpu_frame_buffer(
     lease: FrameWriteLease,
     release: crate::intel::render::ResidentSceneReleaseFence,
@@ -575,7 +575,7 @@ pub(crate) fn publish_gpu_frame_buffer(
     if !release.matches(access.phys, access.byte_len) {
         return Err(FramePoolError::InvalidLease);
     }
-    frame.gpu_release[index] = Some(FrameGpuRelease::Draw3d(release));
+    frame.gpu_release[index] = Some(FrameGpuRelease::ResidentScene(release));
     publish_checked_frame(frame, lease)
 }
 

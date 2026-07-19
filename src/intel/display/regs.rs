@@ -54,6 +54,21 @@ pub(in crate::intel) const UNI_PLANE_WM_SAGV_OFF: usize = 0xD8;
 pub(in crate::intel) const UNI_PLANE_WM_SAGV_TRANS_OFF: usize = 0xDC;
 pub(in crate::intel) const UNI_PLANE_WM_TRANS_OFF: usize = 0xE8;
 pub(in crate::intel) const UNI_PLANE_BUF_CFG_OFF: usize = 0xFC;
+// Gen9+ pipe scalers. Pipe A/B expose two shared scalers; the address layout
+// is stable through the TGL/ADL display engine used by this driver.
+pub(in crate::intel) const PIPE_SCALER_0_A_CTRL: usize = 0x68180;
+pub(in crate::intel) const PIPE_SCALER_1_A_CTRL: usize = 0x68280;
+pub(in crate::intel) const PIPE_SCALER_0_B_CTRL: usize = 0x68980;
+pub(in crate::intel) const PIPE_SCALER_1_B_CTRL: usize = 0x68A80;
+pub(in crate::intel) const PIPE_SCALER_0_C_CTRL: usize = 0x69180;
+pub(in crate::intel) const PIPE_SCALER_WIN_POS_FROM_CTRL: usize = 0x10;
+pub(in crate::intel) const PIPE_SCALER_WIN_SIZE_FROM_CTRL: usize = 0x0C;
+pub(in crate::intel) const PIPE_SCALER_VPHASE_FROM_CTRL: usize = 0x08;
+pub(in crate::intel) const PIPE_SCALER_HPHASE_FROM_CTRL: usize = 0x14;
+pub(in crate::intel) const PIPE_SCALER_ENABLE: u32 = 1 << 31;
+pub(in crate::intel) const PIPE_SCALER_BINDING_MASK: u32 = 0x07 << 25;
+pub(in crate::intel) const PIPE_SCALER_PHASE_MASK: u32 = 0x7FFE;
+pub(in crate::intel) const PIPE_SCALER_PHASE_TRIP: u32 = 1;
 pub(in crate::intel) const PLANE_CTL_ENABLE: u32 = 1 << 31;
 pub(in crate::intel) const PLANE_CTL_ARB_SLOTS_MASK: u32 = 0x07 << 28;
 pub(in crate::intel) const PLANE_CTL_ARB_SLOTS_4BPP: u32 = 1 << 28;

@@ -383,14 +383,19 @@ pub(crate) struct ResidentSceneFrameResult {
     pub(crate) coverage_submits: usize,
     pub(crate) coverage_walkers: usize,
     pub(crate) rgba: Option<Vec<u8>>,
-    /// Present only when RCS was the final writer and its color-cache release
-    /// plus separate post-sync retirement marker completed for the returned
-    /// UI4 allocation.
+    /// True only when geometry, resolve, coverage, and any compatibility copy
+    /// completed. This remains separate from `release_fence`: a caller that
+    /// appends one final GPU writer may deliberately defer the release proof.
+    pub(crate) frame_complete: bool,
+    /// Present only after the final GPU writer's cache release plus ordered
+    /// post-sync retirement marker completed for the returned UI4 allocation.
     pub(crate) release_fence: Option<ResidentSceneReleaseFence>,
 }
 
-/// Proof that RCS completed the producer-release command sequence for one
-/// exact direct-render allocation. This deliberately does not claim that an
+/// Proof that the resident-scene pipeline completed the producer-release
+/// command sequence for one exact direct-render allocation. The final writer
+/// may be the 3D pixel backend, the MSAA resolve, analytical coverage, or a
+/// retained decoration pass. This deliberately does not claim that an
 /// independently mapped display GGTT alias has a compatible cache policy;
 /// that is the consumer side of the handoff. The fields are private so a UI
 /// producer cannot manufacture a release merely from a physical address.
@@ -414,10 +419,23 @@ impl ResidentSceneReleaseFence {
 static RESIDENT_SCENE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_SCENE_PERF_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+fn resident_scene_release(
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> ResidentSceneReleaseFence {
+    ResidentSceneReleaseFence {
+        phys: destination.phys,
+        byte_len: destination.bytes,
+        sequence: RESIDENT_SCENE_RELEASE_SEQUENCE
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1),
+    }
+}
+
 #[derive(Copy, Clone)]
 enum ResidentSceneFrameOutput {
     Readback,
     GpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+    GpuSurfaceDeferredRelease(crate::intel::gpgpu::GpgpuRgba8Surface),
     DirectGpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
 }
 
@@ -974,9 +992,56 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_cove
     )
 }
 
+/// GridPaper's complete direct-render operation. The cursor rectangles are
+/// submitted after MSAA resolve and analytical coverage, so the returned
+/// release proof is reminted only after that actual final writer retires.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    coverage_draws: &[ResidentSceneCoverageDraw],
+    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    let mut result = submit_resident_triangle_scene_capture(
+        draws,
+        coverage_draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::Multisample4x,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination),
+    )?;
+    if !result.frame_complete {
+        return Err("resident-scene-incomplete-before-final-writer");
+    }
+    let started_ns = crate::chronos::monotonic_nanos();
+    if !final_rects.is_empty() {
+        if !crate::intel::gpgpu::fill_solid_rects_rgba8_scanout(destination, final_rects) {
+            return Err("resident-scene-final-rects");
+        }
+    }
+    let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+    if !finalizer.ok
+        || !finalizer
+            .release
+            .is_some_and(|release| release.matches(destination.phys, destination.bytes))
+    {
+        return Err("resident-scene-final-release");
+    }
+    result.coverage_us = result.coverage_us.saturating_add(
+        crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000,
+    );
+    result.release_fence = Some(resident_scene_release(destination));
+    Ok(result)
+}
+
 /// Render a depth-tested retained 4x scene directly into a leased UI4 RGBA
-/// surface. This is Draw3D's live presentation path: resolve completion is the
-/// producer fence, and no CPU readback or full-frame copy is performed.
+/// surface. This is Draw3D's live presentation path: the final scanout release
+/// follows resolve completion, and no CPU readback or full-frame copy runs.
 pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
@@ -1356,6 +1421,7 @@ fn submit_resident_triangle_scene_capture(
         return Err("draw3d-capture-shape");
     }
     if let ResidentSceneFrameOutput::GpuSurface(destination)
+    | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
     | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
         && (!destination.is_valid()
             || destination.width as usize != target_width
@@ -1561,16 +1627,28 @@ fn submit_resident_triangle_scene_capture(
         // single-sample hardware and for CPU readback consumers.
         let output = match (frame_output, msaa_color) {
             (ResidentSceneFrameOutput::GpuSurface(destination), Some(_)) => destination,
+            (ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination), Some(_)) => {
+                destination
+            }
             (ResidentSceneFrameOutput::DirectGpuSurface(destination), _) => destination,
             _ => scratch_output,
         };
+        let direct_scanout_output = match frame_output {
+            ResidentSceneFrameOutput::GpuSurface(destination)
+            | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
+            | ResidentSceneFrameOutput::DirectGpuSurface(destination) => {
+                output.gpu == destination.gpu
+            }
+            ResidentSceneFrameOutput::Readback => false,
+        };
         let resolved = if geometry_complete {
             if let Some(target) = msaa_color {
-                crate::intel::gpgpu::resolve_tile64_msaa4_rgba8(
+                crate::intel::gpgpu::resolve_tile64_msaa4_rgba8_mode(
                     target.surface,
                     output,
                     target_width as u32,
                     target_height as u32,
+                    direct_scanout_output,
                 )
             } else {
                 true
@@ -1583,7 +1661,11 @@ fn submit_resident_triangle_scene_capture(
         let mut coverage_submits = 0usize;
         let mut coverage_walkers = 0usize;
         if resolved {
-            let batch = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d(coverage_draws, output);
+            let batch = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+                coverage_draws,
+                output,
+                direct_scanout_output,
+            );
             coverage_submits = batch.submits;
             coverage_walkers = batch.active_walkers;
             if batch.ok && batch.requested_layers == coverage_draws.len() {
@@ -1597,7 +1679,7 @@ fn submit_resident_triangle_scene_capture(
                 coverage_submits = 0;
                 coverage_walkers = 0;
                 for draw in coverage_draws {
-                    let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d(
+                    let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d_mode(
                         crate::intel::gpgpu::GpgpuGlyphMaskBlit {
                             mask: draw.mask,
                             mask_rect: draw.mask_rect,
@@ -1605,6 +1687,7 @@ fn submit_resident_triangle_scene_capture(
                             dst_xy: draw.dst_xy,
                             color_rgba: draw.color_rgba,
                         },
+                        direct_scanout_output,
                     );
                     if !completed {
                         break;
@@ -1622,11 +1705,12 @@ fn submit_resident_triangle_scene_capture(
         let mut present_copy_performed = false;
         if frame_complete
             && let ResidentSceneFrameOutput::GpuSurface(destination)
+            | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
             | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
             && output.gpu != destination.gpu
         {
             present_copy_performed = true;
-            frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete(
+            frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
                 output,
                 crate::intel::gpgpu::GpgpuRect::new(
                     0,
@@ -1636,6 +1720,7 @@ fn submit_resident_triangle_scene_capture(
                 ),
                 destination,
                 crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+                true,
             );
         }
         let present_copy_finished_ns = crate::chronos::monotonic_nanos();
@@ -1676,27 +1761,33 @@ fn submit_resident_triangle_scene_capture(
             // pixels written rather than pretending that no frame changed.
             changed_pixels = target_width.saturating_mul(target_height);
         }
-        // The RCS marker only releases the direct, single-sample color target
-        // when no later engine touched it. MSAA resolve, coverage composition,
-        // and a present copy all have their own last writer and therefore may
-        // not inherit the earlier geometry release.
-        let rcs_was_final_writer = msaa_color.is_none()
-            && coverage_draws.is_empty()
-            && !present_copy_performed;
-        let release_fence = if frame_complete
-            && rcs_was_final_writer
-            && let ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
-            && output.gpu == destination.gpu
-        {
-            Some(ResidentSceneReleaseFence {
-                phys: destination.phys,
-                byte_len: destination.bytes,
-                sequence: RESIDENT_SCENE_RELEASE_SEQUENCE
-                    .fetch_add(1, Ordering::AcqRel)
-                    .saturating_add(1),
-            })
-        } else {
-            None
+        // The direct single-sample path already ends in the renderer's RCS
+        // release packet. Multi-pass output receives a dedicated finalizer
+        // after resolve/coverage/copy so an older completion marker can never
+        // be promoted into a display-ownership proof.
+        let release_fence = match frame_output {
+            ResidentSceneFrameOutput::DirectGpuSurface(destination)
+                if frame_complete
+                    && msaa_color.is_none()
+                    && coverage_draws.is_empty()
+                    && !present_copy_performed =>
+            {
+                Some(resident_scene_release(destination))
+            }
+            ResidentSceneFrameOutput::GpuSurface(destination) if frame_complete => {
+                let finalizer =
+                    crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+                if finalizer.ok
+                    && finalizer
+                        .release
+                        .is_some_and(|release| release.matches(destination.phys, destination.bytes))
+                {
+                    Some(resident_scene_release(destination))
+                } else {
+                    None
+                }
+            }
+            _ => None,
         };
         let frame_us = crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000;
         let geometry_us = geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000;
@@ -1737,6 +1828,7 @@ fn submit_resident_triangle_scene_capture(
             coverage_submits,
             coverage_walkers,
             rgba,
+            frame_complete,
             release_fence,
         })
     })();

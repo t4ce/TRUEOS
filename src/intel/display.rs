@@ -201,6 +201,25 @@ struct PlaneSurfaceGeometry {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
+enum PlaneScalerMode {
+    Detached,
+    Scaled {
+        scaler_id: usize,
+        window_pos_reg: u32,
+        window_size_reg: u32,
+        hphase_reg: u32,
+        vphase_reg: u32,
+    },
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+struct PlaneScalerFlip {
+    pipe_slot: usize,
+    plane_slot: usize,
+    mode: PlaneScalerMode,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
 struct PlaneSurfaceFlip {
     plane_base: usize,
     surface_reg: u32,
@@ -208,6 +227,9 @@ struct PlaneSurfaceFlip {
     /// Hardware plane opacity. `None` is used by the opaque primary plane;
     /// overlays always stage an explicit value with the SURF transaction.
     constant_alpha: Option<u8>,
+    /// Shared pipe-scaler state for this plane. Primary updates leave it
+    /// untouched; every overlay update explicitly binds or detaches scaling.
+    scaler: Option<PlaneScalerFlip>,
 }
 
 #[derive(Copy, Clone)]
@@ -888,6 +910,8 @@ unsafe impl Sync for OverlaySurface {}
 struct Ui4DirectOverlaySurface {
     width: u32,
     height: u32,
+    dest_width: u32,
+    dest_height: u32,
     pitch_bytes: u32,
     byte_len: usize,
     phys: u64,
@@ -2857,6 +2881,7 @@ fn program_primary_plane_source_for_pipeline(
         match queue_ui4_plane_surface_flip(
             pipe.primary_plane().base(),
             surface_reg,
+            None,
             None,
             None,
             reason,
@@ -5633,6 +5658,7 @@ fn queue_ui4_plane_surface_flip(
     surface_reg: u32,
     geometry: Option<PlaneSurfaceGeometry>,
     constant_alpha: Option<u8>,
+    scaler: Option<PlaneScalerFlip>,
     reason: &str,
 ) -> PlaneSurfaceFlipQueueResult {
     // This transaction belongs exclusively to the application compositor.
@@ -5644,6 +5670,8 @@ fn queue_ui4_plane_surface_flip(
         "ui4-compositor-primary-async"
             | "ui4-video-native-nv12-primary-async"
             | "ui4-alpha-slot1-async"
+            | "ui4-rgb-slot2-async"
+            | "ui4-rgb-slot3-async"
             | "ui4-solara-slot2-async"
             | "ui4-draw3d-slot3-async"
             | "ui4-overlay-async"
@@ -5662,6 +5690,7 @@ fn queue_ui4_plane_surface_flip(
             return if entry.surface_reg == surface_reg
                 && entry.geometry == geometry
                 && entry.constant_alpha == constant_alpha
+                && entry.scaler == scaler
             {
                 PlaneSurfaceFlipQueueResult::Queued
             } else {
@@ -5672,18 +5701,207 @@ fn queue_ui4_plane_surface_flip(
     if batch.len >= batch.entries.len() {
         return PlaneSurfaceFlipQueueResult::Rejected;
     }
+    if let Some(PlaneScalerFlip {
+        pipe_slot,
+        plane_slot,
+        mode: PlaneScalerMode::Scaled { scaler_id, .. },
+    }) = scaler
+        && batch.entries[..batch.len]
+            .iter()
+            .flatten()
+            .filter_map(|entry| entry.scaler)
+            .any(|queued| {
+                queued.pipe_slot == pipe_slot
+                    && matches!(
+                        queued.mode,
+                        PlaneScalerMode::Scaled {
+                            scaler_id: queued_id,
+                            ..
+                        } if queued_id == scaler_id && queued.plane_slot != plane_slot
+                    )
+            })
+    {
+        return PlaneSurfaceFlipQueueResult::Rejected;
+    }
     let index = batch.len;
     batch.entries[index] = Some(PlaneSurfaceFlip {
         plane_base,
         surface_reg,
         geometry,
         constant_alpha,
+        scaler,
     });
     batch.len += 1;
     PlaneSurfaceFlipQueueResult::Queued
 }
 
-/// Publish all staged SURF addresses back-to-back and return immediately.
+#[derive(Copy, Clone)]
+struct PipeScalerRegisters {
+    control: usize,
+    window_pos: usize,
+    window_size: usize,
+    hphase: usize,
+    vphase: usize,
+}
+
+fn pipe_scaler_registers(pipe_slot: usize, scaler_id: usize) -> Option<PipeScalerRegisters> {
+    let control = match (pipe_slot, scaler_id) {
+        (0, 0) => PIPE_SCALER_0_A_CTRL,
+        (0, 1) => PIPE_SCALER_1_A_CTRL,
+        (1, 0) => PIPE_SCALER_0_B_CTRL,
+        (1, 1) => PIPE_SCALER_1_B_CTRL,
+        (2, 0) => PIPE_SCALER_0_C_CTRL,
+        _ => return None,
+    };
+    Some(PipeScalerRegisters {
+        control,
+        window_pos: control - PIPE_SCALER_WIN_POS_FROM_CTRL,
+        window_size: control - PIPE_SCALER_WIN_SIZE_FROM_CTRL,
+        hphase: control + PIPE_SCALER_HPHASE_FROM_CTRL,
+        vphase: control + PIPE_SCALER_VPHASE_FROM_CTRL,
+    })
+}
+
+const fn pipe_scaler_binding(plane_slot: usize) -> u32 {
+    (((plane_slot as u32).saturating_add(1)) << 25) & PIPE_SCALER_BINDING_MASK
+}
+
+fn pipe_scaler_bound_to_plane(
+    dev: crate::intel::Dev,
+    pipe_slot: usize,
+    scaler_id: usize,
+    plane_slot: usize,
+) -> bool {
+    let Some(regs) = pipe_scaler_registers(pipe_slot, scaler_id) else {
+        return false;
+    };
+    let control = crate::intel::mmio_read(dev, regs.control);
+    control & (PIPE_SCALER_ENABLE | PIPE_SCALER_BINDING_MASK)
+        == PIPE_SCALER_ENABLE | pipe_scaler_binding(plane_slot)
+}
+
+fn disable_pipe_scaler(dev: crate::intel::Dev, regs: PipeScalerRegisters) {
+    crate::intel::mmio_write(dev, regs.control, 0);
+    crate::intel::mmio_write(dev, regs.window_pos, 0);
+    crate::intel::mmio_write(dev, regs.window_size, 0);
+}
+
+fn detach_pipe_scalers_from_plane(
+    dev: crate::intel::Dev,
+    pipe_slot: usize,
+    plane_slot: usize,
+) {
+    for scaler_id in 0..2 {
+        if pipe_scaler_bound_to_plane(dev, pipe_slot, scaler_id, plane_slot)
+            && let Some(regs) = pipe_scaler_registers(pipe_slot, scaler_id)
+        {
+            disable_pipe_scaler(dev, regs);
+        }
+    }
+}
+
+fn prepare_plane_scaler_flips(dev: crate::intel::Dev, entries: &[Option<PlaneSurfaceFlip>]) -> bool {
+    for scaler in entries.iter().flatten().filter_map(|entry| entry.scaler) {
+        let wanted_scaler = match scaler.mode {
+            PlaneScalerMode::Detached => None,
+            PlaneScalerMode::Scaled { scaler_id, .. } => {
+                if pipe_scaler_registers(scaler.pipe_slot, scaler_id).is_none() {
+                    return false;
+                }
+                Some(scaler_id)
+            }
+        };
+        for scaler_id in 0..2 {
+            let Some(regs) = pipe_scaler_registers(scaler.pipe_slot, scaler_id) else {
+                continue;
+            };
+            let bound_to_plane = pipe_scaler_bound_to_plane(
+                dev,
+                scaler.pipe_slot,
+                scaler_id,
+                scaler.plane_slot,
+            );
+            let target_rebound = wanted_scaler == Some(scaler_id)
+                && crate::intel::mmio_read(dev, regs.control)
+                    & (PIPE_SCALER_ENABLE | PIPE_SCALER_BINDING_MASK)
+                    != PIPE_SCALER_ENABLE | pipe_scaler_binding(scaler.plane_slot);
+            if (bound_to_plane && wanted_scaler != Some(scaler_id)) || target_rebound {
+                disable_pipe_scaler(dev, regs);
+            }
+        }
+    }
+    true
+}
+
+fn program_plane_scaler_flip(dev: crate::intel::Dev, scaler: PlaneScalerFlip) -> bool {
+    let PlaneScalerMode::Scaled {
+        scaler_id,
+        window_pos_reg,
+        window_size_reg,
+        hphase_reg,
+        vphase_reg,
+    } = scaler.mode
+    else {
+        return true;
+    };
+    let Some(regs) = pipe_scaler_registers(scaler.pipe_slot, scaler_id) else {
+        return false;
+    };
+    crate::intel::mmio_write(
+        dev,
+        regs.control,
+        PIPE_SCALER_ENABLE | pipe_scaler_binding(scaler.plane_slot),
+    );
+    crate::intel::mmio_write(dev, regs.vphase, vphase_reg);
+    crate::intel::mmio_write(dev, regs.hphase, hphase_reg);
+    crate::intel::mmio_write(dev, regs.window_pos, window_pos_reg);
+    crate::intel::mmio_write(dev, regs.window_size, window_size_reg);
+    true
+}
+
+fn plane_scaler_flip_matches(dev: crate::intel::Dev, scaler: PlaneScalerFlip) -> bool {
+    match scaler.mode {
+        PlaneScalerMode::Detached => !(0..2).any(|scaler_id| {
+            pipe_scaler_bound_to_plane(
+                dev,
+                scaler.pipe_slot,
+                scaler_id,
+                scaler.plane_slot,
+            )
+        }),
+        PlaneScalerMode::Scaled {
+            scaler_id,
+            window_pos_reg,
+            window_size_reg,
+            hphase_reg,
+            vphase_reg,
+        } => {
+            let Some(regs) = pipe_scaler_registers(scaler.pipe_slot, scaler_id) else {
+                return false;
+            };
+            pipe_scaler_bound_to_plane(
+                dev,
+                scaler.pipe_slot,
+                scaler_id,
+                scaler.plane_slot,
+            ) && crate::intel::mmio_read(dev, regs.window_pos) == window_pos_reg
+                && crate::intel::mmio_read(dev, regs.window_size) == window_size_reg
+                && crate::intel::mmio_read(dev, regs.hphase) == hphase_reg
+                && crate::intel::mmio_read(dev, regs.vphase) == vphase_reg
+                && !(0..2).any(|other_id| {
+                    other_id != scaler_id
+                        && pipe_scaler_bound_to_plane(
+                            dev,
+                            scaler.pipe_slot,
+                            other_id,
+                            scaler.plane_slot,
+                        )
+                })
+        }
+    }
+}
+
+/// Publish all staged scaler, geometry, opacity and SURF state back-to-back.
 pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
@@ -5695,7 +5913,16 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
     batch.accepting = false;
     batch.submitted_ns = crate::chronos::monotonic_nanos();
     batch.polls = 0;
+    if !prepare_plane_scaler_flips(dev, &batch.entries[..batch.len]) {
+        return false;
+    }
     for entry in batch.entries[..batch.len].iter().flatten() {
+        if entry
+            .scaler
+            .is_some_and(|scaler| !program_plane_scaler_flip(dev, scaler))
+        {
+            return false;
+        }
         if let Some(geometry) = entry.geometry {
             crate::intel::mmio_write(
                 dev,
@@ -5741,6 +5968,7 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     let mut live = [0u32; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY];
     let mut live_mask = 0u32;
     let mut alpha_mask = 0u32;
+    let mut scaler_mask = 0u32;
     for (index, entry) in batch.entries[..batch.len].iter().flatten().enumerate() {
         live[index] = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_SURFLIVE_OFF);
         if live[index] == entry.surface_reg {
@@ -5751,6 +5979,12 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         }) {
             alpha_mask |= 1u32 << index;
         }
+        if entry
+            .scaler
+            .is_none_or(|scaler| plane_scaler_flip_matches(dev, scaler))
+        {
+            scaler_mask |= 1u32 << index;
+        }
     }
     let want_mask = if batch.len == 0 {
         0
@@ -5758,7 +5992,8 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         (1u32 << batch.len) - 1
     };
     let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(batch.submitted_ns);
-    let committed = live_mask == want_mask && alpha_mask == want_mask;
+    let committed =
+        live_mask == want_mask && alpha_mask == want_mask && scaler_mask == want_mask;
     let timed_out = !committed && elapsed_ns >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS;
     if !committed && !timed_out {
         return Ui4PlaneSurfaceFlipPoll::Pending;
@@ -5767,12 +6002,13 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     let seq = UI4_PLANE_SURFACE_FLIP_BATCH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if timed_out || seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} alpha_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surface+plane-alpha-together wait=async\n",
+            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} alpha_mask=0x{:X} scaler_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surface+plane-alpha+scaler-together wait=async\n",
             seq,
             committed as u8,
             batch.len,
             live_mask,
             alpha_mask,
+            scaler_mask,
             want_mask,
             batch.polls,
             elapsed_ns,
@@ -5783,15 +6019,19 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
             let alpha_ok = entry.constant_alpha.is_none_or(|alpha| {
                 overlay_plane_constant_alpha_matches(dev, entry.plane_base, alpha)
             });
-            if live[index] != entry.surface_reg || !alpha_ok {
+            let scaler_ok = entry
+                .scaler
+                .is_none_or(|scaler| plane_scaler_flip_matches(dev, scaler));
+            if live[index] != entry.surface_reg || !alpha_ok || !scaler_ok {
                 crate::log_warn!(
                     target: "intel/display";
-                    "intel/display: ui4-plane-surface-flip timeout plane_base=0x{:X} surf=0x{:08X} live=0x{:08X} plane_opacity={} alpha_ok={}\n",
+                    "intel/display: ui4-plane-surface-flip timeout plane_base=0x{:X} surf=0x{:08X} live=0x{:08X} plane_opacity={} alpha_ok={} scaler_ok={}\n",
                     entry.plane_base,
                     entry.surface_reg,
                     live[index],
                     entry.constant_alpha.map_or(u8::MAX, |alpha| alpha),
                     alpha_ok as u8,
+                    scaler_ok as u8,
                 );
             }
         }
@@ -6159,7 +6399,9 @@ fn program_rgba8_plane_static_contract(
 /// Slots 0-3 share one full-output 4-BPP composition lifecycle: slot 0 is the
 /// opaque primary and slots 1-3 are native premultiplied RGBA8 overlays. Slot
 /// 4 receives the same immutable overlay contract but remains independently
-/// owned by UI4 interaction. After bootstrap, only PLANE_SURF may change.
+/// owned by UI4 interaction. Bootstrap fixes the pixel format, blend mode and
+/// DBUF allocation. A direct-present transaction may still change geometry,
+/// constant plane alpha and PLANE_SURF, with SURFLIVE proving the new surface.
 fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: PrimarySurface) -> bool {
     if UI4_RGBA8_PLANE_STACK_STATE
         .compare_exchange(
@@ -7843,6 +8085,8 @@ static UI4_COMPOSITION_PROOF_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 // through the kernel logger during a performance run.
 static UI4_DIRECT_QUEUE_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static UI4_DIRECT_SCANOUT_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static UI4_DIRECT_PLANE_ALPHA_LOGGED: AtomicBool = AtomicBool::new(false);
+static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
     sequence <= 8 || sequence.is_multiple_of(120)
@@ -8286,6 +8530,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     source: Ui4DirectRgbaFrame,
     pos_x: u32,
     pos_y: u32,
+    dest_width: u32,
+    dest_height: u32,
     opacity: u8,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
@@ -8297,6 +8543,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         .ok_or(Ui4AsyncCompositionError::Unavailable)?;
     if source.width == 0
         || source.height == 0
+        || dest_width == 0
+        || dest_height == 0
         || source.phys == 0
         || !source.phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
         || source.byte_len == 0
@@ -8307,10 +8555,10 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
             .checked_mul(source.height as usize)
             .is_none_or(|required| required > source.byte_len)
         || pos_x
-            .checked_add(source.width)
+            .checked_add(dest_width)
             .is_none_or(|right| right > target.width)
         || pos_y
-            .checked_add(source.height)
+            .checked_add(dest_height)
             .is_none_or(|bottom| bottom > target.height)
     {
         return Err(Ui4AsyncCompositionError::Unavailable);
@@ -8359,6 +8607,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     let surface = Ui4DirectOverlaySurface {
         width: source.width,
         height: source.height,
+        dest_width,
+        dest_height,
         pitch_bytes: source.pitch_bytes,
         byte_len: source.byte_len,
         phys: source.phys,
@@ -8377,15 +8627,23 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     let change = CompositionDamageRegion::from_rect(CompositionDamageRect::new(
         pos_x,
         pos_y,
-        source.width,
-        source.height,
+        dest_width,
+        dest_height,
     ));
     let queue_sequence = UI4_DIRECT_QUEUE_LOG_SEQUENCE
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
+    if opacity != u8::MAX && !UI4_DIRECT_PLANE_ALPHA_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4/direct-present: hardware-opacity active slot={} producer_frame={} pixel_alpha=premultiplied plane_opacity={} source_buffer_mutation=none alpha_commit=surflive+key-alpha-readback\n",
+            plane_slot,
+            source.producer_frame,
+            opacity,
+        );
+    }
     if should_log_ui4_direct_checkpoint(queue_sequence) {
         crate::log_trace!(target: "ui4";
-            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{}@{},{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0\n",
+            "ui4/direct-present: queued checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} source={}x{} destination={}x{}@{},{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0\n",
             queue_sequence,
             reason,
             plane_slot,
@@ -8398,6 +8656,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
             gpu,
             source.width,
             source.height,
+            dest_width,
+            dest_height,
             pos_x,
             pos_y,
             source.pitch_bytes,
@@ -8653,7 +8913,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
             .saturating_add(1);
         if should_log_ui4_direct_checkpoint(scanout_sequence) {
             crate::log_info!(target: "ui4";
-                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} size={}x{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0 engine_output_ready=surflive ownership=display-live elapsed_us={}\n",
+                "ui4/direct-present: scanout-ready checkpoint={} reason={} slot={} alias={} producer_frame={} producer_buffer={} publish_serial={} producer_release_sequence={} source_phys=0x{:X} display_gpu=0x{:X} source={}x{} destination={}x{} pitch=0x{:X} pixel_alpha=premultiplied plane_opacity={} guc_jobs=0 engine_output_ready=surflive ownership=display-live elapsed_us={}\n",
                 scanout_sequence,
                 composition.reason,
                 surface.plane_slot,
@@ -8666,6 +8926,8 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
                 surface.gpu,
                 surface.width,
                 surface.height,
+                surface.dest_width,
+                surface.dest_height,
                 surface.pitch_bytes,
                 surface.opacity,
                 elapsed_us,
@@ -9800,6 +10062,91 @@ fn overlay_plane_geometry(
     })
 }
 
+const DIRECT_PLANE_SCALER_MIN_DIMENSION: u32 = 8;
+const DIRECT_PLANE_SCALER_MAX_FACTOR: u32 = 0x2_FFFF;
+
+fn direct_plane_scaler_factor(source: u32, destination: u32) -> Option<u32> {
+    if source < DIRECT_PLANE_SCALER_MIN_DIMENSION
+        || destination < DIRECT_PLANE_SCALER_MIN_DIMENSION
+        || destination > source
+    {
+        return None;
+    }
+    let numerator = u64::from(source).checked_shl(16)?;
+    let factor = numerator
+        .saturating_add(u64::from(destination).saturating_sub(1))
+        .checked_div(u64::from(destination))?;
+    u32::try_from(factor)
+        .ok()
+        .filter(|factor| *factor <= DIRECT_PLANE_SCALER_MAX_FACTOR)
+}
+
+fn direct_plane_scaler_phase(factor: u32) -> u32 {
+    let phase = i64::from(factor) / 2 - 0x8000;
+    if phase < 0 {
+        (((0x1_0000i64 + phase) >> 2) as u32) & PIPE_SCALER_PHASE_MASK
+    } else {
+        (((phase >> 2) as u32) & PIPE_SCALER_PHASE_MASK) | PIPE_SCALER_PHASE_TRIP
+    }
+}
+
+const fn direct_plane_scaler_id(plane_slot: usize) -> Option<usize> {
+    match plane_slot {
+        1 | 3 => Some(0),
+        2 => Some(1),
+        _ => None,
+    }
+}
+
+fn direct_overlay_geometry_and_scaler(
+    surface: Ui4DirectOverlaySurface,
+) -> Option<(PlaneSurfaceGeometry, PlaneScalerFlip)> {
+    if surface.dest_width == surface.width && surface.dest_height == surface.height {
+        return Some((
+            overlay_plane_geometry(
+                surface.pitch_bytes,
+                surface.width,
+                surface.height,
+                surface.pos_x,
+                surface.pos_y,
+            )?,
+            PlaneScalerFlip {
+                pipe_slot: surface.pipe.slot,
+                plane_slot: surface.plane_slot,
+                mode: PlaneScalerMode::Detached,
+            },
+        ));
+    }
+    let scaler_id = direct_plane_scaler_id(surface.plane_slot)?;
+    pipe_scaler_registers(surface.pipe.slot, scaler_id)?;
+    let hfactor = direct_plane_scaler_factor(surface.width, surface.dest_width)?;
+    let vfactor = direct_plane_scaler_factor(surface.height, surface.dest_height)?;
+    let hphase = direct_plane_scaler_phase(hfactor);
+    let vphase = direct_plane_scaler_phase(vfactor);
+    let window_pos_reg = (surface.pos_x.checked_shl(16)?) | surface.pos_y;
+    let window_size_reg = (surface.dest_width.checked_shl(16)?) | surface.dest_height;
+    Some((
+        overlay_plane_geometry(
+            surface.pitch_bytes,
+            surface.width,
+            surface.height,
+            0,
+            0,
+        )?,
+        PlaneScalerFlip {
+            pipe_slot: surface.pipe.slot,
+            plane_slot: surface.plane_slot,
+            mode: PlaneScalerMode::Scaled {
+                scaler_id,
+                window_pos_reg,
+                window_size_reg,
+                hphase_reg: (hphase << 16) | hphase,
+                vphase_reg: (vphase << 16) | vphase,
+            },
+        },
+    ))
+}
+
 fn program_overlay_plane_geometry(
     dev: crate::intel::Dev,
     plane_base: usize,
@@ -9850,6 +10197,11 @@ fn flip_overlay_plane_surface(
         surface_reg,
         Some(geometry),
         Some(u8::MAX),
+        Some(PlaneScalerFlip {
+            pipe_slot: surface.pipe.slot,
+            plane_slot: surface.plane_slot,
+            mode: PlaneScalerMode::Detached,
+        }),
         reason,
     ) {
         PlaneSurfaceFlipQueueResult::Queued => {
@@ -9871,6 +10223,7 @@ fn flip_overlay_plane_surface(
         PlaneSurfaceFlipQueueResult::Rejected => return false,
         PlaneSurfaceFlipQueueResult::Inactive => {}
     }
+    detach_pipe_scalers_from_plane(dev, surface.pipe.slot, surface.plane_slot);
     program_overlay_plane_geometry(dev, plane_base, geometry);
     program_overlay_plane_constant_alpha(dev, plane_base, u8::MAX);
     crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
@@ -9922,6 +10275,11 @@ fn stage_overlay_plane_surface_flip(
         surface_reg,
         Some(geometry),
         Some(u8::MAX),
+        Some(PlaneScalerFlip {
+            pipe_slot: surface.pipe.slot,
+            plane_slot: surface.plane_slot,
+            mode: PlaneScalerMode::Detached,
+        }),
         reason,
     )
         == PlaneSurfaceFlipQueueResult::Queued
@@ -9957,20 +10315,30 @@ fn stage_ui4_direct_overlay_flip(
     let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
-    let Some(geometry) = overlay_plane_geometry(
-        surface.pitch_bytes,
-        surface.width,
-        surface.height,
-        surface.pos_x,
-        surface.pos_y,
-    ) else {
+    let Some((geometry, scaler)) = direct_overlay_geometry_and_scaler(surface) else {
         return false;
     };
+    if matches!(scaler.mode, PlaneScalerMode::Scaled { .. })
+        && !UI4_DIRECT_PLANE_SCALER_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_info!(target: "ui4";
+            "ui4/direct-present: hardware-shrink active slot={} producer_frame={} source={}x{} destination={}x{}@{},{} source_buffer_mutation=none scaler_commit=surflive+scaler-readback\n",
+            surface.plane_slot,
+            surface.producer_frame,
+            surface.width,
+            surface.height,
+            surface.dest_width,
+            surface.dest_height,
+            surface.pos_x,
+            surface.pos_y,
+        );
+    }
     queue_ui4_plane_surface_flip(
         overlay_plane_base(surface.pipe, surface.plane_slot),
         surface_reg,
         Some(geometry),
         Some(surface.opacity),
+        Some(scaler),
         reason,
     ) == PlaneSurfaceFlipQueueResult::Queued
 }

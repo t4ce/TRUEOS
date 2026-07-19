@@ -71,6 +71,8 @@ const CENTIMETER_TICK_LENGTH_MM: f32 = 2.5;
 const THREE_CENTIMETER_TICK_LENGTH_MM: f32 = 4.0;
 const DECORATION_INSET_MM: f32 = 0.5;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::GRIDPAPER_SERVICE;
+const UI4_PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
+const _: () = assert!(UI4_PLANE_SLOT == 2);
 const SERVICE_PERIOD_MS: u64 = 16;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const INPUT_QUEUE_CAPACITY_PER_INSTANCE: usize = 64;
@@ -1058,7 +1060,7 @@ fn initialize_surface(
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
-        cadence: crate::ui4::FrameCadence::Dirty,
+        cadence: crate::ui4::FrameCadence::Streaming,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -1085,20 +1087,32 @@ struct PoolLeaseState {
 
 fn pool_lease_state(pool_slot: usize) -> PoolLeaseState {
     let mut stores = SNAPSHOTS.lock();
-    let snapshots = &mut stores[pool_slot];
-    let owner = snapshots.owner;
-    let presentable_owner = owner.and_then(|owner| {
-        if snapshots.lifecycle_paused || !snapshots.producer_connected {
-            return None;
+    // The current direct-present iteration reserves one hardware plane for
+    // GridPaper. Keep every leased scene resident, but attach only the first
+    // live producer; otherwise two exact-release windows on slot 2 would be
+    // rejected rather than silently copied/composited.
+    let mut presentation_slot = None;
+    for (candidate_slot, candidate) in stores.iter_mut().enumerate() {
+        let Some(candidate_owner) = candidate.owner else {
+            continue;
+        };
+        if candidate.lifecycle_paused || !candidate.producer_connected {
+            continue;
         }
-        let state = crate::hv::vm_state(owner);
+        let state = crate::hv::vm_state(candidate_owner);
         if state.running || state.starting {
-            Some(owner)
+            if presentation_slot.is_none() {
+                presentation_slot = Some(candidate_slot);
+            }
         } else {
-            snapshots.producer_connected = false;
-            None
+            candidate.producer_connected = false;
         }
-    });
+    }
+    let snapshots = &stores[pool_slot];
+    let owner = snapshots.owner;
+    let presentable_owner = (presentation_slot == Some(pool_slot))
+        .then_some(owner)
+        .flatten();
     PoolLeaseState {
         epoch: snapshots.lease_epoch,
         owner,
@@ -1143,7 +1157,7 @@ fn attach_presentation(
         session,
         frame: surface.frame,
         output,
-        plane: crate::ui4::WindowPlane::Universal(crate::ui4::RGB_OVERLAY_PLANE_SLOT_3 as u8),
+        plane: crate::ui4::WindowPlane::Universal(UI4_PLANE_SLOT as u8),
         placement: crate::ui4::WindowPlacement {
             x: x as i32,
             y: y as i32,
@@ -1648,6 +1662,10 @@ fn publish_page(
         page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
         page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
     ];
+    let cursor_rects = selection.and_then(|selection| {
+        grid_cursor_rects(surface, page, selection, input_field)
+    });
+    let final_rects = cursor_rects.as_ref().map_or(&[][..], |rects| &rects[..]);
     let result = match capture_resident_page_frame(
         page,
         text_animations,
@@ -1655,6 +1673,7 @@ fn publish_page(
         viewport_translation_px,
         surface.width,
         surface.height,
+        final_rects,
         Some(destination),
     ) {
         Ok(result) => result,
@@ -1666,24 +1685,22 @@ fn publish_page(
     if !GPU_DIRECT_PRESENT_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4 size={}x{} pitch={} target_gpu=0x{:X} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={}\n",
+            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={} final_release=pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
             destination.gpu,
+            UI4_PLANE_SLOT,
             result.rgba.is_some() as u8,
             result.coverage_submits,
             result.coverage_walkers,
         );
     }
-    if let Some(selection) = selection
-        && let Some(rects) = grid_cursor_rects(surface, page, selection, input_field)
-        && !crate::intel::gpgpu::fill_solid_rects_rgba8(destination, &rects)
-    {
+    let Some(release) = result.release_fence else {
         let _ = crate::ui4::cancel_frame_buffer(lease);
-        return Err(ServiceError::Render("grid-cursor-overlay"));
-    }
-    if let Err(error) = crate::ui4::publish_frame_buffer(lease) {
+        return Err(ServiceError::Render("missing-gridpaper-release-fence"));
+    };
+    if let Err(error) = crate::ui4::publish_gpu_frame_buffer(lease, release) {
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(error.into());
     }
@@ -1698,6 +1715,7 @@ fn capture_resident_page_frame(
     viewport_translation_px: [f32; 2],
     width: u32,
     height: u32,
+    final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
     destination: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, &'static str> {
     let triangle_draws = page
@@ -1736,9 +1754,10 @@ fn capture_resident_page_frame(
         })
         .collect::<Vec<_>>();
     let captured = if let Some(destination) = destination {
-        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
             &triangle_draws,
             &coverage_draws,
+            final_rects,
             Some([0, 0, 0, 0]),
             destination,
             false,
@@ -1786,9 +1805,10 @@ fn capture_resident_page_frame(
                 })
                 .collect::<Vec<_>>();
             let fallback = if let Some(destination) = destination {
-                crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+                crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
                     &fallback_draws,
                     &[],
+                    final_rects,
                     Some([0, 0, 0, 0]),
                     destination,
                     false,
@@ -1858,6 +1878,7 @@ fn render_print_page(
             [0.0, 0.0],
             PRINT_CAPTURE_WIDTH,
             PRINT_CAPTURE_HEIGHT,
+            &[],
             None,
         )?;
         let rgba_premultiplied = captured.rgba.ok_or("missing-print-frame")?;
@@ -2163,9 +2184,10 @@ fn release_runtime_presentation(
     retire_frame: bool,
 ) -> bool {
     let close_request = if retire_frame {
-        crate::ui4::WindowSessionCloseRequest::default().animate_and_retire_frames()
+        crate::ui4::WindowSessionCloseRequest::default()
+            .direct_plane_animate_and_retire_frames()
     } else {
-        crate::ui4::WindowSessionCloseRequest::default().animate()
+        crate::ui4::WindowSessionCloseRequest::default().direct_plane_animate()
     };
     let release = crate::ui4::finish_window_session_with_request(UI4_OWNER, session, close_request);
     let frame_transferred = retire_frame && release.is_ok();
@@ -2809,7 +2831,7 @@ pub async fn gridpaper_service_task() {
     let spawned = spawn_gridpaper_instance_pool();
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready controller_slot={} pool_workers={} soft_cap={} blueprint_instances=1 page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_active_instance=2 scene={}x{} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} target_cell_mm={} default_scale={} scheduling=ap2+-worker-pool render_lane=single-rcs-async-fair input=window-routed\n",
+        "gridpaper: embassy service ready controller_slot={} pool_workers={} soft_cap={} blueprint_instances=1 page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_active_instance=3 scene={}x{} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} target_cell_mm={} default_scale={} scheduling=ap2+-worker-pool render_lane=single-rcs-async-fair input=window-routed presentation=ui4-triple-direct-slot2 direct_visible_capacity=1 retained_scene_capacity=10 release=pat3-uc+pipe-control-post-sync+surflive\n",
         crate::percpu::current_slot(),
         spawned,
         GRIDPAPER_POOL_SOFT_CAP,

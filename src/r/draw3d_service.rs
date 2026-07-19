@@ -39,6 +39,9 @@ static UI4_GPU_DIRECT_FRAME_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const PROJECTED_COVERAGE_WARN_SCREEN_EQUIVALENTS: f32 = 1.75;
 const UI4_FRAME_PERIOD_US: u64 = 16_667;
+const UI4_FRAME_WIDTH: u32 = crate::ui4::DEFAULT_FRAME_WIDTH;
+const UI4_FRAME_HEIGHT: u32 = crate::ui4::DEFAULT_FRAME_HEIGHT;
+const UI4_FRAME_MARGIN: u32 = 64;
 const UI4_OWNER: crate::ui4::WindowOwner = crate::ui4::WindowOwner::DRAW3D_SERVICE;
 const UI4_PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_3;
 const _: () = assert!(UI4_PLANE_SLOT == 3);
@@ -92,8 +95,12 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     let (max_width, max_height) = crate::intel::render::resident_scene_target_dimensions();
     let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
         .unwrap_or((crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT));
-    let width = scanout_width.min(max_width as u32);
-    let height = scanout_height.min(max_height as u32);
+    let width = UI4_FRAME_WIDTH
+        .min(scanout_width)
+        .min(max_width as u32);
+    let height = UI4_FRAME_HEIGHT
+        .min(scanout_height)
+        .min(max_height as u32);
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
@@ -139,8 +146,12 @@ fn publish_ui4_scene_frame(
             output,
             plane: crate::ui4::WindowPlane::Universal(UI4_PLANE_SLOT as u8),
             placement: crate::ui4::WindowPlacement {
-                x: (scanout_width.saturating_sub(surface.width) / 2) as i32,
-                y: (scanout_height.saturating_sub(surface.height) / 2) as i32,
+                x: scanout_width
+                    .saturating_sub(surface.width.saturating_add(UI4_FRAME_MARGIN))
+                    as i32,
+                y: UI4_FRAME_MARGIN
+                    .min(scanout_height.saturating_sub(surface.height))
+                    as i32,
                 width: surface.width,
                 height: surface.height,
                 z: 80,
@@ -577,7 +588,7 @@ pub async fn draw3d_ui4_render_task() {
         .unwrap_or(0);
     crate::log_info!(
         target: "draw3d";
-        "draw3d: UI4 rewire surface ready owner=kernel-app-3 session={} frame={} window=deferred-until-first-scene output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} ui4_consumers=draw3d-only frame_addresses=3 target_hz=60 producer=one-guc-scene-submit presentation=triple-buffer-direct-scanout per_frame_compositor_jobs=0 per_frame_display_flips=1 cpu_readback=0 cpu_frame_copy=0 scene_running=0\n",
+        "draw3d: UI4 rewire surface ready owner=kernel-app-3 session={} frame={} window=deferred-until-first-scene output=D01 plane_slot={} format=rgba8-premultiplied cadence=streaming buffers={} extent={}x{} resident_scene_consumers=draw3d+gridpaper frame_addresses=3 target_hz=60 producer=one-guc-scene-submit presentation=triple-buffer-direct-scanout per_frame_compositor_jobs=0 per_frame_display_flips=1 cpu_readback=0 cpu_frame_copy=0 scene_running=0\n",
         surface.session.raw(),
         surface.frame.raw(),
         UI4_PLANE_SLOT,

@@ -916,6 +916,8 @@ const FONT_OUTLINE_MESH_PRE_MARKER_SLOT: usize = 33;
 const FONT_OUTLINE_MESH_POST_MARKER_SLOT: usize = 32;
 const FONT_OUTLINE_MESH_PRE_MARKER: u32 = 0xC0DE_F701;
 const FONT_OUTLINE_MESH_POST_MARKER: u32 = 0xC0DE_F702;
+const RGBA8_SCANOUT_RELEASE_MARKER_SLOT: usize = 34;
+const RGBA8_SCANOUT_RELEASE_MARKER: u32 = 0xC0DE_D102;
 const FONT_OUTLINE_MESH_RESULT_MAGIC_BASE: u32 = 0xF07E_CA00;
 const FONT_OUTLINE_MESH_RESULT_DONE: u32 = 0xC001_D00D;
 const FONT_OUTLINE_MESH_LAYOUT_VERSION: u32 = 2;
@@ -2304,6 +2306,52 @@ struct DirectRcsDispatchOutcome {
     observed: u32,
 }
 
+/// Establish the final producer-to-display boundary for an RGBA8 allocation.
+///
+/// Earlier resolve/coverage/decorations may use different completion packets;
+/// this dedicated batch remaps the exact destination PAT3/UC, drains HDC/L3
+/// and render-target writes, and proves retirement with an ordered
+/// PIPE_CONTROL post-sync cookie. No pixel shader or surface copy runs here.
+pub(crate) fn release_rgba8_surface_for_scanout(
+    dst: GpgpuRgba8Surface,
+) -> GpgpuRgba8KernelResult {
+    let started = direct_rcs_now_tick();
+    if !dst.is_valid() {
+        return GpgpuRgba8KernelResult::default();
+    }
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuRgba8KernelResult::default();
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return GpgpuRgba8KernelResult::default();
+    };
+    let prepared = direct_rcs_forcewake(dev)
+        && direct_rcs_map_state(dev, state)
+        && direct_rcs_init_ppgtt(state)
+        && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+        && direct_rcs_encode_rgba8_scanout_release_batch(state);
+    let submitted = prepared && direct_rcs_submit_batch(dev, state);
+    let marker = if submitted {
+        direct_rcs_poll_result_slot_timeout_ms(
+            state,
+            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
+            RGBA8_SCANOUT_RELEASE_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        )
+    } else {
+        0
+    };
+    let ok = marker == RGBA8_SCANOUT_RELEASE_MARKER;
+    GpgpuRgba8KernelResult {
+        ok,
+        submitted,
+        marker,
+        submit_ms: direct_rcs_elapsed_ms_since(started),
+        release: ok.then(|| gpgpu_rgba8_release(dst)),
+    }
+}
+
 
 
 
@@ -3484,10 +3532,20 @@ pub(crate) fn copy_rect_rgba8_complete(
     dst: GpgpuRgba8Surface,
     dst_xy: GpgpuPoint,
 ) -> bool {
+    copy_rect_rgba8_complete_mode(src, src_rect, dst, dst_xy, false)
+}
+
+pub(crate) fn copy_rect_rgba8_complete_mode(
+    src: GpgpuRgba8Surface,
+    src_rect: GpgpuRect,
+    dst: GpgpuRgba8Surface,
+    dst_xy: GpgpuPoint,
+    direct_scanout: bool,
+) -> bool {
     let Some(params) = lower_copy_rect(src, src_rect, dst, dst_xy) else {
         return false;
     };
-    submit_copy_rect_2d(src, dst, params)
+    submit_copy_rect_2d(src, dst, params, direct_scanout)
 }
 
 /// Resolve one gfx12.5 Tile64 R8G8B8A8 4x-MSAA surface into linear RGBA8.
@@ -3501,12 +3559,22 @@ pub(crate) fn resolve_tile64_msaa4_rgba8(
     width: u32,
     height: u32,
 ) -> bool {
+    resolve_tile64_msaa4_rgba8_mode(src, dst, width, height, false)
+}
+
+pub(crate) fn resolve_tile64_msaa4_rgba8_mode(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    width: u32,
+    height: u32,
+    direct_scanout: bool,
+) -> bool {
     let Some(params) =
         lower_copy_rect(src, GpgpuRect::new(0, 0, width, height), dst, GpgpuPoint::new(0, 0))
     else {
         return false;
     };
-    submit_resolve_tile64_msaa4_2d(src, dst, params)
+    submit_resolve_tile64_msaa4_2d(src, dst, params, direct_scanout)
 }
 
 fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
@@ -3780,6 +3848,13 @@ pub(crate) fn font_outline_coverage_r8(
 /// panning a resident scene must not turn an empty clip into a GPU failure and
 /// demote all of its other analytical layers to triangle rendering.
 pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
+    glyph_mask_rgba8_2d_mode(blit, false)
+}
+
+pub(crate) fn glyph_mask_rgba8_2d_mode(
+    blit: GpgpuGlyphMaskBlit,
+    direct_scanout: bool,
+) -> bool {
     if !blit.mask.is_valid()
         || !blit.dst.is_valid()
         || !rect_is_inside_mask(blit.mask, blit.mask_rect)
@@ -3789,7 +3864,13 @@ pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
     let Some(params) = lower_glyph_mask_blit(blit) else {
         return true;
     };
-    submit_glyph_mask_2d(blit.mask, blit.dst, params, blit.color_rgba)
+    submit_glyph_mask_2d(
+        blit.mask,
+        blit.dst,
+        params,
+        blit.color_rgba,
+        direct_scanout,
+    )
 }
 
 /// Composite all persistent R8 coverage layers into one RGBA destination with
@@ -3799,6 +3880,14 @@ pub(crate) fn glyph_mask_rgba8_2d(blit: GpgpuGlyphMaskBlit) -> bool {
 pub(crate) fn glyph_mask_layers_rgba8_2d(
     layers: &[GpgpuGlyphMaskLayer],
     dst: GpgpuRgba8Surface,
+) -> GpgpuGlyphMaskBatchResult {
+    glyph_mask_layers_rgba8_2d_mode(layers, dst, false)
+}
+
+pub(crate) fn glyph_mask_layers_rgba8_2d_mode(
+    layers: &[GpgpuGlyphMaskLayer],
+    dst: GpgpuRgba8Surface,
+    direct_scanout: bool,
 ) -> GpgpuGlyphMaskBatchResult {
     let mut result = GpgpuGlyphMaskBatchResult {
         requested_layers: layers.len(),
@@ -3826,7 +3915,8 @@ pub(crate) fn glyph_mask_layers_rgba8_2d(
         result.ok = true;
         return result;
     }
-    let (submitted, completed) = submit_glyph_mask_layers_2d(layers, dst);
+    let (submitted, completed) =
+        submit_glyph_mask_layers_2d(layers, dst, direct_scanout);
     result.submitted = submitted;
     result.ok = completed;
     result.submits = usize::from(submitted);
@@ -3844,6 +3934,14 @@ pub(crate) fn glyph_mask_layers_rgba8_2d(
 pub(crate) fn fill_rect_worklist_rgba8_stats(
     dst: GpgpuRgba8Surface,
     descs: &[FillRectWorklistRgba8Desc],
+) -> GpgpuWorklistSubmitStats {
+    fill_rect_worklist_rgba8_stats_mode(dst, descs, false)
+}
+
+fn fill_rect_worklist_rgba8_stats_mode(
+    dst: GpgpuRgba8Surface,
+    descs: &[FillRectWorklistRgba8Desc],
+    direct_scanout: bool,
 ) -> GpgpuWorklistSubmitStats {
     let Some(desc_buffer) = rect_worklist_desc_buffer_once() else {
         return GpgpuWorklistSubmitStats::default();
@@ -3871,7 +3969,7 @@ pub(crate) fn fill_rect_worklist_rgba8_stats(
             desc_count: chunk.len() as u32,
         };
         let submit_start_tick = direct_rcs_now_tick();
-        if !submit_fill_rect_worklist(dst, desc_buffer, params) {
+        if !submit_fill_rect_worklist(dst, desc_buffer, params, direct_scanout) {
             break;
         }
         stats.submit_ms = stats
@@ -3895,6 +3993,21 @@ pub(crate) fn fill_rect_worklist_rgba8_stats(
 /// pixels on the CPU. Rectangles are clipped to `dst`; a fully clipped set is
 /// a successful no-op.
 pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolidRect]) -> bool {
+    fill_solid_rects_rgba8_mode(dst, rects, false)
+}
+
+pub(crate) fn fill_solid_rects_rgba8_scanout(
+    dst: GpgpuRgba8Surface,
+    rects: &[GpgpuSolidRect],
+) -> bool {
+    fill_solid_rects_rgba8_mode(dst, rects, true)
+}
+
+fn fill_solid_rects_rgba8_mode(
+    dst: GpgpuRgba8Surface,
+    rects: &[GpgpuSolidRect],
+    direct_scanout: bool,
+) -> bool {
     const INLINE_RECTS: usize = 16;
     if !dst.is_valid() {
         return false;
@@ -3930,7 +4043,8 @@ pub(crate) fn fill_solid_rects_rgba8(dst: GpgpuRgba8Surface, rects: &[GpgpuSolid
     if desc_count == 0 {
         return true;
     }
-    let stats = fill_rect_worklist_rgba8_stats(dst, &descs[..desc_count]);
+    let stats =
+        fill_rect_worklist_rgba8_stats_mode(dst, &descs[..desc_count], direct_scanout);
     stats.descs == desc_count && stats.submits == 1
 }
 
@@ -5158,7 +5272,7 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
         desc_count: 2,
     };
     let start_tick = direct_rcs_now_tick();
-    let submitted = submit_fill_rect_worklist(surface, desc, params);
+    let submitted = submit_fill_rect_worklist(surface, desc, params, false);
     let submit_ms = direct_rcs_elapsed_ms_since(start_tick);
     let pre_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_PRE_MARKER_SLOT);
     let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);
@@ -5737,6 +5851,7 @@ fn submit_copy_rect_2d(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     params: CopyRectRgba8Params,
+    direct_scanout: bool,
 ) -> bool {
     if params.width == 0 || params.height == 0 {
         return false;
@@ -5762,8 +5877,14 @@ fn submit_copy_rect_2d(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let src_ppgtt_ok =
         kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, src.phys, src.bytes);
-    let dst_ppgtt_ok =
-        src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.dst_gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = src_ppgtt_ok
+        && direct_rcs_map_ppgtt_destination(
+            state,
+            params.dst_gpu,
+            dst.phys,
+            dst.bytes,
+            direct_scanout,
+        );
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_copy_rect_2d_batch(state, upload, params, src.bytes, dst.bytes);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
@@ -5885,6 +6006,7 @@ fn submit_resolve_tile64_msaa4_2d(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     params: CopyRectRgba8Params,
+    direct_scanout: bool,
 ) -> bool {
     if params.width == 0 || params.height == 0 {
         return false;
@@ -5910,8 +6032,14 @@ fn submit_resolve_tile64_msaa4_2d(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let src_ppgtt_ok =
         kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, src.phys, src.bytes);
-    let dst_ppgtt_ok =
-        src_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.dst_gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = src_ppgtt_ok
+        && direct_rcs_map_ppgtt_destination(
+            state,
+            params.dst_gpu,
+            dst.phys,
+            dst.bytes,
+            direct_scanout,
+        );
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
             state, upload, params, src.bytes, dst.bytes,
@@ -6030,6 +6158,7 @@ fn submit_glyph_mask_2d(
     dst: GpgpuRgba8Surface,
     params: CopyRectRgba8Params,
     color_rgba: u32,
+    direct_scanout: bool,
 ) -> bool {
     if fill_rect_2d_dispatch(params.width, params.height).is_none() {
         return false;
@@ -6051,8 +6180,14 @@ fn submit_glyph_mask_2d(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let mask_ppgtt_ok = kernel_ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, params.src_gpu, mask.phys, mask.bytes);
-    let dst_ppgtt_ok =
-        mask_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, params.dst_gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = mask_ppgtt_ok
+        && direct_rcs_map_ppgtt_destination(
+            state,
+            params.dst_gpu,
+            dst.phys,
+            dst.bytes,
+            direct_scanout,
+        );
     let batch_ok = dst_ppgtt_ok
         && direct_rcs_encode_glyph_mask_2d_batch(
             state, upload, params, color_rgba, mask.bytes, dst.bytes,
@@ -6074,6 +6209,7 @@ fn submit_glyph_mask_2d(
 fn submit_glyph_mask_layers_2d(
     layers: &[GpgpuGlyphMaskLayer],
     dst: GpgpuRgba8Surface,
+    direct_scanout: bool,
 ) -> (bool, bool) {
     if layers.is_empty() || layers.len() > GLYPH_MASK_BATCH_MAX_LAYERS {
         return (false, false);
@@ -6098,12 +6234,12 @@ fn submit_glyph_mask_layers_2d(
             upload.mapped_bytes,
             direct_rcs_ppgtt_pte_flags(),
         )
-        || !direct_rcs_map_ppgtt_region(
+        || !direct_rcs_map_ppgtt_destination(
             state,
             dst.gpu,
             dst.phys,
             dst.bytes,
-            direct_rcs_ppgtt_pte_flags(),
+            direct_scanout,
         )
     {
         return (false, false);
@@ -6916,6 +7052,7 @@ fn submit_fill_rect_worklist(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,
     params: FillRectWorklistRgba8Params,
+    direct_scanout: bool,
 ) -> bool {
     if params.desc_count == 0 || params.desc_count as usize > RECT_WORKLIST_MAX_DESCS {
         return false;
@@ -6936,8 +7073,14 @@ fn submit_fill_rect_worklist(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_destination(
+            state,
+            dst.gpu,
+            dst.phys,
+            dst.bytes,
+            direct_scanout,
+        );
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
@@ -7621,6 +7764,20 @@ fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
 fn direct_rcs_map_ppgtt_kernel(state: DirectRcsState, gpu: u64, phys: u64, len: usize) -> bool {
     let ok = direct_rcs_map_ppgtt_region(state, gpu, phys, len, direct_rcs_ppgtt_pte_flags());
     ok && direct_rcs_flush_ppgtt_pte_range(state, gpu, len)
+}
+
+fn direct_rcs_map_ppgtt_destination(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+    direct_scanout: bool,
+) -> bool {
+    if direct_scanout {
+        direct_rcs_map_ppgtt_scanout(state, gpu, phys, len)
+    } else {
+        direct_rcs_map_ppgtt_kernel(state, gpu, phys, len)
+    }
 }
 
 /// Map a full-surface compute destination that will transfer directly to the
@@ -8424,6 +8581,35 @@ fn direct_rcs_push_gpgpu_dispatch_epilogue(
         )
         && direct_rcs_push(batch, cursor, MI_BATCH_BUFFER_END)
         && direct_rcs_push(batch, cursor, MI_NOOP)
+}
+
+fn direct_rcs_encode_rgba8_scanout_release_batch(state: DirectRcsState) -> bool {
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len)
+    };
+    let mut cursor = 0usize;
+    let ok = direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS)
+        && direct_rcs_push_pipe_control_post_sync_marker_at(
+            batch,
+            &mut cursor,
+            state.gpu_va.result,
+            RGBA8_SCANOUT_RELEASE_MARKER_SLOT,
+            RGBA8_SCANOUT_RELEASE_MARKER,
+        )
+        && direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END)
+        && direct_rcs_push(batch, &mut cursor, MI_NOOP);
+    if !ok {
+        return false;
+    }
+    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
 }
 
 fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(

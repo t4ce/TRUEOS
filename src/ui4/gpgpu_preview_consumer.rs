@@ -1313,16 +1313,16 @@ fn stop_active_previews(
     let Some(first) = previews.first() else {
         return;
     };
-    // One source per hardware slot can fade by staging plane constant alpha
-    // beside a fresh GGTT alias for the same exact allocation. Geometry never
-    // changes, no composition target is created, and ownership transfers to
-    // UI4 until the final SURFLIVE-backed plane replacement releases it.
-    let direct_fade = previews_support_direct_fade(&previews);
-    let frame_lifecycle_transferred = if direct_fade {
+    // One source per hardware slot can close through pipe-scaler geometry and
+    // plane constant alpha beside fresh GGTT aliases for the same allocation.
+    // No composition target is created; UI4 owns retirement through the final
+    // SURFLIVE-backed plane replacement. Three planes use two scaler waves.
+    let direct_close = previews_support_direct_close(&previews);
+    let frame_lifecycle_transferred = if direct_close {
         finish_window_session_with_request(
             PREVIEW_OWNER,
             first.session,
-            WindowSessionCloseRequest::default().fade_and_retire_frames(),
+            WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames(),
         )
         .is_ok()
     } else {
@@ -1347,7 +1347,7 @@ fn stop_active_previews(
         metrics.elapsed_ms,
         reason,
         if frame_lifecycle_transferred {
-            "direct-plane-alpha-fade"
+            "direct-plane-scaler+alpha"
         } else {
             "broker-detach-no-animation"
         },
@@ -1383,7 +1383,7 @@ fn stop_active_previews(
     }
 }
 
-fn previews_support_direct_fade(previews: &[ActivePreview]) -> bool {
+fn previews_support_direct_close(previews: &[ActivePreview]) -> bool {
     let mut slots = 0u8;
     for preview in previews {
         if !preview.extra_surfaces.is_empty() {
