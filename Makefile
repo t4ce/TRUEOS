@@ -47,8 +47,9 @@ LIMINE_CONFIG_STAMP := $(LIMINE_BUILD_DIR)/.config_args
 LIMINE_TOOLCHAIN_STAMP := $(LIMINE_BUILD_DIR)/.toolchain_args
 LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
 # Linux i915 selects the TGL GuC 70 firmware family for ADL-S/RKL. GuC is a
-# required render/compute dependency, so ISO creation fails if it is absent.
-GUC_FW_HOST_PATH ?= /lib/firmware/i915/tgl_guc_70.bin.zst
+# required render/compute dependency, so keep the redistributable blob in-tree
+# and fail ISO creation if it is absent.
+GUC_FW_HOST_PATH ?= firmware/i915/tgl_guc_70.bin
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_guc_70.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
