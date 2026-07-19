@@ -312,7 +312,7 @@ pub(crate) fn submit_rcs_context(
     } else {
         // Keep the fixed local array alive for the duration of send below.
         let enable_args = [context_id, GUC_CONTEXT_ENABLE];
-        let scheduled = crate::intel::guc_ctb::send_hxg_action(
+        let scheduled = crate::intel::guc_ctb::send_hxg_fast_action(
             dev,
             INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET,
             &enable_args,
@@ -326,9 +326,9 @@ pub(crate) fn submit_rcs_context(
         state.contexts[slot].submissions = state.contexts[slot].submissions.saturating_add(1);
         state.serial = state.serial.wrapping_add(1).max(1);
         let serial = state.serial;
-        crate::log_trace!(
+        crate::log_info!(
             target: "gpgpu";
-            "intel/guc-submit: schedule accepted=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} submission_owner=guc\n",
+            "intel/guc-submit: schedule enqueued=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request completion_event=sched-context-mode-done submission_owner=guc\n",
             context_id,
             token.raw(),
             serial,
@@ -339,7 +339,7 @@ pub(crate) fn submit_rcs_context(
             serial,
         });
     };
-    let scheduled = crate::intel::guc_ctb::send_hxg_action(dev, action, args);
+    let scheduled = crate::intel::guc_ctb::send_hxg_fast_action(dev, action, args);
     if !scheduled.accepted {
         state.failures = state.failures.saturating_add(1);
         log_schedule_rejected(context_id, action, scheduled);
@@ -351,7 +351,7 @@ pub(crate) fn submit_rcs_context(
     let serial = state.serial;
     crate::log_trace!(
         target: "gpgpu";
-        "intel/guc-submit: schedule accepted=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} submission_owner=guc\n",
+        "intel/guc-submit: schedule enqueued=1 engine=rcs0 context_id={} token=0x{:X} serial={} action=0x{:04X} hxg=fast-request submission_owner=guc\n",
         context_id,
         token.raw(),
         serial,
@@ -379,7 +379,7 @@ pub(crate) fn destroy_rcs_context(
     }
     let context_id = (slot + 1) as u32;
     if context.enabled {
-        let disabled = crate::intel::guc_ctb::send_hxg_action(
+        let disabled = crate::intel::guc_ctb::send_hxg_fast_action(
             dev,
             INTEL_GUC_ACTION_SCHED_CONTEXT_MODE_SET,
             &[context_id, GUC_CONTEXT_DISABLE],
@@ -460,7 +460,7 @@ fn log_schedule_rejected(
     scheduled: crate::intel::guc_ctb::CtbSendResult,
 ) {
     crate::log!(
-        "intel/guc-submit: schedule accepted=0 engine=rcs0 context_id={} action=0x{:04X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
+        "intel/guc-submit: schedule enqueued=0 engine=rcs0 context_id={} action=0x{:04X} response=0x{:08X} type={} error={} g2h_poll_iters={}\n",
         context_id,
         action,
         scheduled.response,

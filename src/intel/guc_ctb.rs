@@ -31,11 +31,13 @@ const GUC_KLV_SELF_CFG_G2H_CTB_DESCRIPTOR_ADDR_KEY: u32 = 0x0906;
 const GUC_KLV_SELF_CFG_G2H_CTB_SIZE_KEY: u32 = 0x0907;
 const GUC_HXG_ORIGIN_GUC: u32 = 1;
 const GUC_HXG_TYPE_REQUEST: u32 = 0;
+const GUC_HXG_TYPE_FAST_REQUEST: u32 = 2;
 const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
 const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
 const GEN11_GUC_HOST_INTERRUPT: usize = 0x0019_01F0;
 const GUC_SEND_TRIGGER: u32 = 1 << 0;
-const CT_RESPONSE_POLL_ITERS: usize = 100_000;
+const CT_H2G_ROOM_POLL_ITERS: usize = 8_192;
+const CT_RESPONSE_POLL_ITERS: usize = 8_192;
 
 static CTB_ENABLED: AtomicBool = AtomicBool::new(false);
 static NEXT_FENCE: AtomicU16 = AtomicU16::new(1);
@@ -166,6 +168,30 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
 }
 
 pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32]) -> CtbSendResult {
+    send_hxg(dev, action, args, GUC_HXG_TYPE_REQUEST, true)
+}
+
+/// Enqueue an asynchronous GuC action without waiting for a fenced response.
+///
+/// GuC submission actions such as SCHED_CONTEXT and
+/// SCHED_CONTEXT_MODE_SET are FAST_REQUEST messages.  The latter reports its
+/// state transition through a separate SCHED_CONTEXT_MODE_DONE G2H event; it
+/// does not produce the synchronous response consumed by `send_hxg_action`.
+pub(crate) fn send_hxg_fast_action(
+    dev: crate::intel::Dev,
+    action: u32,
+    args: &[u32],
+) -> CtbSendResult {
+    send_hxg(dev, action, args, GUC_HXG_TYPE_FAST_REQUEST, false)
+}
+
+fn send_hxg(
+    dev: crate::intel::Dev,
+    action: u32,
+    args: &[u32],
+    request_type: u32,
+    wait_for_response: bool,
+) -> CtbSendResult {
     if !enabled() {
         return CtbSendResult {
             accepted: false,
@@ -188,13 +214,61 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
         };
     };
 
-    let fence = NEXT_FENCE.fetch_add(1, Ordering::AcqRel).max(1);
+    let fence = next_fence(!wait_for_response);
     let payload_len = 1usize.saturating_add(args.len().min(14));
     let total_len = 1usize.saturating_add(payload_len);
+    let mut h2g_poll_iters = 0usize;
+    let required = loop {
+        flush_blob_range(state, CT_H2G_DESC_OFFSET, CT_DESC_BYTES);
+        let h2g_head = read_desc_head(state, CT_H2G_DESC_OFFSET) as usize;
+        if h2g_head >= CT_H2G_RING_DWORDS {
+            *guard = Some(state);
+            return CtbSendResult {
+                accepted: false,
+                response: 0,
+                response_type: 0,
+                error: 6,
+                h2g_poll_iters,
+                g2h_poll_iters: 0,
+            };
+        }
+        let tail = state.h2g_tail as usize;
+        let required = if tail.saturating_add(total_len) > CT_H2G_RING_DWORDS {
+            CT_H2G_RING_DWORDS
+                .saturating_sub(tail)
+                .saturating_add(total_len)
+        } else {
+            total_len
+        };
+        if ct_ring_space(tail, h2g_head, CT_H2G_RING_DWORDS) >= required {
+            break required;
+        }
+        h2g_poll_iters = h2g_poll_iters.saturating_add(1);
+        if h2g_poll_iters >= CT_H2G_ROOM_POLL_ITERS {
+            *guard = Some(state);
+            return CtbSendResult {
+                accepted: false,
+                response: 0,
+                response_type: 0,
+                error: 3,
+                h2g_poll_iters,
+                g2h_poll_iters: 0,
+            };
+        }
+        core::hint::spin_loop();
+    };
+
     let mut tail = state.h2g_tail as usize;
+    if tail.saturating_add(total_len) > CT_H2G_RING_DWORDS {
+        while tail < CT_H2G_RING_DWORDS {
+            write_ct_dw(state, CT_H2G_OFFSET, tail, 0);
+            tail += 1;
+        }
+        tail = 0;
+    }
     write_ct_dw(state, CT_H2G_OFFSET, tail, ((fence as u32) << 16) | payload_len as u32);
     tail = (tail + 1) % CT_H2G_RING_DWORDS;
-    write_ct_dw(state, CT_H2G_OFFSET, tail, hxg_request_header(action));
+    write_ct_dw(state, CT_H2G_OFFSET, tail, hxg_action_header(request_type, action));
     tail = (tail + 1) % CT_H2G_RING_DWORDS;
     for value in args.iter().copied().take(payload_len.saturating_sub(1)) {
         write_ct_dw(state, CT_H2G_OFFSET, tail, value);
@@ -202,24 +276,53 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
     }
     state.h2g_tail = tail as u32;
     write_desc_tail(state, CT_H2G_DESC_OFFSET, state.h2g_tail);
-    crate::intel::dma_flush(state.virt, CT_BLOB_BYTES);
+    flush_blob_range(state, CT_H2G_OFFSET, CT_H2G_RING_BYTES);
+    flush_blob_range(state, CT_H2G_DESC_OFFSET, CT_DESC_BYTES);
     crate::intel::mmio_write(dev, GEN11_GUC_HOST_INTERRUPT, GUC_SEND_TRIGGER);
+
+    if !wait_for_response {
+        *guard = Some(state);
+        return CtbSendResult {
+            accepted: true,
+            response: 0,
+            response_type: request_type,
+            error: 0,
+            h2g_poll_iters: h2g_poll_iters.saturating_add(required),
+            g2h_poll_iters: 0,
+        };
+    }
 
     let mut response = 0u32;
     let mut response_type = 0u32;
     let mut error = 4u32;
     let mut g2h_poll_iters = 0usize;
     while g2h_poll_iters < CT_RESPONSE_POLL_ITERS {
-        crate::intel::dma_flush(state.virt, CT_BLOB_BYTES);
-        let tail_now = read_desc_tail(state, CT_G2H_DESC_OFFSET);
-        while state.g2h_head != tail_now {
+        flush_blob_range(state, CT_G2H_DESC_OFFSET, CT_DESC_BYTES);
+        let tail_now = read_desc_tail(state, CT_G2H_DESC_OFFSET) as usize;
+        if tail_now >= CT_G2H_RING_DWORDS {
+            error = 6;
+            break;
+        }
+        if state.g2h_head as usize != tail_now {
+            flush_blob_range(state, CT_G2H_OFFSET, CT_G2H_RING_BYTES);
+        }
+        let mut messages = 0usize;
+        while state.g2h_head as usize != tail_now && messages < CT_G2H_RING_DWORDS {
             let msg_head = state.g2h_head as usize;
+            let available = ct_ring_distance(msg_head, tail_now, CT_G2H_RING_DWORDS);
             let hdr = read_ct_dw(state, CT_G2H_OFFSET, msg_head);
             let msg_fence = (hdr >> 16) as u16;
             let msg_len = (hdr & 0xFF) as usize;
+            let msg_total = 1usize.saturating_add(msg_len);
+            if msg_len == 0 || msg_total > available {
+                error = 7;
+                break;
+            }
             let hxg = read_ct_dw(state, CT_G2H_OFFSET, (msg_head + 1) % CT_G2H_RING_DWORDS);
-            state.g2h_head = ((msg_head + 1 + msg_len) % CT_G2H_RING_DWORDS) as u32;
+            state.g2h_head = ((msg_head + msg_total) % CT_G2H_RING_DWORDS) as u32;
             write_desc_head(state, CT_G2H_DESC_OFFSET, state.g2h_head);
+            flush_blob_range(state, CT_G2H_DESC_OFFSET, CT_DESC_BYTES);
+            messages = messages.saturating_add(1);
             if msg_fence == fence {
                 response = hxg;
                 response_type = hxg_type(hxg);
@@ -236,10 +339,13 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
                     response,
                     response_type,
                     error,
-                    h2g_poll_iters: total_len,
+                    h2g_poll_iters: h2g_poll_iters.saturating_add(required),
                     g2h_poll_iters,
                 };
             }
+        }
+        if error == 6 || error == 7 || messages >= CT_G2H_RING_DWORDS {
+            break;
         }
         g2h_poll_iters += 1;
         core::hint::spin_loop();
@@ -251,7 +357,7 @@ pub(crate) fn send_hxg_action(dev: crate::intel::Dev, action: u32, args: &[u32])
         response,
         response_type,
         error,
-        h2g_poll_iters: total_len,
+        h2g_poll_iters: h2g_poll_iters.saturating_add(required),
         g2h_poll_iters,
     }
 }
@@ -289,6 +395,10 @@ fn write_desc_tail(state: CtbState, desc_off: usize, tail: u32) {
     write_blob_u32(state, desc_off + CT_DESC_TAIL, tail);
 }
 
+fn read_desc_head(state: CtbState, desc_off: usize) -> u32 {
+    read_blob_u32(state, desc_off + CT_DESC_HEAD)
+}
+
 fn read_desc_tail(state: CtbState, desc_off: usize) -> u32 {
     read_blob_u32(state, desc_off + CT_DESC_TAIL)
 }
@@ -317,8 +427,44 @@ fn read_blob_u32(state: CtbState, off: usize) -> u32 {
     }
 }
 
-fn hxg_request_header(action: u32) -> u32 {
-    (GUC_HXG_TYPE_REQUEST << 28) | (action & 0xFFFF)
+fn next_fence(untracked: bool) -> u16 {
+    let rolling = NEXT_FENCE.fetch_add(1, Ordering::AcqRel) & 0x7FFF;
+    let rolling = rolling.max(1);
+    rolling | if untracked { 0x8000 } else { 0 }
+}
+
+fn ct_ring_space(tail: usize, head: usize, size: usize) -> usize {
+    if tail >= size || head >= size || size == 0 {
+        return 0;
+    }
+    if head > tail {
+        head - tail - 1
+    } else {
+        size - tail + head - 1
+    }
+}
+
+fn ct_ring_distance(head: usize, tail: usize, size: usize) -> usize {
+    if head >= size || tail >= size || size == 0 {
+        return 0;
+    }
+    if tail >= head {
+        tail - head
+    } else {
+        size - head + tail
+    }
+}
+
+fn flush_blob_range(state: CtbState, off: usize, len: usize) {
+    if off.saturating_add(len) <= state.len {
+        unsafe {
+            crate::intel::dma_flush(state.virt.add(off), len);
+        }
+    }
+}
+
+fn hxg_action_header(request_type: u32, action: u32) -> u32 {
+    ((request_type & 0x7) << 28) | (action & 0xFFFF)
 }
 
 fn hxg_origin(value: u32) -> u32 {

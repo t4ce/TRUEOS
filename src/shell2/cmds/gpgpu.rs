@@ -101,7 +101,7 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5",
+                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 buffering=double interaction=movable-fixed-size",
                         serial,
                         preset.label(),
                         status.online as u8,
@@ -139,7 +139,7 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} error={}",
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} iterations={} marker=0x{:08X} submit_ms={} buffering=double interaction=movable-fixed-size error={}",
             status.online as u8,
             status.phase.label(),
             status.desired_running as u8,

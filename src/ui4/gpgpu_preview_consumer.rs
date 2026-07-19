@@ -230,7 +230,7 @@ pub(crate) fn gpgpu_preview_status() -> GpgpuPreviewStatus {
 pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview-consumer carrier online owner={:?} placement=worker-ap2+ assigned_slot={} current_slot={} display_api=none\n",
+        "ui4 gpgpu-preview-consumer carrier online owner={:?} placement=worker-ap2+ assigned_slot={} current_slot={} display_api=none activation=Shell2/on-demand buffering=double compute_release=completion-marker-before-publish interaction=movable-fixed-size\n",
         PREVIEW_OWNER,
         worker_slot,
         crate::percpu::current_slot(),
@@ -262,7 +262,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     Ok(preview) => {
                         crate::log_info!(
                             target: "ui4";
-                            "ui4 gpgpu-preview start request={} preset={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} plane_mutation=none\n",
+                            "ui4 gpgpu-preview start request={} preset={} owner={:?} frame={} window={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering=double compute_release=completion-marker-before-publish plane_mutation=none\n",
                             desired.serial,
                             preview.config.preset.label(),
                             PREVIEW_OWNER,
@@ -294,14 +294,39 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 
         let now = Instant::now();
         let mut duration_expired = false;
+        let mut render_fault = None;
         if let Some(preview) = active.as_mut() {
             preview.metrics.elapsed_ms = now.saturating_duration_since(preview.started).as_millis();
             duration_expired = preview.config.duration_ms != 0
                 && preview.metrics.elapsed_ms >= preview.config.duration_ms;
             if !duration_expired && now >= preview.next_render {
-                render_preview_frame(preview);
-                schedule_next_render(preview);
-                publish_active_status(preview, GpgpuPreviewPhase::Running, "none");
+                match render_preview_frame(preview) {
+                    Ok(()) => {
+                        schedule_next_render(preview);
+                        publish_active_status(preview, GpgpuPreviewPhase::Running, "none");
+                    }
+                    Err(reason) => render_fault = Some(reason),
+                }
+            }
+        }
+
+        if let Some(reason) = render_fault {
+            if let Some(failed) = active.take() {
+                let serial = failed.request_serial;
+                let metrics = failed.metrics;
+                stop_active_preview(failed, "render-fault");
+                mark_runtime_fault(serial, metrics, reason);
+                crate::log_warn!(
+                    target: "ui4";
+                    "ui4 gpgpu-preview faulted request={} reason={} attempted={} submitted={} completed={} published={} failed={}\n",
+                    serial,
+                    reason,
+                    metrics.attempted,
+                    metrics.submitted,
+                    metrics.completed,
+                    metrics.published,
+                    metrics.failed,
+                );
             }
         }
 
@@ -348,7 +373,10 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             opacity: u8::MAX,
             visible: true,
         },
-        interaction: super::WindowInteraction::APPLICATION,
+        // This checkpoint restores compute-frame publication and broker-level
+        // motion only. Dynamic resize/maximize remains parked until the
+        // fixed-size double-buffer path is proven under composition.
+        interaction: super::WindowInteraction::MOVABLE_FRAME,
     }) {
         Ok(window) => window,
         Err(_) => {
@@ -405,7 +433,11 @@ fn create_preview_frame(
     create_frame(FrameSpec {
         output,
         content: FrameContent::Image,
-        cadence: FrameCadence::Streaming,
+        // Each compute dispatch waits for its completion marker before this
+        // frame is published. Two buffers are therefore sufficient: the
+        // published front and one producer back buffer, with Busy providing
+        // backpressure while the compositor still owns the retired front.
+        cadence: FrameCadence::Dirty,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -413,7 +445,7 @@ fn create_preview_frame(
     })
 }
 
-fn render_preview_frame(preview: &mut ActivePreview) {
+fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
     let publish_this_frame =
         (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
@@ -421,12 +453,11 @@ fn render_preview_frame(preview: &mut ActivePreview) {
         Ok(lease) => lease,
         Err(FramePoolError::Busy) => {
             preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
-            return;
+            return Ok(());
         }
         Err(_) => {
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            set_active_error(preview.request_serial, "frame-acquire-failed");
-            return;
+            return Err("frame-acquire-failed");
         }
     };
     let surface = match gpgpu_rgba_surface(lease) {
@@ -434,8 +465,7 @@ fn render_preview_frame(preview: &mut ActivePreview) {
         Err(_) => {
             let _ = cancel_frame_buffer(lease);
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-            set_active_error(preview.request_serial, "gpgpu-surface-unavailable");
-            return;
+            return Err("gpgpu-surface-unavailable");
         }
     };
 
@@ -449,26 +479,24 @@ fn render_preview_frame(preview: &mut ActivePreview) {
     if !result.ok {
         let _ = cancel_frame_buffer(lease);
         preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        set_active_error(preview.request_serial, result.error);
-        return;
+        return Err(result.error);
     }
     preview.metrics.completed = preview.metrics.completed.saturating_add(1);
 
     if !publish_this_frame {
         let _ = cancel_frame_buffer(lease);
-        return;
+        return Ok(());
     }
     if publish_frame_buffer(lease).is_err() {
         preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        set_active_error(preview.request_serial, "frame-publish-failed");
-        return;
+        return Err("frame-publish-failed");
     }
     if publish_window_frame(PREVIEW_OWNER, preview.window, DamageRect::FULL).is_err() {
         preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        set_active_error(preview.request_serial, "window-publish-failed");
-        return;
+        return Err("window-publish-failed");
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
+    Ok(())
 }
 
 #[derive(Copy, Clone)]
@@ -711,6 +739,20 @@ fn mark_duration_complete(serial: u64, metrics: GpgpuPreviewMetrics) {
     control.status.window = None;
     control.status.metrics = metrics;
     control.status.last_error = "duration-complete";
+}
+
+fn mark_runtime_fault(serial: u64, metrics: GpgpuPreviewMetrics, reason: &'static str) {
+    let mut control = PREVIEW_CONTROL.lock();
+    if control.desired.serial == serial {
+        control.desired.running = false;
+        control.status.desired_running = false;
+    }
+    control.status.phase = GpgpuPreviewPhase::Faulted;
+    control.status.applied_serial = serial;
+    control.status.frame = None;
+    control.status.window = None;
+    control.status.metrics = metrics;
+    control.status.last_error = reason;
 }
 
 fn publish_active_status(

@@ -1440,9 +1440,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_COMPOSITOR_STARTED,
         spawn_ui4_compositor_service_task,
     ),
-    TaskSpec::disabled(
+    // Online only exposes the Shell2 control endpoint. No compute work or UI4
+    // frame is created until `gpgpu preview start ...` is requested.
+    TaskSpec::enabled_gated(
         "gpgpu-ui4-preview-consumer-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        ui4_compositor_gate,
         &GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
         spawn_gpgpu_ui4_preview_consumer_service_task,
     ),
