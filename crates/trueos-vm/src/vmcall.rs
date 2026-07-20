@@ -69,6 +69,7 @@ pub const OP_BP_ASYNC_FS_STATUS: u32 = 0xD0;
 pub const OP_BP_ASYNC_FS_RESULT_LEN: u32 = 0xD1;
 pub const OP_BP_ASYNC_FS_RESULT_READ: u32 = 0xD2;
 pub const OP_BP_ASYNC_FS_DISCARD: u32 = 0xD3;
+pub const OP_BP_UI4_SCENE_PAN_EVENT_TAKE: u32 = 0xD4;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;

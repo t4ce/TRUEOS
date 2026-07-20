@@ -3,12 +3,16 @@ use alloc::{format, string::String, vec::Vec};
 use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, print_shell_line};
-use crate::intel::gpu_font::{GPU_FONT_LEGACY_BLUE, GpuFontFace, GpuFontRgba, GpuFontTextRequest};
+use crate::intel::gpu_font::{GPU_FONT_DEFAULT_RGBA, GpuFontFace, GpuFontRgba, GpuFontTextRequest};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const MIN_SIZE_PERCENT: u32 = 1;
 const MAX_SIZE_PERCENT: u32 = 100;
-const DEFAULT_SIZE_PERCENT: u32 = 100;
+// Ten independent UI4 font windows cannot reasonably default to one complete
+// scanout each. Explicit `100` remains valid, but the no-size form is a useful
+// quarter-scanout window and keeps analytical coverage below its admission
+// budget for ordinary shell labels.
+const DEFAULT_SIZE_PERCENT: u32 = 25;
 
 struct FntCommand {
     rows: Vec<String>,
@@ -198,7 +202,7 @@ fn prefers_noto_sans_sc(ch: char) -> bool {
 fn parse_options(input: &str) -> Result<(GpuFontFace, u32, GpuFontRgba, bool), &'static str> {
     let mut font = GpuFontFace::Default;
     let mut size_percent = DEFAULT_SIZE_PERCENT;
-    let mut color = GPU_FONT_LEGACY_BLUE;
+    let mut color = GPU_FONT_DEFAULT_RGBA;
     let mut font_seen = false;
     let mut size_seen = false;
     let mut color_seen = false;
@@ -272,7 +276,7 @@ fn parse_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; presents in one of 10 reusable UI4 slots; focus a stamp and press Escape to close it",
+        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; default size=25, explicit 100 remains full-screen bounded fallback; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; presents in one of 10 reusable UI4 slots; focus a stamp and press Escape to close it",
     );
 }
 
@@ -300,6 +304,7 @@ mod tests {
 
         assert!(command.multi_row);
         assert_eq!(command.font.id(), 2);
+        assert_eq!(command.size_percent, 25);
         assert_eq!(command.rows.len(), 2);
         assert_eq!(command.rows[0], "中国");
         assert_eq!(command.rows[1], "العربية 🦀");

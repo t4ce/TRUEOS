@@ -39,6 +39,24 @@ pub struct TrueosUi4SolaraSceneTextRow {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4PanEvent {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+    pub phase: u32,
+    pub x: u32,
+    pub y: u32,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub combo_id: u32,
+    pub vcursor: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SkyboxRenderParams {
     pub right_x: f32,
     pub right_y: f32,
@@ -94,6 +112,10 @@ unsafe extern "C" {
         height: u32,
     ) -> u32;
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_pan_event_take(
+        window_id: u32,
+        out: *mut TrueosUi4PanEvent,
+    ) -> i32;
     pub fn trueos_cabi_ui4_solara_text_rows(
         window_id: u32,
         font_id: u32,

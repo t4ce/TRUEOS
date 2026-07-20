@@ -4,4 +4,6 @@
 # Epoch v2 intentionally removes the synchronous Blueprint filesystem surface
 # and introduces the operation-based async filesystem contract. Keep v1 as the
 # historical baseline; incompatible pre-v2 Blueprints are rejected at prebind.
-5d32326d0fba6e77471472c17af9c0d41a732b20f66f5b4a51465cbd4cbf7b88
+# The UI4 scene pan-event take call is a strictly additive v2 extension; older
+# v2 artifacts do not import it and remain compatible.
+6074c5daec3b843fe6ac1466d949184da1691b24c7ded9d4b52693a8aeab69d4

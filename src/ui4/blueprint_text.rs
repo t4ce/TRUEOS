@@ -6,7 +6,7 @@
 //! producer was the first consumer; shaded scene producers share the same
 //! coherent UI4 frame lifecycle.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
@@ -21,12 +21,13 @@ use crate::intel::gpu_font::{
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
-    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
-    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_window_frame, replace_window_frame, set_window_placement, writable_rgba_view,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
+    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
+    WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
+    create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
+    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
+    publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
+    set_window_placement, take_owner_input_events, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -35,6 +36,7 @@ const MAX_FRAME_HEIGHT: u32 = 1_440;
 const MAX_TEXT_ROWS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
+const MAX_PENDING_PAN_EVENTS: usize = 256;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
 const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
@@ -87,6 +89,26 @@ pub struct TrueosUi4SolaraSceneTextRow {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4PanEvent {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+    pub phase: u32,
+    pub x: u32,
+    pub y: u32,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub combo_id: u32,
+    pub vcursor: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4PanEvent>() == 13 * 4);
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SkyboxRenderParams {
     pub right_x: f32,
     pub right_y: f32,
@@ -121,6 +143,7 @@ struct BlueprintSceneSurface {
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
+    pending_pan_events: VecDeque<TrueosUi4PanEvent>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -327,10 +350,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         output,
         plane: WindowPlane::Universal(plane_slot as u8),
         placement,
-        // Blueprint frame transport does not yet drain the native UI4 owner
-        // queue. Keep broker-level motion available without accumulating
-        // callbacks in a VM-owned queue.
-        interaction: super::WindowInteraction::MOVABLE_FRAME,
+        interaction: super::WindowInteraction::APPLICATION_FIXED_FRAME,
     }) {
         Ok(window) => window,
         Err(error) => {
@@ -359,6 +379,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 placement,
                 skybox: None,
                 skybox_upload: None,
+                pending_pan_events: VecDeque::new(),
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -378,6 +399,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         placement,
         skybox: None,
         skybox_upload: None,
+        pending_pan_events: VecDeque::new(),
     });
     let (cadence_name, buffer_count) = match cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -443,6 +465,74 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     }
     surface.pending_gpu_release = None;
     surface.write_lease = Some(lease);
+    0
+}
+
+/// Take one middle-button pan gesture event scoped to this Blueprint window.
+///
+/// UI4 owns hit testing and pointer capture. The Blueprint owns the resulting
+/// scene offset and repaint policy. A return value of one means the queue is
+/// currently empty; zero writes one event.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4PanEvent,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_pan_event_take(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+
+    let input_events = take_owner_input_events(owner);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    for input in input_events {
+        let Ui4InputEvent::Pan(event) = input else {
+            continue;
+        };
+        if event.window.raw() != window_id
+            || surface.pending_pan_events.len() >= MAX_PENDING_PAN_EVENTS
+        {
+            continue;
+        }
+        let phase = match event.phase {
+            super::Ui4PanPhase::Begin => 1,
+            super::Ui4PanPhase::Update => 2,
+            super::Ui4PanPhase::End => 3,
+        };
+        surface.pending_pan_events.push_back(TrueosUi4PanEvent {
+            controller_id: event.source.controller_id,
+            slot_id: event.source.slot_id,
+            ep_target: event.source.ep_target,
+            hid_kind: u32::from(event.source.hid_kind),
+            phase,
+            x: event.x,
+            y: event.y,
+            local_x: event.local_x,
+            local_y: event.local_y,
+            dx: event.dx,
+            dy: event.dy,
+            combo_id: event.combo_id,
+            vcursor: u32::from(event.vcursor),
+        });
+    }
+    let Some(event) = surface.pending_pan_events.pop_front() else {
+        return 1;
+    };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
     0
 }
 
@@ -1196,6 +1286,27 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
         }
     }
     count as isize
+}
+
+unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4PanEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_PAN_EVENT_TAKE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
 }
 
 unsafe fn guest_text_rows(

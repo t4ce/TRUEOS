@@ -1871,14 +1871,10 @@ fn submit_resident_font_mesh_inner(
     }
 
     let target_size = FONT_STAMP_BASE_SIZE * native_scale as usize;
-    // Keep the default color on the exact shader binary already proven on
-    // hardware. Other colors use the static push-color shader; resident
-    // geometry remains untouched in either case.
-    let draw_rgba = if rgba == crate::intel::gpu_font::GPU_FONT_LEGACY_BLUE {
-        None
-    } else {
-        Some([rgba.r, rgba.g, rgba.b, rgba.a])
-    };
+    // One RGBA path for every font draw, including the historical default
+    // blue. Both enabled SIMD widths receive the same draw-time color and
+    // alpha specialization; resident geometry remains untouched.
+    let draw_rgba = Some([rgba.r, rgba.g, rgba.b, rgba.a]);
     let result = submit_render_custom_triangle_probe_locked_at_extent(
         &[],
         None,

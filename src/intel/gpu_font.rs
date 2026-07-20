@@ -27,11 +27,16 @@ const SMALL_FONT_HINT_MIN_RASTER_PX: f32 = 8.0;
 const SMALL_FONT_HINT_MAX_RASTER_PX: f32 = 32.0;
 const ANALYTICAL_COVERAGE_MIN_RASTER_PX: f32 = 4.0;
 const ANALYTICAL_COVERAGE_MAX_RASTER_PX: f32 = 2_048.0;
+// The analytical kernel visits every pixel in the outline envelope and walks
+// every outline operation (with fixed curve subdivision) for that pixel. Keep
+// one synchronous shell/UI producer comfortably below its 500 ms retirement
+// deadline. Larger display-sized lettering is cheaper and safer as resident
+// triangles; this check happens before any GPGPU submission owns resources.
+const ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS: u64 = 64_000_000;
 
-/// Original shader color retained by the compatibility submit helpers.
-/// Color is deliberately absent from `ResidentFontMesh`: changing this
-/// draw-time value never mutates or uploads the persistent VB/IB allocation.
-pub(crate) const GPU_FONT_LEGACY_BLUE: GpuFontRgba = GpuFontRgba::new(0, 64, 255, 255);
+/// Default font color. It follows the same draw-time RGBA specialization as
+/// every other color; there is no separate baked-blue presentation path.
+pub(crate) const GPU_FONT_DEFAULT_RGBA: GpuFontRgba = GpuFontRgba::new(0, 64, 255, 255);
 pub(crate) const GPU_FONT_COLOR_KEYFRAME_CAPACITY: usize = 8;
 
 /// Select which components a color transition is allowed to change.
@@ -475,7 +480,7 @@ impl PersistentGpuFontJob {
     }
 
     pub(crate) fn submit(&self) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-        self.submit_rgba(GPU_FONT_LEGACY_BLUE)
+        self.submit_rgba(GPU_FONT_DEFAULT_RGBA)
     }
 
     /// Draw the resident geometry with a per-submission RGBA value.
@@ -506,7 +511,7 @@ impl PersistentGpuFontJob {
         &self,
         native_scale: u32,
     ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-        self.submit_at_scale_rgba(native_scale, GPU_FONT_LEGACY_BLUE)
+        self.submit_at_scale_rgba(native_scale, GPU_FONT_DEFAULT_RGBA)
     }
 
     /// Reuse the same resident geometry with a draw-time size and color.
@@ -1656,6 +1661,16 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
             (frame, "skrifa-gpgpu-r8")
         }
         Err(reason) => {
+            if reason == "font-coverage-retirement-uncertain" {
+                crate::log_error!(
+                    target: "render";
+                    "intel/gpu-font: ui4 analytical retirement uncertain font={} target={}x{} action=fail-closed-no-triangle-submit\n",
+                    prepared.font.registry_name(),
+                    target_width,
+                    target_height,
+                );
+                return Err(reason);
+            }
             crate::log_warn!(
                 target: "render";
                 "intel/gpu-font: ui4 analytical unavailable font={} target={}x{} reason={} action=resident-triangle-fallback\n",
@@ -2744,6 +2759,28 @@ fn create_gpu_font_coverage_mask_at_raster(
         .map_err(|_| "font-coverage-mask-range")?;
     let height = u32::try_from(i64::from(union.3) - i64::from(union.1))
         .map_err(|_| "font-coverage-mask-range")?;
+    let estimated_segment_evaluations = prepared.iter().try_fold(0u64, |total, entry| {
+        let width = u64::try_from(i64::from(entry.rect.2) - i64::from(entry.rect.0)).ok()?;
+        let height = u64::try_from(i64::from(entry.rect.3) - i64::from(entry.rect.1)).ok()?;
+        let per_pixel = (entry.ops.len() as u64)
+            .checked_mul(u64::from(ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS))?;
+        total.checked_add(width.checked_mul(height)?.checked_mul(per_pixel)?)
+    });
+    let Some(estimated_segment_evaluations) = estimated_segment_evaluations else {
+        return Err("font-coverage-workload");
+    };
+    if estimated_segment_evaluations > ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS {
+        crate::log_info!(
+            target: "render";
+            "intel/gpu-font: analytical admission=triangle entries={} mask={}x{} estimated_segment_evaluations={} limit={} submitted=0 reason=bounded-direct-rcs-latency\n",
+            prepared.len(),
+            width,
+            height,
+            estimated_segment_evaluations,
+            ANALYTICAL_COVERAGE_MAX_SEGMENT_EVALUATIONS,
+        );
+        return Err("font-coverage-workload");
+    }
     let storage = crate::intel::gpgpu::allocate_font_coverage_mask(width, height)
         .ok_or("font-coverage-mask-alloc")?;
     for entry in &mut prepared {
@@ -2754,14 +2791,24 @@ fn create_gpu_font_coverage_mask_at_raster(
             u32::try_from(entry.rect.2 - entry.rect.0).map_err(|_| "font-coverage-rect-range")?,
             u32::try_from(entry.rect.3 - entry.rect.1).map_err(|_| "font-coverage-rect-range")?,
         );
-        if !crate::intel::gpgpu::font_outline_coverage_r8(
+        match crate::intel::gpgpu::font_outline_coverage_r8(
             &storage,
             entry.ops.as_slice(),
             rect,
             ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
             entry.optical_bias_px,
         ) {
-            return Err("font-coverage-dispatch");
+            crate::intel::gpgpu::GpgpuDispatchRetirement::Complete => {}
+            crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted => {
+                return Err("font-coverage-dispatch");
+            }
+            crate::intel::gpgpu::GpgpuDispatchRetirement::SubmittedIncomplete => {
+                // Hardware can still reference this mask. Its unique PPGTT VA
+                // and DMA pages stay quarantined together with the direct-RCS
+                // context until reboot.
+                core::mem::forget(storage);
+                return Err("font-coverage-retirement-uncertain");
+            }
         }
     }
 
@@ -3162,7 +3209,7 @@ pub(crate) fn persist_font_job(
 pub(crate) fn submit_persistent_font_job(
     lease: &PersistentGpuFontJob,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-    submit_persistent_font_job_rgba(lease, GPU_FONT_LEGACY_BLUE)
+    submit_persistent_font_job_rgba(lease, GPU_FONT_DEFAULT_RGBA)
 }
 
 pub(crate) fn submit_persistent_font_job_rgba(
@@ -3176,7 +3223,7 @@ pub(crate) fn submit_persistent_font_job_at_scale(
     lease: &PersistentGpuFontJob,
     native_scale: u32,
 ) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-    submit_persistent_font_job_at_scale_rgba(lease, native_scale, GPU_FONT_LEGACY_BLUE)
+    submit_persistent_font_job_at_scale_rgba(lease, native_scale, GPU_FONT_DEFAULT_RGBA)
 }
 
 pub(crate) fn submit_persistent_font_job_at_scale_rgba(

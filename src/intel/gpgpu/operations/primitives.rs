@@ -182,6 +182,17 @@ pub(crate) fn allocate_font_coverage_mask(
     Some(GpgpuOwnedMask8Surface { surface, virt })
 }
 
+/// Submission ownership state for a direct-RCS operation. A submitted command
+/// that missed its retirement marker is not an ordinary `false`: its mapped
+/// inputs and outputs must remain alive and the shared direct context must not
+/// accept another batch.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuDispatchRetirement {
+    NotSubmitted,
+    Complete,
+    SubmittedIncomplete,
+}
+
 fn run_font_outline_coverage_r8_self_test() -> bool {
     const WIDTH: u32 = 19;
     const HEIGHT: u32 = 11;
@@ -222,10 +233,20 @@ fn run_font_outline_coverage_r8_self_test() -> bool {
         rect_height: HEIGHT,
         optical_bias_px: 0.0,
     };
-    let submitted = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
-    crate::dma::dealloc(ops_virt, mapped_bytes);
-    if !submitted {
-        return false;
+    let retirement = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
+    if retirement != GpgpuDispatchRetirement::SubmittedIncomplete {
+        crate::dma::dealloc(ops_virt, mapped_bytes);
+    }
+    match retirement {
+        GpgpuDispatchRetirement::Complete => {}
+        GpgpuDispatchRetirement::NotSubmitted => return false,
+        GpgpuDispatchRetirement::SubmittedIncomplete => {
+            // The self-test is a real submission. A missed marker gives
+            // hardware continued ownership of both allocations just like a
+            // production mask dispatch.
+            core::mem::forget(mask);
+            return false;
+        }
     }
     let Some(audit) = mask.nonzero_audit() else {
         return false;
@@ -271,7 +292,7 @@ pub(crate) fn font_outline_coverage_r8(
     rect: GpgpuRect,
     subdivisions: u32,
     optical_bias_px: f32,
-) -> bool {
+) -> GpgpuDispatchRetirement {
     let surface = mask.surface();
     if outline_ops.is_empty()
         || outline_ops.len() > u32::MAX as usize
@@ -282,27 +303,27 @@ pub(crate) fn font_outline_coverage_r8(
         || !optical_bias_px.is_finite()
         || !(0.0..=0.35).contains(&optical_bias_px)
     {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     }
     if !font_outline_coverage_r8_self_test() {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     }
     let input_bytes = match outline_ops
         .len()
         .checked_mul(core::mem::size_of::<[u32; 8]>())
     {
         Some(bytes) => bytes,
-        None => return false,
+        None => return GpgpuDispatchRetirement::NotSubmitted,
     };
     let mapped_bytes = match align_up(input_bytes, super::WARM_ALIGN) {
         Some(bytes) => bytes,
-        None => return false,
+        None => return GpgpuDispatchRetirement::NotSubmitted,
     };
     if mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     }
     let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     };
     unsafe {
         core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
@@ -323,9 +344,18 @@ pub(crate) fn font_outline_coverage_r8(
         rect_height: rect.height,
         optical_bias_px,
     };
-    let completed = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
-    crate::dma::dealloc(ops_virt, mapped_bytes);
-    completed
+    let retirement = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
+    if retirement == GpgpuDispatchRetirement::SubmittedIncomplete {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/gpgpu: font-outline input quarantined phys=0x{:X} bytes={} reason=retirement-uncertain action=no-unmap-no-free\n",
+            ops_phys,
+            mapped_bytes,
+        );
+    } else {
+        crate::dma::dealloc(ops_virt, mapped_bytes);
+    }
+    retirement
 }
 
 /// Composite one R8 glyph layer in a single native two-dimensional dispatch.

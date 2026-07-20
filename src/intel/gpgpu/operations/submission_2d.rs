@@ -411,19 +411,19 @@ fn submit_font_outline_coverage_r8_2d(
     ops_bytes: usize,
     mask: GpgpuMask8Surface,
     params: FontOutlineCoverageR8Params,
-) -> bool {
+) -> GpgpuDispatchRetirement {
     let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     };
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(upload) = upload_font_outline_coverage_r8_kernel() else {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
+        return GpgpuDispatchRetirement::NotSubmitted;
     };
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
@@ -456,7 +456,7 @@ fn submit_font_outline_coverage_r8_2d(
         if occurrence <= 8 || occurrence.is_multiple_of(20) {
             crate::log_warn!(
                 target: "intel-gpgpu";
-                "font_outline_coverage_r8 incomplete occurrence={} ops={} rect={}x{} groups={}x{} submitted={} post=0x{:08X} timeout_ms={} action=triangle-fallback\n",
+                "font_outline_coverage_r8 incomplete occurrence={} ops={} rect={}x{} groups={}x{} submitted={} post=0x{:08X} timeout_ms={} action={}\n",
                 occurrence,
                 params.op_count,
                 params.rect_width,
@@ -466,10 +466,22 @@ fn submit_font_outline_coverage_r8_2d(
                 submitted as u8,
                 observed,
                 FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS,
+                if submitted {
+                    "quarantine-context+resources-no-fallback"
+                } else {
+                    "not-submitted"
+                },
             );
         }
     }
-    completed
+    if completed {
+        GpgpuDispatchRetirement::Complete
+    } else if submitted {
+        quarantine_direct_rcs_context("font-outline-coverage-marker-timeout");
+        GpgpuDispatchRetirement::SubmittedIncomplete
+    } else {
+        GpgpuDispatchRetirement::NotSubmitted
+    }
 }
 
 fn submit_glyph_mask_2d(
@@ -614,4 +626,3 @@ fn submit_glyph_mask_layers_2d(
     }
     (submitted, completed)
 }
-
