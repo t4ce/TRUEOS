@@ -8,7 +8,7 @@ publish = false
 bytemuck = { version = "1.25", features = ["derive"] }
 eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "wayland", "wgpu", "x11"] }
 glam = "0.30"
+rfd = "0.17.2"
 
 [profile.dev]
 opt-level = 1
-

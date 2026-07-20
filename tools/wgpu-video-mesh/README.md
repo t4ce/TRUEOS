@@ -2,8 +2,8 @@
 
 A small, independent Ubuntu desktop demo that loops `x31_head_movie.mp4` through FFmpeg and
 uploads the decoded frames to a WGPU texture. The texture is rendered on a large UV sphere by
-default and can be switched to a cube at runtime. egui provides playback, transform, exposure,
-lighting, and saturation controls.
+default and can be switched to a cube at runtime. egui provides playback, transform, color,
+exposure, lighting, and saturation controls, plus a native picker for loading another video.
 
 The copied video asset lives at `assets/x31_head_movie.mp4`. Audio is intentionally ignored: this
 demo is focused on video-as-a-GPU-texture playback.
@@ -13,7 +13,7 @@ demo is focused on video-as-a-GPU-texture playback.
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config ffmpeg libvulkan1 mesa-vulkan-drivers \
-  libx11-dev libxi-dev libxkbcommon-dev libwayland-dev
+  libx11-dev libxi-dev libxkbcommon-dev libwayland-dev xdg-desktop-portal-gtk
 ```
 
 Use your normal NVIDIA/AMD Vulkan driver instead of `mesa-vulkan-drivers` when applicable.
@@ -40,6 +40,8 @@ not accumulate latency. WGPU uploads each new frame without recreating the textu
 Controls:
 
 - Select **Sphere** or **Cube** in the left panel.
+- Use **Choose video…** to replace the looping texture without restarting the demo.
 - Drag in the scene to orbit and use the mouse wheel to zoom.
 - Press Space or use the button to pause/resume texture updates.
+- Pick an object tint and background color.
 - Adjust spin, size, camera distance, exposure, 3D lighting, and saturation live.

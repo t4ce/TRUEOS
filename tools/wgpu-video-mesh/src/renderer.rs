@@ -31,6 +31,7 @@ pub struct SceneParameters {
     pub exposure: f32,
     pub lighting: f32,
     pub saturation: f32,
+    pub object_tint: [f32; 3],
     pub aspect_ratio: f32,
 }
 
@@ -40,6 +41,7 @@ struct SceneUniform {
     mvp: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     tuning: [f32; 4],
+    tint: [f32; 4],
 }
 
 pub struct SceneCallback {
@@ -264,6 +266,18 @@ impl SceneRenderResources {
         }
     }
 
+    pub fn replace_video(
+        &mut self,
+        queue: &wgpu::Queue,
+        frames: Receiver<VideoFrame>,
+        stats: std::sync::Arc<PlaybackStats>,
+    ) {
+        self.frames = Mutex::new(frames);
+        self.stats = stats;
+        self.uploaded_frames = 0;
+        write_placeholder(queue, &self.video_texture);
+    }
+
     fn prepare(&mut self, queue: &wgpu::Queue, parameters: SceneParameters, playing: bool) {
         let model = Mat4::from_rotation_y(parameters.yaw)
             * Mat4::from_rotation_x(parameters.tilt)
@@ -284,6 +298,12 @@ impl SceneRenderResources {
                 parameters.lighting,
                 parameters.saturation,
                 0.0,
+            ],
+            tint: [
+                parameters.object_tint[0],
+                parameters.object_tint[1],
+                parameters.object_tint[2],
+                1.0,
             ],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));

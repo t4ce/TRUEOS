@@ -2,6 +2,7 @@ struct SceneUniform {
     mvp: mat4x4<f32>,
     model: mat4x4<f32>,
     tuning: vec4<f32>,
+    tint: vec4<f32>,
 };
 
 @group(0) @binding(0)
@@ -43,8 +44,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let light_direction = normalize(vec3<f32>(0.45, 0.7, 0.6));
     let diffuse = 0.28 + 0.72 * max(dot(normalize(input.normal), light_direction), 0.0);
     let light = mix(1.0, diffuse, scene.tuning.y);
-    let color = saturated * scene.tuning.x * light;
+    let color = saturated * scene.tint.rgb * scene.tuning.x * light;
 
     return vec4<f32>(color, 1.0);
 }
-

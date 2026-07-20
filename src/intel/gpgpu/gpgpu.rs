@@ -36,6 +36,10 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME: &str =
     "ui4_nv12_ytile_to_primary_xrgb";
 pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_nv12_ytile_to_primary_xrgb.cl");
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
+    "ui4_nv12_tile64_to_rgba8_frame";
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
+    include_str!("kernels/ui4_nv12_tile64_to_rgba8_frame.cl");
 pub(crate) const STAMP_MANDEL_RGBA8_KERNEL_NAME: &str = "stamp_mandel_rgba8";
 pub(crate) const STAMP_MANDEL_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/stamp_mandel_rgba8.cl");
@@ -108,6 +112,9 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME => {
             Some(UI4_NV12_YTILE_TO_PRIMARY_XRGB_OPENCL_SOURCE)
         }
+        UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
+            Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
+        }
         STAMP_MANDEL_RGBA8_KERNEL_NAME => Some(STAMP_MANDEL_RGBA8_OPENCL_SOURCE),
         SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE64_WORKLIST_RGBA8_OPENCL_SOURCE),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
@@ -159,6 +166,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         }
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_ytile_to_primary_xrgb.cl")
+        }
+        UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
+            Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.cl")
         }
         STAMP_MANDEL_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/stamp_mandel_rgba8.cl"),
         SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => {
@@ -242,6 +252,10 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/ui4_nv12_ytile_to_primary_xrgb.bin");
 pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/ui4_nv12_ytile_to_primary_xrgb.spv");
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/ui4_nv12_tile64_to_rgba8_frame.bin");
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/ui4_nv12_tile64_to_rgba8_frame.spv");
 
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/sprite64_worklist_rgba8.bin");
@@ -344,6 +358,10 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256: [u8; 32] = [
     0x65, 0xEA, 0x37, 0xF3, 0xCE, 0x33, 0xAC, 0x92, 0x67, 0x92, 0x80, 0x34, 0xC3, 0xE5, 0x59, 0xF8,
     0x85, 0x47, 0xE9, 0x02, 0x9D, 0x29, 0x22, 0x31, 0xC9, 0x11, 0x6F, 0x25, 0x85, 0x13, 0x2E, 0x4D,
 ];
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] = [
+    0x35, 0xCD, 0x9F, 0x3C, 0xBA, 0xD1, 0xF2, 0xCE, 0xC7, 0x6B, 0x3E, 0xFB, 0xF9, 0xD8, 0xC9, 0x10,
+    0x01, 0xCD, 0x07, 0x8B, 0xE4, 0xD2, 0x44, 0x35, 0xB1, 0x1C, 0x09, 0x12, 0xAF, 0xA7, 0x37, 0x49,
+];
 
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x79, 0x42, 0xAC, 0xAB, 0x49, 0x7D, 0x8F, 0xD3, 0xB7, 0xD4, 0x06, 0x67, 0x9F, 0x1B, 0x2A, 0x61,
@@ -436,10 +454,12 @@ const PIXEL_PLASMA_RGBA8_ADLS_GPU: u64 = 0x0D3A_0000;
 const FONT_OUTLINE_MESH_ADLS_GPU: u64 = 0x0D3B_0000;
 const FONT_OUTLINE_COVERAGE_R8_ADLS_GPU: u64 = 0x0D3D_0000;
 const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_GPU: u64 = 0x0D3F_0000;
+const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU: u64 = 0x0D40_0000;
 const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const RESOLVE_TILE64_MSAA4_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const UI4_NV12_YTILE_TO_PRIMARY_XRGB_TEXT_OFFSET_BYTES: u64 = 0x40;
+const UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 
@@ -885,6 +905,8 @@ static GLYPH_MASK_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 static UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
+    Mutex::new(None);
+static UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -2152,6 +2174,15 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT: GpgpuKernelArtifa
         bin_sha256: UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256,
     };
 
+pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact {
+        name: UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME,
+        target: "adls",
+        bin: UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN,
+        spv: UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV,
+        bin_sha256: UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256,
+    };
+
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
     target: "adls",
@@ -2556,6 +2587,20 @@ pub(crate) fn upload_ui4_nv12_ytile_to_primary_xrgb_kernel() -> Option<UploadedK
         UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_GPU,
     )?;
     *UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(
+        dev,
+        UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT,
+        UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU,
+    )?;
+    *UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
