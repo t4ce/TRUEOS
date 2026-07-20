@@ -2,12 +2,16 @@ use alloc::string::String;
 use core::fmt::Write;
 use core::str::SplitWhitespace;
 
-use embassy_executor::Spawner;
+use embassy_executor::{Spawner, task};
 
-use super::super::{ShellBackend2, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line,
+};
 use crate::intel::gpgpu::{
     CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
     FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
+    UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME, probe_runtime_artifact_async,
     reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_font_outline_probe,
     upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
     upload_pixel_plasma_rgba8_kernel,
@@ -21,6 +25,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu chart artifact");
     print_shell_line(io, "gpgpu pixel artifact");
     print_shell_line(io, "gpgpu probe font-tessel [artifact|audit|flatten|mesh|all]");
+    print_shell_line(io, "gpgpu artifacts probe <video|kernel>");
     print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
 }
 
@@ -596,11 +601,70 @@ fn digest_hex(digest: &[u8; 32]) -> String {
     out
 }
 
-fn run_artifacts(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+#[task(pool_size = 1)]
+async fn artifact_async_probe_task(target: MatrixTarget, name: String) {
+    match probe_runtime_artifact_async(name.as_str()).await {
+        Ok(probe) => print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "gpgpu artifacts probe {}: ok carrier=managed-trueosfs-async bytes={} matches_embedded={} sha256={} gpu_state=untouched",
+                probe.name,
+                probe.bytes,
+                probe.matches_embedded as u8,
+                digest_hex(&probe.sha256),
+            )
+            .as_str(),
+        ),
+        Err(error) => print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "gpgpu artifacts probe {}: failed reason={} detail={error:?}",
+                name,
+                error.label(),
+            )
+            .as_str(),
+        ),
+    }
+}
+
+fn run_artifacts(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    args: &mut SplitWhitespace<'_>,
+) {
     let Some(cmd) = args.next() else {
         usage(io);
         return;
     };
+    if cmd.eq_ignore_ascii_case("probe") {
+        let Some(raw_name) = args.next() else {
+            usage(io);
+            return;
+        };
+        if !expect_no_more(io, args) {
+            return;
+        }
+        let name = if raw_name.eq_ignore_ascii_case("video") {
+            String::from(UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME)
+        } else {
+            String::from(raw_name)
+        };
+        let target = matrix_target_for_backend(io);
+        match artifact_async_probe_task(target.clone(), name) {
+            Ok(token) => {
+                spawner.spawn(token);
+                print_matrix_target_line(
+                    &target,
+                    "gpgpu artifacts probe: queued carrier=managed-trueosfs-async gpu_state=untouched",
+                );
+            }
+            Err(_) => print_matrix_target_line(
+                &target,
+                "gpgpu artifacts probe: failed reason=task-unavailable",
+            ),
+        }
+        return;
+    }
     if !cmd.eq_ignore_ascii_case("reload") {
         usage(io);
         return;
@@ -668,7 +732,7 @@ pub(crate) fn try_parse(
     } else if cmd.eq_ignore_ascii_case("probe") {
         run_probe(io, args);
     } else if cmd.eq_ignore_ascii_case("artifacts") {
-        run_artifacts(io, args);
+        run_artifacts(_spawner, io, args);
     } else {
         usage(io);
     }

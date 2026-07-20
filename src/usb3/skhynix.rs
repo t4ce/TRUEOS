@@ -589,10 +589,10 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
 
     if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=intersection-split-gpgpu-held status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=false allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifacts\n"
+            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=gpgpu-artifact-prelookup-cut status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=false allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,gpgpu-runtime-artifact-entry,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifact-kfs-read,TRUEOSFS_ROOT_MOUNTED,TRUEOSFS_INDEX_READY,APP_VM_READY,unnamed-readiness-consumers\n"
         );
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=intersection-split-gpgpu-held root-readiness=false index-readiness=false\n"
+            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=gpgpu-artifact-prelookup-cut root-readiness=false index-readiness=false\n"
         );
         return;
     }

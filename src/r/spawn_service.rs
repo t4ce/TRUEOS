@@ -1722,7 +1722,7 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: diagnostic-profile usb_uas_cut={} allows(font/rapl/ttstt/asset/input/gpgpu)={}/{}/{}/{}/{}/{} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            "spawn-svc: diagnostic-profile usb_uas_cut={} allows(font/rapl/ttstt/asset/input/gpgpu)={}/{}/{}/{}/{}/{} gpgpu_artifact_cut={} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_EAGER_FONT_WARM,
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_RAPL_PERSISTENCE,
@@ -1730,6 +1730,7 @@ pub async fn spawn_service_task(spawner: Spawner) {
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_ASSET_SHACK,
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_USER_INPUT_WRITER,
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_GPGPU_RUNTIME_ARTIFACT_CUT,
             crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
             tga_boot_gate(),
             fpga_offload_boot_gate(),
