@@ -1,9 +1,11 @@
 //! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder remains a native Tile64 NV12 producer. One SIMD16 GuC dispatch
+//! The decoder remains a native media-Y-tiled NV12 producer. One SIMD16 GuC dispatch
 //! writes an exact broker-owned RGBA backbuffer. GuC completion releases the
 //! decoder picture; UI4 publication transfers only the completed RGBA surface,
 //! whose display ownership independently ends at SURFLIVE.
+//! The older `Tile64` Rust/kernel symbol names are retained as an artifact ABI;
+//! the shader uses the proven 128x32 media Y-tile byte layout.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -23,10 +25,8 @@ use super::{
 // The decoded-video producer owns one ordinary broker window independently of
 // the compositor service.
 const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
-const VIDEO_PLAYBACK_AUTOSTART: bool = true;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
-const VIDEO_INPUT_POLL_MS: u64 = 10;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -103,115 +103,32 @@ struct VideoStream {
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
-static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
 
 /// Reserve the decoded-video lifetime without allocating or publishing pixels.
 /// The exact double-buffered Frame is created only when the decoder supplies
 /// its first real source. This keeps all DMA allocation and PPGTT work on the
 /// producer handoff side of the TRUEOSFS/decode boundary.
-pub(crate) fn prepare_decoded_video_player() -> bool {
-    install_decoded_video_player(true, !VIDEO_PLAYBACK_AUTOSTART, "kernel-boot-video-task")
-}
-
-/// Begin the fixed `vid` command lifetime. Unlike the boot preparation helper,
-/// this refuses to borrow an existing stream: exactly one Embassy playback
-/// task owns the session it will later close.
 pub(crate) fn begin_shell_decoded_video_player() -> bool {
-    install_decoded_video_player(false, false, "shell2-vid-task")
-}
-
-fn install_decoded_video_player(
-    allow_existing: bool,
-    initially_paused: bool,
-    lifecycle_owner: &str,
-) -> bool {
     if VIDEO_LIFECYCLE_RESERVED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
-        return allow_existing;
+        return false;
     }
-    VIDEO_PLAYBACK_PAUSED.store(initially_paused, Ordering::Release);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player lifetime reserved owner={:?} playback={} control=focused-space source=await-first-decoded-frame lifecycle_owner={} frame=deferred window=deferred broker_state=deferred-until-first-decoded-frame rgba_ring_allocation=deferred placeholder_present=0\n",
+        "ui4 video-player lifetime reserved owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame=deferred window=deferred broker_state=deferred-until-first-decoded-frame rgba_ring_allocation=deferred placeholder_present=0\n",
         VIDEO_OWNER,
-        if initially_paused { "paused-default" } else { "playing" },
-        lifecycle_owner,
     );
     true
 }
 
-/// Drain only this consumer's owner queue and wait until focused Space leaves
-/// the player in its running state. Returns true when a pause interval occurred
-/// so the decoder can reset its frame deadline instead of reporting fake lag.
-pub(crate) async fn wait_decoded_video_playback_ready() -> bool {
-    let mut waited = VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire);
-    loop {
-        poll_decoded_video_player_input();
-        if !VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) {
-            return waited;
-        }
-        waited = true;
-        Timer::after(Duration::from_millis(VIDEO_INPUT_POLL_MS)).await;
-    }
-}
-
-/// Probe-only confirmation that the newest decoded-video publication crossed
-/// the compositor and display boundary. Normal playback remains pipelined and
-/// does not wait here per frame.
-pub(crate) async fn wait_decoded_video_presented(timeout_ms: u64) -> bool {
-    let started = embassy_time::Instant::now();
-    loop {
-        let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
-        let Some(window) = window else {
-            return false;
-        };
-        let acknowledged = super::visible_windows_for_output(VIDEO_OUTPUT)
-            .iter()
-            .find(|snapshot| snapshot.id == window)
-            .is_some_and(|snapshot| snapshot.publish_serial != 0 && snapshot.damage.is_none());
-        if acknowledged {
-            crate::log_info!(target: "ui4";
-                "ui4 video-frame probe acknowledgement window={} boundary=surflive-latest elapsed_ms={}\n",
-                window.raw(), started.elapsed().as_millis(),
-            );
-            return true;
-        }
-        if started.elapsed().as_millis() >= timeout_ms {
-            return false;
-        }
-        Timer::after(Duration::from_millis(1)).await;
-    }
-}
 
 fn poll_decoded_video_player_input() {
     reap_retired_video_frames();
     for event in take_owner_input_events(VIDEO_OWNER) {
         match event {
-            Ui4InputEvent::Keyboard(event) => {
-                let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
-                if Some(event.window) != window
-                    || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                    || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_SPACE
-                {
-                    continue;
-                }
-                let was_paused = VIDEO_PLAYBACK_PAUSED.fetch_xor(true, Ordering::AcqRel);
-                crate::log_info!(
-                    target: "ui4";
-                    "ui4 video-player playback-toggle owner={:?} window={} state={} trigger=focused-space keyboard={}:{}:{} combo={} virtual={}\n",
-                    VIDEO_OWNER,
-                    event.window.raw(),
-                    if was_paused { "playing" } else { "paused" },
-                    event.event.controller_id,
-                    event.event.slot_id,
-                    event.event.ep_target,
-                    event.combo_id,
-                    event.virtual_keyboard as u8,
-                );
-            }
             Ui4InputEvent::Pan(event) => pan_video_viewport(event),
             Ui4InputEvent::Resize(event) => crate::log_warn!(
                 target: "ui4";
@@ -462,7 +379,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
             sequence,
             source.decode_sequence,
             stream.frame.raw(),
@@ -516,7 +433,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     stream.pan_y,
                 )?;
                 crate::log_info!(target: "ui4";
-                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-nv12-to-ui4-rgba8-frame attachment=none frame_buffers=2 plane_slot={} reason={}\n",
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback=playing producer=guc-nv12-to-ui4-rgba8-frame attachment=none frame_buffers=2 plane_slot={} reason={}\n",
                     stream.frame.raw(),
                     stream.window.raw(),
                     spec.coded_width,
@@ -531,7 +448,6 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     layout.source_y,
                     layout.destination_x,
                     layout.destination_y,
-                    if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
                     VIDEO_PLANE_SLOT,
                     reason,
                 );
@@ -640,11 +556,11 @@ fn create_stream(spec: DecodedVideoFrameSpec) -> Option<VideoStream> {
     )?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=2 cadence=streaming frame_format=rgba8-premultiplied native_format=tile64-nv12 attachment=none source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_slot={} direct_import=after-compute-release plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=2 cadence=streaming frame_format=rgba8-premultiplied native_format=media-ytile-nv12 attachment=none source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_slot={} direct_import=after-compute-release plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
-        "tile64-nv12",
+        "media-ytile-nv12",
         spec.coded_width,
         spec.coded_height,
         frame_width,

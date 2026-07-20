@@ -339,9 +339,10 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
     Ok(submission)
 }
 
-/// Convert one decoder-retired Tile64 NV12 picture directly into the exact
-/// leased UI4 RGBA allocation. The accepted submission owns `dst` until its
-/// completion marker retires; display programming is deliberately absent.
+/// Convert one decoder-retired media-Y-tiled NV12 picture directly into the
+/// exact leased UI4 RGBA allocation. The older `Tile64` symbol names are kept
+/// for artifact ABI compatibility. The accepted submission owns `dst` until
+/// its completion marker retires; display programming is deliberately absent.
 pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     source: GpgpuNv12Tile64Surface,
     dst: GpgpuRgba8Surface,
@@ -482,7 +483,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         started_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "nv12-tile64-rgba8-frame",
+        kernel: "nv12-media-ytile-rgba8-frame",
         stats: GpgpuWorklistSubmitStats {
             descs: 1,
             walkers: 1,
@@ -499,7 +500,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         );
     }
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
+        "ui4/guc-video-frame: queued serial={} native=media-ytile-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
         serial,
         dst.width,
         dst.height,

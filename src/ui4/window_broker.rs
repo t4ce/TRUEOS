@@ -33,8 +33,6 @@ impl WindowOwner {
     pub(crate) const DRAW3D_SERVICE: Self = Self::KernelApp(3);
     pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
-    /// Isolated owner used by the staged Frame -> GuC -> display probe.
-    pub(crate) const VIDEO_PROBE: Self = Self::KernelApp(6);
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

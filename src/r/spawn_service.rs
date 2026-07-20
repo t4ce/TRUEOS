@@ -77,7 +77,6 @@ define_started_flags!(
     UI4_COMPOSITOR_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
-    UI4_VIDEO_PLAYBACK_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
@@ -548,10 +547,6 @@ fn spawn_hw_pic_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_pic_service())
 }
 
-fn spawn_ui4_video_playback_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_bsp_spawner| crate::intel::ui4_video_playback_task_spawn())
-}
-
 fn spawn_hw_logo_present_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::intel::hw_logo_present_task())
 }
@@ -616,11 +611,6 @@ fn ap1_ui_core_ready_gate() -> bool {
 #[inline]
 fn intel_media_engine_gate() -> bool {
     crate::intel::has_media_decode_engine()
-}
-
-#[inline]
-fn ui4_video_probe_gate() -> bool {
-    ui4_compositor_gate() && intel_media_engine_gate()
 }
 
 #[inline]
@@ -1186,7 +1176,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 65
+const TASK_COUNT: usize = 64
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1467,15 +1457,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         intel_media_engine_gate,
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
-    ),
-    // Ten-cut Frame -> GuC -> SURFLIVE harness. The task itself waits ten
-    // seconds after the boot-logo sequence and stops at the first failed cut.
-    TaskSpec::enabled_gated(
-        "ui4-video-probe",
-        crate::intel::hw_vid_probe_readiness_mask(),
-        ui4_video_probe_gate,
-        &UI4_VIDEO_PLAYBACK_STARTED,
-        spawn_ui4_video_playback_task,
     ),
     TaskSpec::enabled_gated(
         "hw_logo_present_task",

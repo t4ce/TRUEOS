@@ -14,7 +14,6 @@ mod input_broker;
 mod screenshot;
 mod slot4_service;
 mod video_frame;
-mod video_probe;
 mod window_broker;
 
 pub(crate) use compositor_service::ui4_compositor_service_task;
@@ -42,11 +41,9 @@ pub(crate) use input_broker::{
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
-    DecodedNv12Source, begin_shell_decoded_video_player, prepare_decoded_video_player,
-    present_decoded_nv12_stream_frame, stop_decoded_nv12_stream, wait_decoded_video_playback_ready,
-    wait_decoded_video_presented,
+    DecodedNv12Source, begin_shell_decoded_video_player, present_decoded_nv12_stream_frame,
+    stop_decoded_nv12_stream,
 };
-pub(crate) use video_probe::run_video_probe;
 
 pub(crate) use window_broker::{
     WindowBrokerError, WindowCreate, WindowId, WindowInteraction, WindowOwner, WindowPlacement,

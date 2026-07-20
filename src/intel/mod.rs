@@ -876,14 +876,6 @@ pub(crate) fn has_media_decode_engine() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn hw_vid_probe_enabled() -> bool {
-    self::media::hw_vid::probe_enabled()
-}
-
-pub(crate) const fn hw_vid_probe_readiness_mask() -> u32 {
-    self::media::hw_vid::probe_readiness_mask()
-}
-
 pub(crate) fn hw_pic_service()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::hw_pic::hw_pic_service()
@@ -911,11 +903,6 @@ pub(crate) fn hw_pic_snapshot() -> self::hw_pic::HwPicQueueSnapshot {
 pub(crate) fn hw_logo_present_task()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::display::hw_logo_present_task()
-}
-
-pub(crate) fn ui4_video_playback_task_spawn()
--> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
-    self::media::hw_vid::ui4_video_playback_task()
 }
 
 pub async fn run_media_source_warmup_async() {
