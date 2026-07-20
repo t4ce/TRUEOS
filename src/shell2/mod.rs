@@ -2131,7 +2131,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     minute_text.as_str(),
                                     command,
                                 );
-                            } else if is_vmx_control_command(submitted) {
+                            } else if is_vmx_tui_command(submitted)
+                                || is_vmx_control_command(submitted)
+                            {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );
@@ -2161,7 +2163,9 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                                     minute_text.as_str(),
                                     command,
                                 );
-                            } else if is_vmx_control_command(submitted) {
+                            } else if is_vmx_tui_command(submitted)
+                                || is_vmx_control_command(submitted)
+                            {
                                 let _ = crate::hv::blueprint_console_submit_control_line(
                                     vm_id, submitted,
                                 );

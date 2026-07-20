@@ -60,6 +60,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7;
 pub const OP_BP_QJS_WORKBENCH_EVAL_V1: u32 = 0xC8;
 pub const OP_BP_QJS_WORKBENCH_POLL_V1: u32 = 0xC9;
 pub const OP_BP_QJS_WORKBENCH_CLOSE_V1: u32 = 0xCA;
+pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB;
 pub const OP_NET_TCP_WRITE: u32 = 0x10;
 pub const OP_NET_TCP_READ: u32 = 0x11;
 pub const OP_BP_NET_OPEN: u32 = 0x20;

@@ -413,6 +413,10 @@ pub(crate) struct RgbaOverlayTile<'a> {
     /// GPU-visible source for the UI4 compositor fast path. Legacy/readback
     /// callers may omit this and retain the CPU fallback.
     pub(crate) gpgpu_surface: Option<crate::intel::gpgpu::GpgpuRgba8Surface>,
+    /// Keep the producer's PAT3/UC PPGTT policy when this surface was authored
+    /// for direct scanout. Generic composition may sample it, but must not
+    /// create a PAT0/WB synonym at the same GPU virtual address.
+    pub(crate) gpgpu_scanout_cache: bool,
     /// Additional whole-tile opacity applied after source alpha.
     pub(crate) opacity: u8,
     /// The producer contract guarantees alpha=255 for every published pixel.
@@ -2858,8 +2862,7 @@ fn program_primary_plane_source_for_pipeline(
         || color_ctl != color_ctl_enabled;
     let surf_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
     let surf_live_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
-    let ui4_primary_batch_only =
-        matches!(reason, "ui4-compositor-primary-async" | "ui4-video-native-nv12-primary-async");
+    let ui4_primary_batch_only = reason == "ui4-compositor-primary-async";
     if !ui4_rgba8_plane_stack_ready(pipe) || contract_changed {
         crate::log_error!(target: "intel/display";
             "intel/display: primary-plane-source rejected reason={} pipeline={} cause=immutable-rgba8-contract-mismatch ready={} contract_changed={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X}\n",
@@ -5485,7 +5488,6 @@ fn queue_ui4_plane_surface_flip(
     if !matches!(
         reason,
         "ui4-compositor-primary-async"
-            | "ui4-video-native-nv12-primary-async"
             | "ui4-alpha-slot1-async"
             | "ui4-rgb-slot2-async"
             | "ui4-rgb-slot3-async"
@@ -7928,97 +7930,6 @@ pub(crate) fn queue_ui4_primary_composition(
     }
 }
 
-/// Queue the known-good native video primary conversion. The kernel rebuilds
-/// every output pixel from either decoder NV12 or the immutable desktop base;
-/// the only display operation after GuC retirement is the normal primary
-/// surface flip and SURFLIVE confirmation.
-pub(crate) fn queue_ui4_primary_native_nv12_composition(
-    source: crate::intel::gpgpu::GpgpuNv12Tile64Surface,
-    content_dst_x: u32,
-    content_dst_y: u32,
-    content_width: u32,
-    content_height: u32,
-    source_x: u32,
-    source_y: u32,
-    reason: &'static str,
-) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
-    let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target
-        .pipeline
-        .pipe()
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    if target.width == 0 || target.height == 0 {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    let primary = primary_surface_for_pipe(pipe).ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    if primary.width != target.width
-        || primary.height != target.height
-        || primary.pitch_bytes < primary.width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
-    {
-        return Err(Ui4AsyncCompositionError::Unavailable);
-    }
-    let surface = ensure_primary_swap_surface_for_pipe(dev, pipe, target.width, target.height)
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let destination_gpu = primary_compose_rcs_gpu_for_surface(surface)
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let base = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        primary.phys,
-        primary.gpu,
-        primary.byte_len,
-        primary.width,
-        primary.height,
-        primary.pitch_bytes,
-    )
-    .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        surface.phys,
-        destination_gpu,
-        surface.byte_len,
-        surface.width,
-        surface.height,
-        surface.pitch_bytes,
-    )
-    .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let full = CompositionDamageRegion::from_rect(CompositionDamageRect::new(
-        0,
-        0,
-        target.width,
-        target.height,
-    ));
-    let gpu = crate::intel::gpgpu::queue_ui4_compositor_nv12_tile64_to_primary(
-        source,
-        base,
-        destination,
-        content_dst_x,
-        content_dst_y,
-        content_width,
-        content_height,
-        source_x,
-        source_y,
-    )
-    .map_err(|error| match error {
-        crate::intel::gpgpu::Ui4CompositorSubmitError::Busy => Ui4AsyncCompositionError::Busy,
-        crate::intel::gpgpu::Ui4CompositorSubmitError::Unavailable => {
-            Ui4AsyncCompositionError::Unavailable
-        }
-        _ => Ui4AsyncCompositionError::Failed,
-    })?;
-    Ok(Ui4AsyncComposition {
-        work: Some(Ui4AsyncCompositionWork::GucRcs(gpu)),
-        target: Ui4AsyncCompositionTarget::Primary {
-            surface,
-            pipeline: target.pipeline,
-        },
-        proof: None,
-        change: full,
-        effective: full,
-        tile_count: 1,
-        queued_ns: crate::chronos::monotonic_nanos(),
-        reason,
-    })
-}
-
 pub(crate) fn queue_ui4_overlay_composition(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
@@ -8490,6 +8401,12 @@ fn prepare_ui4_composition_proof(
     // its fully opaque pixels, so the expected result is independent of the
     // destination's previous contents and of every lower layer.
     let tile = tiles.last()?;
+    // A released direct-scanout source is GPU-owned PAT3/UC memory. Sampling it
+    // for diagnostics on the CPU would reintroduce the cache walk that the
+    // producer-release contract removed from the present path.
+    if tile.gpgpu_scanout_cache {
+        return None;
+    }
     if tile.opacity != u8::MAX
         || tile.width == 0
         || tile.height == 0
@@ -8828,6 +8745,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
             }
             layers.push(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
                 src: source,
+                src_scanout_cache: tile.gpgpu_scanout_cache,
                 dst_x: tile.x.min(i32::MAX as u32) as i32,
                 dst_y: tile.y.min(i32::MAX as u32) as i32,
                 dst_width: tile.width,
@@ -9120,6 +9038,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
             }
             layers.push(crate::intel::gpgpu::GpgpuUi4ComposeLayer {
                 src: source,
+                src_scanout_cache: tile.gpgpu_scanout_cache,
                 dst_x: tile.x.min(i32::MAX as u32) as i32,
                 dst_y: tile.y.min(i32::MAX as u32) as i32,
                 dst_width: tile.width,

@@ -1187,6 +1187,7 @@ fn submit_persistent_font_demo_grid_engine_frame() -> bool {
             pitch_bytes: captured.width as usize * 4,
             pixels: captured.pixels.as_slice(),
             gpgpu_surface: None,
+            gpgpu_scanout_cache: false,
             opacity: u8::MAX,
             known_opaque: false,
             expected_rgba: if exact_color_check {

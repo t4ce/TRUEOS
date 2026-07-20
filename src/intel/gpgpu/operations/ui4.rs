@@ -20,12 +20,23 @@ pub(crate) fn queue_ui4_compositor_layers(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let base = base.unwrap_or(dst);
+    let base_is_dst = base.gpu == dst.gpu
+        && base.phys == dst.phys
+        && base.bytes == dst.bytes
+        && base.pitch_bytes == dst.pitch_bytes;
     if !base.is_valid()
         || ((flags & UI4_COMPOSE_FLAG_BASE_XRGB) != 0
             && (base.width != dst.width || base.height != dst.height))
-        || layers
-            .iter()
-            .any(|layer| !layer.src.is_valid() || layer.dst_width == 0 || layer.dst_height == 0)
+        || (!base_is_dst
+            && (gpu_ranges_overlap(base.gpu, base.bytes, dst.gpu, dst.bytes)
+                || gpu_ranges_overlap(base.phys, base.bytes, dst.phys, dst.bytes)))
+        || layers.iter().any(|layer| {
+            !layer.src.is_valid()
+                || layer.dst_width == 0
+                || layer.dst_height == 0
+                || gpu_ranges_overlap(layer.src.gpu, layer.src.bytes, dst.gpu, dst.bytes)
+                || gpu_ranges_overlap(layer.src.phys, layer.src.bytes, dst.phys, dst.bytes)
+        })
     {
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
@@ -81,18 +92,34 @@ pub(crate) fn queue_ui4_compositor_layers(
     }
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let base_ok = kernel_ok && direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes);
+    // Overlay composition uses the destination itself as the preserved base.
+    // Map that exact VA once as PAT3/UC: mapping it first as PAT0/WB and then
+    // rewriting the same PTEs for the destination recreated the cache-policy
+    // transition which corrupted earlier producer/display handoffs.
+    let base_ok = kernel_ok
+        && if base_is_dst {
+            direct_rcs_map_ppgtt_scanout(state, base.gpu, base.phys, base.bytes)
+        } else {
+            direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes)
+        };
     // This allocation transfers directly to a display plane after GuC
     // retirement. Sources and descriptors remain PAT0/WB, while the exact
     // destination follows the proven PAT3/UC scanout contract used by the
     // native-video, Draw3D, Gridpaper, and preview paths.
-    let dst_ok = base_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ok = base_ok
+        && (base_is_dst || direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes));
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut sources_ok = desc_ok;
     for layer in layers {
-        if sources_ok
-            && !direct_rcs_map_ppgtt_kernel(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
-        {
+        if !sources_ok {
+            break;
+        }
+        let mapped = if layer.src_scanout_cache {
+            direct_rcs_map_ppgtt_scanout(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
+        } else {
+            direct_rcs_map_ppgtt_kernel(state, layer.src.gpu, layer.src.phys, layer.src.bytes)
+        };
+        if !mapped {
             sources_ok = false;
         }
     }
@@ -167,7 +194,7 @@ pub(crate) fn queue_ui4_compositor_layers(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} ppgtt=base-pat0-wb,dst-pat3-uc,desc-pat0-wb,sources-pat0-wb context=isolated persistent=1 wait=none\n",
+        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} ppgtt_base={} ppgtt_dst=pat3-uc desc=pat0-wb sources=producer-stable-pat same_va_cache_remap=0 context=isolated persistent=1 wait=none\n",
         serial,
         layers.len(),
         damage_width,
@@ -175,6 +202,7 @@ pub(crate) fn queue_ui4_compositor_layers(
         damage_x,
         damage_y,
         dst.gpu,
+        if base_is_dst { "dst-pat3-uc" } else { "pat0-wb" },
     );
     Ok(submission)
 }
@@ -306,163 +334,6 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
         "ui4/guc-compositor: queued serial={} descs={} dst_gpu=0x{:X} context=isolated persistent=1 wait=none\n",
         serial,
         total_descs,
-        dst.gpu,
-    );
-    Ok(submission)
-}
-
-/// Queue the proven native-video primary rebuild as one GuC-owned RCS job.
-/// Every primary output pixel is written: native NV12 inside the viewport and
-/// the immutable XRGB desktop base outside it.
-pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
-    source: GpgpuNv12Tile64Surface,
-    base: GpgpuRgba8Surface,
-    dst: GpgpuRgba8Surface,
-    content_dst_x: u32,
-    content_dst_y: u32,
-    content_width: u32,
-    content_height: u32,
-    source_x: u32,
-    source_y: u32,
-) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    let destination_valid = content_width != 0
-        && content_height != 0
-        && content_dst_x
-            .checked_add(content_width)
-            .is_some_and(|right| right <= dst.width)
-        && content_dst_y
-            .checked_add(content_height)
-            .is_some_and(|bottom| bottom <= dst.height);
-    let source_valid = source_x
-        .checked_add(content_width)
-        .is_some_and(|right| right <= source.width)
-        && source_y
-            .checked_add(content_height)
-            .is_some_and(|bottom| bottom <= source.height);
-    let layouts_match = base.is_valid()
-        && dst.is_valid()
-        && source.is_valid()
-        && base.width == dst.width
-        && base.height == dst.height;
-    let ranges_distinct = !gpu_ranges_overlap(source.gpu, source.bytes, base.gpu, base.bytes)
-        && !gpu_ranges_overlap(source.gpu, source.bytes, dst.gpu, dst.bytes)
-        && !gpu_ranges_overlap(base.gpu, base.bytes, dst.gpu, dst.bytes)
-        && !gpu_ranges_overlap(source.phys, source.bytes, base.phys, base.bytes)
-        && !gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes)
-        && !gpu_ranges_overlap(base.phys, base.bytes, dst.phys, dst.bytes);
-    if !destination_valid || !source_valid || !layouts_match || !ranges_distinct {
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
-    let params = Ui4Nv12Tile64ToRgba8FrameParams {
-        nv12_gpu: source.gpu,
-        base_gpu: base.gpu,
-        dst_gpu: dst.gpu,
-        src_pitch_bytes: source.pitch_bytes,
-        src_uv_offset: source.uv_offset,
-        base_pitch_bytes: base.pitch_bytes,
-        dst_pitch_bytes: dst.pitch_bytes,
-        output_width: dst.width,
-        output_height: dst.height,
-        content_dst_x,
-        content_dst_y,
-        content_width,
-        content_height,
-        source_x,
-        source_y,
-    };
-
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if runtime.pending.is_some() {
-        return Err(Ui4CompositorSubmitError::Busy);
-    }
-    let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let upload = upload_ui4_nv12_ytile_to_primary_xrgb_kernel()
-        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
-
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
-    if mapped_ok {
-        runtime.state_mapped = true;
-    }
-    let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(state));
-    if ppgtt_ok {
-        runtime.ppgtt_initialized = true;
-    }
-    let kernel_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let source_ok =
-        kernel_ok && direct_rcs_map_ppgtt_kernel(state, source.gpu, source.phys, source.bytes);
-    let base_ok = source_ok && direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes);
-    let dst_ok = base_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
-    let batch_ok = dst_ok
-        && direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
-            state,
-            upload,
-            params,
-            source.bytes,
-            base.bytes,
-            dst.bytes,
-        );
-    if !batch_ok {
-        crate::log_error!(target: "ui4";
-            "ui4/guc-video-compositor: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} base={} dst={} batch={} source_gpu=0x{:X} base_gpu=0x{:X} dst_gpu=0x{:X}\n",
-            forcewake_ok as u8,
-            mapped_ok as u8,
-            ppgtt_ok as u8,
-            kernel_ok as u8,
-            source_ok as u8,
-            base_ok as u8,
-            dst_ok as u8,
-            batch_ok as u8,
-            source.gpu,
-            base.gpu,
-            dst.gpu,
-        );
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
-    let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_for(
-        dev,
-        state,
-        &mut runtime.submit,
-        crate::gpu::vgpu::KernelClient::Ui4Compositor,
-    ) {
-        return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    }
-    runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
-    let serial = runtime.next_serial;
-    let gpu = runtime
-        .submit
-        .pending
-        .expect("accepted UI4 submission must have an executor token");
-    let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.last_completion = None;
-    runtime.pending = Some(Ui4CompositorPending {
-        submission,
-        started_tick,
-        marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
-        marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "nv12-tile64-primary",
-        stats: GpgpuWorklistSubmitStats {
-            descs: 1,
-            walkers: 1,
-            submits: 1,
-            submit_ms: 0,
-        },
-        overdue_logged: false,
-    });
-    crate::log_trace!(target: "ui4";
-        "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,base-pat0-wb,dst-pat3-uc bindings=3 display_plane_writes=0\n",
-        serial,
-        dst.width,
-        dst.height,
-        content_width,
-        content_height,
-        content_dst_x,
-        content_dst_y,
-        source_x,
-        source_y,
         dst.gpu,
     );
     Ok(submission)

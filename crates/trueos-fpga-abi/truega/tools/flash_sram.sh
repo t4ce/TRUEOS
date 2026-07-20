@@ -34,7 +34,8 @@ PROGRAMMER="$(find_exe programmer_cli "$HOME/Programmme/Gowin/Programmer/bin/pro
 }
 FS_FILE="$PROJECT_DIR/impl/pnr/min_pci_led.fs"
 DEVICE="GW5AST-138B"
-CABLE_INDEX="5"
+CABLE_INDEX="${TRUEGA_CABLE_INDEX:-4}"
+CABLE_CHANNEL="${TRUEGA_CABLE_CHANNEL:-0}"
 FREQ="2.5MHz"
 
 if [[ ! -f "$FS_FILE" ]]; then
@@ -57,4 +58,5 @@ echo "program SRAM:"
   --run 2 \
   --fsFile "$FS_FILE" \
   --cable-index "$CABLE_INDEX" \
+  --channel "$CABLE_CHANNEL" \
   --frequency "$FREQ"

@@ -71,6 +71,9 @@ pub(crate) struct Mandel64WorklistRgba8Params {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuUi4ComposeLayer {
     pub(crate) src: GpgpuRgba8Surface,
+    /// The source was produced through the stable PAT3/UC scanout mapping and
+    /// must retain that policy when the compositor samples it.
+    pub(crate) src_scanout_cache: bool,
     pub(crate) dst_x: i32,
     pub(crate) dst_y: i32,
     pub(crate) dst_width: u32,

@@ -20,13 +20,11 @@ pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{
     FrameGpuRelease, FramePoolError, FrameReadLease, FrameRgbaView, FrameWriteLease,
-    NativeVideoFrameView, acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer,
-    create_frame, destroy_frame, frame_snapshot, gpgpu_rgba_surface,
-    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpgpu_native_video_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_gpu_frame_buffer, publish_native_video_frame_buffer, published_native_video_view,
-    published_rgba_view, release_published_frame, retain_published_frame,
-    wait_frame_buffer_release, writable_rgba_view,
+    acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame,
+    destroy_frame, frame_snapshot, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_gpgpu_video_frame_buffer, publish_gpu_frame_buffer, published_rgba_view,
+    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -43,9 +41,8 @@ pub(crate) use input_broker::{
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
-    DecodedNv12Source, acknowledge_native_video_publication, begin_shell_decoded_video_player,
-    prepare_decoded_video_player, present_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
-    wait_decoded_video_playback_ready,
+    DecodedNv12Source, begin_shell_decoded_video_player, prepare_decoded_video_player,
+    present_decoded_nv12_stream_frame, stop_decoded_nv12_stream, wait_decoded_video_playback_ready,
 };
 
 pub(crate) use window_broker::{
@@ -326,6 +323,7 @@ pub(crate) enum FramePlanError {
     EmptyExtent,
     BaseColorRequiresPremultipliedRgba,
     VideoRequiresPremultipliedRgba,
+    VideoRequiresStreamingCadence,
     VideoRequiresDoubleBuffering,
 }
 
@@ -346,8 +344,13 @@ impl FramePlan {
             }
             _ => {}
         }
-        if spec.content == FrameContent::Video && spec.buffering != FrameBuffering::Double {
-            return Err(FramePlanError::VideoRequiresDoubleBuffering);
+        if let FrameContent::Video = spec.content {
+            if !matches!(spec.cadence, FrameCadence::Streaming) {
+                return Err(FramePlanError::VideoRequiresStreamingCadence);
+            }
+            if !matches!(spec.buffering, FrameBuffering::Double) {
+                return Err(FramePlanError::VideoRequiresDoubleBuffering);
+            }
         }
         Ok(Self {
             output: spec.output,
@@ -383,4 +386,29 @@ const _: () = {
     assert!(half.r == 128 && half.g == 64 && half.b == 1 && half.a == 128);
     let opaque = PremultipliedRgba8::from_straight_rgba(12, 34, 56, 255);
     assert!(opaque.r == 12 && opaque.g == 34 && opaque.b == 56 && opaque.a == 255);
+    let admitted_video = FrameSpec {
+        output: OutputId::from_slot(0).unwrap(),
+        content: FrameContent::Video,
+        cadence: FrameCadence::Streaming,
+        buffering: FrameBuffering::Double,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width: DEFAULT_FRAME_WIDTH,
+        height: DEFAULT_FRAME_HEIGHT,
+        base_color: None,
+    };
+    assert!(matches!(FramePlan::from_spec(admitted_video), Ok(_)));
+    assert!(matches!(
+        FramePlan::from_spec(FrameSpec {
+            cadence: FrameCadence::Dirty,
+            ..admitted_video
+        }),
+        Err(FramePlanError::VideoRequiresStreamingCadence)
+    ));
+    assert!(matches!(
+        FramePlan::from_spec(FrameSpec {
+            buffering: FrameBuffering::Triple,
+            ..admitted_video
+        }),
+        Err(FramePlanError::VideoRequiresDoubleBuffering)
+    ));
 };

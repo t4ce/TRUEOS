@@ -1,9 +1,9 @@
 //! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder remains a native Tile64 NV12 producer. Each retired source is
-//! attached to one exact UI4 triple-buffer lease. The compositor then performs
-//! the proven full-primary GuC conversion and retains the native source until
-//! the resulting primary flip reaches SURFLIVE.
+//! The decoder remains a native Tile64 NV12 producer. One SIMD16 GuC dispatch
+//! writes an exact broker-owned RGBA backbuffer. GuC completion releases the
+//! decoder picture; UI4 publication transfers only the completed RGBA surface,
+//! whose display ownership independently ends at SURFLIVE.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,11 +12,12 @@ use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
-    DamageRect, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId, ScanoutFormat,
-    Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
-    acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, publish_native_video_frame_buffer, publish_window_frame,
-    take_owner_input_events,
+    DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
+    ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement,
+    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
+    cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
+    finish_window_session_with_request, gpgpu_rgba_surface, publish_gpgpu_video_frame_buffer,
+    publish_window_frame, take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -24,8 +25,8 @@ use super::{
 const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
 const VIDEO_PLAYBACK_AUTOSTART: bool = true;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
+const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
 const VIDEO_INPUT_POLL_MS: u64 = 10;
-const VIDEO_PRESENT_ACK_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -52,9 +53,9 @@ pub(crate) struct NativeViewportLayout {
     pub(crate) height: u32,
 }
 
-/// Dimensions used to bind one decoded picture to its UI4 viewport.  Pixel
-/// storage stays decoder-owned; the UI4 frame owns the publication lifetime
-/// and binds the native source to one exact leased buffer slot.
+/// Dimensions used to bind one decoded picture to its UI4 viewport. Pixel
+/// storage stays decoder-owned until GuC completion; only the converted RGBA
+/// allocation enters the UI4 publication lifetime.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVideoFrameSpec {
     pub(crate) coded_width: u32,
@@ -102,12 +103,11 @@ struct VideoStream {
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
-static VIDEO_NATIVE_ACK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 
 /// Register the decoded-video ownership records without presenting pixels.
-/// The broker window remains pending until the first decoder-retired NV12
-/// attachment becomes the first visible publication.
+/// The broker window remains pending until the first decoder-retired picture
+/// has been converted into a complete RGBA publication.
 pub(crate) fn prepare_decoded_video_player() -> bool {
     install_decoded_video_player(true, !VIDEO_PLAYBACK_AUTOSTART, "kernel-boot-video-task")
 }
@@ -287,12 +287,9 @@ fn reap_retired_video_frames() {
         .retain(|frame| matches!(destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
-pub(crate) fn acknowledge_native_video_publication(sequence: u64) {
-    VIDEO_NATIVE_ACK.fetch_max(sequence, Ordering::AcqRel);
-}
-
-/// Publish one native decoder surface and retain it until the compositor has
-/// completed both its GuC conversion and the primary SURFLIVE transition.
+/// Convert one decoder picture into an exact UI4 RGBA backbuffer. The function
+/// returns after the GuC read of NV12 has retired and the RGBA publication is
+/// visible to the broker; it deliberately does not wait for display SURFLIVE.
 pub(crate) async fn present_decoded_nv12_stream_frame(
     source: DecodedNv12Source,
     reason: &str,
@@ -319,11 +316,30 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     ) else {
         return false;
     };
-    let write = match acquire_frame_buffer(stream.frame) {
-        Ok(write) => write,
+    let write = loop {
+        match acquire_frame_buffer(stream.frame) {
+            Ok(write) => break write,
+            Err(super::FramePoolError::Busy) => {
+                // Double buffering intentionally applies display backpressure:
+                // one surface may be live while the other is the sole producer
+                // target. No decoder pixels are copied or published here.
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            Err(error) => {
+                crate::log_warn!(target: "ui4";
+                    "ui4 video-frame acquire failed reason={} error={:?}\n", reason, error,
+                );
+                return false;
+            }
+        }
+    };
+    let destination = match gpgpu_rgba_surface(write) {
+        Ok(surface) => surface,
         Err(error) => {
+            let _ = cancel_frame_buffer(write);
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame acquire failed reason={} error={:?}\n", reason, error,
+                "ui4 video-frame destination unavailable frame={} buffer={} error={:?} reason={}\n",
+                stream.frame.raw(), write.buffer_index, error, reason,
             );
             return false;
         }
@@ -335,35 +351,90 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             return false;
         }
     };
-    let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    let native = super::NativeVideoFrameView {
-        source: super::NativeNv12Surface {
-            phys: source.phys,
-            gpu: source.gpu,
-            virt: source.virt,
-            byte_len: source.byte_len,
-            width: source.width,
-            height: source.height,
-            pitch_bytes,
-            uv_offset: source.uv_offset,
-            layout: super::Nv12Layout::YTiled,
-            pipeline_slot: VIDEO_OUTPUT.slot(),
-        },
-        source_x: layout.source_x,
-        source_y: layout.source_y,
-        destination_x: layout.destination_x,
-        destination_y: layout.destination_y,
-        width: layout.width,
-        height: layout.height,
-        decode_sequence: source.decode_sequence,
-        presentation_sequence: sequence,
+    let uv_offset = match u32::try_from(source.uv_offset) {
+        Ok(offset) => offset,
+        Err(_) => {
+            let _ = cancel_frame_buffer(write);
+            return false;
+        }
     };
-    let published = match publish_native_video_frame_buffer(write, native) {
+    let Some(native_source) = crate::intel::gpgpu::GpgpuNv12Tile64Surface::new(
+        source.phys,
+        source.gpu,
+        source.byte_len,
+        source.width,
+        source.height,
+        pitch_bytes,
+        uv_offset,
+    ) else {
+        let _ = cancel_frame_buffer(write);
+        crate::log_warn!(target: "ui4";
+            "ui4 video-frame native source rejected frame={} decode_seq={} source_gpu=0x{:X} reason={}\n",
+            stream.frame.raw(), source.decode_sequence, source.gpu, reason,
+        );
+        return false;
+    };
+
+    let submission = loop {
+        match crate::intel::gpgpu::queue_ui4_video_frame_nv12_tile64_to_rgba8(
+            native_source,
+            destination,
+            layout.destination_x,
+            layout.destination_y,
+            layout.width,
+            layout.height,
+            layout.source_x,
+            layout.source_y,
+        ) {
+            Ok(submission) => break submission,
+            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
+                // The dedicated Frame lease and decoder picture remain pinned
+                // until this GuC runtime accepts their exact handoff.
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            Err(error) => {
+                let _ = cancel_frame_buffer(write);
+                crate::log_warn!(target: "ui4";
+                    "ui4 video-frame GuC queue failed frame={} buffer={} decode_seq={} error={:?} reason={}\n",
+                    stream.frame.raw(), write.buffer_index, source.decode_sequence, error, reason,
+                );
+                return false;
+            }
+        }
+    };
+    let mut completion_failure_logged = false;
+    let (release, submit_ms) = loop {
+        match crate::intel::gpgpu::poll_ui4_video_frame_submission(submission, destination) {
+            crate::intel::gpgpu::Ui4VideoFrameCompletion::Pending => {
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            crate::intel::gpgpu::Ui4VideoFrameCompletion::Complete { stats, release } => {
+                break (release, stats.submit_ms);
+            }
+            crate::intel::gpgpu::Ui4VideoFrameCompletion::Failed => {
+                // An accepted request has no cancellation proof. Keep the NV12
+                // picture and write lease quarantined instead of permitting
+                // either allocation to be reused under unfinished GPU work.
+                if !completion_failure_logged {
+                    completion_failure_logged = true;
+                    crate::log_error!(target: "ui4";
+                        "ui4 video-frame GuC completion failed frame={} buffer={} decode_seq={} reason={} action=retain-native-and-write-lease-no-publish log=once\n",
+                        stream.frame.raw(), write.buffer_index, source.decode_sequence, reason,
+                    );
+                }
+                Timer::after(Duration::from_millis(1)).await;
+            }
+        }
+    };
+    // From this point onward the decoder source is no longer referenced by any
+    // queued GPU command. Only the completed RGBA allocation crosses into UI4.
+    let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    let published = match publish_gpgpu_video_frame_buffer(write, release) {
         Ok(published) => published,
         Err(error) => {
             let _ = cancel_frame_buffer(write);
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame native publish failed frame={} buffer={} error={:?} reason={}\n",
+                "ui4 video-frame GPU publish failed frame={} buffer={} error={:?} reason={}\n",
                 stream.frame.raw(), write.buffer_index, error, reason,
             );
             return false;
@@ -373,7 +444,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
         Ok(serial) => serial,
         Err(error) => {
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream-before-source-reuse\n",
+                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_already_released_at=guc-completion\n",
                 stream.frame.raw(), stream.window.raw(), error, reason,
             );
             let _ = stop_decoded_nv12_stream("window-publish-failed");
@@ -382,7 +453,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-frame-primary source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X} plane_route=primary-xrgb-after-guc linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
             sequence,
             source.decode_sequence,
             stream.frame.raw(),
@@ -390,6 +461,8 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             published.buffer_index,
             published.publish_serial,
             window_serial,
+            release.sequence(),
+            submit_ms,
             source.width,
             source.height,
             source.visible_width,
@@ -401,21 +474,8 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             layout.destination_x,
             layout.destination_y,
             source.gpu,
+            destination.gpu,
         );
-    }
-
-    let deadline =
-        embassy_time::Instant::now() + Duration::from_millis(VIDEO_PRESENT_ACK_TIMEOUT_MS);
-    let mut overdue_logged = false;
-    while VIDEO_NATIVE_ACK.load(Ordering::Acquire) < sequence {
-        if !overdue_logged && embassy_time::Instant::now() >= deadline {
-            overdue_logged = true;
-            crate::log_warn!(target: "ui4";
-                "ui4 video-frame present overdue seq={} frame={} window={} reason={} action=retain-native-source-and-wait-for-surflive\n",
-                sequence, stream.frame.raw(), stream.window.raw(), reason,
-            );
-        }
-        Timer::after(Duration::from_millis(1)).await;
     }
     true
 }
@@ -447,7 +507,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     stream.pan_y,
                 )?;
                 crate::log_info!(target: "ui4";
-                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-native-nv12-frame-primary attachment=per-frame-buffer reason={}\n",
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-nv12-to-ui4-rgba8-frame attachment=none frame_buffers=2 plane_slot={} reason={}\n",
                     stream.frame.raw(),
                     stream.window.raw(),
                     spec.coded_width,
@@ -463,6 +523,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     layout.destination_x,
                     layout.destination_y,
                     if VIDEO_PLAYBACK_PAUSED.load(Ordering::Acquire) { "paused" } else { "playing" },
+                    VIDEO_PLANE_SLOT,
                     reason,
                 );
             }
@@ -478,14 +539,23 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
     let stream = VIDEO_STREAM.lock().take();
     if let Some(stream) = stream {
-        let _ = finish_window_session(VIDEO_OWNER, stream.session);
-        retire_video_frame(stream.frame);
+        let animated = finish_window_session_with_request(
+            VIDEO_OWNER,
+            stream.session,
+            WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames(),
+        )
+        .is_ok();
+        if !animated {
+            let _ = finish_window_session(VIDEO_OWNER, stream.session);
+            retire_video_frame(stream.frame);
+        }
         crate::log_info!(
             target: "ui4";
-            "ui4 video-frame stopped reason={} frame={} window={} plane_mutation=none\n",
+            "ui4 video-frame stopped reason={} frame={} window={} teardown={} display_release=surflive plane_mutation=none\n",
             reason,
             stream.frame.raw(),
             stream.window.raw(),
+            if animated { "direct-plane-shrink+fade" } else { "immediate-fallback" },
         );
         true
     } else {
@@ -523,7 +593,7 @@ fn create_stream(
         session,
         frame,
         output: VIDEO_OUTPUT,
-        plane: super::WindowPlane::Primary,
+        plane: super::WindowPlane::Universal(VIDEO_PLANE_SLOT as u8),
         placement,
         interaction: super::WindowInteraction::APPLICATION_FIXED_FRAME,
     }) {
@@ -534,10 +604,9 @@ fn create_stream(
             return None;
         }
     };
-    // The RGBA ring carries broker ownership and publication serials only. No
-    // carrier buffer is published by itself: each visible publication carries
-    // the exact decoder-retired NV12 attachment. The producer never writes
-    // display MMIO.
+    // No placeholder is published. The first visible buffer is always a fully
+    // converted, GuC-released RGBA picture; the producer never writes display
+    // MMIO and decoder memory is never attached to the broker Frame.
     let visible_width = if placeholder { 0 } else { spec.visible_width };
     let visible_height = if placeholder { 0 } else { spec.visible_height };
     let pan_x = centered_crop_origin(visible_width, frame_width);
@@ -552,7 +621,7 @@ fn create_stream(
     )?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming carrier_format=rgba8-premultiplied native_format=tile64-nv12 attachment=per-frame-buffer source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_route=primary-guc-conversion plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=2 cadence=streaming frame_format=rgba8-premultiplied native_format=tile64-nv12 attachment=none source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_slot={} direct_import=after-compute-release plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
@@ -570,6 +639,7 @@ fn create_stream(
         placement.x,
         placement.y,
         placement.z,
+        VIDEO_PLANE_SLOT,
     );
     Some(VideoStream {
         session,
@@ -592,12 +662,13 @@ fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::Fra
         output: VIDEO_OUTPUT,
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
+        buffering: FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        // The RGBA allocation remains an initialized ownership/serial carrier;
-        // the compositor consumes the attached native surface directly.
-        base_color: Some(super::PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+        // The SIMD16 producer overwrites every pixel, including opaque-black
+        // letterbox regions, before this allocation can be published.
+        base_color: None,
     })
 }
 

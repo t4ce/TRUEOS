@@ -334,12 +334,29 @@ pub fn qjs_workbench_close() {
 }
 
 #[inline]
+pub fn leave_terminal_handoff() {
+    let _ = unsafe { vcabi::trueos_cabi_blueprint_return_to_cli() };
+}
+
+#[inline]
 pub fn attached_read_byte() -> Option<u8> {
     let value = unsafe { vcabi::trueos_cabi_shell_attached_read_byte() };
     if (0..=255).contains(&value) {
         Some(value as u8)
     } else {
         None
+    }
+}
+
+const TERMINAL_REENTRY_BYTE: u8 = 0x1f;
+
+pub fn wait_for_terminal_reentry() {
+    loop {
+        if attached_read_byte() == Some(TERMINAL_REENTRY_BYTE) {
+            return;
+        }
+        crate::vsys::poll_once();
+        crate::vsys::sleep_ms(5);
     }
 }
 

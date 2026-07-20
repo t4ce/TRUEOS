@@ -1593,16 +1593,7 @@ pub unsafe extern "C" fn sys_read(_fd: u32, recv_buf: *mut u8, nrequested: usize
     let Some(out) = abi_write_bytes(recv_buf, nrequested) else {
         return 0;
     };
-    let mut read = 0usize;
-    while read < out.len() {
-        let byte = crate::r::io::fs_cabi::trueos_cabi_shell_attached_read_byte();
-        if byte < 0 {
-            break;
-        }
-        out[read] = byte as u8;
-        read += 1;
-    }
-    read
+    crate::r::io::fs_cabi::read_attached_console_bytes(out)
 }
 
 #[unsafe(no_mangle)]

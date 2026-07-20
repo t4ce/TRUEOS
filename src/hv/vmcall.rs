@@ -76,6 +76,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 wid
 pub const OP_BP_QJS_WORKBENCH_EVAL_V1: u32 = 0xC8; // arg0 eval mode,payload source -> encoded result
 pub const OP_BP_QJS_WORKBENCH_POLL_V1: u32 = 0xC9; // pump VM -> pending print output
 pub const OP_BP_QJS_WORKBENCH_CLOSE_V1: u32 = 0xCA; // discard calling VM's QuickJS runtime
+pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell input payload
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1692,6 +1693,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(u64::from)
                 .unwrap_or(u64::MAX);
             write_response(vm_id, seq, STATUS_OK, byte, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_ATTACHED_READ => {
+            let want = core::cmp::min(arg0 as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            let read = crate::hv::blueprint_console_read(vm_id, out);
+            write_response(vm_id, seq, STATUS_OK, read as u64, read as u32);
             DispatchOutcome::Resume
         }
         OP_BP_SHELL_ATTACHED_READABLE_LEN => {

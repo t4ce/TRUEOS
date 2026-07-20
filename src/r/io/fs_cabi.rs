@@ -1795,20 +1795,44 @@ pub extern "C" fn trueos_cabi_konsole_end_frame() -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
+    let mut byte = [0u8; 1];
+    if read_attached_console_bytes(&mut byte) == 1 {
+        i32::from(byte[0])
+    } else {
+        -1
+    }
+}
+
+pub fn read_attached_console_bytes(out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, data) =
-            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ_BYTE, 0, 0);
-        if status == trueos_vm::vmcall::STATUS_OK && data != u64::MAX {
-            return data as u8 as i32;
+        let want = core::cmp::min(out.len(), trueos_vm::vmcall::PAYLOAD_CAP);
+        let (status, read) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ,
+            want as u64,
+            0,
+            &[],
+            &mut out[..want],
+        );
+        if status == trueos_vm::vmcall::STATUS_OK {
+            return core::cmp::min(read as usize, want);
         }
-        return -1;
+        return 0;
     }
     if let Some(target) = super::env::console_target() {
-        return crate::shell2::read_matrix_target_byte(&target)
-            .map(i32::from)
-            .unwrap_or(-1);
+        let mut read = 0usize;
+        while read < out.len() {
+            let Some(byte) = crate::shell2::read_matrix_target_byte(&target) else {
+                break;
+            };
+            out[read] = byte;
+            read += 1;
+        }
+        return read;
     }
-    -1
+    0
 }
 
 #[unsafe(no_mangle)]

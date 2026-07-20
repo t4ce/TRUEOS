@@ -15,7 +15,10 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_VM: AtomicU8 = AtomicU8::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
-const NET_SHELL_DIRECT_TERMINAL_RESET: &[u8] = b"\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
+// Direct terminal apps may stop before their userspace guard flushes its
+// cleanup, and release_net_shell_direct intentionally drops queued app paint.
+// Restore every terminal mode that shell2 relies on before repainting it.
+const NET_SHELL_DIRECT_TERMINAL_RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
 
 pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
@@ -96,6 +99,7 @@ pub(crate) fn release_net_shell_direct(vm_id: u8) {
         }
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
         NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
+        net_shell_direct_reset_terminal();
         crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
     }
 }
@@ -108,29 +112,48 @@ pub(crate) fn net_shell_direct_owned_by(vm_id: u8) -> bool {
     NET_SHELL_DIRECT_VM.load(Ordering::Acquire) == vm_id.saturating_add(1)
 }
 
-pub(crate) fn net_shell_direct_read_byte(vm_id: u8) -> Option<u8> {
+pub(crate) fn net_shell_direct_inject_input(vm_id: u8, bytes: &[u8]) -> bool {
     if !net_shell_direct_owned_by(vm_id) {
-        return None;
+        return false;
     }
-    loop {
-        let byte = NET_SHELL_STATE.lock().rx.pop_front()?;
+    NET_SHELL_STATE.lock().rx.extend(bytes.iter().copied());
+    true
+}
+
+pub(crate) fn net_shell_direct_read(vm_id: u8, out: &mut [u8]) -> usize {
+    if out.is_empty() || !net_shell_direct_owned_by(vm_id) {
+        return 0;
+    }
+    let mut st = NET_SHELL_STATE.lock();
+    let mut read = 0usize;
+    let mut last_was_cr = NET_SHELL_DIRECT_RX_LAST_WAS_CR.load(Ordering::Acquire);
+    while read < out.len() {
+        let Some(byte) = st.rx.pop_front() else {
+            break;
+        };
         match byte {
+            b'\n' if last_was_cr => {
+                last_was_cr = false;
+            }
             b'\n' => {
-                if NET_SHELL_DIRECT_RX_LAST_WAS_CR.swap(false, Ordering::AcqRel) {
-                    continue;
-                }
-                return Some(b'\r');
+                out[read] = b'\r';
+                read += 1;
+                last_was_cr = false;
             }
             b'\r' => {
-                NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(true, Ordering::Release);
-                return Some(byte);
+                out[read] = byte;
+                read += 1;
+                last_was_cr = true;
             }
             _ => {
-                NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
-                return Some(byte);
+                out[read] = byte;
+                read += 1;
+                last_was_cr = false;
             }
         }
     }
+    NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(last_was_cr, Ordering::Release);
+    read
 }
 
 pub(crate) fn net_shell_direct_readable_len(vm_id: u8) -> usize {

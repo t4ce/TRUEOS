@@ -322,6 +322,8 @@ pub(crate) enum BlueprintConsoleSurface {
     Terminal,
 }
 
+pub(crate) const BLUEPRINT_TUI_REENTER_BYTE: u8 = 0x1f;
+
 impl BlueprintConsoleSurface {
     fn is_terminal(self) -> bool {
         matches!(self, Self::Terminal)
@@ -358,6 +360,7 @@ pub(crate) struct BlueprintProcessContext {
     console_surface: BlueprintConsoleSurface,
     console_route: BlueprintConsoleRoute,
     console_attached: bool,
+    terminal_reentry_ready: bool,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
     exit_reason: Option<AllocString>,
@@ -1475,6 +1478,7 @@ pub fn stage_blueprint_launch(
         console_surface,
         console_route,
         console_attached: true,
+        terminal_reentry_ready: false,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
         exit_reason: None,
@@ -1878,25 +1882,108 @@ pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
         }
         context.console_surface = BlueprintConsoleSurface::Text;
         context.console_route = BlueprintConsoleRoute::Matrix;
+        context.terminal_reentry_ready = true;
         context.console_input.clear();
         context.control_shell_line.clear();
         (context.console_target.clone(), was_direct)
     };
 
-    // A Blueprint launched by shell2 only borrows the selected view while its
-    // terminal UI is active. Returning from that UI must give the view and
-    // its input back to shell2; attaching the VM minishell here leaves the
-    // outer shell painted but unable to consume input.
-    if let Some(target) = target.as_ref() {
-        crate::shell2::unbind_matrix_target_vm(target, vm_id);
-    }
+    // The Blueprint keeps its VM and selected Matrix slot; only terminal
+    // presentation ownership returns to shell2. Keeping the VM bound without
+    // direct input exposes its mini-shell and lets `tui` re-enter later.
     if was_direct {
         crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    }
+    if let Some(target) = target.as_ref() {
+        crate::shell2::bind_matrix_target_vm(target, vm_id);
     }
     crate::log_os::blueprint_line(
         log::Level::Info,
         format_args!(
             "apps: vm{} console handoff terminal->shell2 target={}\n",
+            vm_id,
+            target.is_some() as u8
+        ),
+    );
+    true
+}
+
+pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let target = {
+        let guard = slot.lock();
+        let Some(context) = guard.as_ref() else {
+            return false;
+        };
+        if !context.console_attached || !context.terminal_reentry_ready {
+            return false;
+        }
+        context.console_target.clone()
+    };
+    let direct =
+        blueprint_uses_net_shell_direct_path(BlueprintConsoleSurface::Terminal, target.as_ref());
+    if direct && !crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
+        return false;
+    }
+
+    let committed = {
+        let mut guard = slot.lock();
+        if let Some(context) = guard.as_mut() {
+            if !context.console_attached || !context.terminal_reentry_ready {
+                false
+            } else {
+                context.console_surface = BlueprintConsoleSurface::Terminal;
+                context.console_route = if direct {
+                    BlueprintConsoleRoute::NetShellDirect
+                } else {
+                    BlueprintConsoleRoute::Matrix
+                };
+                context.terminal_reentry_ready = false;
+                context.console_input.clear();
+                context.control_shell_line.clear();
+                if !direct {
+                    context.console_input.push_back(BLUEPRINT_TUI_REENTER_BYTE);
+                }
+                true
+            }
+        } else {
+            false
+        }
+    };
+    if !committed {
+        if direct {
+            crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+        }
+        return false;
+    }
+
+    if direct
+        && !crate::shell2::backends::net_tcp::net_shell_direct_inject_input(
+            vm_id,
+            &[BLUEPRINT_TUI_REENTER_BYTE],
+        )
+    {
+        if let Some(context) = slot.lock().as_mut() {
+            context.console_surface = BlueprintConsoleSurface::Text;
+            context.console_route = BlueprintConsoleRoute::Matrix;
+            context.terminal_reentry_ready = true;
+        }
+        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+        if let Some(target) = target.as_ref() {
+            crate::shell2::bind_matrix_target_vm(target, vm_id);
+        }
+        return false;
+    }
+
+    if !direct && let Some(target) = target.as_ref() {
+        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+    }
+    crate::log_os::blueprint_line(
+        log::Level::Info,
+        format_args!(
+            "apps: vm{} console handoff shell2->terminal target={}\n",
             vm_id,
             target.is_some() as u8
         ),
@@ -2012,11 +2099,17 @@ fn blueprint_control_shell_command(vm_id: u8, raw: &str) {
         }
         "help" | "?" => blueprint_control_shell_write_text(
             vm_id,
-            "commands: host home env smp help stop pause preserve\n\
+            "commands: tui host home env smp help stop pause preserve\n\
+             tui: re-enter this app's optional terminal UI\n\
              stop: stop without a checkpoint\n\
              pause: replicatable checkpoint; resume by vmid from F2 pause\n\
              preserve: raw checkpoint-and-stop without a lifecycle latch",
         ),
+        "tui" | "terminal" | "term" => {
+            if !blueprint_console_enter_tui(vm_id) {
+                blueprint_control_shell_line(vm_id, "vmx-shell: terminal UI is not available");
+            }
+        }
         "stop" => match stop(vm_id) {
             Ok(true) => blueprint_control_shell_line(vm_id, "vmx-shell: stop requested"),
             Ok(false) => blueprint_control_shell_line(vm_id, "vmx-shell: vm is not running"),
@@ -2165,20 +2258,36 @@ pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
 }
 
 pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
+    let mut byte = [0u8; 1];
+    (blueprint_console_read(vm_id, &mut byte) == 1).then_some(byte[0])
+}
+
+pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let mut guard = slot.lock();
         if let Some(context) = guard.as_mut() {
             if !context.console_attached {
-                return None;
+                return 0;
             }
             if context.console_route.is_net_shell_direct() {
                 drop(guard);
-                return crate::shell2::backends::net_tcp::net_shell_direct_read_byte(vm_id);
+                return crate::shell2::backends::net_tcp::net_shell_direct_read(vm_id, out);
             }
-            return context.console_input.pop_front();
+            let mut read = 0usize;
+            while read < out.len() {
+                let Some(byte) = context.console_input.pop_front() else {
+                    break;
+                };
+                out[read] = byte;
+                read += 1;
+            }
+            return read;
         }
     }
-    None
+    0
 }
 
 pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
@@ -2266,7 +2375,7 @@ fn resume_blueprint_process_context(vm_id: u8) {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return;
     };
-    let route = {
+    let presentation = {
         let guard = slot.lock();
         let Some(context) = guard.as_ref() else {
             return;
@@ -2274,13 +2383,17 @@ fn resume_blueprint_process_context(vm_id: u8) {
         if context.console_attached {
             return;
         }
-        (context.console_route, context.console_target.clone())
+        (context.console_route, context.console_surface, context.console_target.clone())
     };
-    let attached = if route.0.is_net_shell_direct() {
+    let attached = if presentation.0.is_net_shell_direct() {
         crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id)
     } else {
-        if let Some(target) = route.1.as_ref() {
-            crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+        if let Some(target) = presentation.2.as_ref() {
+            if presentation.1.is_terminal() {
+                crate::shell2::bind_matrix_target_vm_input(target, vm_id);
+            } else {
+                crate::shell2::bind_matrix_target_vm(target, vm_id);
+            }
         }
         true
     };

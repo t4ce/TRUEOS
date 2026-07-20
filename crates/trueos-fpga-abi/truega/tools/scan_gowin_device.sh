@@ -23,7 +23,8 @@ PROGRAMMER="$(find_exe programmer_cli "$HOME/Programmme/Gowin/Programmer/bin/pro
   exit 1
 }
 DEVICE="GW5AST-138B"
-CABLE_INDEX="5"
+CABLE_INDEX="${TRUEGA_CABLE_INDEX:-4}"
+CABLE_CHANNEL="${TRUEGA_CABLE_CHANNEL:-0}"
 
 echo "scan cables:"
 "$PROGRAMMER" --scan-cables L || true
@@ -31,6 +32,7 @@ echo "scan cables:"
 
 echo "scan device:"
 "$PROGRAMMER" \
-  --device "$DEVICE"
-  --cable-index "$CABLE_INDEX"
+  --device "$DEVICE" \
+  --cable-index "$CABLE_INDEX" \
+  --channel "$CABLE_CHANNEL" \
   --scan
