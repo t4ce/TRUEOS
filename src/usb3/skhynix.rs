@@ -23,6 +23,10 @@ const UAS_TRACE_STARTUP_OPS: u64 = 4;
 const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
 
 struct SkhynixUasRuntime {
+    // Detached endpoint handles do not own the xHCI slot's DMA-backed device
+    // contexts. Keep the Device alive for at least as long as those handles so
+    // the controller's DCBAA entry never points at freed memory.
+    _device_lifetime: super::crabusb::Device,
     command_out: super::crabusb::Endpoint,
     status_in: super::crabusb::Endpoint,
     data_in: super::crabusb::Endpoint,
@@ -241,6 +245,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     };
 
     let runtime = SkhynixUasRuntime {
+        _device_lifetime: pooled.device,
         command_out,
         status_in,
         data_in,
