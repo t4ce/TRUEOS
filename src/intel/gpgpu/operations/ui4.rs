@@ -82,7 +82,11 @@ pub(crate) fn queue_ui4_compositor_layers(
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let base_ok = kernel_ok && direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes);
-    let dst_ok = base_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    // This allocation transfers directly to a display plane after GuC
+    // retirement. Sources and descriptors remain PAT0/WB, while the exact
+    // destination follows the proven PAT3/UC scanout contract used by the
+    // native-video, Draw3D, Gridpaper, and preview paths.
+    let dst_ok = base_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut sources_ok = desc_ok;
     for layer in layers {
@@ -163,7 +167,7 @@ pub(crate) fn queue_ui4_compositor_layers(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} context=isolated persistent=1 wait=none\n",
+        "ui4/guc-compositor: queued serial={} kernel=ui4-compose-layers layers={} walkers=1 damage={}x{}@{},{} dst_gpu=0x{:X} ppgtt=base-pat0-wb,dst-pat3-uc,desc-pat0-wb,sources-pat0-wb context=isolated persistent=1 wait=none\n",
         serial,
         layers.len(),
         damage_width,

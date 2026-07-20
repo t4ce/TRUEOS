@@ -5,6 +5,7 @@ use super::ShellBackend2;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandSessionKind {
     FormatSure(u32),
+    Qjs,
     RemoveSure(u64),
 }
 
@@ -12,6 +13,7 @@ impl CommandSessionKind {
     pub(crate) const fn shows_session_activity(self) -> bool {
         match self {
             Self::FormatSure(_) => true,
+            Self::Qjs => true,
             Self::RemoveSure(_) => true,
         }
     }
@@ -19,6 +21,7 @@ impl CommandSessionKind {
     pub(crate) const fn accepts_broadcast_input(self) -> bool {
         match self {
             Self::FormatSure(_) => false,
+            Self::Qjs => false,
             Self::RemoveSure(_) => false,
         }
     }

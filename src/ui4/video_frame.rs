@@ -15,8 +15,8 @@ use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId, ScanoutFormat,
     Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, publish_frame_buffer, publish_native_video_frame_buffer,
-    publish_window_frame, replace_window_frame, take_owner_input_events,
+    destroy_frame, finish_window_session, publish_native_video_frame_buffer, publish_window_frame,
+    take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -105,14 +105,14 @@ static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_NATIVE_ACK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 
-/// Install the boot player's ordinary UI4 window without decoding a picture.
-/// Its initialized black frame gives the user a focusable target while the
-/// playback gate remains paused.
+/// Register the decoded-video ownership records without presenting pixels.
+/// The broker window remains pending until the first decoder-retired NV12
+/// attachment becomes the first visible publication.
 pub(crate) fn prepare_decoded_video_player() -> bool {
     install_decoded_video_player(true, !VIDEO_PLAYBACK_AUTOSTART, "kernel-boot-video-task")
 }
 
-/// Begin a shell-owned playback window. Unlike the boot preparation helper,
+/// Begin the fixed `vid` command lifetime. Unlike the boot preparation helper,
 /// this refuses to borrow an existing stream: exactly one Embassy playback
 /// task owns the session it will later close.
 pub(crate) fn begin_shell_decoded_video_player() -> bool {
@@ -141,20 +141,6 @@ fn install_decoded_video_player(
     ) else {
         return false;
     };
-    let write = match acquire_frame_buffer(stream.frame) {
-        Ok(write) => write,
-        Err(_) => {
-            cleanup_uninstalled_stream(stream);
-            return false;
-        }
-    };
-    if publish_frame_buffer(write).is_err()
-        || publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL).is_err()
-    {
-        let _ = cancel_frame_buffer(write);
-        cleanup_uninstalled_stream(stream);
-        return false;
-    }
     let mut slot = VIDEO_STREAM.lock();
     if slot.is_some() {
         drop(slot);
@@ -166,7 +152,7 @@ fn install_decoded_video_player(
     VIDEO_PLAYBACK_PAUSED.store(initially_paused, Ordering::Release);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player ready owner={:?} frame={} window={} playback={} control=focused-space source=await-first-frame lifecycle_owner={}\n",
+        "ui4 video-player ready owner={:?} frame={} window={} playback={} control=focused-space source=await-first-decoded-frame lifecycle_owner={} broker_state=pending placeholder_present=0\n",
         VIDEO_OWNER,
         stream.frame.raw(),
         stream.window.raw(),
@@ -218,19 +204,11 @@ fn poll_decoded_video_player_input() {
                 );
             }
             Ui4InputEvent::Pan(event) => pan_video_viewport(event),
-            Ui4InputEvent::Resize(event) => {
-                if let Err(reason) = resize_video_viewport(event.window, event.width, event.height)
-                {
-                    crate::log_warn!(
-                        target: "ui4";
-                        "ui4 video-player resize rejected window={} extent={}x{} reason={}\n",
-                        event.window.raw(),
-                        event.width,
-                        event.height,
-                        reason,
-                    );
-                }
-            }
+            Ui4InputEvent::Resize(event) => crate::log_warn!(
+                target: "ui4";
+                "ui4 video-player resize ignored window={} extent={}x{} reason=fixed-shell-vid-frame no-placeholder-publish=1\n",
+                event.window.raw(), event.width, event.height,
+            ),
             _ => {}
         }
     }
@@ -278,103 +256,6 @@ fn pan_video_viewport(event: super::Ui4PanEvent) {
 
 fn move_crop_origin(origin: u32, drag_delta: i32, maximum: u32) -> u32 {
     (i64::from(origin) - i64::from(drag_delta)).clamp(0, i64::from(maximum)) as u32
-}
-
-fn resize_video_viewport(window: WindowId, width: u32, height: u32) -> Result<(), &'static str> {
-    if width == 0 || height == 0 {
-        return Err("empty-extent");
-    }
-    let previous = VIDEO_STREAM
-        .lock()
-        .as_ref()
-        .copied()
-        .filter(|stream| stream.window == window)
-        .ok_or("window-not-active")?;
-    if previous.frame_width == width && previous.frame_height == height {
-        return Ok(());
-    }
-
-    let replacement = create_video_frame(width, height).map_err(|_| "frame-create-failed")?;
-    let write = acquire_frame_buffer(replacement).map_err(|_| {
-        let _ = destroy_frame(replacement);
-        "frame-prime-acquire-failed"
-    })?;
-    if publish_frame_buffer(write).is_err() {
-        let _ = cancel_frame_buffer(write);
-        let _ = destroy_frame(replacement);
-        return Err("frame-prime-publish-failed");
-    }
-    if replace_window_frame(VIDEO_OWNER, window, replacement).is_err() {
-        let _ = destroy_frame(replacement);
-        return Err("window-replace-failed");
-    }
-
-    let updated = {
-        let mut slot = VIDEO_STREAM.lock();
-        match slot.as_mut() {
-            Some(stream) if stream.window == window && stream.frame == previous.frame => {
-                stream.frame = replacement;
-                stream.frame_width = width;
-                stream.frame_height = height;
-                stream.pan_x = centered_crop_origin(stream.visible_width, width);
-                stream.pan_y = centered_crop_origin(stream.visible_height, height);
-                stream.active_pan_source = None;
-                true
-            }
-            _ => false,
-        }
-    };
-    if !updated {
-        let _ = replace_window_frame(VIDEO_OWNER, window, previous.frame);
-        let _ = publish_window_frame(VIDEO_OWNER, window, DamageRect::FULL);
-        retire_video_frame(replacement);
-        return Err("stream-changed");
-    }
-    let _ = publish_window_frame(VIDEO_OWNER, window, DamageRect::FULL);
-    retire_video_frame(previous.frame);
-
-    let stream = VIDEO_STREAM
-        .lock()
-        .as_ref()
-        .copied()
-        .ok_or("stream-disappeared")?;
-    let layout = native_viewport_layout(
-        stream.visible_width,
-        stream.visible_height,
-        width,
-        height,
-        stream.pan_x,
-        stream.pan_y,
-    );
-    if let Some(layout) = layout {
-        crate::log_info!(
-            target: "ui4";
-            "ui4 video-player resize applied window={} frame={} viewport={}x{} native={}x{} source_crop={}x{}@{},{} destination={},{} letterbox={} scaling=none-1to1\n",
-            window.raw(),
-            replacement.raw(),
-            width,
-            height,
-            stream.visible_width,
-            stream.visible_height,
-            layout.width,
-            layout.height,
-            layout.source_x,
-            layout.source_y,
-            layout.destination_x,
-            layout.destination_y,
-            (width > stream.visible_width || height > stream.visible_height) as u8,
-        );
-    } else {
-        crate::log_info!(
-            target: "ui4";
-            "ui4 video-player resize applied window={} frame={} viewport={}x{} native=await-first-frame scaling=none-1to1\n",
-            window.raw(),
-            replacement.raw(),
-            width,
-            height,
-        );
-    }
-    Ok(())
 }
 
 fn cleanup_uninstalled_stream(stream: VideoStream) {
@@ -644,7 +525,7 @@ fn create_stream(
         output: VIDEO_OUTPUT,
         plane: super::WindowPlane::Primary,
         placement,
-        interaction: super::WindowInteraction::APPLICATION,
+        interaction: super::WindowInteraction::APPLICATION_FIXED_FRAME,
     }) {
         Ok(window) => window,
         Err(_) => {
@@ -653,9 +534,10 @@ fn create_stream(
             return None;
         }
     };
-    // This is an ordinary broker-owned RGBA window. The producer never writes
-    // display MMIO: slot 1 imports only its completed RGBA allocation, while
-    // slots 2 and 3 remain owned by Gridpaper and Draw3D.
+    // The RGBA ring carries broker ownership and publication serials only. No
+    // carrier buffer is published by itself: each visible publication carries
+    // the exact decoder-retired NV12 attachment. The producer never writes
+    // display MMIO.
     let visible_width = if placeholder { 0 } else { spec.visible_width };
     let visible_height = if placeholder { 0 } else { spec.visible_height };
     let pan_x = centered_crop_origin(visible_width, frame_width);
@@ -674,7 +556,7 @@ fn create_stream(
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
-        if placeholder { "await-first-frame" } else { "tile64-nv12" },
+        if placeholder { "await-first-decoded-frame" } else { "tile64-nv12" },
         spec.coded_width,
         spec.coded_height,
         frame_width,

@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::collections::VecDeque;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_void};
 use core::ptr;
@@ -10,7 +11,12 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use trueos_qjs as qjs;
 
-use super::{MatrixTarget, ShellBackend2, matrix, shell2_qjs_c4};
+use super::shell2_cmd::CommandSessionKind;
+use super::{CommandSessionInputResult, LineSource, MatrixTarget, matrix};
+
+const SOURCE_HISTORY_CAP: usize = 32;
+const SOURCE_HISTORY_VIEW: usize = 10;
+const PENDING_SOURCE_MAX: usize = 16 * 1024;
 
 struct ShellQjsContextOpaque {
     slot_id: matrix::MatrixSlotId,
@@ -21,6 +27,9 @@ struct ShellQjsVmSlot {
     rt: *mut qjs::JSRuntime,
     ctx: *mut qjs::JSContext,
     opaque: Box<ShellQjsContextOpaque>,
+    eval_count: u64,
+    pending_source: String,
+    history: VecDeque<String>,
 }
 
 impl Drop for ShellQjsVmSlot {
@@ -43,39 +52,24 @@ impl Drop for ShellQjsVmSlot {
     }
 }
 
-// The shell owns these raw QuickJS pointers behind a single mutex and only drives
-// them from the shell executor plus its dedicated repl drainer task.
+// The shell drives these raw QuickJS pointers behind one mutex from its executor
+// and from the dedicated pending-job drainer.
 unsafe impl Send for ShellQjsVmSlot {}
 
 struct ShellQjsState {
-    repl_slots: Vec<Box<ShellQjsVmSlot>>,
+    sessions: Vec<Box<ShellQjsVmSlot>>,
 }
 
 impl ShellQjsState {
     const fn new() -> Self {
         Self {
-            repl_slots: Vec::new(),
+            sessions: Vec::new(),
         }
     }
 }
 
 static SHELL_QJS_STATE: Mutex<ShellQjsState> = Mutex::new(ShellQjsState::new());
-static SHELL_QJS_REPL_DRAINER_STARTED: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QjsPromptMode {
-    Repl,
-    Eval,
-}
-
-impl QjsPromptMode {
-    pub(crate) const fn next(self) -> Self {
-        match self {
-            Self::Repl => Self::Eval,
-            Self::Eval => Self::Repl,
-        }
-    }
-}
+static SHELL_QJS_DRAINER_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScanMode {
@@ -87,7 +81,7 @@ enum ScanMode {
     BlockComment,
 }
 
-pub(crate) fn is_likely_valid(source: &str) -> bool {
+fn is_likely_complete(source: &str) -> bool {
     let src = source.trim();
     if src.is_empty() {
         return false;
@@ -121,17 +115,17 @@ pub(crate) fn is_likely_valid(source: &str) -> bool {
                     }
                     ')' => {
                         if stack.pop() != Some('(') {
-                            return false;
+                            return true;
                         }
                     }
                     ']' => {
                         if stack.pop() != Some('[') {
-                            return false;
+                            return true;
                         }
                     }
                     '}' => {
                         if stack.pop() != Some('{') {
-                            return false;
+                            return true;
                         }
                     }
                     _ => {}
@@ -181,7 +175,7 @@ pub(crate) fn is_likely_valid(source: &str) -> bool {
         prev = ch;
     }
 
-    mode == ScanMode::Normal && stack.is_empty()
+    matches!(mode, ScanMode::Normal | ScanMode::LineComment) && stack.is_empty()
 }
 
 #[inline]
@@ -197,26 +191,76 @@ unsafe fn read_js_string_arg(ctx: *mut qjs::JSContext, value: qjs::JSValueConst)
     out
 }
 
-unsafe extern "C" fn qjs_shell2_print_line(
+unsafe fn value_to_display_string(
+    ctx: *mut qjs::JSContext,
+    value: qjs::JSValueConst,
+) -> Option<String> {
+    let global = qjs::JS_GetGlobalObject(ctx);
+    if global.is_exception() {
+        return read_js_string_arg(ctx, value);
+    }
+    let json = qjs::JS_GetPropertyStr(ctx, global, b"JSON\0".as_ptr() as *const c_char);
+    qjs::js_free_value(ctx, global);
+    if json.is_exception() {
+        return read_js_string_arg(ctx, value);
+    }
+    let stringify = qjs::JS_GetPropertyStr(
+        ctx,
+        json,
+        b"stringify\0".as_ptr() as *const c_char,
+    );
+    if stringify.is_exception() {
+        qjs::js_free_value(ctx, json);
+        return read_js_string_arg(ctx, value);
+    }
+
+    let arg = qjs::js_dup_value(ctx, value);
+    let rendered = qjs::JS_Call(ctx, stringify, json, 1, &arg as *const qjs::JSValueConst);
+    qjs::js_free_value(ctx, arg);
+    qjs::js_free_value(ctx, stringify);
+    qjs::js_free_value(ctx, json);
+    if rendered.is_exception() {
+        let exception = qjs::JS_GetException(ctx);
+        qjs::js_free_value(ctx, exception);
+        return read_js_string_arg(ctx, value);
+    }
+    if rendered.tag == qjs::JS_TAG_UNDEFINED {
+        qjs::js_free_value(ctx, rendered);
+        return read_js_string_arg(ctx, value);
+    }
+
+    let out = read_js_string_arg(ctx, rendered);
+    qjs::js_free_value(ctx, rendered);
+    out
+}
+
+unsafe extern "C" fn qjs_tui_print(
     ctx: *mut qjs::JSContext,
     _this_val: qjs::JSValueConst,
     argc: i32,
     argv: *const qjs::JSValueConst,
 ) -> qjs::JSValue {
-    if argc < 1 || argv.is_null() {
-        return qjs::JS_NewFloat64(ctx, 0.0);
-    }
-    let args = core::slice::from_raw_parts(argv, argc as usize);
-    let Some(text) = read_js_string_arg(ctx, args[0]) else {
-        return qjs::JS_NewFloat64(ctx, 0.0);
-    };
     let opaque = qjs::JS_GetContextOpaque(ctx) as *mut ShellQjsContextOpaque;
     if opaque.is_null() {
         return qjs::JS_NewFloat64(ctx, 0.0);
     }
 
-    print_slot_line(&(*opaque).slot_id, text.as_str());
-    qjs::JS_NewFloat64(ctx, text.len() as f64)
+    let mut line = String::new();
+    if argc > 0 && !argv.is_null() {
+        for value in core::slice::from_raw_parts(argv, argc as usize) {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(
+                value_to_display_string(ctx, *value)
+                    .or_else(|| read_js_string_arg(ctx, *value))
+                    .unwrap_or_else(|| String::from("<value>"))
+                    .as_str(),
+            );
+        }
+    }
+    print_slot_line(&(*opaque).slot_id, line.as_str());
+    qjs::JS_NewFloat64(ctx, line.len() as f64)
 }
 
 unsafe extern "C" fn qjs_shell2_slot_array_buffer(
@@ -243,188 +287,36 @@ unsafe extern "C" fn qjs_shell2_slot_array_buffer(
     qjs::JS_NewArrayBufferCopy(ctx, text.as_bytes().as_ptr(), text.len())
 }
 
-unsafe fn install_shell_repl_helpers(ctx: *mut qjs::JSContext) {
-    let shim_src = br#"
-(function (G) {
-    if (!G || typeof G.__trueosShell2PrintLine !== 'function') return;
-
-    function formatBytes(bytes, maxItems) {
-        const parts = [];
-        const limit = Math.min(bytes.length >>> 0, maxItems >>> 0);
-        for (let i = 0; i < limit; i += 1) {
-            parts.push(String(bytes[i]));
-        }
-        if ((bytes.length >>> 0) > limit) {
-            parts.push('...');
-        }
-        return parts.join(', ');
-    }
-
-    function describe(value) {
-        if (value === undefined) return 'undefined';
-        if (value === null) return 'null';
-
-        const kind = typeof value;
-        if (kind === 'string' || kind === 'number' || kind === 'boolean' || kind === 'bigint') {
-            return String(value);
-        }
-        if (kind === 'function') {
-            return String(value);
-        }
-
-        if (value instanceof ArrayBuffer) {
-            const bytes = new Uint8Array(value);
-            return 'ArrayBuffer(' + bytes.byteLength + ') [' + formatBytes(bytes, 32) + ']';
-        }
-
-        if (typeof ArrayBuffer !== 'undefined' && typeof ArrayBuffer.isView === 'function' && ArrayBuffer.isView(value)) {
-            const ctorName = value && value.constructor && value.constructor.name ? String(value.constructor.name) : 'TypedArray';
-            const count = typeof value.length === 'number' ? value.length : (typeof value.byteLength === 'number' ? value.byteLength : 0);
-            let bytes;
-            if (value instanceof Uint8Array) {
-                bytes = value;
-            } else {
-                bytes = new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength || 0);
-            }
-            return ctorName + '(' + count + ') [' + formatBytes(bytes, 32) + ']';
-        }
-
-        try {
-            const json = JSON.stringify(value, null, 2);
-            if (typeof json === 'string') return json;
-        } catch (_err) {}
-
-        try {
-            return String(value);
-        } catch (_err) {}
-
-        return Object.prototype.toString.call(value);
-    }
-
-    G.__trueosShell2Describe = describe;
-
-    if (typeof G.print !== 'function') {
-        G.print = function (...args) {
-            const line = args.map(describe).join(' ');
-            return G.__trueosShell2PrintLine(line);
-        };
-    }
-})(typeof globalThis !== 'undefined' ? globalThis : this);
-"#;
-
-    let shim = qjs::js_eval_bytes(
-        ctx,
-        shim_src,
-        b"<shell-qjs-repl-helpers>\0".as_ptr() as *const c_char,
-        qjs::JS_EVAL_TYPE_GLOBAL,
-    );
-    if shim.is_exception() {
-        qjs::qjs_diag::dump_last_exception(ctx, "shell qjs repl helpers");
-    }
-    qjs::js_free_value(ctx, shim);
-}
-
-unsafe fn js_value_to_display_string(
-    ctx: *mut qjs::JSContext,
-    value: qjs::JSValueConst,
-) -> Option<String> {
+unsafe fn install_tui_globals(ctx: *mut qjs::JSContext) {
     let global = qjs::JS_GetGlobalObject(ctx);
-    if global.is_exception() {
-        return read_js_string_arg(ctx, value);
-    }
+    let print_fn = qjs::JS_NewCFunction2(
+        ctx,
+        Some(qjs_tui_print),
+        b"print\0".as_ptr() as *const c_char,
+        1,
+        qjs::JS_CFUNC_GENERIC,
+        0,
+    );
+    let _ = qjs::JS_SetPropertyStr(ctx, global, b"print\0".as_ptr() as *const c_char, print_fn);
 
-    let describe =
-        qjs::JS_GetPropertyStr(ctx, global, b"__trueosShell2Describe\0".as_ptr() as *const c_char);
+    for name in [b"abuffer\0".as_slice(), "§\0".as_bytes()] {
+        let slot_fn = qjs::JS_NewCFunction2(
+            ctx,
+            Some(qjs_shell2_slot_array_buffer),
+            name.as_ptr() as *const c_char,
+            1,
+            qjs::JS_CFUNC_GENERIC,
+            0,
+        );
+        let _ = qjs::JS_SetPropertyStr(ctx, global, name.as_ptr() as *const c_char, slot_fn);
+    }
     qjs::js_free_value(ctx, global);
-    if describe.is_exception()
-        || describe.tag == qjs::JS_TAG_UNDEFINED
-        || describe.tag == qjs::JS_TAG_NULL
-    {
-        qjs::js_free_value(ctx, describe);
-        return read_js_string_arg(ctx, value);
-    }
-
-    let arg = qjs::js_dup_value(ctx, value);
-    let described =
-        qjs::JS_Call(ctx, describe, qjs::JSValue::undefined(), 1, &arg as *const qjs::JSValueConst);
-    qjs::js_free_value(ctx, arg);
-    qjs::js_free_value(ctx, describe);
-    if described.is_exception() {
-        let exc = qjs::JS_GetException(ctx);
-        qjs::js_free_value(ctx, exc);
-        return read_js_string_arg(ctx, value);
-    }
-
-    let out = read_js_string_arg(ctx, described);
-    qjs::js_free_value(ctx, described);
-    out
-}
-
-unsafe fn install_shell_globals(ctx: *mut qjs::JSContext) {
-    let global = qjs::JS_GetGlobalObject(ctx);
-    let shell2_print_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_shell2_print_line),
-        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosShell2PrintLine\0".as_ptr() as *const c_char,
-        shell2_print_fn,
-    );
-    let slot_array_buffer_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_shell2_slot_array_buffer),
-        b"abuffer\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"abuffer\0".as_ptr() as *const c_char,
-        slot_array_buffer_fn,
-    );
-    let slot_operator_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_shell2_slot_array_buffer),
-        "§\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(ctx, global, "§\0".as_ptr() as *const c_char, slot_operator_fn);
-    let shell2_slot_array_buffer_fn = qjs::JS_NewCFunction2(
-        ctx,
-        Some(qjs_shell2_slot_array_buffer),
-        b"__trueosShell2SlotArrayBuffer\0".as_ptr() as *const c_char,
-        1,
-        qjs::JS_CFUNC_GENERIC,
-        0,
-    );
-    let _ = qjs::JS_SetPropertyStr(
-        ctx,
-        global,
-        b"__trueosShell2SlotArrayBuffer\0".as_ptr() as *const c_char,
-        shell2_slot_array_buffer_fn,
-    );
-    qjs::js_free_value(ctx, global);
-    install_shell_repl_helpers(ctx);
 }
 
 fn normalize_slot_id(requested: &str) -> matrix::MatrixSlotId {
     let trimmed = requested.trim();
     let trimmed = trimmed.strip_prefix('§').unwrap_or(trimmed);
     let trimmed = trimmed.strip_suffix('§').unwrap_or(trimmed);
-    if trimmed.is_empty() {
-        return matrix::MatrixSlotId::new();
-    }
-
     let mut id = matrix::MatrixSlotId::new();
     for ch in trimmed.chars() {
         if id.push(ch).is_err() {
@@ -435,26 +327,27 @@ fn normalize_slot_id(requested: &str) -> matrix::MatrixSlotId {
 }
 
 fn print_slot_line(slot_id: &matrix::MatrixSlotId, text: &str) {
-    matrix::record_line_in_slot(slot_id, super::LineSource::System, text);
+    matrix::record_line_in_slot(slot_id, LineSource::System, text);
 }
 
 fn print_target_line(target: &MatrixTarget, text: &str) {
     print_slot_line(&target.slot_id, text);
 }
 
-fn create_shell_vm(slot_id: &matrix::MatrixSlotId) -> Result<Box<ShellQjsVmSlot>, &'static str> {
+fn create_vm(slot_id: &matrix::MatrixSlotId) -> Result<Box<ShellQjsVmSlot>, &'static str> {
     let rt = unsafe { qjs::JS_NewRuntime() };
     if rt.is_null() {
-        return Err("qjs: failed to create runtime");
+        return Err("failed to create QuickJS runtime");
     }
 
     unsafe { qjs::qjs_diag::install_runtime(rt) };
+    // This is the shared TRUEOS + Node-style loader used by the other QJS VMs.
     unsafe { qjs::node::install(rt) };
 
     let ctx = unsafe { qjs::JS_NewContext(rt) };
     if ctx.is_null() {
         unsafe { qjs::JS_FreeRuntime(rt) };
-        return Err("qjs: failed to create context");
+        return Err("failed to create QuickJS context");
     }
 
     unsafe { qjs::qjs_diag::install_context(ctx) };
@@ -467,269 +360,420 @@ fn create_shell_vm(slot_id: &matrix::MatrixSlotId) -> Result<Box<ShellQjsVmSlot>
         opaque: Box::new(ShellQjsContextOpaque {
             slot_id: slot_id.clone(),
         }),
+        eval_count: 0,
+        pending_source: String::new(),
+        history: VecDeque::new(),
     });
     unsafe {
         qjs::JS_SetContextOpaque(slot.ctx, slot.opaque.as_mut() as *mut _ as *mut c_void);
+        install_tui_globals(slot.ctx);
     }
-    unsafe { install_shell_globals(ctx) };
-
     Ok(slot)
 }
 
-fn ensure_repl_vm<'a>(
+fn ensure_vm<'a>(
     state: &'a mut ShellQjsState,
     slot_id: &matrix::MatrixSlotId,
 ) -> Result<&'a mut ShellQjsVmSlot, &'static str> {
-    if let Some(idx) = state
-        .repl_slots
+    if let Some(index) = state
+        .sessions
         .iter()
-        .position(|slot| slot.slot_id == *slot_id)
+        .position(|session| session.slot_id == *slot_id)
     {
-        return Ok(state.repl_slots[idx].as_mut());
+        return Ok(state.sessions[index].as_mut());
     }
-
-    let slot = create_shell_vm(slot_id)?;
-    state.repl_slots.push(slot);
-    let idx = state.repl_slots.len().saturating_sub(1);
-    Ok(state.repl_slots[idx].as_mut())
+    state.sessions.push(create_vm(slot_id)?);
+    Ok(state
+        .sessions
+        .last_mut()
+        .expect("QJS session was just inserted")
+        .as_mut())
 }
 
-fn drain_shell_vm(rt: *mut qjs::JSRuntime, ctx: *mut qjs::JSContext, label: &str) -> bool {
-    for _ in 0..64 {
-        if !unsafe { qjs::vm::pump_runtime_once(rt, ctx, label) } {
-            return false;
-        }
-        let pending = unsafe { qjs::JS_IsJobPending(rt) > 0 }
-            || unsafe { qjs::async_ops::has_pending(ctx) }
-            || qjs::timers::has_pending(ctx)
-            || qjs::workers::has_pending_for_ctx(ctx);
-        if !pending {
-            return true;
-        }
-    }
-    true
-}
-
-unsafe fn js_value_to_string(ctx: *mut qjs::JSContext, value: qjs::JSValueConst) -> Option<String> {
-    read_js_string_arg(ctx, value)
-}
-
-unsafe fn js_exception_to_string(ctx: *mut qjs::JSContext) -> String {
-    let exc = qjs::JS_GetException(ctx);
-    let stack = qjs::JS_GetPropertyStr(ctx, exc, b"stack\0".as_ptr() as *const c_char);
+unsafe fn exception_to_string(ctx: *mut qjs::JSContext) -> String {
+    let exception = qjs::JS_GetException(ctx);
+    let stack = qjs::JS_GetPropertyStr(ctx, exception, b"stack\0".as_ptr() as *const c_char);
     let message = if !stack.is_exception() && stack.tag != qjs::JS_TAG_UNDEFINED {
-        js_value_to_string(ctx, stack)
+        read_js_string_arg(ctx, stack)
     } else {
         None
     }
-    .or_else(|| js_value_to_string(ctx, exc))
+    .or_else(|| read_js_string_arg(ctx, exception))
     .unwrap_or_else(|| String::from("<exception>"));
     qjs::js_free_value(ctx, stack);
-    qjs::js_free_value(ctx, exc);
+    qjs::js_free_value(ctx, exception);
     message
 }
 
-fn ensure_repl_drainer_started(spawner: &Spawner) -> bool {
-    if SHELL_QJS_REPL_DRAINER_STARTED.load(Ordering::Acquire) {
+fn ensure_drainer_started(spawner: &Spawner) -> bool {
+    if SHELL_QJS_DRAINER_STARTED.load(Ordering::Acquire) {
         return true;
     }
-
-    if SHELL_QJS_REPL_DRAINER_STARTED
+    if SHELL_QJS_DRAINER_STARTED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return true;
     }
 
-    match shell_qjs_repl_slots_drainer() {
+    match shell_qjs_sessions_drainer() {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
-            SHELL_QJS_REPL_DRAINER_STARTED.store(false, Ordering::Release);
-            return false;
+            SHELL_QJS_DRAINER_STARTED.store(false, Ordering::Release);
+            false
         }
-    }
-
-    true
-}
-
-fn submit_repl(
-    spawner: &Spawner,
-    target: &MatrixTarget,
-    source: &str,
-    analysis: &shell2_qjs_c4::Analysis,
-) {
-    if !ensure_repl_drainer_started(spawner) {
-        print_target_line(target, "qjs repl error: failed to start repl drainer");
-        return;
-    }
-
-    let mut state = SHELL_QJS_STATE.lock();
-    let Ok(slot) = ensure_repl_vm(&mut state, &target.slot_id) else {
-        print_target_line(target, "qjs repl error: failed to initialize slot runtime");
-        return;
-    };
-
-    let value = unsafe {
-        qjs::js_eval_bytes(
-            slot.ctx,
-            source.as_bytes(),
-            b"<shell-qjs-repl>\0".as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-        )
-    };
-
-    if value.is_exception() {
-        let msg = unsafe { js_exception_to_string(slot.ctx) };
-        let line = alloc::format!("qjs repl error: {}", msg);
-        print_target_line(target, line.as_str());
-        return;
-    }
-
-    let text = unsafe { js_value_to_display_string(slot.ctx, value) };
-    unsafe { qjs::js_free_value(slot.ctx, value) };
-
-    if let Some(text) = text {
-        if !text.is_empty() && text != "undefined" {
-            let styled =
-                shell2_qjs_c4::format_js_value_pretty(text.as_str(), analysis.hint).unwrap_or(text);
-            let line = alloc::format!("qjs repl => {}", styled);
-            print_target_line(target, line.as_str());
-            if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
-                print_target_line(target, summary.as_str());
-            }
-            return;
-        }
-    }
-
-    print_target_line(target, "qjs repl ok");
-    if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
-        print_target_line(target, summary.as_str());
     }
 }
 
-fn submit_eval(target: &MatrixTarget, source: &str, analysis: &shell2_qjs_c4::Analysis) {
-    let Ok(vm) = create_shell_vm(&target.slot_id) else {
-        print_target_line(target, "qjs eval error: failed to initialize eval runtime");
-        return;
-    };
+fn dashboard_lines() -> [&'static str; 7] {
+    [
+        "╭─ QuickJS scripting workbench ─────────────────────────────────────────────╮",
+        "│ VM       persistent for this TUI session                                   │",
+        "│ Runtime  shell profile · timers · workers · fetch                          │",
+        "│ Modules  TRUEOS/Node loader · :import SPECIFIER → $module                  │",
+        "├─ Editor / REPL ────────────────────────────────────────────────────────────┤",
+        "│ Enter JavaScript · ↑/↓ history · :help · :reset · :clear · :quit · ESC     │",
+        "╰────────────────────────────────────────────────────────────────────────────╯",
+    ]
+}
 
-    let rt = vm.rt;
-    let ctx = vm.ctx;
-    let value = unsafe {
-        qjs::js_eval_bytes(
-            ctx,
-            source.as_bytes(),
-            b"<shell-qjs-eval>\0".as_ptr() as *const c_char,
-            qjs::JS_EVAL_TYPE_GLOBAL,
-        )
-    };
-
-    if value.is_exception() {
-        let msg = unsafe { js_exception_to_string(ctx) };
-        let line = alloc::format!("qjs eval error: {}", msg);
-        print_target_line(target, line.as_str());
-        return;
+fn print_dashboard(target: &MatrixTarget) {
+    // Matrix transcripts are newest-first, so insert the panel bottom-to-top.
+    for line in dashboard_lines().iter().rev() {
+        print_target_line(target, line);
     }
+}
 
-    let _ = drain_shell_vm(rt, ctx, "qjs-eval");
-    let text = unsafe { js_value_to_display_string(ctx, value) };
-    unsafe { qjs::js_free_value(ctx, value) };
-
-    if let Some(text) = text {
-        if !text.is_empty() && text != "undefined" {
-            let styled =
-                shell2_qjs_c4::format_js_value_pretty(text.as_str(), analysis.hint).unwrap_or(text);
-            let line = alloc::format!("qjs eval => {}", styled);
-            print_target_line(target, line.as_str());
-            if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
-                print_target_line(target, summary.as_str());
-            }
-            return;
-        }
+pub(crate) fn begin_session(spawner: &Spawner, target: &MatrixTarget) -> Result<(), &'static str> {
+    if !ensure_drainer_started(spawner) {
+        return Err("background job drainer is unavailable");
     }
-
-    print_target_line(target, "qjs eval ok");
-    if let Some(summary) = shell2_qjs_c4::format_symbol_summary(analysis) {
-        print_target_line(target, summary.as_str());
+    {
+        let mut state = SHELL_QJS_STATE.lock();
+        let _ = ensure_vm(&mut state, &target.slot_id)?;
     }
+    print_dashboard(target);
+    Ok(())
+}
+
+pub(crate) fn is_session_active(slot_id: &matrix::MatrixSlotId) -> bool {
+    SHELL_QJS_STATE
+        .lock()
+        .sessions
+        .iter()
+        .any(|session| session.slot_id == *slot_id)
 }
 
 pub(crate) fn free_slot(requested: &str) {
     let slot_id = normalize_slot_id(requested);
     let mut state = SHELL_QJS_STATE.lock();
-    if let Some(idx) = state
-        .repl_slots
+    if let Some(index) = state
+        .sessions
         .iter()
-        .position(|slot| slot.slot_id == slot_id)
+        .position(|session| session.slot_id == slot_id)
     {
-        let _ = state.repl_slots.swap_remove(idx);
+        let _ = state.sessions.swap_remove(index);
     }
 }
 
-pub(crate) fn submit(
-    spawner: &Spawner,
-    _io: &'static dyn ShellBackend2,
-    target: &MatrixTarget,
-    mode: QjsPromptMode,
-    submitted: &str,
-) {
-    let source = submitted.trim();
-    let source = if source == "§" { "§()" } else { source };
-    if source.is_empty() {
-        print_target_line(target, "qjs: empty input");
-        return;
-    }
-
-    let analysis = shell2_qjs_c4::analyze(source);
-
-    if !is_likely_valid(source) {
-        if let Some(diag) = &analysis.diagnostic {
-            let diag_text = shell2_qjs_c4::format_tiny_diagnostic(diag);
-            let line = alloc::format!("qjs: input looks incomplete ({})", diag_text);
-            print_target_line(target, line.as_str());
-        } else {
-            print_target_line(target, "qjs: input looks incomplete");
+pub(crate) fn end_session(target: &MatrixTarget, reason: &str) {
+    {
+        let mut state = SHELL_QJS_STATE.lock();
+        if let Some(index) = state
+            .sessions
+            .iter()
+            .position(|session| session.slot_id == target.slot_id)
+        {
+            let _ = state.sessions.swap_remove(index);
         }
+    }
+    print_target_line(target, alloc::format!("qjs: workbench closed ({reason})").as_str());
+}
+
+fn reset_session(target: &MatrixTarget) {
+    let result = {
+        let mut state = SHELL_QJS_STATE.lock();
+        if let Some(index) = state
+            .sessions
+            .iter()
+            .position(|session| session.slot_id == target.slot_id)
+        {
+            let _ = state.sessions.swap_remove(index);
+        }
+        create_vm(&target.slot_id).map(|vm| state.sessions.push(vm))
+    };
+    match result {
+        Ok(()) => print_target_line(target, "qjs: VM reset; globals and pending jobs were discarded"),
+        Err(error) => print_target_line(target, alloc::format!("qjs: reset failed: {error}").as_str()),
+    }
+}
+
+fn print_help(target: &MatrixTarget) {
+    for line in [
+        "qjs controls:",
+        "  :help                 show this help",
+        "  :clear                clear the workbench transcript",
+        "  :reset                replace the persistent VM",
+        "  :history              show recent evaluated sources",
+        "  :cancel               discard a multiline continuation",
+        "  :import SPECIFIER     load through the shared module loader into $module",
+        "  :modules              show supported module specifiers",
+        "  :quit                 close the workbench (ESC also closes it)",
+    ]
+    .iter()
+    .rev()
+    {
+        print_target_line(target, line);
+    }
+}
+
+fn print_modules_help(target: &MatrixTarget) {
+    for line in [
+        "qjs module loader:",
+        "  embedded/native:  :import fs  ·  :import complex  ·  :import node:events",
+        "  TRUEOSFS:         :import /path/to/module.mjs",
+        "  URL/cache:        :import https://example.test/module.mjs",
+        "  namespace:        the last successful import is stored in globalThis.$module",
+    ]
+    .iter()
+    .rev()
+    {
+        print_target_line(target, line);
+    }
+}
+
+fn push_js_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                use core::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", ch as u32);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+}
+
+fn queue_module_import(target: &MatrixTarget, specifier: &str) {
+    if specifier.is_empty() {
+        print_target_line(target, "qjs: usage `:import SPECIFIER`");
+        return;
+    }
+    let mut quoted = String::new();
+    push_js_string(&mut quoted, specifier);
+    let source = alloc::format!(
+        "importModule({quoted}).then(function (module) {{ globalThis.$module = module; print('module loaded as $module:', {quoted}); return module; }})"
+    );
+    evaluate_source(target, source.as_str(), Some("module import"));
+}
+
+fn print_history(target: &MatrixTarget) {
+    let history = {
+        let state = SHELL_QJS_STATE.lock();
+        state
+            .sessions
+            .iter()
+            .find(|session| session.slot_id == target.slot_id)
+            .map(|session| session.history.clone())
+            .unwrap_or_default()
+    };
+    if history.is_empty() {
+        print_target_line(target, "qjs: source history is empty");
+        return;
+    }
+    for (index, source) in history.iter().rev().take(SOURCE_HISTORY_VIEW).enumerate().rev() {
+        let compact = source.replace('\n', " ↵ ");
+        print_target_line(
+            target,
+            alloc::format!("  -{}  {}", index + 1, compact).as_str(),
+        );
+    }
+    print_target_line(target, "qjs source history (newest first):");
+}
+
+fn evaluate_source(target: &MatrixTarget, source: &str, label: Option<&str>) {
+    let mut state = SHELL_QJS_STATE.lock();
+    let Some(session) = state
+        .sessions
+        .iter_mut()
+        .find(|session| session.slot_id == target.slot_id)
+    else {
+        print_target_line(target, "qjs: VM is unavailable; close and reopen the workbench");
+        return;
+    };
+
+    session.eval_count = session.eval_count.saturating_add(1);
+    let eval_number = session.eval_count;
+    if session.history.len() >= SOURCE_HISTORY_CAP {
+        let _ = session.history.pop_front();
+    }
+    session.history.push_back(source.to_string());
+
+    let value = unsafe {
+        qjs::js_eval_bytes(
+            session.ctx,
+            source.as_bytes(),
+            b"<shell-qjs-tui>\0".as_ptr() as *const c_char,
+            qjs::JS_EVAL_TYPE_GLOBAL,
+        )
+    };
+    if value.is_exception() {
+        let message = unsafe { exception_to_string(session.ctx) };
+        print_target_line(
+            target,
+            alloc::format!("qjs #{eval_number:04} error: {message}").as_str(),
+        );
         return;
     }
 
-    if mode == QjsPromptMode::Repl {
-        submit_repl(spawner, target, source, &analysis);
-    } else {
-        submit_eval(target, source, &analysis);
+    let rendered = unsafe { value_to_display_string(session.ctx, value) };
+    unsafe { qjs::js_free_value(session.ctx, value) };
+    match rendered.as_deref() {
+        Some("undefined") | None => print_target_line(
+            target,
+            alloc::format!("qjs #{eval_number:04} {}ok", label.unwrap_or("")).as_str(),
+        ),
+        Some(text) => print_target_line(
+            target,
+            alloc::format!("qjs #{eval_number:04} ⇒ {text}").as_str(),
+        ),
     }
+}
+
+fn take_complete_source(target: &MatrixTarget, submitted: &str) -> Option<String> {
+    let mut state = SHELL_QJS_STATE.lock();
+    let Some(session) = state
+        .sessions
+        .iter_mut()
+        .find(|session| session.slot_id == target.slot_id)
+    else {
+        return Some(submitted.to_string());
+    };
+
+    let mut source = core::mem::take(&mut session.pending_source);
+    if !source.is_empty() {
+        source.push('\n');
+    }
+    source.push_str(submitted);
+    if is_likely_complete(source.as_str()) {
+        return Some(source);
+    }
+    if source.len() > PENDING_SOURCE_MAX {
+        print_target_line(target, "qjs: multiline source exceeded 16 KiB and was discarded");
+        return None;
+    }
+    session.pending_source = source;
+    print_target_line(target, "qjs … multiline continuation (:cancel to discard)");
+    None
+}
+
+pub(crate) fn handle_session_input(
+    _spawner: &Spawner,
+    target: &MatrixTarget,
+    submitted: &str,
+) -> CommandSessionInputResult {
+    let trimmed = submitted.trim();
+    if matches!(trimmed, ":quit" | ".quit" | ":q" | "Quit") {
+        end_session(target, ":quit");
+        return CommandSessionInputResult::CompleteIdle;
+    }
+    match trimmed {
+        ":help" | ".help" => {
+            print_help(target);
+            return CommandSessionInputResult::KeepRunning;
+        }
+        ":clear" | ".clear" => {
+            matrix::clear_active_lines(target.output_mask);
+            print_dashboard(target);
+            return CommandSessionInputResult::KeepRunning;
+        }
+        ":reset" | ".reset" => {
+            reset_session(target);
+            return CommandSessionInputResult::KeepRunning;
+        }
+        ":history" | ".history" => {
+            print_history(target);
+            return CommandSessionInputResult::KeepRunning;
+        }
+        ":cancel" | ".cancel" => {
+            let mut state = SHELL_QJS_STATE.lock();
+            if let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.slot_id == target.slot_id)
+            {
+                session.pending_source.clear();
+            }
+            print_target_line(target, "qjs: multiline continuation discarded");
+            return CommandSessionInputResult::KeepRunning;
+        }
+        ":modules" | ".modules" => {
+            print_modules_help(target);
+            return CommandSessionInputResult::KeepRunning;
+        }
+        _ => {}
+    }
+
+    if let Some(specifier) = trimmed
+        .strip_prefix(":import ")
+        .or_else(|| trimmed.strip_prefix(":load "))
+        .map(str::trim)
+    {
+        queue_module_import(target, specifier);
+        return CommandSessionInputResult::KeepRunning;
+    }
+    if trimmed.starts_with(':') || trimmed.starts_with('.') && !trimmed.starts_with("..") {
+        print_target_line(target, "qjs: unknown workbench command; use :help");
+        return CommandSessionInputResult::KeepRunning;
+    }
+    if trimmed.is_empty() {
+        return CommandSessionInputResult::KeepRunning;
+    }
+
+    if let Some(source) = take_complete_source(target, submitted) {
+        evaluate_source(target, source.as_str(), None);
+    }
+    CommandSessionInputResult::KeepRunning
+}
+
+pub(crate) fn session_kind() -> CommandSessionKind {
+    CommandSessionKind::Qjs
 }
 
 #[embassy_executor::task]
-async fn shell_qjs_repl_slots_drainer() {
+async fn shell_qjs_sessions_drainer() {
     loop {
         let sleep_ms = {
             let mut state = SHELL_QJS_STATE.lock();
-            if state.repl_slots.is_empty() {
+            if state.sessions.is_empty() {
                 50
             } else {
-                let mut failed_indexes = Vec::new();
-                for (idx, slot) in state.repl_slots.iter_mut().enumerate() {
-                    if unsafe { qjs::vm::pump_runtime_once(slot.rt, slot.ctx, "shell-qjs-repl") } {
+                let mut failed = Vec::new();
+                for (index, session) in state.sessions.iter_mut().enumerate() {
+                    if unsafe {
+                        qjs::vm::pump_runtime_once(session.rt, session.ctx, "shell-qjs-tui")
+                    } {
                         continue;
                     }
-
-                    let line = alloc::format!(
-                        "qjs repl slot §{}§ runtime fault; world reset",
-                        slot.slot_id.as_str()
+                    print_slot_line(
+                        &session.slot_id,
+                        "qjs: runtime fault; close and reopen the workbench",
                     );
-                    print_slot_line(&slot.slot_id, line.as_str());
-                    failed_indexes.push(idx);
+                    failed.push(index);
                 }
-
-                for idx in failed_indexes.into_iter().rev() {
-                    let _ = state.repl_slots.swap_remove(idx);
+                for index in failed.into_iter().rev() {
+                    let _ = state.sessions.swap_remove(index);
                 }
-
                 5
             }
         };
-
         Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
     }
 }

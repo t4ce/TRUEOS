@@ -28,9 +28,8 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_C4: &str = r#"{"type":"object","properties":{"mode":{"type":"string","enum":["file","inline"],"description":"Compile from a TRUEOSFS file or inline C4 source."},"path":{"type":"string","description":"TRUEOSFS source path when mode=file."},"source":{"type":"string","description":"Inline C4 source when mode=inline."}},"required":["mode"],"additionalProperties":false}"#;
-const TOOL_JSON_DIASHOW: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc","log"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format or optional disk id for action=log."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."},"max":{"type":"integer","minimum":1,"maximum":4096,"description":"Maximum raw TRUEOSFS log records to print for action=log."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["diashow","gboy"],"description":"etc subcommand to run."},"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path for subcommand=gboy."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["gboy"],"description":"etc subcommand to run."},"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path for subcommand=gboy."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to render."},"size":{"type":"integer","minimum":1,"maximum":100,"description":"Percentage of the centered aspect-fit scanout size."},"font":{"type":"integer","minimum":1,"maximum":2,"description":"GPU font face id."},"color":{"type":"string","description":"RGBA color encoded as RRGGBBAA."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["preview","probe","chart","pixel","artifacts"],"description":"GPGPU command family."},"action":{"type":"string","enum":["start","status","stop","reload"],"description":"Preview lifecycle or artifact action. Preview start launches Mandelbrot, chart, and plasma together in dedicated UI4 broker frames."},"probe":{"type":"string","enum":["font-tessel"],"description":"Diagnostic probe family."},"stage":{"type":"string","enum":["artifact","audit","flatten","mesh","all"],"description":"Artifact or font-tessellation diagnostic stage."},"duration_ms":{"type":"integer","minimum":0,"description":"Preview lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target compute-launch cadence in milliseconds for all preview members."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth completed compute frame per preview member."},"kernel":{"type":"string","description":"Known kernel name or all for artifact reload."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -39,6 +38,7 @@ const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"t
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"paths":{"type":"array","items":{"type":"string"},"description":"Optional TRUEOSFS paths to list."},"long":{"type":"boolean","description":"Show file kind, ownership, byte size, and name."},"tree":{"type":"boolean","description":"Walk recursively from the path."},"table":{"type":"boolean","description":"Render the shell2 table view."},"archive7z":{"type":"boolean","description":"Inspect a .7z archive and print its entries without extracting."},"oneline":{"type":"boolean","description":"Show one entry per line."},"directory_only":{"type":"boolean","description":"List directories themselves instead of their contents."},"color":{"type":"string","enum":["always","auto","never"],"description":"Color output mode."},"size":{"type":"string","enum":["default","short","bytes"],"description":"Size display mode."},"permission":{"type":"string","enum":["rwx","octal","attributes","disable"],"description":"Permission display mode."},"sort":{"type":"string","enum":["name","size","extension","none"],"description":"Sort entries."},"reverse":{"type":"boolean","description":"Reverse the selected sort."},"group_dirs":{"type":"string","enum":["none","first","last"],"description":"Group directories before or after files."},"depth":{"type":"integer","minimum":0,"description":"Maximum recursive depth."},"header":{"type":"boolean","description":"Show long-output headers."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
@@ -123,14 +123,10 @@ fn dispatch_cry(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     super::cmds::cry::try_parse(io, rest)
 }
 
-fn dispatch_diashow(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::diashow::try_parse(io, rest)
-}
-
 fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let trimmed = rest.trim_start();
     if trimmed.is_empty() {
-        super::print_shell_line(io, "etc: usage `etc diashow` | `etc gboy <rom.gb>`");
+        super::print_shell_line(io, "etc: usage `etc gboy <rom.gb>`");
         return ParseOutcome::Handled;
     }
 
@@ -141,12 +137,10 @@ fn dispatch_etc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
     let command = &trimmed[..command_end];
     let tail = trimmed[command_end..].trim_start();
 
-    if command.eq_ignore_ascii_case("diashow") {
-        super::cmds::diashow::try_parse(io, tail)
-    } else if command.eq_ignore_ascii_case("gboy") {
+    if command.eq_ignore_ascii_case("gboy") {
         super::cmds::gboy::try_parse(io, tail)
     } else if command.eq_ignore_ascii_case("help") {
-        super::print_shell_line(io, "etc: commands `diashow`, `gboy <rom.gb>`");
+        super::print_shell_line(io, "etc: commands `gboy <rom.gb>`");
         ParseOutcome::Handled
     } else {
         super::print_shell_line(io, alloc::format!("etc: unknown subcommand `{command}`").as_str());
@@ -184,6 +178,10 @@ fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     let _ = spawner;
     let mut args = rest.split_whitespace();
     super::cmds::net::try_parse(io, &mut args)
+}
+
+fn dispatch_qjs(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::qjs::try_parse(spawner, io, rest)
 }
 
 fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -258,23 +256,12 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
-        name: "diashow",
-        mode: "cmd",
-        color: Some(STATUS_PINK_RGB),
-        advertised: false,
-        handler: dispatch_diashow,
-        tool_description: Some(
-            "Decode up to 200 /diashow/*.jpeg files with the kernel zune JPEG path and present them centered on the primary scanout from AP1.",
-        ),
-        tool_parameters_json: Some(TOOL_JSON_DIASHOW),
-    },
-    BuiltinShell2CmdEntry {
         name: "etc",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_etc,
-        tool_description: Some("Run miscellaneous commands such as diashow and gboy."),
+        tool_description: Some("Run miscellaneous commands such as gboy."),
         tool_parameters_json: Some(TOOL_JSON_ETC),
     },
     BuiltinShell2CmdEntry {
@@ -428,6 +415,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_NET),
     },
     BuiltinShell2CmdEntry {
+        name: "qjs",
+        mode: "tui",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_qjs,
+        tool_description: Some(
+            "Open the persistent QuickJS scripting workbench. Exit with ESC or :quit.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_QJS),
+    },
+    BuiltinShell2CmdEntry {
         name: "tlb",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
@@ -562,7 +560,7 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "txt",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs", "txt",
         "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
     ];
 

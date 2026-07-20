@@ -501,10 +501,26 @@ fn queue_async_plane(
     pending: &mut PendingFrame,
     plan: PlanePlan,
 ) -> Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError> {
-    if matches!(plan.target, CompositionTarget::Primary)
-        && let Some(result) = queue_native_video_primary(pending)
-    {
-        return result;
+    if matches!(plan.target, CompositionTarget::Primary) {
+        let mut has_video = false;
+        for window in pending
+            .windows
+            .iter()
+            .filter(|window| window.plane.slot() == super::PRIMARY_PLANE_SLOT)
+        {
+            has_video |= frame_snapshot(window.frame)?.plan.content == FrameContent::Video;
+        }
+        if has_video {
+            return match queue_native_video_primary(pending) {
+                Some(result) => result,
+                None => {
+                    crate::log_error!(target: "ui4";
+                        "ui4/video: native primary handoff unavailable action=reject-frame generic-rgba-fallback=0\n",
+                    );
+                    Err(Ui4CompositorError::PresentFailed)
+                }
+            };
+        }
     }
     let views: Vec<FrameRgbaView> = pending
         .leases
