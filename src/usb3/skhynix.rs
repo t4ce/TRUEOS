@@ -559,12 +559,6 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         );
         return;
     }
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
-        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=index-readiness-only status=published root_readiness=false index_readiness=true combined-root-index-consumers=false app_vm_ready=false\n"
-        );
-    }
     let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
     let index_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_INDEX_READY);
     crate::log!(
@@ -595,10 +589,10 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
 
     if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=intersection-split-gpgpu-held status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=true allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifacts\n"
+            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=intersection-split-gpgpu-held status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=false allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifacts\n"
         );
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=intersection-split-gpgpu-held root-readiness=false index-readiness=true\n"
+            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=intersection-split-gpgpu-held root-readiness=false index-readiness=false\n"
         );
         return;
     }

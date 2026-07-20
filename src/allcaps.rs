@@ -91,8 +91,8 @@ pub mod storage {
     /// read, 4 completes the TRUEOSFS placement probe, 5 installs an unpublished
     /// internal root, 6 replays its index read-only, 7 exposes that prepared root
     /// to direct/manual VFS users without global readiness, 8 additionally admits
-    /// HTTP TRUEOSFS plus the request-driven HTML shack and publishes only the
-    /// index-ready metadata seal, and 9 finally publishes ordinary root readiness.
+    /// HTTP TRUEOSFS plus the request-driven HTML shack, and 9 finally publishes
+    /// ordinary root/index readiness.
     /// Cut 6 forbids checkpoint writes; cuts 7 and 8 keep automatic readiness
     /// consumers asleep so Shell2 `lsd` and HTTP can be proved independently.
     pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 8;
