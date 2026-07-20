@@ -31,6 +31,10 @@ GOWIN_SH="$(find_exe gw_sh "$HOME/Programmme/Gowin/IDE/bin/gw_sh" "$HOME/Program
   echo "missing gw_sh; put Gowin IDE bin on PATH or install under ~/Programmme/Gowin" >&2
   exit 1
 }
+CARGO_BIN="$(find_exe cargo "$HOME/.cargo/bin/cargo")" || {
+  echo "missing cargo; the Ubuntu firmware build requires Rust to generate RTL" >&2
+  exit 1
+}
 GOWIN_IDE_DIR="$(cd "$(dirname "$GOWIN_SH")/.." && pwd)"
 GOWIN_LIB="$GOWIN_IDE_DIR/lib"
 SYSTEM_FREETYPE="/lib/x86_64-linux-gnu/libfreetype.so.6"
@@ -38,6 +42,13 @@ PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
 TCL_FILE="$(mktemp)"
 PLACE_OPTION="${TRUEGA_PLACE_OPTION:-3}"
 ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
+HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
+HOST_TARGET="${TRUEGA_HOST_TARGET:-x86_64-unknown-linux-gnu}"
+GENERATOR_TARGET_DIR="${TRUEGA_GENERATOR_TARGET_DIR:-/tmp/truega-tga-gen-target}"
+GENERATOR_MANIFEST="$PROJECT_DIR/tools/tga-gen/Cargo.toml"
+GENERATED_RTL="$PROJECT_DIR/src/generated/truega_functions.v"
+GENERATED_MANIFEST="$PROJECT_DIR/artifacts/truega_firmware.manifest.bin"
+GENERATED_RUST_INTERFACE="$PROJECT_DIR/../src/generated.rs"
 
 finish() {
   local rc=$?
@@ -46,6 +57,17 @@ finish() {
   exit "$rc"
 }
 trap finish EXIT
+
+# RustHDL is strictly an Ubuntu build input. Pin the host target and a separate target
+# directory so the generator cannot inherit TRUEOS's no_std kernel target/build-std state.
+CARGO_TARGET_DIR="$GENERATOR_TARGET_DIR" "$CARGO_BIN" "+$HOST_TOOLCHAIN" run --quiet \
+  --manifest-path "$GENERATOR_MANIFEST" \
+  --target "$HOST_TARGET" \
+  --config 'unstable.build-std=[]' \
+  -- \
+  --rtl-out "$GENERATED_RTL" \
+  --manifest-out "$GENERATED_MANIFEST" \
+  --rust-interface-out "$GENERATED_RUST_INTERFACE"
 
 cat > "$TCL_FILE" <<EOF
 open_project $PROJECT_FILE
@@ -63,3 +85,12 @@ EOF
 
 cd "$PROJECT_DIR"
 env LD_PRELOAD="$SYSTEM_FREETYPE${LD_PRELOAD:+:$LD_PRELOAD}" LD_LIBRARY_PATH="$GOWIN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$GOWIN_SH" "$TCL_FILE"
+
+BITSTREAM="$PROJECT_DIR/impl/pnr/min_pci_led.fs"
+if [[ ! -s "$BITSTREAM" ]]; then
+  echo "Gowin completed without a non-empty bitstream: $BITSTREAM" >&2
+  exit 1
+fi
+sha256sum "$BITSTREAM" > "$PROJECT_DIR/artifacts/min_pci_led.fs.sha256"
+echo "bitstream=$BITSTREAM"
+echo "manifest=$GENERATED_MANIFEST"

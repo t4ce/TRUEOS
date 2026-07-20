@@ -750,6 +750,18 @@ const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str
         FramePoolError::InvalidPlan(FramePlanError::VideoRequiresDoubleBuffering) => {
             "frame-create-invalid-plan-video-buffering"
         }
+        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresDefaultExtent) => {
+            "frame-create-invalid-plan-video-extent"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::RenderSceneRequiresPremultipliedRgba) => {
+            "frame-create-invalid-plan-render-scene-format"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::RenderSceneRequiresStreamingCadence) => {
+            "frame-create-invalid-plan-render-scene-cadence"
+        }
+        FramePoolError::InvalidPlan(FramePlanError::RenderSceneRequiresTripleBuffering) => {
+            "frame-create-invalid-plan-render-scene-buffering"
+        }
         FramePoolError::InvalidHandle => "frame-create-invalid-handle",
         FramePoolError::UnsupportedFormat => "frame-create-unsupported-format",
         FramePoolError::OutOfMemory => "frame-create-out-of-memory",

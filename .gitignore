@@ -6,6 +6,7 @@ target/
 virglrenderer-1.0.0/
 Cargo.lock
 !tools/wgpu-video-mesh/Cargo.lock
+!crates/trueos-fpga-abi/truega/tools/tga-gen/Cargo.lock
 node_modules
 package.json
 package-lock.json

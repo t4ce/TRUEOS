@@ -66,6 +66,7 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
     FPGA_OFFLOAD_SERVICE_STARTED,
+    FPGA_OFFLOAD_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
@@ -483,6 +484,10 @@ fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_fpga_offload_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::fpga_offload::fpga_offload_service_task())
+}
+
+fn spawn_fpga_offload_heartbeat(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::fpga_offload::fpga_offload_heartbeat_task())
 }
 
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
@@ -1377,6 +1382,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
     TaskSpec::enabled("fpga-offload", 0, &FPGA_OFFLOAD_SERVICE_STARTED, spawn_fpga_offload_service),
+    TaskSpec::enabled(
+        "fpga-offload-heartbeat",
+        0,
+        &FPGA_OFFLOAD_HEARTBEAT_STARTED,
+        spawn_fpga_offload_heartbeat,
+    ),
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
         0,

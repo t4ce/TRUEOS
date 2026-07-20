@@ -90,8 +90,8 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// become part of an application composition surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
 // Compatibility aliases for the parked linked-NV12 display-plane experiment.
-// Normal UI4 video is converted by the GuC into the primary XRGB swap surface;
-// it never assigns decoder planes to either of these roles.
+// Normal UI4 video is converted by the GuC into its exact double-buffered RGBA
+// Frame on slot 1; it never assigns decoder planes to either of these roles.
 pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
 pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
 
@@ -325,6 +325,10 @@ pub(crate) enum FramePlanError {
     VideoRequiresPremultipliedRgba,
     VideoRequiresStreamingCadence,
     VideoRequiresDoubleBuffering,
+    VideoRequiresDefaultExtent,
+    RenderSceneRequiresPremultipliedRgba,
+    RenderSceneRequiresStreamingCadence,
+    RenderSceneRequiresTripleBuffering,
 }
 
 impl FramePlan {
@@ -342,6 +346,10 @@ impl FramePlan {
             (FrameContent::Video, _) => {
                 return Err(FramePlanError::VideoRequiresPremultipliedRgba);
             }
+            (FrameContent::RenderScene3d, ScanoutFormat::Rgba8888Premultiplied) => {}
+            (FrameContent::RenderScene3d, _) => {
+                return Err(FramePlanError::RenderSceneRequiresPremultipliedRgba);
+            }
             _ => {}
         }
         if let FrameContent::Video = spec.content {
@@ -350,6 +358,17 @@ impl FramePlan {
             }
             if !matches!(spec.buffering, FrameBuffering::Double) {
                 return Err(FramePlanError::VideoRequiresDoubleBuffering);
+            }
+            if spec.width != DEFAULT_FRAME_WIDTH || spec.height != DEFAULT_FRAME_HEIGHT {
+                return Err(FramePlanError::VideoRequiresDefaultExtent);
+            }
+        }
+        if let FrameContent::RenderScene3d = spec.content {
+            if !matches!(spec.cadence, FrameCadence::Streaming) {
+                return Err(FramePlanError::RenderSceneRequiresStreamingCadence);
+            }
+            if !matches!(spec.buffering, FrameBuffering::Triple) {
+                return Err(FramePlanError::RenderSceneRequiresTripleBuffering);
             }
         }
         Ok(Self {
@@ -410,5 +429,26 @@ const _: () = {
             ..admitted_video
         }),
         Err(FramePlanError::VideoRequiresDoubleBuffering)
+    ));
+    assert!(matches!(
+        FramePlan::from_spec(FrameSpec {
+            width: DEFAULT_FRAME_WIDTH - 1,
+            ..admitted_video
+        }),
+        Err(FramePlanError::VideoRequiresDefaultExtent)
+    ));
+    let admitted_resident_scene = FrameSpec {
+        content: FrameContent::RenderScene3d,
+        cadence: FrameCadence::Streaming,
+        buffering: FrameBuffering::Triple,
+        ..admitted_video
+    };
+    assert!(matches!(FramePlan::from_spec(admitted_resident_scene), Ok(_)));
+    assert!(matches!(
+        FramePlan::from_spec(FrameSpec {
+            buffering: FrameBuffering::Double,
+            ..admitted_resident_scene
+        }),
+        Err(FramePlanError::RenderSceneRequiresTripleBuffering)
     ));
 };

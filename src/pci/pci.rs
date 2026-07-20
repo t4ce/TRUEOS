@@ -18,6 +18,7 @@ const CFG_DATA: u16 = 0xCFC;
 const CFG_ENABLE: u32 = 0x8000_0000;
 
 const MAX_PCI_DEVICES: usize = 256;
+const MAX_PCI_CLAIMS: usize = 64;
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
@@ -104,6 +105,22 @@ impl PciDevice {
 }
 
 static DEVICES: Mutex<Vec<PciDevice, MAX_PCI_DEVICES>> = Mutex::new(Vec::new());
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct PciClaim {
+    bus: u8,
+    slot: u8,
+    function: u8,
+    owner: &'static str,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PciClaimError {
+    AlreadyClaimed(&'static str),
+    RegistryFull,
+}
+
+static PCI_CLAIMS: Mutex<Vec<PciClaim, MAX_PCI_CLAIMS>> = Mutex::new(Vec::new());
 
 const ECAM_MAX_REGIONS: usize = 8;
 const ECAM_BUS_WINDOW_SIZE: usize = 1 << 20; // 1MiB per bus
@@ -394,6 +411,45 @@ pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     f(lock.as_slice())
 }
 
+/// Exclusively claim one enumerated PCI function for a kernel driver.
+///
+/// Repeating a claim by the same owner is idempotent. Different drivers cannot claim the
+/// same BDF until the current owner releases it (for example after hot-unplug).
+pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaimError> {
+    let mut claims = PCI_CLAIMS.lock();
+    if let Some(claim) = claims.iter().find(|claim| {
+        claim.bus == dev.bus && claim.slot == dev.slot && claim.function == dev.function
+    }) {
+        return if claim.owner == owner {
+            Ok(())
+        } else {
+            Err(PciClaimError::AlreadyClaimed(claim.owner))
+        };
+    }
+    claims
+        .push(PciClaim {
+            bus: dev.bus,
+            slot: dev.slot,
+            function: dev.function,
+            owner,
+        })
+        .map_err(|_| PciClaimError::RegistryFull)
+}
+
+pub fn release_device_claim(bus: u8, slot: u8, function: u8, owner: &'static str) -> bool {
+    let mut claims = PCI_CLAIMS.lock();
+    let Some(index) = claims.iter().position(|claim| {
+        claim.bus == bus
+            && claim.slot == slot
+            && claim.function == function
+            && claim.owner == owner
+    }) else {
+        return false;
+    };
+    claims.swap_remove(index);
+    true
+}
+
 pub fn find_by_class(class: u8) -> alloc::vec::Vec<PciDevice> {
     let mut out = alloc::vec::Vec::new();
     with_devices(|list| {
@@ -433,6 +489,14 @@ pub fn read_bar0_raw(bus: u8, slot: u8, function: u8) -> (u32, Option<u32>) {
 pub fn enable_mem_and_bus_master(bus: u8, slot: u8, function: u8) {
     let mut cmd = config_read_u16(bus, slot, function, 0x04);
     cmd |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER;
+    config_write_u16(bus, slot, function, 0x04, cmd);
+}
+
+/// Enable BAR memory decoding while explicitly leaving DMA/bus mastering disabled.
+pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
+    let mut cmd = config_read_u16(bus, slot, function, 0x04);
+    cmd |= PCI_COMMAND_MEM_SPACE;
+    cmd &= !PCI_COMMAND_BUS_MASTER;
     config_write_u16(bus, slot, function, 0x04, cmd);
 }
 

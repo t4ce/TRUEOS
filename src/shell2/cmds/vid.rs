@@ -321,6 +321,10 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
         set_matrix_target_active(&target, false);
         return;
     };
+    crate::log_info!(
+        target: "ui4";
+        "shell2/vid: stage=ui4-lifetime-reserved next=open-source frame-allocation=deferred-until-first-decoded-frame\n"
+    );
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);

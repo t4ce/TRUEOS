@@ -9,6 +9,7 @@ use crate::pci::PciDevice;
 
 const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
 const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
+const TGA_PCI_OWNER: &str = "tga";
 const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 
 // Minimal TGA contract (we control both ends):
@@ -31,7 +32,9 @@ const TGA_OFFLOAD_WORK_PACKAGE_OFF: usize = trueos_fpga_abi::BAR0_WORK_PACKAGE_O
 
 const TGA_OFFLOAD_DOORBELL_MAGIC: u32 = 0x4C4C_4143; // "CALL"
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
-const TGA_HEARTBEAT_MMIO_ENABLED: bool = true;
+// Raw LED writes are a transport-debug fallback only. Normal blinking comes from
+// fpga_offload::led_step_heartbeat so it proves the complete function-call path.
+const TGA_HEARTBEAT_MMIO_ENABLED: bool = false;
 const TGA_MAGIC_EXPECTED: u32 = 0x5453_4154;
 
 struct Tga {
@@ -463,7 +466,24 @@ pub fn try_init() -> bool {
         return false;
     };
 
+    if let Err(error) = crate::pci::claim_device(&dev, TGA_PCI_OWNER) {
+        crate::log!(
+            "tga: PCI claim rejected bdf={:02X}:{:02X}.{} error={:?}\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            error
+        );
+        return false;
+    }
+
     let Some(tga) = bring_online(&dev) else {
+        let _ = crate::pci::release_device_claim(
+            dev.bus,
+            dev.slot,
+            dev.function,
+            TGA_PCI_OWNER,
+        );
         return false;
     };
 
@@ -514,7 +534,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     }
 
     let cmd_before = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
-    crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+    crate::pci::enable_mem_space_only(dev.bus, dev.slot, dev.function);
     let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
     if cmd_before == 0xFFFF || cmd_after == 0xFFFF {
@@ -612,13 +632,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
             lo | (hi << 32)
         };
 
-        crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+        crate::pci::enable_mem_space_only(dev.bus, dev.slot, dev.function);
         if bar_phys == 0 {
             return None;
         }
     } else {
         // If the BAR was already valid, ensure the device is enabled now.
-        crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
+        crate::pci::enable_mem_space_only(dev.bus, dev.slot, dev.function);
     }
 
     // We only need the first few BAR0 registers, so mapping 1 page keeps it minimal.
@@ -716,6 +736,12 @@ pub(crate) async fn tga_task() {
                     {
                         let mut guard = TGA.lock();
                         if let Some(old) = guard.take() {
+                            let _ = crate::pci::release_device_claim(
+                                old.bus,
+                                old.slot,
+                                old.function,
+                                TGA_PCI_OWNER,
+                            );
                             *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
                             log_tga_state("disconnected", &old);
                             TGA_LIVENESS_LOGGED.store(false, Ordering::Release);

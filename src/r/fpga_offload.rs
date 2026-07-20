@@ -26,6 +26,7 @@ use trueos_fpga_abi::{
 const MAX_ACTIVE_CALLS: usize = 32;
 const DEVICE_RETRY_MS: u64 = 100;
 const COMPLETION_POLL_MS: u64 = 1;
+const HEARTBEAT_PERIOD_MS: u64 = 250;
 
 static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(1);
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -236,12 +237,17 @@ pub async fn call(function: FunctionId, input: &[u8], output_capacity: usize) ->
     submit(function, input, output_capacity)?.await
 }
 
-/// First typed function in the resurrected TRUEGA firmware.
-pub async fn heartbeat() -> Result<bool, Error> {
-    let completion = call(trueos_fpga_abi::builtins::HEARTBEAT, &[], 4).await?;
+/// First typed function in the TRUEGA firmware: advance the visible LED state and
+/// return the liveness magic through the same work-package completion path.
+pub async fn led_step_heartbeat() -> Result<bool, Error> {
+    let completion = call(trueos_fpga_abi::builtins::LED_STEP_HEARTBEAT, &[], 4).await?;
     let reply =
         trueos_fpga_abi::builtins::result_u32(completion.output()).ok_or(Error::Protocol)?;
     Ok(reply == trueos_fpga_abi::builtins::HEARTBEAT_REPLY)
+}
+
+pub async fn heartbeat() -> Result<bool, Error> {
+    led_step_heartbeat().await
 }
 
 pub async fn add_u32(a: u32, b: u32) -> Result<u32, Error> {
@@ -459,5 +465,23 @@ pub async fn fpga_offload_service_task() {
                 }
             }
         }
+    }
+}
+
+/// Periodic client of slot 0. This is not another hardware worker: all calls still pass
+/// through `fpga_offload_service_task`, which permits exactly one in-flight work package.
+/// If that end-to-end path wedges, the visible LED sequence stops as intended.
+#[embassy_executor::task]
+pub async fn fpga_offload_heartbeat_task() {
+    crate::log!("fpga-offload: LED function heartbeat client started\n");
+    loop {
+        if crate::tga::is_online() {
+            match led_step_heartbeat().await {
+                Ok(true) => {}
+                Ok(false) => crate::log!("fpga-offload: heartbeat returned bad liveness magic\n"),
+                Err(error) => crate::log!("fpga-offload: heartbeat call failed: {:?}\n", error),
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(HEARTBEAT_PERIOD_MS)).await;
     }
 }

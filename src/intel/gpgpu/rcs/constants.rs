@@ -151,8 +151,6 @@ const UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const UI4_NV12_PRIMARY_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
 const UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x1100;
-const UI4_NV12_FRAME_DST_SURFACE_STATE_OFFSET_BYTES: usize =
-    UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES;
 const UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES: usize = 0x1200;
 const UI4_NV12_PRIMARY_CROSS_THREAD_GRFS: u32 = 4;
 const UI4_NV12_PRIMARY_CROSS_THREAD_BYTES: usize = UI4_NV12_PRIMARY_CROSS_THREAD_GRFS as usize * 32;
@@ -451,6 +449,23 @@ const UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE: u64 = 0x01D0_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01D1_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE: u64 = 0x01D4_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
+// The decoder's `gpu_addr` belongs to the media-engine address space. Never
+// borrow that number as an RCS PPGTT VA. One sequential video conversion owns
+// this compositor-private PAT0 alias until its GuC completion marker retires;
+// each new decoded picture may retarget the physical pages without changing
+// the alias's cache policy. The 16 MiB window matches the media output backing
+// and remains disjoint from both persistent font resources and UI4 RGBA VAs.
+const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
+const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
+const _: () = assert!(
+    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
+        + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
+        <= crate::r::ui_surface::UI_SURFACE_GPU_BASE
+);
+const _: () = assert!(
+    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
+);
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;

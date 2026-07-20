@@ -1,143 +1,243 @@
+mod firmware;
+
+use sha2::{Digest, Sha256};
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use trueos_fpga_abi::{
+    FirmwareManifest, FunctionDescriptor, WorkPackage, ABI_VERSION, FIRMWARE_MANIFEST_MAGIC,
+    FUNCTION_COUNT,
+};
 
 #[derive(Clone, Copy)]
-enum Op {
-    AddU32,
+struct FunctionSpec {
+    id: u16,
+    rust_name: &'static str,
+    signature: &'static str,
+    input_bytes: u16,
+    output_bytes: u16,
 }
 
+const FUNCTIONS: [FunctionSpec; FUNCTION_COUNT] = [
+    FunctionSpec {
+        id: 0,
+        rust_name: "LED_STEP_HEARTBEAT",
+        signature: "led_step_heartbeat()->u32",
+        input_bytes: 0,
+        output_bytes: 4,
+    },
+    FunctionSpec {
+        id: 1,
+        rust_name: "ADD_U32",
+        signature: "add_u32(u32,u32)->u32",
+        input_bytes: 8,
+        output_bytes: 4,
+    },
+    FunctionSpec {
+        id: 2,
+        rust_name: "XOR_U32",
+        signature: "xor_u32(u32,u32)->u32",
+        input_bytes: 8,
+        output_bytes: 4,
+    },
+];
+
 struct Config {
-    lanes: usize,
-    op: Op,
-    out: PathBuf,
+    rtl_out: PathBuf,
+    manifest_out: PathBuf,
+    rust_interface_out: PathBuf,
 }
 
 fn main() {
-    let cfg = parse_args().unwrap_or_else(|err| {
-        eprintln!("{err}");
+    let cfg = parse_args().unwrap_or_else(|error| {
+        eprintln!("{error}");
         eprintln!(
-            "usage: tga-gen --lanes 64 --op add-u32 --out src/generated/tga_static_add64.vhd"
+            "usage: tga-gen [--rtl-out FILE] [--manifest-out FILE] [--rust-interface-out FILE]"
         );
         std::process::exit(2);
     });
 
-    if cfg.lanes == 0 || cfg.lanes > 1024 {
-        eprintln!("lane count must be 1..1024");
-        std::process::exit(2);
-    }
+    let rtl = rename_rust_hdl_top(firmware::generate());
+    let firmware_hash: [u8; 32] = Sha256::digest(rtl.as_bytes()).into();
+    let manifest = manifest_bytes(firmware_hash);
+    let rust_interface = emit_rust_interface(firmware_hash);
 
-    let text = match cfg.op {
-        Op::AddU32 => emit_add_u32(cfg.lanes),
-    };
+    write_if_changed(&cfg.rtl_out, rtl.as_bytes());
+    write_if_changed(&cfg.manifest_out, &manifest);
+    write_if_changed(&cfg.rust_interface_out, rust_interface.as_bytes());
 
-    if let Some(parent) = cfg.out.parent() {
-        fs::create_dir_all(parent).expect("create output directory");
-    }
-    fs::write(&cfg.out, text).expect("write generated VHDL");
-    println!("generated {}", cfg.out.display());
+    println!(
+        "generated rtl={} manifest={} rust_interface={} functions={} sha256={}",
+        cfg.rtl_out.display(),
+        cfg.manifest_out.display(),
+        cfg.rust_interface_out.display(),
+        FUNCTIONS.len(),
+        hex(&firmware_hash)
+    );
 }
 
 fn parse_args() -> Result<Config, String> {
-    let mut lanes = None;
-    let mut op = None;
-    let mut out = None;
+    let mut rtl_out = PathBuf::from("src/generated/truega_functions.v");
+    let mut manifest_out = PathBuf::from("artifacts/truega_firmware.manifest.bin");
+    let mut rust_interface_out = PathBuf::from("../src/generated.rs");
     let mut args = env::args().skip(1);
 
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--lanes" => {
-                let value = args.next().ok_or("--lanes needs a value")?;
-                lanes = Some(value.parse::<usize>().map_err(|_| "invalid --lanes")?);
-            }
-            "--op" => {
-                let value = args.next().ok_or("--op needs a value")?;
-                op = Some(match value.as_str() {
-                    "add" | "add-u32" => Op::AddU32,
-                    _ => return Err(format!("unknown op {value:?}")),
-                });
-            }
-            "--out" => {
-                out = Some(PathBuf::from(args.next().ok_or("--out needs a value")?));
-            }
+    while let Some(argument) = args.next() {
+        let destination = match argument.as_str() {
+            "--rtl-out" => &mut rtl_out,
+            "--manifest-out" => &mut manifest_out,
+            "--rust-interface-out" => &mut rust_interface_out,
             "-h" | "--help" => return Err(String::new()),
-            _ => return Err(format!("unknown argument {arg:?}")),
-        }
+            _ => return Err(format!("unknown argument {argument:?}")),
+        };
+        *destination = PathBuf::from(
+            args.next()
+                .ok_or_else(|| format!("{argument} needs a value"))?,
+        );
     }
 
     Ok(Config {
-        lanes: lanes.unwrap_or(64),
-        op: op.unwrap_or(Op::AddU32),
-        out: out.unwrap_or_else(|| PathBuf::from("src/generated/tga_static_add64.vhd")),
+        rtl_out,
+        manifest_out,
+        rust_interface_out,
     })
 }
 
-fn emit_add_u32(lanes: usize) -> String {
-    let bits = lanes * 32;
-    let last_bit = bits - 1;
-    let last_lane = lanes - 1;
+fn rename_rust_hdl_top(verilog: String) -> String {
+    verilog.replace("top$", "truega_functions$").replacen(
+        "module top(",
+        "module truega_functions(",
+        1,
+    )
+}
 
-    let mut vhdl = String::new();
-    vhdl.push_str("-- Generated by tools/tga-gen. Do not hand-edit this datapath.\n");
-    vhdl.push_str("-- Static machine: all lanes are real hardware, not spawned work.\n");
-    vhdl.push_str("library IEEE;\n");
-    vhdl.push_str("use IEEE.std_logic_1164.all;\n");
-    vhdl.push_str("use IEEE.numeric_std.all;\n\n");
-    vhdl.push_str("entity tga_static_add64 is\n");
-    vhdl.push_str("\tport (\n");
-    vhdl.push_str("\t\tclk          : in  std_logic;\n");
-    vhdl.push_str("\t\trst          : in  std_logic;\n");
-    vhdl.push_str("\t\tstart        : in  std_logic;\n");
-    vhdl.push_str(&format!(
-        "\t\ta_flat       : in  std_logic_vector({last_bit} downto 0);\n"
-    ));
-    vhdl.push_str(&format!(
-        "\t\tb_flat       : in  std_logic_vector({last_bit} downto 0);\n"
-    ));
-    vhdl.push_str(&format!(
-        "\t\tresult_flat  : out std_logic_vector({last_bit} downto 0);\n"
-    ));
-    vhdl.push_str("\t\tdone         : out std_logic;\n");
-    vhdl.push_str("\t\tretire_count : out std_logic_vector(31 downto 0)\n");
-    vhdl.push_str("\t);\n");
-    vhdl.push_str("end entity;\n\n");
-    vhdl.push_str("architecture rtl of tga_static_add64 is\n");
-    vhdl.push_str(&format!(
-        "\tsignal result_reg : std_logic_vector({last_bit} downto 0) := (others => '0');\n"
-    ));
-    vhdl.push_str("\tsignal done_reg : std_logic := '0';\n");
-    vhdl.push_str("\tsignal retire_reg : unsigned(31 downto 0) := (others => '0');\n");
-    vhdl.push_str("begin\n");
-    vhdl.push_str("\tprocess(clk)\n");
-    vhdl.push_str("\tbegin\n");
-    vhdl.push_str("\t\tif rising_edge(clk) then\n");
-    vhdl.push_str("\t\t\tif rst = '1' then\n");
-    vhdl.push_str("\t\t\t\tresult_reg <= (others => '0');\n");
-    vhdl.push_str("\t\t\t\tdone_reg <= '0';\n");
-    vhdl.push_str("\t\t\t\tretire_reg <= (others => '0');\n");
-    vhdl.push_str("\t\t\telse\n");
-    vhdl.push_str("\t\t\t\tdone_reg <= '0';\n");
-    vhdl.push_str("\t\t\t\tif start = '1' then\n");
+fn descriptor(spec: FunctionSpec) -> FunctionDescriptor {
+    FunctionDescriptor {
+        id: spec.id,
+        input_bytes: spec.input_bytes,
+        output_bytes: spec.output_bytes,
+        flags: 0,
+        symbol_hash: fnv1a64(spec.signature.as_bytes()),
+    }
+}
 
-    for lane in 0..lanes {
-        let lo = lane * 32;
-        let hi = lo + 31;
-        vhdl.push_str(&format!(
-            "\t\t\t\t\tresult_reg({hi} downto {lo}) <= std_logic_vector(unsigned(a_flat({hi} downto {lo})) + unsigned(b_flat({hi} downto {lo})));\n"
-        ));
+fn manifest_bytes(firmware_hash: [u8; 32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(core::mem::size_of::<FirmwareManifest>());
+    bytes.extend_from_slice(&FIRMWARE_MANIFEST_MAGIC.to_le_bytes());
+    bytes.extend_from_slice(&ABI_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&(FUNCTION_COUNT as u16).to_le_bytes());
+    bytes.extend_from_slice(&(core::mem::size_of::<WorkPackage>() as u32).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&firmware_hash);
+    for spec in FUNCTIONS {
+        let function = descriptor(spec);
+        bytes.extend_from_slice(&function.id.to_le_bytes());
+        bytes.extend_from_slice(&function.input_bytes.to_le_bytes());
+        bytes.extend_from_slice(&function.output_bytes.to_le_bytes());
+        bytes.extend_from_slice(&function.flags.to_le_bytes());
+        bytes.extend_from_slice(&function.symbol_hash.to_le_bytes());
+    }
+    bytes.extend_from_slice(&[0; 32]);
+    assert_eq!(bytes.len(), core::mem::size_of::<FirmwareManifest>());
+    bytes
+}
+
+fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
+    let mut rust = String::new();
+    rust.push_str("// @generated by TRUEGA tools/tga-gen; do not hand-edit.\n");
+    rust.push_str(
+        "// This is ordinary host Rust metadata. It contains no HDL/compiler runtime.\n\n",
+    );
+    rust.push_str("use super::{FunctionDescriptor, FunctionId};\n\n");
+    for spec in FUNCTIONS {
+        writeln!(rust, "pub const {}: FunctionId = FunctionId::SLOT_{};", spec.rust_name, spec.id)
+            .unwrap();
+    }
+    rust.push_str("pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // \"TGAT\"\n");
+    rust.push_str("pub const FIRMWARE_RTL_SHA256: [u8; 32] = [\n    ");
+    for (index, byte) in firmware_hash.iter().enumerate() {
+        if index != 0 && index % 8 == 0 {
+            rust.push_str("\n    ");
+        }
+        write!(rust, "0x{byte:02x}, ").unwrap();
+    }
+    rust.push_str("\n];\n\n");
+    rust.push_str("pub const FUNCTIONS: [FunctionDescriptor; 3] = [\n");
+    for spec in FUNCTIONS {
+        writeln!(
+            rust,
+            "    FunctionDescriptor {{ id: {}.raw(), input_bytes: {}, output_bytes: {}, flags: 0, symbol_hash: 0x{:016x} }},",
+            spec.rust_name,
+            spec.input_bytes,
+            spec.output_bytes,
+            fnv1a64(spec.signature.as_bytes())
+        )
+        .unwrap();
+    }
+    rust.push_str("];\n\n");
+    rust.push_str(
+        "pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n\
+         \tlet mut bytes = [0; 8];\n\
+         \tbytes[..4].copy_from_slice(&a.to_le_bytes());\n\
+         \tbytes[4..].copy_from_slice(&b.to_le_bytes());\n\
+         \tbytes\n\
+         }\n\n\
+         pub fn result_u32(bytes: &[u8]) -> Option<u32> {\n\
+         \tSome(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))\n\
+         }\n",
+    );
+    rust
+}
+
+fn write_if_changed(path: &Path, contents: &[u8]) {
+    if fs::read(path).ok().as_deref() == Some(contents) {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create generated artifact directory");
+    }
+    fs::write(path, contents).unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+}
+
+const fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut index = 0;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
+    }
+    hash
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(value, "{byte:02x}").unwrap();
+    }
+    value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_manifest_matches_shared_abi_layout() {
+        let bytes = manifest_bytes([0xA5; 32]);
+        assert_eq!(bytes.len(), core::mem::size_of::<FirmwareManifest>());
+        assert_eq!(&bytes[..4], &FIRMWARE_MANIFEST_MAGIC.to_le_bytes());
+        assert_eq!(&bytes[4..6], &ABI_VERSION.to_le_bytes());
+        assert_eq!(&bytes[6..8], &(FUNCTION_COUNT as u16).to_le_bytes());
     }
 
-    vhdl.push_str("\t\t\t\t\tdone_reg <= '1';\n");
-    vhdl.push_str("\t\t\t\t\tretire_reg <= retire_reg + 1;\n");
-    vhdl.push_str("\t\t\t\tend if;\n");
-    vhdl.push_str("\t\t\tend if;\n");
-    vhdl.push_str("\t\tend if;\n");
-    vhdl.push_str("\tend process;\n\n");
-    vhdl.push_str("\tresult_flat <= result_reg;\n");
-    vhdl.push_str("\tdone <= done_reg;\n");
-    vhdl.push_str("\tretire_count <= std_logic_vector(retire_reg);\n");
-    vhdl.push_str("end architecture;\n");
-
-    debug_assert_eq!(last_lane, 63);
-    vhdl
+    #[test]
+    fn generated_interface_has_exactly_three_slots() {
+        let interface = emit_rust_interface([0; 32]);
+        assert!(interface.contains("HEARTBEAT"));
+        assert!(interface.contains("ADD_U32"));
+        assert!(interface.contains("XOR_U32"));
+        assert_eq!(FUNCTIONS.len(), 3);
+    }
 }

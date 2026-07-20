@@ -22,15 +22,18 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         UI4_NV12_PRIMARY_IDD_OFFSET_BYTES,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
         UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES,
-        2,
+        3,
         UI4_NV12_PRIMARY_CROSS_THREAD_GRFS,
-    ) || !direct_rcs_write_copy_rect_surface_states_at(
+    ) || !direct_rcs_write_alpha_blend_worklist_surface_states_at(
         state,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
         UI4_NV12_PRIMARY_SRC_SURFACE_STATE_OFFSET_BYTES,
-        UI4_NV12_FRAME_DST_SURFACE_STATE_OFFSET_BYTES,
+        UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES,
+        UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES,
         params.nv12_gpu,
         source_bytes,
+        params.base_gpu,
+        dst_bytes,
         params.dst_gpu,
         dst_bytes,
     ) || !direct_rcs_write_ui4_nv12_frame_payload_at(

@@ -51,7 +51,7 @@ for targeted bring-up.
 converts a decoder-owned Tile64 NV12 source into the complete, exact UI4 RGBA8
 lease (opaque black outside the selected native viewport); it neither reads a
 display backbuffer nor programs a plane. The Alder Lake S artifact SHA-256 is
-`ce8d5d0b6c828392f9e0fdcb19068e23599b8d37d3cf34298b07607609176c5b`.
+`75c2c230cc45ae1987910479a21da79226ed85cff8e4cf8e2a61b6b69cc017b3`.
 
 `artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
 with Intel `ocloc`/IGC. Its SHA-256 is:

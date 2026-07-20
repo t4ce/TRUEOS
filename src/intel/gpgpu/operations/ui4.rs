@@ -352,6 +352,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     source_x: u32,
     source_y: u32,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    let source_gpu = UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE;
     let destination_valid = content_width != 0
         && content_height != 0
         && content_dst_x
@@ -367,21 +368,22 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             .checked_add(content_height)
             .is_some_and(|bottom| bottom <= source.height);
     let layouts_valid = dst.is_valid() && source.is_valid();
-    let ranges_distinct = !gpu_ranges_overlap(source.gpu, source.bytes, dst.gpu, dst.bytes)
+    let ranges_distinct = source.bytes <= UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES
+        && !gpu_ranges_overlap(source_gpu, source.bytes, dst.gpu, dst.bytes)
         && !gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes);
     if !destination_valid || !source_valid || !layouts_valid || !ranges_distinct {
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let params = Ui4Nv12Tile64ToRgba8FrameParams {
-        nv12_gpu: source.gpu,
-        // The rebuilt binary keeps this legacy stateless pointer slot solely
-        // so all following scalar offsets remain stable. It is never read and
-        // deliberately aliases neither source nor destination.
-        base_gpu: 0,
+        nv12_gpu: source_gpu,
+        // Keep the known-good three-binding video ABI, but do not revive the
+        // full-primary desktop copy. Outside the native viewport each work
+        // item reads and rewrites only its own pixel in this exact lease.
+        base_gpu: dst.gpu,
         dst_gpu: dst.gpu,
         src_pitch_bytes: source.pitch_bytes,
         src_uv_offset: source.uv_offset,
-        base_pitch_bytes: 0,
+        base_pitch_bytes: dst.pitch_bytes,
         dst_pitch_bytes: dst.pitch_bytes,
         output_width: dst.width,
         output_height: dst.height,
@@ -414,7 +416,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let source_ok =
-        kernel_ok && direct_rcs_map_ppgtt_kernel(state, source.gpu, source.phys, source.bytes);
+        kernel_ok && direct_rcs_map_ppgtt_kernel(state, source_gpu, source.phys, source.bytes);
     let dst_ok = source_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ok
         && direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
@@ -426,7 +428,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         );
     if !batch_ok {
         crate::log_error!(target: "ui4";
-            "ui4/guc-video-frame: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} dst={} batch={} source_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            "ui4/guc-video-frame: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} dst={} batch={} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X}\n",
             forcewake_ok as u8,
             mapped_ok as u8,
             ppgtt_ok as u8,
@@ -434,10 +436,29 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             source_ok as u8,
             dst_ok as u8,
             batch_ok as u8,
+            source_gpu,
             source.gpu,
             dst.gpu,
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+    let submit_attempt = UI4_VIDEO_FRAME_SUBMIT_ATTEMPTS
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    let log_submit_boundary = submit_attempt == 1 || submit_attempt.is_power_of_two();
+    if log_submit_boundary {
+        crate::log_info!(target: "ui4";
+            "ui4/guc-video-frame: submit-boundary attempt={} action=enter-guc-submit ppgtt_root=0x{:X} source_gpu=0x{:X} media_gpu=0x{:X} source_phys=0x{:X} source_bytes=0x{:X} source_pat=0 source_alias=compositor-owned destination_gpu=0x{:X} destination_phys=0x{:X} destination_bytes=0x{:X} destination_pat=3 bindings=3 base_alias=exact-destination pte_preflight=complete batch_ready=1 display_plane_writes=0 cpu_pixel_copy=0\n",
+            submit_attempt,
+            state.ppgtt_phys,
+            source_gpu,
+            source.gpu,
+            source.phys,
+            source.bytes,
+            dst.gpu,
+            dst.phys,
+            dst.bytes,
+        );
     }
     let started_tick = direct_rcs_now_tick();
     if !direct_rcs_submit_batch_for(
@@ -470,8 +491,15 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         },
         overdue_logged: false,
     });
+    if log_submit_boundary {
+        crate::log_info!(target: "ui4";
+            "ui4/guc-video-frame: submit-boundary attempt={} action=guc-submit-accepted serial={} next=completion-marker\n",
+            submit_attempt,
+            serial,
+        );
+    }
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,dst-pat3-uc bindings=2 legacy_base_pointer=zero-unbound display_plane_writes=0\n",
+        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
         serial,
         dst.width,
         dst.height,
@@ -481,6 +509,8 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         content_dst_y,
         source_x,
         source_y,
+        source_gpu,
+        source.gpu,
         dst.gpu,
     );
     Ok(submission)
@@ -616,7 +646,16 @@ pub(crate) async fn gpu_completion_reaper_task() {
             // the backend marker probe that is responsible for completing it.
             let _ready = poll_fn(|cx| Poll::Ready(Pin::new(&mut *fence).poll(cx).is_ready())).await;
         }
-        if !matches!(poll_ui4_compositor_submission(submission), Ui4CompositorCompletion::Pending) {
+        // Completion belongs to the task which queued the exact request.  In
+        // particular, consuming a video conversion here can let a following
+        // compositor job overwrite `last_completion` before the video task
+        // observes its release. Keep this task observer-only; every current
+        // submission class has a persistent owner which polls and retires it.
+        if UI4_COMPOSITOR_RUNTIME
+            .lock()
+            .pending
+            .is_none_or(|pending| pending.submission != submission)
+        {
             active = None;
         }
         Timer::after(Duration::from_millis(1)).await;

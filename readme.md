@@ -144,7 +144,7 @@ brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 > belong to their authors.
 
 # Network Console Access
-`konsole -e sh -c 'stty -echo -icanon cols 200 rows 60; nc 192.168.178.94 4245; stty sane'`
+`konsole -e sh -c 'stty raw -echo; exec nc 192.168.178.94 4245'`
 
 # Optional Section
 > [!IMPORTANT]

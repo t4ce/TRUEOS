@@ -143,7 +143,8 @@ pub struct FirmwareManifest {
     pub function_count: u16,
     pub work_package_bytes: u32,
     pub flags: u32,
-    pub firmware_hash: [u8; 32],
+    /// SHA-256 of the generated RTL consumed by the vendor synthesis tool.
+    pub rtl_sha256: [u8; 32],
     pub functions: [FunctionDescriptor; FUNCTION_COUNT],
     pub reserved: [u8; 32],
 }
@@ -160,65 +161,12 @@ pub const BAR0_WORK_PACKAGE_OFFSET: usize = 0x100;
 pub const BAR0_REQUIRED_BYTES: usize = BAR0_WORK_PACKAGE_OFFSET + size_of::<WorkPackage>();
 pub const WORK_PACKAGE_STATE_OFFSET: usize = core::mem::offset_of!(WorkPackage, state);
 
-/// The three functions in the salvaged TRUEGA bring-up bitstream.
+/// Typed host interface emitted beside the RustHDL-generated firmware RTL.
 ///
-/// A later Rust-to-hardware build may generate this module, its manifest descriptors,
-/// and the matching VHDL together. Keeping the seed interface here gives the kernel an
-/// ordinary typed Rust surface immediately.
-pub mod builtins {
-    use super::{FunctionDescriptor, FunctionId};
-
-    pub const HEARTBEAT: FunctionId = FunctionId::SLOT_0;
-    pub const ADD_U32: FunctionId = FunctionId::SLOT_1;
-    pub const XOR_U32: FunctionId = FunctionId::SLOT_2;
-    pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // "TGAT"
-
-    pub const FUNCTIONS: [FunctionDescriptor; 3] = [
-        FunctionDescriptor {
-            id: HEARTBEAT.raw(),
-            input_bytes: 0,
-            output_bytes: 4,
-            flags: 0,
-            symbol_hash: fnv1a64(b"heartbeat()->u32"),
-        },
-        FunctionDescriptor {
-            id: ADD_U32.raw(),
-            input_bytes: 8,
-            output_bytes: 4,
-            flags: 0,
-            symbol_hash: fnv1a64(b"add_u32(u32,u32)->u32"),
-        },
-        FunctionDescriptor {
-            id: XOR_U32.raw(),
-            input_bytes: 8,
-            output_bytes: 4,
-            flags: 0,
-            symbol_hash: fnv1a64(b"xor_u32(u32,u32)->u32"),
-        },
-    ];
-
-    pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {
-        let mut bytes = [0; 8];
-        bytes[..4].copy_from_slice(&a.to_le_bytes());
-        bytes[4..].copy_from_slice(&b.to_le_bytes());
-        bytes
-    }
-
-    pub fn result_u32(bytes: &[u8]) -> Option<u32> {
-        Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
-    }
-
-    const fn fnv1a64(bytes: &[u8]) -> u64 {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut index = 0;
-        while index < bytes.len() {
-            hash ^= bytes[index] as u64;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-            index += 1;
-        }
-        hash
-    }
-}
+/// This checked-in module is ordinary `no_std` Rust metadata and packing code. Regenerating
+/// it is an Ubuntu build action; TRUEOS never links the generator or understands HDL.
+pub mod generated;
+pub use generated as builtins;
 
 const _: [(); 256] = [(); size_of::<WorkPackage>()];
 const _: [(); 64] = [(); align_of::<WorkPackage>()];

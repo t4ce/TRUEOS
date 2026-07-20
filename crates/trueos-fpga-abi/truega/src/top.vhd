@@ -71,6 +71,22 @@ architecture rtl of top is
 		);
 	end component;
 
+	-- Generated from tools/tga-gen/src/firmware.rs by the Ubuntu firmware build.
+	-- This is three fixed circuits plus a slot mux, not a processor or interpreter.
+	component truega_functions is
+		port (
+			function_id          : in  std_logic_vector(15 downto 0);
+			arg0                 : in  std_logic_vector(31 downto 0);
+			arg1                 : in  std_logic_vector(31 downto 0);
+			led_state            : in  std_logic_vector(4 downto 0);
+			next_led             : out std_logic_vector(4 downto 0);
+			result               : out std_logic_vector(31 downto 0);
+			required_input_bytes : out std_logic_vector(15 downto 0);
+			output_bytes         : out std_logic_vector(15 downto 0);
+			valid                : out std_logic
+		);
+	end component;
+
 	type word_arr_t is array (0 to 15) of std_logic_vector(31 downto 0);
 	type call_word_arr_t is array (0 to 63) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
@@ -136,6 +152,11 @@ architecture rtl of top is
 	signal call_words : call_word_arr_t := (others => (others => '0'));
 	signal call_pending : std_logic := '0';
 	signal call_retire_count : unsigned(31 downto 0) := (others => '0');
+	signal function_result : std_logic_vector(31 downto 0);
+	signal function_required_input_bytes : std_logic_vector(15 downto 0);
+	signal function_output_bytes : std_logic_vector(15 downto 0);
+	signal function_next_led : std_logic_vector(4 downto 0);
+	signal function_valid : std_logic;
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal tx_pending_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -253,6 +274,19 @@ architecture rtl of top is
 	end function;
 
 begin
+	u_functions: truega_functions
+		port map(
+			function_id          => call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16),
+			arg0                 => call_words(CALL_INPUT_WORD),
+			arg1                 => call_words(CALL_INPUT_WORD + 1),
+			led_state            => led_reg,
+			next_led             => function_next_led,
+			result               => function_result,
+			required_input_bytes => function_required_input_bytes,
+			output_bytes         => function_output_bytes,
+			valid                => function_valid
+		);
+
 	u_serdes: SerDes_Top
 		port map(
 			PCIE_Controller_Top_pcie_tl_rx_sop_o        => tl_rx_sop,
@@ -523,8 +557,8 @@ begin
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
 
-					-- A doorbell only selects one of three circuits already present in this
-					-- bitstream. There is no instruction fetch or command interpreter.
+					-- A doorbell only selects one of three RustHDL-generated circuits already
+					-- present in this bitstream. There is no instruction fetch or interpreter.
 					if call_pending = '1' then
 						call_words(CALL_OUTPUT_LEN_WORD) <= (others => '0');
 						call_words(CALL_ERROR_WORD) <= (others => '0');
@@ -532,44 +566,24 @@ begin
 							or (call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) /= WORK_ABI_VERSION) then
 							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_PACKAGE;
 							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-						elsif unsigned(call_words(CALL_OUTPUT_CAP_WORD)) < to_unsigned(4, 32) then
+						elsif function_valid = '0' then
+							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_FUNCTION;
+							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+						elsif unsigned(call_words(CALL_INPUT_LEN_WORD))
+							< resize(unsigned(function_required_input_bytes), 32) then
+							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
+							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+						elsif unsigned(call_words(CALL_OUTPUT_CAP_WORD))
+							< resize(unsigned(function_output_bytes), 32) then
 							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
 							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
 						else
-							case call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16) is
-							when x"0000" =>
-								-- slot 0: heartbeat() -> "TGAT"
-								call_words(CALL_OUTPUT_WORD) <= PROTOCOL_MAGIC;
-								call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
-								call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
-							when x"0001" =>
-								-- slot 1: add_u32(a, b) -> a + b
-								if unsigned(call_words(CALL_INPUT_LEN_WORD)) < to_unsigned(8, 32) then
-									call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
-									call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-								else
-									call_words(CALL_OUTPUT_WORD) <= std_logic_vector(
-										unsigned(call_words(CALL_INPUT_WORD))
-										+ unsigned(call_words(CALL_INPUT_WORD + 1))
-									);
-									call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
-									call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
-								end if;
-							when x"0002" =>
-								-- slot 2: xor_u32(a, b) -> a xor b
-								if unsigned(call_words(CALL_INPUT_LEN_WORD)) < to_unsigned(8, 32) then
-									call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
-									call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-								else
-									call_words(CALL_OUTPUT_WORD) <= call_words(CALL_INPUT_WORD)
-										xor call_words(CALL_INPUT_WORD + 1);
-									call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
-									call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
-								end if;
-							when others =>
-								call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_FUNCTION;
-								call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-							end case;
+							call_words(CALL_OUTPUT_WORD) <= function_result;
+							call_words(CALL_OUTPUT_LEN_WORD) <= x"0000" & function_output_bytes;
+							call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
+							if call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16) = x"0000" then
+								led_reg <= function_next_led;
+							end if;
 						end if;
 						call_pending <= '0';
 						call_retire_count <= call_retire_count + 1;

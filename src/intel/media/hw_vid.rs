@@ -397,7 +397,7 @@ pub(crate) async fn ui4_video_playback_task() {
             return;
         };
         crate::log!(
-            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} frame_buffers=3 source=tile64-nv12 output=ui4-rgba8-frame plane_slot=1 kernel=nv12-tile64-rgba8-frame presentation={} lifecycle=producer-release+direct-import+surflive playback=playing control=focused-space fallback=none carrier_slot={}\n",
+            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} frame_buffers=2 source=tile64-nv12 output=ui4-rgba8-frame plane_slot=1 kernel=nv12-tile64-rgba8-frame presentation={} lifecycle=producer-release+direct-import+surflive playback=playing control=focused-space fallback=none carrier_slot={}\n",
             H264_BOOT_PROBE_STREAM_PATH,
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
             H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
@@ -460,10 +460,31 @@ pub(crate) async fn run_shell_vid_playback(
         return Err("media decode engine unavailable");
     }
     let _playback_guard = h264_try_begin_playback("shell-trueosfs")?;
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=playback-guard-acquired path={} next=stream-open\n",
+        path
+    );
     let Some(file) = h264_open_playback_stream_once(path).await else {
         return Err("video asset missing from TRUEOSFS root");
     };
-    let annexb = if h264_path_is_mp4(path) || h264_file_has_mp4_header(file, path).await {
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=stream-open-complete path={} bytes={} next=container-probe\n",
+        path,
+        file.data_len()
+    );
+    let is_mp4 = if h264_path_is_mp4(path) {
+        true
+    } else {
+        crate::log!("intel/hw_vid: shell-vid stage=container-probe-begin path={} bytes=12\n", path);
+        let is_mp4 = h264_file_has_mp4_header(file, path).await;
+        crate::log!(
+            "intel/hw_vid: shell-vid stage=container-probe-complete path={} container={}\n",
+            path,
+            if is_mp4 { "mp4" } else { "annexb" }
+        );
+        is_mp4
+    };
+    let annexb = if is_mp4 {
         let file_bytes = usize::try_from(file.data_len()).map_err(|_| "video asset too large")?;
         if file_bytes > H264_TRUEOSFS_MP4_MAX_BYTES {
             return Err("TRUEOSFS MP4 exceeds playback size limit");
@@ -488,6 +509,15 @@ pub(crate) async fn run_shell_vid_playback(
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=decode-loop-begin path={} source={}\n",
+        path,
+        if annexb.is_some() {
+            "memory-annexb"
+        } else {
+            "range-annexb"
+        }
+    );
     let report = match annexb {
         Some(bytes) => {
             h264_i_p_playback_probe_annexb_bytes(bytes, "trueosfs-root-mp4-avc1", path, options)

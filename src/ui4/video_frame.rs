@@ -104,10 +104,12 @@ static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
+static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
 
-/// Register the decoded-video ownership records without presenting pixels.
-/// The broker window remains pending until the first decoder-retired picture
-/// has been converted into a complete RGBA publication.
+/// Reserve the decoded-video lifetime without allocating or publishing pixels.
+/// The exact double-buffered Frame is created only when the decoder supplies
+/// its first real source. This keeps all DMA allocation and PPGTT work on the
+/// producer handoff side of the TRUEOSFS/decode boundary.
 pub(crate) fn prepare_decoded_video_player() -> bool {
     install_decoded_video_player(true, !VIDEO_PLAYBACK_AUTOSTART, "kernel-boot-video-task")
 }
@@ -124,38 +126,17 @@ fn install_decoded_video_player(
     initially_paused: bool,
     lifecycle_owner: &str,
 ) -> bool {
-    if VIDEO_STREAM.lock().is_some() {
+    if VIDEO_LIFECYCLE_RESERVED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
         return allow_existing;
     }
-    let placeholder_spec = DecodedVideoFrameSpec {
-        coded_width: 16,
-        coded_height: 9,
-        visible_width: 16,
-        visible_height: 9,
-    };
-    let Some(stream) = create_stream(
-        placeholder_spec,
-        super::DEFAULT_FRAME_WIDTH,
-        super::DEFAULT_FRAME_HEIGHT,
-        true,
-    ) else {
-        return false;
-    };
-    let mut slot = VIDEO_STREAM.lock();
-    if slot.is_some() {
-        drop(slot);
-        cleanup_uninstalled_stream(stream);
-        return allow_existing;
-    }
-    *slot = Some(stream);
-    drop(slot);
     VIDEO_PLAYBACK_PAUSED.store(initially_paused, Ordering::Release);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player ready owner={:?} frame={} window={} playback={} control=focused-space source=await-first-decoded-frame lifecycle_owner={} broker_state=pending placeholder_present=0\n",
+        "ui4 video-player lifetime reserved owner={:?} playback={} control=focused-space source=await-first-decoded-frame lifecycle_owner={} frame=deferred window=deferred broker_state=deferred-until-first-decoded-frame rgba_ring_allocation=deferred placeholder_present=0\n",
         VIDEO_OWNER,
-        stream.frame.raw(),
-        stream.window.raw(),
         if initially_paused { "paused-default" } else { "playing" },
         lifecycle_owner,
     );
@@ -369,7 +350,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     ) else {
         let _ = cancel_frame_buffer(write);
         crate::log_warn!(target: "ui4";
-            "ui4 video-frame native source rejected frame={} decode_seq={} source_gpu=0x{:X} reason={}\n",
+            "ui4 video-frame native source rejected frame={} decode_seq={} media_gpu=0x{:X} reason={}\n",
             stream.frame.raw(), source.decode_sequence, source.gpu, reason,
         );
         return false;
@@ -453,7 +434,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
             sequence,
             source.decode_sequence,
             stream.frame.raw(),
@@ -481,7 +462,7 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
 }
 
 fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Option<VideoStream> {
-    if !spec.valid() {
+    if !spec.valid() || !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
         return None;
     }
     {
@@ -530,13 +511,19 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
             return Some(*stream);
         }
     }
-    let stream =
-        create_stream(spec, super::DEFAULT_FRAME_WIDTH, super::DEFAULT_FRAME_HEIGHT, false)?;
-    *VIDEO_STREAM.lock() = Some(stream);
+    let stream = create_stream(spec)?;
+    let mut slot = VIDEO_STREAM.lock();
+    if let Some(existing) = *slot {
+        drop(slot);
+        cleanup_uninstalled_stream(stream);
+        return Some(existing);
+    }
+    *slot = Some(stream);
     Some(stream)
 }
 
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
+    let reserved = VIDEO_LIFECYCLE_RESERVED.swap(false, Ordering::AcqRel);
     let stream = VIDEO_STREAM.lock().take();
     if let Some(stream) = stream {
         let animated = finish_window_session_with_request(
@@ -558,18 +545,22 @@ pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
             if animated { "direct-plane-shrink+fade" } else { "immediate-fallback" },
         );
         true
+    } else if reserved {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 video-frame stopped reason={} frame=none window=none teardown=none-before-first-decoded-frame display_release=none plane_mutation=none\n",
+            reason,
+        );
+        true
     } else {
         false
     }
 }
 
-fn create_stream(
-    spec: DecodedVideoFrameSpec,
-    frame_width: u32,
-    frame_height: u32,
-    placeholder: bool,
-) -> Option<VideoStream> {
-    let frame = create_video_frame(frame_width, frame_height).ok()?;
+fn create_stream(spec: DecodedVideoFrameSpec) -> Option<VideoStream> {
+    let frame_width = super::DEFAULT_FRAME_WIDTH;
+    let frame_height = super::DEFAULT_FRAME_HEIGHT;
+    let frame = create_video_frame().ok()?;
     let session = match begin_window_session(VIDEO_OWNER) {
         Ok(session) => session,
         Err(_) => {
@@ -607,8 +598,8 @@ fn create_stream(
     // No placeholder is published. The first visible buffer is always a fully
     // converted, GuC-released RGBA picture; the producer never writes display
     // MMIO and decoder memory is never attached to the broker Frame.
-    let visible_width = if placeholder { 0 } else { spec.visible_width };
-    let visible_height = if placeholder { 0 } else { spec.visible_height };
+    let visible_width = spec.visible_width;
+    let visible_height = spec.visible_height;
     let pan_x = centered_crop_origin(visible_width, frame_width);
     let pan_y = centered_crop_origin(visible_height, frame_height);
     let layout = native_viewport_layout(
@@ -625,7 +616,7 @@ fn create_stream(
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
-        if placeholder { "await-first-decoded-frame" } else { "tile64-nv12" },
+        "tile64-nv12",
         spec.coded_width,
         spec.coded_height,
         frame_width,
@@ -645,8 +636,8 @@ fn create_stream(
         session,
         frame,
         window,
-        source_width: if placeholder { 0 } else { spec.coded_width },
-        source_height: if placeholder { 0 } else { spec.coded_height },
+        source_width: spec.coded_width,
+        source_height: spec.coded_height,
         visible_width,
         visible_height,
         frame_width,
@@ -657,15 +648,15 @@ fn create_stream(
     })
 }
 
-fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::FramePoolError> {
+fn create_video_frame() -> Result<FrameHandle, super::FramePoolError> {
     create_frame(FrameSpec {
         output: VIDEO_OUTPUT,
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
         buffering: FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
+        width: super::DEFAULT_FRAME_WIDTH,
+        height: super::DEFAULT_FRAME_HEIGHT,
         // The SIMD16 producer overwrites every pixel, including opaque-black
         // letterbox regions, before this allocation can be published.
         base_color: None,

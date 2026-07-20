@@ -57,11 +57,12 @@ __kernel void ui4_nv12_tile64_to_rgba8_frame(
     uint inside_x = x - content_dst_x;
     uint inside_y = y - content_dst_y;
     if (inside_x >= content_width || inside_y >= content_height) {
-        // Keep the legacy arguments until the CPU payload ABI is rebaked, but
-        // never touch the old desktop-base binding in the Frame producer.
-        (void)base_xrgb;
-        (void)base_pitch_bytes;
-        dst_rgba[dst_index] = 0xFF000000u;
+        // Preserve the proven three-binding SIMD16 ABI without importing a
+        // desktop surface. The Frame producer binds this exact destination as
+        // its own base, so every lane reads and rewrites only the same pixel.
+        // The alpha repair also makes a freshly zeroed lease opaque black.
+        uint base_pitch_pixels = base_pitch_bytes >> 2;
+        dst_rgba[dst_index] = base_xrgb[y * base_pitch_pixels + x] | 0xFF000000u;
         return;
     }
 

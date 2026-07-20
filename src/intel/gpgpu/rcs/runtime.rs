@@ -341,6 +341,9 @@ fn direct_rcs_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
+    if len == 0 || !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) {
+        return false;
+    }
     let Some(end) = u64::try_from(len).ok().and_then(|len| gpu.checked_add(len)) else {
         return false;
     };
@@ -349,7 +352,11 @@ fn direct_rcs_map_ppgtt_region(
     }
 
     let pt_off = 12288usize;
-    for page in 0..len.div_ceil(4096) {
+    let pages = len.div_ceil(4096);
+    let cache_policy_mask = GEN8_PAGE_PWT | GEN8_PAGE_PCD;
+    // Preflight the entire range before changing any leaf. A rejected policy
+    // transition must not leave a partially rewritten mapping behind.
+    for page in 0..pages {
         let va_page = (gpu >> 12) + page as u64;
         let pd_index = (va_page >> 9) as usize;
         let pt_index = (va_page & 0x1FF) as usize;
@@ -357,9 +364,42 @@ fn direct_rcs_map_ppgtt_region(
             return false;
         }
         let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
-        let pte = (phys + (page as u64) * 4096) & !0xFFF;
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
+        let previous = unsafe { core::ptr::read_volatile(pte_ptr) };
+        if previous & super::GEN8_PAGE_PRESENT != 0
+            && previous & cache_policy_mask != entry_flags & cache_policy_mask
+        {
+            let occurrence = DIRECT_RCS_PPGTT_POLICY_REJECTIONS
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            if occurrence == 1 || occurrence.is_power_of_two() {
+                crate::log_error!(target: "gpgpu";
+                    "intel/gpgpu: PPGTT cache-policy remap rejected occurrence={} gpu=0x{:X} page={} previous_pat={} requested_pat={} action=reject-before-submit same_va_pat_transition=forbidden\n",
+                    occurrence,
+                    gpu,
+                    page,
+                    (previous & cache_policy_mask) >> 3,
+                    (entry_flags & cache_policy_mask) >> 3,
+                );
+            }
+            return false;
+        }
+    }
+    for page in 0..pages {
+        let va_page = (gpu >> 12) + page as u64;
+        let pd_index = (va_page >> 9) as usize;
+        let pt_index = (va_page & 0x1FF) as usize;
+        let pte_off = pt_off + pd_index * 4096 + pt_index * core::mem::size_of::<u64>();
+        let Some(pte) = (page as u64)
+            .checked_mul(4096)
+            .and_then(|offset| phys.checked_add(offset))
+            .map(|address| address & !0xFFF)
+        else {
+            return false;
+        };
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
         unsafe {
-            core::ptr::write_volatile(state.ppgtt_virt.add(pte_off) as *mut u64, pte | entry_flags);
+            core::ptr::write_volatile(pte_ptr, pte | entry_flags);
         }
     }
     true

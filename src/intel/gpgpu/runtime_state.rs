@@ -37,6 +37,8 @@ static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
+static DIRECT_RCS_PPGTT_POLICY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static UI4_VIDEO_FRAME_SUBMIT_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =

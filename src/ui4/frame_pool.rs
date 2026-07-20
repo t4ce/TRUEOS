@@ -498,7 +498,12 @@ pub(crate) fn publish_gpu_frame_buffer(
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
     let index = lease.buffer_index as usize;
-    if frame.plan.content != FrameContent::RenderScene3d || !frame.gpu_authored[index] {
+    if frame.plan.content != FrameContent::RenderScene3d
+        || frame.plan.cadence != super::FrameCadence::Streaming
+        || frame.plan.buffering != super::FrameBuffering::Triple
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
+    {
         return Err(FramePoolError::ProducerReleaseRequired);
     }
     let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
@@ -552,6 +557,8 @@ pub(crate) fn publish_gpgpu_video_frame_buffer(
         || frame.plan.cadence != super::FrameCadence::Streaming
         || frame.plan.buffering != super::FrameBuffering::Double
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || frame.plan.width != super::DEFAULT_FRAME_WIDTH
+        || frame.plan.height != super::DEFAULT_FRAME_HEIGHT
         || !frame.gpu_authored[index]
     {
         return Err(FramePoolError::ProducerReleaseRequired);

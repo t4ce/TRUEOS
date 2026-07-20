@@ -9,7 +9,7 @@ use spin::Mutex;
 // from the logical window/frame limits: a streaming frame consumes three
 // handles, and physical memory plus producer GPU VA remain bounded below.
 const MAX_UI_SURFACES: usize = 64;
-const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
+pub(crate) const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
 // Producer surfaces are mapped into the direct-RCS PPGTT on demand. Keep this
 // arena below render's persistent-font range at 0x2000_0000 and well inside
 // the direct-RCS 1 GiB PPGTT. Packing actual aligned allocation sizes avoids

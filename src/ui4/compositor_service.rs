@@ -5,7 +5,7 @@
 //! surface-flip batch. It intentionally creates no application windows.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use embassy_time::{Duration as EmbassyDuration, Timer};
 
@@ -26,6 +26,7 @@ static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_CPU_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_BCS0_BASELINE_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Ui4CompositorError {
@@ -880,7 +881,33 @@ fn commit_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {
         let replacement = pending.direct_leases[slot].take();
         let previous = core::mem::replace(&mut runtime.live_direct[slot], replacement);
         if let Some(previous) = previous {
-            let _ = release_published_frame(previous);
+            release_replaced_direct_lease(slot, previous, "flip-batch-complete");
+        }
+    }
+}
+
+/// Drop the old scanout owner's exact buffer only after the caller proved that
+/// the replacement surface is live. Video logs this boundary explicitly so a
+/// hardware run can distinguish producer completion from display retirement.
+fn release_replaced_direct_lease(slot: usize, lease: FrameReadLease, boundary: &'static str) {
+    let video = frame_snapshot(lease.frame)
+        .is_ok_and(|snapshot| snapshot.plan.content == FrameContent::Video);
+    let released = release_published_frame(lease).is_ok();
+    if video {
+        let sequence = VIDEO_SURFLIVE_RELEASE_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if sequence <= 8 || sequence.is_multiple_of(120) || !released {
+            crate::log_info!(target: "ui4";
+                "ui4 video-frame display-retired seq={} frame={} buffer={} slot={} boundary=surflive-{} display_lease_released={} display_ownership_released={} cpu_pixel_copy=0\n",
+                sequence,
+                lease.frame.raw(),
+                lease.buffer_index,
+                slot,
+                boundary,
+                released as u8,
+                released as u8,
+            );
         }
     }
 }
@@ -901,7 +928,7 @@ fn settle_failed_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame
         if latched {
             let previous = runtime.live_direct[slot].replace(lease);
             if let Some(previous) = previous {
-                let _ = release_published_frame(previous);
+                release_replaced_direct_lease(slot, previous, "failed-batch-partial-latch");
             }
         } else {
             let _ = release_published_frame(lease);
