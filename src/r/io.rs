@@ -56,6 +56,12 @@ pub mod kfs {
             .map_err(|_| FsError::BadPath)
     }
 
+    /// Compatibility boundary for APIs whose public contract is synchronous.
+    ///
+    /// The caller must already be on a background AP service lane. Only typed,
+    /// owned request data crosses to the BSP; the BSP creates and awaits the
+    /// actual TRUEOSFS future. Never restore `spawn_and_wait_local` here: doing
+    /// so recursively polls the same executor and was the USB/video stall.
     fn wait_for_filesystem<T>(
         request: core::result::Result<
             Result<T>,

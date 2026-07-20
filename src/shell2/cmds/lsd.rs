@@ -302,6 +302,10 @@ fn run_submitted(io: &'static dyn ShellBackend2, rest: &str) {
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    // `trueos_lsd` exposes a synchronous filesystem-facing API. Do not run it
+    // inline in the Shell2/BSP executor: its kfs calls must originate on this
+    // AP service lane so request_broker can park the caller while the BSP keeps
+    // TRUEOSFS, block I/O, and USB/xHCI progressing asynchronously.
     let submitted = String::from(rest);
     let target = matrix_target_for_backend(io);
     super::super::set_matrix_target_active(&target, true);

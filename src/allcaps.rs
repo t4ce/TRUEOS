@@ -95,7 +95,10 @@ pub mod storage {
     /// ordinary root/index readiness.
     /// Cut 6 forbids checkpoint writes; cuts 7 and 8 keep automatic readiness
     /// consumers asleep so Shell2 `lsd` and HTTP can be proved independently.
-    pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 8;
+    // Closing verification: return the X31 to the ordinary deferred
+    // TRUEOSFS mount/index/readiness path. Keep the diagnostic stages in place
+    // until this no-cut boot has passed, then remove the dormant harness.
+    pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 0;
 
     /// Cut-9 consumer isolation: publish normal TRUEOSFS readiness, but keep
     /// the eager filesystem font warm asleep. This leaves every other cut-9

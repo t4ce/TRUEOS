@@ -1291,6 +1291,8 @@ const TASK_COUNT: usize = 65
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
+    // BSP half of the synchronous-kfs compatibility bridge. It must remain a
+    // local BSP task because TRUEOSFS/block futures are intentionally non-Send.
     TaskSpec::enabled(
         "trueosfs-request-broker",
         0,

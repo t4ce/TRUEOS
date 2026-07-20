@@ -278,8 +278,10 @@ fn _loop(executor: &'static Executor) -> ! {
     loop {
         time::poll();
         // Keep the per-CPU executor-poll guard authoritative for BSP tasks.
-        // Blocking filesystem callers now run on leased AP service lanes and
-        // cross into the BSP through the TRUEOSFS request broker.
+        // Do not call `executor.poll()` directly here: that hid the fact that a
+        // BSP task was recursively polling its own executor through synchronous
+        // kfs access. Blocking filesystem callers belong on leased AP service
+        // lanes and cross into the BSP through the TRUEOSFS request broker.
         debug_assert!(core::ptr::eq(
             executor,
             unsafe { &*percpu::this_cpu().executor_ptr() },

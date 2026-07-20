@@ -1,3 +1,15 @@
+//! Blocking-call compatibility bridge for the BSP-owned async filesystem.
+//!
+//! Architecture invariant: TRUEOSFS and its USB/block futures are non-`Send`
+//! and must be created and polled by the BSP executor. A synchronous caller
+//! must therefore run on a dedicated background AP service lane, submit only
+//! owned request data here, and park until the BSP completes its request.
+//!
+//! Do not replace this with `spawn_and_wait_local`, a boxed cross-core future,
+//! or manual `Executor::poll()`. The old version recursively polled the BSP
+//! executor from inside one of its own tasks, deadlocking filesystem access and
+//! apparently unrelated first-frame GPGPU/video work.
+
 extern crate alloc;
 
 use alloc::collections::VecDeque;
