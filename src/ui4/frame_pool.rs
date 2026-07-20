@@ -13,8 +13,8 @@ use crate::graphics::primitives::{Error as SurfaceError, UiSurfaceFormat};
 use crate::r::ui_surface::{self, UiSurfaceHandle};
 
 use super::{
-    FrameCadence, FrameContent, FrameHandle, FramePlan, FramePlanError, FrameSpec,
-    NativeNv12Surface, Nv12Layout, PremultipliedRgba8, ScanoutFormat,
+    FrameContent, FrameHandle, FramePlan, FramePlanError, FrameSpec, NativeNv12Surface, Nv12Layout,
+    PremultipliedRgba8, ScanoutFormat,
 };
 
 const MAX_FRAMES: usize = 64;
@@ -147,7 +147,6 @@ struct FrameRecord {
     active: bool,
     plan: FramePlan,
     surfaces: [Option<UiSurfaceHandle>; 3],
-    native_nv12: [Option<NativeNv12Surface>; 3],
     native_video: [Option<NativeVideoFrameView>; 3],
     buffer_count: u8,
     front_buffer: Option<u8>,
@@ -167,7 +166,6 @@ impl FrameRecord {
             active: false,
             plan: EMPTY_PLAN,
             surfaces: [None; 3],
-            native_nv12: [None; 3],
             native_video: [None; 3],
             buffer_count: 0,
             front_buffer: None,
@@ -181,17 +179,11 @@ impl FrameRecord {
         }
     }
 
-    fn activate(
-        &mut self,
-        plan: FramePlan,
-        surfaces: [Option<UiSurfaceHandle>; 3],
-        native_nv12: [Option<NativeNv12Surface>; 3],
-    ) {
+    fn activate(&mut self, plan: FramePlan, surfaces: [Option<UiSurfaceHandle>; 3]) {
         self.generation = next_generation(self.generation);
         self.active = true;
         self.plan = plan;
         self.surfaces = surfaces;
-        self.native_nv12 = native_nv12;
         self.native_video = [None; 3];
         self.buffer_count = plan.buffering.count() as u8;
         self.front_buffer = None;
@@ -284,57 +276,7 @@ pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolErro
         pool.frames.push(FrameRecord::inactive(0));
         slot
     };
-    pool.frames[slot].activate(plan, surfaces, [None; 3]);
-    let generation = pool.frames[slot].generation;
-    pack_handle(slot, generation)
-}
-
-/// Import one complete native NV12 ring. The producer still uses normal UI4
-/// write leases and the presenter uses read leases; only allocation remains
-/// owned by the trusted display path.
-pub(crate) fn import_native_nv12_frame(
-    spec: FrameSpec,
-    native_nv12: [NativeNv12Surface; 3],
-) -> Result<FrameHandle, FramePoolError> {
-    let plan = FramePlan::from_spec(spec).map_err(FramePoolError::InvalidPlan)?;
-    if spec.content != FrameContent::Video
-        || spec.cadence != FrameCadence::Streaming
-        || !matches!(spec.format, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile)
-        || plan.buffering.count() != native_nv12.len()
-    {
-        return Err(FramePoolError::UnsupportedFormat);
-    }
-    let expected_layout = match spec.format {
-        ScanoutFormat::Nv12Linear => Nv12Layout::Linear,
-        ScanoutFormat::Nv12YTile => Nv12Layout::YTiled,
-        _ => return Err(FramePoolError::UnsupportedFormat),
-    };
-    if native_nv12
-        .iter()
-        .any(|surface| !valid_native_nv12_surface(*surface, spec, expected_layout))
-        || (0..native_nv12.len()).any(|left| {
-            ((left + 1)..native_nv12.len()).any(|right| {
-                native_nv12[left].phys == native_nv12[right].phys
-                    || native_nv12[left].gpu == native_nv12[right].gpu
-                    || native_nv12[left].virt == native_nv12[right].virt
-            })
-        })
-    {
-        return Err(FramePoolError::UnsupportedFormat);
-    }
-
-    let mut pool = FRAME_POOL.lock();
-    let slot = if let Some(slot) = pool.frames.iter().position(|frame| !frame.active) {
-        slot
-    } else {
-        if pool.frames.len() >= MAX_FRAMES {
-            return Err(FramePoolError::OutOfMemory);
-        }
-        let slot = pool.frames.len();
-        pool.frames.push(FrameRecord::inactive(0));
-        slot
-    };
-    pool.frames[slot].activate(plan, [None; 3], native_nv12.map(Some));
+    pool.frames[slot].activate(plan, surfaces);
     let generation = pool.frames[slot].generation;
     pack_handle(slot, generation)
 }
@@ -349,7 +291,6 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
         frame.active = false;
         frame.front_buffer = None;
         frame.buffer_count = 0;
-        frame.native_nv12 = [None; 3];
         frame.native_video = [None; 3];
         core::mem::replace(&mut frame.surfaces, [None; 3])
     };
@@ -373,8 +314,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
         .find(|index| {
             (count == 1 || frame.front_buffer != Some(*index))
                 && frame.readers[*index as usize] == 0
-                && (frame.surfaces[*index as usize].is_some()
-                    || frame.native_nv12[*index as usize].is_some())
+                && frame.surfaces[*index as usize].is_some()
         })
         .ok_or(FramePoolError::Busy)?;
 
@@ -482,31 +422,6 @@ pub(crate) fn writable_rgba_view(lease: FrameWriteLease) -> Result<FrameRgbaView
         gpu_authored: false,
         gpu_release: None,
     })
-}
-
-pub(crate) fn writable_native_nv12_view(
-    lease: FrameWriteLease,
-) -> Result<NativeNv12Surface, FramePoolError> {
-    let pool = FRAME_POOL.lock();
-    let frame = pool.checked(lease.frame)?;
-    checked_lease(frame, lease)?;
-    if !matches!(frame.plan.format, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) {
-        return Err(FramePoolError::UnsupportedFormat);
-    }
-    frame.native_nv12[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)
-}
-
-pub(crate) fn published_native_nv12_view(
-    lease: FrameReadLease,
-) -> Result<NativeNv12Surface, FramePoolError> {
-    let pool = FRAME_POOL.lock();
-    let frame = pool.checked(lease.frame)?;
-    if frame.readers[lease.buffer_index as usize] == 0
-        || !matches!(frame.plan.format, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile)
-    {
-        return Err(FramePoolError::InvalidLease);
-    }
-    frame.native_nv12[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)
 }
 
 /// Resolve the native video source attached to this exact published buffer.
@@ -746,34 +661,7 @@ fn surface_format(format: ScanoutFormat) -> Option<UiSurfaceFormat> {
         ScanoutFormat::Xrgb8888 => Some(UiSurfaceFormat::Xrgb8888),
         ScanoutFormat::Xbgr8888 => Some(UiSurfaceFormat::Xbgr8888),
         ScanoutFormat::Rgba8888Premultiplied => Some(UiSurfaceFormat::Rgba8888),
-        ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile => None,
     }
-}
-
-fn valid_native_nv12_surface(
-    surface: NativeNv12Surface,
-    spec: FrameSpec,
-    expected_layout: Nv12Layout,
-) -> bool {
-    let pitch = surface.pitch_bytes as usize;
-    let Some(y_bytes) = pitch.checked_mul(surface.height as usize) else {
-        return false;
-    };
-    let Some(uv_bytes) = pitch.checked_mul(surface.height.div_ceil(2) as usize) else {
-        return false;
-    };
-    let Some(required) = surface.uv_offset.checked_add(uv_bytes) else {
-        return false;
-    };
-    surface.phys != 0
-        && surface.gpu != 0
-        && surface.virt != 0
-        && surface.width == spec.width
-        && surface.height == spec.height
-        && surface.pitch_bytes >= spec.width
-        && surface.uv_offset >= y_bytes
-        && surface.byte_len >= required
-        && surface.layout == expected_layout
 }
 
 fn valid_native_video_view(view: NativeVideoFrameView, plan: FramePlan) -> bool {

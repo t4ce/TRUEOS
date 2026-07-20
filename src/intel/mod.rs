@@ -518,10 +518,6 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
     self::display::present_premultiplied_rgba_primary_tiles_damage(tiles, damage, reason)
 }
 
-pub(crate) fn set_decoded_nv12_overlay_plane_alpha(alpha: u8, reason: &str) -> bool {
-    self::display::set_decoded_nv12_overlay_plane_alpha(alpha, reason)
-}
-
 pub fn primary_surface_gpu_addr() -> Option<u64> {
     self::display::primary_surface_gpu_addr()
 }

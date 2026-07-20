@@ -188,7 +188,8 @@ impl FrameHandle {
     }
 }
 
-/// Native formats currently programmed by the Intel display driver.
+/// Pixel formats owned by ordinary UI4 Frame allocations. Native decoder
+/// formats are render-source attachments, never implicit display-plane modes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ScanoutFormat {
     /// Opaque 8:8:8:8 primary-plane storage in RGB order.
@@ -197,10 +198,6 @@ pub(crate) enum ScanoutFormat {
     Xbgr8888,
     /// Per-pixel alpha overlay storage; RGB is already multiplied by alpha.
     Rgba8888Premultiplied,
-    /// Linear two-plane NV12 used by the currently proven video staging ring.
-    Nv12Linear,
-    /// Current hardware-decoder Y-tiled NV12 surface.
-    Nv12YTile,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -209,8 +206,9 @@ pub(crate) enum Nv12Layout {
     YTiled,
 }
 
-/// One trusted native NV12 buffer imported into a UI4 frame. The display
-/// allocator retains the backing allocation; UI4 owns producer/read leases.
+/// One trusted native NV12 render source. This type carries no plane
+/// assignment: the GuC render conversion consumes it before the compositor's
+/// ordinary XRGB primary flip.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeNv12Surface {
     pub(crate) phys: u64,
@@ -229,8 +227,6 @@ pub(crate) struct NativeNv12Surface {
 pub(crate) enum AlphaContract {
     Opaque,
     PerPixelPremultiplied,
-    /// NV12 carries no per-pixel alpha; the display plane supplies one value.
-    PlaneConstant,
 }
 
 impl ScanoutFormat {
@@ -238,7 +234,6 @@ impl ScanoutFormat {
         match self {
             Self::Xrgb8888 | Self::Xbgr8888 => AlphaContract::Opaque,
             Self::Rgba8888Premultiplied => AlphaContract::PerPixelPremultiplied,
-            Self::Nv12Linear | Self::Nv12YTile => AlphaContract::PlaneConstant,
         }
     }
 
@@ -250,10 +245,6 @@ impl ScanoutFormat {
             Self::Rgba8888Premultiplied => PlaneAssignment::AlphaOverlay {
                 slot: ALPHA_OVERLAY_PLANE_SLOT as u8,
             },
-            Self::Nv12Linear | Self::Nv12YTile => PlaneAssignment::LinkedNv12 {
-                uv_slot: NV12_UV_PLANE_SLOT as u8,
-                y_slot: NV12_Y_PLANE_SLOT as u8,
-            },
         }
     }
 }
@@ -263,7 +254,6 @@ impl ScanoutFormat {
 pub(crate) enum PlaneAssignment {
     Primary { slot: u8 },
     AlphaOverlay { slot: u8 },
-    LinkedNv12 { uv_slot: u8, y_slot: u8 },
 }
 
 /// One color in UI4's native RGBA surface convention.
@@ -339,8 +329,7 @@ pub(crate) struct FramePlan {
 pub(crate) enum FramePlanError {
     EmptyExtent,
     BaseColorRequiresPremultipliedRgba,
-    VideoRequiresRgbaOrNv12,
-    Nv12RequiresVideo,
+    VideoRequiresPremultipliedRgba,
 }
 
 impl FramePlan {
@@ -354,17 +343,9 @@ impl FramePlan {
             return Err(FramePlanError::BaseColorRequiresPremultipliedRgba);
         }
         match (spec.content, spec.format) {
-            (
-                FrameContent::Video,
-                ScanoutFormat::Rgba8888Premultiplied
-                | ScanoutFormat::Nv12Linear
-                | ScanoutFormat::Nv12YTile,
-            ) => {}
+            (FrameContent::Video, ScanoutFormat::Rgba8888Premultiplied) => {}
             (FrameContent::Video, _) => {
-                return Err(FramePlanError::VideoRequiresRgbaOrNv12);
-            }
-            (_, ScanoutFormat::Nv12Linear | ScanoutFormat::Nv12YTile) => {
-                return Err(FramePlanError::Nv12RequiresVideo);
+                return Err(FramePlanError::VideoRequiresPremultipliedRgba);
             }
             _ => {}
         }
@@ -389,13 +370,6 @@ const _: () = {
     assert!(matches!(
         ScanoutFormat::Rgba8888Premultiplied.plane(),
         PlaneAssignment::AlphaOverlay { slot: 1 }
-    ));
-    assert!(matches!(
-        ScanoutFormat::Nv12YTile.plane(),
-        PlaneAssignment::LinkedNv12 {
-            uv_slot: 2,
-            y_slot: 3
-        }
     ));
     assert!(PRIMARY_PLANE_SLOT == 0);
     assert!(ALPHA_OVERLAY_PLANE_SLOT == 1);

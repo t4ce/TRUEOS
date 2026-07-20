@@ -2858,6 +2858,10 @@ fn program_primary_plane_source_for_pipeline(
         || color_ctl != color_ctl_enabled;
     let surf_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
     let surf_live_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
+    let ui4_primary_batch_only = matches!(
+        reason,
+        "ui4-compositor-primary-async" | "ui4-video-native-nv12-primary-async"
+    );
     if !ui4_rgba8_plane_stack_ready(pipe) || contract_changed {
         crate::log_error!(target: "intel/display";
             "intel/display: primary-plane-source rejected reason={} pipeline={} cause=immutable-rgba8-contract-mismatch ready={} contract_changed={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X}\n",
@@ -2873,6 +2877,16 @@ fn program_primary_plane_source_for_pipeline(
             dst_w,
             dst_h,
             source.pitch_bytes,
+        );
+        return false;
+    }
+    if ui4_primary_batch_only && surf_before != surf_live_before {
+        crate::log_warn!(target: "ui4";
+            "ui4/primary-flip: stage rejected reason={} pipeline={} surf=0x{:08X} surf_live=0x{:08X} action=retry batch_only=1 direct_mmio_fallback=0 contract_rearm=0\n",
+            reason,
+            pipeline.name(),
+            surf_before,
+            surf_live_before,
         );
         return false;
     }
@@ -2910,6 +2924,7 @@ fn program_primary_plane_source_for_pipeline(
                 return true;
             }
             PlaneSurfaceFlipQueueResult::Rejected => return false,
+            PlaneSurfaceFlipQueueResult::Inactive if ui4_primary_batch_only => return false,
             PlaneSurfaceFlipQueueResult::Inactive => {}
         }
     }

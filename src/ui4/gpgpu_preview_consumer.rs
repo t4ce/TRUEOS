@@ -741,11 +741,8 @@ const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str
         FramePoolError::InvalidPlan(FramePlanError::BaseColorRequiresPremultipliedRgba) => {
             "frame-create-invalid-plan-base-color-format"
         }
-        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresRgbaOrNv12) => {
+        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresPremultipliedRgba) => {
             "frame-create-invalid-plan-video-format"
-        }
-        FramePoolError::InvalidPlan(FramePlanError::Nv12RequiresVideo) => {
-            "frame-create-invalid-plan-nv12-content"
         }
         FramePoolError::InvalidHandle => "frame-create-invalid-handle",
         FramePoolError::UnsupportedFormat => "frame-create-unsupported-format",

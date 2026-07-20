@@ -127,7 +127,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=parked\n",
+        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=slot0-frame-native-source+guc-xrgb-primary linked_nv12_planes=off\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -840,9 +840,10 @@ const fn overlay_async_reason(slot: usize) -> &'static str {
     }
 }
 
-/// Select the exact native sidecar that belongs to the sole primary video
-/// window.  Ordinary RGBA windows and multi-window primary compositions keep
-/// using the general compositor; there is no silent format reinterpretation.
+/// Select the exact native render-source attachment owned by the sole primary
+/// video Frame lease. Ordinary RGBA windows and multi-window primary
+/// compositions keep using the general compositor; no NV12 attachment is ever
+/// interpreted as a display-plane assignment.
 fn queue_native_video_primary(
     pending: &PendingFrame,
 ) -> Option<Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError>> {

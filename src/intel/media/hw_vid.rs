@@ -24,10 +24,6 @@ const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOption
 // presentation is converted to the native UI4/GuC producer used by forward
 // playback.
 const H264_REVERSE_PLAYBACK_ENABLED: bool = false;
-// Cached reverse-frame diagnostics have not yet been migrated to UI4. Keep
-// their old primary-surface presenter disabled independently from the live
-// forward playback path.
-const H264_REVERSE_PRIMARY_PRESENTATION_ENABLED: bool = false;
 const H264_BOOT_PROBE_STRIPE_STUDY_FRAME_MS: u64 = 120;
 const H264_BOOT_PROBE_STRIPE_STUDY_STORE_TOP: usize = 8;
 const H264_BOOT_PROBE_STREAM_LOAD_TIMEOUT_MS: u64 = 20_000;
@@ -3881,21 +3877,10 @@ fn h264_capture_probe_output(output: &super::hw_pic::HwPicOutput) -> Option<H264
     })
 }
 
-fn h264_present_decoded_frame(frame: &H264DecodedFrame) -> bool {
-    if !H264_REVERSE_PRIMARY_PRESENTATION_ENABLED || frame.bytes.is_empty() {
-        return false;
-    }
-    crate::intel::display::present_ytile_nv12_surface_center(
-        frame.bytes.as_slice(),
-        frame.width,
-        frame.height,
-        0,
-        0,
-        frame.visible_width,
-        frame.visible_height,
-        frame.pitch_bytes,
-        frame.uv_offset,
-    )
+fn h264_present_decoded_frame(_frame: &H264DecodedFrame) -> bool {
+    // Cached reverse playback remains parked. In particular, it must not
+    // bypass UI4 by calling the retired direct display.rs NV12 presenter.
+    false
 }
 
 fn h264_decoded_frames_total_bytes(frames: &[H264DecodedFrame]) -> usize {

@@ -4140,7 +4140,7 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,base-pat0-wb,dst-pat3-uc\n",
+        "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,base-pat0-wb,dst-pat3-uc display_plane_writes=0\n",
         serial,
         dst.width,
         dst.height,
