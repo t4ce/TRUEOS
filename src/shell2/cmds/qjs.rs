@@ -1,7 +1,31 @@
-use embassy_executor::Spawner;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use embassy_executor::{Spawner, task};
 
 use super::super::shell2_cmd::ParseOutcome;
-use super::super::{ShellBackend2, matrix_target_for_backend, print_shell_line, shell2_qjs};
+use super::super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
+    print_shell_line,
+};
+
+const QJS_ARCHIVE: &str = "qjs.bp";
+
+#[task(pool_size = 2)]
+async fn launch_qjs(target: MatrixTarget, app_args: Vec<String>) {
+    if let Err(error) = super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        target.clone(),
+        QJS_ARCHIVE,
+        app_args,
+    )
+    .await
+    {
+        print_matrix_target_system_line(
+            &target,
+            alloc::format!("qjs: could not launch {QJS_ARCHIVE}: {error}").as_str(),
+        );
+    }
+}
 
 pub(crate) fn try_parse(
     spawner: &Spawner,
@@ -10,7 +34,10 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let trimmed = rest.trim();
     if matches!(trimmed, "help" | "-h" | "--help") {
-        print_shell_line(io, "qjs: usage `qjs`; exit the workbench with ESC or `:quit`");
+        print_shell_line(
+            io,
+            "qjs: usage `qjs`; evaluate with Ctrl-Enter/F5, exit with ESC, Ctrl-Q, or :quit",
+        );
         return ParseOutcome::Handled;
     }
     if !trimmed.is_empty() {
@@ -19,14 +46,9 @@ pub(crate) fn try_parse(
     }
 
     let target = matrix_target_for_backend(io);
-    match shell2_qjs::begin_session(spawner, &target) {
-        Ok(()) => ParseOutcome::StartSession(shell2_qjs::session_kind()),
-        Err(error) => {
-            print_shell_line(
-                io,
-                alloc::format!("qjs: could not open workbench: {error}").as_str(),
-            );
-            ParseOutcome::Handled
-        }
+    match launch_qjs(target, Vec::new()) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => print_shell_line(io, "qjs: launch task unavailable"),
     }
+    ParseOutcome::Handled
 }

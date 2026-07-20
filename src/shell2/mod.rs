@@ -13,11 +13,11 @@ pub(crate) mod cmds;
 mod ecma48;
 mod interface;
 mod matrix;
+pub(crate) mod qjs_workbench;
 mod shell2_apps;
 mod shell2_cmd;
 mod shell2_cmd_registry;
 mod shell2_dl;
-mod shell2_qjs;
 mod shell2_surf;
 mod term_style;
 mod utf8;
@@ -189,7 +189,6 @@ struct ChromeState {
     is_vmx: bool,
     terminal_hotkey: bool,
     mode: ShellMode2,
-    qjs_tui: bool,
     apps_mode: AppsPromptMode,
     surf_prefix: SurfPromptPrefix,
     cmd_status_text: Option<AllocString>,
@@ -347,8 +346,6 @@ impl<'a> AlignedWriter<'a> {
         }
         if active_matrix_slot_is_vmx(output_mask) {
             self.vmx_status();
-        } else if shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask)) {
-            self.qjs_status();
         } else if mode == ShellMode2::Surf {
             self.surf_status(surf_prefix);
         } else if mode == ShellMode2::Apps {
@@ -423,14 +420,6 @@ impl<'a> AlignedWriter<'a> {
             SurfPromptPrefix::Html.label(),
             surf_prefix == SurfPromptPrefix::Html,
         );
-        self.right_text(STATUS_ROW, text.as_str());
-    }
-
-    fn qjs_status(&self) {
-        let mut text = AllocString::new();
-        self.push_ai_token(&mut text, "qjs TUI", true);
-        self.push_plain(&mut text, " - ");
-        self.push_plain(&mut text, "persistent VM - :help - :reset - :import - :quit - [ESC]");
         self.right_text(STATUS_ROW, text.as_str());
     }
 
@@ -563,13 +552,6 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::SHOW_CURSOR);
         self.io.raw_write_str(ecma48::CURSOR_COLOR_GRAY);
         self.io.raw_write_str(ecma48::CURSOR_BLINKING_BLOCK);
-        if shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask)) {
-            let prompt = alloc::format!(
-                "{}",
-                term_style::paint("qjs › ").bold().color(STATUS_SELECTED_RGB)
-            );
-            self.io.raw_write_str(prompt.as_str());
-        }
     }
 
     fn user_char(&self, ch: char) {
@@ -734,7 +716,6 @@ fn current_chrome_state(
         is_vmx: active_matrix_slot_is_vmx(output_mask),
         terminal_hotkey: active_terminal_hotkey_mode(output_mask),
         mode,
-        qjs_tui: shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask)),
         apps_mode,
         surf_prefix,
         cmd_status_text: cmd_status_text.map(AllocString::from),
@@ -809,11 +790,7 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
 }
 
 fn main_mode_visible_width(_output_mask: u8) -> usize {
-    let modes = [
-        ShellMode2::Surf,
-        ShellMode2::Apps,
-        ShellMode2::Cmd,
-    ];
+    let modes = [ShellMode2::Surf, ShellMode2::Apps, ShellMode2::Cmd];
     let mut width = 0usize;
     for (idx, mode) in modes.iter().copied().enumerate() {
         if idx != 0 {
@@ -1230,7 +1207,6 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         .and_then(|rest| rest.strip_suffix('§'))
         .is_some()
     {
-        shell2_qjs::free_slot(submitted);
         let (freed_id, vm_ids) = matrix::free_slot(submitted);
         for vm_id in vm_ids {
             match crate::hv::stop(vm_id) {
@@ -1337,14 +1313,7 @@ fn redraw_active_view(
     out.clear_screen_home();
     out.reset_scroll_region();
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(
-        output_mask,
-        mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
+    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
     out.set_scroll_region(slot_content_top_row(output_mask));
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
@@ -1450,14 +1419,7 @@ async fn run_plain_section_status(
         Timer::after(EmbassyDuration::from_millis(SECTION_RAINBOW_FRAME_MS)).await;
     }
 
-    out.mode_status(
-        output_mask,
-        mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
+    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
 }
 
 fn handle_submit(
@@ -1531,28 +1493,6 @@ fn find_command_session_indexes(
         .collect()
 }
 
-fn close_active_qjs_session(
-    sessions: &mut alloc::vec::Vec<CommandSession>,
-    output_mask: u8,
-    reason: &str,
-) -> bool {
-    let active_slot = matrix::active_slot_id(output_mask);
-    let lifetime = matrix::slot_lifetime_generation(&active_slot);
-    let Some(index) = sessions.iter().position(|session| {
-        session.slot_id == active_slot
-            && session.slot_lifetime_generation == lifetime
-            && session.kind == shell2_cmd::CommandSessionKind::Qjs
-    }) else {
-        return false;
-    };
-
-    let target = matrix_target_for_slot(output_mask, &active_slot, lifetime);
-    shell2_qjs::end_session(&target, reason);
-    matrix::set_slot_activity(&active_slot, matrix::MatrixSlotActivity::Idle);
-    let _ = sessions.remove(index);
-    true
-}
-
 fn handle_command_session_input(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -1567,9 +1507,6 @@ fn handle_command_session_input(
             crate::shell2::cmds::format::handle_session_input(
                 spawner, io, &target, submitted, disc_id,
             )
-        }
-        shell2_cmd::CommandSessionKind::Qjs => {
-            shell2_qjs::handle_session_input(spawner, &target, submitted)
         }
         shell2_cmd::CommandSessionKind::RemoveSure(session_id) => {
             crate::shell2::cmds::rm::handle_session_input(spawner, &target, submitted, session_id)
@@ -1598,14 +1535,7 @@ fn apply_mode_toggle(
     minute_text: &str,
 ) {
     out.banner(output_mask, mode, minute_text);
-    out.mode_status(
-        output_mask,
-        mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
+    out.mode_status(output_mask, mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
     render_prompt_line(out, output_mask, line);
 }
 
@@ -1633,14 +1563,7 @@ fn apply_matrix_operator_and_refresh(
     *mode = ShellMode2::Cmd;
     configure_output_view(out, output_mask);
     out.banner(output_mask, *mode, minute_text);
-    out.mode_status(
-        output_mask,
-        *mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text,
-        running_go2_phase,
-    );
+    out.mode_status(output_mask, *mode, apps_mode, surf_prefix, cmd_status_text, running_go2_phase);
     let transcript = current_transcript_for_task(io);
     render_active_slot_content(out, output_mask, &transcript);
     transcript
@@ -1805,19 +1728,13 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let mut last_matrix_revision = matrix::visible_revision(output_mask);
     let mut saw_cr = false;
     let mut esc = EscState::None;
-    let mut esc_idle_ticks = 0u8;
     let mut csi_input = CsiInput::new();
     let mut text_decode = utf8::Decoder::new();
     let mut live_history_cursor: Option<usize> = None;
     let mut input_bytes_since_yield = 0usize;
     let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
-    let mut last_chrome_state = current_chrome_state(
-        output_mask,
-        mode,
-        apps_mode,
-        surf_prefix,
-        cmd_status_text.as_deref(),
-    );
+    let mut last_chrome_state =
+        current_chrome_state(output_mask, mode, apps_mode, surf_prefix, cmd_status_text.as_deref());
     if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
         out.io.raw_write_str(TERMINAL_SIZE_QUERY);
     }
@@ -1881,31 +1798,15 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         if let Some(b) = io.read_byte() {
             if b == LOCAL_ESCAPE_KEY_BYTE {
                 esc = EscState::None;
-                esc_idle_ticks = 0;
                 text_decode.reset();
                 live_history_cursor = None;
                 cmd_status_text = None;
-                if close_active_qjs_session(&mut command_sessions, output_mask, "ESC") {
-                    zeroize_input_line(&mut line);
-                    transcript = redraw_active_view(
-                        &out,
-                        io,
-                        output_mask,
-                        mode,
-                        apps_mode,
-                        surf_prefix,
-                        cmd_status_text.as_deref(),
-                        running_go2_phase,
-                        minute_text.as_str(),
-                    );
-                    last_chrome_state = current_chrome_state(
-                        output_mask,
-                        mode,
-                        apps_mode,
-                        surf_prefix,
-                        cmd_status_text.as_deref(),
-                    );
-                    last_matrix_revision = matrix::visible_revision(output_mask);
+                if active_terminal_hotkey_mode(output_mask)
+                    && matrix::active_slot_app_label(output_mask).as_deref() == Some("qjs")
+                    && let Some(vm_id) = active_matrix_vm_input_id(output_mask)
+                        .or_else(|| active_matrix_vm_id(output_mask))
+                {
+                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &[0x1b]);
                 } else if active_terminal_hotkey_mode(output_mask) {
                     zeroize_input_line(&mut line);
                     let _ = matrix::set_active_terminal_hotkey_mode(output_mask, false);
@@ -1931,10 +1832,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 }
                 continue;
             }
-            if b == LOCAL_F1_KEY_BYTE
-                && !active_matrix_slot_is_vmx(output_mask)
-                && !shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask))
-            {
+            if b == LOCAL_F1_KEY_BYTE && !active_matrix_slot_is_vmx(output_mask) {
                 esc = EscState::None;
                 text_decode.reset();
                 live_history_cursor = None;
@@ -1982,7 +1880,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     if b == 0x1b {
                         text_decode.reset();
                         esc = EscState::Esc;
-                        esc_idle_ticks = 0;
                         continue;
                     }
                 }
@@ -1990,12 +1887,10 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     match b {
                         b'[' => {
                             esc = EscState::Csi;
-                            esc_idle_ticks = 0;
                             csi_input.reset();
                         }
                         b'O' => {
                             esc = EscState::Ss3;
-                            esc_idle_ticks = 0;
                         }
                         _ => {
                             esc = EscState::None;
@@ -2031,7 +1926,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                         b'~' => {
                             if let Some(function_index) = csi_input.first().checked_sub(10)
                                 && !active_matrix_slot_is_vmx(output_mask)
-                                && !shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask))
                                 && let Some(next_mode) = mode_from_function_key(function_index)
                             {
                                 mode = next_mode;
@@ -2083,9 +1977,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     continue;
                 }
                 EscState::Ss3 => {
-                    if !active_matrix_slot_is_vmx(output_mask)
-                        && !shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask))
-                    {
+                    if !active_matrix_slot_is_vmx(output_mask) {
                         let next_mode = match b {
                             b'P' => Some(ShellMode2::Surf),
                             b'Q' => Some(ShellMode2::Apps),
@@ -2121,9 +2013,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
             match b {
                 b'\t' => {
                     text_decode.reset();
-                    if active_matrix_vm_id(output_mask).is_some()
-                        || shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask))
-                    {
+                    if active_matrix_vm_id(output_mask).is_some() {
                         continue;
                     }
                     match mode {
@@ -2193,33 +2083,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                     let has_broadcast_sessions = session_indexes
                         .iter()
                         .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
-                    let qjs_session_index = session_indexes.iter().copied().find(|idx| {
-                        command_sessions[*idx].kind == shell2_cmd::CommandSessionKind::Qjs
-                    });
-                    if let Some(session_idx) = qjs_session_index {
-                        if !submitted.is_empty() {
-                            record_user_line_for_active_slot(io, submitted);
-                        }
-                        match handle_command_session_input(
-                            &spawner,
-                            io,
-                            &command_sessions[session_idx],
-                            submitted,
-                            output_mask,
-                        ) {
-                            CommandSessionInputResult::CompleteIdle => {
-                                matrix::set_slot_activity(
-                                    &command_sessions[session_idx].slot_id,
-                                    matrix::MatrixSlotActivity::Idle,
-                                );
-                                let _ = command_sessions.remove(session_idx);
-                            }
-                            CommandSessionInputResult::CompleteRunning => {
-                                let _ = command_sessions.remove(session_idx);
-                            }
-                            CommandSessionInputResult::KeepRunning => {}
-                        }
-                    } else if let Some(operator) = parse_double_section_operator(submitted) {
+                    if let Some(operator) = parse_double_section_operator(submitted) {
                         match operator {
                             DoubleSectionOperator::Clear => {
                                 matrix::clear_active_lines(output_mask);
@@ -2496,41 +2360,6 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             }
         } else {
-            if esc == EscState::Esc
-                && shell2_qjs::is_session_active(&matrix::active_slot_id(output_mask))
-            {
-                esc_idle_ticks = esc_idle_ticks.saturating_add(1);
-                if esc_idle_ticks >= 10 {
-                    esc = EscState::None;
-                    esc_idle_ticks = 0;
-                    text_decode.reset();
-                    live_history_cursor = None;
-                    cmd_status_text = None;
-                    if close_active_qjs_session(&mut command_sessions, output_mask, "ESC") {
-                        zeroize_input_line(&mut line);
-                        transcript = redraw_active_view(
-                            &out,
-                            io,
-                            output_mask,
-                            mode,
-                            apps_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                            running_go2_phase,
-                            minute_text.as_str(),
-                        );
-                        last_chrome_state = current_chrome_state(
-                            output_mask,
-                            mode,
-                            apps_mode,
-                            surf_prefix,
-                            cmd_status_text.as_deref(),
-                        );
-                        last_matrix_revision = matrix::visible_revision(output_mask);
-                    }
-                    continue;
-                }
-            }
             if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) == 0 {
                 if terminal_size_query_idle_ticks == 0 {
                     out.io.raw_write_str(TERMINAL_SIZE_QUERY);

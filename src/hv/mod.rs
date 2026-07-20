@@ -2506,6 +2506,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
+        let _ = crate::shell2::qjs_workbench::close(vm_id);
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
         if released != crate::ui4::OwnerReleaseSummary::default() {
             hvlogf(format_args!(

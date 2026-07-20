@@ -19,7 +19,7 @@ struct BuiltinShell2CmdEntry {
 }
 
 const STATUS_GREEN_RGB: (u8, u8, u8) = (60, 220, 120);
-const STATUS_GREEN_ALT_RGB: (u8, u8, u8) = (78, 232, 136);
+const STATUS_GREEN_SQUARE_BRACKET_RGB: (u8, u8, u8) = (78, 232, 136);
 const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
@@ -561,14 +561,15 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs", "txt",
-        "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
+        "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs",
+        "txt", "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
 
     let mut first = true;
     for name in STATUS_ORDER {
+        // `rm` and `mv` remain separate commands; only their statusbar glyphs overlap.
         if *name == "mv" {
             continue;
         }
@@ -594,16 +595,15 @@ pub(crate) fn command_names_status_text() -> AllocString {
 }
 
 fn push_rm_mv_status_token(out: &mut AllocString) {
-    for (text, color) in [
-        ("(", STATUS_GREEN_RGB),
-        ("r", STATUS_GREEN_RGB),
-        ("[", STATUS_GREEN_ALT_RGB),
-        ("m", STATUS_GREEN_RGB),
-        (")", STATUS_GREEN_RGB),
-        ("v", STATUS_GREEN_RGB),
-        ("]", STATUS_GREEN_ALT_RGB),
-    ] {
-        let styled = alloc::format!("{}", super::term_style::paint(text).bold().color(color));
+    for ch in "(r[m)v]".chars() {
+        let mut glyph = [0u8; 4];
+        let glyph = ch.encode_utf8(&mut glyph);
+        let color = if matches!(ch, '[' | ']') {
+            STATUS_GREEN_SQUARE_BRACKET_RGB
+        } else {
+            STATUS_GREEN_RGB
+        };
+        let styled = alloc::format!("{}", super::term_style::paint(glyph).bold().color(color));
         out.push_str(styled.as_str());
     }
 }

@@ -73,6 +73,9 @@ pub const OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8: u32 = 0xC4; // arg0 window,arg1 by
 pub const OP_BP_UI4_SCENE_FRAME_SET_POSITION: u32 = 0xC5; // arg0 window,arg1 x/y -> rc
 pub const OP_BP_UI4_SCENE_FRAME_RESIZE: u32 = 0xC6; // arg0 window,arg1 width/height -> rc
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 width/height -> window
+pub const OP_BP_QJS_WORKBENCH_EVAL_V1: u32 = 0xC8; // arg0 eval mode,payload source -> encoded result
+pub const OP_BP_QJS_WORKBENCH_POLL_V1: u32 = 0xC9; // pump VM -> pending print output
+pub const OP_BP_QJS_WORKBENCH_CLOSE_V1: u32 = 0xCA; // discard calling VM's QuickJS runtime
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -978,6 +981,45 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 x, y, width, height,
             );
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_QJS_WORKBENCH_EVAL_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Ok(source) = core::str::from_utf8(payload) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let result = crate::shell2::qjs_workbench::eval(vm_id, source, arg0 as u32);
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let len = result.len().min(PAYLOAD_CAP);
+            unsafe {
+                (&mut (*page).payload)[..len].copy_from_slice(&result[..len]);
+            }
+            write_response(vm_id, seq, STATUS_OK, len as u64, len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_QJS_WORKBENCH_POLL_V1 => {
+            let output = crate::shell2::qjs_workbench::poll(vm_id);
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let len = output.len().min(PAYLOAD_CAP);
+            unsafe {
+                (&mut (*page).payload)[..len].copy_from_slice(&output[..len]);
+            }
+            write_response(vm_id, seq, STATUS_OK, len as u64, len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_QJS_WORKBENCH_CLOSE_V1 => {
+            let closed = crate::shell2::qjs_workbench::close(vm_id);
+            write_response(vm_id, seq, STATUS_OK, u64::from(closed), 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {

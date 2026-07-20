@@ -1478,6 +1478,67 @@ pub unsafe extern "C" fn trueos_cabi_shell2_raw_write(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_qjs_workbench_eval_v1(
+    source_ptr: *const u8,
+    source_len: usize,
+    mode: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if source_ptr.is_null() || source_len == 0 {
+        return -1;
+    }
+    let source = unsafe { core::slice::from_raw_parts(source_ptr, source_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_none()
+        || source.len() > trueos_vm::vmcall::PAYLOAD_CAP
+    {
+        return -1;
+    }
+    let mut response = alloc::vec![0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, len) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_QJS_WORKBENCH_EVAL_V1,
+        u64::from(mode),
+        0,
+        source,
+        response.as_mut_slice(),
+    );
+    copy_guest_text_response(status, len, response.as_slice(), out_ptr, out_cap)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_qjs_workbench_poll_v1(
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let mut response = alloc::vec![0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, len) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_QJS_WORKBENCH_POLL_V1,
+        0,
+        0,
+        &[],
+        response.as_mut_slice(),
+    );
+    copy_guest_text_response(status, len, response.as_slice(), out_ptr, out_cap)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_qjs_workbench_close_v1() -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let (status, _) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_QJS_WORKBENCH_CLOSE_V1, 0, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_exit_reason(
     data_ptr: *const u8,
     data_len: usize,

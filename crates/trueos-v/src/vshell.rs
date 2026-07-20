@@ -257,6 +257,82 @@ pub fn shell2_raw_write(bytes: &[u8]) -> usize {
     unsafe { vcabi::trueos_cabi_shell2_raw_write(bytes.as_ptr(), bytes.len()) }
 }
 
+const QJS_WORKBENCH_RESPONSE_CAP: usize = 160 * 1024 - 56;
+const QJS_WORKBENCH_RESULT_HEADER_LEN: usize = 10;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum QjsWorkbenchMode {
+    Auto = 0,
+    Script = 1,
+    Module = 2,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QjsWorkbenchEval {
+    pub ok: bool,
+    pub mode: QjsWorkbenchMode,
+    pub eval_count: u64,
+    pub text: String,
+}
+
+pub fn qjs_workbench_eval(
+    source: &str,
+    mode: QjsWorkbenchMode,
+) -> Result<QjsWorkbenchEval, String> {
+    if source.is_empty() {
+        return Err("source is empty".into());
+    }
+    let mut response = vec![0u8; QJS_WORKBENCH_RESPONSE_CAP];
+    let len = unsafe {
+        vcabi::trueos_cabi_qjs_workbench_eval_v1(
+            source.as_ptr(),
+            source.len(),
+            mode as u32,
+            response.as_mut_ptr(),
+            response.len(),
+        )
+    };
+    if len < QJS_WORKBENCH_RESULT_HEADER_LEN as isize {
+        return Err("QuickJS workbench bridge failed".into());
+    }
+    let len = len as usize;
+    let actual_mode = match response[1] {
+        2 => QjsWorkbenchMode::Module,
+        _ => QjsWorkbenchMode::Script,
+    };
+    let eval_count = u64::from_le_bytes(
+        response[2..10]
+            .try_into()
+            .map_err(|_| String::from("invalid QuickJS result header"))?,
+    );
+    let text =
+        String::from_utf8_lossy(&response[QJS_WORKBENCH_RESULT_HEADER_LEN..len]).into_owned();
+    match response[0] {
+        0 | 1 => Ok(QjsWorkbenchEval {
+            ok: response[0] == 0,
+            mode: actual_mode,
+            eval_count,
+            text,
+        }),
+        _ => Err(text),
+    }
+}
+
+pub fn qjs_workbench_poll() -> Result<String, String> {
+    let mut response = vec![0u8; QJS_WORKBENCH_RESPONSE_CAP];
+    let len =
+        unsafe { vcabi::trueos_cabi_qjs_workbench_poll_v1(response.as_mut_ptr(), response.len()) };
+    if len < 0 {
+        return Err("QuickJS output poll failed".into());
+    }
+    Ok(String::from_utf8_lossy(&response[..len as usize]).into_owned())
+}
+
+pub fn qjs_workbench_close() {
+    let _ = unsafe { vcabi::trueos_cabi_qjs_workbench_close_v1() };
+}
+
 #[inline]
 pub fn attached_read_byte() -> Option<u8> {
     let value = unsafe { vcabi::trueos_cabi_shell_attached_read_byte() };
