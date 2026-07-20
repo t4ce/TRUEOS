@@ -56,28 +56,38 @@ pub mod kfs {
             .map_err(|_| FsError::BadPath)
     }
 
+    fn wait_for_filesystem<T>(
+        request: core::result::Result<
+            Result<T>,
+            crate::r::fs::request_broker::BlockingRequestError,
+        >,
+    ) -> Result<T> {
+        match request {
+            Ok(result) => result,
+            Err(error) => {
+                crate::log_error!(target: "filesystem";
+                    "kfs: blocking request rejected reason={:?} cpu={} executor_poll={}\n",
+                    error,
+                    crate::percpu::this_cpu().cpu_index(),
+                    crate::percpu::in_executor_poll(),
+                );
+                Err(FsError::Device(block::Error::NotReady))
+            }
+        }
+    }
+
     #[inline]
     pub fn read_file(path: &str) -> Result<Vec<u8>> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::file_out_async(disk, name.as_str()).await? {
-                Some(bytes) => Ok(bytes),
-                None => Err(FsError::NotFound),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::read_file(disk, name))
     }
 
     #[inline]
     pub fn read_file_len(path: &str) -> Result<usize> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::file_info_async(disk, name.as_str()).await? {
-                Some(info) => Ok(info.data_len as usize),
-                None => Err(FsError::NotFound),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::read_file_len(disk, name))
     }
 
     #[inline]
@@ -89,23 +99,9 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         let cap = out.len();
-        let bytes = crate::wait::spawn_and_wait_local(async move {
-            let mut scratch = alloc::vec![0u8; cap];
-            match crate::r::fs::trueosfs::file_read_range_async(
-                disk,
-                name.as_str(),
-                offset,
-                scratch.as_mut_slice(),
-            )
-            .await?
-            {
-                Some(got) => {
-                    scratch.truncate(got);
-                    Ok(scratch)
-                }
-                None => Err(FsError::NotFound),
-            }
-        })?;
+        let bytes = wait_for_filesystem(crate::r::fs::request_broker::read_file_range(
+            disk, name, offset, cap,
+        ))?;
         let got = core::cmp::min(bytes.len(), out.len());
         out[..got].copy_from_slice(&bytes[..got]);
         Ok(got)
@@ -115,53 +111,14 @@ pub mod kfs {
     pub fn stat(path: &str) -> Result<FsStat> {
         let disk = root_disk()?;
         let name = normalize_rel(path, true)?;
-        crate::wait::spawn_and_wait_local(async move {
-            if name.is_empty() {
-                return Ok(FsStat {
-                    kind: FsNodeKind::Directory,
-                    len: 0,
-                });
-            }
-
-            if let Some(info) = crate::r::fs::trueosfs::file_info_async(disk, name.as_str()).await?
-            {
-                return Ok(FsStat {
-                    kind: FsNodeKind::File,
-                    len: info.data_len,
-                });
-            }
-
-            let marker = alloc::format!("{}/.keep", name);
-            if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await? {
-                return Ok(FsStat {
-                    kind: FsNodeKind::Directory,
-                    len: 0,
-                });
-            }
-
-            if crate::r::fs::trueosfs::dir_has_children_async(disk, name.as_str()).await? {
-                return Ok(FsStat {
-                    kind: FsNodeKind::Directory,
-                    len: 0,
-                });
-            }
-
-            Err(FsError::NotFound)
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::stat(disk, name))
     }
 
     #[inline]
     pub fn write_file_begin(path: &str, total_len: u64) -> Result<u32> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::file_write_begin_async(disk, name.as_str(), total_len)
-                .await?
-            {
-                Some(h) => Ok(h),
-                None => Err(FsError::NoSpace),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::write_file_begin(disk, name, total_len))
     }
 
     #[inline]
@@ -172,75 +129,35 @@ pub mod kfs {
             return Ok(());
         }
 
-        crate::wait::spawn_and_wait_local(async move {
-            let mut prefix = String::new();
-            for part in name.split('/') {
-                if !prefix.is_empty() {
-                    prefix.push('/');
-                }
-                prefix.push_str(part);
-
-                let marker = alloc::format!("{}/.keep", prefix);
-                if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await?
-                    || crate::r::fs::trueosfs::dir_has_children_async(disk, prefix.as_str()).await?
-                {
-                    continue;
-                }
-
-                let ok = crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await?;
-                if !ok {
-                    return Err(FsError::NoSpace);
-                }
-            }
-            Ok(())
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::create_dir_all(disk, name))
     }
 
     #[inline]
     pub fn write_file_chunk(handle: u32, data: &[u8]) -> Result<()> {
         let data = data.to_vec();
-        crate::wait::spawn_and_wait_local(async move {
-            crate::r::fs::trueosfs::file_write_chunk_async(handle, data.as_slice()).await?;
-            Ok(())
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::write_file_chunk(handle, data))
     }
 
     #[inline]
     pub fn write_file_finish(handle: u32) -> Result<()> {
-        crate::wait::spawn_and_wait_local(async move {
-            crate::r::fs::trueosfs::file_write_finish_async(handle).await?;
-            Ok(())
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::write_file_finish(handle))
     }
 
     #[inline]
     pub fn write_file_abort(handle: u32) -> Result<()> {
-        crate::wait::spawn_and_wait_local(async move {
-            crate::r::fs::trueosfs::file_write_abort_async(handle).await?;
-            Ok(())
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::write_file_abort(handle))
     }
 
     #[inline]
     pub fn html_tree(max_entries: usize) -> Result<String> {
         let disk = root_disk()?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::fs_html::html_tree_async(disk, max_entries).await? {
-                Some(v) => Ok(v),
-                None => Err(FsError::NoRoot),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::html_tree(disk, max_entries))
     }
 
     #[inline]
     pub fn json_all(max_entries: usize) -> Result<String> {
         let disk = root_disk()?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::json_all_async(disk, max_entries).await? {
-                Some(v) => Ok(v),
-                None => Err(FsError::NoRoot),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::json_all(disk, max_entries))
     }
 
     #[inline]
@@ -252,31 +169,21 @@ pub mod kfs {
 
         let disk = root_disk()?;
         let name = normalize_rel(path, true)?;
-        crate::wait::spawn_and_wait_local(async move {
-            match crate::r::fs::trueosfs::list_dir_async(disk, name.as_str()).await? {
-                Some(v) => Ok(v),
-                None => Err(FsError::NoRoot),
-            }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::list_dir(disk, name))
     }
 
     #[inline]
     pub fn remove(path: &str) -> Result<()> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            let ok = crate::r::fs::trueosfs::file_delete_async(disk, name.as_str()).await?;
-            if ok { Ok(()) } else { Err(FsError::NotFound) }
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::remove(disk, name))
     }
 
     #[inline]
     pub fn exists(path: &str) -> Result<bool> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
-        crate::wait::spawn_and_wait_local(async move {
-            Ok(crate::r::fs::trueosfs::file_exists_async(disk, name.as_str()).await?)
-        })
+        wait_for_filesystem(crate::r::fs::request_broker::exists(disk, name))
     }
 }
 

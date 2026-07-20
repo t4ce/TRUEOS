@@ -277,7 +277,14 @@ fn spawn_bsp_services(spawner: Spawner) {
 fn _loop(executor: &'static Executor) -> ! {
     loop {
         time::poll();
-        unsafe { executor.poll() };
+        // Keep the per-CPU executor-poll guard authoritative for BSP tasks.
+        // Blocking filesystem callers now run on leased AP service lanes and
+        // cross into the BSP through the TRUEOSFS request broker.
+        debug_assert!(core::ptr::eq(
+            executor,
+            unsafe { &*percpu::this_cpu().executor_ptr() },
+        ));
+        runtime::poll_local_executor();
         //if counter.is_multiple_of(10_000_000) {
         //    log_os::debugcon_write_byte_raw(b'0');
         //}

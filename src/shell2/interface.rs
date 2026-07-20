@@ -1,4 +1,4 @@
-pub(crate) trait ShellIo2 {
+pub(crate) trait ShellIo2: Sync {
     // Raw terminal/backend writes bypass the shell transcript. Normal command
     // output should go through `print_shell_line` or a command session target.
     fn raw_write_str(&self, s: &str);

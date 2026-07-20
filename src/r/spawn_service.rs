@@ -39,6 +39,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    TRUEOSFS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
     SMP_HLT_HISTORY_STARTED,
@@ -251,6 +252,10 @@ fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttemp
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
+}
+
+fn spawn_trueosfs_request_broker(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::fs::request_broker::service_task())
 }
 
 fn spawn_blocking_service_lanes(spawner: Spawner) -> SpawnAttempt {
@@ -1281,11 +1286,17 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 64
+const TASK_COUNT: usize = 65
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
+    TaskSpec::enabled(
+        "trueosfs-request-broker",
+        0,
+        &TRUEOSFS_REQUEST_BROKER_STARTED,
+        spawn_trueosfs_request_broker,
+    ),
     TaskSpec::enabled(
         "blocking-service-lanes",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,

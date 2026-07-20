@@ -227,12 +227,12 @@ fn first_path_arg(args: &[String]) -> Option<String> {
     None
 }
 
-pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn run_submitted(io: &'static dyn ShellBackend2, rest: &str) {
     let (mut table, archive_7z, args) = match strip_shell2_flags(rest) {
         Ok(parsed) => parsed,
         Err(err) => {
             print_shell_line(io, alloc::format!("lsd: {}", err).as_str());
-            return ParseOutcome::Handled;
+            return;
         }
     };
     let display_path = first_path_arg(args.as_slice());
@@ -247,12 +247,12 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     if archive_7z {
         let Some(path) = display_path.as_deref() else {
             print_shell_line(io, "lsd: usage `lsd -7z path`");
-            return ParseOutcome::Handled;
+            return;
         };
         if let Err(err) = run_lsd_archive(io, path) {
             print_shell_line(io, alloc::format!("lsd: {path}: {err}").as_str());
         }
-        return ParseOutcome::Handled;
+        return;
     }
 
     let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
@@ -299,6 +299,33 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             print_shell_line(io, alloc::format!("lsd: {}", err).as_str());
         }
     }
+}
 
+pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let submitted = String::from(rest);
+    let target = matrix_target_for_backend(io);
+    super::super::set_matrix_target_active(&target, true);
+    let completion_target = target.clone();
+    let job = alloc::boxed::Box::new(move || {
+        crate::log_info!(target: "filesystem";
+            "shell2/lsd: blocking-lane start cpu={} executor_poll={} fs_transport=bsp-request-broker\n",
+            crate::percpu::this_cpu().cpu_index(),
+            crate::percpu::in_executor_poll(),
+        );
+        run_submitted(io, submitted.as_str());
+        crate::log_info!(target: "filesystem";
+            "shell2/lsd: blocking-lane done cpu={} fs_transport=bsp-request-broker\n",
+            crate::percpu::this_cpu().cpu_index(),
+        );
+        super::super::set_matrix_target_active(&completion_target, false);
+    });
+    let rc = crate::r::blocking::spawn_blocking_job_with_purpose(job, "shell2-lsd");
+    if rc != 0 {
+        super::super::set_matrix_target_active(&target, false);
+        print_shell_line(
+            io,
+            alloc::format!("lsd: blocking service lane unavailable rc={rc}").as_str(),
+        );
+    }
     ParseOutcome::Handled
 }
