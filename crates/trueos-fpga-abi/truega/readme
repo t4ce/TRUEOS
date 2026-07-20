@@ -1,0 +1,29 @@
+env LD_LIBRARY_PATH="$(pwd)/../lib" QT_LOGGING_RULES="qt.qpa.gl=true;qt.qpa.xcb=true" ./gw_ide
+
+
+::: layout notes :::
+
+
+
+Tip: Try Plan mode to let the agent perform deep analysis and planning before implementing changes.
+
+did we not find our way more about the layout ecetera? with all these tries
+
+Yes — we learned a bunch about the RX stream/layout, just not in a nice “spec doc” form because Gowin doesn’t hand us one.
+
+What we learned about the Gowin TL RX stream (hard observations)
+
+tl_rx_data[255:0] is effectively 8×DWORD per beat, and tl_rx_valid[7:0] tells you which DWORD lanes are valid in that cycle.
+A full TLP can span multiple cycles; tl_rx_sop/tl_rx_eop bracket the packet, but the header DWORD is not guaranteed to be the first collected DWORD. That’s why scanning h=0..9 for the header worked.
+The “MWr discriminator” we used is real: the header DWORD has Fmt/Type in bits [31:24] and we repeatedly saw 0x40 / 0x60 show up there (3DW/4DW MWr candidates).
+The length field is in header bits [9:0] (we reliably detected LEN==1 for the heartbeat).
+Lane ordering matters: collecting lanes in the wrong order within a beat will scramble the word sequence (we explicitly tried reversing the per-beat lane loop).
+Address vs payload location relative to the header is consistent once you use the right packing, but the core’s packing made our initial fixed (h+2)/(h+3) assumptions unreliable until we either:
+scan for the header, and/or
+auto-locate address/payload by behavior (addr stable + offset bits zero, payload toggles 0/1)
+What we learned about the actual transaction
+
+TRUEOS is definitely issuing posted Memory Writes to BAR0+0 with a payload that toggles between 0 and 1.
+The FPGA is definitely receiving traffic that BAR-decodes to BAR0 and includes MWr TLPs.
+End-to-end is now working: decoded payload bit0 reaches the LED output in TRUEGA/min_pci_led/src/top.vhd.
+If you want, I can write this up as a short “layout notes” markdown next to the harness (so we don’t lose the map again).

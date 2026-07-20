@@ -1,4 +1,4 @@
-use core::ptr::{NonNull, read_volatile, write_bytes, write_volatile};
+use core::ptr::{NonNull, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
@@ -11,46 +11,30 @@ const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
 const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
 const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 
-// Minimal "unified" contract (we control both ends):
+// Minimal TGA contract (we control both ends):
 // - BAR0 is MMIO
 // - BAR0 + 0x00 is a 32-bit LED bitfield
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
-// - BAR0 + 0x20 is reserved for a future 32-bit read-only protocol magic ("TGAT")
-// - BAR0 + 0x28 starts the tiny ADD unit after ARG0/ARG1 are written
-//   - RESULT becomes ARG0 + ARG1, STATUS.DONE is set, RETIRE_COUNT increments
+// - BAR0 + 0x20 is a 32-bit read-only liveness magic ("TGAT")
+// - BAR0 + 0x28..0x34 publishes one fixed DMA work package
+// - BAR0 + 0x38 is a doorbell; the function and arguments live in the package
+//
+// The LED/magic plane stays independent of function execution so it remains useful when
+// function firmware wedges.  There is no FPGA-side command processor or virtual memory.
 const TGA_LED_SET_OFF: usize = 0x00;
 const TGA_MAGIC_OFF: usize = 0x20;
-const TGA_ADD_STATUS_OFF: usize = 0x24;
-const TGA_ADD_CMD_OFF: usize = 0x28;
-const TGA_ADD_ARG0_OFF: usize = 0x2C;
-const TGA_ADD_ARG1_OFF: usize = 0x30;
-const TGA_ADD_RESULT_OFF: usize = 0x34;
-const TGA_ADD_RETIRE_COUNT_OFF: usize = 0x38;
-const TGA_ADD_ERROR_OFF: usize = 0x3C;
-const TGA_HOST_MB_ADDR_LO_OFF: usize = 0x40;
-const TGA_HOST_MB_ADDR_HI_OFF: usize = 0x44;
-const TGA_HOST_MB_BYTES_OFF: usize = 0x48;
-const TGA_HOST_MB_DOORBELL_OFF: usize = 0x4C;
+const TGA_OFFLOAD_ABI_VERSION_OFF: usize = 0x24;
+const TGA_OFFLOAD_WORK_ADDR_LO_OFF: usize = 0x28;
+const TGA_OFFLOAD_WORK_ADDR_HI_OFF: usize = 0x2C;
+const TGA_OFFLOAD_WORK_BYTES_OFF: usize = 0x30;
+const TGA_OFFLOAD_FLAGS_OFF: usize = 0x34;
+const TGA_OFFLOAD_DOORBELL_OFF: usize = 0x38;
+const TGA_OFFLOAD_IRQ_ACK_OFF: usize = 0x3C;
 
-const TGA_CMD_ADD_U32: u32 = 1;
-const TGA_STATUS_BUSY: u32 = 1 << 0;
-const TGA_STATUS_DONE: u32 = 1 << 1;
-const TGA_ADD_POLL_LIMIT: usize = 10_000;
-const TGA_HOST_MB_BYTES: usize = 4096;
-const TGA_HOST_MB_ALIGN: usize = 4096;
-const TGA_HOST_MB_DOORBELL_MAGIC: u32 = 0x484D_4231; // "HMB1"
-const TGA_HOST_MB_MAGIC_OFF: usize = 0x00;
-const TGA_HOST_MB_SEQ_OFF: usize = 0x04;
-const TGA_HOST_MB_VALUE_OFF: usize = 0x08;
-const TGA_HOST_MB_STATUS_OFF: usize = 0x0C;
+const TGA_OFFLOAD_DOORBELL_MAGIC: u32 = 0x4C4C_4143; // "CALL"
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
 const TGA_HEARTBEAT_MMIO_ENABLED: bool = true;
-const TGA_READBACK_DOORBELL_ENABLED: bool = true;
-const TGA_HOST_MAILBOX_ENABLED: bool = true;
-const TGA_ADD_PROOF_ON_CONNECT_ENABLED: bool = false;
-const TGA_READBACK_DOORBELL_AFTER_WRITES: u32 = 20;
-const TGA_READBACK_DOORBELL_LED_VALUE: u32 = 0x1F;
 const TGA_MAGIC_EXPECTED: u32 = 0x5453_4154;
 
 struct Tga {
@@ -64,13 +48,13 @@ struct Tga {
     mmio_base: usize,
     led_reg: usize,
     magic_reg: usize,
-    add_status_reg: usize,
-    add_cmd_reg: usize,
-    add_arg0_reg: usize,
-    add_arg1_reg: usize,
-    add_result_reg: usize,
-    add_retire_count_reg: usize,
-    add_error_reg: usize,
+    offload_abi_version_reg: usize,
+    offload_work_addr_lo_reg: usize,
+    offload_work_addr_hi_reg: usize,
+    offload_work_bytes_reg: usize,
+    offload_flags_reg: usize,
+    offload_doorbell_reg: usize,
+    offload_irq_ack_reg: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -85,28 +69,13 @@ struct TgaHotplugSnapshot {
     mmio_base: usize,
 }
 
-#[derive(Copy, Clone)]
-struct TgaHostMailbox {
-    phys: u64,
-    virt: usize,
-    len: usize,
-}
-
 // Safety: `Tga` contains an MMIO pointer and is always accessed behind the `TGA` mutex.
 unsafe impl Send for Tga {}
 
-#[derive(Copy, Clone)]
-pub struct TgaAddProof {
-    pub a: u32,
-    pub b: u32,
-    pub expected: u32,
-    pub result: u32,
-    pub status: u32,
-    pub retire_count: u32,
-    pub error: u32,
-    pub polls: usize,
-    pub done: bool,
-    pub ok: bool,
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum OffloadTransportError {
+    Offline,
+    InvalidPackage,
 }
 
 impl Tga {
@@ -125,56 +94,19 @@ impl Tga {
         unsafe { write_volatile(reg as *mut u32, value) };
     }
 
-    fn add_u32(&self, a: u32, b: u32) -> TgaAddProof {
-        let expected = a.wrapping_add(b);
-
-        Self::write_reg(self.add_status_reg, 0);
-        Self::write_reg(self.add_arg0_reg, a);
-        Self::write_reg(self.add_arg1_reg, b);
-        Self::write_reg(self.add_cmd_reg, TGA_CMD_ADD_U32);
-
-        let mut status = 0;
-        let mut polls = 0usize;
-        while polls < TGA_ADD_POLL_LIMIT {
-            status = Self::read_reg(self.add_status_reg);
-            if (status & TGA_STATUS_DONE) != 0 && (status & TGA_STATUS_BUSY) == 0 {
-                break;
-            }
-            polls += 1;
-        }
-
-        let result = Self::read_reg(self.add_result_reg);
-        let retire_count = Self::read_reg(self.add_retire_count_reg);
-        let error = Self::read_reg(self.add_error_reg);
-        let done = (status & TGA_STATUS_DONE) != 0 && (status & TGA_STATUS_BUSY) == 0;
-        let ok = done && result == expected && error == 0;
-
-        TgaAddProof {
-            a,
-            b,
-            expected,
-            result,
-            status,
-            retire_count,
-            error,
-            polls,
-            done,
-            ok,
-        }
+    fn protocol_magic(&self) -> u32 {
+        Self::read_reg(self.magic_reg)
     }
 }
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
-static TGA_HOST_MAILBOX: Mutex<Option<TgaHostMailbox>> = Mutex::new(None);
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
-static TGA_READBACK_DOORBELL_DONE: AtomicBool = AtomicBool::new(false);
-static TGA_HOST_MAILBOX_LAST_SEQ: AtomicU32 = AtomicU32::new(0);
-static TGA_HOST_MAILBOX_LAST_MAGIC: AtomicU32 = AtomicU32::new(0);
+static TGA_LIVENESS_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -305,153 +237,24 @@ fn write_heartbeat_led(value: u32, count: u32) {
     }
 }
 
-fn ensure_host_mailbox() -> Option<TgaHostMailbox> {
-    if !TGA_HOST_MAILBOX_ENABLED {
-        return None;
-    }
-
-    {
-        let guard = TGA_HOST_MAILBOX.lock();
-        if let Some(mb) = *guard {
-            return Some(mb);
-        }
-    }
-
-    let Some((phys, virt)) = crate::dma::alloc(TGA_HOST_MB_BYTES, TGA_HOST_MB_ALIGN) else {
-        crate::log!(
-            "tga: host-mailbox alloc failed bytes={} align={}\n",
-            TGA_HOST_MB_BYTES,
-            TGA_HOST_MB_ALIGN
-        );
-        return None;
-    };
-
-    unsafe { write_bytes(virt, 0, TGA_HOST_MB_BYTES) };
-    fence(Ordering::Release);
-
-    let mb = TgaHostMailbox {
-        phys,
-        virt: virt as usize,
-        len: TGA_HOST_MB_BYTES,
-    };
-
-    *TGA_HOST_MAILBOX.lock() = Some(mb);
-    crate::log!(
-        "tga: host-mailbox allocated phys=0x{:016X} virt=0x{:016X} bytes=0x{:X} layout magic+0 seq+4 value+8 status+12\n",
-        mb.phys,
-        mb.virt,
-        mb.len
-    );
-    Some(mb)
-}
-
-fn publish_host_mailbox() {
-    if !TGA_HOST_MAILBOX_ENABLED {
+fn log_liveness_once() {
+    if TGA_LIVENESS_LOGGED.swap(true, Ordering::AcqRel) {
         return;
     }
-    let Some(mb) = ensure_host_mailbox() else {
-        return;
-    };
-
     let guard = TGA.lock();
     let Some(tga) = guard.as_ref() else {
+        TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
         return;
     };
-    let bus = tga.bus;
-    let slot = tga.slot;
-    let function = tga.function;
-    let bar_phys = tga.bar_phys;
-    let base = tga.mmio_base;
-
-    Tga::write_reg(base + TGA_HOST_MB_ADDR_LO_OFF, mb.phys as u32);
-    Tga::write_reg(base + TGA_HOST_MB_ADDR_HI_OFF, (mb.phys >> 32) as u32);
-    Tga::write_reg(base + TGA_HOST_MB_BYTES_OFF, mb.len as u32);
-    fence(Ordering::Release);
-    Tga::write_reg(base + TGA_HOST_MB_DOORBELL_OFF, TGA_HOST_MB_DOORBELL_MAGIC);
-    drop(guard);
-
+    let magic = tga.protocol_magic();
     crate::log!(
-        "tga: host-mailbox published bdf={:02X}:{:02X}.{} bar0=0x{:016X} phys=0x{:016X} bytes=0x{:X} doorbell=0x{:08X}\n",
-        bus,
-        slot,
-        function,
-        bar_phys,
-        mb.phys,
-        mb.len,
-        TGA_HOST_MB_DOORBELL_MAGIC
-    );
-}
-
-fn poll_host_mailbox() {
-    if !TGA_HOST_MAILBOX_ENABLED {
-        return;
-    }
-    let Some(mb) = *TGA_HOST_MAILBOX.lock() else {
-        return;
-    };
-
-    fence(Ordering::Acquire);
-    let base = mb.virt;
-    let magic = unsafe { read_volatile((base + TGA_HOST_MB_MAGIC_OFF) as *const u32) };
-    let seq = unsafe { read_volatile((base + TGA_HOST_MB_SEQ_OFF) as *const u32) };
-    let value = unsafe { read_volatile((base + TGA_HOST_MB_VALUE_OFF) as *const u32) };
-    let status = unsafe { read_volatile((base + TGA_HOST_MB_STATUS_OFF) as *const u32) };
-
-    let last_seq = TGA_HOST_MAILBOX_LAST_SEQ.load(Ordering::Relaxed);
-    let last_magic = TGA_HOST_MAILBOX_LAST_MAGIC.load(Ordering::Relaxed);
-    if magic == 0 && seq == 0 && value == 0 && status == 0 {
-        return;
-    }
-    if magic == last_magic && seq == last_seq {
-        return;
-    }
-
-    TGA_HOST_MAILBOX_LAST_MAGIC.store(magic, Ordering::Relaxed);
-    TGA_HOST_MAILBOX_LAST_SEQ.store(seq, Ordering::Relaxed);
-    crate::log!(
-        "tga: host-mailbox rx magic=0x{:08X} expected=0x{:08X} ok={} seq={} value=0x{:08X} status=0x{:08X} phys=0x{:016X}\n",
+        "tga: heartbeat reply={} magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}\n",
+        if magic == TGA_MAGIC_EXPECTED { "yep-alive" } else { "bad-magic" },
         magic,
         TGA_MAGIC_EXPECTED,
-        (magic == TGA_MAGIC_EXPECTED) as u8,
-        seq,
-        value,
-        status,
-        mb.phys
-    );
-}
-
-fn try_readback_doorbell(count: u32) {
-    if !TGA_READBACK_DOORBELL_ENABLED || count < TGA_READBACK_DOORBELL_AFTER_WRITES {
-        return;
-    }
-    if TGA_READBACK_DOORBELL_DONE.swap(true, Ordering::Relaxed) {
-        return;
-    }
-
-    let guard = TGA.lock();
-    let Some(tga) = guard.as_ref() else {
-        TGA_READBACK_DOORBELL_DONE.store(false, Ordering::Relaxed);
-        return;
-    };
-    let bus = tga.bus;
-    let slot = tga.slot;
-    let function = tga.function;
-    let bar_phys = tga.bar_phys;
-    let led_reg = tga.led_reg;
-    let magic_reg = tga.magic_reg;
-    tga.write_led(TGA_READBACK_DOORBELL_LED_VALUE);
-    drop(guard);
-
-    crate::log!(
-        "tga: readback-doorbell posted led=0x{:02X} future_magic_expected=0x{:08X} bdf={:02X}:{:02X}.{} bar0=0x{:016X} led_virt=0x{:016X} magic_virt=0x{:016X}\n",
-        TGA_READBACK_DOORBELL_LED_VALUE,
-        TGA_MAGIC_EXPECTED,
-        bus,
-        slot,
-        function,
-        bar_phys,
-        led_reg,
-        magic_reg
+        tga.bus,
+        tga.slot,
+        tga.function
     );
 }
 
@@ -551,23 +354,58 @@ pub fn tga_led_set(on: bool) {
     tga_led_write(if on { 1 } else { 0 });
 }
 
-pub fn tga_add_u32(a: u32, b: u32) -> Option<TgaAddProof> {
+/// Publish the one DMA-resident call package understood by the TGA firmware.
+///
+/// This is transport setup, not a command submission protocol.  The function slot,
+/// arguments, completion flag, and result all live in the fixed work package.
+pub(crate) fn bind_offload_work_package(
+    phys: u64,
+    bytes: usize,
+) -> Result<(), OffloadTransportError> {
+    if phys == 0 || bytes != core::mem::size_of::<trueos_fpga_abi::WorkPackage>() {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
     let guard = TGA.lock();
-    let proof = guard.as_ref()?.add_u32(a, b);
-    crate::log!(
-        "tga: add-proof a=0x{:08X} b=0x{:08X} result=0x{:08X} expected=0x{:08X} ok={} done={} polls={} status=0x{:08X} retire={} error=0x{:08X}\n",
-        proof.a,
-        proof.b,
-        proof.result,
-        proof.expected,
-        proof.ok as u8,
-        proof.done as u8,
-        proof.polls,
-        proof.status,
-        proof.retire_count,
-        proof.error
-    );
-    Some(proof)
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    Tga::write_reg(tga.offload_abi_version_reg, trueos_fpga_abi::ABI_VERSION as u32);
+    Tga::write_reg(tga.offload_work_addr_lo_reg, phys as u32);
+    Tga::write_reg(tga.offload_work_addr_hi_reg, (phys >> 32) as u32);
+    Tga::write_reg(tga.offload_work_bytes_reg, bytes as u32);
+    Tga::write_reg(tga.offload_flags_reg, 0);
+    fence(Ordering::Release);
+    Ok(())
+}
+
+/// Hand ownership of the already-published work package to the FPGA.
+pub(crate) fn ring_offload_doorbell() -> Result<(), OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    fence(Ordering::Release);
+    Tga::write_reg(tga.offload_doorbell_reg, TGA_OFFLOAD_DOORBELL_MAGIC);
+    Ok(())
+}
+
+/// Acknowledge a completion interrupt after the service has consumed the result.
+/// Polling firmware does not require this operation.
+pub(crate) fn ack_offload_interrupt() -> Result<(), OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    Tga::write_reg(tga.offload_irq_ack_reg, 1);
+    Ok(())
+}
+
+pub fn protocol_alive() -> bool {
+    TGA.lock()
+        .as_ref()
+        .map(|tga| tga.protocol_magic() == TGA_MAGIC_EXPECTED)
+        .unwrap_or(false)
 }
 
 pub fn try_init() -> bool {
@@ -613,16 +451,10 @@ pub fn try_init() -> bool {
     }
 
     *TGA.lock() = Some(tga);
-    TGA_READBACK_DOORBELL_DONE.store(false, Ordering::Relaxed);
-    TGA_HOST_MAILBOX_LAST_MAGIC.store(0, Ordering::Relaxed);
-    TGA_HOST_MAILBOX_LAST_SEQ.store(0, Ordering::Relaxed);
-    publish_host_mailbox();
+    TGA_LIVENESS_LOGGED.store(false, Ordering::Relaxed);
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         // Keep contract explicit when MMIO touch is enabled: default to LED off.
         tga_led_set(false);
-    }
-    if TGA_ADD_PROOF_ON_CONNECT_ENABLED {
-        let _ = tga_add_u32(0x1234_5678, 0x1111_2222);
     }
     true
 }
@@ -630,7 +462,7 @@ pub fn try_init() -> bool {
 pub fn init_once() {
     crate::log_info!(
         target: "boot";
-        "tga: init_once deferred; task owns hotplug/probe after network readiness\n"
+        "tga: init_once deferred; task owns VID/PID claim and hotplug probe\n"
     );
 }
 
@@ -787,13 +619,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
     let magic_reg = base + TGA_MAGIC_OFF;
-    let add_status_reg = base + TGA_ADD_STATUS_OFF;
-    let add_cmd_reg = base + TGA_ADD_CMD_OFF;
-    let add_arg0_reg = base + TGA_ADD_ARG0_OFF;
-    let add_arg1_reg = base + TGA_ADD_ARG1_OFF;
-    let add_result_reg = base + TGA_ADD_RESULT_OFF;
-    let add_retire_count_reg = base + TGA_ADD_RETIRE_COUNT_OFF;
-    let add_error_reg = base + TGA_ADD_ERROR_OFF;
+    let offload_abi_version_reg = base + TGA_OFFLOAD_ABI_VERSION_OFF;
+    let offload_work_addr_lo_reg = base + TGA_OFFLOAD_WORK_ADDR_LO_OFF;
+    let offload_work_addr_hi_reg = base + TGA_OFFLOAD_WORK_ADDR_HI_OFF;
+    let offload_work_bytes_reg = base + TGA_OFFLOAD_WORK_BYTES_OFF;
+    let offload_flags_reg = base + TGA_OFFLOAD_FLAGS_OFF;
+    let offload_doorbell_reg = base + TGA_OFFLOAD_DOORBELL_OFF;
+    let offload_irq_ack_reg = base + TGA_OFFLOAD_IRQ_ACK_OFF;
 
     let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
 
@@ -821,13 +653,13 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         mmio_base: base,
         led_reg,
         magic_reg,
-        add_status_reg,
-        add_cmd_reg,
-        add_arg0_reg,
-        add_arg1_reg,
-        add_result_reg,
-        add_retire_count_reg,
-        add_error_reg,
+        offload_abi_version_reg,
+        offload_work_addr_lo_reg,
+        offload_work_addr_hi_reg,
+        offload_work_bytes_reg,
+        offload_flags_reg,
+        offload_doorbell_reg,
+        offload_irq_ack_reg,
     };
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         tga.write_led(0);
@@ -871,6 +703,7 @@ pub(crate) async fn tga_task() {
                         if let Some(old) = guard.take() {
                             *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
                             log_tga_state("disconnected", &old);
+                            TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
                         }
                     }
                     presence_miss_streak = 0;
@@ -890,8 +723,7 @@ pub(crate) async fn tga_task() {
             // Send 0..31 then wrap.
             write_heartbeat_led(t & 0x1F, t);
         }
-        try_readback_doorbell(t);
-        poll_host_mailbox();
+        log_liveness_once();
 
         let now = Instant::now();
         if next_tick <= now {

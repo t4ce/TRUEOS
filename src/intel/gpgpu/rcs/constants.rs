@@ -153,13 +153,15 @@ const COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x1200;
 const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 
-// The native UI4 video Frame producer binds exactly the decoder source and the
-// leased Frame destination for one SIMD16 full-output dispatch. It owns no
-// desktop/base surface and no descriptor worklist.
+// Native video uses either the proven three-surface primary conversion
+// (source/base/destination) or the parked two-surface exact-Frame experiment.
 const UI4_NV12_PRIMARY_IDD_OFFSET_BYTES: usize = 0x1000;
 const UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const UI4_NV12_PRIMARY_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
-const UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
+const UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
+const UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x1100;
+const UI4_NV12_FRAME_DST_SURFACE_STATE_OFFSET_BYTES: usize =
+    UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES;
 const UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES: usize = 0x1200;
 const UI4_NV12_PRIMARY_CROSS_THREAD_GRFS: u32 = 4;
 const UI4_NV12_PRIMARY_CROSS_THREAD_BYTES: usize = UI4_NV12_PRIMARY_CROSS_THREAD_GRFS as usize * 32;
@@ -462,4 +464,3 @@ const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;
-

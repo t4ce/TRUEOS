@@ -511,6 +511,28 @@ pub(crate) fn publish_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
+/// Publish one decoder-retired Tile64 NV12 picture as the native attachment
+/// of this exact triple-buffered video Frame allocation. The broker-managed
+/// RGBA allocation is only the initialized ownership/serial carrier; the
+/// compositor consumes the native source without a CPU conversion or copy.
+pub(crate) fn publish_native_video_frame_buffer(
+    lease: FrameWriteLease,
+    view: NativeVideoFrameView,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    if frame.plan.content != FrameContent::Video
+        || frame.plan.buffering != super::FrameBuffering::Triple
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !valid_native_video_view(view, frame.plan)
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    frame.native_video[lease.buffer_index as usize] = Some(view);
+    publish_checked_frame(frame, lease)
+}
+
 /// Publish one decoder-retired native source together with the completed RGBA
 /// allocation produced from it. Both identities belong to this exact triple
 /// buffer slot: the native attachment pins decoder reuse until SURFLIVE, while

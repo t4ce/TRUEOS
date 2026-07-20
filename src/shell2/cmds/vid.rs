@@ -50,6 +50,31 @@ struct VidCommand {
     options: H264PlaybackOptions,
 }
 
+struct VidUi4Session {
+    active: bool,
+}
+
+impl VidUi4Session {
+    fn begin() -> Option<Self> {
+        crate::ui4::begin_shell_decoded_video_player().then_some(Self { active: true })
+    }
+
+    fn close(mut self) -> bool {
+        let stopped = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
+        self.active = false;
+        stopped
+    }
+}
+
+impl Drop for VidUi4Session {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = crate::ui4::stop_decoded_nv12_stream("shell2-vid-task-drop");
+            self.active = false;
+        }
+    }
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -288,6 +313,14 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
         )
         .as_str(),
     );
+    let Some(ui4_session) = VidUi4Session::begin() else {
+        print_matrix_target_line(
+            &target,
+            "vid: ui4 window unavailable or already owned by another playback task",
+        );
+        set_matrix_target_active(&target, false);
+        return;
+    };
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);
@@ -341,7 +374,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             break;
         }
     }
-    let stopped = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
+    let stopped = ui4_session.close();
     print_matrix_target_line(
         &target,
         alloc::format!("vid: ui4 video-frame stopped={}", stopped as u8).as_str(),

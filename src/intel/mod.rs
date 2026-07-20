@@ -370,6 +370,28 @@ pub(crate) fn queue_ui4_primary_composition(
     self::display::queue_ui4_primary_composition(tiles, damage, reason)
 }
 
+pub(crate) fn queue_ui4_primary_native_nv12_composition(
+    source: gpgpu::GpgpuNv12Tile64Surface,
+    content_dst_x: u32,
+    content_dst_y: u32,
+    content_width: u32,
+    content_height: u32,
+    source_x: u32,
+    source_y: u32,
+    reason: &'static str,
+) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
+    self::display::queue_ui4_primary_native_nv12_composition(
+        source,
+        content_dst_x,
+        content_dst_y,
+        content_width,
+        content_height,
+        source_x,
+        source_y,
+        reason,
+    )
+}
+
 pub(crate) fn queue_ui4_overlay_composition(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],

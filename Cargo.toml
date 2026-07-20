@@ -76,6 +76,7 @@ trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-lsd = { path = "crates/trueos-lsd" }
 trueos-silk = { path = "crates/trueos-silk" }
+trueos-fpga-abi = { path = "crates/trueos-fpga-abi" }
 trueos-draw3d = { path = "crates/trueos-draw3d" }
 trueos-h264-encode-probe = { path = "crates/trueos-h264-encode-probe", optional = true }
 parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"] }
