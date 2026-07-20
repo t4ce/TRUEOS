@@ -2,7 +2,7 @@
 
 A small, independent Ubuntu desktop demo that loops `x31_head_movie.mp4` through FFmpeg and
 uploads the decoded frames to a WGPU texture. The texture is rendered on a large UV sphere by
-default and can be switched to a cube at runtime. egui provides playback, transform, color,
+default and can be switched among ten normalized Blender-style meshes at runtime. egui provides playback, transform, color,
 exposure, lighting, and saturation controls, plus a native picker for loading another video.
 
 The copied video asset lives at `assets/x31_head_movie.mp4`. Audio is intentionally ignored: this
@@ -39,7 +39,8 @@ not accumulate latency. WGPU uploads each new frame without recreating the textu
 
 Controls:
 
-- Select **Sphere** or **Cube** in the left panel.
+- Select Plane, Cube, Circle, UV Sphere, Icosphere, Cylinder, Cone, Torus, Grid, or Suzanne from
+  the **Geometry** dropdown. Every mesh has a maximum vertex radius of `1.0`.
 - Use **Choose video…** to replace the looping texture without restarting the demo.
 - Drag in the scene to orbit and use the mouse wheel to zoom.
 - Press Space or use the button to pause/resume texture updates.

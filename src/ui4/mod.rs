@@ -23,9 +23,9 @@ pub(crate) use frame_pool::{
     NativeVideoFrameView, acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer,
     create_frame, destroy_frame, frame_snapshot, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_gpu_frame_buffer, publish_native_video_frame_buffer,
-    published_native_video_view, published_rgba_view, release_published_frame,
-    retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
+    publish_gpgpu_native_video_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_gpu_frame_buffer, published_native_video_view, published_rgba_view,
+    release_published_frame, retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -91,8 +91,8 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// become part of an application composition surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
 // Compatibility aliases for the parked linked-NV12 display-plane experiment.
-// Normal UI4 video is converted directly into the primary back buffer by the
-// GuC compositor and does not reserve either of these plane roles.
+// Normal UI4 video is converted into its exact RGBA Frame allocation and uses
+// slot 1; it never assigns decoder planes to either of these roles.
 pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
 pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
 
@@ -207,8 +207,8 @@ pub(crate) enum Nv12Layout {
 }
 
 /// One trusted native NV12 render source. This type carries no plane
-/// assignment: the GuC render conversion consumes it before the compositor's
-/// ordinary XRGB primary flip.
+/// assignment: the GuC conversion consumes it before the resulting UI4 RGBA
+/// allocation becomes eligible for an ordinary direct-import flip.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NativeNv12Surface {
     pub(crate) phys: u64,

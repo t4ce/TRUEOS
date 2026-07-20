@@ -501,33 +501,44 @@ pub(crate) fn publish_frame_buffer(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
-    if matches!(frame.plan.content, FrameContent::RenderScene3d | FrameContent::BlueprintScene)
-        && frame.gpu_authored[lease.buffer_index as usize]
+    if matches!(
+        frame.plan.content,
+        FrameContent::RenderScene3d | FrameContent::BlueprintScene | FrameContent::Video
+    ) && frame.gpu_authored[lease.buffer_index as usize]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
     }
     publish_checked_frame(frame, lease)
 }
 
-/// Publish one decoder-retired Tile64 NV12 picture as the native attachment
-/// of this exact triple-buffered video Frame allocation. The broker-managed
-/// RGBA allocation remains only the initialized fallback/serial carrier; the
-/// native source is consumed without a CPU conversion or copy.
-pub(crate) fn publish_native_video_frame_buffer(
+/// Publish one decoder-retired native source together with the completed RGBA
+/// allocation produced from it. Both identities belong to this exact triple
+/// buffer slot: the native attachment pins decoder reuse until SURFLIVE, while
+/// the compute release makes the RGBA allocation eligible for direct import.
+pub(crate) fn publish_gpgpu_native_video_frame_buffer(
     lease: FrameWriteLease,
     view: NativeVideoFrameView,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
 ) -> Result<PublishedFrame, FramePoolError> {
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::Video
         || frame.plan.buffering != super::FrameBuffering::Triple
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
         || !valid_native_video_view(view, frame.plan)
     {
         return Err(FramePoolError::ProducerReleaseRequired);
     }
-    frame.native_video[lease.buffer_index as usize] = Some(view);
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.native_video[index] = Some(view);
+    frame.gpu_release[index] = Some(FrameGpuRelease::Compute(release));
     publish_checked_frame(frame, lease)
 }
 

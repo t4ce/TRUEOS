@@ -127,7 +127,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-double-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=slot0-frame-native-source+guc-xrgb-primary linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=slot1-triple-guc-rgba8-direct-import linked_nv12_planes=off\n",
         COMPOSITION_PERIOD_MS,
     );
 
@@ -501,11 +501,6 @@ fn queue_async_plane(
     pending: &mut PendingFrame,
     plan: PlanePlan,
 ) -> Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError> {
-    if matches!(plan.target, CompositionTarget::Primary) {
-        if let Some(result) = queue_native_video_primary(pending) {
-            return result;
-        }
-    }
     let views: Vec<FrameRgbaView> = pending
         .leases
         .iter()
@@ -776,6 +771,7 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                 (snapshot.plan.content, snapshot.plan.buffering),
                 (FrameContent::Image, super::FrameBuffering::Double)
                     | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
+                    | (FrameContent::Video, super::FrameBuffering::Triple)
             )
         }
     })
@@ -838,88 +834,6 @@ const fn overlay_async_reason(slot: usize) -> &'static str {
         super::RGB_OVERLAY_PLANE_SLOT_3 => "ui4-rgb-slot3-async",
         _ => "ui4-overlay-async",
     }
-}
-
-/// Select the exact native render-source attachment owned by the sole primary
-/// video Frame lease. Ordinary RGBA windows and multi-window primary
-/// compositions keep using the general compositor; no NV12 attachment is ever
-/// interpreted as a display-plane assignment.
-fn queue_native_video_primary(
-    pending: &PendingFrame,
-) -> Option<Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError>> {
-    let mut primary = pending
-        .windows
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, window)| window.plane.slot() == super::PRIMARY_PLANE_SLOT);
-    let (lease_index, window) = primary.next()?;
-    if primary.next().is_some() || window.placement.opacity != u8::MAX {
-        return None;
-    }
-    let snapshot = frame_snapshot(window.frame).ok()?;
-    if snapshot.plan.content != FrameContent::Video
-        || snapshot.plan.width != window.placement.width
-        || snapshot.plan.height != window.placement.height
-    {
-        return None;
-    }
-    let publication = published_native_video_view(pending.leases[lease_index]).ok()?;
-    Some((|| {
-        let (output_width, output_height) =
-            crate::intel::active_scanout_dimensions().ok_or(Ui4CompositorError::PresentFailed)?;
-        let intended_x = i64::from(window.placement.x) + i64::from(publication.destination_x);
-        let intended_y = i64::from(window.placement.y) + i64::from(publication.destination_y);
-        let intended_right = intended_x + i64::from(publication.width);
-        let intended_bottom = intended_y + i64::from(publication.height);
-        let destination_x = intended_x.clamp(0, i64::from(output_width));
-        let destination_y = intended_y.clamp(0, i64::from(output_height));
-        let destination_right = intended_right.clamp(0, i64::from(output_width));
-        let destination_bottom = intended_bottom.clamp(0, i64::from(output_height));
-        let content_width = u32::try_from(destination_right.saturating_sub(destination_x))
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        let content_height = u32::try_from(destination_bottom.saturating_sub(destination_y))
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        if content_width == 0 || content_height == 0 {
-            return Err(Ui4CompositorError::PresentFailed);
-        }
-        let clipped_left = u32::try_from(destination_x.saturating_sub(intended_x))
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        let clipped_top = u32::try_from(destination_y.saturating_sub(intended_y))
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        let source_x = publication
-            .source_x
-            .checked_add(clipped_left)
-            .ok_or(Ui4CompositorError::PresentFailed)?;
-        let source_y = publication
-            .source_y
-            .checked_add(clipped_top)
-            .ok_or(Ui4CompositorError::PresentFailed)?;
-        let pitch_bytes = publication.source.pitch_bytes;
-        let uv_offset = u32::try_from(publication.source.uv_offset)
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
-        let source = crate::intel::gpgpu::GpgpuNv12Tile64Surface::new(
-            publication.source.phys,
-            publication.source.gpu,
-            publication.source.byte_len,
-            publication.source.width,
-            publication.source.height,
-            pitch_bytes,
-            uv_offset,
-        )
-        .ok_or(Ui4CompositorError::PresentFailed)?;
-        crate::intel::queue_ui4_primary_native_nv12_composition(
-            source,
-            destination_x as u32,
-            destination_y as u32,
-            content_width,
-            content_height,
-            source_x,
-            source_y,
-            "ui4-video-native-nv12-primary-async",
-        )
-        .map_err(|_| Ui4CompositorError::PresentFailed)
-    })())
 }
 
 fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {

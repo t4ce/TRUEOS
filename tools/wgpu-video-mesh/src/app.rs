@@ -51,7 +51,7 @@ impl VideoMeshApp {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
         Ok(Self {
-            mesh: MeshKind::Sphere,
+            mesh: MeshKind::UvSphere,
             playing: true,
             auto_rotate: true,
             rotation_speed: 18.0,
@@ -121,10 +121,14 @@ impl VideoMeshApp {
         ui.add_space(10.0);
 
         ui.label("Geometry");
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.mesh, MeshKind::Sphere, "Sphere");
-            ui.selectable_value(&mut self.mesh, MeshKind::Cube, "Cube");
-        });
+        egui::ComboBox::from_id_salt("geometry_selector")
+            .selected_text(self.mesh.label())
+            .width(ui.available_width())
+            .show_ui(ui, |ui| {
+                for kind in MeshKind::ALL {
+                    ui.selectable_value(&mut self.mesh, kind, kind.label());
+                }
+            });
 
         ui.add_space(8.0);
         if ui

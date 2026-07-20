@@ -1000,7 +1000,7 @@ pub(crate) struct CopyRectRgba8Params {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Ui4Nv12Tile64ToPrimaryXrgbParams {
+pub(crate) struct Ui4Nv12Tile64ToRgba8FrameParams {
     pub(crate) nv12_gpu: u64,
     pub(crate) base_gpu: u64,
     pub(crate) dst_gpu: u64,
@@ -1936,6 +1936,16 @@ pub(crate) enum Ui4CompositorCompletion {
     Complete(GpgpuWorklistSubmitStats),
     Failed,
     InvalidSubmission,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum Ui4VideoFrameCompletion {
+    Pending,
+    Complete {
+        stats: GpgpuWorklistSubmitStats,
+        release: GpgpuRgba8ReleaseFence,
+    },
+    Failed,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -4043,12 +4053,11 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
     Ok(submission)
 }
 
-/// Queue the complete native-video primary rebuild as one GuC-owned RCS job.
-/// No CPU pixel conversion, intermediate RGBA frame, descriptor worklist, or
-/// post-submit fallback is part of this contract.
-pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
+/// Convert one decoder-retired Tile64 NV12 picture directly into the exact
+/// leased UI4 RGBA allocation. The accepted submission owns `dst` until its
+/// completion marker retires; display programming is deliberately absent.
+pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     source: GpgpuNv12Tile64Surface,
-    base: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     content_dst_x: u32,
     content_dst_y: u32,
@@ -4071,27 +4080,22 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         && source_y
             .checked_add(content_height)
             .is_some_and(|bottom| bottom <= source.height);
-    let layouts_match = base.is_valid()
-        && dst.is_valid()
-        && source.is_valid()
-        && base.width == dst.width
-        && base.height == dst.height;
-    let ranges_distinct = !gpu_ranges_overlap(source.gpu, source.bytes, base.gpu, base.bytes)
-        && !gpu_ranges_overlap(source.gpu, source.bytes, dst.gpu, dst.bytes)
-        && !gpu_ranges_overlap(base.gpu, base.bytes, dst.gpu, dst.bytes)
-        && !gpu_ranges_overlap(source.phys, source.bytes, base.phys, base.bytes)
-        && !gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes)
-        && !gpu_ranges_overlap(base.phys, base.bytes, dst.phys, dst.bytes);
-    if !destination_valid || !source_valid || !layouts_match || !ranges_distinct {
+    let layouts_valid = dst.is_valid() && source.is_valid();
+    let ranges_distinct = !gpu_ranges_overlap(source.gpu, source.bytes, dst.gpu, dst.bytes)
+        && !gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes);
+    if !destination_valid || !source_valid || !layouts_valid || !ranges_distinct {
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
-    let params = Ui4Nv12Tile64ToPrimaryXrgbParams {
+    let params = Ui4Nv12Tile64ToRgba8FrameParams {
         nv12_gpu: source.gpu,
-        base_gpu: base.gpu,
+        // Keep the proven three-binding payload ABI. The frame kernel never
+        // reads binding 1, so aliasing it to the destination does not create a
+        // second allocation or a copy dependency.
+        base_gpu: dst.gpu,
         dst_gpu: dst.gpu,
         src_pitch_bytes: source.pitch_bytes,
         src_uv_offset: source.uv_offset,
-        base_pitch_bytes: base.pitch_bytes,
+        base_pitch_bytes: 0,
         dst_pitch_bytes: dst.pitch_bytes,
         output_width: dst.width,
         output_height: dst.height,
@@ -4108,7 +4112,7 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         return Err(Ui4CompositorSubmitError::Busy);
     }
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let upload = upload_ui4_nv12_ytile_to_primary_xrgb_kernel()
+    let upload = upload_ui4_nv12_tile64_to_rgba8_frame_kernel()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
@@ -4125,30 +4129,27 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
     let source_ok =
         kernel_ok && direct_rcs_map_ppgtt_kernel(state, source.gpu, source.phys, source.bytes);
-    let base_ok = source_ok && direct_rcs_map_ppgtt_kernel(state, base.gpu, base.phys, base.bytes);
-    let dst_ok = base_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ok = source_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ok
-        && direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
+        && direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
             state,
             upload,
             params,
             source.bytes,
-            base.bytes,
+            dst.bytes,
             dst.bytes,
         );
     if !batch_ok {
         crate::log_error!(target: "ui4";
-            "ui4/guc-video-compositor: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} base={} dst={} batch={} source_gpu=0x{:X} base_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            "ui4/guc-video-frame: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} dst={} batch={} source_gpu=0x{:X} dst_gpu=0x{:X}\n",
             forcewake_ok as u8,
             mapped_ok as u8,
             ppgtt_ok as u8,
             kernel_ok as u8,
             source_ok as u8,
-            base_ok as u8,
             dst_ok as u8,
             batch_ok as u8,
             source.gpu,
-            base.gpu,
             dst.gpu,
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
@@ -4175,7 +4176,7 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         started_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "nv12-tile64-primary",
+        kernel: "nv12-tile64-rgba8-frame",
         stats: GpgpuWorklistSubmitStats {
             descs: 1,
             walkers: 1,
@@ -4185,7 +4186,7 @@ pub(crate) fn queue_ui4_compositor_nv12_tile64_to_primary(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-compositor: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,base-pat0-wb,dst-pat3-uc display_plane_writes=0\n",
+        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,dst-pat3-uc base=dst-alias-unused display_plane_writes=0\n",
         serial,
         dst.width,
         dst.height,
@@ -4278,6 +4279,24 @@ pub(crate) fn poll_ui4_compositor_submission(
         return Ui4CompositorCompletion::Pending;
     }
     Ui4CompositorCompletion::Pending
+}
+
+/// Retire the video conversion and mint the exact-allocation producer release
+/// only after the shared GuC completion packet has been observed.
+pub(crate) fn poll_ui4_video_frame_submission(
+    submission: Ui4CompositorSubmission,
+    dst: GpgpuRgba8Surface,
+) -> Ui4VideoFrameCompletion {
+    match poll_ui4_compositor_submission(submission) {
+        Ui4CompositorCompletion::Pending => Ui4VideoFrameCompletion::Pending,
+        Ui4CompositorCompletion::Complete(stats) => Ui4VideoFrameCompletion::Complete {
+            stats,
+            release: gpgpu_rgba8_release(dst),
+        },
+        Ui4CompositorCompletion::Failed | Ui4CompositorCompletion::InvalidSubmission => {
+            Ui4VideoFrameCompletion::Failed
+        }
+    }
 }
 
 /// Backend completion driver for awaitable UI4 GPU fences. Polling remains
@@ -8063,10 +8082,10 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     true
 }
 
-fn direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
+fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
-    params: Ui4Nv12Tile64ToPrimaryXrgbParams,
+    params: Ui4Nv12Tile64ToRgba8FrameParams,
     source_bytes: usize,
     base_bytes: usize,
     dst_bytes: usize,
@@ -8087,7 +8106,7 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
         state,
         UI4_NV12_PRIMARY_IDD_OFFSET_BYTES,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_TEXT_OFFSET_BYTES,
+        UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES,
         3,
         UI4_NV12_PRIMARY_CROSS_THREAD_GRFS,
     ) || !direct_rcs_write_alpha_blend_worklist_surface_states_at(
@@ -8102,7 +8121,7 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_primary_batch(
         base_bytes,
         params.dst_gpu,
         dst_bytes,
-    ) || !direct_rcs_write_ui4_nv12_primary_payload_at(
+    ) || !direct_rcs_write_ui4_nv12_frame_payload_at(
         state,
         UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES,
         params,
@@ -9458,10 +9477,10 @@ fn direct_rcs_write_buffer_surface_state(
     true
 }
 
-fn direct_rcs_write_ui4_nv12_primary_payload_at(
+fn direct_rcs_write_ui4_nv12_frame_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
-    params: Ui4Nv12Tile64ToPrimaryXrgbParams,
+    params: Ui4Nv12Tile64ToRgba8FrameParams,
 ) -> bool {
     if payload_offset + UI4_NV12_PRIMARY_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
         return false;

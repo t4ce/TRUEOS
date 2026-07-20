@@ -1,6 +1,7 @@
 mod app;
 mod mesh;
 mod renderer;
+mod suzanne_data;
 mod video;
 
 use std::path::PathBuf;

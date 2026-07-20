@@ -16,10 +16,64 @@ use crate::{
     video::{PlaybackStats, VIDEO_HEIGHT, VIDEO_WIDTH, VideoFrame},
 };
 
+#[repr(usize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshKind {
-    Sphere,
+    Plane,
     Cube,
+    Circle,
+    UvSphere,
+    Icosphere,
+    Cylinder,
+    Cone,
+    Torus,
+    Grid,
+    Monkey,
+}
+
+impl MeshKind {
+    pub const ALL: [Self; 10] = [
+        Self::Plane,
+        Self::Cube,
+        Self::Circle,
+        Self::UvSphere,
+        Self::Icosphere,
+        Self::Cylinder,
+        Self::Cone,
+        Self::Torus,
+        Self::Grid,
+        Self::Monkey,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Plane => "Plane",
+            Self::Cube => "Cube",
+            Self::Circle => "Circle",
+            Self::UvSphere => "UV Sphere",
+            Self::Icosphere => "Icosphere",
+            Self::Cylinder => "Cylinder",
+            Self::Cone => "Cone",
+            Self::Torus => "Torus",
+            Self::Grid => "Grid",
+            Self::Monkey => "Monkey (Suzanne)",
+        }
+    }
+
+    fn build(self) -> MeshData {
+        match self {
+            Self::Plane => mesh::plane(),
+            Self::Cube => mesh::cube(),
+            Self::Circle => mesh::circle(64),
+            Self::UvSphere => mesh::uv_sphere(64, 40),
+            Self::Icosphere => mesh::icosphere(2),
+            Self::Cylinder => mesh::cylinder(64),
+            Self::Cone => mesh::cone(64),
+            Self::Torus => mesh::torus(64, 24),
+            Self::Grid => mesh::grid(12, 12),
+            Self::Monkey => mesh::suzanne(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -109,8 +163,7 @@ pub struct SceneRenderResources {
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     video_texture: wgpu::Texture,
-    sphere: GpuMesh,
-    cube: GpuMesh,
+    meshes: Vec<GpuMesh>,
     frames: Mutex<Receiver<VideoFrame>>,
     stats: std::sync::Arc<PlaybackStats>,
     uploaded_frames: u64,
@@ -253,13 +306,17 @@ impl SceneRenderResources {
             cache: None,
         });
 
+        let meshes = MeshKind::ALL
+            .into_iter()
+            .map(|kind| GpuMesh::new(device, kind.label(), kind.build()))
+            .collect();
+
         Self {
             pipeline,
             bind_group,
             uniform_buffer,
             video_texture,
-            sphere: GpuMesh::new(device, "sphere", mesh::uv_sphere(64, 40)),
-            cube: GpuMesh::new(device, "cube", mesh::cube()),
+            meshes,
             frames: Mutex::new(frames),
             stats,
             uploaded_frames: 0,
@@ -342,10 +399,7 @@ impl SceneRenderResources {
     }
 
     fn paint(&self, render_pass: &mut wgpu::RenderPass<'_>, kind: MeshKind) {
-        let mesh = match kind {
-            MeshKind::Sphere => &self.sphere,
-            MeshKind::Cube => &self.cube,
-        };
+        let mesh = &self.meshes[kind as usize];
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
