@@ -124,7 +124,6 @@ pub(crate) fn begin_shell_decoded_video_player() -> bool {
     true
 }
 
-
 fn poll_decoded_video_player_input() {
     reap_retired_video_frames();
     for event in take_owner_input_events(VIDEO_OWNER) {

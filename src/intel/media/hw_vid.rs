@@ -27,8 +27,7 @@ pub(crate) const UI4_FRAMED_VIDEO_ASSET: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_ANNEXB: &[u8] =
     include_bytes!("../../../tools/vid/x31_head_movie.annexb.h264");
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
-const H264_DEFAULT_MEDIA_URL: &str =
-    "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
+const H264_DEFAULT_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
 static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -153,7 +152,6 @@ impl H264PlaybackOptions {
     pub(crate) const fn loop_playback(self) -> bool {
         self.loop_playback
     }
-
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -326,8 +324,7 @@ impl H264PlaybackTiming {
 /// Decode the fixed, hardware-validated Annex-B asset and publish every picture
 /// through the native UI4 double-Frame path. Shell2 owns the surrounding UI4
 /// lifetime; this function owns one VDBOX playback lap and its engine lease.
-pub(crate) async fn run_ui4_framed_video_playback(
-) -> Result<H264PlaybackReport, &'static str> {
+pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
@@ -372,7 +369,6 @@ pub(crate) async fn run_ui4_framed_video_playback(
         Ok(report)
     }
 }
-
 
 pub(crate) async fn run_online_vid_playback(
     options: H264PlaybackOptions,
@@ -2275,7 +2271,6 @@ impl H264RangeNalReader {
     }
 }
 
-
 async fn h264_open_playback_stream_once(
     path: &str,
 ) -> Option<crate::r::fs::trueosfs::FileReadHandle> {
@@ -2664,8 +2659,7 @@ async fn h264_i_p_playback_probe_with_reader(
         "eos"
     );
 
-    if mode.stripe_study() && forward_full_cache.len() == indexed_frames.len()
-    {
+    if mode.stripe_study() && forward_full_cache.len() == indexed_frames.len() {
         h264_stripe_study_from_full_cache(indexed_frames.as_slice(), forward_full_cache.as_slice())
             .await;
     }

@@ -80,7 +80,10 @@ BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 EMULATOR_LOG_CAPTURE := tools/emulator-log-capture.sh
 EMULATOR_LOG_DIR ?= bld/emulator-logs
 EMULATOR_LOG_SLOTS ?= 3
+NET_SHELL_CONSOLE_HOST ?= 192.168.178.94
+NET_SHELL_CONSOLE_PORT ?= 4245
 NET_SHELL_CONSOLE_PID := $(ISO_DIR)/net-shell-console.pid
+NET_SHELL_CONSOLE_LOG := $(ISO_DIR)/net-shell-console.log
 
 CARGO_BUILD_FLAGS ?=
 
@@ -195,7 +198,11 @@ net-shell-console:
 		fi; \
 		rm -f "$(NET_SHELL_CONSOLE_PID)"; \
 	fi
-	@konsole -e sh -c 'stty raw -echo; exec nc 192.168.178.94 4245' & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
+	@: > "$(NET_SHELL_CONSOLE_LOG)"
+	@nohup setsid konsole --separate --title TRUEOS-net-shell -e sh -c \
+		'trap "stty sane 2>/dev/null || true" EXIT; trap "stty sane 2>/dev/null || true; exit 0" INT TERM; stty -echo -icanon cols 200 rows 60; while :; do nc "$$1" "$$2" 2>/dev/null || true; sleep 1; done' \
+		trueos-net-shell "$(NET_SHELL_CONSOLE_HOST)" "$(NET_SHELL_CONSOLE_PORT)" \
+		</dev/null >>"$(NET_SHELL_CONSOLE_LOG)" 2>&1 & echo $$! > "$(NET_SHELL_CONSOLE_PID)"
 
 FORCE:
 
@@ -275,7 +282,7 @@ iso: artifacts images limine
 		echo "iso: skipping baremetal log drain (START_BAREMETAL_LOG=$(START_BAREMETAL_LOG))"; \
 	fi
 	@if [ "$(START_NET_SHELL_CONSOLE)" = "1" ]; then \
-		$(MAKE) --no-print-directory net-shell-console; \
+		$(MAKE) --no-print-directory net-shell-console NET_SHELL_CONSOLE_HOST="$(NET_SHELL_CONSOLE_HOST)" NET_SHELL_CONSOLE_PORT="$(NET_SHELL_CONSOLE_PORT)"; \
 	else \
 		echo "iso: skipping net shell console (START_NET_SHELL_CONSOLE=$(START_NET_SHELL_CONSOLE))"; \
 	fi
@@ -392,6 +399,8 @@ dbg: iso
 		wait $$qemu_pid
 
 run: START_BAREMETAL_LOG=0
+run: NET_SHELL_CONSOLE_HOST=127.0.0.1
+run: NET_SHELL_CONSOLE_PORT=$(QEMU_HOST_TCP_PORT_NET_SHELL)
 run: iso
 	@killall -9 qemu-system-x86_64 || true
 	@$(QEMU_RUN_ENV) $(QEMU_RUNNER) iso & qemu_pid=$$!; \
