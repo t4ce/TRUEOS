@@ -38,7 +38,7 @@ pub(crate) fn try_parse(
     } else {
         GpuFontTextRequest::SingleLine(row_refs[0])
     };
-    match crate::intel::gpu_font::stamp_text_once_with_font_centered(
+    match crate::ui4::present_font_stamp(
         request,
         command.font,
         command.size_percent,
@@ -47,20 +47,26 @@ pub(crate) fn try_parse(
         Ok(result) => print_shell_line(
             io,
             format!(
-                "fnt: stamped={} font={} size={}percent rgba={:02X}{:02X}{:02X}{:02X} text_chars={} rows={} glyphs={} stamp={}x{} completed={}",
-                result.stamped as u8,
-                result.summary.font_name,
-                result.size_percent,
+                "fnt: stamped=1 slot={} frame={} window={} request={} reused_slot={} reused_frame={} font={} size={}percent rgba={:02X}{:02X}{:02X}{:02X} text_chars={} rows={} glyphs={} stamp={}x{} completed={} producer={} ui4=double escape=focused-close",
+                result.slot,
+                result.frame.raw(),
+                result.window.raw(),
+                result.request_serial,
+                result.reused_slot as u8,
+                result.reused_frame as u8,
+                result.stamp.summary.font_name,
+                result.stamp.size_percent,
                 command.color.r,
                 command.color.g,
                 command.color.b,
                 command.color.a,
-                result.text_chars,
-                result.rows,
-                result.summary.glyphs,
-                result.stamp_width,
-                result.stamp_height,
-                result.render.completed as u8,
+                result.stamp.text_chars,
+                result.stamp.rows,
+                result.stamp.summary.glyphs,
+                result.stamp.stamp_width,
+                result.stamp.stamp_height,
+                result.stamp.render.completed as u8,
+                result.stamp.producer_path,
             )
             .as_str(),
         ),
@@ -266,7 +272,7 @@ fn parse_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; renders a transient centered GPU stamp",
+        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; presents in one of 10 reusable UI4 slots; focus a stamp and press Escape to close it",
     );
 }
 

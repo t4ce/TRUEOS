@@ -2,6 +2,13 @@ use core::ffi::CStr;
 use core::ffi::{c_char, c_int, c_long, c_void};
 use core::ptr;
 
+unsafe extern "C" {
+    // Implemented in stdio.c. These declarations let the Blueprint resolver
+    // retain and address the freestanding glibc-fortify compatibility shims.
+    pub fn __snprintf_chk();
+    pub fn __vsnprintf_chk();
+}
+
 pub use v::qjs_abi::{
     TrueosHidCursorEvent, TrueosHidKeyboardSample, TrueosMouseState, trueos_cabi_alloc,
     trueos_cabi_boot_timestamp_secs, trueos_cabi_browser_asset_ref_push,

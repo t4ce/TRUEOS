@@ -270,30 +270,41 @@ fn test_blit(io: &'static dyn ShellBackend2) -> bool {
 }
 
 fn test_font(io: &'static dyn ShellBackend2) -> bool {
-    use crate::intel::gpu_font::{GPU_FONT_LEGACY_BLUE, GpuFontFace, GpuFontTextRequest};
+    use crate::intel::gpu_font::{GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest};
 
     let before = vgpu::kernel_timeline(KernelClient::Render).unwrap_or_default();
-    let render = crate::intel::gpu_font::stamp_text_once_with_font_centered(
-        GpuFontTextRequest::SingleLine("hello"),
-        GpuFontFace::Default,
-        100,
-        GPU_FONT_LEGACY_BLUE,
-    );
+    let entry = GpuFontJobEntry {
+        text: GpuFontTextRequest::SingleLine("hello"),
+        position: [0.0, 0.0],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+        slant: 0.0,
+    };
+    let entries = [entry];
+    let render = crate::intel::gpu_font::render_font_job_readback_once(GpuFontJob {
+        entries: &entries,
+        font: GpuFontFace::Default,
+        native_scale: 1,
+    });
     let after = vgpu::kernel_timeline(KernelClient::Render).unwrap_or_default();
-    let rendered = render
-        .as_ref()
-        .is_ok_and(|result| result.stamped && result.render.completed);
+    let (rendered, error) = match render {
+        Ok(readback) => {
+            let rendered = readback.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
+            crate::intel::gpu_font::recycle_font_job_readback(readback);
+            (rendered, "none")
+        }
+        Err(error) => (false, error),
+    };
     let timeline = after.submitted > before.submitted && after.completed == after.submitted;
     print_shell_line(
         io,
         format!(
-            "vgpu font: text=hello configured=legacy-blue/default/100percent rendered={} timeline={} submitted={}->{} completed={} error={}",
+            "vgpu font: text=hello mode=offscreen-readback/no-primary-stamp rendered={} timeline={} submitted={}->{} completed={} error={}",
             rendered as u8,
             timeline as u8,
             before.submitted,
             after.submitted,
             after.completed,
-            render.err().unwrap_or("none"),
+            error,
         )
         .as_str(),
     );

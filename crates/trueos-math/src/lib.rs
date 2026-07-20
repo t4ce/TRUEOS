@@ -150,6 +150,21 @@ pub extern "C" fn asinf(x: f32) -> f32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn atanf(x: f32) -> f32 {
+    libm::atanf(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn atan2f(y: f32, x: f32) -> f32 {
+    libm::atan2f(y, x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tanf(x: f32) -> f32 {
+    libm::tanf(x)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn log2f(x: f32) -> f32 {
     log2_f32(x)
 }
@@ -192,6 +207,46 @@ pub extern "C" fn sin(x: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn cos(x: f64) -> f64 {
     cos_f64(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn acos(x: f64) -> f64 {
+    libm::acos(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn asin(x: f64) -> f64 {
+    libm::asin(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn atan(x: f64) -> f64 {
+    libm::atan(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tan(x: f64) -> f64 {
+    libm::tan(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sinh(x: f64) -> f64 {
+    libm::sinh(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn cosh(x: f64) -> f64 {
+    libm::cosh(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn expm1(x: f64) -> f64 {
+    libm::expm1(x)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn log1p(x: f64) -> f64 {
+    libm::log1p(x)
 }
 
 #[unsafe(no_mangle)]

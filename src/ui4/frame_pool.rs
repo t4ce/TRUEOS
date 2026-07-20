@@ -466,11 +466,43 @@ pub(crate) fn publish_frame_buffer(
     checked_lease(frame, lease)?;
     if matches!(
         frame.plan.content,
-        FrameContent::RenderScene3d | FrameContent::BlueprintScene | FrameContent::Video
+        FrameContent::FontScene2d
+            | FrameContent::RenderScene3d
+            | FrameContent::BlueprintScene
+            | FrameContent::Video
     ) && frame.gpu_authored[lease.buffer_index as usize]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
     }
+    publish_checked_frame(frame, lease)
+}
+
+/// Publish one dirty/double font allocation only after the final analytical
+/// coverage or resident-triangle writer retired. Font windows use the normal
+/// compositor/SURFLIVE read lease after this producer handoff; the CPU never
+/// promotes GPU-authored bytes through the generic publication path.
+pub(crate) fn publish_gpu_font_frame_buffer(
+    lease: FrameWriteLease,
+    release: crate::intel::render::ResidentSceneReleaseFence,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    let index = lease.buffer_index as usize;
+    if frame.plan.content != FrameContent::FontScene2d
+        || frame.plan.cadence != super::FrameCadence::Dirty
+        || frame.plan.buffering != super::FrameBuffering::Double
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !frame.gpu_authored[index]
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    let surface = frame.surfaces[index].ok_or(FramePoolError::InvalidLease)?;
+    let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::InvalidLease)?;
+    if !release.matches(access.phys, access.byte_len) {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.gpu_release[index] = Some(FrameGpuRelease::ResidentScene(release));
     publish_checked_frame(frame, lease)
 }
 

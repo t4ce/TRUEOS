@@ -245,7 +245,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_fnt,
-        tool_description: Some("Render quoted UTF-8 text as a centered one-shot GPU stamp."),
+        tool_description: Some(
+            "Render quoted UTF-8 text into one of ten reusable broker-owned UI4 font frames.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_FNT),
     },
     BuiltinShell2CmdEntry {

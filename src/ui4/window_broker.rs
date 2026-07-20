@@ -33,6 +33,7 @@ impl WindowOwner {
     pub(crate) const DRAW3D_SERVICE: Self = Self::KernelApp(3);
     pub(crate) const GRIDPAPER_SERVICE: Self = Self::KernelApp(4);
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
+    pub(crate) const FONT_STAMP: Self = Self::KernelApp(6);
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]

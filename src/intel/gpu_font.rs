@@ -610,7 +610,7 @@ pub(crate) struct GpuFontTextRender {
     pub(crate) rows: usize,
 }
 
-pub(crate) struct GpuFontTextStamp {
+struct GpuFontTextStamp {
     pub(crate) summary: FontTesselSummary,
     pub(crate) render: crate::intel::render::RenderJokerResult,
     pub(crate) layout: GpuFontTextLayout,
@@ -651,6 +651,48 @@ struct BuiltGpuFontJob {
     text_chars: usize,
     rows: usize,
     glyphs: usize,
+}
+
+/// One fully measured font stamp which has not acquired its UI4 destination
+/// yet. Keeping the owned geometry here lets the broker allocate only the
+/// fitted glyph extent instead of ten full-scanout double buffers.
+pub(crate) struct PreparedGpuFontStamp<'a> {
+    request: GpuFontTextRequest<'a>,
+    font: GpuFontFace,
+    rgba: GpuFontRgba,
+    built: BuiltGpuFontJob,
+    scanout_width: u32,
+    scanout_height: u32,
+    size_percent: u32,
+    stamp_width: u32,
+    stamp_height: u32,
+}
+
+impl PreparedGpuFontStamp<'_> {
+    pub(crate) const fn width(&self) -> u32 {
+        self.stamp_width
+    }
+
+    pub(crate) const fn height(&self) -> u32 {
+        self.stamp_height
+    }
+}
+
+/// Result of the current GuC font producer writing one exact UI4 allocation.
+/// The release fence is deliberately opaque and can only be consumed by the
+/// UI4 frame-pool publication contract for this same physical surface.
+pub(crate) struct GpuFontUi4Stamp {
+    pub(crate) summary: FontTesselSummary,
+    pub(crate) render: crate::intel::render::RenderJokerResult,
+    pub(crate) text_chars: usize,
+    pub(crate) rows: usize,
+    pub(crate) scanout_width: u32,
+    pub(crate) scanout_height: u32,
+    pub(crate) size_percent: u32,
+    pub(crate) stamp_width: u32,
+    pub(crate) stamp_height: u32,
+    pub(crate) producer_path: &'static str,
+    pub(crate) release: crate::intel::render::ResidentSceneReleaseFence,
 }
 
 struct CachedGpuFont {
@@ -1481,10 +1523,10 @@ fn render_analytical_font_stamp_readback(
 fn composite_font_stamp_readback(
     readback: &mut crate::intel::render::FontRenderTargetReadback,
     rgba: GpuFontRgba,
-    dst_x: i32,
-    dst_y: i32,
-    stamp_width: u32,
-    stamp_height: u32,
+    _dst_x: i32,
+    _dst_y: i32,
+    _stamp_width: u32,
+    _stamp_height: u32,
 ) -> (bool, u32, u32) {
     let mut source_width = 0;
     let mut source_height = 0;
@@ -1494,31 +1536,226 @@ fn composite_font_stamp_readback(
                 source_width = visible_width;
                 source_height = visible_height;
                 recolor_transient_font_target(readback.pixels.as_mut_slice(), rgba);
-                crate::intel::display::blend_rgba_primary_rect(
-                    readback.pixels.as_slice(),
-                    readback.width,
-                    readback.height,
-                    readback.width as usize * 4,
-                    0,
-                    0,
-                    dst_x,
-                    dst_y,
-                    stamp_width,
-                    stamp_height,
-                    "shell2-font-primary-stamp",
-                )
+                true
             });
     (stamped, source_width, source_height)
 }
 
-/// Tessellate and render one text request directly at its final stamp extent,
-/// aspect-fit that extent to the requested percentage of the primary scanout,
-/// and alpha-blend the result 1:1 at center. Large stamps use a correspondingly
-/// finer curve tolerance when the small refinement budget permits it, while
-/// the warmed size-independent outlines remain unchanged. Geometry and
-/// render-target ownership end before this function returns; only the stamped
-/// framebuffer pixels remain, like logo/BGRT stamps.
-pub(crate) fn stamp_text_once_with_font_centered(
+/// Measure and tessellate one stamp before its UI4 slot acquires a back
+/// buffer. The returned object owns the invocation geometry and borrows only
+/// the command text for the duration of the synchronous presentation call.
+pub(crate) fn prepare_text_stamp_for_ui4<'a>(
+    request: GpuFontTextRequest<'a>,
+    font: GpuFontFace,
+    size_percent: u32,
+    rgba: GpuFontRgba,
+) -> Result<PreparedGpuFontStamp<'a>, &'static str> {
+    if !(MIN_FONT_STAMP_SIZE_PERCENT..=MAX_FONT_STAMP_SIZE_PERCENT).contains(&size_percent) {
+        return Err("font-size-percent-range-1-to-100");
+    }
+    let (scanout_width, scanout_height) =
+        crate::intel::active_scanout_dimensions().ok_or("no-active-scanout-dimensions")?;
+    let entry = GpuFontJobEntry {
+        text: request,
+        position: [0.0, 0.0],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+        slant: 0.0,
+    };
+    let built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
+    let source_width = libm::ceilf((built.bounds.2 - built.bounds.0).max(1.0)) as u32;
+    let source_height = libm::ceilf((built.bounds.3 - built.bounds.1).max(1.0)) as u32;
+    let (stamp_width, stamp_height) = fit_font_stamp_to_scanout(
+        source_width,
+        source_height,
+        scanout_width,
+        scanout_height,
+        size_percent,
+    );
+    Ok(PreparedGpuFontStamp {
+        request,
+        font,
+        rgba,
+        built,
+        scanout_width,
+        scanout_height,
+        size_percent,
+        stamp_width,
+        stamp_height,
+    })
+}
+
+/// Render a prepared font stamp into the exact GPU address owned by a UI4
+/// write lease. Both the analytical-mask path and the resident-triangle
+/// fallback use the current GuC clients; neither invokes the legacy execlist
+/// helpers or reads pixels back through the CPU.
+pub(crate) fn render_prepared_text_stamp_to_ui4(
+    mut prepared: PreparedGpuFontStamp<'_>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<GpuFontUi4Stamp, &'static str> {
+    if !destination.is_valid()
+        || destination.width != prepared.stamp_width
+        || destination.height != prepared.stamp_height
+    {
+        return Err("font-ui4-destination-shape");
+    }
+
+    let alpha = prepared.rgba.a;
+    let premultiply =
+        |channel: u8| -> u8 { ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8 };
+    let color = [
+        premultiply(prepared.rgba.r),
+        premultiply(prepared.rgba.g),
+        premultiply(prepared.rgba.b),
+        alpha,
+    ];
+
+    let target_width = prepared.stamp_width;
+    let target_height = prepared.stamp_height;
+    let mesh_width = (prepared.built.bounds.2 - prepared.built.bounds.0).max(1.0);
+    let mesh_height = (prepared.built.bounds.3 - prepared.built.bounds.1).max(1.0);
+    let padding = NATIVE_FONT_STAMP_PADDING_PIXELS
+        .min(target_width.saturating_sub(1) / 2)
+        .min(target_height.saturating_sub(1) / 2);
+    let content_width = target_width
+        .saturating_sub(padding.saturating_mul(2))
+        .max(1);
+    let content_height = target_height
+        .saturating_sub(padding.saturating_mul(2))
+        .max(1);
+    let pixel_scale = (content_width as f32 / mesh_width).min(content_height as f32 / mesh_height);
+    let analytical_entry = GpuFontJobEntry {
+        text: prepared.request,
+        position: [target_width as f32 * 0.5, target_height as f32 * 0.5],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX * pixel_scale,
+        slant: 0.0,
+    };
+
+    let (frame, producer_path) = match create_gpu_font_centered_coverage_mask_at_raster(
+        core::slice::from_ref(&analytical_entry),
+        prepared.font,
+        target_width,
+        target_height,
+        target_width,
+        target_height,
+    ) {
+        Ok(coverage) => {
+            let origin = coverage.origin_px();
+            let draw = crate::intel::render::ResidentSceneCoverageDraw {
+                mask: coverage.surface(),
+                mask_rect: coverage.full_rect(),
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(origin[0], origin[1]),
+                color_rgba: u32::from_le_bytes(color),
+            };
+            let frame = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+                &[],
+                core::slice::from_ref(&draw),
+                Some([0, 0, 0, 0]),
+                destination,
+                false,
+            )?;
+            (frame, "skrifa-gpgpu-r8")
+        }
+        Err(reason) => {
+            crate::log_warn!(
+                target: "render";
+                "intel/gpu-font: ui4 analytical unavailable font={} target={}x{} reason={} action=resident-triangle-fallback\n",
+                prepared.font.registry_name(),
+                target_width,
+                target_height,
+                reason,
+            );
+            let mesh = crate::intel::render::create_resident_font_mesh(
+                prepared.built.vertices.as_slice(),
+                prepared.built.indices.as_slice(),
+                prepared.built.bounds,
+            )?;
+            let draw = crate::intel::render::ResidentSceneDraw {
+                mesh: &mesh,
+                rgba: color,
+                viewport_translation_px: [0.0, 0.0],
+            };
+            let frame = match crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+                core::slice::from_ref(&draw),
+                &[],
+                Some([0, 0, 0, 0]),
+                destination,
+                false,
+            ) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    // The submit may have crossed the hardware boundary. Do
+                    // not free its resident pages without an exact retirement
+                    // proof; the caller quarantines the destination lease too.
+                    crate::log_error!(
+                        target: "render";
+                        "intel/gpu-font: ui4 triangle submit failed target={}x{} reason={} action=quarantine-resident-mesh+destination\n",
+                        target_width,
+                        target_height,
+                        error,
+                    );
+                    return Err(error);
+                }
+            };
+            if !frame.frame_complete || frame.release_fence.is_none() {
+                return Err("font-ui4-triangle-incomplete");
+            }
+            if !crate::intel::render::release_resident_font_mesh(&mesh) {
+                return Err("font-ui4-triangle-release");
+            }
+            (frame, "resident-triangles")
+        }
+    };
+
+    if frame.completed_draws != frame.requested_draws || !frame.frame_complete {
+        return Err("font-ui4-render-incomplete");
+    }
+    let release = frame
+        .release_fence
+        .filter(|release| release.matches(destination.phys, destination.bytes))
+        .ok_or("font-ui4-release-fence")?;
+    let summary = prepared.built.summaries.pop().ok_or("font-job-summary")?;
+    let render = crate::intel::render::RenderJokerResult {
+        variant: producer_path,
+        submit_name: "font-stamp-ui4",
+        target: "ui4-font-frame",
+        completed: true,
+        vs_counter: false,
+        ps_state_marker: false,
+        raster_packet: false,
+        clip_counter: false,
+        ps_observed: false,
+    };
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: ui4-stamp-ready font={} text_chars={} rows={} target={}x{} path={} release_sequence={} producer=guc exact_surface=1 cpu_readback=0 cpu_frame_copy=0 legacy_execlist=0\n",
+        prepared.font.registry_name(),
+        prepared.built.text_chars,
+        prepared.built.rows,
+        target_width,
+        target_height,
+        producer_path,
+        release.sequence(),
+    );
+    Ok(GpuFontUi4Stamp {
+        summary,
+        render,
+        text_chars: prepared.built.text_chars,
+        rows: prepared.built.rows,
+        scanout_width: prepared.scanout_width,
+        scanout_height: prepared.scanout_height,
+        size_percent: prepared.size_percent,
+        stamp_width: target_width,
+        stamp_height: target_height,
+        producer_path,
+        release,
+    })
+}
+
+/// Retained readback-only implementation used while comparing the old
+/// tessellated result with the direct-to-UI4 producer. It has no display or
+/// broker entry point; live font stamps use [`prepare_text_stamp_for_ui4`] and
+/// [`render_prepared_text_stamp_to_ui4`].
+fn render_legacy_font_stamp_readback_centered(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
     size_percent: u32,
