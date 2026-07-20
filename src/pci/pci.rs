@@ -439,10 +439,7 @@ pub fn claim_device(dev: &PciDevice, owner: &'static str) -> Result<(), PciClaim
 pub fn release_device_claim(bus: u8, slot: u8, function: u8, owner: &'static str) -> bool {
     let mut claims = PCI_CLAIMS.lock();
     let Some(index) = claims.iter().position(|claim| {
-        claim.bus == bus
-            && claim.slot == slot
-            && claim.function == function
-            && claim.owner == owner
+        claim.bus == bus && claim.slot == slot && claim.function == function && claim.owner == owner
     }) else {
         return false;
     };

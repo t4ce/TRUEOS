@@ -478,12 +478,7 @@ pub fn try_init() -> bool {
     }
 
     let Some(tga) = bring_online(&dev) else {
-        let _ = crate::pci::release_device_claim(
-            dev.bus,
-            dev.slot,
-            dev.function,
-            TGA_PCI_OWNER,
-        );
+        let _ = crate::pci::release_device_claim(dev.bus, dev.slot, dev.function, TGA_PCI_OWNER);
         return false;
     };
 

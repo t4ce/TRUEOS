@@ -157,36 +157,38 @@ fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
     rust.push_str("pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // \"TGAT\"\n");
     rust.push_str("pub const FIRMWARE_RTL_SHA256: [u8; 32] = [\n    ");
     for (index, byte) in firmware_hash.iter().enumerate() {
-        if index != 0 && index % 8 == 0 {
-            rust.push_str("\n    ");
+        write!(rust, "0x{byte:02x},").unwrap();
+        if index % 16 == 15 {
+            rust.push('\n');
+            if index + 1 != firmware_hash.len() {
+                rust.push_str("    ");
+            }
+        } else {
+            rust.push(' ');
         }
-        write!(rust, "0x{byte:02x}, ").unwrap();
-    }
-    rust.push_str("\n];\n\n");
-    rust.push_str("pub const FUNCTIONS: [FunctionDescriptor; 3] = [\n");
-    for spec in FUNCTIONS {
-        writeln!(
-            rust,
-            "    FunctionDescriptor {{ id: {}.raw(), input_bytes: {}, output_bytes: {}, flags: 0, symbol_hash: 0x{:016x} }},",
-            spec.rust_name,
-            spec.input_bytes,
-            spec.output_bytes,
-            fnv1a64(spec.signature.as_bytes())
-        )
-        .unwrap();
     }
     rust.push_str("];\n\n");
-    rust.push_str(
-        "pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n\
-         \tlet mut bytes = [0; 8];\n\
-         \tbytes[..4].copy_from_slice(&a.to_le_bytes());\n\
-         \tbytes[4..].copy_from_slice(&b.to_le_bytes());\n\
-         \tbytes\n\
-         }\n\n\
-         pub fn result_u32(bytes: &[u8]) -> Option<u32> {\n\
-         \tSome(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))\n\
-         }\n",
-    );
+    rust.push_str("pub const FUNCTIONS: [FunctionDescriptor; 3] = [\n");
+    for spec in FUNCTIONS {
+        rust.push_str("    FunctionDescriptor {\n");
+        writeln!(rust, "        id: {}.raw(),", spec.rust_name).unwrap();
+        writeln!(rust, "        input_bytes: {},", spec.input_bytes).unwrap();
+        writeln!(rust, "        output_bytes: {},", spec.output_bytes).unwrap();
+        rust.push_str("        flags: 0,\n");
+        writeln!(rust, "        symbol_hash: 0x{:016x},", fnv1a64(spec.signature.as_bytes()))
+            .unwrap();
+        rust.push_str("    },\n");
+    }
+    rust.push_str("];\n\n");
+    rust.push_str("pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n");
+    rust.push_str("    let mut bytes = [0; 8];\n");
+    rust.push_str("    bytes[..4].copy_from_slice(&a.to_le_bytes());\n");
+    rust.push_str("    bytes[4..].copy_from_slice(&b.to_le_bytes());\n");
+    rust.push_str("    bytes\n");
+    rust.push_str("}\n\n");
+    rust.push_str("pub fn result_u32(bytes: &[u8]) -> Option<u32> {\n");
+    rust.push_str("    Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))\n");
+    rust.push_str("}\n");
     rust
 }
 
