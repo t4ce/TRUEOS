@@ -423,20 +423,10 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
         return;
     };
 
-    let diagnostic_allow = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
-        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_SHELL2_DL
-        && crate::r::fs::trueosfs::has_published_root_with_index();
-    if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
-        && !diagnostic_allow
-    {
+    if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
         log("dl: no TRUEOSFS root mounted");
         set_matrix_target_active(&target, false);
         return;
-    }
-    if diagnostic_allow {
-        crate::log_info!(target: "usb";
-            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=shell2-dl status=allowed source=published-root-with-index manual_fs_io=true\n"
-        );
     }
 
     log(alloc::format!("dl: fetching {} from {}", app.name, app.url).as_str());

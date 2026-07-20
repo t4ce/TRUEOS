@@ -9,6 +9,7 @@ pub(crate) mod format;
 pub(crate) mod fslog;
 pub(crate) mod gboy;
 pub(crate) mod gpgpu;
+pub(crate) mod grid;
 pub(crate) mod hyper;
 pub(crate) mod install;
 pub(crate) mod lsd;

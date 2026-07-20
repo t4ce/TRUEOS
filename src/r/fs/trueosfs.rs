@@ -55,7 +55,6 @@ pub struct TrueosFsPlacement {
 struct RootMount {
     disk_id: block::DiscId,
     seq: u32,
-    published: bool,
     index: Option<Box<TrueosFsIndex>>,
     building_index: bool,
     writes_since_checkpoint: u32,
@@ -133,7 +132,6 @@ fn request_mount_existing_visible_roots() {
     }
 }
 
-/// Background task that performs deferred TRUEOSFS probing/mounting.
 /// Eagerly build the in-memory index for `disk` right after mounting, so later
 /// callers (e.g. vhttps-cache) don't pay the log-replay cost on their first access.
 async fn warm_index_async(disk: block::DeviceHandle) {
@@ -146,6 +144,7 @@ async fn warm_index_async(disk: block::DeviceHandle) {
     }
 }
 
+/// Background task that performs deferred TRUEOSFS probing and mounting.
 #[embassy_executor::task]
 pub async fn mount_service_task() {
     async move {
@@ -594,18 +593,15 @@ fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
     }
 }
 
-/// Ensure a single TRUEOSFS root exists for this *whole disk*.
+/// Asynchronously ensure a single TRUEOSFS root exists for this *whole disk*.
 ///
 /// Returns:
 /// - `Ok(Some(disk_id))` if the disk contains TRUEOSFS and is now registered
 /// - `Ok(None)` if the disk does not contain TRUEOSFS
 /// - `Err(_)` on I/O or invalid param
-// NOTE: the synchronous `mount_root` wrapper was removed.
-// Use `mount_root_async` (and call it from an async task/service).
-
-/// Async variant of [`mount_root`].
 ///
-/// Use this from async contexts to avoid `block_on` (which can starve other tasks such as USB polling).
+/// Driver attach paths should enqueue [`request_mount_root`] instead of waiting
+/// here, so the executor remains available to service the underlying device.
 pub async fn mount_root_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<block::DiscId>, block::Error> {
@@ -621,7 +617,7 @@ pub async fn mount_root_async(
 
     {
         let roots = ROOTS.lock();
-        if roots.iter().any(|m| m.disk_id == disk_id && m.published) {
+        if roots.iter().any(|m| m.disk_id == disk_id) {
             return Ok(Some(disk_id));
         }
     }
@@ -653,18 +649,8 @@ pub async fn remount_root_async(
 }
 
 fn register_root_mount(disk: block::DeviceHandle, replace_existing: bool) {
-    register_root_mount_with_publication(disk, replace_existing, true, true);
-}
-
-fn register_root_mount_with_publication(
-    disk: block::DeviceHandle,
-    replace_existing: bool,
-    publish: bool,
-    publish_readiness: bool,
-) {
     let disk_id = disk.id();
     let seq = ROOT_SEQ.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-    let mut publish_existing_index = false;
     let cache_gen = if replace_existing {
         let roots = ROOTS.lock();
         roots
@@ -680,16 +666,9 @@ fn register_root_mount_with_publication(
         let mut roots = ROOTS.lock();
         if let Some(existing) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
             if !replace_existing {
-                if publish && !existing.published {
-                    existing.published = true;
-                    existing.seq = seq;
-                    publish_existing_index = existing.index.is_some();
-                } else {
-                    return;
-                }
+                return;
             } else {
                 existing.seq = seq;
-                existing.published = publish;
                 existing.index = None;
                 existing.building_index = false;
                 existing.writes_since_checkpoint = 0;
@@ -700,7 +679,6 @@ fn register_root_mount_with_publication(
                 building_index: false,
                 disk_id,
                 seq,
-                published: publish,
                 index: None,
                 writes_since_checkpoint: 0,
                 cache_gen,
@@ -708,64 +686,12 @@ fn register_root_mount_with_publication(
         }
     }
 
-    if !publish {
-        return;
-    }
-
     PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
     PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
 
     file_record_cache_invalidate_disk(disk_id);
 
-    if publish_readiness {
-        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-        if publish_existing_index {
-            crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
-        }
-    }
-}
-
-/// Install a root in the internal mount table without exposing it through the
-/// primary-root APIs or readiness flags. This is used by the UAS bring-up
-/// harness so index replay can be tested without starting filesystem consumers.
-pub(crate) fn register_unpublished_root_for_diagnostic(
-    disk: block::DeviceHandle,
-) -> Result<block::DiscId, block::Error> {
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-    register_root_mount_with_publication(disk, false, false, false);
-    Ok(disk.id())
-}
-
-/// Expose a prepared diagnostic root through the normal primary-root and VFS
-/// lookup APIs. Readiness publication is optional so a direct Shell2 consumer
-/// can be tested before the task registry admits automatic filesystem users.
-/// Returns the number of paths in the already-replayed index.
-pub(crate) fn publish_unpublished_root_for_diagnostic(
-    disk: block::DeviceHandle,
-    publish_readiness: bool,
-) -> Result<usize, block::Error> {
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-
-    let entries = {
-        let roots = ROOTS.lock();
-        let Some(root) = roots.iter().find(|root| root.disk_id == disk.id()) else {
-            return Err(block::Error::NotReady);
-        };
-        if root.published {
-            return Err(block::Error::InvalidParam);
-        }
-        root.index
-            .as_ref()
-            .map(|index| index.len())
-            .ok_or(block::Error::NotReady)?
-    };
-
-    register_root_mount_with_publication(disk, false, true, publish_readiness);
-    Ok(entries)
+    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
 }
 
 fn unregister_root_mount(disk_id: block::DiscId) {
@@ -872,24 +798,7 @@ fn file_record_cache_invalidate_prefix(disk_id: block::DiscId, prefix: &str) {
 
 fn file_record_cache_invalidate_disk(disk_id: block::DiscId) {
     let mut cache = FILE_RECORD_CACHE.lock();
-    let before = cache.len();
-    let capacity = cache.capacity();
     cache.retain(|entry| entry.disk_id != disk_id);
-    let after = cache.len();
-    drop(cache);
-
-    let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
-    if matches!(diagnostic_cut, 7..=9) {
-        crate::log_info!(target: "usb";
-            "crabusb: skhynix-green proof=file-record-cache action=invalidate-disk stage={} disc={} before={} after={} removed={} capacity={}\n",
-            diagnostic_cut,
-            disk_id,
-            before,
-            after,
-            before.saturating_sub(after),
-            capacity,
-        );
-    }
 }
 
 fn invalidate_root_index(disk_id: block::DiscId) {
@@ -1948,15 +1857,6 @@ async fn ensure_index_async(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,
 ) -> Result<(), block::Error> {
-    ensure_index_async_with_policy(disk, placement, true, true).await
-}
-
-async fn ensure_index_async_with_policy(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-    publish_readiness: bool,
-    allow_checkpoint_write: bool,
-) -> Result<(), block::Error> {
     let disk_id = disk.id();
     let start_cache_gen;
 
@@ -2077,17 +1977,9 @@ async fn ensure_index_async_with_policy(
             if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
                 if m.cache_gen == start_cache_gen {
                     m.index = Some(tree);
-                    if publish_readiness {
-                        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
-                    }
-                    if allow_checkpoint_write {
-                        checkpoint_after_publish = Some((
-                            replay_from_rel_blocks,
-                            end_rel_blocks,
-                            had_checkpoint,
-                            entry_count,
-                        ));
-                    }
+                    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
+                    checkpoint_after_publish =
+                        Some((replay_from_rel_blocks, end_rel_blocks, had_checkpoint, entry_count));
                 } else {
                     needs_rebuild = true;
                 }
@@ -2105,9 +1997,7 @@ async fn ensure_index_async_with_policy(
     };
 
     if needs_rebuild {
-        if publish_readiness {
-            request_warm_index(disk_id);
-        }
+        request_warm_index(disk_id);
         return Err(block::Error::NotReady);
     }
 
@@ -2127,34 +2017,6 @@ async fn ensure_index_async_with_policy(
     }
 
     result
-}
-
-/// Replay an unpublished root's checkpoint/log into memory without publishing
-/// index readiness and without allowing the normal checkpoint-write side
-/// effect. Returns the number of live paths recovered by the replay.
-pub(crate) async fn warm_unpublished_index_read_only_for_diagnostic(
-    disk: block::DeviceHandle,
-    placement: &TrueosFsPlacement,
-) -> Result<usize, block::Error> {
-    {
-        let roots = ROOTS.lock();
-        let Some(root) = roots.iter().find(|root| root.disk_id == disk.id()) else {
-            return Err(block::Error::NotReady);
-        };
-        if root.published {
-            return Err(block::Error::InvalidParam);
-        }
-    }
-
-    ensure_index_async_with_policy(disk, placement, false, false).await?;
-
-    let roots = ROOTS.lock();
-    roots
-        .iter()
-        .find(|root| root.disk_id == disk.id() && !root.published)
-        .and_then(|root| root.index.as_ref())
-        .map(|index| index.len())
-        .ok_or(block::Error::NotReady)
 }
 
 fn push_json_string_escaped(out: &mut String, value: &str) {
@@ -2398,14 +2260,7 @@ pub async fn file_append_async(
 // The async mount path intentionally avoids this (it would require blocking I/O).
 
 pub fn roots_len() -> usize {
-    ROOTS.lock().iter().filter(|root| root.published).count()
-}
-
-pub(crate) fn has_published_root_with_index() -> bool {
-    ROOTS
-        .lock()
-        .iter()
-        .any(|root| root.published && root.index.is_some())
+    ROOTS.lock().len()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2425,7 +2280,7 @@ pub fn list_roots() -> Vec<RootInfo> {
     let roots = ROOTS.lock();
     let index_queue = INDEX_QUEUE.lock();
     let mut out: Vec<RootInfo> = Vec::with_capacity(roots.len());
-    for m in roots.iter().filter(|root| root.published) {
+    for m in roots.iter() {
         out.push(RootInfo {
             disk_id: m.disk_id,
             seq: m.seq,
@@ -2439,7 +2294,7 @@ pub fn list_roots() -> Vec<RootInfo> {
 
 pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<String>> {
     let roots = ROOTS.lock();
-    let mount = roots.iter().find(|m| m.disk_id == disk_id && m.published)?;
+    let mount = roots.iter().find(|m| m.disk_id == disk_id)?;
     let index = mount.index.as_ref()?;
 
     let mut out = Vec::new();
@@ -2565,11 +2420,7 @@ pub fn primary_root_id() -> Option<block::DiscId> {
     }
 
     let roots = ROOTS.lock();
-    let picked = roots
-        .iter()
-        .filter(|root| root.published)
-        .max_by_key(|m| m.seq)
-        .map(|m| m.disk_id);
+    let picked = roots.iter().max_by_key(|m| m.seq).map(|m| m.disk_id);
     if let Some(disk_id) = picked {
         PRIMARY_ROOT_RAW.store(disk_id.raw(), Ordering::Release);
         if let Some(disk) = block::device_handle(disk_id) {
@@ -2600,10 +2451,7 @@ pub fn primary_root_is_read_only() -> Option<bool> {
 
 pub fn root_seq(disk_id: block::DiscId) -> Option<u32> {
     let roots = ROOTS.lock();
-    roots
-        .iter()
-        .find(|m| m.disk_id == disk_id && m.published)
-        .map(|m| m.seq)
+    roots.iter().find(|m| m.disk_id == disk_id).map(|m| m.seq)
 }
 
 struct AlignedBuf {

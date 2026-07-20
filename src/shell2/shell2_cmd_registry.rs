@@ -34,6 +34,7 @@ const TOOL_JSON_ETC: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_FNT: &str = r#"{"type":"object","properties":{"text":{"type":"string","description":"UTF-8 text to render."},"size":{"type":"integer","minimum":1,"maximum":100,"description":"Percentage of the centered aspect-fit scanout size."},"font":{"type":"integer","minimum":1,"maximum":2,"description":"GPU font face id."},"color":{"type":"string","description":"RGBA color encoded as RRGGBBAA."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_GBOY: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS Game Boy ROM path."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_GPGPU: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["preview","probe","chart","pixel","artifacts"],"description":"GPGPU command family."},"action":{"type":"string","enum":["start","status","stop","reload"],"description":"Preview lifecycle or artifact action. Preview start launches Mandelbrot, chart, and plasma together in dedicated UI4 broker frames."},"probe":{"type":"string","enum":["font-tessel"],"description":"Diagnostic probe family."},"stage":{"type":"string","enum":["artifact","audit","flatten","mesh","all"],"description":"Artifact or font-tessellation diagnostic stage."},"duration_ms":{"type":"integer","minimum":0,"description":"Preview lifetime in milliseconds; zero runs until stopped."},"cadence_ms":{"type":"integer","minimum":1,"maximum":60000,"description":"Target compute-launch cadence in milliseconds for all preview members."},"publish_every":{"type":"integer","minimum":1,"maximum":1024,"description":"Publish every Nth completed compute frame per preview member."},"kernel":{"type":"string","description":"Known kernel name or all for artifact reload."}},"required":["subcommand"],"additionalProperties":false}"#;
+const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","font","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"paths":{"type":"array","items":{"type":"string"},"description":"Optional TRUEOSFS paths to list."},"long":{"type":"boolean","description":"Show file kind, ownership, byte size, and name."},"tree":{"type":"boolean","description":"Walk recursively from the path."},"table":{"type":"boolean","description":"Render the shell2 table view."},"archive7z":{"type":"boolean","description":"Inspect a .7z archive and print its entries without extracting."},"oneline":{"type":"boolean","description":"Show one entry per line."},"directory_only":{"type":"boolean","description":"List directories themselves instead of their contents."},"color":{"type":"string","enum":["always","auto","never"],"description":"Color output mode."},"size":{"type":"string","enum":["default","short","bytes"],"description":"Size display mode."},"permission":{"type":"string","enum":["rwx","octal","attributes","disable"],"description":"Permission display mode."},"sort":{"type":"string","enum":["name","size","extension","none"],"description":"Sort entries."},"reverse":{"type":"boolean","description":"Reverse the selected sort."},"group_dirs":{"type":"string","enum":["none","first","last"],"description":"Group directories before or after files."},"depth":{"type":"integer","minimum":0,"description":"Maximum recursive depth."},"header":{"type":"boolean","description":"Show long-output headers."}},"required":[],"additionalProperties":false}"#;
@@ -171,6 +172,10 @@ fn dispatch_gpgpu(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
     super::cmds::gpgpu::try_parse(spawner, io, &mut args)
 }
 
+fn dispatch_grid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::grid::try_parse(spawner, io, rest)
+}
+
 fn dispatch_vgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::vgpu::try_parse(io, rest)
 }
@@ -304,6 +309,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Control UI4-backed GPGPU live previews and inspect or reload known kernel artifacts.",
         ),
         tool_parameters_json: Some(TOOL_JSON_GPGPU),
+    },
+    BuiltinShell2CmdEntry {
+        name: "grid",
+        mode: "cmd",
+        color: Some(STATUS_ORANGE_RGB),
+        advertised: true,
+        handler: dispatch_grid,
+        tool_description: Some("Open the Gridpaper Blueprint."),
+        tool_parameters_json: Some(TOOL_JSON_GRID),
     },
     BuiltinShell2CmdEntry {
         name: "vgpu",
@@ -562,7 +576,8 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs",
-        "txt", "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp", "etc",
+        "txt", "grid", "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp",
+        "etc",
     ];
 
     let mut out = AllocString::new();

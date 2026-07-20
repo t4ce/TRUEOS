@@ -21,16 +21,6 @@ const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
 const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 512 * 1024;
 const UAS_TRACE_STARTUP_OPS: u64 = 4;
 const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
-const UAS_DIAGNOSTIC_CUT: u8 = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
-const UAS_CUT_AFTER_RUNTIME_RETAINED: u8 = 1;
-const UAS_CUT_AFTER_WORKER_HANDOFF: u8 = 2;
-const UAS_CUT_AFTER_HANDOFF_READ: u8 = 3;
-const UAS_CUT_AFTER_TRUEOSFS_LOCATE: u8 = 4;
-const UAS_CUT_AFTER_PRIVATE_ROOT: u8 = 5;
-const UAS_CUT_AFTER_READ_ONLY_INDEX: u8 = 6;
-const UAS_CUT_AFTER_PRIMARY_PUBLICATION: u8 = 7;
-const UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK: u8 = 8;
-const UAS_CUT_AFTER_GLOBAL_READINESS: u8 = 9;
 
 struct SkhynixUasRuntime {
     command_out: super::crabusb::Endpoint,
@@ -87,10 +77,6 @@ struct UasTarget {
 }
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-manifest cut={} stages=1:runtime-retained,2:worker-handoff,3:lba1-read,4:trueosfs-locate,5:private-root,6:read-only-index,7:primary-publication-lsd-only,8:http-trueosfs-plus-html-shack,9:global-readiness,0:mount-continue\n",
-        UAS_DIAGNOSTIC_CUT
-    );
     if let Some(config) = pooled.device.configurations().first() {
         crate::log_trace!(target: "usb";
             "crabusb: skhynix-green proof=config-raw len={} bytes={:02x?}\n",
@@ -266,24 +252,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         device: pooled.device,
     };
     crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=1 name=runtime-retained slot={} device_owner=true endpoint_owner=true status=ok next={}\n",
-        runtime.device.slot_id(),
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_RUNTIME_RETAINED {
-            "cut"
-        } else {
-            "worker-handoff"
-        }
+        "crabusb: skhynix-green proof=runtime-retained slot={} device_owner=true endpoint_owner=true status=ok next=worker-handoff\n",
+        runtime.device.slot_id()
     );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_RUNTIME_RETAINED {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=1 status=stopped action=no-block-register\n"
-        );
-        return;
-    }
 
     let label =
         alloc::format!("USB UAS {} {}", probe_info.vendor.as_str(), probe_info.product.as_str());
-    let proof_block_size = probe_info.block_size as usize;
     let descriptor =
         crate::disc::block::DeviceDescriptor::new(crate::disc::block::DeviceKind::Unknown)
             .with_label(label)
@@ -315,295 +289,14 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         SKHYNIX_UAS_WRITE_TRANSFER_BYTES
     );
     crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=2 name=worker-handoff disc={} device_owner=block-worker status=ok next={}\n",
-        handle.id(),
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_WORKER_HANDOFF {
-            "cut"
-        } else {
-            "lba1-read"
-        }
-    );
-
-    crate::log!(
         "crabusb: skhynix-green {:04x}:{:04x} proof=endpoints cmd_out=true status_in=true data_in=true data_out=true owner=block\n",
         pooled.vendor_id,
         pooled.product_id
     );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_WORKER_HANDOFF {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=2 status=stopped action=runtime-retained-no-io\n"
-        );
-        return;
-    }
-
+    crate::r::fs::trueosfs::request_mount_root(handle);
     crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=3 name=lba1-read status=start disc={} lba=1 blocks=1 expected_bytes={} carrier=block-worker\n",
-        handle.id(),
-        proof_block_size
-    );
-    let proof = match handle.read_blocks(1, 1).await {
-        Ok(bytes) if bytes.len() == proof_block_size => bytes,
-        Ok(bytes) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=3 name=lba1-read status=failed reason=short got={} expected={} action=cut-before-mount\n",
-                bytes.len(),
-                proof_block_size
-            );
-            return;
-        }
-        Err(err) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=3 name=lba1-read status=failed err={:?} action=cut-before-mount\n",
-                err
-            );
-            return;
-        }
-    };
-    let proof_head_len = proof.len().min(8);
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=3 name=lba1-read status=ok bytes={} head={:02x?} next={}\n",
-        proof.len(),
-        &proof[..proof_head_len],
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_HANDOFF_READ {
-            "cut"
-        } else {
-            "trueosfs-locate"
-        }
-    );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_HANDOFF_READ {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=3 status=stopped action=worker-and-device-retained-mount-deferred\n"
-        );
-        return;
-    }
-
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=4 name=trueosfs-locate status=start disc={} action=probe-only-no-mount-publication\n",
+        "crabusb: skhynix-green proof=trueosfs-mount status=requested disc={} path=ordinary-deferred-mount\n",
         handle.id()
-    );
-    let placement = match crate::r::fs::trueosfs::locate_async(handle).await {
-        Ok(Some(placement)) => placement,
-        Ok(None) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=4 name=trueosfs-locate status=not-found action=cut-before-mount\n"
-            );
-            return;
-        }
-        Err(err) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=4 name=trueosfs-locate status=failed err={:?} action=cut-before-mount\n",
-                err
-            );
-            return;
-        }
-    };
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=4 name=trueosfs-locate status=ok bootable={} super_lba={} data_lba={} data_end={:?} next={}\n",
-        placement.bootable,
-        placement.super_lba,
-        placement.data_lba,
-        placement.data_end_lba_exclusive,
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_TRUEOSFS_LOCATE {
-            "cut"
-        } else if UAS_DIAGNOSTIC_CUT == 0 {
-            "trueosfs-mount"
-        } else {
-            "private-root"
-        }
-    );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_TRUEOSFS_LOCATE {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=4 status=stopped action=placement-proved-mount-not-published\n"
-        );
-        return;
-    }
-
-    if UAS_DIAGNOSTIC_CUT == 0 {
-        crate::r::fs::trueosfs::request_mount_root(handle);
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=0 name=trueosfs-mount status=requested disc={} action=continue-normal-runtime\n",
-            handle.id()
-        );
-        return;
-    }
-
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=5 name=private-root status=start disc={} publish_primary=false publish_readiness=false\n",
-        handle.id()
-    );
-    if let Err(err) = crate::r::fs::trueosfs::register_unpublished_root_for_diagnostic(handle) {
-        crate::log_warn!(target: "usb";
-            "crabusb: skhynix-green proof=diagnostic-stage stage=5 name=private-root status=failed err={:?} action=cut-before-index\n",
-            err
-        );
-        return;
-    }
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=5 name=private-root status=ok disc={} visible_roots={} root_readiness=false next={}\n",
-        handle.id(),
-        crate::r::fs::trueosfs::roots_len(),
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_PRIVATE_ROOT {
-            "cut"
-        } else {
-            "read-only-index"
-        }
-    );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_PRIVATE_ROOT {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=5 status=stopped action=private-root-retained-no-readiness-no-index\n"
-        );
-        return;
-    }
-
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=6 name=read-only-index status=start disc={} checkpoint_write=false root_readiness=false index_readiness=false\n",
-        handle.id()
-    );
-    let entries = match crate::r::fs::trueosfs::warm_unpublished_index_read_only_for_diagnostic(
-        handle, &placement,
-    )
-    .await
-    {
-        Ok(entries) => entries,
-        Err(err) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=6 name=read-only-index status=failed err={:?} action=cut-before-publication\n",
-                err
-            );
-            return;
-        }
-    };
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=6 name=read-only-index status=ok disc={} entries={} checkpoint_write=false visible_roots={} next={}\n",
-        handle.id(),
-        entries,
-        crate::r::fs::trueosfs::roots_len(),
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_READ_ONLY_INDEX {
-            "cut"
-        } else {
-            "primary-publication"
-        }
-    );
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_READ_ONLY_INDEX {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=6 status=stopped action=index-replayed-private-no-consumers-no-writes\n"
-        );
-        return;
-    }
-
-    let heap_before_publication = crate::allocators::host_heap_integrity_bounded();
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=heap-integrity stage=6 boundary=before-primary-publication healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
-        heap_before_publication.healthy,
-        heap_before_publication.reason,
-        heap_before_publication.nodes,
-        heap_before_publication.current,
-        heap_before_publication.next,
-    );
-    if !heap_before_publication.healthy {
-        crate::log_warn!(target: "usb";
-            "crabusb: skhynix-green proof=diagnostic-cut stage=6 status=stopped reason=host-heap-corrupt action=no-publication\n"
-        );
-        return;
-    }
-
-    if !matches!(
-        UAS_DIAGNOSTIC_CUT,
-        UAS_CUT_AFTER_PRIMARY_PUBLICATION
-            | UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK
-            | UAS_CUT_AFTER_GLOBAL_READINESS
-    ) {
-        crate::log_warn!(target: "usb";
-            "crabusb: skhynix-green proof=diagnostic-cut stage=6 status=stopped reason=unsupported-cut cut={} action=no-publication\n",
-            UAS_DIAGNOSTIC_CUT
-        );
-        return;
-    }
-
-    let publish_readiness = UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_GLOBAL_READINESS;
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=7 name=primary-publication status=start disc={} publish_primary=true publish_readiness={} readiness_consumers={} direct-primary-consumers=capability-gated\n",
-        handle.id(),
-        publish_readiness,
-        if publish_readiness {
-            "released"
-        } else {
-            "blocked"
-        }
-    );
-    let published_entries = match crate::r::fs::trueosfs::publish_unpublished_root_for_diagnostic(
-        handle,
-        publish_readiness,
-    ) {
-        Ok(entries) => entries,
-        Err(err) => {
-            crate::log_warn!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-stage stage=7 name=primary-publication status=failed err={:?} action=cut-before-consumers\n",
-                err
-            );
-            return;
-        }
-    };
-    let heap_after_publication = crate::allocators::host_heap_integrity_bounded();
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=heap-integrity stage=7 boundary=after-primary-publication healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
-        heap_after_publication.healthy,
-        heap_after_publication.reason,
-        heap_after_publication.nodes,
-        heap_after_publication.current,
-        heap_after_publication.next,
-    );
-    if !heap_after_publication.healthy {
-        crate::log_warn!(target: "usb";
-            "crabusb: skhynix-green proof=diagnostic-cut stage=7 status=stopped reason=host-heap-corrupt-after-publication action=no-consumers\n"
-        );
-        return;
-    }
-    let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-    let index_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_INDEX_READY);
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=7 name=primary-publication status=ok disc={} entries={} visible_roots={} primary_root={} root_readiness={} index_readiness={} next={}\n",
-        handle.id(),
-        published_entries,
-        crate::r::fs::trueosfs::roots_len(),
-        crate::r::fs::trueosfs::primary_root_id()
-            .map(|disk_id| disk_id.raw())
-            .unwrap_or(0),
-        root_ready,
-        index_ready,
-        if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_PRIMARY_PUBLICATION {
-            "cut-lsd-only"
-        } else if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
-            "http-trueosfs-plus-html-shack"
-        } else {
-            "global-readiness"
-        }
-    );
-
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_PRIMARY_PUBLICATION {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=7 status=stopped action=primary-visible-manual-lsd-only root-readiness=false automatic-fs-consumers=capability-blocked\n"
-        );
-        return;
-    }
-
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=intersection-split-gpgpu-held status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=false allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifacts,TRUEOSFS_ROOT_MOUNTED,TRUEOSFS_INDEX_READY,APP_VM_READY,unnamed-readiness-consumers\n"
-        );
-        crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=intersection-split-gpgpu-held root-readiness=false index-readiness=false\n"
-        );
-        return;
-    }
-
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-stage stage=9 name=global-readiness status=ok root_readiness={} index_readiness={} action=ordinary-consumers-released\n",
-        root_ready,
-        index_ready
-    );
-    crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-cut stage=9 status=stopped action=prepared-root-published-with-ordinary-consumers\n"
     );
 }
 
@@ -901,11 +594,11 @@ async fn uas_command_in(
     data: &mut [u8],
     tag: u16,
     trace_details: bool,
-    diagnostic_stages: bool,
+    first_read_trace: bool,
 ) -> Result<usize, MassProbeError> {
-    if diagnostic_stages {
+    if first_read_trace {
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-transfer stage=3.10 phase=enter cmd={} tag=0x{:04x} status_ep=0x{:02x} data_ep=0x{:02x} bytes={} streams={}\n",
+            "crabusb: skhynix-green proof=uas-first-read step=10 phase=enter cmd={} tag=0x{:04x} status_ep=0x{:02x} data_ep=0x{:02x} bytes={} streams={}\n",
             cmd,
             tag,
             status_in.info().address.raw(),
@@ -915,9 +608,9 @@ async fn uas_command_in(
         );
     }
     if !UAS_XHCI_STREAMS_ENABLED {
-        if diagnostic_stages {
+        if first_read_trace {
             crate::log!(
-                "crabusb: skhynix-green proof=diagnostic-transfer stage=3.11 phase=route mode=no-streams\n"
+                "crabusb: skhynix-green proof=uas-first-read step=11 phase=route mode=no-streams\n"
             );
         }
         return uas_command_in_no_streams(
@@ -948,17 +641,17 @@ async fn uas_command_in(
         let ready_id = match status_in.submit(uas_bulk_in_request(&mut ready_iu, tag)) {
             Ok(id) => id,
             Err(_) => {
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log_warn!(target: "usb";
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.11 phase=status-submit status=failed action=cut-transfer\n"
+                        "crabusb: skhynix-green proof=uas-first-read step=11 phase=status-submit status=failed action=abort-transfer\n"
                     );
                 }
                 return Err(MassProbeError::Transport("uas-status-submit"));
             }
         };
-        if diagnostic_stages {
+        if first_read_trace {
             crate::log!(
-                "crabusb: skhynix-green proof=diagnostic-transfer stage=3.11 phase=status-submit status=ok request={} stream={}\n",
+                "crabusb: skhynix-green proof=uas-first-read step=11 phase=status-submit status=ok request={} stream={}\n",
                 ready_id.raw(),
                 tag
             );
@@ -967,18 +660,18 @@ async fn uas_command_in(
             Ok(id) => id,
             Err(_) => {
                 let _ = status_in.cancel(ready_id);
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log_warn!(target: "usb";
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.12 phase=data-submit status=failed status_request={} action=cancel-status-and-cut-transfer\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=12 phase=data-submit status=failed status_request={} action=cancel-status-and-abort-transfer\n",
                         ready_id.raw()
                     );
                 }
                 return Err(MassProbeError::Transport("uas-data-submit"));
             }
         };
-        if diagnostic_stages {
+        if first_read_trace {
             crate::log!(
-                "crabusb: skhynix-green proof=diagnostic-transfer stage=3.12 phase=data-submit status=ok request={} stream={} bytes={}\n",
+                "crabusb: skhynix-green proof=uas-first-read step=12 phase=data-submit status=ok request={} stream={} bytes={}\n",
                 data_id.raw(),
                 tag,
                 data.len()
@@ -998,17 +691,17 @@ async fn uas_command_in(
         if let Err(err) = uas_send_command(command_out, cmd, cdb, tag, trace_details).await {
             let _ = status_in.cancel(ready_id);
             let _ = data_in.cancel(data_id);
-            if diagnostic_stages {
+            if first_read_trace {
                 crate::log_warn!(target: "usb";
-                    "crabusb: skhynix-green proof=diagnostic-transfer stage=3.13 phase=command status=failed err={:?} action=cancel-preposted-and-cut-transfer\n",
+                    "crabusb: skhynix-green proof=uas-first-read step=13 phase=command status=failed err={:?} action=cancel-preposted-and-abort-transfer\n",
                     err
                 );
             }
             return Err(err);
         }
-        if diagnostic_stages {
+        if first_read_trace {
             crate::log!(
-                "crabusb: skhynix-green proof=diagnostic-transfer stage=3.13 phase=command status=ok tag=0x{:04x} next=first-in-completion\n",
+                "crabusb: skhynix-green proof=uas-first-read step=13 phase=command status=ok tag=0x{:04x} next=first-in-completion\n",
                 tag
             );
         }
@@ -1040,9 +733,9 @@ async fn uas_command_in(
 
         match first {
             FirstInCompletion::Data(got) => {
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log!(
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.14 phase=first-completion source=data status={} request={}\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=14 phase=first-completion source=data status={} request={}\n",
                         if got.is_ok() { "ok" } else { "failed" },
                         data_id.raw()
                     );
@@ -1055,9 +748,9 @@ async fn uas_command_in(
                     "uas-status-in",
                 )
                 .await;
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log!(
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.15 phase=second-completion source=status status={} request={}\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=15 phase=second-completion source=status status={} request={}\n",
                         if ready_result.is_ok() { "ok" } else { "failed" },
                         ready_id.raw()
                     );
@@ -1069,9 +762,9 @@ async fn uas_command_in(
                 let ready = &ready_iu[..ready_got.min(ready_iu.len())];
                 let ready_iu_id = ready[0];
                 let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log!(
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.16 phase=status-iu iu=0x{:02x} iu_tag=0x{:04x} expected_tag=0x{:04x} bytes={}\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=16 phase=status-iu iu=0x{:02x} iu_tag=0x{:04x} expected_tag=0x{:04x} bytes={}\n",
                         ready_iu_id,
                         ready_tag,
                         tag,
@@ -1088,9 +781,9 @@ async fn uas_command_in(
                 }
             }
             FirstInCompletion::Status(ready_got) => {
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log!(
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.14 phase=first-completion source=status status={} request={}\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=14 phase=first-completion source=status status={} request={}\n",
                         if ready_got.is_ok() { "ok" } else { "failed" },
                         ready_id.raw()
                     );
@@ -1102,9 +795,9 @@ async fn uas_command_in(
                 let ready = &ready_iu[..ready_got.min(ready_iu.len())];
                 let ready_iu_id = ready[0];
                 let ready_tag = parse_uas_tag(ready).unwrap_or(0);
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log!(
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.15 phase=status-iu iu=0x{:02x} iu_tag=0x{:04x} expected_tag=0x{:04x} bytes={}\n",
+                        "crabusb: skhynix-green proof=uas-first-read step=15 phase=status-iu iu=0x{:02x} iu_tag=0x{:04x} expected_tag=0x{:04x} bytes={}\n",
                         ready_iu_id,
                         ready_tag,
                         tag,
@@ -1120,9 +813,9 @@ async fn uas_command_in(
                         "uas-data-in",
                     )
                     .await;
-                    if diagnostic_stages {
+                    if first_read_trace {
                         crate::log!(
-                            "crabusb: skhynix-green proof=diagnostic-transfer stage=3.16 phase=second-completion source=data status={} request={}\n",
+                            "crabusb: skhynix-green proof=uas-first-read step=16 phase=second-completion source=data status={} request={}\n",
                             if data_result.is_ok() { "ok" } else { "failed" },
                             data_id.raw()
                         );
@@ -1137,9 +830,9 @@ async fn uas_command_in(
                         "uas-data-in",
                     )
                     .await;
-                    if diagnostic_stages {
+                    if first_read_trace {
                         crate::log!(
-                            "crabusb: skhynix-green proof=diagnostic-transfer stage=3.16 phase=second-completion source=data status={} request={}\n",
+                            "crabusb: skhynix-green proof=uas-first-read step=16 phase=second-completion source=data status={} request={}\n",
                             if data_result.is_ok() { "ok" } else { "failed" },
                             data_id.raw()
                         );
@@ -1158,9 +851,9 @@ async fn uas_command_in(
                     ready_id.raw(),
                     data_id.raw()
                 );
-                if diagnostic_stages {
+                if first_read_trace {
                     crate::log_warn!(target: "usb";
-                        "crabusb: skhynix-green proof=diagnostic-transfer stage=3.14 phase=first-completion status=timeout action=cancel-preposted-and-cut-transfer\n"
+                        "crabusb: skhynix-green proof=uas-first-read step=14 phase=first-completion status=timeout action=cancel-preposted-and-abort-transfer\n"
                     );
                 }
                 let _ = status_in.cancel(ready_id);
@@ -1172,18 +865,18 @@ async fn uas_command_in(
 
     match outcome {
         InOutcome::Done(got) => {
-            if diagnostic_stages {
+            if first_read_trace {
                 crate::log!(
-                    "crabusb: skhynix-green proof=diagnostic-transfer stage=3.17 phase=complete status=ok bytes={} final_status=direct\n",
+                    "crabusb: skhynix-green proof=uas-first-read step=17 phase=complete status=ok bytes={} final_status=direct\n",
                     got
                 );
             }
             Ok(got)
         }
         InOutcome::DrainStatus(got) => {
-            if diagnostic_stages {
+            if first_read_trace {
                 crate::log!(
-                    "crabusb: skhynix-green proof=diagnostic-transfer stage=3.17 phase=final-status-drain status=start\n"
+                    "crabusb: skhynix-green proof=uas-first-read step=17 phase=final-status-drain status=start\n"
                 );
             }
             let drain = uas_drain_status_grace(
@@ -1194,9 +887,9 @@ async fn uas_command_in(
                 trace_details,
             )
             .await;
-            if diagnostic_stages {
+            if first_read_trace {
                 crate::log!(
-                    "crabusb: skhynix-green proof=diagnostic-transfer stage=3.18 phase=final-status-drain status={}\n",
+                    "crabusb: skhynix-green proof=uas-first-read step=18 phase=final-status-drain status={}\n",
                     if drain.is_ok() { "ok" } else { "failed" }
                 );
             }
@@ -1741,10 +1434,10 @@ impl SkhynixUasBlockDevice {
         let trace_transfer = Self::trace_operation(op);
         let cdb = cdb_read_10(lba as u32, blocks as u16);
         let tag = self.alloc_tag();
-        let diagnostic_stages = op == 1;
-        if diagnostic_stages {
+        let first_read_trace = op == 1;
+        if first_read_trace {
             crate::log!(
-                "crabusb: skhynix-green proof=diagnostic-transfer stage=3.00 phase=block-enter slot={} op={} lba={} blocks={} bytes={} tag=0x{:04x} command_ep=0x{:02x} status_ep=0x{:02x} data_ep=0x{:02x}\n",
+                "crabusb: skhynix-green proof=uas-first-read step=00 phase=block-enter slot={} op={} lba={} blocks={} bytes={} tag=0x{:04x} command_ep=0x{:02x} status_ep=0x{:02x} data_ep=0x{:02x}\n",
                 self.runtime.device.slot_id(),
                 op,
                 lba,
@@ -1775,7 +1468,7 @@ impl SkhynixUasBlockDevice {
             dst,
             tag,
             trace_transfer,
-            diagnostic_stages,
+            first_read_trace,
         )
         .await
         {

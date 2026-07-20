@@ -932,71 +932,25 @@ pub(crate) async fn font_warm_task() {
             return;
         }
 
-        // A primary-root handle is an addressability detail, not permission
-        // for an automatic consumer to start filesystem work. In particular,
-        // the USB/UAS cut harness deliberately exposes a prepared root to
-        // direct Shell2 commands before publishing global TRUEOSFS readiness.
-        // Polling only `primary_root_handle()` here made that diagnostic
-        // publication silently launch two eager font reads (including the
-        // 17 MiB Noto face) and their synchronous all-glyph outline warmup.
-        let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
-        let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-        let diagnostic_allow_configured = diagnostic_cut == 8
-            && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_EAGER_FONT_WARM;
-        let diagnostic_allow = diagnostic_allow_configured
-            && crate::r::fs::trueosfs::has_published_root_with_index();
-        let diagnostic_hold = diagnostic_cut == 9
-            && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_HOLD_EAGER_FONT_WARM;
-        if (!root_ready && !diagnostic_allow) || diagnostic_hold {
-            if matches!(diagnostic_cut, 7..=9) {
-                crate::log_info!(
-                    target: "usb";
-                    "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=graphics-font-fs-warm status=blocked reason={} heartbeat={} root_readiness={} automatic_io=false\n",
-                    diagnostic_cut,
-                    if diagnostic_hold {
-                        "consumer-isolation-eager-font"
-                    } else {
-                        "root-readiness-withheld"
-                    },
-                    heartbeat,
-                    root_ready,
-                );
-            }
-            let retry_secs = if diagnostic_allow_configured {
-                1
-            } else {
-                TRUEOSFS_FONT_HEARTBEAT_SECS
-            };
+        if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
             for spec in TRUEOSFS_FONTS
                 .iter()
                 .filter(|spec| font_summary(spec.name).is_none())
             {
                 crate::log_info!(
                     target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason={} heartbeat={} retry_secs={}\n",
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-ready heartbeat={} retry_secs={}\n",
                     spec.name,
                     spec.path,
-                    if diagnostic_hold {
-                        "diagnostic-consumer-isolation"
-                    } else {
-                        "root-not-ready"
-                    },
                     heartbeat,
-                    retry_secs,
+                    TRUEOSFS_FONT_HEARTBEAT_SECS,
                 );
             }
             embassy_time::Timer::after(embassy_time::Duration::from_secs(
-                retry_secs,
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
             .await;
             continue;
-        }
-
-        if diagnostic_allow {
-            crate::log_info!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=graphics-font-fs-warm status=allowed source=published-root-with-index automatic_fs_io=true heartbeat={}\n",
-                heartbeat,
-            );
         }
 
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {

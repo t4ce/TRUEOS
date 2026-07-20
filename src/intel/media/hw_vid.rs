@@ -335,8 +335,6 @@ pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport
 
 /// Load the validated Annex-B asset from the published TRUEOSFS primary root,
 /// then run it through the same decoder and UI4 path as the embedded source.
-/// This explicit Shell2 source is intentionally independent of global
-/// filesystem readiness so cut 7 can test disc I/O without waking consumers.
 pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
 -> Result<H264PlaybackReport, &'static str> {
     crate::log_info!(target: "ui4";
@@ -363,13 +361,6 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
 
     let disk =
         crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?;
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=open-start path={} root_readiness={} index_readiness={}\n",
-        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
-        UI4_FRAMED_VIDEO_ASSET,
-        crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED),
-        crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_INDEX_READY),
-    );
     let file = crate::r::fs::trueosfs::file_read_open_async(disk, UI4_FRAMED_VIDEO_ASSET)
         .await
         .map_err(|_| "TRUEOSFS video stream open failed")?
@@ -378,14 +369,6 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
     if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_MAX_BYTES {
         return Err("TRUEOSFS video size outside playback limit");
     }
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=open-ok path={} bytes={} data_lba={} next=range-read\n",
-        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
-        UI4_FRAMED_VIDEO_ASSET,
-        file_bytes,
-        file.data_lba(),
-    );
-
     let mut annexb = Vec::new();
     annexb
         .try_reserve_exact(file_bytes)
@@ -409,14 +392,6 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
         }
         done = done.saturating_add(read);
     }
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=read-ok path={} bytes={} chunks={} next=annexb-parse\n",
-        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
-        UI4_FRAMED_VIDEO_ASSET,
-        done,
-        done.div_ceil(H264_TRUEOSFS_READ_CHUNK_BYTES),
-    );
-
     let heap_after_load = crate::allocators::host_heap_integrity_bounded();
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=heap-after-trueosfs-load healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",

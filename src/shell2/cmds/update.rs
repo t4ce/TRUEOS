@@ -81,21 +81,10 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 
         let info = disk.info();
         log("update: waiting for net");
-        let diagnostic_allow = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
-            && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_SHELL2_UPDATE
-            && crate::r::fs::trueosfs::has_published_root_with_index();
-        if diagnostic_allow {
-            crate::log_info!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=shell2-update status=allowed source=published-root-with-index manual_fs_io=true\n"
-            );
-            crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
-        } else {
-            crate::r::readiness::wait_for(
-                crate::r::readiness::NET_V4_CONFIGURED
-                    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-            )
-            .await;
-        }
+        crate::r::readiness::wait_for(
+            crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        )
+        .await;
         if interrupted() {
             log("update: interrupted before download");
             return;

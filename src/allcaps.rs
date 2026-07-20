@@ -83,42 +83,6 @@ pub mod storage {
     pub const NVME_IO_TRANSFER_PAGES_CAP: u64 = 128;
 
     pub const USB_MASS_UAS_IO_TIMEOUT_MS: u64 = 10_000;
-
-    /// SK hynix UAS bring-up cut used while proving the detached-endpoint
-    /// ownership handoff. 0 continues into the ordinary TRUEOSFS mount, 1
-    /// stops after the parent Device is retained by the runtime, 2 stops after
-    /// the block worker owns that runtime, 3 performs one worker-mediated LBA1
-    /// read, 4 completes the TRUEOSFS placement probe, 5 installs an unpublished
-    /// internal root, 6 replays its index read-only, 7 exposes that prepared root
-    /// to direct/manual VFS users without global readiness, 8 additionally admits
-    /// HTTP TRUEOSFS plus the request-driven HTML shack, and 9 finally publishes
-    /// ordinary root/index readiness.
-    /// Cut 6 forbids checkpoint writes; cuts 7 and 8 keep automatic readiness
-    /// consumers asleep so Shell2 `lsd` and HTTP can be proved independently.
-    // Closing verification: return the X31 to the ordinary deferred
-    // TRUEOSFS mount/index/readiness path. Keep the diagnostic stages in place
-    // until this no-cut boot has passed, then remove the dormant harness.
-    pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 0;
-
-    /// Cut-9 consumer isolation: publish normal TRUEOSFS readiness, but keep
-    /// the eager filesystem font warm asleep. This leaves every other cut-9
-    /// consumer enabled and separates the 17 MiB Noto/all-glyph warm from the
-    /// UAS, VFS, and video paths under investigation.
-    pub const USB_MASS_UAS_DIAGNOSTIC_HOLD_EAGER_FONT_WARM: bool = true;
-
-    /// Cut-8 inverse profile: admit selected automatic consumers through the
-    /// already-published primary root without setting global readiness bits.
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_EAGER_FONT_WARM: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_RAPL_PERSISTENCE: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_TTSTT_MODEL_WARM: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_ASSET_SHACK: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_USER_INPUT_WRITER: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS: bool = false;
-
-    /// Cut-8 manual consumers admitted through the published diagnostic root.
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_SHELL2_DL: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_SHELL2_UPDATE: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_TLB_PCI_FS_DB: bool = true;
 }
 
 pub mod input {

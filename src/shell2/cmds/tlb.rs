@@ -1026,17 +1026,7 @@ fn print_menu(io: &'static dyn ShellBackend2) {
 fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
     ensure_pci_devices_enumerated();
 
-    let diagnostic_allow = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
-        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_TLB_PCI_FS_DB
-        && crate::r::fs::trueosfs::has_published_root_with_index();
-    let db = if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
-        || diagnostic_allow
-    {
-        if diagnostic_allow {
-            crate::log_info!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=tlb-pci-fs-db status=allowed source=published-root-with-index manual_fs_io=true\n"
-            );
-        }
+    let db = if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
         crate::pci::pciids::load_sanitized_from_root_blocking()
             .ok()
             .flatten()
