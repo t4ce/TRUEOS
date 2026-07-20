@@ -51,26 +51,30 @@ pub(crate) fn try_parse(
         Ok(result) => print_shell_line(
             io,
             format!(
-                "fnt: stamped=1 slot={} frame={} window={} request={} reused_slot={} reused_frame={} font={} size={}percent rgba={:02X}{:02X}{:02X}{:02X} text_chars={} rows={} glyphs={} stamp={}x{} completed={} producer={} ui4=double escape=focused-close",
+                "fnt: stamped=1 slot={} frame={} window={} request={} reused_slot={} reused_frame={} font={} size={}percent font_px={:.2} rgba={:02X}{:02X}{:02X}{:02X} text_chars={} rows={} glyphs={} document={}x{} viewport={}x{} completed={} producer={} release={} ui4=double pan=middle-drag escape=focused-close",
                 result.slot,
                 result.frame.raw(),
                 result.window.raw(),
                 result.request_serial,
                 result.reused_slot as u8,
                 result.reused_frame as u8,
-                result.stamp.summary.font_name,
-                result.stamp.size_percent,
+                result.font_name,
+                result.size_percent,
+                result.font_pixels,
                 command.color.r,
                 command.color.g,
                 command.color.b,
                 command.color.a,
-                result.stamp.text_chars,
-                result.stamp.rows,
-                result.stamp.summary.glyphs,
-                result.stamp.stamp_width,
-                result.stamp.stamp_height,
-                result.stamp.render.completed as u8,
-                result.stamp.producer_path,
+                result.text_chars,
+                result.rows,
+                result.glyphs,
+                result.document_width,
+                result.document_height,
+                result.viewport_width,
+                result.viewport_height,
+                result.render_completed as u8,
+                result.producer_path,
+                result.release_sequence,
             )
             .as_str(),
         ),
@@ -276,7 +280,7 @@ fn parse_rgba(encoded: &str) -> Result<GpuFontRgba, &'static str> {
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; default size=25, explicit 100 remains full-screen bounded fallback; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; presents in one of 10 reusable UI4 slots; focus a stamp and press Escape to close it",
+        "fnt: `fnt \"text\" [1..100] [font=1|2|3] [color=RRGGBBAA]`; size selects document typography (default 25); text wraps in a 1920x1080 document shown through a 768x512 UI4 frame; middle-drag pans, Escape closes; rows: `fnt rows \"row 1\" \"row 2\" ...`; font 2=Noto Sans SC, font 3=Inconsolata; CJK automatically selects font 2; up to 10 reusable UI4 slots",
     );
 }
 

@@ -461,17 +461,25 @@ fn quarantine_failed_destination(
     existing: Option<FontSlot>,
     frame: FrameHandle,
     candidate_is_new: bool,
+    document: GpuFontUi4Document,
     reason: &'static str,
 ) {
+    let mut retired_document = None;
     if !candidate_is_new && existing.is_some_and(|slot| slot.frame == frame) {
         if let Some(slot) = existing {
             let _ = finish_window_session(FONT_OWNER, slot.session);
         }
-        FONT_STAMPS.lock().slots[slot_index] = None;
+        let mut state = FONT_STAMPS.lock();
+        state.slots[slot_index] = None;
+        retired_document = state.documents[slot_index].take();
+    }
+    if let Some(previous) = retired_document {
+        retire_font_document(previous.document);
     }
     let quarantined = {
         let mut state = FONT_STAMPS.lock();
         state.quarantine(frame);
+        state.quarantined_documents.push(document);
         state.quarantined_frames.len()
     };
     crate::log_error!(
@@ -483,6 +491,12 @@ fn quarantine_failed_destination(
         candidate_is_new as u8,
         quarantined,
     );
+}
+
+fn retire_font_document(document: GpuFontUi4Document) {
+    if !release_ui4_font_document(&document) {
+        FONT_STAMPS.lock().queue_document_retirement(document);
+    }
 }
 
 fn close_slot_for_escape(window: WindowId) {
@@ -498,10 +512,18 @@ fn close_slot_for_escape(window: WindowId) {
     };
     match finish_window_session(FONT_OWNER, slot.session) {
         Ok(_) => {
-            let mut state = FONT_STAMPS.lock();
-            if state.slots[index].is_some_and(|current| current.window == window) {
-                state.slots[index] = None;
-                state.queue_retirement(slot.frame);
+            let document = {
+                let mut state = FONT_STAMPS.lock();
+                if state.slots[index].is_some_and(|current| current.window == window) {
+                    state.slots[index] = None;
+                    state.queue_retirement(slot.frame);
+                    state.documents[index].take()
+                } else {
+                    None
+                }
+            };
+            if let Some(document) = document {
+                retire_font_document(document.document);
             }
             crate::log_info!(
                 target: "ui4/font-stamp";
@@ -523,17 +545,203 @@ fn close_slot_for_escape(window: WindowId) {
     }
 }
 
-fn drain_escape_events() {
+fn drain_font_events() {
     for event in take_owner_input_events(FONT_OWNER) {
-        let Ui4InputEvent::Keyboard(event) = event else {
-            continue;
-        };
-        if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-            && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
-        {
-            close_slot_for_escape(event.window);
+        match event {
+            Ui4InputEvent::Keyboard(event)
+                if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                    && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE =>
+            {
+                close_slot_for_escape(event.window);
+            }
+            Ui4InputEvent::Pan(event) => pan_font_document(event),
+            _ => {}
         }
     }
+}
+
+fn pan_font_document(event: super::Ui4PanEvent) {
+    let mut state = FONT_STAMPS.lock();
+    let Some(index) = state
+        .slots
+        .iter()
+        .position(|slot| slot.is_some_and(|slot| slot.window == event.window))
+    else {
+        return;
+    };
+    let Some(view) = state.documents[index].as_mut() else {
+        return;
+    };
+    match event.phase {
+        super::Ui4PanPhase::Begin => view.active_pan_source = Some(event.source),
+        super::Ui4PanPhase::Update if view.active_pan_source == Some(event.source) => {
+            let next_x = move_document_origin(
+                view.pan_x,
+                event.dx,
+                view.document.document_width.saturating_sub(FONT_VIEW_WIDTH),
+            );
+            let next_y = move_document_origin(
+                view.pan_y,
+                event.dy,
+                view.document
+                    .document_height
+                    .saturating_sub(FONT_VIEW_HEIGHT),
+            );
+            if next_x != view.pan_x || next_y != view.pan_y {
+                view.pan_x = next_x;
+                view.pan_y = next_y;
+                view.dirty = true;
+            }
+        }
+        super::Ui4PanPhase::End if view.active_pan_source == Some(event.source) => {
+            view.active_pan_source = None;
+            crate::log_info!(
+                target: "ui4/font-stamp";
+                "font document pan ended slot={} window={} document={}x{} viewport={}x{} crop_origin={},{} retessellate=0 geometry_upload=0\n",
+                index,
+                event.window.raw(),
+                view.document.document_width,
+                view.document.document_height,
+                FONT_VIEW_WIDTH,
+                FONT_VIEW_HEIGHT,
+                view.pan_x,
+                view.pan_y,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn move_document_origin(origin: u32, drag_delta: i32, maximum: u32) -> u32 {
+    (i64::from(origin) - i64::from(drag_delta)).clamp(0, i64::from(maximum)) as u32
+}
+
+fn render_one_dirty_document() {
+    let mut state = FONT_STAMPS.lock();
+    let Some(index) = state
+        .documents
+        .iter()
+        .position(|view| view.as_ref().is_some_and(|view| view.dirty))
+    else {
+        return;
+    };
+    let Some(slot) = state.slots[index] else {
+        let document = state.documents[index].take();
+        drop(state);
+        if let Some(document) = document {
+            retire_font_document(document.document);
+        }
+        return;
+    };
+    let lease = match acquire_frame_buffer(slot.frame) {
+        Ok(lease) => lease,
+        Err(FramePoolError::Busy) => return,
+        Err(error) => {
+            crate::log_warn!(
+                target: "ui4/font-stamp";
+                "font document pan acquire deferred slot={} frame={} error={:?}\n",
+                index,
+                slot.frame.raw(),
+                error,
+            );
+            return;
+        }
+    };
+    let destination = match gpgpu_rgba_surface(lease) {
+        Ok(destination) => destination,
+        Err(_) => {
+            let _ = cancel_frame_buffer(lease);
+            return;
+        }
+    };
+    let (pan_x, pan_y, rendered) = {
+        let view = state.documents[index]
+            .as_ref()
+            .expect("dirty font document selected");
+        (
+            view.pan_x,
+            view.pan_y,
+            render_ui4_font_document_view(&view.document, view.pan_x, view.pan_y, destination),
+        )
+    };
+    let rendered = match rendered {
+        Ok(rendered) => rendered,
+        Err(reason) => {
+            // A failed direct-RCS call may have crossed the submission
+            // boundary. Keep its exact destination and resident mesh mapped.
+            let document = state.documents[index].take();
+            state.slots[index] = None;
+            state.quarantine(slot.frame);
+            if let Some(document) = document {
+                state.quarantined_documents.push(document.document);
+            }
+            drop(state);
+            let _ = finish_window_session(FONT_OWNER, slot.session);
+            crate::log_error!(
+                target: "ui4/font-stamp";
+                "font document pan render quarantined slot={} frame={} window={} crop_origin={},{} reason={} action=no-cancel-no-unmap\n",
+                index,
+                slot.frame.raw(),
+                slot.window.raw(),
+                pan_x,
+                pan_y,
+                reason,
+            );
+            return;
+        }
+    };
+    if let Err(error) = publish_gpu_font_frame_buffer(lease, rendered.release) {
+        let _ = cancel_frame_buffer(lease);
+        crate::log_warn!(
+            target: "ui4/font-stamp";
+            "font document pan frame publish deferred slot={} frame={} crop_origin={},{} error={:?}\n",
+            index,
+            slot.frame.raw(),
+            pan_x,
+            pan_y,
+            error,
+        );
+        return;
+    }
+    if let Err(error) = publish_window_frame(FONT_OWNER, slot.window, DamageRect::FULL) {
+        // The GPU release is exact and retired, so the mesh is safe to retire.
+        // The now-ready frame remains broker-owned until its ordinary destroy
+        // retry succeeds.
+        let document = state.documents[index].take();
+        state.slots[index] = None;
+        state.queue_retirement(slot.frame);
+        drop(state);
+        let _ = finish_window_session(FONT_OWNER, slot.session);
+        if let Some(document) = document {
+            retire_font_document(document.document);
+        }
+        crate::log_warn!(
+            target: "ui4/font-stamp";
+            "font document pan window publish closed slot={} frame={} window={} error={:?}\n",
+            index,
+            slot.frame.raw(),
+            slot.window.raw(),
+            error,
+        );
+        return;
+    }
+    if let Some(view) = state.documents[index].as_mut() {
+        // Do not erase a newer input update that arrived before publication.
+        if view.pan_x == pan_x && view.pan_y == pan_y {
+            view.dirty = false;
+        }
+    }
+    crate::log_info!(
+        target: "ui4/font-stamp";
+        "font document pan presented slot={} frame={} window={} crop_origin={},{} producer={} release={} geometry_upload=0 cpu_frame_copy=0 surflive_release=1\n",
+        index,
+        slot.frame.raw(),
+        slot.window.raw(),
+        pan_x,
+        pan_y,
+        rendered.producer_path,
+        rendered.release.sequence(),
+    );
 }
 
 fn reap_retired_frames() {
@@ -556,18 +764,29 @@ fn reap_retired_frames() {
             }
         }
     }
+    let mut document_index = 0;
+    while document_index < state.retired_documents.len() {
+        if release_ui4_font_document(&state.retired_documents[document_index]) {
+            state.retired_documents.swap_remove(document_index);
+        } else {
+            document_index += 1;
+        }
+    }
 }
 
 #[embassy_executor::task]
 pub(crate) async fn ui4_font_stamp_service_task() {
     crate::log_info!(
         target: "ui4/font-stamp";
-        "font stamp service online slots={} plane=slot1-alpha sessions=one-per-window producer_serialization=one guc=render+gpgpu compositor_guc=isolated escape=focused-window-close physical_release=surflive\n",
+        "font stamp service online slots={} plane=slot1-alpha sessions=one-per-window document=1920x1080 viewport={}x{} buffering=double producer_serialization=one guc=render compositor_guc=isolated pan=middle-drag-retained-viewport escape=focused-window-close physical_release=surflive\n",
         MAX_FONT_STAMP_SLOTS,
+        FONT_VIEW_WIDTH,
+        FONT_VIEW_HEIGHT,
     );
     loop {
-        if !FONT_PRESENT_IN_FLIGHT.load(Ordering::Acquire) {
-            drain_escape_events();
+        if let Ok(_guard) = PresentGuard::acquire() {
+            drain_font_events();
+            render_one_dirty_document();
             reap_retired_frames();
         }
         Timer::after(Duration::from_millis(FONT_INPUT_POLL_MS)).await;

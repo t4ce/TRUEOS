@@ -230,6 +230,8 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const TOP_VHDL: &str = include_str!("../../../src/top.vhd");
+
     #[test]
     fn binary_manifest_matches_shared_abi_layout() {
         let bytes = manifest_bytes([0xA5; 32]);
@@ -246,5 +248,21 @@ mod tests {
         assert!(interface.contains("ADD_U32"));
         assert!(interface.contains("XOR_U32"));
         assert_eq!(FUNCTIONS.len(), 3);
+    }
+
+    #[test]
+    fn gowin_completion_uses_the_high_dword_lanes() {
+        // IPUG1020 Figure 3-1 numbers TL dwords from [255:224] downward.
+        // A four-dword completion therefore occupies the high half with F0 valid.
+        for required in [
+            "tx_pending_data(255 downto 224) <= dw0;",
+            "tx_pending_data(223 downto 192) <= dw1;",
+            "tx_pending_data(191 downto 160) <= dw2;",
+            "tx_pending_data(159 downto 128) <= data_in;",
+            "tx_pending_valid <= \"11110000\";",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing Gowin TL layout: {required}");
+        }
+        assert!(!TOP_VHDL.contains("tx_pending_valid <= \"00001111\";"));
     }
 }

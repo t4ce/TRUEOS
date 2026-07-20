@@ -114,7 +114,6 @@ architecture rtl of top is
 	constant CALL_ERROR_BAD_FUNCTION : std_logic_vector(31 downto 0) := x"BAD00003";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
-	constant TX_CPLD_REVERSE_DWORDS : boolean := false;
 
 	signal pcie_linkup : std_logic;
 
@@ -472,18 +471,16 @@ begin
 				dbg_last_cpld_data <= data_in;
 
 			tx_pending_data <= (others => '0');
-			if TX_CPLD_REVERSE_DWORDS then
-				tx_pending_data(31 downto 0) <= data_in;
-				tx_pending_data(63 downto 32) <= dw2;
-				tx_pending_data(95 downto 64) <= dw1;
-				tx_pending_data(127 downto 96) <= dw0;
-			else
-				tx_pending_data(31 downto 0) <= dw0;
-				tx_pending_data(63 downto 32) <= dw1;
-				tx_pending_data(95 downto 64) <= dw2;
-				tx_pending_data(127 downto 96) <= data_in;
-			end if;
-			tx_pending_valid <= "00001111";
+			-- The Gowin TL bus carries the first dword in [255:224] and then
+			-- descends through the vector. A four-dword CplD therefore occupies
+			-- the high half of the beat and uses valid=F0, matching IPUG1020
+			-- Figure 3-1. Using the low half makes the controller see the payload
+			-- as the first dword and discard the malformed completion.
+			tx_pending_data(255 downto 224) <= dw0;
+			tx_pending_data(223 downto 192) <= dw1;
+			tx_pending_data(191 downto 160) <= dw2;
+			tx_pending_data(159 downto 128) <= data_in;
+			tx_pending_valid <= "11110000";
 			tx_pending_sop <= '1';
 			tx_pending_eop <= '1';
 			tx_pending <= '1';

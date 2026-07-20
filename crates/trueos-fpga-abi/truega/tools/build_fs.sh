@@ -62,6 +62,11 @@ trap finish EXIT
 
 # RustHDL is strictly an Ubuntu build input. Pin the host target and a separate target
 # directory so the generator cannot inherit TRUEOS's no_std kernel target/build-std state.
+CARGO_TARGET_DIR="$GENERATOR_TARGET_DIR" "$CARGO_BIN" "+$HOST_TOOLCHAIN" test --quiet \
+  --manifest-path "$GENERATOR_MANIFEST" \
+  --target "$HOST_TARGET" \
+  --config 'unstable.build-std=[]'
+
 CARGO_TARGET_DIR="$GENERATOR_TARGET_DIR" "$CARGO_BIN" "+$HOST_TOOLCHAIN" run --quiet \
   --manifest-path "$GENERATOR_MANIFEST" \
   --target "$HOST_TARGET" \
