@@ -110,14 +110,7 @@ pub mod storage {
     pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_TTSTT_MODEL_WARM: bool = true;
     pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_ASSET_SHACK: bool = true;
     pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_USER_INPUT_WRITER: bool = true;
-    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS: bool = true;
-
-    /// Cut the filesystem-backed GPGPU artifact path at a precise boundary.
-    ///
-    /// 0: normal runtime-artifact lookup/upload behavior.
-    /// 1: admit and trace eligible first-use uploads, then force the embedded
-    ///    artifact before any synchronous TRUEOSFS lookup is attempted.
-    pub const USB_MASS_UAS_DIAGNOSTIC_GPGPU_RUNTIME_ARTIFACT_CUT: u8 = 1;
+    pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS: bool = false;
 
     /// Cut-8 manual consumers admitted through the published diagnostic root.
     pub const USB_MASS_UAS_DIAGNOSTIC_ALLOW_SHELL2_DL: bool = true;

@@ -31,56 +31,19 @@ fn upload_artifact_from_sources(
         && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS
         && crate::r::fs::trueosfs::has_published_root_with_index();
     let trueosfs_ready = globally_ready || diagnostic_allow;
-    let in_executor_poll = crate::percpu::in_executor_poll();
-    let diagnostic_cut =
-        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_GPGPU_RUNTIME_ARTIFACT_CUT;
     if diagnostic_allow {
         static DIAGNOSTIC_ALLOW_LOGGED: AtomicBool = AtomicBool::new(false);
         if !DIAGNOSTIC_ALLOW_LOGGED.swap(true, Ordering::AcqRel) {
             crate::log_info!(target: "usb";
-                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=gpgpu-runtime-artifacts status=entered source=published-root-with-index cut={} automatic_fs_io={}\n",
-                diagnostic_cut,
-                if diagnostic_cut == 1 { "held-before-lookup" } else { "on-eligible-upload" },
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=gpgpu-runtime-artifacts status=allowed source=published-root-with-index automatic_fs_io=on-eligible-upload\n"
             );
         }
     }
-
-    if diagnostic_allow && diagnostic_cut == 1 {
-        crate::log_info!(target: "usb";
-            "crabusb: skhynix-green proof=gpgpu-runtime-artifact-boundary stage=8 kernel={} status=cut boundary=before-kfs-read mode={} executor_poll={} globally_ready={} diagnostic_allow=true action={}\n",
-            artifact.name,
-            if strict_runtime_artifact { "strict-reload" } else { "automatic-first-use" },
-            in_executor_poll,
-            globally_ready,
-            if strict_runtime_artifact { "held-by-diagnostic-cut" } else { "fallback-embedded" },
-        );
-        if strict_runtime_artifact {
-            return None;
-        }
-        return upload_embedded_artifact(dev, artifact, gpu);
-    }
-
-    if trueosfs_ready && !in_executor_poll {
-        if diagnostic_allow {
-            crate::log_info!(target: "usb";
-                "crabusb: skhynix-green proof=gpgpu-runtime-artifact-boundary stage=8 kernel={} status=enter boundary=kfs-read path={} executor_poll=false globally_ready={} diagnostic_allow=true\n",
-                artifact.name,
-                runtime_artifact_display_path(artifact.name),
-                globally_ready,
-            );
-        }
+    if trueosfs_ready && !crate::percpu::in_executor_poll() {
         match read_runtime_artifact_bytes(artifact.name) {
             Ok(Some(bytes)) if !bytes.is_empty() => {
                 let path = runtime_artifact_display_path(artifact.name);
                 let spv_bytes = read_runtime_spv_len(artifact.name).unwrap_or(artifact.spv.len());
-                if diagnostic_allow {
-                    crate::log_info!(target: "usb";
-                        "crabusb: skhynix-green proof=gpgpu-runtime-artifact-boundary stage=8 kernel={} status=ok boundary=kfs-read bytes={} spv_bytes={} next=validate-dma-ggtt-upload\n",
-                        artifact.name,
-                        bytes.len(),
-                        spv_bytes,
-                    );
-                }
                 return upload_artifact_bytes(
                     dev,
                     artifact,
@@ -145,14 +108,6 @@ fn upload_artifact_from_sources(
         }
     }
 
-    upload_embedded_artifact(dev, artifact, gpu)
-}
-
-fn upload_embedded_artifact(
-    dev: super::Dev,
-    artifact: GpgpuKernelArtifact,
-    gpu: u64,
-) -> Option<UploadedKernelArtifact> {
     let source_path = kernel_source_path(artifact.name).unwrap_or("embedded");
     upload_artifact_bytes(
         dev,
@@ -197,7 +152,13 @@ fn upload_artifact_bytes(
         return None;
     }
     let actual_sha256 = sha256_digest(bin);
-    let requires_allowlisted_sha = runtime_artifact_requires_allowlisted_sha(artifact.name);
+    let requires_allowlisted_sha = matches!(
+        artifact.name,
+        CHART_SINE_RGBA8_KERNEL_NAME
+            | PIXEL_PLASMA_RGBA8_KERNEL_NAME
+            | FONT_OUTLINE_MESH_KERNEL_NAME
+            | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
+    );
     if requires_allowlisted_sha && actual_sha256 != artifact.bin_sha256 {
         crate::log_error!(
             target: "gpgpu";
@@ -291,129 +252,6 @@ fn runtime_artifact_rel_path(name: &str, ext: &str) -> String {
 
 fn runtime_artifact_display_path(name: &str) -> String {
     alloc::format!("/{}", runtime_artifact_rel_path(name, "bin"))
-}
-
-const GPGPU_RUNTIME_ARTIFACT_PROBE_MAX_BYTES: u64 = 1024 * 1024;
-
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct GpgpuRuntimeArtifactProbe {
-    pub(crate) name: &'static str,
-    pub(crate) bytes: usize,
-    pub(crate) sha256: [u8; 32],
-    pub(crate) matches_embedded: bool,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub(crate) enum GpgpuRuntimeArtifactProbeError {
-    UnknownKernel,
-    NoRoot,
-    NotFound,
-    TooLarge(u64),
-    ChangedDuringRead { expected: u64, actual: usize },
-    Invalid(&'static str),
-    Device(crate::disc::block::Error),
-}
-
-impl GpgpuRuntimeArtifactProbeError {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::UnknownKernel => "unknown-kernel",
-            Self::NoRoot => "no-root",
-            Self::NotFound => "not-found",
-            Self::TooLarge(_) => "too-large",
-            Self::ChangedDuringRead { .. } => "changed-during-read",
-            Self::Invalid(reason) => reason,
-            Self::Device(_) => "device-error",
-        }
-    }
-}
-
-/// Read and validate one filesystem-backed kernel artifact without touching
-/// GPU mappings, upload slots, or UI4 state. This is deliberately async all the
-/// way down to the serviced block-device worker and is the proof path for the
-/// runtime-artifact loader redesign.
-pub(crate) async fn probe_runtime_artifact_async(
-    name: &str,
-) -> Result<GpgpuRuntimeArtifactProbe, GpgpuRuntimeArtifactProbeError> {
-    let artifact = runtime_artifact_metadata(name)
-        .ok_or(GpgpuRuntimeArtifactProbeError::UnknownKernel)?;
-    let disk = crate::r::fs::trueosfs::primary_root_handle()
-        .ok_or(GpgpuRuntimeArtifactProbeError::NoRoot)?;
-    let path = runtime_artifact_rel_path(artifact.name, "bin");
-
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=gpgpu-runtime-artifact-async-probe kernel={} phase=info-start path=/{} executor_poll={} gpu_state=untouched ui4_lock=not-held\n",
-        artifact.name,
-        path,
-        crate::percpu::in_executor_poll(),
-    );
-    let info = crate::r::fs::trueosfs::file_info_async(disk, path.as_str())
-        .await
-        .map_err(GpgpuRuntimeArtifactProbeError::Device)?
-        .ok_or(GpgpuRuntimeArtifactProbeError::NotFound)?;
-    if info.data_len > GPGPU_RUNTIME_ARTIFACT_PROBE_MAX_BYTES {
-        return Err(GpgpuRuntimeArtifactProbeError::TooLarge(info.data_len));
-    }
-
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=gpgpu-runtime-artifact-async-probe kernel={} phase=read-start bytes={} carrier=managed-trueosfs-async next=serviced-block-worker\n",
-        artifact.name,
-        info.data_len,
-    );
-    let bytes = crate::r::fs::trueosfs::file_out_async(disk, path.as_str())
-        .await
-        .map_err(GpgpuRuntimeArtifactProbeError::Device)?
-        .ok_or(GpgpuRuntimeArtifactProbeError::NotFound)?;
-    if bytes.len() as u64 != info.data_len {
-        return Err(GpgpuRuntimeArtifactProbeError::ChangedDuringRead {
-            expected: info.data_len,
-            actual: bytes.len(),
-        });
-    }
-    validate_kernel_artifact_bytes(bytes.as_slice())
-        .map_err(GpgpuRuntimeArtifactProbeError::Invalid)?;
-    let sha256 = sha256_digest(bytes.as_slice());
-    let matches_embedded = sha256 == artifact.bin_sha256;
-    if runtime_artifact_requires_allowlisted_sha(artifact.name) && !matches_embedded {
-        return Err(GpgpuRuntimeArtifactProbeError::Invalid(
-            "sha256-not-allowlisted",
-        ));
-    }
-
-    crate::log_info!(target: "usb";
-        "crabusb: skhynix-green proof=gpgpu-runtime-artifact-async-probe kernel={} phase=done bytes={} matches_embedded={} action=drop-without-upload executor_reentry=none\n",
-        artifact.name,
-        bytes.len(),
-        matches_embedded,
-    );
-    Ok(GpgpuRuntimeArtifactProbe {
-        name: artifact.name,
-        bytes: bytes.len(),
-        sha256,
-        matches_embedded,
-    })
-}
-
-fn runtime_artifact_metadata(name: &str) -> Option<GpgpuKernelArtifact> {
-    match name {
-        UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME => {
-            Some(UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT)
-        }
-        UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
-            Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT)
-        }
-        _ => known_artifact_slot(name).map(|slot| slot.artifact),
-    }
-}
-
-fn runtime_artifact_requires_allowlisted_sha(name: &str) -> bool {
-    matches!(
-        name,
-        CHART_SINE_RGBA8_KERNEL_NAME
-            | PIXEL_PLASMA_RGBA8_KERNEL_NAME
-            | FONT_OUTLINE_MESH_KERNEL_NAME
-            | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
-    )
 }
 
 fn read_runtime_artifact_bytes(name: &str) -> Result<Option<Vec<u8>>, crate::io::kfs::FsError> {

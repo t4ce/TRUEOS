@@ -277,14 +277,7 @@ fn spawn_bsp_services(spawner: Spawner) {
 fn _loop(executor: &'static Executor) -> ! {
     loop {
         time::poll();
-        // Keep the per-CPU executor-poll guard authoritative for every BSP
-        // task. Synchronous adapters use this state to reject recursive polling
-        // of this same executor (notably filesystem-backed GPGPU artifacts).
-        debug_assert!(core::ptr::eq(
-            executor,
-            unsafe { &*percpu::this_cpu().executor_ptr() },
-        ));
-        runtime::poll_local_executor();
+        unsafe { executor.poll() };
         //if counter.is_multiple_of(10_000_000) {
         //    log_os::debugcon_write_byte_raw(b'0');
         //}
