@@ -124,7 +124,7 @@ impl ShellMode2 {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum EscState {
     None,
     Esc,
@@ -808,7 +808,7 @@ fn active_slot_label_visible_width(output_mask: u8) -> usize {
     1usize.saturating_add(ecma48::visible_width(active_slot.as_str()))
 }
 
-fn main_mode_visible_width(output_mask: u8) -> usize {
+fn main_mode_visible_width(_output_mask: u8) -> usize {
     let modes = [
         ShellMode2::Surf,
         ShellMode2::Apps,

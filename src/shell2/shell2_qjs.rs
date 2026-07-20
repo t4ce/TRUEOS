@@ -417,7 +417,10 @@ fn ensure_drainer_started(spawner: &Spawner) -> bool {
     }
 
     match shell_qjs_sessions_drainer() {
-        Ok(token) => spawner.spawn(token),
+        Ok(token) => {
+            spawner.spawn(token);
+            true
+        }
         Err(_) => {
             SHELL_QJS_DRAINER_STARTED.store(false, Ordering::Release);
             false

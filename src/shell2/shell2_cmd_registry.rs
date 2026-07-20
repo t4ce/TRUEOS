@@ -19,6 +19,7 @@ struct BuiltinShell2CmdEntry {
 }
 
 const STATUS_GREEN_RGB: (u8, u8, u8) = (60, 220, 120);
+const STATUS_GREEN_ALT_RGB: (u8, u8, u8) = (78, 232, 136);
 const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
@@ -568,6 +569,9 @@ pub(crate) fn command_names_status_text() -> AllocString {
 
     let mut first = true;
     for name in STATUS_ORDER {
+        if *name == "mv" {
+            continue;
+        }
         let Some(entry) = BUILTIN_CMD_REGISTRY
             .iter()
             .find(|entry| entry.advertised && entry.name == *name)
@@ -579,10 +583,29 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         first = false;
-        push_status_command_name(&mut out, entry);
+        if entry.name == "rm" {
+            push_rm_mv_status_token(&mut out);
+        } else {
+            push_status_command_name(&mut out, entry);
+        }
     }
 
     out
+}
+
+fn push_rm_mv_status_token(out: &mut AllocString) {
+    for (text, color) in [
+        ("(", STATUS_GREEN_RGB),
+        ("r", STATUS_GREEN_RGB),
+        ("[", STATUS_GREEN_ALT_RGB),
+        ("m", STATUS_GREEN_RGB),
+        (")", STATUS_GREEN_RGB),
+        ("v", STATUS_GREEN_RGB),
+        ("]", STATUS_GREEN_ALT_RGB),
+    ] {
+        let styled = alloc::format!("{}", super::term_style::paint(text).bold().color(color));
+        out.push_str(styled.as_str());
+    }
 }
 
 fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
