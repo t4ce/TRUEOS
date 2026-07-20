@@ -36,7 +36,7 @@ pub(crate) use self::media::xelp_media2_ngin;
 pub(crate) use self::media::xelp_media2_ngin_hw_pic;
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use spin::Mutex;
+use spin::Once;
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
@@ -110,7 +110,10 @@ const PCI_DEVICE_RAPTOR_LAKE_S_GT1_UHD770: u16 = 0xA780;
 static INIT: AtomicBool = AtomicBool::new(false);
 static GEN12_INTEGRATED_PAT_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
-static CLAIMED_DEVICE: Mutex<Option<Dev>> = Mutex::new(None);
+// The display device is selected exactly once during boot and never mutates.
+// Keep readers lock-free so interrupt-adjacent display/media paths cannot
+// deadlock an executor by re-entering a spin mutex held by the interrupted CPU.
+static CLAIMED_DEVICE: Once<Dev> = Once::new();
 
 #[derive(Copy, Clone)]
 pub(crate) struct Dev {
@@ -158,7 +161,7 @@ pub fn init_once() {
         guc_boot as u8,
         media_decode_enabled_for_device(dev.device_id) as u8
     );
-    *CLAIMED_DEVICE.lock() = Some(dev);
+    CLAIMED_DEVICE.call_once(|| dev);
     let forcewake_ready = device_uses_gen12_integrated_pat(dev.device_id) && forcewake(dev);
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
@@ -274,7 +277,7 @@ pub(crate) fn guc_submission_ready() -> bool {
 }
 
 pub fn has_claimed_device() -> bool {
-    CLAIMED_DEVICE.lock().is_some()
+    CLAIMED_DEVICE.get().is_some()
 }
 
 /// Keep emulator policy aligned with the existing Intel display hardware split.
@@ -289,7 +292,7 @@ pub(crate) fn is_emulator_environment() -> bool {
 }
 
 pub(crate) fn claimed_device() -> Option<Dev> {
-    *CLAIMED_DEVICE.lock()
+    CLAIMED_DEVICE.get().copied()
 }
 
 pub(crate) fn guc_boot_enabled() -> bool {
@@ -875,6 +878,10 @@ pub(crate) fn has_media_decode_engine() -> bool {
 
 pub(crate) fn hw_vid_probe_enabled() -> bool {
     self::media::hw_vid::probe_enabled()
+}
+
+pub(crate) const fn hw_vid_probe_readiness_mask() -> u32 {
+    self::media::hw_vid::probe_readiness_mask()
 }
 
 pub(crate) fn hw_pic_service()

@@ -116,6 +116,7 @@ pub fn generate() -> String {
 }
 
 /// Software reference behavior used only by host-side generator tests.
+#[cfg(test)]
 pub mod reference {
     use super::HEARTBEAT_REPLY;
 

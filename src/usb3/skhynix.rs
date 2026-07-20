@@ -23,12 +23,10 @@ const UAS_TRACE_STARTUP_OPS: u64 = 4;
 const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
 
 struct SkhynixUasRuntime {
-    device: super::crabusb::Device,
     command_out: super::crabusb::Endpoint,
     status_in: super::crabusb::Endpoint,
     data_in: super::crabusb::Endpoint,
     data_out: super::crabusb::Endpoint,
-    target: UasTarget,
 }
 
 struct SkhynixUasBlockDevice {
@@ -243,12 +241,10 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     };
 
     let runtime = SkhynixUasRuntime {
-        device: pooled.device,
         command_out,
         status_in,
         data_in,
         data_out,
-        target,
     };
 
     let label =

@@ -80,6 +80,51 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
+    let mut probe_args = rest.split_whitespace();
+    if probe_args
+        .next()
+        .is_some_and(|arg| arg.eq_ignore_ascii_case("probe"))
+    {
+        let selection = match probe_args.next() {
+            None | Some("all") => None,
+            Some(raw) => match raw.parse::<u8>() {
+                Ok(cut @ 1..=10) => Some(cut),
+                _ => {
+                    usage(io);
+                    return ParseOutcome::Handled;
+                }
+            },
+        };
+        if probe_args.next().is_some() {
+            usage(io);
+            return ParseOutcome::Handled;
+        }
+        let active_target = matrix_target_for_backend(io);
+        let target = switch_matrix_target_slot(&active_target, VID_SLOT);
+        set_matrix_target_active(&target, true);
+        match vid_probe_task(target.clone(), selection) {
+            Ok(token) => {
+                spawner.spawn(token);
+                print_matrix_target_line(
+                    &target,
+                    alloc::format!(
+                        "vid: probe queued selection={} cuts=10 policy=stop-first-failure",
+                        selection.map_or(0, usize::from)
+                    )
+                    .as_str(),
+                );
+            }
+            Err(err) => {
+                set_matrix_target_active(&target, false);
+                print_matrix_target_line(
+                    &target,
+                    alloc::format!("vid: probe task failed {err:?}").as_str(),
+                );
+            }
+        }
+        return ParseOutcome::Handled;
+    }
+
     let mut args = rest.split_whitespace();
     let Some(command) = parse_options(io, &mut args) else {
         return ParseOutcome::Handled;
@@ -291,6 +336,25 @@ fn usage(io: &'static dyn ShellBackend2) {
         io,
         "vid: examples `vid 60`, `vid 60 video.mp4`, `vid 60 path=video.mp4`, `vid 60 online`, `vid 15 reverse`",
     );
+    print_shell_line(
+        io,
+        "vid: staged harness `vid probe all` or `vid probe <1..10>` (also autostarts 10 seconds after the boot logo)",
+    );
+}
+
+#[embassy_executor::task(pool_size = 1)]
+async fn vid_probe_task(target: MatrixTarget, selection: Option<u8>) {
+    print_matrix_target_line(
+        &target,
+        alloc::format!("vid: probe start selection={} cuts=10", selection.map_or(0, usize::from))
+            .as_str(),
+    );
+    let passed = crate::ui4::run_video_probe(selection, "shell2").await;
+    print_matrix_target_line(
+        &target,
+        alloc::format!("vid: probe done passed={}", passed as u8).as_str(),
+    );
+    set_matrix_target_active(&target, false);
 }
 
 #[embassy_executor::task(pool_size = 1)]

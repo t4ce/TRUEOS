@@ -166,9 +166,7 @@ fn first_mmio_bar(dev: &crate::pci::PciDevice) -> Option<(u8, u64)> {
     None
 }
 
-pub mod xhci {
-    pub const MAX_XHCI_CONTROLLERS: usize = 0;
-}
+pub mod xhci {}
 
 #[derive(Clone, Debug, Default)]
 pub struct UsbControllerInfo {

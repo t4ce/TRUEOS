@@ -158,6 +158,34 @@ pub(crate) async fn wait_decoded_video_playback_ready() -> bool {
     }
 }
 
+/// Probe-only confirmation that the newest decoded-video publication crossed
+/// the compositor and display boundary. Normal playback remains pipelined and
+/// does not wait here per frame.
+pub(crate) async fn wait_decoded_video_presented(timeout_ms: u64) -> bool {
+    let started = embassy_time::Instant::now();
+    loop {
+        let window = VIDEO_STREAM.lock().as_ref().map(|stream| stream.window);
+        let Some(window) = window else {
+            return false;
+        };
+        let acknowledged = super::visible_windows_for_output(VIDEO_OUTPUT)
+            .iter()
+            .find(|snapshot| snapshot.id == window)
+            .is_some_and(|snapshot| snapshot.publish_serial != 0 && snapshot.damage.is_none());
+        if acknowledged {
+            crate::log_info!(target: "ui4";
+                "ui4 video-frame probe acknowledgement window={} boundary=surflive-latest elapsed_ms={}\n",
+                window.raw(), started.elapsed().as_millis(),
+            );
+            return true;
+        }
+        if started.elapsed().as_millis() >= timeout_ms {
+            return false;
+        }
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
 fn poll_decoded_video_player_input() {
     reap_retired_video_frames();
     for event in take_owner_input_events(VIDEO_OWNER) {

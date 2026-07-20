@@ -478,8 +478,19 @@ pub async fn fpga_offload_heartbeat_task() {
         if crate::tga::is_online() {
             match led_step_heartbeat().await {
                 Ok(true) => {}
-                Ok(false) => crate::log!("fpga-offload: heartbeat returned bad liveness magic\n"),
-                Err(error) => crate::log!("fpga-offload: heartbeat call failed: {:?}\n", error),
+                Ok(false) => {
+                    crate::log_warn!(
+                        "fpga-offload: heartbeat disabled after bad liveness magic; flash matching TRUEGA firmware\n"
+                    );
+                    return;
+                }
+                Err(error) => {
+                    crate::log_warn!(
+                        "fpga-offload: heartbeat disabled after first failure: {:?}; flash matching TRUEGA firmware\n",
+                        error
+                    );
+                    return;
+                }
             }
         }
         Timer::after(EmbassyDuration::from_millis(HEARTBEAT_PERIOD_MS)).await;

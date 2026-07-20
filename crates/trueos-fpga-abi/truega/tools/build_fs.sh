@@ -40,8 +40,10 @@ GOWIN_LIB="$GOWIN_IDE_DIR/lib"
 SYSTEM_FREETYPE="/lib/x86_64-linux-gnu/libfreetype.so.6"
 PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
 TCL_FILE="$(mktemp)"
-PLACE_OPTION="${TRUEGA_PLACE_OPTION:-3}"
+BUILD_MARKER="$(mktemp)"
+PLACE_OPTION="${TRUEGA_PLACE_OPTION:-4}"
 ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
+CLOCK_CONVERSION="${TRUEGA_CLOCK_CONVERSION:-1}"
 HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
 HOST_TARGET="${TRUEGA_HOST_TARGET:-x86_64-unknown-linux-gnu}"
 GENERATOR_TARGET_DIR="${TRUEGA_GENERATOR_TARGET_DIR:-/tmp/truega-tga-gen-target}"
@@ -52,7 +54,7 @@ GENERATED_RUST_INTERFACE="$PROJECT_DIR/../src/generated.rs"
 
 finish() {
   local rc=$?
-  rm -f "$TCL_FILE"
+  rm -f "$TCL_FILE" "$BUILD_MARKER"
   echo "finished_at=$(date --iso-8601=seconds) status=$rc"
   exit "$rc"
 }
@@ -73,6 +75,7 @@ cat > "$TCL_FILE" <<EOF
 open_project $PROJECT_FILE
 set_option -top_module top
 set_option -output_base_name min_pci_led
+set_option -fix_gated_and_generated_clocks $CLOCK_CONVERSION
 set_option -place_option $PLACE_OPTION
 set_option -route_option $ROUTE_OPTION
 set_option -clock_route_order 1
@@ -87,8 +90,8 @@ cd "$PROJECT_DIR"
 env LD_PRELOAD="$SYSTEM_FREETYPE${LD_PRELOAD:+:$LD_PRELOAD}" LD_LIBRARY_PATH="$GOWIN_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$GOWIN_SH" "$TCL_FILE"
 
 BITSTREAM="$PROJECT_DIR/impl/pnr/min_pci_led.fs"
-if [[ ! -s "$BITSTREAM" ]]; then
-  echo "Gowin completed without a non-empty bitstream: $BITSTREAM" >&2
+if [[ ! -s "$BITSTREAM" || ! "$BITSTREAM" -nt "$BUILD_MARKER" ]]; then
+  echo "Gowin completed without updating a non-empty bitstream: $BITSTREAM" >&2
   exit 1
 fi
 sha256sum "$BITSTREAM" > "$PROJECT_DIR/artifacts/min_pci_led.fs.sha256"

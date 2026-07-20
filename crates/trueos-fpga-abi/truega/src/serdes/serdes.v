@@ -9,7 +9,6 @@
 //Created Time: Sun Feb  8 03:28:46 2026
 
 module SerDes_Top (PCIE_Controller_Top_pcie_tl_rx_sop_o, PCIE_Controller_Top_pcie_tl_rx_eop_o, PCIE_Controller_Top_pcie_tl_rx_data_o, PCIE_Controller_Top_pcie_tl_rx_valid_o, PCIE_Controller_Top_pcie_tl_rx_bardec_o, PCIE_Controller_Top_pcie_tl_rx_err_o, PCIE_Controller_Top_pcie_tl_tx_wait_o, PCIE_Controller_Top_pcie_ltssm_o, PCIE_Controller_Top_pcie_tl_tx_creditsp_o, PCIE_Controller_Top_pcie_tl_tx_creditsnp_o, PCIE_Controller_Top_pcie_tl_tx_creditscpl_o, PCIE_Controller_Top_pcie_tl_cfg_busdev_o, PCIE_Controller_Top_pcie_linkup_o, PCIE_Controller_Top_pcie_tl_drp_clk_o, PCIE_Controller_Top_pcie_tl_drp_rddata_o, PCIE_Controller_Top_pcie_tl_drp_resp_o, PCIE_Controller_Top_pcie_tl_drp_rd_valid_o, PCIE_Controller_Top_pcie_tl_drp_ready_o, PCIE_Controller_Top_pcie_rstn_i, PCIE_Controller_Top_pcie_tl_clk_i, PCIE_Controller_Top_pcie_tl_rx_wait_i, PCIE_Controller_Top_pcie_tl_rx_masknp_i, PCIE_Controller_Top_pcie_tl_tx_sop_i, PCIE_Controller_Top_pcie_tl_tx_eop_i, PCIE_Controller_Top_pcie_tl_tx_data_i, PCIE_Controller_Top_pcie_tl_tx_valid_i, PCIE_Controller_Top_pcie_tl_drp_addr_i, PCIE_Controller_Top_pcie_tl_drp_wrdata_i, PCIE_Controller_Top_pcie_tl_drp_strb_i, PCIE_Controller_Top_pcie_tl_drp_wr_i, PCIE_Controller_Top_pcie_tl_drp_rd_i,
-pcie_refclk_p_i, pcie_refclk_n_i, pcie_rxp0_i, pcie_rxn0_i, pcie_txp0_o, pcie_txn0_o,
 debug_refclk_det_o, debug_rx_lock_o);
 
 output PCIE_Controller_Top_pcie_tl_rx_sop_o;
@@ -43,13 +42,6 @@ input [31:0] PCIE_Controller_Top_pcie_tl_drp_wrdata_i;
 input [7:0] PCIE_Controller_Top_pcie_tl_drp_strb_i;
 input PCIE_Controller_Top_pcie_tl_drp_wr_i;
 input PCIE_Controller_Top_pcie_tl_drp_rd_i;
-
-input pcie_refclk_p_i;
-input pcie_refclk_n_i;
-input pcie_rxp0_i;
-input pcie_rxn0_i;
-output pcie_txp0_o;
-output pcie_txn0_o;
 
 output debug_refclk_det_o;
 output debug_rx_lock_o;
@@ -351,9 +343,6 @@ wire gw_gnd;
 assign gw_vcc = 1'b1;
 assign gw_gnd = 1'b0;
 
-assign pcie_txp0_o = q0_ln0_txp_o;
-assign pcie_txn0_o = q0_ln0_txm_o;
-
 assign debug_refclk_det_o = q0_fabric_pma_cm0_dr_refclk_det_o;
 assign debug_rx_lock_o = q0_fabric_ln0_pma_rx_lock_o;
 
@@ -486,8 +475,10 @@ GTR12_QUAD gtr12_quad_inst0 (
     .INET_Q_PMAC(q0_inet_q_pmac),
     .INET_Q_TEST(q0_inet_q_test),
     .INET_Q_UPAR(q0_inet_q_upar),
-    .LN0_RXM_I(pcie_rxn0_i),
-    .LN0_RXP_I(pcie_rxp0_i),
+    // The CSR selects the GTR12 hard block's dedicated PCIe package pins.
+    // These primitive inputs are fabric injection points, not board I/O.
+    .LN0_RXM_I(gw_gnd),
+    .LN0_RXP_I(gw_gnd),
     .LN1_RXM_I(gw_gnd),
     .LN1_RXP_I(gw_gnd),
     .LN2_RXM_I(gw_gnd),
@@ -503,9 +494,9 @@ GTR12_QUAD gtr12_quad_inst0 (
     .FABRIC_REFCLK_OE_L_I(gw_gnd),
     .FABRIC_REFCLK_OE_R_I(gw_gnd),
     .FABRIC_REFCLK_OUTPUT_SEL_I({gw_gnd,gw_gnd,gw_gnd,gw_gnd,gw_gnd}),
-    .REFCLKM0_I(pcie_refclk_n_i),
+    .REFCLKM0_I(gw_gnd),
     .REFCLKM1_I(gw_gnd),
-    .REFCLKP0_I(pcie_refclk_p_i),
+    .REFCLKP0_I(gw_gnd),
     .REFCLKP1_I(gw_gnd),
     .FABRIC_BURN_IN_I(gw_gnd),
     .FABRIC_CK_SOC_DIV_I({gw_gnd,gw_gnd}),

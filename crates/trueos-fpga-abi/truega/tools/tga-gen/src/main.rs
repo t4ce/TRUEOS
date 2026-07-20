@@ -154,7 +154,12 @@ fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
         writeln!(rust, "pub const {}: FunctionId = FunctionId::SLOT_{};", spec.rust_name, spec.id)
             .unwrap();
     }
-    rust.push_str("pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // \"TGAT\"\n");
+    writeln!(
+        rust,
+        "pub const HEARTBEAT_REPLY: u32 = 0x{:08X}; // \"TGAT\"",
+        firmware::HEARTBEAT_REPLY
+    )
+    .unwrap();
     rust.push_str("pub const FIRMWARE_RTL_SHA256: [u8; 32] = [\n    ");
     for (index, byte) in firmware_hash.iter().enumerate() {
         write!(rust, "0x{byte:02x},").unwrap();

@@ -243,19 +243,24 @@ fn log_liveness_once() {
         return;
     };
     let magic = tga.protocol_magic();
-    crate::log!(
-        "tga: heartbeat reply={} magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}\n",
-        if magic == TGA_MAGIC_EXPECTED {
-            "yep-alive"
-        } else {
-            "bad-magic"
-        },
-        magic,
-        TGA_MAGIC_EXPECTED,
-        tga.bus,
-        tga.slot,
-        tga.function
-    );
+    if magic == TGA_MAGIC_EXPECTED {
+        crate::log!(
+            "tga: liveness reply=yep-alive magic=0x{:08X} bdf={:02X}:{:02X}.{}\n",
+            magic,
+            tga.bus,
+            tga.slot,
+            tga.function
+        );
+    } else {
+        crate::log_warn!(
+            "tga: liveness mismatch magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}; flash matching TRUEGA firmware\n",
+            magic,
+            TGA_MAGIC_EXPECTED,
+            tga.bus,
+            tga.slot,
+            tga.function
+        );
+    }
 }
 
 fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {

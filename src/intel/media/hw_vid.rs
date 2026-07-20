@@ -7,18 +7,10 @@ use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer
 use serde_json::Value;
 
 const H264_BOOT_PROBE_ENABLED: bool = true;
-const H264_BOOT_PROBE_PLAYBACK_ENABLED: bool = true;
-const H264_BOOT_PROBE_PLAYBACK_OPTIONS: H264PlaybackOptions = H264PlaybackOptions {
-    fps: 60,
-    reverse_after_forward: false,
-    cache_mode: H264PlaybackCacheMode::Off,
-    stripe_study: false,
-    show_cache_fill: false,
-    diagnostics: false,
-    noreset_lite: true,
-    loop_playback: true,
-    presentation: H264PresentationPolicy::Ui4BootRequired,
-};
+// Hardware staging cursor. `vid probe all` always retains the complete ten-cut
+// ladder; autostart advances independently so a proven earlier teardown cannot
+// prevent the next producer boundary from executing on the following boot.
+const H264_BOOT_PROBE_AUTOSTART_CUT: Option<u8> = Some(10);
 // Cached reverse frames still use the retired primary-surface presentation
 // path instead of the ordinary UI4 window. Keep that ABI parked until reverse
 // presentation is converted to the native UI4/GuC producer used by forward
@@ -31,7 +23,7 @@ const H264_BOOT_PROBE_STREAM_LOAD_POLL_MS: u64 = 250;
 const H264_BOOT_PROBE_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 const H264_TRUEOSFS_MP4_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_BOOT_PROBE_TIMEOUT_MS: u64 = 5_000;
-const H264_BOOT_PROBE_DELAY_MS: u64 = 2_000;
+const H264_BOOT_PROBE_DELAY_MS: u64 = 10_000;
 const H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_BROWSER_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS: u64 = 60_000;
@@ -42,6 +34,11 @@ const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
 pub(crate) const H264_MEDIA_URL_PROBE_URL: &str =
     "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
+const H264_BOOT_PROBE_FIRST_FRAME_PATH: &str = "x31_head_movie_first_frame.h264";
+const H264_BOOT_PROBE_FIRST_FRAME: &[u8] =
+    include_bytes!("../../../tools/vid/x31_head_movie_first_frame.h264");
+const H264_BOOT_PROBE_FULL_STREAM: &[u8] =
+    include_bytes!("../../../tools/vid/x31_head_movie.annexb.h264");
 
 static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -93,6 +90,9 @@ pub(crate) struct H264PlaybackOptions {
     noreset_lite: bool,
     loop_playback: bool,
     presentation: H264PresentationPolicy,
+    /// Diagnostic upper bound on frames actually submitted to the decoder.
+    /// Zero preserves ordinary end-of-stream playback.
+    frame_limit: usize,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -136,6 +136,7 @@ impl H264PlaybackOptions {
             noreset_lite,
             loop_playback,
             presentation: H264PresentationPolicy::Ui4Interactive,
+            frame_limit: 0,
         }
     }
 
@@ -187,6 +188,15 @@ impl H264PlaybackOptions {
 
     pub(crate) const fn loop_playback(self) -> bool {
         self.loop_playback
+    }
+
+    pub(crate) const fn with_frame_limit(mut self, frame_limit: usize) -> Self {
+        self.frame_limit = frame_limit;
+        self
+    }
+
+    pub(crate) const fn frame_limit(self) -> usize {
+        self.frame_limit
     }
 
     const fn presentation(self) -> H264PresentationPolicy {
@@ -365,6 +375,19 @@ pub(crate) const fn probe_enabled() -> bool {
     H264_BOOT_PROBE_ENABLED
 }
 
+pub(crate) const fn probe_readiness_mask() -> u32 {
+    match H264_BOOT_PROBE_AUTOSTART_CUT {
+        // The selected decoder autostart cuts carry their fixed diagnostic
+        // Annex-B payload in the kernel.  This keeps the media/UI4 ownership
+        // probe independent of USB/UAS source availability.  The complete
+        // ladder still exercises the ordinary TRUEOSFS source path.
+        None => {
+            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY
+        }
+        Some(_) => 0,
+    }
+}
+
 #[embassy_executor::task]
 pub(crate) async fn ui4_video_playback_task() {
     if !H264_BOOT_PROBE_ENABLED {
@@ -377,78 +400,183 @@ pub(crate) async fn ui4_video_playback_task() {
     }
 
     crate::intel::wait_hw_logo_sequence_done().await;
+    crate::log!(
+        "ui4/video-probe: autostart armed delay_ms={} cuts=10 selection={:?} trigger=kernel-service\n",
+        H264_BOOT_PROBE_DELAY_MS,
+        H264_BOOT_PROBE_AUTOSTART_CUT
+    );
     Timer::after(EmbassyDuration::from_millis(H264_BOOT_PROBE_DELAY_MS)).await;
-    if H264_BOOT_PROBE_PLAYBACK_ENABLED {
-        if !crate::ui4::prepare_decoded_video_player() {
-            crate::log!(
-                "intel/hw_vid: ui4-video-playback skipped reason=player-window-unavailable\n"
-            );
-            return;
-        }
-        crate::log!(
-            "intel/hw_vid: ui4-video-playback armed playback=playing-autostart control=focused-space asset={} action=space-toggles-pause carrier=bsp\n",
-            H264_BOOT_PROBE_STREAM_PATH,
-        );
-        crate::ui4::wait_decoded_video_playback_ready().await;
-        let Ok(_playback_guard) = h264_try_begin_playback("ui4-video-playback") else {
-            crate::log!(
-                "intel/hw_vid: ui4-video-playback skipped reason=playback-already-active\n"
-            );
-            return;
-        };
-        crate::log!(
-            "intel/hw_vid: ui4-video-playback start owner=kernel-app-2 asset={} fps={} direction={} cache={} loop={} frame_buffers=2 source=tile64-nv12 output=ui4-rgba8-frame plane_slot=1 kernel=nv12-tile64-rgba8-frame presentation={} lifecycle=producer-release+direct-import+surflive playback=playing control=focused-space fallback=none carrier_slot={}\n",
-            H264_BOOT_PROBE_STREAM_PATH,
-            H264_BOOT_PROBE_PLAYBACK_OPTIONS.fps(),
-            H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
-            H264_BOOT_PROBE_PLAYBACK_OPTIONS.cache_mode().name(),
-            H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() as u8,
-            H264_BOOT_PROBE_PLAYBACK_OPTIONS.presentation().name(),
-            crate::percpu::current_slot()
-        );
-        if let Some(file) = h264_wait_for_playback_stream().await {
-            let old_noreset_lite =
-                crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(
-                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.noreset_lite(),
-                );
-            let mut lap = 0usize;
-            loop {
-                crate::ui4::wait_decoded_video_playback_ready().await;
-                lap = lap.saturating_add(1);
-                let report = h264_i_p_playback_probe(
-                    file,
-                    H264_BOOT_PROBE_STREAM_PATH,
-                    H264_BOOT_PROBE_PLAYBACK_OPTIONS,
+    let passed = match H264_BOOT_PROBE_AUTOSTART_CUT {
+        Some(cut @ (9 | 10)) => {
+            // Keep the real decoder in this task's own future.  The synthetic
+            // cuts can be nested freely, but the decoder future previously
+            // stopped while being introduced through
+            // run_video_probe -> cut_decoder -> playback, before the first
+            // playback instruction ran.  The former boot-video path executed
+            // this same engine sequence directly from this task.
+            let frame_limit = if cut == 9 { 1 } else { 0 };
+            let (asset_path, source_name, embedded_annexb): (&str, &str, &[u8]) = if cut == 9 {
+                (
+                    H264_BOOT_PROBE_FIRST_FRAME_PATH,
+                    "kernel-embedded-first-frame",
+                    H264_BOOT_PROBE_FIRST_FRAME,
                 )
-                .await;
+            } else {
+                (
+                    H264_BOOT_PROBE_STREAM_PATH,
+                    "kernel-embedded-full-stream",
+                    H264_BOOT_PROBE_FULL_STREAM,
+                )
+            };
+            crate::log!(
+                "ui4/video-probe: manifest trigger=kernel-autostart selection={} cuts=1:frame-contract,2:window-attach,3:cpu-single-present,4:cpu-double-ring,5:guc-rgba-single,6:guc-rgba-double-ring,7:synthetic-nv12-single,8:synthetic-nv12-double-ring,9:decoder-first-frame,10:decoder-stream policy=stop-first-failure\n",
+                cut
+            );
+            crate::log!(
+                "ui4/video-probe: cut={} name={} stage=start trigger=kernel-autostart execution=decoder-owner-task-direct\n",
+                cut,
+                if cut == 9 {
+                    "decoder-first-frame"
+                } else {
+                    "decoder-stream"
+                }
+            );
+
+            let mut lifetime_reserved = false;
+            let result: Result<usize, &'static str> = 'decoder_cut: {
+                if !crate::ui4::begin_shell_decoded_video_player() {
+                    break 'decoder_cut Err("decoder-ui4-lifetime-unavailable");
+                }
+                lifetime_reserved = true;
                 crate::log!(
-                    "intel/hw_vid: ui4-video-playback lap={} done submitted={} skipped_unsupported={} elapsed_ms={} effective_fps={}.{:02} direction={} loop={} final_frame_preserved=1\n",
-                    lap,
+                    "ui4 video-player lifetime reserved owner=KernelApp(2) playback=playing control=focused-space source=await-first-decoded-frame lifecycle_owner=kernel-video-task frame=deferred window=deferred broker_state=deferred-until-first-decoded-frame rgba_ring_allocation=deferred placeholder_present=0\n"
+                );
+                crate::log!(
+                    "ui4/video-probe: cut={} checkpoint=decoder-lifetime-reserved frame_limit={} asset={} next=decode-submit\n",
+                    cut,
+                    frame_limit,
+                    asset_path
+                );
+                let options = H264PlaybackOptions::new(
+                    60,
+                    false,
+                    H264PlaybackCacheMode::Off,
+                    false,
+                    false,
+                    false,
+                    true,
+                    false,
+                )
+                .with_frame_limit(frame_limit);
+                crate::log!(
+                    "ui4/video-probe: cut={} checkpoint=decoder-options-ready frame_limit={} next=decoder-owner-task-direct\n",
+                    cut,
+                    frame_limit
+                );
+                crate::log!(
+                    "intel/hw_vid: kernel-video-probe stage=entered frame_limit={} execution=decoder-owner-task-direct next=playback-guard\n",
+                    options.frame_limit()
+                );
+
+                let _playback_guard = match h264_try_begin_playback("ui4-video-probe") {
+                    Ok(guard) => guard,
+                    Err(error) => break 'decoder_cut Err(error),
+                };
+                crate::log!(
+                    "intel/hw_vid: kernel-video-probe stage=playback-guard-acquired asset={} next=stream-open\n",
+                    asset_path
+                );
+
+                let old_hw_pic_logging =
+                    crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+                let old_surface_probes =
+                    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(
+                        options.diagnostics(),
+                    );
+                let old_noreset_lite =
+                    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(
+                        options.noreset_lite(),
+                    );
+                crate::log!(
+                    "intel/hw_vid: kernel-video-probe stage=decode-loop-begin asset={} frame_limit={} source={} ui4_lifetime=kernel-video-task\n",
+                    asset_path,
+                    options.frame_limit(),
+                    source_name
+                );
+                let mut bytes = Vec::with_capacity(embedded_annexb.len());
+                bytes.extend_from_slice(embedded_annexb);
+                let report =
+                    h264_i_p_playback_probe_annexb_bytes(bytes, source_name, asset_path, options)
+                        .await;
+                crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(
+                    old_noreset_lite,
+                );
+                crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+                crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(
+                    old_surface_probes,
+                );
+                crate::log!(
+                    "ui4/video-probe: cut={} checkpoint=decoder-return submitted={} skipped={} elapsed_ms={} next=latest-surflive-ack\n",
+                    cut,
                     report.submitted,
                     report.skipped_unsupported,
-                    report.elapsed_ms,
-                    report.effective_fps_x100 / 100,
-                    report.effective_fps_x100 % 100,
-                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.name(),
-                    H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() as u8
+                    report.elapsed_ms
                 );
-                if !H264_BOOT_PROBE_PLAYBACK_OPTIONS.loop_playback() {
-                    break;
+                if report.submitted == 0 || (frame_limit != 0 && report.submitted != frame_limit) {
+                    break 'decoder_cut Err("decoder-frame-count-mismatch");
+                }
+                if !crate::ui4::wait_decoded_video_presented(2_000).await {
+                    break 'decoder_cut Err("decoder-surflive-ack-timeout");
+                }
+                if !crate::ui4::stop_decoded_nv12_stream("video-probe-cut-complete") {
+                    break 'decoder_cut Err("decoder-window-close-rejected");
+                }
+                lifetime_reserved = false;
+                break 'decoder_cut Ok(report.submitted);
+            };
+
+            match result {
+                Ok(frames) => {
+                    crate::log!(
+                        "ui4/video-probe: cut={} name={} stage=pass frames={} boundary=surflive-confirmed\n",
+                        cut,
+                        if cut == 9 {
+                            "decoder-first-frame"
+                        } else {
+                            "decoder-stream"
+                        },
+                        frames
+                    );
+                    true
+                }
+                Err(reason) => {
+                    if lifetime_reserved {
+                        let _ = crate::ui4::stop_decoded_nv12_stream("video-probe-decode-failed");
+                    }
+                    crate::log!(
+                        "ui4/video-probe: cut={} name={} stage=fail reason={} action=stop-first-failure\n",
+                        cut,
+                        if cut == 9 {
+                            "decoder-first-frame"
+                        } else {
+                            "decoder-stream"
+                        },
+                        reason
+                    );
+                    false
                 }
             }
-            crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
-        } else {
-            crate::log!(
-                "intel/hw_vid: ui4-video-playback skipped reason=stream-file-unavailable path={} action=require-trueosfs-file\n",
-                H264_BOOT_PROBE_STREAM_PATH
-            );
         }
-        return;
-    }
-
+        selection => crate::ui4::run_video_probe(selection, "kernel-autostart").await,
+    };
     crate::log!(
-        "intel/hw_vid: ui4-video-playback skipped reason=playback-disabled path={}\n",
-        H264_BOOT_PROBE_STREAM_PATH
+        "ui4/video-probe: autostart complete passed={} cuts=10 action={}\n",
+        passed as u8,
+        if passed {
+            "retain-final-result"
+        } else {
+            "stop-at-first-failed-cut"
+        }
     );
 }
 
@@ -456,9 +584,14 @@ pub(crate) async fn run_shell_vid_playback(
     path: &str,
     options: H264PlaybackOptions,
 ) -> Result<H264PlaybackReport, &'static str> {
+    crate::log!("intel/hw_vid: shell-vid stage=enter path={} next=media-engine-check\n", path);
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=media-engine-ready path={} next=playback-guard\n",
+        path
+    );
     let _playback_guard = h264_try_begin_playback("shell-trueosfs")?;
     crate::log!(
         "intel/hw_vid: shell-vid stage=playback-guard-acquired path={} next=stream-open\n",
@@ -525,6 +658,43 @@ pub(crate) async fn run_shell_vid_playback(
         }
         None => h264_i_p_playback_probe(file, path, options).await,
     };
+    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
+    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    Ok(report)
+}
+
+/// Run the fixed kernel-owned Annex-B asset without routing through the shell
+/// command's container-demux future. The caller owns the UI4 video lifetime;
+/// this function owns only the decoder engine lease and native picture stream.
+pub(crate) async fn run_kernel_video_probe_playback(
+    options: H264PlaybackOptions,
+) -> Result<H264PlaybackReport, &'static str> {
+    crate::log!(
+        "intel/hw_vid: kernel-video-probe stage=entered frame_limit={} media_engine=prevalidated-by-owner next=playback-guard\n",
+        options.frame_limit()
+    );
+    let _playback_guard = h264_try_begin_playback("ui4-video-probe")?;
+    crate::log!(
+        "intel/hw_vid: kernel-video-probe stage=playback-guard-acquired asset={} next=stream-open\n",
+        H264_BOOT_PROBE_STREAM_PATH
+    );
+    let Some(file) = h264_wait_for_playback_stream().await else {
+        return Err("video asset missing from TRUEOSFS root");
+    };
+
+    let old_hw_pic_logging =
+        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+    let old_surface_probes =
+        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
+    let old_noreset_lite =
+        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    crate::log!(
+        "intel/hw_vid: kernel-video-probe stage=decode-loop-begin asset={} frame_limit={} source=range-annexb ui4_lifetime=caller-owned\n",
+        H264_BOOT_PROBE_STREAM_PATH,
+        options.frame_limit()
+    );
+    let report = h264_i_p_playback_probe(file, H264_BOOT_PROBE_STREAM_PATH, options).await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
@@ -2490,6 +2660,10 @@ async fn h264_wait_for_playback_stream() -> Option<crate::r::fs::trueosfs::FileR
 async fn h264_open_playback_stream_once(
     path: &str,
 ) -> Option<crate::r::fs::trueosfs::FileReadHandle> {
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=stream-root-lookup path={} next=trueosfs-primary-root\n",
+        path
+    );
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         crate::log!(
             "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=no-trueosfs-root mode=shell\n",
@@ -2497,6 +2671,10 @@ async fn h264_open_playback_stream_once(
         );
         return None;
     };
+    crate::log!(
+        "intel/hw_vid: shell-vid stage=stream-root-ready path={} next=file-open-async\n",
+        path
+    );
     match crate::r::fs::trueosfs::file_read_open_async(disk, path).await {
         Ok(Some(file)) => {
             crate::log!(
@@ -2645,7 +2823,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} presentation={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
+        "intel/hw_vid: h264-playback-probe start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} presentation={} cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} frame_limit={} stop={}\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
@@ -2660,7 +2838,13 @@ async fn h264_i_p_playback_probe_with_reader(
         mode.show_cache_fill() as u8,
         mode.diagnostics() as u8,
         mode.noreset_lite() as u8,
-        mode.loop_playback() as u8
+        mode.loop_playback() as u8,
+        mode.frame_limit(),
+        if mode.frame_limit() == 0 {
+            "eos"
+        } else {
+            "frame-limit"
+        }
     );
 
     while let Some(nal) = reader.next_nal().await {
@@ -2726,7 +2910,12 @@ async fn h264_i_p_playback_probe_with_reader(
 
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
+    let mut stop_reason = "eos";
     for unit in access_units {
+        if mode.frame_limit() != 0 && submitted >= mode.frame_limit() {
+            stop_reason = "frame-limit";
+            break;
+        }
         if mode.presentation() == H264PresentationPolicy::Ui4BootRequired
             && crate::ui4::wait_decoded_video_playback_ready().await
         {
@@ -2871,15 +3060,18 @@ async fn h264_i_p_playback_probe_with_reader(
         forward_full_cache_bytes,
         forward_tail_cache_frames,
         forward_tail_cache_bytes,
-        "eos"
+        stop_reason
     );
 
-    if mode.stripe_study() && forward_full_cache.len() == indexed_frames.len() {
+    if mode.frame_limit() == 0
+        && mode.stripe_study()
+        && forward_full_cache.len() == indexed_frames.len()
+    {
         h264_stripe_study_from_full_cache(indexed_frames.as_slice(), forward_full_cache.as_slice())
             .await;
     }
 
-    if mode.reverse_after_forward() {
+    if mode.frame_limit() == 0 && mode.reverse_after_forward() {
         let forward_cache = if forward_full_cache_enabled && !forward_full_cache.is_empty() {
             Some(H264ForwardCache::Full(forward_full_cache))
         } else if forward_tail_cache_enabled && !forward_tail_cache.is_empty() {

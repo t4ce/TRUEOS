@@ -135,8 +135,14 @@ fn direct_rcs_write_ui4_nv12_frame_payload_at(
         let payload = state.batch_virt.add(payload_offset);
         core::ptr::write_bytes(payload, 0, UI4_NV12_PRIMARY_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords, params.output_width);
-        core::ptr::write_volatile(dwords.add(1), params.output_height);
+        // The SIMD16 artifact's .ze_info assigns bytes 0..12 to
+        // `global_id_offset`, not to global size.  Keep all three components
+        // zero: the walker supplies the group dimensions, while the explicit
+        // output_width/output_height kernel arguments live at bytes 88/92
+        // below.  Feeding the output extent here starts every invocation at
+        // (width, height), so the kernel's first bounds check retires every
+        // lane without touching the destination even though its completion
+        // marker still succeeds.
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
         core::ptr::write_volatile(dwords.add(5), 1);
@@ -589,4 +595,3 @@ fn direct_rcs_write_font_outline_mesh_payload_at(
     }
     true
 }
-

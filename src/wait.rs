@@ -63,13 +63,6 @@ pub fn spin_step_no_exec() {
     core::hint::spin_loop();
 }
 
-/// Single parking step that drives async work and may idle the BSP.
-#[inline]
-pub fn park_step() {
-    crate::time::poll();
-    crate::runtime::poll_local_executor();
-}
-
 /// Spin until `condition` is true or the timeout expires.
 #[inline]
 pub fn spin_until_timeout<F: FnMut() -> bool>(timeout_ms: u64, mut condition: F) -> bool {
@@ -126,17 +119,6 @@ impl WaitQueue {
             seq: AtomicU32::new(0),
             wakers: Mutex::new(Vec::new()),
         }
-    }
-
-    /// Publish an event without touching the waiter list.
-    ///
-    /// VM guests can execute mapped hull CABI code while the host heap is
-    /// deliberately unmapped (HVSR-0002). The waiter list stores host task
-    /// wakers in host heap memory, so guest-side signal paths must only bump
-    /// the sequence and let the host executor observe it on its next poll.
-    #[inline]
-    pub fn notify_guest_signal(&self) {
-        self.seq.fetch_add(1, Ordering::Release);
     }
 
     #[inline]
@@ -407,12 +389,6 @@ pub fn platform_wait_observe(key: u64) -> u32 {
 #[inline]
 pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
     platform_wait_queue(key).wait_for_event_after_blocking_parked(observed, timeout_ms)
-}
-
-#[inline]
-pub fn platform_wait(key: u64, timeout_ms: u64) -> bool {
-    let observed = platform_wait_observe(key);
-    platform_wait_after(key, observed, timeout_ms)
 }
 
 #[inline]

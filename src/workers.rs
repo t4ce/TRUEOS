@@ -214,13 +214,6 @@ pub fn pick_perf_background_spawner_with_slot() -> Option<(u32, u8, WorkerSpawne
     pick_background_spawner_with_filter(|slot| core_kind_for_slot(slot) == CORE_KIND_PERF)
 }
 
-pub fn pick_background_spawner_where<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>
-where
-    F: Fn(u32) -> bool,
-{
-    pick_background_spawner_with_filter(accept_slot)
-}
-
 fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, WorkerSpawner)>
 where
     F: Fn(u32) -> bool,

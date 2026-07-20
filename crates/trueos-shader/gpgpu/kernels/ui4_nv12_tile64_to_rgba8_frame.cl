@@ -1,26 +1,24 @@
 // TRUEOS UI4 native-video Frame producer for Alder Lake S.
 //
-// One SIMD16 dispatch converts a decoder-owned Tile64 NV12 picture directly
+// One SIMD16 dispatch converts a decoder-owned media Y-tiled NV12 picture directly
 // into one exact UI4-owned, linear premultiplied RGBA8 Frame buffer. Pixels
 // outside the selected picture are opaque black. The destination can therefore
 // be published and imported by the same release/SURFLIVE lifecycle as the
 // GPGPU preview and resident Draw3D consumers.
 
-inline uint ui4_tile64_8bpp_offset(uint byte_x, uint row_y, uint tiles_per_row)
+// The proven linked-plane path de-tiled this exact VDBOX allocation as legacy
+// 128x32 Y tiles before scanout.  MFX_SURFACE_STATE's tilemode value must not
+// be interpreted as the display-memory Tile64 swizzle here: doing so turns the
+// untouched rollback clear into large green blocks separated by decoded
+// horizontal bands.
+inline uint ui4_media_ytile_8bpp_offset(uint byte_x, uint row_y, uint tiles_per_row)
 {
-    uint tile_col = byte_x >> 8;
-    uint tile_row = row_y >> 8;
-    uint u = byte_x & 255u;
-    uint v = row_y & 255u;
-    uint within_tile = ((u & 0x0fu) << 0)
-        | ((v & 0x03u) << 4)
-        | (((u >> 4) & 0x03u) << 6)
-        | (((v >> 2) & 0x01u) << 8)
-        | (((u >> 6) & 0x01u) << 9)
-        | (((v >> 3) & 0x03u) << 10)
-        | (((u >> 7) & 0x01u) << 12)
-        | (((v >> 5) & 0x07u) << 13);
-    return (tile_row * tiles_per_row + tile_col) * 65536u + within_tile;
+    uint tile_col = byte_x >> 7;
+    uint tile_row = row_y >> 5;
+    uint in_x = byte_x & 127u;
+    uint in_y = row_y & 31u;
+    uint within_tile = (in_x >> 4) * 512u + in_y * 16u + (in_x & 15u);
+    return (tile_row * tiles_per_row + tile_col) * 4096u + within_tile;
 }
 
 inline uint ui4_clamped_bt601_channel(int value)
@@ -68,11 +66,11 @@ __kernel void ui4_nv12_tile64_to_rgba8_frame(
 
     uint sample_x = source_x + inside_x;
     uint sample_y = source_y + inside_y;
-    uint tiles_per_row = src_pitch_bytes >> 8;
+    uint tiles_per_row = src_pitch_bytes >> 7;
     uint chroma_row = src_uv_offset / src_pitch_bytes;
-    uint y_offset = ui4_tile64_8bpp_offset(sample_x, sample_y, tiles_per_row);
+    uint y_offset = ui4_media_ytile_8bpp_offset(sample_x, sample_y, tiles_per_row);
     uint uv_x = sample_x & ~1u;
-    uint uv_offset = ui4_tile64_8bpp_offset(
+    uint uv_offset = ui4_media_ytile_8bpp_offset(
         uv_x,
         chroma_row + (sample_y >> 1),
         tiles_per_row);

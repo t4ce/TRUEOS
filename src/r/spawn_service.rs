@@ -619,6 +619,11 @@ fn intel_media_engine_gate() -> bool {
 }
 
 #[inline]
+fn ui4_video_probe_gate() -> bool {
+    ui4_compositor_gate() && intel_media_engine_gate()
+}
+
+#[inline]
 fn virtio_gpu_ui_gate() -> bool {
     crate::virtio_gpu_logo::present()
 }
@@ -1463,12 +1468,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &HW_PIC_SERVICE_STARTED,
         spawn_hw_pic_service,
     ),
-    // Keep the native NV12/GuC implementation available to manual video
-    // callers, but do not let the boot demo compete with the static Draw3D
-    // carrier while the compositor path is being proven.
-    TaskSpec::disabled(
-        "ui4-video-playback",
-        0,
+    // Ten-cut Frame -> GuC -> SURFLIVE harness. The task itself waits ten
+    // seconds after the boot-logo sequence and stops at the first failed cut.
+    TaskSpec::enabled_gated(
+        "ui4-video-probe",
+        crate::intel::hw_vid_probe_readiness_mask(),
+        ui4_video_probe_gate,
         &UI4_VIDEO_PLAYBACK_STARTED,
         spawn_ui4_video_playback_task,
     ),

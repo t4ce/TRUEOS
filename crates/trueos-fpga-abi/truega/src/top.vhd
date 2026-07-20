@@ -7,14 +7,6 @@ entity top is
 		clk          : in  std_logic;
 		pcie_perst_n : in  std_logic;
 
-		-- PCIe PHY pins (x1)
-		pcie_refclk_p : in  std_logic;
-		pcie_refclk_n : in  std_logic;
-		pcie_rxp0     : in  std_logic;
-		pcie_rxn0     : in  std_logic;
-		pcie_txp0     : out std_logic;
-		pcie_txn0     : out std_logic;
-
 		usr_led0 : out std_logic;
 		usr_led1 : out std_logic;
 		usr_led2 : out std_logic;
@@ -44,13 +36,6 @@ architecture rtl of top is
 			PCIE_Controller_Top_pcie_tl_drp_resp_o      : out std_logic;
 			PCIE_Controller_Top_pcie_tl_drp_rd_valid_o  : out std_logic;
 			PCIE_Controller_Top_pcie_tl_drp_ready_o     : out std_logic;
-
-			pcie_refclk_p_i : in  std_logic;
-			pcie_refclk_n_i : in  std_logic;
-			pcie_rxp0_i     : in  std_logic;
-			pcie_rxn0_i     : in  std_logic;
-			pcie_txp0_o     : out std_logic;
-			pcie_txn0_o     : out std_logic;
 
 			debug_refclk_det_o : out std_logic;
 			debug_rx_lock_o    : out std_logic;
@@ -87,10 +72,9 @@ architecture rtl of top is
 		);
 	end component;
 
-	type word_arr_t is array (0 to 15) of std_logic_vector(31 downto 0);
-	type call_word_arr_t is array (0 to 63) of std_logic_vector(31 downto 0);
+	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
-	constant PKT_MAX_WORDS : integer := 16;
+	constant PKT_MAX_WORDS : integer := 8;
 	constant BAR0_LED_DW : std_logic_vector(9 downto 0) := "0000000000";
 	constant BAR0_RESET_DW : std_logic_vector(9 downto 0) := "0000000100";
 	constant BAR0_STATUS_DW : std_logic_vector(9 downto 0) := "0000000101";
@@ -149,7 +133,22 @@ architecture rtl of top is
 
 	signal led_reg : std_logic_vector(4 downto 0) := (others => '0');
 	signal debug_led_mode : std_logic := '0';
-	signal call_words : call_word_arr_t := (others => (others => '0'));
+	-- The complete 256-byte work-package address map remains visible to software, but
+	-- only words used by the three fused functions need physical storage. Unused and
+	-- reserved words read as zero. This is a fixed register file, not command memory.
+	signal call_magic : std_logic_vector(31 downto 0) := WORK_PACKAGE_MAGIC;
+	signal call_abi_function : std_logic_vector(31 downto 0) := x"00000001";
+	signal call_id_low : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_id_high : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_state : std_logic_vector(31 downto 0) := WORK_STATE_IDLE;
+	signal call_flags : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_input_len : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_output_cap : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_output_len : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_error : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_input0 : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_input1 : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_output0 : std_logic_vector(31 downto 0) := (others => '0');
 	signal call_pending : std_logic := '0';
 	signal call_retire_count : unsigned(31 downto 0) := (others => '0');
 	signal function_result : std_logic_vector(31 downto 0);
@@ -163,12 +162,22 @@ architecture rtl of top is
 	signal tx_pending_sop : std_logic := '0';
 	signal tx_pending_eop : std_logic := '0';
 
-	signal pkt_active    : std_logic := '0';
-	signal pkt_bar0      : std_logic := '0';
+	signal capture_pending : std_logic := '0';
+	signal rx_snapshot_data : std_logic_vector(255 downto 0) := (others => '0');
+	signal rx_snapshot_valid : std_logic_vector(7 downto 0) := (others => '0');
 	signal pkt_cnt_fwd   : unsigned(4 downto 0) := (others => '0');
 	signal pkt_cnt_rev   : unsigned(4 downto 0) := (others => '0');
 	signal pkt_words_fwd : word_arr_t := (others => (others => '0'));
 	signal pkt_words_rev : word_arr_t := (others => (others => '0'));
+	signal decode_pending : std_logic := '0';
+	signal transaction_pending : std_logic := '0';
+	signal transaction_write : std_logic := '0';
+	signal transaction_read : std_logic := '0';
+	signal transaction_addr_dw : std_logic_vector(9 downto 0) := (others => '0');
+	signal transaction_payload_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal transaction_req_id : std_logic_vector(15 downto 0) := (others => '0');
+	signal transaction_req_tag : std_logic_vector(7 downto 0) := (others => '0');
+	signal tl_rx_backpressure : std_logic;
 
 	-- Gowin Analyzer probe surface for first BAR read-completion bring-up.
 	-- Pulses show the live cycle; sticky bits survive long enough to inspect.
@@ -274,11 +283,13 @@ architecture rtl of top is
 	end function;
 
 begin
+	tl_rx_backpressure <= capture_pending or decode_pending or transaction_pending;
+
 	u_functions: truega_functions
 		port map(
-			function_id          => call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16),
-			arg0                 => call_words(CALL_INPUT_WORD),
-			arg1                 => call_words(CALL_INPUT_WORD + 1),
+			function_id          => call_abi_function(31 downto 16),
+			arg0                 => call_input0,
+			arg1                 => call_input1,
 			led_state            => led_reg,
 			next_led             => function_next_led,
 			result               => function_result,
@@ -308,19 +319,12 @@ begin
 			PCIE_Controller_Top_pcie_tl_drp_rd_valid_o  => open,
 			PCIE_Controller_Top_pcie_tl_drp_ready_o     => open,
 
-			pcie_refclk_p_i => pcie_refclk_p,
-			pcie_refclk_n_i => pcie_refclk_n,
-			pcie_rxp0_i     => pcie_rxp0,
-			pcie_rxn0_i     => pcie_rxn0,
-			pcie_txp0_o     => pcie_txp0,
-			pcie_txn0_o     => pcie_txn0,
-
 			debug_refclk_det_o => open,
 			debug_rx_lock_o    => open,
 
 			PCIE_Controller_Top_pcie_rstn_i          => pcie_perst_n,
 			PCIE_Controller_Top_pcie_tl_clk_i        => clk,
-			PCIE_Controller_Top_pcie_tl_rx_wait_i    => '0',
+			PCIE_Controller_Top_pcie_tl_rx_wait_i    => tl_rx_backpressure,
 			PCIE_Controller_Top_pcie_tl_rx_masknp_i  => '0',
 			PCIE_Controller_Top_pcie_tl_tx_sop_i     => tl_tx_sop,
 			PCIE_Controller_Top_pcie_tl_tx_eop_i     => tl_tx_eop,
@@ -341,8 +345,6 @@ begin
 		variable next_tx_valid : std_logic_vector(7 downto 0);
 		variable next_tx_sop : std_logic;
 		variable next_tx_eop : std_logic;
-		variable next_active : std_logic;
-		variable next_bar0 : std_logic;
 		variable next_cnt_fwd : integer range 0 to PKT_MAX_WORDS;
 		variable next_cnt_rev : integer range 0 to PKT_MAX_WORDS;
 		variable hit_write : boolean;
@@ -387,63 +389,51 @@ begin
 			req_id_out := (others => '0');
 			req_tag_out := (others => '0');
 
-			for h in 0 to PKT_MAX_WORDS - 1 loop
-				exit when h >= count;
-				hdr := words(h);
-				fmt_type := hdr(31 downto 24);
+			-- SOP and lane-valid compaction guarantee that the first protocol dword is
+			-- word zero in one of the two lane interpretations. Searching every array
+			-- position creates a deep priority chain for no supported TLP case.
+			if count = 0 then
+				return;
+			end if;
+			hdr := words(0);
+			fmt_type := hdr(31 downto 24);
 
-				if (fmt_type = x"40") or (fmt_type = x"60") then
-					if hdr(9 downto 0) = "0000000001" then
-						if fmt_type = x"40" then
-							addr_idx := h + 2;
-							payload_idx := h + 3;
-						else
-							addr_idx := h + 3;
-							payload_idx := h + 4;
-						end if;
+			if (fmt_type = x"40") or (fmt_type = x"60") then
+				if hdr(9 downto 0) = "0000000001" then
+					if fmt_type = x"40" then
+						addr_idx := 2;
+						payload_idx := 3;
+					else
+						addr_idx := 3;
+						payload_idx := 4;
+					end if;
 
-						if (addr_idx < 0) or (payload_idx < 0) then
-							next;
-						end if;
-						if (addr_idx >= count) or (payload_idx >= count) then
-							next;
-						end if;
-						if (addr_idx >= PKT_MAX_WORDS) or (payload_idx >= PKT_MAX_WORDS) then
-							next;
-						end if;
-
+					if (addr_idx < count) and (payload_idx < count) then
 						addr_low := words(addr_idx);
 						payload := words(payload_idx);
 						addr_out := addr_low(11 downto 2);
 						payload_out := payload;
 						found_write := true;
-						return;
 					end if;
-				elsif (fmt_type = x"00") or (fmt_type = x"20") then
-					if hdr(9 downto 0) = "0000000001" then
-						if fmt_type = x"00" then
-							addr_idx := h + 2;
-						else
-							addr_idx := h + 3;
-						end if;
+				end if;
+			elsif (fmt_type = x"00") or (fmt_type = x"20") then
+				if hdr(9 downto 0) = "0000000001" then
+					if fmt_type = x"00" then
+						addr_idx := 2;
+					else
+						addr_idx := 3;
+					end if;
 
-						if (h + 1 >= count) or (addr_idx >= count) then
-							next;
-						end if;
-						if (h + 1 >= PKT_MAX_WORDS) or (addr_idx >= PKT_MAX_WORDS) then
-							next;
-						end if;
-
-						req_hdr := words(h + 1);
+					if (1 < count) and (addr_idx < count) then
+						req_hdr := words(1);
 						addr_low := words(addr_idx);
 						addr_out := addr_low(11 downto 2);
 						req_id_out := req_hdr(31 downto 16);
 						req_tag_out := req_hdr(15 downto 8);
 						found_read := true;
-						return;
 					end if;
 				end if;
-			end loop;
+			end if;
 		end procedure;
 
 		procedure queue_cpld(
@@ -500,18 +490,36 @@ begin
 			if pcie_perst_n = '0' then
 				led_reg <= (others => '0');
 				debug_led_mode <= '0';
-				call_words <= (others => (others => '0'));
-				call_words(CALL_MAGIC_WORD) <= WORK_PACKAGE_MAGIC;
-				call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) <= WORK_ABI_VERSION;
-				call_words(CALL_STATE_WORD) <= WORK_STATE_IDLE;
+				call_magic <= WORK_PACKAGE_MAGIC;
+				call_abi_function <= x"0000" & WORK_ABI_VERSION;
+				call_id_low <= (others => '0');
+				call_id_high <= (others => '0');
+				call_state <= WORK_STATE_IDLE;
+				call_flags <= (others => '0');
+				call_input_len <= (others => '0');
+				call_output_cap <= (others => '0');
+				call_output_len <= (others => '0');
+				call_error <= (others => '0');
+				call_input0 <= (others => '0');
+				call_input1 <= (others => '0');
+				call_output0 <= (others => '0');
 				call_pending <= '0';
 				call_retire_count <= (others => '0');
-				pkt_active <= '0';
-				pkt_bar0 <= '0';
+				capture_pending <= '0';
+				rx_snapshot_data <= (others => '0');
+				rx_snapshot_valid <= (others => '0');
 				pkt_cnt_fwd <= (others => '0');
 				pkt_cnt_rev <= (others => '0');
 				pkt_words_fwd <= (others => (others => '0'));
 				pkt_words_rev <= (others => (others => '0'));
+				decode_pending <= '0';
+				transaction_pending <= '0';
+				transaction_write <= '0';
+				transaction_read <= '0';
+				transaction_addr_dw <= (others => '0');
+				transaction_payload_dw <= (others => '0');
+				transaction_req_id <= (others => '0');
+				transaction_req_tag <= (others => '0');
 					tx_pending <= '0';
 					tx_pending_data <= (others => '0');
 					tx_pending_valid <= (others => '0');
@@ -560,28 +568,28 @@ begin
 					-- A doorbell only selects one of three RustHDL-generated circuits already
 					-- present in this bitstream. There is no instruction fetch or interpreter.
 					if call_pending = '1' then
-						call_words(CALL_OUTPUT_LEN_WORD) <= (others => '0');
-						call_words(CALL_ERROR_WORD) <= (others => '0');
-						if (call_words(CALL_MAGIC_WORD) /= WORK_PACKAGE_MAGIC)
-							or (call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) /= WORK_ABI_VERSION) then
-							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_PACKAGE;
-							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+						call_output_len <= (others => '0');
+						call_error <= (others => '0');
+						if (call_magic /= WORK_PACKAGE_MAGIC)
+							or (call_abi_function(15 downto 0) /= WORK_ABI_VERSION) then
+							call_error <= CALL_ERROR_BAD_PACKAGE;
+							call_state <= WORK_STATE_FAILED;
 						elsif function_valid = '0' then
-							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_FUNCTION;
-							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-						elsif unsigned(call_words(CALL_INPUT_LEN_WORD))
+							call_error <= CALL_ERROR_BAD_FUNCTION;
+							call_state <= WORK_STATE_FAILED;
+						elsif unsigned(call_input_len)
 							< resize(unsigned(function_required_input_bytes), 32) then
-							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
-							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
-						elsif unsigned(call_words(CALL_OUTPUT_CAP_WORD))
+							call_error <= CALL_ERROR_BAD_LENGTH;
+							call_state <= WORK_STATE_FAILED;
+						elsif unsigned(call_output_cap)
 							< resize(unsigned(function_output_bytes), 32) then
-							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
-							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+							call_error <= CALL_ERROR_BAD_LENGTH;
+							call_state <= WORK_STATE_FAILED;
 						else
-							call_words(CALL_OUTPUT_WORD) <= function_result;
-							call_words(CALL_OUTPUT_LEN_WORD) <= x"0000" & function_output_bytes;
-							call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
-							if call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16) = x"0000" then
+							call_output0 <= function_result;
+							call_output_len <= x"0000" & function_output_bytes;
+							call_state <= WORK_STATE_COMPLETE;
+							if call_abi_function(31 downto 16) = x"0000" then
 								led_reg <= function_next_led;
 							end if;
 						end if;
@@ -603,75 +611,18 @@ begin
 					tx_pending_eop <= '0';
 				end if;
 
-				next_active := pkt_active;
-				next_bar0 := pkt_bar0;
 				next_cnt_fwd := to_integer(pkt_cnt_fwd);
 				next_cnt_rev := to_integer(pkt_cnt_rev);
 				next_words_fwd := pkt_words_fwd;
 				next_words_rev := pkt_words_rev;
 
-				dw(0) := tl_rx_data(31 downto 0);
-				dw(1) := tl_rx_data(63 downto 32);
-				dw(2) := tl_rx_data(95 downto 64);
-				dw(3) := tl_rx_data(127 downto 96);
-				dw(4) := tl_rx_data(159 downto 128);
-				dw(5) := tl_rx_data(191 downto 160);
-				dw(6) := tl_rx_data(223 downto 192);
-				dw(7) := tl_rx_data(255 downto 224);
-
-				if tl_rx_sop = '1' then
-					next_active := '1';
-					next_bar0 := tl_rx_bardec(0);
-					next_cnt_fwd := 0;
-					next_cnt_rev := 0;
-					clear_words(next_words_fwd);
-					clear_words(next_words_rev);
-				elsif next_active = '1' then
-					if tl_rx_bardec(0) = '1' then
-						next_bar0 := '1';
-					end if;
-				end if;
-
-				if next_active = '1' then
-					for i in 0 to 7 loop
-						if tl_rx_valid(i) = '1' then
-							if next_cnt_fwd < PKT_MAX_WORDS then
-								next_words_fwd(next_cnt_fwd) := dw(i);
-								next_cnt_fwd := next_cnt_fwd + 1;
-							end if;
-						end if;
-					end loop;
-
-					for i in 7 downto 0 loop
-						if tl_rx_valid(i) = '1' then
-							if next_cnt_rev < PKT_MAX_WORDS then
-								next_words_rev(next_cnt_rev) := dw(i);
-								next_cnt_rev := next_cnt_rev + 1;
-							end if;
-						end if;
-					end loop;
-				end if;
-
-					if (next_active = '1') and (tl_rx_eop = '1') then
-						if (pcie_linkup = '1') and (next_bar0 = '1') then
-							dbg_rx_bar0_eop <= '1';
-							dbg_seen_rx_bar0_eop <= '1';
-							dbg_last_rx_fwd_dw0 <= next_words_fwd(0);
-							dbg_last_rx_fwd_dw1 <= next_words_fwd(1);
-							dbg_last_rx_fwd_dw2 <= next_words_fwd(2);
-							dbg_last_rx_fwd_dw3 <= next_words_fwd(3);
-							dbg_last_rx_rev_dw0 <= next_words_rev(0);
-							dbg_last_rx_rev_dw1 <= next_words_rev(1);
-							dbg_last_rx_rev_dw2 <= next_words_rev(2);
-							dbg_last_rx_rev_dw3 <= next_words_rev(3);
-							decode_words(next_words_fwd, next_cnt_fwd, hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
-							if not hit_write and not hit_read then
-								decode_words(next_words_rev, next_cnt_rev, hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
-							end if;
-							dbg_last_addr_dw <= addr_dw;
-							dbg_last_payload_dw <= payload_dw;
-							dbg_last_req_id <= req_id;
-							dbg_last_req_tag <= req_tag;
+					if transaction_pending = '1' then
+							hit_write := transaction_write = '1';
+							hit_read := transaction_read = '1';
+							addr_dw := transaction_addr_dw;
+							payload_dw := transaction_payload_dw;
+							req_id := transaction_req_id;
+							req_tag := transaction_req_tag;
 							addr_index := to_integer(unsigned(addr_dw));
 
 							if hit_write then
@@ -679,17 +630,32 @@ begin
 								dbg_seen_hit_write <= '1';
 								if (addr_index >= BAR0_CALL_BASE_DW)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
-									call_words(addr_index - BAR0_CALL_BASE_DW) <= payload_dw;
+									case addr_index - BAR0_CALL_BASE_DW is
+									when CALL_MAGIC_WORD => call_magic <= payload_dw;
+									when CALL_ABI_FUNCTION_WORD => call_abi_function <= payload_dw;
+									when 2 => call_id_low <= payload_dw;
+									when 3 => call_id_high <= payload_dw;
+									when CALL_STATE_WORD => call_state <= payload_dw;
+									when 5 => call_flags <= payload_dw;
+									when CALL_INPUT_LEN_WORD => call_input_len <= payload_dw;
+									when CALL_OUTPUT_CAP_WORD => call_output_cap <= payload_dw;
+									when CALL_OUTPUT_LEN_WORD => call_output_len <= payload_dw;
+									when CALL_ERROR_WORD => call_error <= payload_dw;
+									when CALL_INPUT_WORD => call_input0 <= payload_dw;
+									when CALL_INPUT_WORD + 1 => call_input1 <= payload_dw;
+									when CALL_OUTPUT_WORD => call_output0 <= payload_dw;
+									when others => null;
+									end case;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									if (payload_dw = CALL_DOORBELL_MAGIC)
-										and (call_words(CALL_STATE_WORD) = WORK_STATE_HOST_READY)
+										and (call_state = WORK_STATE_HOST_READY)
 										and (call_pending = '0') then
-										call_words(CALL_STATE_WORD) <= WORK_STATE_FPGA_BUSY;
+										call_state <= WORK_STATE_FPGA_BUSY;
 										call_pending <= '1';
 									else
-										call_words(CALL_OUTPUT_LEN_WORD) <= (others => '0');
-										call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_PACKAGE;
-										call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+										call_output_len <= (others => '0');
+										call_error <= CALL_ERROR_BAD_PACKAGE;
+										call_state <= WORK_STATE_FAILED;
 									end if;
 								elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
 									null;
@@ -706,10 +672,19 @@ begin
 											led_reg <= val8(4 downto 0);
 										end if;
 									when BAR0_RESET_DW =>
-										call_words <= (others => (others => '0'));
-										call_words(CALL_MAGIC_WORD) <= WORK_PACKAGE_MAGIC;
-										call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) <= WORK_ABI_VERSION;
-										call_words(CALL_STATE_WORD) <= WORK_STATE_IDLE;
+										call_magic <= WORK_PACKAGE_MAGIC;
+										call_abi_function <= x"0000" & WORK_ABI_VERSION;
+										call_id_low <= (others => '0');
+										call_id_high <= (others => '0');
+										call_state <= WORK_STATE_IDLE;
+										call_flags <= (others => '0');
+										call_input_len <= (others => '0');
+										call_output_cap <= (others => '0');
+										call_output_len <= (others => '0');
+										call_error <= (others => '0');
+										call_input0 <= (others => '0');
+										call_input1 <= (others => '0');
+										call_output0 <= (others => '0');
 										call_pending <= '0';
 									when others =>
 										null;
@@ -721,7 +696,22 @@ begin
 								read_data_dw := (others => '0');
 								if (addr_index >= BAR0_CALL_BASE_DW)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
-									read_data_dw := call_words(addr_index - BAR0_CALL_BASE_DW);
+									case addr_index - BAR0_CALL_BASE_DW is
+									when CALL_MAGIC_WORD => read_data_dw := call_magic;
+									when CALL_ABI_FUNCTION_WORD => read_data_dw := call_abi_function;
+									when 2 => read_data_dw := call_id_low;
+									when 3 => read_data_dw := call_id_high;
+									when CALL_STATE_WORD => read_data_dw := call_state;
+									when 5 => read_data_dw := call_flags;
+									when CALL_INPUT_LEN_WORD => read_data_dw := call_input_len;
+									when CALL_OUTPUT_CAP_WORD => read_data_dw := call_output_cap;
+									when CALL_OUTPUT_LEN_WORD => read_data_dw := call_output_len;
+									when CALL_ERROR_WORD => read_data_dw := call_error;
+									when CALL_INPUT_WORD => read_data_dw := call_input0;
+									when CALL_INPUT_WORD + 1 => read_data_dw := call_input1;
+									when CALL_OUTPUT_WORD => read_data_dw := call_output0;
+									when others => null;
+									end case;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									read_data_dw := std_logic_vector(call_retire_count);
 								else
@@ -729,7 +719,7 @@ begin
 									when BAR0_LED_DW =>
 										read_data_dw(4 downto 0) := led_reg;
 									when BAR0_STATUS_DW =>
-										read_data_dw := call_words(CALL_STATE_WORD);
+										read_data_dw := call_state;
 									when BAR0_MAGIC_DW =>
 										read_data_dw := PROTOCOL_MAGIC;
 										dbg_magic_read <= '1';
@@ -774,18 +764,93 @@ begin
 									dbg_cpld_blocked <= '1';
 								end if;
 							end if;
-						end if;
 
-					next_active := '0';
-					next_bar0 := '0';
-					next_cnt_fwd := 0;
-					next_cnt_rev := 0;
-					clear_words(next_words_fwd);
-					clear_words(next_words_rev);
-				end if;
+							transaction_pending <= '0';
+							transaction_write <= '0';
+							transaction_read <= '0';
+					elsif decode_pending = '1' then
+							-- Decode only the preceding cycle's packet snapshot. Using the
+							-- capture variables here creates a false live RX-to-transaction
+							-- combinational path through their input muxes.
+							decode_words(pkt_words_fwd, to_integer(pkt_cnt_fwd), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
+							if not hit_write and not hit_read then
+								decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
+							end if;
+							dbg_last_addr_dw <= addr_dw;
+							dbg_last_payload_dw <= payload_dw;
+							dbg_last_req_id <= req_id;
+							dbg_last_req_tag <= req_tag;
+							if hit_write then
+								transaction_write <= '1';
+							else
+								transaction_write <= '0';
+							end if;
+							if hit_read then
+								transaction_read <= '1';
+							else
+								transaction_read <= '0';
+							end if;
+							if hit_write or hit_read then
+								transaction_pending <= '1';
+							else
+								transaction_pending <= '0';
+							end if;
+							transaction_addr_dw <= addr_dw;
+							transaction_payload_dw <= payload_dw;
+							transaction_req_id <= req_id;
+							transaction_req_tag <= req_tag;
+							next_cnt_fwd := 0;
+							next_cnt_rev := 0;
+							clear_words(next_words_fwd);
+							clear_words(next_words_rev);
+							decode_pending <= '0';
+					elsif capture_pending = '1' then
+						-- All supported memory TLPs fit in one 256-bit beat. First
+						-- snapshot the hard-IP outputs, then compact valid lanes here
+						-- from registers so the SerDes pins see no priority chain.
+						dw(0) := rx_snapshot_data(31 downto 0);
+						dw(1) := rx_snapshot_data(63 downto 32);
+						dw(2) := rx_snapshot_data(95 downto 64);
+						dw(3) := rx_snapshot_data(127 downto 96);
+						dw(4) := rx_snapshot_data(159 downto 128);
+						dw(5) := rx_snapshot_data(191 downto 160);
+						dw(6) := rx_snapshot_data(223 downto 192);
+						dw(7) := rx_snapshot_data(255 downto 224);
+						next_cnt_fwd := 0;
+						next_cnt_rev := 0;
+						clear_words(next_words_fwd);
+						clear_words(next_words_rev);
+						for i in 0 to 7 loop
+							if rx_snapshot_valid(i) = '1' then
+								next_words_fwd(next_cnt_fwd) := dw(i);
+								next_cnt_fwd := next_cnt_fwd + 1;
+							end if;
+						end loop;
+						for i in 7 downto 0 loop
+							if rx_snapshot_valid(i) = '1' then
+								next_words_rev(next_cnt_rev) := dw(i);
+								next_cnt_rev := next_cnt_rev + 1;
+							end if;
+						end loop;
+						dbg_last_rx_fwd_dw0 <= next_words_fwd(0);
+						dbg_last_rx_fwd_dw1 <= next_words_fwd(1);
+						dbg_last_rx_fwd_dw2 <= next_words_fwd(2);
+						dbg_last_rx_fwd_dw3 <= next_words_fwd(3);
+						dbg_last_rx_rev_dw0 <= next_words_rev(0);
+						dbg_last_rx_rev_dw1 <= next_words_rev(1);
+						dbg_last_rx_rev_dw2 <= next_words_rev(2);
+						dbg_last_rx_rev_dw3 <= next_words_rev(3);
+						capture_pending <= '0';
+						decode_pending <= '1';
+					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
+						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1') then
+						rx_snapshot_data <= tl_rx_data;
+						rx_snapshot_valid <= tl_rx_valid;
+						capture_pending <= '1';
+						dbg_rx_bar0_eop <= '1';
+						dbg_seen_rx_bar0_eop <= '1';
+					end if;
 
-				pkt_active <= next_active;
-				pkt_bar0 <= next_bar0;
 				pkt_cnt_fwd <= to_unsigned(next_cnt_fwd, pkt_cnt_fwd'length);
 				pkt_cnt_rev <= to_unsigned(next_cnt_rev, pkt_cnt_rev'length);
 				pkt_words_fwd <= next_words_fwd;
