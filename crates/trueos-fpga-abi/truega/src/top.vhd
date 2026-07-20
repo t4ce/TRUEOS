@@ -178,6 +178,8 @@ architecture rtl of top is
 	signal transaction_req_id : std_logic_vector(15 downto 0) := (others => '0');
 	signal transaction_req_tag : std_logic_vector(7 downto 0) := (others => '0');
 	signal tl_rx_backpressure : std_logic;
+	signal rx_nonposted_busy : std_logic := '0';
+	signal tl_rx_masknp : std_logic;
 
 	-- Gowin Analyzer probe surface for first BAR read-completion bring-up.
 	-- Pulses show the live cycle; sticky bits survive long enough to inspect.
@@ -284,6 +286,12 @@ architecture rtl of top is
 
 begin
 	tl_rx_backpressure <= capture_pending or decode_pending or transaction_pending;
+	-- A BAR read is a non-posted request: keep later non-posted requests out of
+	-- the controller until our completion has actually entered its TX buffer.
+	-- Include the live SOP cycle so the mask is visible when the first request
+	-- is accepted, as required by the Gowin transaction-layer handshake.
+	tl_rx_masknp <= rx_nonposted_busy or
+		(tl_rx_sop and tl_rx_eop and pcie_linkup and tl_rx_bardec(0));
 
 	u_functions: truega_functions
 		port map(
@@ -325,7 +333,7 @@ begin
 			PCIE_Controller_Top_pcie_rstn_i          => pcie_perst_n,
 			PCIE_Controller_Top_pcie_tl_clk_i        => clk,
 			PCIE_Controller_Top_pcie_tl_rx_wait_i    => tl_rx_backpressure,
-			PCIE_Controller_Top_pcie_tl_rx_masknp_i  => '0',
+			PCIE_Controller_Top_pcie_tl_rx_masknp_i  => tl_rx_masknp,
 			PCIE_Controller_Top_pcie_tl_tx_sop_i     => tl_tx_sop,
 			PCIE_Controller_Top_pcie_tl_tx_eop_i     => tl_tx_eop,
 			PCIE_Controller_Top_pcie_tl_tx_data_i    => tl_tx_data,
@@ -520,6 +528,7 @@ begin
 				transaction_payload_dw <= (others => '0');
 				transaction_req_id <= (others => '0');
 				transaction_req_tag <= (others => '0');
+				rx_nonposted_busy <= '0';
 					tx_pending <= '0';
 					tx_pending_data <= (others => '0');
 					tx_pending_valid <= (others => '0');
@@ -608,8 +617,9 @@ begin
 						tx_pending_data <= (others => '0');
 					tx_pending_valid <= (others => '0');
 					tx_pending_sop <= '0';
-					tx_pending_eop <= '0';
-				end if;
+						tx_pending_eop <= '0';
+						rx_nonposted_busy <= '0';
+					end if;
 
 				next_cnt_fwd := to_integer(pkt_cnt_fwd);
 				next_cnt_rev := to_integer(pkt_cnt_rev);
@@ -690,6 +700,7 @@ begin
 										null;
 									end case;
 								end if;
+								rx_nonposted_busy <= '0';
 							elsif hit_read then
 								dbg_hit_read <= '1';
 								dbg_seen_hit_read <= '1';
@@ -762,6 +773,7 @@ begin
 									queue_cpld(req_id, req_tag, addr_dw, read_data_dw);
 								else
 									dbg_cpld_blocked <= '1';
+									rx_nonposted_busy <= '0';
 								end if;
 							end if;
 
@@ -794,6 +806,7 @@ begin
 								transaction_pending <= '1';
 							else
 								transaction_pending <= '0';
+								rx_nonposted_busy <= '0';
 							end if;
 							transaction_addr_dw <= addr_dw;
 							transaction_payload_dw <= payload_dw;
@@ -847,6 +860,7 @@ begin
 						rx_snapshot_data <= tl_rx_data;
 						rx_snapshot_valid <= tl_rx_valid;
 						capture_pending <= '1';
+						rx_nonposted_busy <= '1';
 						dbg_rx_bar0_eop <= '1';
 						dbg_seen_rx_bar0_eop <= '1';
 					end if;

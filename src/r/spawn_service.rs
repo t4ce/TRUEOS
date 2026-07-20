@@ -1375,9 +1375,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::enabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
-    TaskSpec::enabled("fpga-offload", 0, &FPGA_OFFLOAD_SERVICE_STARTED, spawn_fpga_offload_service),
-    TaskSpec::enabled(
+    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::disabled("fpga-offload", 0, &FPGA_OFFLOAD_SERVICE_STARTED, spawn_fpga_offload_service),
+    TaskSpec::disabled(
         "fpga-offload-heartbeat",
         0,
         &FPGA_OFFLOAD_HEARTBEAT_STARTED,

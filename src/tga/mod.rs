@@ -291,8 +291,8 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         || assign_changed
         || map_changed)
     {
-        crate::log!(
-            "tga: reconnect stable bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} map=0x{:X}\n",
+        crate::log_warn!(
+            "tga: hotplug event (warn marks a significant low-level event, not a detected fault): endpoint reconnect completed with stable resources bdf={:02X}:{:02X}.{} bar0=0x{:016X} size=0x{:X} map=0x{:X}\n",
             now.bus,
             now.slot,
             now.function,
@@ -303,8 +303,8 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         return;
     }
 
-    crate::log!(
-        "tga: reconnect delta bdf {:02X}:{:02X}.{} -> {:02X}:{:02X}.{} bar0 0x{:016X} -> 0x{:016X} size 0x{:X} -> 0x{:X} mode {} -> {} assign {} -> {} map 0x{:X} -> 0x{:X}\n",
+    crate::log_warn!(
+        "tga: hotplug event (warn marks a significant low-level event, not a detected fault): endpoint reconnect completed; bdf {:02X}:{:02X}.{} -> {:02X}:{:02X}.{} bar0 0x{:016X} -> 0x{:016X} size 0x{:X} -> 0x{:X} mode {} -> {} assign {} -> {} map 0x{:X} -> 0x{:X}\n",
         prev.bus,
         prev.slot,
         prev.function,
@@ -602,15 +602,6 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         let align = TGA_EXPECTED_BAR0_SIZE.max(0x1000);
 
         let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
-        crate::log!(
-            "tga: hotplug BAR assign bdf={:02X}:{:02X}.{} size=0x{:X} align=0x{:X} base=0x{:016X}\n",
-            dev.bus,
-            dev.slot,
-            dev.function,
-            size,
-            align,
-            base
-        );
 
         // Preserve the low BAR attribute bits (IO/type/prefetch) reported by the device.
         let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
@@ -665,21 +656,6 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let offload_work_package_reg = base + TGA_OFFLOAD_WORK_PACKAGE_OFF;
     let offload_doorbell_reg = base + TGA_OFFLOAD_DOORBELL_OFF;
     let offload_irq_ack_reg = base + TGA_OFFLOAD_IRQ_ACK_OFF;
-
-    let cmd_after = crate::pci::config_read_u16(dev.bus, dev.slot, dev.function, 0x04);
-
-    crate::log!(
-        "tga: bring_online bdf={:02X}:{:02X}.{} cmd 0x{:04X}->0x{:04X} raw_bar0=0x{:08X} raw_bar1=0x{:08X} bar0=0x{:016X} size=0x{:X}\n",
-        dev.bus,
-        dev.slot,
-        dev.function,
-        cmd_before,
-        cmd_after,
-        bar_lo,
-        bar_hi.unwrap_or(0),
-        bar_phys,
-        bar_size
-    );
 
     let tga = Tga {
         bus: dev.bus,
@@ -743,7 +719,6 @@ pub(crate) async fn tga_task() {
                                 TGA_PCI_OWNER,
                             );
                             *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
-                            log_tga_state("disconnected", &old);
                             TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
                         }
                     }

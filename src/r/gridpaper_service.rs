@@ -2672,12 +2672,6 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
 #[embassy_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
 async fn gridpaper_instance_worker_task(pool_slot: usize) {
     crate::intel::wait_hw_logo_sequence_done().await;
-    crate::log_info!(
-        target: "gridpaper";
-        "gridpaper: pool worker online pool_slot={} carrier_slot={} render_lane=shared-async-serialized\n",
-        pool_slot,
-        crate::percpu::current_slot(),
-    );
 
     let mut observed_lease_epoch = 0u64;
     let mut runtime: Option<GridPaperRuntime> = None;
@@ -2830,22 +2824,9 @@ pub async fn gridpaper_service_task() {
     let spawned = spawn_gridpaper_instance_pool();
     crate::log_info!(
         target: "gridpaper";
-        "gridpaper: embassy service ready controller_slot={} pool_workers={} soft_cap={} blueprint_instances=1 page_bytes={} cells={} snapshot_buffers_per_instance=2 ui4_buffers_per_active_instance=3 scene={}x{} document_mm={}x{} grid_mm={}x{} surface_mm={}x{} target_cell_mm={} default_scale={} scheduling=ap2+-worker-pool render_lane=single-rcs-async-fair input=window-routed presentation=ui4-triple-direct-slot2 direct_visible_capacity=1 retained_scene_capacity=10 release=pat3-uc+pipe-control-post-sync+surflive\n",
-        crate::percpu::current_slot(),
+        "gridpaper: pool initialized workers={} soft_cap={} render_lane=shared-async-serialized\n",
         spawned,
         GRIDPAPER_POOL_SOFT_CAP,
-        PAGE_BYTES,
-        COLUMNS * ROWS,
-        SCENE_WIDTH,
-        SCENE_HEIGHT,
-        A4_WIDTH_MM,
-        A4_HEIGHT_MM,
-        GRID_WIDTH_MM,
-        GRID_HEIGHT_MM,
-        SURFACE_WIDTH_MM,
-        SURFACE_HEIGHT_MM,
-        CELL_EDGE_MM,
-        NATIVE_SCALE_PERCENT,
     );
     if spawned != GRIDPAPER_POOL_SOFT_CAP {
         crate::log_warn!(
