@@ -24,9 +24,21 @@ fn upload_artifact_from_sources(
     // disk I/O. Diagnostic TRUEOSFS publication exposes a root to explicit
     // Shell2 consumers before global readiness; runtime overrides remain on
     // their embedded artifacts until the filesystem capability is published.
-    let trueosfs_ready = crate::r::readiness::is_set(
+    let globally_ready = crate::r::readiness::is_set(
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
     );
+    let diagnostic_allow = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
+        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS
+        && crate::r::fs::trueosfs::has_published_root_with_index();
+    let trueosfs_ready = globally_ready || diagnostic_allow;
+    if diagnostic_allow {
+        static DIAGNOSTIC_ALLOW_LOGGED: AtomicBool = AtomicBool::new(false);
+        if !DIAGNOSTIC_ALLOW_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_info!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=gpgpu-runtime-artifacts status=allowed source=published-root-with-index automatic_fs_io=on-eligible-upload\n"
+            );
+        }
+    }
     if trueosfs_ready && !crate::percpu::in_executor_poll() {
         match read_runtime_artifact_bytes(artifact.name) {
             Ok(Some(bytes)) if !bytes.is_empty() => {

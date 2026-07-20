@@ -941,9 +941,13 @@ pub(crate) async fn font_warm_task() {
         // 17 MiB Noto face) and their synchronous all-glyph outline warmup.
         let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
         let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+        let diagnostic_allow_configured = diagnostic_cut == 8
+            && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_EAGER_FONT_WARM;
+        let diagnostic_allow = diagnostic_allow_configured
+            && crate::r::fs::trueosfs::has_published_root_with_index();
         let diagnostic_hold = diagnostic_cut == 9
             && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_HOLD_EAGER_FONT_WARM;
-        if !root_ready || diagnostic_hold {
+        if (!root_ready && !diagnostic_allow) || diagnostic_hold {
             if matches!(diagnostic_cut, 7..=9) {
                 crate::log_info!(
                     target: "usb";
@@ -958,6 +962,11 @@ pub(crate) async fn font_warm_task() {
                     root_ready,
                 );
             }
+            let retry_secs = if diagnostic_allow_configured {
+                1
+            } else {
+                TRUEOSFS_FONT_HEARTBEAT_SECS
+            };
             for spec in TRUEOSFS_FONTS
                 .iter()
                 .filter(|spec| font_summary(spec.name).is_none())
@@ -973,14 +982,21 @@ pub(crate) async fn font_warm_task() {
                         "root-not-ready"
                     },
                     heartbeat,
-                    TRUEOSFS_FONT_HEARTBEAT_SECS,
+                    retry_secs,
                 );
             }
             embassy_time::Timer::after(embassy_time::Duration::from_secs(
-                TRUEOSFS_FONT_HEARTBEAT_SECS,
+                retry_secs,
             ))
             .await;
             continue;
+        }
+
+        if diagnostic_allow {
+            crate::log_info!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=graphics-font-fs-warm status=allowed source=published-root-with-index automatic_fs_io=true heartbeat={}\n",
+                heartbeat,
+            );
         }
 
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {

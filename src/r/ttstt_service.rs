@@ -48,6 +48,11 @@ static OUTSTANDING_JOBS: AtomicUsize = AtomicUsize::new(0);
 static BACKEND_WARM_STARTED: AtomicBool = AtomicBool::new(false);
 
 static MODELS: Mutex<Option<Arc<ModelSet>>> = Mutex::new(None);
+// Cut-8 diagnostics may intentionally exercise whichever TTSTT assets are
+// present even when the complete speech model set is unavailable. Keep those
+// bytes resident so a missing peer model does not turn the retry loop into a
+// repeated bulk-read workload.
+static DIAGNOSTIC_PARTIAL_MODELS: Mutex<Option<Vec<ModelImage>>> = Mutex::new(None);
 static JOBS: Mutex<VecDeque<QueuedJob>> = Mutex::new(VecDeque::new());
 static JOB_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static SPEECH_BACKEND: Mutex<Option<&'static dyn SpeechBackend>> = Mutex::new(None);
@@ -676,6 +681,125 @@ async fn load_model_set() -> Result<Arc<ModelSet>, ModelLoadError> {
     }))
 }
 
+#[inline]
+fn diagnostic_partial_warm_enabled() -> bool {
+    crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
+        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_TTSTT_MODEL_WARM
+}
+
+fn diagnostic_partial_resident_bytes() -> Option<usize> {
+    DIAGNOSTIC_PARTIAL_MODELS.lock().as_ref().map(|models| {
+        models
+            .iter()
+            .fold(0usize, |total, model| total.saturating_add(model.bytes().len()))
+    })
+}
+
+/// Exercise the actual on-disk TTSTT model payloads without claiming that the
+/// speech service is usable when another required model is absent.
+async fn diagnostic_warm_available_models() {
+    if !diagnostic_partial_warm_enabled() {
+        return;
+    }
+    if let Some(bytes) = diagnostic_partial_resident_bytes() {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=resident bytes={} reread=false service_ready=false\n",
+            bytes,
+        );
+        return;
+    }
+
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log_warn!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=skipped reason=no-primary-root\n"
+        );
+        return;
+    };
+
+    let mut candidates = Vec::new();
+    match find_kokoro_model_path(disk).await {
+        Ok(path) => candidates.push(path),
+        Err(error) => crate::log_warn!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-skipped role=kokoro reason={}\n",
+            error.describe(),
+        ),
+    }
+    candidates.push(KOKORO_VOICES_PATH.to_string());
+    candidates.push(WHISPER_MODEL_PATH.to_string());
+
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=start candidates={} chunk_bytes={} service_ready=false\n",
+        candidates.len(),
+        MODEL_READ_CHUNK_BYTES,
+    );
+
+    let mut resident = Vec::new();
+    let mut resident_bytes = 0usize;
+    for path in candidates {
+        let len = match preflight_model_image(disk, path.as_str()).await {
+            Ok(len) => len,
+            Err(error) => {
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-skipped path={} reason={}\n",
+                    path,
+                    error.describe(),
+                );
+                continue;
+            }
+        };
+        let Ok(len_usize) = usize::try_from(len) else {
+            crate::log_warn!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-skipped path={} reason=size-not-addressable bytes={}\n",
+                path,
+                len,
+            );
+            continue;
+        };
+        if resident_bytes.saturating_add(len_usize) > MODEL_SET_MAX_BYTES {
+            crate::log_warn!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-skipped path={} reason=diagnostic-resident-cap bytes={} resident_before={} cap={}\n",
+                path,
+                len,
+                resident_bytes,
+                MODEL_SET_MAX_BYTES,
+            );
+            continue;
+        }
+
+        match load_model_image(disk, path.clone(), len).await {
+            Ok(model) => {
+                resident_bytes = resident_bytes.saturating_add(model.bytes().len());
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-resident path={} bytes={} resident_total={} service_ready=false\n",
+                    model.path(),
+                    model.bytes().len(),
+                    resident_bytes,
+                );
+                resident.push(model);
+            }
+            Err(error) => crate::log_warn!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=asset-failed path={} reason={}\n",
+                path,
+                error.describe(),
+            ),
+        }
+    }
+
+    if resident.is_empty() {
+        crate::log_warn!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=empty service_ready=false\n"
+        );
+        return;
+    }
+    let assets = resident.len();
+    *DIAGNOSTIC_PARTIAL_MODELS.lock() = Some(resident);
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-partial-model-warm status=complete assets={} bytes={} reread=false service_ready=false\n",
+        assets,
+        resident_bytes,
+    );
+}
+
 async fn eligible_worker_slots() -> Vec<u32> {
     loop {
         // Wait for the topology to settle so the pool gets every eligible
@@ -820,6 +944,9 @@ pub async fn service_task() {
         );
         match load_model_set().await {
             Ok(models) => {
+                // A subsequently completed model set supersedes diagnostic
+                // partial residency and must not retain duplicate images.
+                *DIAGNOSTIC_PARTIAL_MODELS.lock() = None;
                 RESIDENT_BYTES.store(models.total_bytes() as u64, Ordering::Release);
                 *MODELS.lock() = Some(models.clone());
                 SERVICE_STATE.store(ServiceState::ModelsResident as u8, Ordering::Release);
@@ -854,6 +981,7 @@ pub async fn service_task() {
                 }
             }
             Err(error) => {
+                diagnostic_warm_available_models().await;
                 let delay_ms = error.retry_ms();
                 crate::log_warn!(
                     target: "ttstt";

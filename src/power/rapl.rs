@@ -21,6 +21,13 @@ const RAPL_HISTORY_TRIM_BYTES: usize = 1024 * 1024;
 const RAPL_HISTORY_HEADER: &[u8] = b"# trueos rapl history v1\n# ms,dt_ms,update,valid,pkg_j,pp0_j,pp1_j,dram_j,psys_j,pkg_w,pp0_w,pp1_w,dram_w,psys_w\n";
 const RAPL_WATCH_RECEIVERS: usize = 8;
 
+#[inline]
+fn diagnostic_allow_trueosfs_persistence() -> bool {
+    crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
+        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_RAPL_PERSISTENCE
+        && crate::r::fs::trueosfs::has_published_root_with_index()
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RaplCaps {
     pub vendor_intel: bool,
@@ -326,6 +333,13 @@ pub async fn raple_service() {
         RAPL_TRUEOSFS_PERSIST_PERIOD_MS,
         RAPL_TRUEOSFS_PATH
     );
+    if crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
+        && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_RAPL_PERSISTENCE
+    {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=rapl-trueosfs-persistence status=allowed source=published-root-with-index sampler=online automatic_fs_io=true\n"
+        );
+    }
 
     let mut next_persist_ms = service_now_ms().saturating_add(RAPL_TRUEOSFS_PERSIST_PERIOD_MS);
     loop {
@@ -388,7 +402,9 @@ fn read_sample(domain: RaplDomain, msr: u32, units: RaplUnits) -> RaplSample {
 }
 
 async fn persist_history_to_trueosfs() {
-    if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
+    if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
+        && !diagnostic_allow_trueosfs_persistence()
+    {
         return;
     }
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {

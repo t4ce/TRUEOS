@@ -61,8 +61,15 @@ impl HttpPerf {
 const MIB: usize = 1024 * 1024;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 1024;
 const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 500 * MIB;
-const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 1024 * 1024;
+// Keep a streamed filesystem response below the r8125 hardware RX-ring burst
+// boundary. A 1 MiB window fills the TCP TX buffer in one turn and produces an
+// ACK burst that can exhaust the controller's 64 RX descriptors before its
+// service task runs again. 64 KiB remains efficient for TRUEOSFS/UAS while
+// giving the network lane a chance to recycle descriptors between windows.
+const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 64 * 1024;
 const HTTP_TRUEOSFS_SEND_YIELD_COMMANDS: usize = 16;
+const HTTP_TRUEOSFS_STREAM_PACE_US: u64 = 250;
+const HTTP_TRUEOSFS_STREAM_LOG_EVERY_CHUNKS: usize = 8;
 const HTTP_OCTET_STREAM: &str = "application/octet-stream";
 const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
 const HTTP_MULTIPART_CONTENT_TYPE: &str = "multipart/byteranges; boundary=trueosfs-boundary";
@@ -407,27 +414,105 @@ async fn http_stream_file_range(
     let mut remaining = len;
     let mut off = offset;
     let mut slot = 0usize;
+    let mut chunks = 0usize;
+    let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+
+    if diagnostic_cut == 8 {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=start handle={} path={} offset={} bytes={} window_bytes={} pace_us={}\n",
+            handle.0,
+            path,
+            offset,
+            len,
+            chunk_bytes,
+            HTTP_TRUEOSFS_STREAM_PACE_US,
+        );
+    }
 
     while remaining > 0 {
         if !http_stream_drain_events(vnet, server, handle) {
+            if diagnostic_cut == 8 {
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=peer-closed offset={} remaining={} chunks={}\n",
+                    handle.0,
+                    path,
+                    off,
+                    remaining,
+                    chunks,
+                );
+            }
             return false;
         }
         let buf = &mut buffers[slot];
         let want = core::cmp::min(remaining, buf.len() as u64) as usize;
         let t0 = tsc_now();
-        let read =
-            match crate::r::fs::trueosfs::file_read_range_async(disk, path, off, &mut buf[..want])
-                .await
-            {
-                Ok(Some(n)) => n,
-                _ => 0,
-            };
+        let read = match crate::r::fs::trueosfs::file_read_range_async(
+            disk,
+            path,
+            off,
+            &mut buf[..want],
+        )
+        .await
+        {
+            Ok(Some(n)) => n,
+            Ok(None) => {
+                if diagnostic_cut == 8 {
+                    crate::log_info!(target: "usb";
+                        "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=file-missing offset={} requested={} remaining={} chunks={}\n",
+                        handle.0,
+                        path,
+                        off,
+                        want,
+                        remaining,
+                        chunks,
+                    );
+                }
+                return false;
+            }
+            Err(err) => {
+                if diagnostic_cut == 8 {
+                    crate::log_info!(target: "usb";
+                        "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=file-read-error offset={} requested={} remaining={} chunks={} err={:?}\n",
+                        handle.0,
+                        path,
+                        off,
+                        want,
+                        remaining,
+                        chunks,
+                        err,
+                    );
+                }
+                return false;
+            }
+        };
         let t1 = tsc_now();
         perf.record_read(t1.wrapping_sub(t0));
         if read == 0 {
-            break;
+            if diagnostic_cut == 8 {
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=zero-read offset={} requested={} remaining={} chunks={}\n",
+                    handle.0,
+                    path,
+                    off,
+                    want,
+                    remaining,
+                    chunks,
+                );
+            }
+            return false;
         }
         if !http_stream_drain_events(vnet, server, handle) {
+            if diagnostic_cut == 8 {
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=peer-closed-after-read offset={} read={} remaining={} chunks={}\n",
+                    handle.0,
+                    path,
+                    off,
+                    read,
+                    remaining,
+                    chunks,
+                );
+            }
             return false;
         }
 
@@ -436,12 +521,54 @@ async fn http_stream_file_range(
         let t3 = tsc_now();
         perf.record_submit(t3.wrapping_sub(t2), submitted);
         if submitted < read {
+            if diagnostic_cut == 8 {
+                crate::log_info!(target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=stopped handle={} path={} reason=send-queue-backpressure offset={} read={} submitted={} remaining={} chunks={}\n",
+                    handle.0,
+                    path,
+                    off,
+                    read,
+                    submitted,
+                    remaining,
+                    chunks,
+                );
+            }
             return false;
         }
 
         off = off.saturating_add(read as u64);
         remaining = remaining.saturating_sub(read as u64);
+        chunks = chunks.saturating_add(1);
         slot ^= 1;
+        if diagnostic_cut == 8
+            && (chunks.is_multiple_of(HTTP_TRUEOSFS_STREAM_LOG_EVERY_CHUNKS) || remaining == 0)
+        {
+            crate::log_info!(target: "usb";
+                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=progress handle={} path={} offset={} sent={} remaining={} chunks={}\n",
+                handle.0,
+                path,
+                off,
+                off.saturating_sub(offset),
+                remaining,
+                chunks,
+            );
+        }
+        if remaining != 0 {
+            Timer::after(EmbassyDuration::from_micros(
+                HTTP_TRUEOSFS_STREAM_PACE_US,
+            ))
+            .await;
+        }
+    }
+    if diagnostic_cut == 8 {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs-stream phase=complete handle={} path={} offset={} sent={} chunks={}\n",
+            handle.0,
+            path,
+            off,
+            off.saturating_sub(offset),
+            chunks,
+        );
     }
     true
 }

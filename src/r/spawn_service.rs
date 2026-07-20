@@ -17,6 +17,9 @@ const SPAWN_SERVICE_IDLE_MS: u64 = 250;
 const SYSTEM_SERVICE_SNAPSHOT_PERIOD_MS: u64 = 1_000;
 
 static SYSTEM_SERVICE_SNAPSHOT: Mutex<String> = Mutex::new(String::new());
+static TTSTT_DIAGNOSTIC_ALLOW_LOGGED: AtomicBool = AtomicBool::new(false);
+static ASSET_SHACK_DIAGNOSTIC_ALLOW_LOGGED: AtomicBool = AtomicBool::new(false);
+static USER_INPUT_DIAGNOSTIC_ALLOW_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Central task orchestrator ("FSM spawn service").
 ///
@@ -571,6 +574,12 @@ fn spawn_thermal_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
+    if crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8 {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=html-shack status=armed policy=request-driven workers={} automatic_fs_io=false automatic_net_io=false\n",
+            crate::surfer::html_shack::HTML_FETCH_WORKERS,
+        );
+    }
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service(spawner))
 }
 
@@ -634,6 +643,72 @@ fn http_trueosfs_gate() -> bool {
     crate::r::readiness::is_set(
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
     )
+}
+
+#[inline]
+fn html_shack_gate() -> bool {
+    const HTML_SHACK_CUT: u8 = 8;
+    const GLOBAL_READINESS_CUT: u8 = 9;
+
+    let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+    if diagnostic_cut == HTML_SHACK_CUT {
+        return crate::r::fs::trueosfs::has_published_root_with_index();
+    }
+    if diagnostic_cut != 0 && diagnostic_cut != GLOBAL_READINESS_CUT {
+        return false;
+    }
+
+    crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
+}
+
+#[inline]
+fn diagnostic_cut8_published_allow(enabled: bool) -> bool {
+    crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8
+        && enabled
+        && crate::r::fs::trueosfs::has_published_root_with_index()
+}
+
+#[inline]
+fn ttstt_cpu_service_gate() -> bool {
+    let allowed = diagnostic_cut8_published_allow(
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_TTSTT_MODEL_WARM,
+    );
+    if allowed && !TTSTT_DIAGNOSTIC_ALLOW_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=ttstt-model-warm status=allowed source=published-root-with-index automatic_fs_io=true\n"
+        );
+    }
+    allowed
+        || crate::r::readiness::is_set(
+            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
+                | crate::r::readiness::TRUEOSFS_INDEX_READY,
+        )
+}
+
+#[inline]
+fn asset_shack_gate() -> bool {
+    let allowed = diagnostic_cut8_published_allow(
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_ASSET_SHACK,
+    );
+    if allowed && !ASSET_SHACK_DIAGNOSTIC_ALLOW_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=asset-shack status=allowed source=published-root-with-index workers=4 automatic_fs_io=false automatic_net_io=false\n"
+        );
+    }
+    allowed || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
+}
+
+#[inline]
+fn user_input_writer_gate() -> bool {
+    let allowed = diagnostic_cut8_published_allow(
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_USER_INPUT_WRITER,
+    );
+    if allowed && !USER_INPUT_DIAGNOSTIC_ALLOW_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=user-input-record-writer status=allowed source=published-root-with-index default=off automatic_fs_io=conditional\n"
+        );
+    }
+    allowed || crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
 
 #[inline]
@@ -1217,11 +1292,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &BLOCKING_JOB_DISPATCHER_STARTED,
         spawn_blocking_service_lanes,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "ttstt-cpu-service",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-            | crate::r::readiness::TRUEOSFS_INDEX_READY
-            | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        ttstt_cpu_service_gate,
         &TTSTT_CPU_SERVICE_STARTED,
         spawn_ttstt_cpu_service,
     ),
@@ -1524,15 +1598,17 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "html_fetch_service",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        crate::r::readiness::NET_V4_CONFIGURED,
+        html_shack_gate,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "asset_shack_service",
-        crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        crate::r::readiness::NET_V4_CONFIGURED,
+        asset_shack_gate,
         &ASSET_SHACK_SERVICE_STARTED,
         asset_fetch_service,
     ),
@@ -1554,9 +1630,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TINYAUDIO_LIVE_HTTP_STARTED,
         spawn_tinyaudio_live_http,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "user-input-record-writer",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        0,
+        user_input_writer_gate,
         &USER_INPUT_RECORD_WRITER_STARTED,
         spawn_user_input_record_writer,
     ),
@@ -1645,8 +1722,14 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: diagnostic-profile usb_uas_cut={} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            "spawn-svc: diagnostic-profile usb_uas_cut={} allows(font/rapl/ttstt/asset/input/gpgpu)={}/{}/{}/{}/{}/{} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
             crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_EAGER_FONT_WARM,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_RAPL_PERSISTENCE,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_TTSTT_MODEL_WARM,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_ASSET_SHACK,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_USER_INPUT_WRITER,
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_ALLOW_GPGPU_RUNTIME_ARTIFACTS,
             crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
             tga_boot_gate(),
             fpga_offload_boot_gate(),

@@ -29,7 +29,7 @@ const UAS_CUT_AFTER_TRUEOSFS_LOCATE: u8 = 4;
 const UAS_CUT_AFTER_PRIVATE_ROOT: u8 = 5;
 const UAS_CUT_AFTER_READ_ONLY_INDEX: u8 = 6;
 const UAS_CUT_AFTER_PRIMARY_PUBLICATION: u8 = 7;
-const UAS_CUT_WITH_HTTP_TRUEOSFS_ONLY: u8 = 8;
+const UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK: u8 = 8;
 const UAS_CUT_AFTER_GLOBAL_READINESS: u8 = 9;
 
 struct SkhynixUasRuntime {
@@ -88,7 +88,7 @@ struct UasTarget {
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
     crate::log!(
-        "crabusb: skhynix-green proof=diagnostic-manifest cut={} stages=1:runtime-retained,2:worker-handoff,3:lba1-read,4:trueosfs-locate,5:private-root,6:read-only-index,7:primary-publication-lsd-only,8:http-trueosfs-only,9:global-readiness,0:mount-continue\n",
+        "crabusb: skhynix-green proof=diagnostic-manifest cut={} stages=1:runtime-retained,2:worker-handoff,3:lba1-read,4:trueosfs-locate,5:private-root,6:read-only-index,7:primary-publication-lsd-only,8:http-trueosfs-plus-html-shack,9:global-readiness,0:mount-continue\n",
         UAS_DIAGNOSTIC_CUT
     );
     if let Some(config) = pooled.device.configurations().first() {
@@ -510,7 +510,7 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
     if !matches!(
         UAS_DIAGNOSTIC_CUT,
         UAS_CUT_AFTER_PRIMARY_PUBLICATION
-            | UAS_CUT_WITH_HTTP_TRUEOSFS_ONLY
+            | UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK
             | UAS_CUT_AFTER_GLOBAL_READINESS
     ) {
         crate::log_warn!(target: "usb";
@@ -559,6 +559,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         );
         return;
     }
+    if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
+        crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
+        crate::log!(
+            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=index-readiness-only status=published root_readiness=false index_readiness=true combined-root-index-consumers=false app_vm_ready=false\n"
+        );
+    }
     let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
     let index_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_INDEX_READY);
     crate::log!(
@@ -573,8 +579,8 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         index_ready,
         if UAS_DIAGNOSTIC_CUT == UAS_CUT_AFTER_PRIMARY_PUBLICATION {
             "cut-lsd-only"
-        } else if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_ONLY {
-            "http-trueosfs-only"
+        } else if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
+            "http-trueosfs-plus-html-shack"
         } else {
             "global-readiness"
         }
@@ -587,12 +593,12 @@ pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevic
         return;
     }
 
-    if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_ONLY {
+    if UAS_DIAGNOSTIC_CUT == UAS_CUT_WITH_HTTP_TRUEOSFS_AND_HTML_SHACK {
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=http-trueosfs-only status=armed network_gate=NET_ANY_CONFIGURED root_readiness=false index_readiness=false other_automatic_consumers=false\n"
+            "crabusb: skhynix-green proof=diagnostic-stage stage=8 name=intersection-split-gpgpu-held status=armed http_network_gate=NET_ANY_CONFIGURED html_network_gate=NET_V4_CONFIGURED root_readiness=false index_readiness=true allowed=font,rapl-persistence,ttstt,asset-shack,user-input-writer,shell2-dl,shell2-update,tlb-pci-fs-db held=gpgpu-runtime-artifacts\n"
         );
         crate::log!(
-            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=primary-visible-manual-lsd-and-http-only\n"
+            "crabusb: skhynix-green proof=diagnostic-cut stage=8 status=stopped action=intersection-split-gpgpu-held root-readiness=false index-readiness=true\n"
         );
         return;
     }
