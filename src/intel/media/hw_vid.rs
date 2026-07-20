@@ -44,6 +44,7 @@ pub(crate) const H264_MEDIA_URL_PROBE_URL: &str =
 pub(crate) const H264_BOOT_PROBE_STREAM_PATH: &str = "x31_head_movie.annexb.h264";
 
 static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 struct H264PlaybackGuard;
 
@@ -3804,6 +3805,21 @@ async fn h264_present_probe_output(
             pitch_bytes: output.pitch_bytes,
             uv_offset: output.uv_offset,
         };
+        if !H264_UI4_HANDOFF_CHECKPOINT_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log!(
+                "intel/hw_vid: checkpoint stage=decode-retired-ui4-handoff phase={} playback_frame={} id={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} decoded={}x{} visible={}x{} action=acquire-ui4-frame\n",
+                phase,
+                playback_frame,
+                output.id,
+                output.gpu_addr,
+                output.phys_addr,
+                output.byte_len,
+                output.width,
+                output.height,
+                output.visible_width,
+                output.visible_height,
+            );
+        }
         let ui4_presented =
             crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str()).await;
         if presentation == H264PresentationPolicy::Ui4BootRequired {

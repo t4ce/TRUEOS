@@ -28,14 +28,6 @@ inline uint ui4_clamped_bt601_channel(int value)
     return (uint)clamp((value + 128) >> 8, 0, 255);
 }
 
-inline uint ui4_xrgb_to_opaque_rgba(uint xrgb)
-{
-    return 0xFF000000u
-        | ((xrgb >> 16) & 0xFFu)
-        | (xrgb & 0x0000FF00u)
-        | ((xrgb & 0xFFu) << 16);
-}
-
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void ui4_nv12_tile64_to_rgba8_frame(
     __global const uchar *src_nv12,
@@ -65,16 +57,11 @@ __kernel void ui4_nv12_tile64_to_rgba8_frame(
     uint inside_x = x - content_dst_x;
     uint inside_y = y - content_dst_y;
     if (inside_x >= content_width || inside_y >= content_height) {
-        // A non-zero base pitch retains the three-buffer ABI for optional
-        // XRGB-backed framing. The video producer passes zero and therefore
-        // has no hidden desktop/display dependency.
-        if (base_pitch_bytes != 0u) {
-            uint base_pitch_pixels = base_pitch_bytes >> 2;
-            dst_rgba[dst_index] = ui4_xrgb_to_opaque_rgba(
-                base_xrgb[y * base_pitch_pixels + x]);
-        } else {
-            dst_rgba[dst_index] = 0xFF000000u;
-        }
+        // Keep the legacy arguments until the CPU payload ABI is rebaked, but
+        // never touch the old desktop-base binding in the Frame producer.
+        (void)base_xrgb;
+        (void)base_pitch_bytes;
+        dst_rgba[dst_index] = 0xFF000000u;
         return;
     }
 

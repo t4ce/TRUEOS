@@ -359,8 +359,8 @@ pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_BIN_SHA256: [u8; 32] = [
     0x85, 0x47, 0xE9, 0x02, 0x9D, 0x29, 0x22, 0x31, 0xC9, 0x11, 0x6F, 0x25, 0x85, 0x13, 0x2E, 0x4D,
 ];
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] = [
-    0x35, 0xCD, 0x9F, 0x3C, 0xBA, 0xD1, 0xF2, 0xCE, 0xC7, 0x6B, 0x3E, 0xFB, 0xF9, 0xD8, 0xC9, 0x10,
-    0x01, 0xCD, 0x07, 0x8B, 0xE4, 0xD2, 0x44, 0x35, 0xB1, 0x1C, 0x09, 0x12, 0xAF, 0xA7, 0x37, 0x49,
+    0xCE, 0x8D, 0x5D, 0x0B, 0x6C, 0x82, 0x83, 0x92, 0xF9, 0xE0, 0xFD, 0xCB, 0x19, 0x06, 0x8E, 0x23,
+    0x59, 0x9B, 0x8D, 0x37, 0xD3, 0xCF, 0x34, 0x29, 0x8B, 0x07, 0x60, 0x76, 0x09, 0x17, 0x6C, 0x5B,
 ];
 
 pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
@@ -583,13 +583,13 @@ const COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x1200;
 const COPY_RECT_PIXELS_PER_LANE: u32 = 2;
 
-// The native UI4 video compositor has exactly three raw buffers and one
-// SIMD16 full-output dispatch.  It intentionally owns no descriptor worklist.
+// The native UI4 video Frame producer binds exactly the decoder source and the
+// leased Frame destination for one SIMD16 full-output dispatch. It owns no
+// desktop/base surface and no descriptor worklist.
 const UI4_NV12_PRIMARY_IDD_OFFSET_BYTES: usize = 0x1000;
 const UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;
 const UI4_NV12_PRIMARY_SRC_SURFACE_STATE_OFFSET_BYTES: usize = 0x1080;
-const UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
-const UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x1100;
+const UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES: usize = 0x10C0;
 const UI4_NV12_PRIMARY_PAYLOAD_OFFSET_BYTES: usize = 0x1200;
 const UI4_NV12_PRIMARY_CROSS_THREAD_GRFS: u32 = 4;
 const UI4_NV12_PRIMARY_CROSS_THREAD_BYTES: usize = UI4_NV12_PRIMARY_CROSS_THREAD_GRFS as usize * 32;
@@ -4088,10 +4088,10 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     }
     let params = Ui4Nv12Tile64ToRgba8FrameParams {
         nv12_gpu: source.gpu,
-        // Keep the proven three-binding payload ABI. The frame kernel never
-        // reads binding 1, so aliasing it to the destination does not create a
-        // second allocation or a copy dependency.
-        base_gpu: dst.gpu,
+        // The rebuilt binary keeps this legacy stateless pointer slot solely
+        // so all following scalar offsets remain stable. It is never read and
+        // deliberately aliases neither source nor destination.
+        base_gpu: 0,
         dst_gpu: dst.gpu,
         src_pitch_bytes: source.pitch_bytes,
         src_uv_offset: source.uv_offset,
@@ -4136,7 +4136,6 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             upload,
             params,
             source.bytes,
-            dst.bytes,
             dst.bytes,
         );
     if !batch_ok {
@@ -4186,7 +4185,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,dst-pat3-uc base=dst-alias-unused display_plane_writes=0\n",
+        "ui4/guc-video-frame: queued serial={} native=tile64-nv12 output={}x{} content={}x{}@{},{} source={},{} dst_gpu=0x{:X} ppgtt=source-pat0-wb,dst-pat3-uc bindings=2 legacy_base_pointer=zero-unbound display_plane_writes=0\n",
         serial,
         dst.width,
         dst.height,
@@ -8087,7 +8086,6 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
     upload: UploadedKernelArtifact,
     params: Ui4Nv12Tile64ToRgba8FrameParams,
     source_bytes: usize,
-    base_bytes: usize,
     dst_bytes: usize,
 ) -> bool {
     if params.output_width == 0
@@ -8107,18 +8105,15 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         UI4_NV12_PRIMARY_IDD_OFFSET_BYTES,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
         UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES,
-        3,
+        2,
         UI4_NV12_PRIMARY_CROSS_THREAD_GRFS,
-    ) || !direct_rcs_write_alpha_blend_worklist_surface_states_at(
+    ) || !direct_rcs_write_copy_rect_surface_states_at(
         state,
         UI4_NV12_PRIMARY_BINDING_TABLE_OFFSET_BYTES,
         UI4_NV12_PRIMARY_SRC_SURFACE_STATE_OFFSET_BYTES,
-        UI4_NV12_PRIMARY_BASE_SURFACE_STATE_OFFSET_BYTES,
         UI4_NV12_PRIMARY_DST_SURFACE_STATE_OFFSET_BYTES,
         params.nv12_gpu,
         source_bytes,
-        params.base_gpu,
-        base_bytes,
         params.dst_gpu,
         dst_bytes,
     ) || !direct_rcs_write_ui4_nv12_frame_payload_at(

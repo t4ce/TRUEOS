@@ -108,6 +108,9 @@ static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_NATIVE_ACK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
+static VIDEO_GUC_PREPARED_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIDEO_GUC_ADMITTED_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
+static VIDEO_GUC_RETIRED_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Install the boot player's ordinary UI4 window without decoding a picture.
 /// Its initialized black frame gives the user a focusable target while the
@@ -470,6 +473,20 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
         );
         return false;
     };
+    if !VIDEO_GUC_PREPARED_CHECKPOINT_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4 video-frame checkpoint stage=guc-prepared decode_seq={} frame={} buffer={} source_gpu=0x{:X} source_phys=0x{:X} source_bytes=0x{:X} target_gpu=0x{:X} target_phys=0x{:X} target_bytes=0x{:X} bindings=2 action=submit\n",
+            source.decode_sequence,
+            stream.frame.raw(),
+            write.buffer_index,
+            source.gpu,
+            source.phys,
+            source.byte_len,
+            destination.gpu,
+            destination.phys,
+            destination.bytes,
+        );
+    }
 
     let submission = loop {
         match crate::intel::gpgpu::queue_ui4_video_frame_nv12_tile64_to_rgba8(
@@ -498,6 +515,16 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             }
         }
     };
+    if !VIDEO_GUC_ADMITTED_CHECKPOINT_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4 video-frame checkpoint stage=guc-admitted decode_seq={} frame={} buffer={} source_gpu=0x{:X} target_gpu=0x{:X} action=wait-retirement\n",
+            source.decode_sequence,
+            stream.frame.raw(),
+            write.buffer_index,
+            source.gpu,
+            destination.gpu,
+        );
+    }
     let mut completion_failure_logged = false;
     let (release, submit_ms) = loop {
         match crate::intel::gpgpu::poll_ui4_video_frame_submission(submission, destination) {
@@ -522,6 +549,16 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             }
         }
     };
+    if !VIDEO_GUC_RETIRED_CHECKPOINT_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_info!(target: "ui4";
+            "ui4 video-frame checkpoint stage=guc-retired decode_seq={} frame={} buffer={} release={} submit_ms={} action=publish-exact-lease\n",
+            source.decode_sequence,
+            stream.frame.raw(),
+            write.buffer_index,
+            release.sequence(),
+            submit_ms,
+        );
+    }
     let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let native = super::NativeVideoFrameView {
         source: super::NativeNv12Surface {
