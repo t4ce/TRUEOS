@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use embassy_executor::{SendSpawner, SpawnToken, Spawner};
 use spin::Mutex;
@@ -24,6 +24,7 @@ static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
 static CORE_KIND_BY_SLOT: [AtomicU8; WORKER_SLOT_LIMIT] =
     [const { AtomicU8::new(CORE_KIND_UNKNOWN) }; WORKER_SLOT_LIMIT];
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
+static WORKER_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 pub struct WorkerSpawner {
@@ -69,6 +70,42 @@ fn worker_spawner(cpu_slot: u32, spawner: SendSpawner) -> WorkerSpawner {
     WorkerSpawner { cpu_slot, spawner }
 }
 
+fn maybe_log_worker_summary(registered: usize) {
+    let topology_slots = topology_core_slot_count();
+    if topology_slots == 0 || registered < topology_slots {
+        return;
+    }
+
+    if WORKER_SUMMARY_LOGGED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let mut perf = 0;
+    let mut eff = 0;
+    let mut unknown = 0;
+    for kind in CORE_KIND_BY_SLOT.iter().take(topology_slots) {
+        match kind.load(Ordering::Acquire) {
+            CORE_KIND_PERF => perf += 1,
+            CORE_KIND_EFF => eff += 1,
+            _ => unknown += 1,
+        }
+    }
+
+    crate::log!(
+        "workers: registration summary slots=0..{} registered={}/{} kinds(perf/eff/unknown)={}/{}/{} app_visible={}\n",
+        topology_slots - 1,
+        registered,
+        topology_slots,
+        perf,
+        eff,
+        unknown,
+        app_visible_parallelism()
+    );
+}
+
 pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     let send_spawner = spawner.make_send();
     if let Some(slot) = CORE_SPAWNER_BY_SLOT.get(cpu_slot as usize) {
@@ -81,13 +118,7 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
         spawners.len()
     };
     CORE_KINDS.lock().insert(cpu_slot, core_kind);
-    crate::log!(
-        "workers: registered core spawner slot={} kind={} registered={} app_visible={}\n",
-        cpu_slot,
-        core_kind,
-        registered,
-        app_visible_parallelism()
-    );
+    maybe_log_worker_summary(registered);
     if is_background_worker_slot(cpu_slot) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
     }

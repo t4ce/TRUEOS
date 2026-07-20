@@ -939,14 +939,23 @@ pub(crate) async fn font_warm_task() {
         // Polling only `primary_root_handle()` here made that diagnostic
         // publication silently launch two eager font reads (including the
         // 17 MiB Noto face) and their synchronous all-glyph outline warmup.
-        if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
-            let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
-            if matches!(diagnostic_cut, 7..=8) {
+        let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+        let root_ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+        let diagnostic_hold = diagnostic_cut == 9
+            && crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_HOLD_EAGER_FONT_WARM;
+        if !root_ready || diagnostic_hold {
+            if matches!(diagnostic_cut, 7..=9) {
                 crate::log_info!(
                     target: "usb";
-                    "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=graphics-font-fs-warm status=blocked reason=root-readiness-withheld heartbeat={} automatic_io=false\n",
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=graphics-font-fs-warm status=blocked reason={} heartbeat={} root_readiness={} automatic_io=false\n",
                     diagnostic_cut,
+                    if diagnostic_hold {
+                        "consumer-isolation-eager-font"
+                    } else {
+                        "root-readiness-withheld"
+                    },
                     heartbeat,
+                    root_ready,
                 );
             }
             for spec in TRUEOSFS_FONTS
@@ -955,9 +964,14 @@ pub(crate) async fn font_warm_task() {
             {
                 crate::log_info!(
                     target: "boot";
-                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-ready heartbeat={} retry_secs={}\n",
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason={} heartbeat={} retry_secs={}\n",
                     spec.name,
                     spec.path,
+                    if diagnostic_hold {
+                        "diagnostic-consumer-isolation"
+                    } else {
+                        "root-not-ready"
+                    },
                     heartbeat,
                     TRUEOSFS_FONT_HEARTBEAT_SECS,
                 );

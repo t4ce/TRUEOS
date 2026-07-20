@@ -95,6 +95,12 @@ pub mod storage {
     /// Cut 6 forbids checkpoint writes; cuts 7 and 8 keep automatic readiness
     /// consumers asleep so Shell2 `lsd` and HTTP can be proved independently.
     pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 9;
+
+    /// Cut-9 consumer isolation: publish normal TRUEOSFS readiness, but keep
+    /// the eager filesystem font warm asleep. This leaves every other cut-9
+    /// consumer enabled and separates the 17 MiB Noto/all-glyph warm from the
+    /// UAS, VFS, and video paths under investigation.
+    pub const USB_MASS_UAS_DIAGNOSTIC_HOLD_EAGER_FONT_WARM: bool = true;
 }
 
 pub mod input {

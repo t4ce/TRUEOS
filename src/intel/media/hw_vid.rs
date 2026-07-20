@@ -8,6 +8,8 @@ use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
+const H264_TRUEOSFS_VIDEO_MAX_BYTES: usize = 160 * 1024 * 1024;
+const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const UI4_FRAMED_VIDEO_ASSET: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_ANNEXB: &[u8] =
     include_bytes!("../../../tools/vid/x31_head_movie.annexb.h264");
@@ -326,6 +328,127 @@ pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
     if report.submitted == 0 {
         Err("embedded video produced no decodable frames")
+    } else {
+        Ok(report)
+    }
+}
+
+/// Load the validated Annex-B asset from the published TRUEOSFS primary root,
+/// then run it through the same decoder and UI4 path as the embedded source.
+/// This explicit Shell2 source is intentionally independent of global
+/// filesystem readiness so cut 7 can test disc I/O without waking consumers.
+pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
+-> Result<H264PlaybackReport, &'static str> {
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=trueosfs-entry source=trueosfs-root-annexb asset={} next=media-engine-check\n",
+        UI4_FRAMED_VIDEO_ASSET,
+    );
+    if !crate::intel::has_media_decode_engine() {
+        return Err("media decode engine unavailable");
+    }
+    let _playback_guard = h264_try_begin_playback("shell-trueosfs-ui4-framed-video")?;
+
+    let heap_before_load = crate::allocators::host_heap_integrity_bounded();
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=heap-before-trueosfs-load healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
+        heap_before_load.healthy,
+        heap_before_load.reason,
+        heap_before_load.nodes,
+        heap_before_load.current,
+        heap_before_load.next,
+    );
+    if !heap_before_load.healthy {
+        return Err("host heap free list corrupt before TRUEOSFS video load");
+    }
+
+    let disk =
+        crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?;
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=open-start path={} root_readiness={} index_readiness={}\n",
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
+        UI4_FRAMED_VIDEO_ASSET,
+        crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED),
+        crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_INDEX_READY),
+    );
+    let file = crate::r::fs::trueosfs::file_read_open_async(disk, UI4_FRAMED_VIDEO_ASSET)
+        .await
+        .map_err(|_| "TRUEOSFS video stream open failed")?
+        .ok_or("video asset missing from TRUEOSFS root")?;
+    let file_bytes = usize::try_from(file.data_len()).map_err(|_| "TRUEOSFS video too large")?;
+    if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_MAX_BYTES {
+        return Err("TRUEOSFS video size outside playback limit");
+    }
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=open-ok path={} bytes={} data_lba={} next=range-read\n",
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
+        UI4_FRAMED_VIDEO_ASSET,
+        file_bytes,
+        file.data_lba(),
+    );
+
+    let mut annexb = Vec::new();
+    annexb
+        .try_reserve_exact(file_bytes)
+        .map_err(|_| "TRUEOSFS video asset allocation failed")?;
+    annexb.resize(file_bytes, 0);
+    let mut done = 0usize;
+    while done < file_bytes {
+        let end = done
+            .saturating_add(H264_TRUEOSFS_READ_CHUNK_BYTES)
+            .min(file_bytes);
+        let read = crate::r::fs::trueosfs::file_read_handle_range_async(
+            file,
+            done as u64,
+            &mut annexb[done..end],
+        )
+        .await
+        .map_err(|_| "TRUEOSFS video range read failed")?
+        .ok_or("TRUEOSFS video disappeared during range read")?;
+        if read == 0 || read > end - done {
+            return Err("TRUEOSFS video range read was short");
+        }
+        done = done.saturating_add(read);
+    }
+    crate::log_info!(target: "usb";
+        "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-vid-trueosfs status=read-ok path={} bytes={} chunks={} next=annexb-parse\n",
+        crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
+        UI4_FRAMED_VIDEO_ASSET,
+        done,
+        done.div_ceil(H264_TRUEOSFS_READ_CHUNK_BYTES),
+    );
+
+    let heap_after_load = crate::allocators::host_heap_integrity_bounded();
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=heap-after-trueosfs-load healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
+        heap_after_load.healthy,
+        heap_after_load.reason,
+        heap_after_load.nodes,
+        heap_after_load.current,
+        heap_after_load.next,
+    );
+    if !heap_after_load.healthy {
+        return Err("host heap free list corrupt after TRUEOSFS video load");
+    }
+
+    let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
+    let old_hw_pic_logging =
+        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
+    let old_surface_probes =
+        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
+    let old_noreset_lite =
+        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let report = h264_i_p_playback_probe_annexb_bytes(
+        annexb,
+        "trueosfs-root-annexb",
+        UI4_FRAMED_VIDEO_ASSET,
+        options,
+    )
+    .await;
+    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
+    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
+    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    if report.submitted == 0 {
+        Err("TRUEOSFS video produced no decodable frames")
     } else {
         Ok(report)
     }
@@ -1266,14 +1389,16 @@ struct H264IndexedFrame {
 struct H264MemoryNalReader {
     scan_offset: usize,
     emitted_nals: usize,
+    source: &'static str,
     buffer: Vec<u8>,
 }
 
 impl H264MemoryNalReader {
-    fn new(buffer: Vec<u8>) -> Self {
+    fn new(buffer: Vec<u8>, source: &'static str) -> Self {
         Self {
             scan_offset: 0,
             emitted_nals: 0,
+            source,
             buffer,
         }
     }
@@ -1302,27 +1427,38 @@ impl H264MemoryNalReader {
 
             self.scan_offset = end;
             if payload_start < end && payload_start < self.buffer.len() {
-                let first_nal = self.emitted_nals == 0;
-                if first_nal {
+                let nal_ordinal = self.emitted_nals.saturating_add(1);
+                let trace_nal = nal_ordinal <= 8;
+                if trace_nal {
+                    let heap = crate::allocators::host_heap_integrity_bounded();
                     crate::log_info!(target: "ui4";
-                        "shell2/vid: stage=first-nal-span source=kernel-embedded-annexb offset=0x{:X} bytes={} next=first-nal-allocation\n",
+                        "shell2/vid: stage=early-nal-span source={} ordinal={} offset=0x{:X} bytes={} heap_healthy={} heap_reason={} heap_nodes={} next=nal-allocation\n",
+                        self.source,
+                        nal_ordinal,
                         start,
                         end - start,
+                        heap.healthy,
+                        heap.reason,
+                        heap.nodes,
                     );
                 }
                 let mut bytes = Vec::with_capacity(end - start);
-                if first_nal {
+                if trace_nal {
                     crate::log_info!(target: "ui4";
-                        "shell2/vid: stage=first-nal-reserved source=kernel-embedded-annexb capacity={} next=first-nal-copy\n",
+                        "shell2/vid: stage=early-nal-reserved source={} ordinal={} capacity={} next=nal-copy\n",
+                        self.source,
+                        nal_ordinal,
                         bytes.capacity(),
                     );
                 }
                 bytes.extend_from_slice(&self.buffer[start..end]);
                 let nal_type = self.buffer[payload_start] & 0x1f;
                 self.emitted_nals = self.emitted_nals.saturating_add(1);
-                if first_nal {
+                if trace_nal {
                     crate::log_info!(target: "ui4";
-                        "shell2/vid: stage=first-nal-copied source=kernel-embedded-annexb bytes={} nal_type={} next=parse-remaining-nals\n",
+                        "shell2/vid: stage=early-nal-copied source={} ordinal={} bytes={} nal_type={} next=parse-nal\n",
+                        self.source,
+                        nal_ordinal,
                         bytes.len(),
                         nal_type,
                     );
@@ -1396,7 +1532,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
     mode: H264PlaybackOptions,
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
-    let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes));
+    let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes, source));
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=annexb-reader-ready source={} bytes={} next=parse-state-init\n",
         source,

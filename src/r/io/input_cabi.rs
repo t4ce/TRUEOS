@@ -76,6 +76,44 @@ pub fn host_input_cursor_events_since(
     (wrote, HEADER_LEN + wrote.saturating_mul(event_size))
 }
 
+pub fn host_input_pop_keyboard_output(payload: &mut [u8]) -> (i32, usize) {
+    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    if payload.len() < event_size {
+        return (-1, 0);
+    }
+    let Some(event) = crate::r::keyboard::pop_output_event() else {
+        return (1, 0);
+    };
+    let bytes = unsafe { core::slice::from_raw_parts(&event as *const _ as *const u8, event_size) };
+    payload[..event_size].copy_from_slice(bytes);
+    (0, event_size)
+}
+
+pub fn host_input_keyboard_output_since(
+    read_seq: u64,
+    out_cap: u32,
+    payload: &mut [u8],
+) -> (usize, usize) {
+    const HEADER_LEN: usize = 12;
+    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    if payload.len() < HEADER_LEN || event_size == 0 {
+        return (0, 0);
+    }
+    let max_events = (payload.len() - HEADER_LEN) / event_size;
+    let cap = core::cmp::min(out_cap as usize, max_events);
+    let mut events = alloc::vec![crate::r::keyboard::TrueosKeyboardOutputEvent::default(); cap];
+    let (next_seq, dropped, wrote) =
+        crate::r::keyboard::read_output_events_since(read_seq, events.as_mut_slice());
+    payload[0..8].copy_from_slice(&next_seq.to_le_bytes());
+    payload[8..12].copy_from_slice(&dropped.to_le_bytes());
+    let bytes_len = wrote.saturating_mul(event_size);
+    if bytes_len != 0 {
+        let bytes = unsafe { core::slice::from_raw_parts(events.as_ptr() as *const u8, bytes_len) };
+        payload[HEADER_LEN..HEADER_LEN + bytes_len].copy_from_slice(bytes);
+    }
+    (wrote, HEADER_LEN + bytes_len)
+}
+
 fn guest_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
     if out_buttons_down.is_null() || cursor_id == 0 {
         return -1;
@@ -157,6 +195,79 @@ fn guest_input_read_cursor_events_since(
     got as u32
 }
 
+fn guest_input_pop_keyboard_output(out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let mut payload = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_INPUT_KEYBOARD_OUTPUT_POP,
+        0,
+        0,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -1;
+    }
+    let rc = data as i64 as i32;
+    if rc != 0 {
+        return rc;
+    }
+    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    unsafe {
+        core::ptr::copy_nonoverlapping(payload.as_ptr(), out as *mut u8, event_size);
+    }
+    0
+}
+
+fn guest_input_read_keyboard_output_since(
+    read_seq: u64,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+    out_cap: u32,
+    out_next_seq: *mut u64,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out_next_seq.is_null() || out_dropped.is_null() {
+        return 0;
+    }
+    let mut payload = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, wrote) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE,
+        read_seq,
+        out_cap as u64,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK || payload.len() < 12 {
+        return 0;
+    }
+    let next_seq = u64::from_le_bytes([
+        payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6],
+        payload[7],
+    ]);
+    let dropped = u32::from_le_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    unsafe {
+        *out_next_seq = next_seq;
+        *out_dropped = dropped;
+    }
+
+    let event_size = core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>();
+    let got = core::cmp::min(wrote as usize, out_cap as usize);
+    let bytes_len = got.saturating_mul(event_size);
+    if got == 0 || out.is_null() || payload.len() < 12 + bytes_len {
+        return got as u32;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            payload[12..12 + bytes_len].as_ptr(),
+            out as *mut u8,
+            bytes_len,
+        );
+    }
+    got as u32
+}
+
 unsafe fn input_pop_cursor_event(out: *mut crate::usb2::hid::TrueosHidCursorEvent) -> i32 {
     if out.is_null() {
         return -1;
@@ -196,6 +307,54 @@ unsafe fn input_read_cursor_events_since(
     let out_slice = unsafe { core::slice::from_raw_parts_mut(out, cap) };
     let (next_seq, dropped, wrote) =
         crate::usb2::hid::read_cursor_events_since(read_seq, out_slice);
+    unsafe {
+        *out_next_seq = next_seq;
+        *out_dropped = dropped;
+    }
+    wrote as u32
+}
+
+unsafe fn input_pop_keyboard_output(
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    let Some(event) = crate::r::keyboard::pop_output_event() else {
+        return 1;
+    };
+    unsafe {
+        *out = event;
+    }
+    0
+}
+
+unsafe fn input_read_keyboard_output_since(
+    read_seq: u64,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+    out_cap: u32,
+    out_next_seq: *mut u64,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out_next_seq.is_null() || out_dropped.is_null() {
+        return 0;
+    }
+
+    let cap = out_cap as usize;
+    if cap == 0 || out.is_null() {
+        let mut none: [crate::r::keyboard::TrueosKeyboardOutputEvent; 0] = [];
+        let (next_seq, dropped, _wrote) =
+            crate::r::keyboard::read_output_events_since(read_seq, &mut none);
+        unsafe {
+            *out_next_seq = next_seq;
+            *out_dropped = dropped;
+        }
+        return 0;
+    }
+
+    let out_slice = unsafe { core::slice::from_raw_parts_mut(out, cap) };
+    let (next_seq, dropped, wrote) =
+        crate::r::keyboard::read_output_events_since(read_seq, out_slice);
     unsafe {
         *out_next_seq = next_seq;
         *out_dropped = dropped;
@@ -277,6 +436,36 @@ pub unsafe extern "C" fn trueos_cabi_input_cursor_pos(
         *out_y = libm::round(ny * h1) as i32;
     }
     0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_input_pop_keyboard_output(
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_pop_keyboard_output(out);
+    }
+    unsafe { input_pop_keyboard_output(out) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_input_read_keyboard_output_since(
+    read_seq: u64,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+    out_cap: u32,
+    out_next_seq: *mut u64,
+    out_dropped: *mut u32,
+) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_read_keyboard_output_since(
+            read_seq,
+            out,
+            out_cap,
+            out_next_seq,
+            out_dropped,
+        );
+    }
+    unsafe { input_read_keyboard_output_since(read_seq, out, out_cap, out_next_seq, out_dropped) }
 }
 
 #[unsafe(no_mangle)]

@@ -77,6 +77,8 @@ pub const OP_BP_QJS_WORKBENCH_EVAL_V1: u32 = 0xC8; // arg0 eval mode,payload sou
 pub const OP_BP_QJS_WORKBENCH_POLL_V1: u32 = 0xC9; // pump VM -> pending print output
 pub const OP_BP_QJS_WORKBENCH_CLOSE_V1: u32 = 0xCA; // discard calling VM's QuickJS runtime
 pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell input payload
+pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
+pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1149,6 +1151,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let (wrote, response_len) =
                 crate::r::io::cabi::host_input_cursor_events_since(arg0, arg1 as u32, unsafe {
+                    &mut (*p).payload
+                });
+            write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_KEYBOARD_OUTPUT_POP => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (rc, response_len) =
+                crate::r::io::cabi::host_input_pop_keyboard_output(unsafe { &mut (*p).payload });
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (wrote, response_len) =
+                crate::r::io::cabi::host_input_keyboard_output_since(arg0, arg1 as u32, unsafe {
                     &mut (*p).payload
                 });
             write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);

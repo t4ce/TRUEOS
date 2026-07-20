@@ -46,6 +46,7 @@ const MIB: usize = 1024 * 1024;
 const HV_LOG_LINE: usize = crate::allcaps::hv::LOG_LINE_BYTES;
 pub const TRUEOS_VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const TRUEOS_VM_CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+const VMX_PREEMPTION_QUANTUM_MS: u64 = 16;
 
 struct TrueosVmId {
     running: AtomicBool,
@@ -89,6 +90,9 @@ static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+static VMXON_PA_BY_CPU: [AtomicU64; TRUEOS_VM_CPU_SLOT_LIMIT] =
+    [const { AtomicU64::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
+static VMX_CORE_CONTRACT_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
 static HV_CONTROL_NUDGE_SEQ: AtomicU64 = AtomicU64::new(1);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
@@ -188,6 +192,50 @@ fn prepare_vmx_control_registers() -> Result<u32, &'static str> {
     Ok((basic & 0x7fff_ffff) as u32)
 }
 
+fn maybe_log_vmx_core_contract_summary(revision: u32) {
+    const FIRST_VMX_SLOT: usize = 2;
+
+    let topology_slots = crate::percpu::total_slots().min(TRUEOS_VM_CPU_SLOT_LIMIT);
+    if topology_slots <= FIRST_VMX_SLOT {
+        return;
+    }
+
+    let expected = topology_slots - FIRST_VMX_SLOT;
+    let active = VMX_ROOT_ACTIVE_BY_CPU[FIRST_VMX_SLOT..topology_slots]
+        .iter()
+        .filter(|state| state.load(Ordering::Acquire))
+        .count();
+    if active != expected {
+        return;
+    }
+
+    let mut min_pa = u64::MAX;
+    let mut max_pa = 0;
+    for pa in &VMXON_PA_BY_CPU[FIRST_VMX_SLOT..topology_slots] {
+        let pa = pa.load(Ordering::Acquire);
+        min_pa = min_pa.min(pa);
+        max_pa = max_pa.max(pa);
+    }
+
+    if VMX_CORE_CONTRACT_SUMMARY_LOGGED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    hvlogf(format_args!(
+        "hv: vmx core-contract summary slots={}..{} active={}/{} revision=0x{:08X} vmxon_pa_span=0x{:016X}-0x{:016X}",
+        FIRST_VMX_SLOT,
+        topology_slots - 1,
+        active,
+        expected,
+        revision,
+        min_pa,
+        max_pa
+    ));
+}
+
 pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
     let slot = current_vmx_slot()?;
     if slot <= 1 {
@@ -212,14 +260,12 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
         return Err("vmxon");
     }
 
+    VMXON_PA_BY_CPU[slot].store(vmxon_pa, Ordering::Release);
     VMX_ROOT_ACTIVE_BY_CPU[slot].store(true, Ordering::Release);
     if slot >= 2 {
         crate::r::readiness::set(crate::r::readiness::VTHREAD_HW_TAG_READY);
     }
-    hvlogf(format_args!(
-        "hv: vmx core-contract active slot={} revision=0x{:08X} vmxon_pa=0x{:016X}",
-        slot, revision, vmxon_pa
-    ));
+    maybe_log_vmx_core_contract_summary(revision);
     Ok(())
 }
 
@@ -2742,9 +2788,16 @@ async fn vmx_launch_once_with_ept(
     if !crate::hv::vmcall::prepare_for_vm(vm_id, reset_vmcall_transport) {
         return Err("vmcall comm page");
     }
-    if let Err(e) = setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id)) {
-        return Err(e);
-    }
+    let preemption_timer_enabled =
+        setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id))?;
+    let preemption_timer_ticks = preemption_timer_enabled.then(|| {
+        let (ticks, rate_shift) = vmx_preemption_timer_ticks(VMX_PREEMPTION_QUANTUM_MS);
+        hvlogf(format_args!(
+            "hv: vm{} reporting: vmx preemption timer quantum_ms={} rate_shift={} ticks={}",
+            vm_id, VMX_PREEMPTION_QUANTUM_MS, rate_shift, ticks
+        ));
+        ticks
+    });
     crate::log!("app-vm-run-queue: vmcs ready vm={} entry=0x{:016X}\n", vm_id, guest_launch_rip());
 
     // ── vmexit dispatch loop ──────────────────────────────────────────────────
@@ -2766,6 +2819,10 @@ async fn vmx_launch_once_with_ept(
                 vm_id
             ));
             break;
+        }
+
+        if let Some(ticks) = preemption_timer_ticks {
+            vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
         }
 
         if first {
@@ -2987,6 +3044,11 @@ async fn vmx_launch_once_with_ept(
                 clear_current_vm_id();
                 Timer::after(EmbassyDuration::from_millis(1)).await;
                 set_current_vm_id(vm_id);
+            }
+            VMEXIT_REASON_VMX_PREEMPTION_TIMER => {
+                // Do not advance RIP. The timer exists to return control to
+                // this loop so host stop/preserve requests are observed even
+                // when guest code misses its cooperative yield point.
             }
             0xA => {
                 let mut regs = crate::hv::vmx::guest_registers();
@@ -3213,7 +3275,7 @@ fn setup_vmcs_for_launch(
     eptp: u64,
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
-) -> Result<(), &'static str> {
+) -> Result<bool, &'static str> {
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let true_ctls = ((basic >> 55) & 1) != 0;
     let pin_msr = if true_ctls {
@@ -3237,13 +3299,12 @@ fn setup_vmcs_for_launch(
         0x484
     };
 
-    let pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, 0);
+    let pin = crate::hv::vmx::adjust_vmx_ctrl(pin_msr, PIN_BASED_VMX_PREEMPTION_TIMER);
     let proc = crate::hv::vmx::adjust_vmx_ctrl(
         proc_msr,
         PROC_BASED_HLT_EXITING
             | PROC_BASED_PAUSE_EXITING
             | PROC_BASED_ACTIVATE_SECONDARY
-            | PROC_BASED_VMX_PREEMPTION_TIMER
             | PROC_BASED_USE_TSC_OFFSETTING,
     );
     let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
@@ -3274,6 +3335,14 @@ fn setup_vmcs_for_launch(
     if (proc & PROC_BASED_PAUSE_EXITING) == 0 {
         hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit PAUSE_EXITING not available",
+            current_vm_id_for_log(),
+            lineage_record.level
+        ));
+    }
+    let preemption_timer_enabled = (pin & PIN_BASED_VMX_PREEMPTION_TIMER) != 0;
+    if !preemption_timer_enabled {
+        hvwarnf(format_args!(
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: pin bit VMX_PREEMPTION_TIMER not available; lifecycle stop remains cooperative",
             current_vm_id_for_log(),
             lineage_record.level
         ));
@@ -3539,7 +3608,7 @@ fn setup_vmcs_for_launch(
             vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
             vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
 
-            return Ok(());
+            return Ok(preemption_timer_enabled);
         }
     }
     if tr_sel == 0 {
@@ -3732,5 +3801,19 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
     vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
 
-    Ok(())
+    Ok(preemption_timer_enabled)
+}
+
+fn vmx_preemption_timer_ticks(quantum_ms: u64) -> (u32, u8) {
+    let misc = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_MISC).read() };
+    let rate_shift = (misc & 0x1F) as u8;
+    let divisor = 1u128 << rate_shift;
+    let tsc_ticks = (crate::time::tsc_hz() as u128)
+        .saturating_mul(quantum_ms as u128)
+        .saturating_add(999)
+        / 1_000;
+    let timer_ticks = tsc_ticks.saturating_add(divisor - 1) / divisor;
+    // Some Intel parts document an erratum for a programmed value of one.
+    let timer_ticks = timer_ticks.clamp(2, u32::MAX as u128) as u32;
+    (timer_ticks, rate_shift)
 }

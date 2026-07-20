@@ -81,7 +81,16 @@ pub async fn net_shell_task() {
             return;
         }
 
-        crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+        // Deliberate BSP recovery privilege: net-shell must be reachable before the
+        // ordinary network readiness gates open. `NetService::new` installs a
+        // per-NIC static IPv4 fallback before starting DHCP, so a TCP listener can
+        // be opened as soon as the service core and a physical link are available.
+        // Keep this exception local to the recovery shell; other network consumers
+        // continue to wait for NET_*_CONFIGURED in the service registry.
+        crate::log!(
+            "net-shell: early-network privilege active; bypassing NET_ANY_CONFIGURED ms={}\n",
+            Instant::now().as_millis()
+        );
 
         // Route the shell over a NIC that is actually usable.
         // Historically this was pinned to dev0, but on real hardware dev0 is often the
@@ -372,6 +381,16 @@ pub async fn net_shell_task() {
                         // These are useful during bring-up; keep them visible but not too spammy.
                         if ticks.is_multiple_of(100) {
                             crate::log!("net-shell: error {}\n", msg);
+                        }
+
+                        // The privileged task can run before a NIC reports link-up. An
+                        // early OpenTcpListen then fails with `link down`; retry it instead
+                        // of waiting for an IP-readiness transition that this task is
+                        // intentionally allowed to bypass.
+                        if tcp_handle.is_none() {
+                            let _ = cmds.push(NetCommand::OpenTcpListen {
+                                port: NET_SHELL_TCP_PORT,
+                            });
                         }
                     }
                     NetEvent::UdpPacket { .. } => {}

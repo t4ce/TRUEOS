@@ -17,6 +17,7 @@ struct VidCommand {
 #[derive(Copy, Clone)]
 enum VidSource {
     Embedded,
+    TrueosFs,
     Online,
 }
 
@@ -24,6 +25,7 @@ impl VidSource {
     const fn name(self) -> &'static str {
         match self {
             Self::Embedded => "kernel-embedded",
+            Self::TrueosFs => "trueosfs",
             Self::Online => "online-mp4",
         }
     }
@@ -31,6 +33,7 @@ impl VidSource {
     const fn asset(self) -> &'static str {
         match self {
             Self::Embedded => crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
+            Self::TrueosFs => crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
             Self::Online => "fixed-online-avc1-mp4",
         }
     }
@@ -38,6 +41,7 @@ impl VidSource {
     const fn next_stage(self) -> &'static str {
         match self {
             Self::Embedded => "embedded-annexb-decode",
+            Self::TrueosFs => "trueosfs-annexb-load-decode",
             Self::Online => "fixed-mp4-download-demux-decode",
         }
     }
@@ -84,6 +88,14 @@ pub(crate) fn try_parse(
         } else if arg.eq_ignore_ascii_case("embedded") && !saw_source {
             source = VidSource::Embedded;
             saw_source = true;
+        } else if (arg.eq_ignore_ascii_case("fs")
+            || arg.eq_ignore_ascii_case("trueosfs")
+            || arg.eq_ignore_ascii_case("disc")
+            || arg.eq_ignore_ascii_case("local"))
+            && !saw_source
+        {
+            source = VidSource::TrueosFs;
+            saw_source = true;
         } else if arg.eq_ignore_ascii_case("loop") && !saw_loop {
             loop_playback = true;
             saw_loop = true;
@@ -122,7 +134,7 @@ pub(crate) fn try_parse(
 }
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vid: usage `vid [embedded|online] [loop]`");
+    print_shell_line(io, "vid: usage `vid [embedded|fs|online] [loop]`");
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -158,6 +170,9 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
         let result = match command.source {
             VidSource::Embedded => {
                 crate::intel::media::hw_vid::run_ui4_framed_video_playback().await
+            }
+            VidSource::TrueosFs => {
+                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback().await
             }
             VidSource::Online => {
                 crate::intel::media::hw_vid::run_online_ui4_framed_video_playback().await

@@ -10,6 +10,7 @@ pub const IA32_VMX_TRUE_PROCBASED_CTLS: u32 = 0x48E;
 pub const IA32_VMX_TRUE_EXIT_CTLS: u32 = 0x48F;
 pub const IA32_VMX_TRUE_ENTRY_CTLS: u32 = 0x490;
 pub const IA32_VMX_PROCBASED_CTLS2: u32 = 0x48B;
+pub const IA32_VMX_MISC: u32 = 0x485;
 pub const IA32_VMX_CR0_FIXED0: u32 = 0x486;
 pub const IA32_VMX_CR0_FIXED1: u32 = 0x487;
 pub const IA32_VMX_CR4_FIXED0: u32 = 0x488;
@@ -134,7 +135,7 @@ pub const VMCS_VM_INSTRUCTION_ERROR: u64 = 0x4400;
 pub const VMCS_VMEXIT_GUEST_RIP: u64 = 0x681E;
 
 pub const PROC_BASED_HLT_EXITING: u64 = 1 << 7;
-pub const PROC_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
+pub const PIN_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
 pub const PROC_BASED_PAUSE_EXITING: u64 = 1 << 30;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 pub const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
@@ -148,6 +149,7 @@ pub const RFLAGS_IF: u64 = 1 << 9;
 pub const EXCEPTION_BITMAP_ALL: u64 = 0xFFFF_FFFF;
 pub const VMEXIT_REASON_VMCALL: u64 = 0x12;
 pub const VMEXIT_REASON_PAUSE: u64 = 0x28;
+pub const VMEXIT_REASON_VMX_PREEMPTION_TIMER: u64 = 0x34;
 
 pub const HV_GDT_SEL_CODE: u16 = 0x08;
 pub const HV_GDT_SEL_DATA: u16 = 0x10;
