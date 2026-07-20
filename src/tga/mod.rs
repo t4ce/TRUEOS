@@ -17,20 +17,17 @@ const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 //   - bit0..bit5: usr_led0..usr_led5
 //   - other bits ignored
 // - BAR0 + 0x20 is a 32-bit read-only liveness magic ("TGAT")
-// - BAR0 + 0x28..0x34 publishes one fixed DMA work package
-// - BAR0 + 0x38 is a doorbell; the function and arguments live in the package
+// - BAR0 + 0x80 is the function-call doorbell
+// - BAR0 + 0x100..0x1FF is one fixed, inline work package
 //
 // The LED/magic plane stays independent of function execution so it remains useful when
-// function firmware wedges.  There is no FPGA-side command processor or virtual memory.
-const TGA_LED_SET_OFF: usize = 0x00;
-const TGA_MAGIC_OFF: usize = 0x20;
-const TGA_OFFLOAD_ABI_VERSION_OFF: usize = 0x24;
-const TGA_OFFLOAD_WORK_ADDR_LO_OFF: usize = 0x28;
-const TGA_OFFLOAD_WORK_ADDR_HI_OFF: usize = 0x2C;
-const TGA_OFFLOAD_WORK_BYTES_OFF: usize = 0x30;
-const TGA_OFFLOAD_FLAGS_OFF: usize = 0x34;
-const TGA_OFFLOAD_DOORBELL_OFF: usize = 0x38;
-const TGA_OFFLOAD_IRQ_ACK_OFF: usize = 0x3C;
+// function firmware wedges.  There is no FPGA-side command processor, DMA requester, or
+// virtual memory.
+const TGA_LED_SET_OFF: usize = trueos_fpga_abi::BAR0_LED_OFFSET;
+const TGA_MAGIC_OFF: usize = trueos_fpga_abi::BAR0_LIVENESS_MAGIC_OFFSET;
+const TGA_OFFLOAD_DOORBELL_OFF: usize = trueos_fpga_abi::BAR0_CALL_DOORBELL_OFFSET;
+const TGA_OFFLOAD_IRQ_ACK_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_ACK_OFFSET;
+const TGA_OFFLOAD_WORK_PACKAGE_OFF: usize = trueos_fpga_abi::BAR0_WORK_PACKAGE_OFFSET;
 
 const TGA_OFFLOAD_DOORBELL_MAGIC: u32 = 0x4C4C_4143; // "CALL"
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
@@ -48,11 +45,7 @@ struct Tga {
     mmio_base: usize,
     led_reg: usize,
     magic_reg: usize,
-    offload_abi_version_reg: usize,
-    offload_work_addr_lo_reg: usize,
-    offload_work_addr_hi_reg: usize,
-    offload_work_bytes_reg: usize,
-    offload_flags_reg: usize,
+    offload_work_package_reg: usize,
     offload_doorbell_reg: usize,
     offload_irq_ack_reg: usize,
 }
@@ -249,7 +242,11 @@ fn log_liveness_once() {
     let magic = tga.protocol_magic();
     crate::log!(
         "tga: heartbeat reply={} magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}\n",
-        if magic == TGA_MAGIC_EXPECTED { "yep-alive" } else { "bad-magic" },
+        if magic == TGA_MAGIC_EXPECTED {
+            "yep-alive"
+        } else {
+            "bad-magic"
+        },
         magic,
         TGA_MAGIC_EXPECTED,
         tga.bus,
@@ -354,15 +351,15 @@ pub fn tga_led_set(on: bool) {
     tga_led_write(if on { 1 } else { 0 });
 }
 
-/// Publish the one DMA-resident call package understood by the TGA firmware.
-///
-/// This is transport setup, not a command submission protocol.  The function slot,
-/// arguments, completion flag, and result all live in the fixed work package.
-pub(crate) fn bind_offload_work_package(
-    phys: u64,
-    bytes: usize,
+/// Copy one complete call into the fixed BAR window and hand it to the FPGA.
+pub(crate) fn submit_offload_work_package(
+    package: &trueos_fpga_abi::WorkPackage,
 ) -> Result<(), OffloadTransportError> {
-    if phys == 0 || bytes != core::mem::size_of::<trueos_fpga_abi::WorkPackage>() {
+    if package.magic != trueos_fpga_abi::WORK_PACKAGE_MAGIC
+        || package.abi_version != trueos_fpga_abi::ABI_VERSION
+        || trueos_fpga_abi::FunctionId::new(package.function).is_none()
+        || package.state != trueos_fpga_abi::WorkState::HostReady as u32
+    {
         return Err(OffloadTransportError::InvalidPackage);
     }
 
@@ -370,24 +367,50 @@ pub(crate) fn bind_offload_work_package(
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
     };
-    Tga::write_reg(tga.offload_abi_version_reg, trueos_fpga_abi::ABI_VERSION as u32);
-    Tga::write_reg(tga.offload_work_addr_lo_reg, phys as u32);
-    Tga::write_reg(tga.offload_work_addr_hi_reg, (phys >> 32) as u32);
-    Tga::write_reg(tga.offload_work_bytes_reg, bytes as u32);
-    Tga::write_reg(tga.offload_flags_reg, 0);
+    let source = package as *const trueos_fpga_abi::WorkPackage as *const u32;
+    let word_count = core::mem::size_of::<trueos_fpga_abi::WorkPackage>() / 4;
+    for index in 0..word_count {
+        let value = unsafe { source.add(index).read() };
+        Tga::write_reg(tga.offload_work_package_reg + index * 4, value);
+    }
     fence(Ordering::Release);
+    let observed_state =
+        Tga::read_reg(tga.offload_work_package_reg + trueos_fpga_abi::WORK_PACKAGE_STATE_OFFSET);
+    if observed_state != trueos_fpga_abi::WorkState::HostReady as u32 {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    Tga::write_reg(tga.offload_doorbell_reg, TGA_OFFLOAD_DOORBELL_MAGIC);
     Ok(())
 }
 
-/// Hand ownership of the already-published work package to the FPGA.
-pub(crate) fn ring_offload_doorbell() -> Result<(), OffloadTransportError> {
+/// Read only the ownership/completion flag from the call window.
+pub(crate) fn offload_work_state() -> Result<trueos_fpga_abi::WorkState, OffloadTransportError> {
     let guard = TGA.lock();
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
     };
-    fence(Ordering::Release);
-    Tga::write_reg(tga.offload_doorbell_reg, TGA_OFFLOAD_DOORBELL_MAGIC);
-    Ok(())
+    fence(Ordering::Acquire);
+    let raw =
+        Tga::read_reg(tga.offload_work_package_reg + trueos_fpga_abi::WORK_PACKAGE_STATE_OFFSET);
+    trueos_fpga_abi::WorkState::from_raw(raw).ok_or(OffloadTransportError::InvalidPackage)
+}
+
+/// Copy the completed package back after the FPGA has published a terminal state.
+pub(crate) fn read_offload_work_package()
+-> Result<trueos_fpga_abi::WorkPackage, OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    let mut package = trueos_fpga_abi::WorkPackage::ZEROED;
+    let destination = &mut package as *mut trueos_fpga_abi::WorkPackage as *mut u32;
+    let word_count = core::mem::size_of::<trueos_fpga_abi::WorkPackage>() / 4;
+    fence(Ordering::Acquire);
+    for index in 0..word_count {
+        let value = Tga::read_reg(tga.offload_work_package_reg + index * 4);
+        unsafe { destination.add(index).write(value) };
+    }
+    Ok(package)
 }
 
 /// Acknowledge a completion interrupt after the service has consumed the result.
@@ -619,11 +642,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let base = mapped.as_ptr() as usize;
     let led_reg = base + TGA_LED_SET_OFF;
     let magic_reg = base + TGA_MAGIC_OFF;
-    let offload_abi_version_reg = base + TGA_OFFLOAD_ABI_VERSION_OFF;
-    let offload_work_addr_lo_reg = base + TGA_OFFLOAD_WORK_ADDR_LO_OFF;
-    let offload_work_addr_hi_reg = base + TGA_OFFLOAD_WORK_ADDR_HI_OFF;
-    let offload_work_bytes_reg = base + TGA_OFFLOAD_WORK_BYTES_OFF;
-    let offload_flags_reg = base + TGA_OFFLOAD_FLAGS_OFF;
+    let offload_work_package_reg = base + TGA_OFFLOAD_WORK_PACKAGE_OFF;
     let offload_doorbell_reg = base + TGA_OFFLOAD_DOORBELL_OFF;
     let offload_irq_ack_reg = base + TGA_OFFLOAD_IRQ_ACK_OFF;
 
@@ -653,11 +672,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         mmio_base: base,
         led_reg,
         magic_reg,
-        offload_abi_version_reg,
-        offload_work_addr_lo_reg,
-        offload_work_addr_hi_reg,
-        offload_work_bytes_reg,
-        offload_flags_reg,
+        offload_work_package_reg,
         offload_doorbell_reg,
         offload_irq_ack_reg,
     };

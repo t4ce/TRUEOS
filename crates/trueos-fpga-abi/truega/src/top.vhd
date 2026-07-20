@@ -24,14 +24,6 @@ entity top is
 end entity;
 
 architecture rtl of top is
-	component addition is
-		port (
-			a      : in  std_logic_vector(31 downto 0);
-			b      : in  std_logic_vector(31 downto 0);
-			result : out std_logic_vector(31 downto 0)
-		);
-	end component;
-
 	component SerDes_Top is
 		port (
 			PCIE_Controller_Top_pcie_tl_rx_sop_o        : out std_logic;
@@ -80,19 +72,13 @@ architecture rtl of top is
 	end component;
 
 	type word_arr_t is array (0 to 15) of std_logic_vector(31 downto 0);
+	type call_word_arr_t is array (0 to 63) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
 	constant PKT_MAX_WORDS : integer := 16;
 	constant BAR0_LED_DW : std_logic_vector(9 downto 0) := "0000000000";
 	constant BAR0_RESET_DW : std_logic_vector(9 downto 0) := "0000000100";
 	constant BAR0_STATUS_DW : std_logic_vector(9 downto 0) := "0000000101";
 	constant BAR0_MAGIC_DW : std_logic_vector(9 downto 0) := "0000001000";
-	constant BAR0_ADD_STATUS_DW : std_logic_vector(9 downto 0) := "0000001001";
-	constant BAR0_ADD_CMD_DW : std_logic_vector(9 downto 0) := "0000001010";
-	constant BAR0_ADD_ARG0_DW : std_logic_vector(9 downto 0) := "0000001011";
-	constant BAR0_ADD_ARG1_DW : std_logic_vector(9 downto 0) := "0000001100";
-	constant BAR0_ADD_RESULT_DW : std_logic_vector(9 downto 0) := "0000001101";
-	constant BAR0_ADD_RETIRE_DW : std_logic_vector(9 downto 0) := "0000001110";
-	constant BAR0_ADD_ERROR_DW : std_logic_vector(9 downto 0) := "0000001111";
 	constant BAR0_DBG_SEEN_DW : std_logic_vector(9 downto 0) := "0000010000";
 	constant BAR0_DBG_LAST_ADDR_DW : std_logic_vector(9 downto 0) := "0000010001";
 	constant BAR0_DBG_LAST_READ_DATA_DW : std_logic_vector(9 downto 0) := "0000010010";
@@ -101,8 +87,31 @@ architecture rtl of top is
 	constant BAR0_DBG_LAST_CPLD1_DW : std_logic_vector(9 downto 0) := "0000010101";
 	constant BAR0_DBG_LAST_CPLD2_DW : std_logic_vector(9 downto 0) := "0000010110";
 	constant BAR0_DBG_LAST_CPLD_DATA_DW : std_logic_vector(9 downto 0) := "0000010111";
+	constant BAR0_CALL_DOORBELL_DW : integer := 16#080# / 4;
+	constant BAR0_CALL_IRQ_ACK_DW : integer := 16#084# / 4;
+	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
+	constant CALL_WORD_COUNT : integer := 64;
+	constant CALL_MAGIC_WORD : integer := 0;
+	constant CALL_ABI_FUNCTION_WORD : integer := 1;
+	constant CALL_STATE_WORD : integer := 4;
+	constant CALL_INPUT_LEN_WORD : integer := 6;
+	constant CALL_OUTPUT_CAP_WORD : integer := 7;
+	constant CALL_OUTPUT_LEN_WORD : integer := 8;
+	constant CALL_ERROR_WORD : integer := 9;
+	constant CALL_INPUT_WORD : integer := 16;
+	constant CALL_OUTPUT_WORD : integer := 40;
 	constant PROTOCOL_MAGIC : std_logic_vector(31 downto 0) := x"54534154";
-	constant ADD_CMD_U32 : std_logic_vector(31 downto 0) := x"00000001";
+	constant WORK_PACKAGE_MAGIC : std_logic_vector(31 downto 0) := x"4B505754";
+	constant WORK_ABI_VERSION : std_logic_vector(15 downto 0) := x"0001";
+	constant WORK_STATE_IDLE : std_logic_vector(31 downto 0) := x"00000000";
+	constant WORK_STATE_HOST_READY : std_logic_vector(31 downto 0) := x"00000001";
+	constant WORK_STATE_FPGA_BUSY : std_logic_vector(31 downto 0) := x"00000002";
+	constant WORK_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000003";
+	constant WORK_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000004";
+	constant CALL_DOORBELL_MAGIC : std_logic_vector(31 downto 0) := x"4C4C4143";
+	constant CALL_ERROR_BAD_PACKAGE : std_logic_vector(31 downto 0) := x"BAD00001";
+	constant CALL_ERROR_BAD_LENGTH : std_logic_vector(31 downto 0) := x"BAD00002";
+	constant CALL_ERROR_BAD_FUNCTION : std_logic_vector(31 downto 0) := x"BAD00003";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
 	constant TX_CPLD_REVERSE_DWORDS : boolean := false;
@@ -124,13 +133,9 @@ architecture rtl of top is
 
 	signal led_reg : std_logic_vector(4 downto 0) := (others => '0');
 	signal debug_led_mode : std_logic := '0';
-	signal add_done : std_logic := '0';
-	signal add_arg0 : std_logic_vector(31 downto 0) := (others => '0');
-	signal add_arg1 : std_logic_vector(31 downto 0) := (others => '0');
-	signal add_sum : std_logic_vector(31 downto 0) := (others => '0');
-	signal add_result : std_logic_vector(31 downto 0) := (others => '0');
-	signal add_retire_count : std_logic_vector(31 downto 0) := (others => '0');
-	signal add_error : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_words : call_word_arr_t := (others => (others => '0'));
+	signal call_pending : std_logic := '0';
+	signal call_retire_count : unsigned(31 downto 0) := (others => '0');
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal tx_pending_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -224,13 +229,6 @@ architecture rtl of top is
 		return x(7 downto 0);
 	end function;
 
-	function make_status_word(done : std_logic) return std_logic_vector is
-		variable status_word : std_logic_vector(31 downto 0) := (others => '0');
-	begin
-		status_word(1) := done;
-		return status_word;
-	end function;
-
 	function make_seen_word(
 		rx_bar0_eop : std_logic;
 		hit_write : std_logic;
@@ -255,13 +253,6 @@ architecture rtl of top is
 	end function;
 
 begin
-	u_addition: addition
-		port map (
-			a      => add_arg0,
-			b      => add_arg1,
-			result => add_sum
-		);
-
 	u_serdes: SerDes_Top
 		port map(
 			PCIE_Controller_Top_pcie_tl_rx_sop_o        => tl_rx_sop,
@@ -328,6 +319,7 @@ begin
 		variable req_id : std_logic_vector(15 downto 0);
 		variable req_tag : std_logic_vector(7 downto 0);
 		variable read_data_dw : std_logic_vector(31 downto 0);
+		variable addr_index : integer range 0 to 1023;
 
 		procedure clear_words(variable words : inout word_arr_t) is
 		begin
@@ -474,12 +466,12 @@ begin
 			if pcie_perst_n = '0' then
 				led_reg <= (others => '0');
 				debug_led_mode <= '0';
-				add_done <= '0';
-				add_arg0 <= (others => '0');
-				add_arg1 <= (others => '0');
-				add_result <= (others => '0');
-				add_retire_count <= (others => '0');
-				add_error <= (others => '0');
+				call_words <= (others => (others => '0'));
+				call_words(CALL_MAGIC_WORD) <= WORK_PACKAGE_MAGIC;
+				call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) <= WORK_ABI_VERSION;
+				call_words(CALL_STATE_WORD) <= WORK_STATE_IDLE;
+				call_pending <= '0';
+				call_retire_count <= (others => '0');
 				pkt_active <= '0';
 				pkt_bar0 <= '0';
 				pkt_cnt_fwd <= (others => '0');
@@ -498,6 +490,7 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
+
 					dbg_seen_rx_bar0_eop <= '0';
 					dbg_seen_hit_write <= '0';
 					dbg_seen_hit_read <= '0';
@@ -529,6 +522,58 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
+
+					-- A doorbell only selects one of three circuits already present in this
+					-- bitstream. There is no instruction fetch or command interpreter.
+					if call_pending = '1' then
+						call_words(CALL_OUTPUT_LEN_WORD) <= (others => '0');
+						call_words(CALL_ERROR_WORD) <= (others => '0');
+						if (call_words(CALL_MAGIC_WORD) /= WORK_PACKAGE_MAGIC)
+							or (call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) /= WORK_ABI_VERSION) then
+							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_PACKAGE;
+							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+						elsif unsigned(call_words(CALL_OUTPUT_CAP_WORD)) < to_unsigned(4, 32) then
+							call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
+							call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+						else
+							case call_words(CALL_ABI_FUNCTION_WORD)(31 downto 16) is
+							when x"0000" =>
+								-- slot 0: heartbeat() -> "TGAT"
+								call_words(CALL_OUTPUT_WORD) <= PROTOCOL_MAGIC;
+								call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
+								call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
+							when x"0001" =>
+								-- slot 1: add_u32(a, b) -> a + b
+								if unsigned(call_words(CALL_INPUT_LEN_WORD)) < to_unsigned(8, 32) then
+									call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
+									call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+								else
+									call_words(CALL_OUTPUT_WORD) <= std_logic_vector(
+										unsigned(call_words(CALL_INPUT_WORD))
+										+ unsigned(call_words(CALL_INPUT_WORD + 1))
+									);
+									call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
+									call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
+								end if;
+							when x"0002" =>
+								-- slot 2: xor_u32(a, b) -> a xor b
+								if unsigned(call_words(CALL_INPUT_LEN_WORD)) < to_unsigned(8, 32) then
+									call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_LENGTH;
+									call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+								else
+									call_words(CALL_OUTPUT_WORD) <= call_words(CALL_INPUT_WORD)
+										xor call_words(CALL_INPUT_WORD + 1);
+									call_words(CALL_OUTPUT_LEN_WORD) <= x"00000004";
+									call_words(CALL_STATE_WORD) <= WORK_STATE_COMPLETE;
+								end if;
+							when others =>
+								call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_FUNCTION;
+								call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
+							end case;
+						end if;
+						call_pending <= '0';
+						call_retire_count <= call_retire_count + 1;
+					end if;
 
 					if (tx_pending = '1') and (tl_tx_wait = '0') then
 						next_tx_data := tx_pending_data;
@@ -613,71 +658,69 @@ begin
 							dbg_last_payload_dw <= payload_dw;
 							dbg_last_req_id <= req_id;
 							dbg_last_req_tag <= req_tag;
+							addr_index := to_integer(unsigned(addr_dw));
 
 							if hit_write then
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
-								case addr_dw is
-								when BAR0_LED_DW =>
-									if payload_dw = LED_DEBUG_ON then
-										debug_led_mode <= '1';
-									elsif payload_dw = LED_DEBUG_OFF then
-										debug_led_mode <= '0';
-										led_reg <= (others => '0');
-									elsif debug_led_mode = '0' then
-										val8 := payload_byte(payload_dw);
-										led_reg <= val8(4 downto 0);
-									end if;
-								when BAR0_ADD_STATUS_DW =>
-									add_done <= '0';
-									add_error <= (others => '0');
-								when BAR0_ADD_ARG0_DW =>
-									add_arg0 <= payload_dw;
-									add_done <= '0';
-								when BAR0_ADD_ARG1_DW =>
-									add_arg1 <= payload_dw;
-									add_done <= '0';
-								when BAR0_ADD_CMD_DW =>
-									if payload_dw = ADD_CMD_U32 then
-										add_result <= add_sum;
-										add_retire_count <= std_logic_vector(unsigned(add_retire_count) + 1);
-										add_error <= (others => '0');
-										add_done <= '1';
+								if (addr_index >= BAR0_CALL_BASE_DW)
+									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
+									call_words(addr_index - BAR0_CALL_BASE_DW) <= payload_dw;
+								elsif addr_index = BAR0_CALL_DOORBELL_DW then
+									if (payload_dw = CALL_DOORBELL_MAGIC)
+										and (call_words(CALL_STATE_WORD) = WORK_STATE_HOST_READY)
+										and (call_pending = '0') then
+										call_words(CALL_STATE_WORD) <= WORK_STATE_FPGA_BUSY;
+										call_pending <= '1';
 									else
-										add_error <= x"BAD00001";
-										add_done <= '1';
+										call_words(CALL_OUTPUT_LEN_WORD) <= (others => '0');
+										call_words(CALL_ERROR_WORD) <= CALL_ERROR_BAD_PACKAGE;
+										call_words(CALL_STATE_WORD) <= WORK_STATE_FAILED;
 									end if;
-								when BAR0_RESET_DW =>
-									add_done <= '0';
-									add_arg0 <= (others => '0');
-									add_arg1 <= (others => '0');
-									add_result <= (others => '0');
-									add_error <= (others => '0');
-								when others =>
+								elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
 									null;
-								end case;
+								else
+									case addr_dw is
+									when BAR0_LED_DW =>
+										if payload_dw = LED_DEBUG_ON then
+											debug_led_mode <= '1';
+										elsif payload_dw = LED_DEBUG_OFF then
+											debug_led_mode <= '0';
+											led_reg <= (others => '0');
+										elsif debug_led_mode = '0' then
+											val8 := payload_byte(payload_dw);
+											led_reg <= val8(4 downto 0);
+										end if;
+									when BAR0_RESET_DW =>
+										call_words <= (others => (others => '0'));
+										call_words(CALL_MAGIC_WORD) <= WORK_PACKAGE_MAGIC;
+										call_words(CALL_ABI_FUNCTION_WORD)(15 downto 0) <= WORK_ABI_VERSION;
+										call_words(CALL_STATE_WORD) <= WORK_STATE_IDLE;
+										call_pending <= '0';
+									when others =>
+										null;
+									end case;
+								end if;
 							elsif hit_read then
 								dbg_hit_read <= '1';
 								dbg_seen_hit_read <= '1';
 								read_data_dw := (others => '0');
-								case addr_dw is
-								when BAR0_LED_DW =>
-									read_data_dw(4 downto 0) := led_reg;
-								when BAR0_STATUS_DW =>
-									read_data_dw := make_status_word(add_done);
+								if (addr_index >= BAR0_CALL_BASE_DW)
+									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
+									read_data_dw := call_words(addr_index - BAR0_CALL_BASE_DW);
+								elsif addr_index = BAR0_CALL_DOORBELL_DW then
+									read_data_dw := std_logic_vector(call_retire_count);
+								else
+									case addr_dw is
+									when BAR0_LED_DW =>
+										read_data_dw(4 downto 0) := led_reg;
+									when BAR0_STATUS_DW =>
+										read_data_dw := call_words(CALL_STATE_WORD);
 									when BAR0_MAGIC_DW =>
 										read_data_dw := PROTOCOL_MAGIC;
 										dbg_magic_read <= '1';
 										dbg_seen_magic_read <= '1';
-									when BAR0_ADD_STATUS_DW =>
-										read_data_dw(1) := add_done;
-								when BAR0_ADD_RESULT_DW =>
-									read_data_dw := add_result;
-								when BAR0_ADD_RETIRE_DW =>
-									read_data_dw := add_retire_count;
-								when BAR0_ADD_ERROR_DW =>
-									read_data_dw := add_error;
-								when BAR0_DBG_SEEN_DW =>
+									when BAR0_DBG_SEEN_DW =>
 									read_data_dw := make_seen_word(
 										dbg_seen_rx_bar0_eop,
 										dbg_seen_hit_write,
@@ -688,24 +731,25 @@ begin
 										dbg_cpld_blocked,
 										pcie_linkup
 									);
-								when BAR0_DBG_LAST_ADDR_DW =>
+									when BAR0_DBG_LAST_ADDR_DW =>
 									read_data_dw(9 downto 0) := dbg_last_addr_dw;
-								when BAR0_DBG_LAST_READ_DATA_DW =>
+									when BAR0_DBG_LAST_READ_DATA_DW =>
 									read_data_dw := dbg_last_read_data;
-								when BAR0_DBG_LAST_REQ_DW =>
+									when BAR0_DBG_LAST_REQ_DW =>
 									read_data_dw(31 downto 16) := dbg_last_req_id;
 									read_data_dw(15 downto 8) := dbg_last_req_tag;
-								when BAR0_DBG_LAST_CPLD0_DW =>
+									when BAR0_DBG_LAST_CPLD0_DW =>
 									read_data_dw := dbg_last_cpld_dw0;
-								when BAR0_DBG_LAST_CPLD1_DW =>
+									when BAR0_DBG_LAST_CPLD1_DW =>
 									read_data_dw := dbg_last_cpld_dw1;
-								when BAR0_DBG_LAST_CPLD2_DW =>
+									when BAR0_DBG_LAST_CPLD2_DW =>
 									read_data_dw := dbg_last_cpld_dw2;
-								when BAR0_DBG_LAST_CPLD_DATA_DW =>
+									when BAR0_DBG_LAST_CPLD_DATA_DW =>
 									read_data_dw := dbg_last_cpld_data;
-								when others =>
+									when others =>
 									read_data_dw := (others => '0');
-								end case;
+									end case;
+								end if;
 								dbg_last_read_data <= read_data_dw;
 
 								if tx_pending = '0' then

@@ -9,7 +9,6 @@
         <File path="src/serdes/pcie_controller/pcie_controller.v" type="file.verilog" enable="1"/>
         <File path="src/serdes/serdes.v" type="file.verilog" enable="1"/>
         <File path="src/serdes/upar_arbiter/upar_arbiter.v" type="file.verilog" enable="1"/>
-        <File path="src/addition.vhd" type="file.vhdl" enable="1"/>
         <File path="src/top.vhd" type="file.vhdl" enable="1"/>
         <File path="src/tga_bar_read.rao" type="file.gao" enable="1"/>
         <File path="src/min_pci_led.cst" type="file.cst" enable="1"/>

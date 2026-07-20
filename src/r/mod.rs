@@ -3,6 +3,7 @@ pub mod codec;
 pub mod cursor;
 pub mod disc;
 pub mod draw3d_service;
+pub mod fpga_offload;
 pub mod fs;
 pub mod gridpaper_service;
 pub mod hid_udp_srv;

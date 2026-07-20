@@ -65,6 +65,7 @@ define_started_flags!(
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
     TGA_TASK_STARTED,
+    FPGA_OFFLOAD_SERVICE_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     INTEL_CURSOR_SERVICE_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
@@ -482,6 +483,10 @@ fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::tga::tga_task())
+}
+
+fn spawn_fpga_offload_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::fpga_offload::fpga_offload_service_task())
 }
 
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
@@ -1175,7 +1180,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 63
+const TASK_COUNT: usize = 64
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1374,12 +1379,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::disabled(
-        "tga",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &TGA_TASK_STARTED,
-        spawn_tga_task,
-    ),
+    TaskSpec::enabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::enabled("fpga-offload", 0, &FPGA_OFFLOAD_SERVICE_STARTED, spawn_fpga_offload_service),
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
         0,

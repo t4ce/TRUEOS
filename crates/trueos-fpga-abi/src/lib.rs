@@ -4,8 +4,8 @@
 //!
 //! This crate deliberately contains no compiler, RTL, transport driver, allocator, or
 //! scheduler.  An FPGA firmware build assigns code to the three function slots and emits
-//! a [`FirmwareManifest`] beside its bitstream.  The kernel only moves one
-//! [`WorkPackage`] through a device-owned DMA address and observes its completion state.
+//! a [`FirmwareManifest`] beside its bitstream.  The kernel only copies one
+//! [`WorkPackage`] through the fixed TGA BAR window and observes its completion state.
 
 use core::mem::{align_of, size_of};
 
@@ -76,10 +76,11 @@ impl WorkState {
     }
 }
 
-/// The only call object shared with the FPGA.
+/// The only call object shared with the FPGA, mapped at BAR0 + [`BAR0_WORK_PACKAGE_OFFSET`].
 ///
 /// Inputs and outputs are inline by design.  The first implementation therefore needs no
-/// process address space, scatter/gather list, TLB, or device-side command processor.
+/// process address space, DMA requester, scatter/gather list, TLB, or device-side command
+/// processor.
 /// Larger payload protocols can be introduced later as separate function signatures
 /// without changing this minimal call path.
 #[repr(C, align(64))]
@@ -147,6 +148,78 @@ pub struct FirmwareManifest {
     pub reserved: [u8; 32],
 }
 
+/// TRUEGA's preserved LED/debug plane.
+pub const BAR0_LED_OFFSET: usize = 0x000;
+pub const BAR0_LIVENESS_MAGIC_OFFSET: usize = 0x020;
+/// Write-only handoff after the complete package has been copied into the BAR window.
+pub const BAR0_CALL_DOORBELL_OFFSET: usize = 0x080;
+/// Optional completion-interrupt acknowledgement. Polling firmware may ignore it.
+pub const BAR0_CALL_IRQ_ACK_OFFSET: usize = 0x084;
+/// First byte of the fixed, dword-addressable call window.
+pub const BAR0_WORK_PACKAGE_OFFSET: usize = 0x100;
+pub const BAR0_REQUIRED_BYTES: usize = BAR0_WORK_PACKAGE_OFFSET + size_of::<WorkPackage>();
+pub const WORK_PACKAGE_STATE_OFFSET: usize = core::mem::offset_of!(WorkPackage, state);
+
+/// The three functions in the salvaged TRUEGA bring-up bitstream.
+///
+/// A later Rust-to-hardware build may generate this module, its manifest descriptors,
+/// and the matching VHDL together. Keeping the seed interface here gives the kernel an
+/// ordinary typed Rust surface immediately.
+pub mod builtins {
+    use super::{FunctionDescriptor, FunctionId};
+
+    pub const HEARTBEAT: FunctionId = FunctionId::SLOT_0;
+    pub const ADD_U32: FunctionId = FunctionId::SLOT_1;
+    pub const XOR_U32: FunctionId = FunctionId::SLOT_2;
+    pub const HEARTBEAT_REPLY: u32 = 0x5453_4154; // "TGAT"
+
+    pub const FUNCTIONS: [FunctionDescriptor; 3] = [
+        FunctionDescriptor {
+            id: HEARTBEAT.raw(),
+            input_bytes: 0,
+            output_bytes: 4,
+            flags: 0,
+            symbol_hash: fnv1a64(b"heartbeat()->u32"),
+        },
+        FunctionDescriptor {
+            id: ADD_U32.raw(),
+            input_bytes: 8,
+            output_bytes: 4,
+            flags: 0,
+            symbol_hash: fnv1a64(b"add_u32(u32,u32)->u32"),
+        },
+        FunctionDescriptor {
+            id: XOR_U32.raw(),
+            input_bytes: 8,
+            output_bytes: 4,
+            flags: 0,
+            symbol_hash: fnv1a64(b"xor_u32(u32,u32)->u32"),
+        },
+    ];
+
+    pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {
+        let mut bytes = [0; 8];
+        bytes[..4].copy_from_slice(&a.to_le_bytes());
+        bytes[4..].copy_from_slice(&b.to_le_bytes());
+        bytes
+    }
+
+    pub fn result_u32(bytes: &[u8]) -> Option<u32> {
+        Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+    }
+
+    const fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut index = 0;
+        while index < bytes.len() {
+            hash ^= bytes[index] as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            index += 1;
+        }
+        hash
+    }
+}
+
 const _: [(); 256] = [(); size_of::<WorkPackage>()];
 const _: [(); 64] = [(); align_of::<WorkPackage>()];
 const _: [(); 128] = [(); size_of::<FirmwareManifest>()];
@@ -176,5 +249,12 @@ mod tests {
     fn completion_states_are_stable() {
         assert_eq!(WorkState::from_raw(WorkState::Complete as u32), Some(WorkState::Complete));
         assert_eq!(WorkState::from_raw(99), None);
+    }
+
+    #[test]
+    fn builtin_binary_interface_is_little_endian() {
+        let args = builtins::binary_u32_args(0x1122_3344, 0xAABB_CCDD);
+        assert_eq!(args, [0x44, 0x33, 0x22, 0x11, 0xDD, 0xCC, 0xBB, 0xAA]);
+        assert_eq!(builtins::result_u32(&args), Some(0x1122_3344));
     }
 }
