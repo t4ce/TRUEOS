@@ -1061,6 +1061,7 @@ fn initialize_surface(
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
         cadence: crate::ui4::FrameCadence::Streaming,
+        buffering: crate::ui4::FrameBuffering::Triple,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,

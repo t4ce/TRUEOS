@@ -200,6 +200,7 @@ impl FrameRecord {
 const EMPTY_PLAN: FramePlan = FramePlan {
     output: super::OutputId::from_slot(0).unwrap(),
     content: super::FrameContent::Image,
+    cadence: super::FrameCadence::Immutable,
     format: ScanoutFormat::Xrgb8888,
     alpha: super::AlphaContract::Opaque,
     plane: super::PlaneAssignment::Primary { slot: 0 },

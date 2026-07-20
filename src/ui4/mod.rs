@@ -150,16 +150,6 @@ pub(crate) enum FrameCadence {
     Streaming,
 }
 
-impl FrameCadence {
-    pub(crate) const fn buffering(self) -> FrameBuffering {
-        match self {
-            Self::Immutable => FrameBuffering::Single,
-            Self::Dirty => FrameBuffering::Double,
-            Self::Streaming => FrameBuffering::Triple,
-        }
-    }
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(crate) enum FrameBuffering {
@@ -305,6 +295,9 @@ pub(crate) struct FrameSpec {
     pub(crate) output: OutputId,
     pub(crate) content: FrameContent,
     pub(crate) cadence: FrameCadence,
+    /// Explicit producer/display ownership depth. Cadence describes when
+    /// pixels change; it does not silently choose how many allocations exist.
+    pub(crate) buffering: FrameBuffering,
     pub(crate) format: ScanoutFormat,
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -318,6 +311,7 @@ pub(crate) struct FrameSpec {
 pub(crate) struct FramePlan {
     pub(crate) output: OutputId,
     pub(crate) content: FrameContent,
+    pub(crate) cadence: FrameCadence,
     pub(crate) format: ScanoutFormat,
     pub(crate) alpha: AlphaContract,
     pub(crate) plane: PlaneAssignment,
@@ -332,6 +326,7 @@ pub(crate) enum FramePlanError {
     EmptyExtent,
     BaseColorRequiresPremultipliedRgba,
     VideoRequiresPremultipliedRgba,
+    VideoRequiresDoubleBuffering,
 }
 
 impl FramePlan {
@@ -351,13 +346,17 @@ impl FramePlan {
             }
             _ => {}
         }
+        if spec.content == FrameContent::Video && spec.buffering != FrameBuffering::Double {
+            return Err(FramePlanError::VideoRequiresDoubleBuffering);
+        }
         Ok(Self {
             output: spec.output,
             content: spec.content,
+            cadence: spec.cadence,
             format: spec.format,
             alpha: spec.format.alpha(),
             plane: spec.format.plane(),
-            buffering: spec.cadence.buffering(),
+            buffering: spec.buffering,
             width: spec.width,
             height: spec.height,
             base_color: spec.base_color,
@@ -366,9 +365,9 @@ impl FramePlan {
 }
 
 const _: () = {
-    assert!(FrameCadence::Immutable.buffering().count() == 1);
-    assert!(FrameCadence::Dirty.buffering().count() == 2);
-    assert!(FrameCadence::Streaming.buffering().count() == 3);
+    assert!(FrameBuffering::Single.count() == 1);
+    assert!(FrameBuffering::Double.count() == 2);
+    assert!(FrameBuffering::Triple.count() == 3);
     assert!(matches!(
         ScanoutFormat::Rgba8888Premultiplied.plane(),
         PlaneAssignment::AlphaOverlay { slot: 1 }

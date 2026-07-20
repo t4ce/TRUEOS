@@ -282,6 +282,11 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         output,
         content: FrameContent::BlueprintScene,
         cadence,
+        buffering: match cadence {
+            FrameCadence::Immutable => super::FrameBuffering::Single,
+            FrameCadence::Dirty => super::FrameBuffering::Double,
+            FrameCadence::Streaming => super::FrameBuffering::Triple,
+        },
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -506,6 +511,11 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         output,
         content: FrameContent::BlueprintScene,
         cadence,
+        buffering: match cadence {
+            FrameCadence::Immutable => super::FrameBuffering::Single,
+            FrameCadence::Dirty => super::FrameBuffering::Double,
+            FrameCadence::Streaming => super::FrameBuffering::Triple,
+        },
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,

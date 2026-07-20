@@ -6,7 +6,7 @@
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::{c_char, c_void};
 use core::ptr;
@@ -368,7 +368,7 @@ pub(crate) fn eval(vm_id: u8, source: &str, requested_mode: u32) -> Vec<u8> {
     let mode = match requested_mode {
         MODE_SCRIPT => MODE_SCRIPT,
         MODE_MODULE => MODE_MODULE,
-        _ if source_uses_module_syntax(source) => MODE_MODULE,
+        MODE_AUTO if source_uses_module_syntax(source) => MODE_MODULE,
         _ => MODE_SCRIPT,
     };
     let filename = alloc::format!("<qjs-workbench-{:04}.mjs>\0", vm.eval_count);

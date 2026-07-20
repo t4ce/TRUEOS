@@ -6,24 +6,33 @@ use embassy_executor::{Spawner, task};
 use super::super::shell2_cmd::ParseOutcome;
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
-    print_shell_line,
+    print_shell_line, submit_online_to_target,
 };
 
+const QJS_APP: &str = "qjs";
 const QJS_ARCHIVE: &str = "qjs.bp";
 
 #[task(pool_size = 2)]
-async fn launch_qjs(target: MatrixTarget, app_args: Vec<String>) {
-    if let Err(error) = super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+async fn launch_qjs(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
         target.clone(),
         QJS_ARCHIVE,
         app_args,
     )
     .await
     {
-        print_matrix_target_system_line(
+        Ok(_) => {}
+        Err(error) if error == "archive not found" => {
+            if submit_online_to_target(&spawner, target.clone(), alloc::vec![QJS_APP.into()])
+                .is_err()
+            {
+                print_matrix_target_system_line(&target, "qjs: online launch task unavailable");
+            }
+        }
+        Err(error) => print_matrix_target_system_line(
             &target,
             alloc::format!("qjs: could not launch {QJS_ARCHIVE}: {error}").as_str(),
-        );
+        ),
     }
 }
 
@@ -46,7 +55,7 @@ pub(crate) fn try_parse(
     }
 
     let target = matrix_target_for_backend(io);
-    match launch_qjs(target, Vec::new()) {
+    match launch_qjs(*spawner, target, Vec::new()) {
         Ok(token) => spawner.spawn(token),
         Err(_) => print_shell_line(io, "qjs: launch task unavailable"),
     }

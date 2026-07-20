@@ -768,6 +768,7 @@ fn create_preview_frame(
         // published front and one producer back buffer, with Busy providing
         // backpressure while the compositor still owns the retired front.
         cadence: FrameCadence::Dirty,
+        buffering: super::FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
@@ -786,6 +787,7 @@ fn create_static30_frame(
         // Every test card is written and published exactly once. A single
         // buffer is the honest contract and keeps the 30-frame probe small.
         cadence: FrameCadence::Immutable,
+        buffering: super::FrameBuffering::Single,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
