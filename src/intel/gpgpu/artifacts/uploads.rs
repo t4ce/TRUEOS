@@ -22,14 +22,6 @@ pub(crate) fn glyph_mask_rgba8_upload_status() -> Option<UploadedKernelArtifact>
     *GLYPH_MASK_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn present_rgba8_to_primary_xrgb_rect_upload_status() -> Option<UploadedKernelArtifact> {
-    *PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD.lock()
-}
-
-pub(crate) fn sprite64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock()
-}
-
 pub(crate) fn sprite_quad_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock()
 }
@@ -40,36 +32,6 @@ pub(crate) fn ui4_compose_layers_rgba8_upload_status() -> Option<UploadedKernelA
 
 pub(crate) fn mandel64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_project_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_transform_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_clip_box_q16_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_plane_sample_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_plane_fill_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CANVAS3D_PLANE_FILL_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_plane_patch_fill_cut_rgba8_upload_status() -> Option<UploadedKernelArtifact>
-{
-    *CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn canvas3d_plane_patch_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact>
-{
-    *CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn skybox_sample_rgb565_upload_status() -> Option<UploadedKernelArtifact> {
@@ -234,28 +196,6 @@ pub(crate) fn upload_glyph_mask_rgba8_kernel() -> Option<UploadedKernelArtifact>
     Some(upload)
 }
 
-pub(crate) fn upload_present_rgba8_to_primary_xrgb_rect_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: present-rgba8-to-primary-xrgb-rect upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_ARTIFACT,
-        PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_GPU,
-    )?;
-    *PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_ui4_nv12_ytile_to_primary_xrgb_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD.lock() {
         return Some(upload);
@@ -281,28 +221,6 @@ pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedK
         UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU,
     )?;
     *UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_sprite64_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: sprite64-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        SPRITE64_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *SPRITE64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -362,159 +280,6 @@ pub(crate) fn upload_mandel64_worklist_rgba8_kernel() -> Option<UploadedKernelAr
         MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
     )?;
     *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_project_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-project-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT,
-        CANVAS3D_PROJECT_RGBA8_ADLS_GPU,
-    )?;
-    *CANVAS3D_PROJECT_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_transform_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-transform-q16 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT,
-        CANVAS3D_TRANSFORM_Q16_ADLS_GPU,
-    )?;
-    *CANVAS3D_TRANSFORM_Q16_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_clip_box_q16_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-clip-box-q16 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT, CANVAS3D_CLIP_BOX_Q16_ADLS_GPU)?;
-    *CANVAS3D_CLIP_BOX_Q16_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_plane_sample_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-plane-sample-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_ARTIFACT,
-        CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_GPU,
-    )?;
-    *CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_plane_fill_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CANVAS3D_PLANE_FILL_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-plane-fill-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_PLANE_FILL_RGBA8_ADLS_ARTIFACT,
-        CANVAS3D_PLANE_FILL_RGBA8_ADLS_GPU,
-    )?;
-    *CANVAS3D_PLANE_FILL_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_plane_patch_fill_cut_rgba8_kernel() -> Option<UploadedKernelArtifact>
-{
-    if let Some(upload) = *CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-plane-patch-fill-cut-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_ARTIFACT,
-        CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_GPU,
-    )?;
-    *CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_canvas3d_plane_patch_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact>
-{
-    if let Some(upload) = *CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: canvas3d-plane-patch-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -652,18 +417,9 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
     GLYPH_MASK_RGBA8_KERNEL_NAME,
-    PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME,
-    SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
     SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
     MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-    CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
-    CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
-    CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME,
-    CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME,
-    CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME,
-    CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME,
-    CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
     CHART_SINE_RGBA8_KERNEL_NAME,
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
@@ -757,16 +513,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
             upload: &GLYPH_MASK_RGBA8_UPLOAD,
         }),
-        PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_ARTIFACT,
-            gpu: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_GPU,
-            upload: &PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD,
-        }),
-        SPRITE64_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: SPRITE64_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &SPRITE64_WORKLIST_RGBA8_UPLOAD,
-        }),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,
             gpu: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_GPU,
@@ -781,41 +527,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
             gpu: MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
             upload: &MANDEL64_WORKLIST_RGBA8_UPLOAD,
-        }),
-        CANVAS3D_PROJECT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT,
-            gpu: CANVAS3D_PROJECT_RGBA8_ADLS_GPU,
-            upload: &CANVAS3D_PROJECT_RGBA8_UPLOAD,
-        }),
-        CANVAS3D_TRANSFORM_Q16_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT,
-            gpu: CANVAS3D_TRANSFORM_Q16_ADLS_GPU,
-            upload: &CANVAS3D_TRANSFORM_Q16_UPLOAD,
-        }),
-        CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT,
-            gpu: CANVAS3D_CLIP_BOX_Q16_ADLS_GPU,
-            upload: &CANVAS3D_CLIP_BOX_Q16_UPLOAD,
-        }),
-        CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_ARTIFACT,
-            gpu: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_GPU,
-            upload: &CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD,
-        }),
-        CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_PLANE_FILL_RGBA8_ADLS_ARTIFACT,
-            gpu: CANVAS3D_PLANE_FILL_RGBA8_ADLS_GPU,
-            upload: &CANVAS3D_PLANE_FILL_RGBA8_UPLOAD,
-        }),
-        CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_ARTIFACT,
-            gpu: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_GPU,
-            upload: &CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD,
-        }),
-        CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD,
         }),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
@@ -845,4 +556,3 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
         _ => None,
     }
 }
-

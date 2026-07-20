@@ -7,25 +7,13 @@ static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>
 
 static ALPHA_BLEND_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GLYPH_MASK_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
-    Mutex::new(None);
 static UI4_NV12_YTILE_TO_PRIMARY_XRGB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 static UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
-static SPRITE64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static UI4_COMPOSE_LAYERS_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static MANDEL64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_PROJECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_TRANSFORM_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_CLIP_BOX_Q16_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_PLANE_SAMPLE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_PLANE_FILL_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
-    Mutex::new(None);
-static CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
-    Mutex::new(None);
 static SKYBOX_SAMPLE_RGB565_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -54,7 +42,7 @@ static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
 static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
     Mutex::new(Ui4CompositorRuntime::new());
 
-static PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+static SKYBOX_SAMPLE_RGB565_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static COPY_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static FILL_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);

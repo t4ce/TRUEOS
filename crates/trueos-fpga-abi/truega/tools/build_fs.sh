@@ -36,6 +36,8 @@ GOWIN_LIB="$GOWIN_IDE_DIR/lib"
 SYSTEM_FREETYPE="/lib/x86_64-linux-gnu/libfreetype.so.6"
 PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
 TCL_FILE="$(mktemp)"
+PLACE_OPTION="${TRUEGA_PLACE_OPTION:-3}"
+ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
 
 finish() {
   local rc=$?
@@ -49,8 +51,8 @@ cat > "$TCL_FILE" <<EOF
 open_project $PROJECT_FILE
 set_option -top_module top
 set_option -output_base_name min_pci_led
-set_option -place_option 3
-set_option -route_option 0
+set_option -place_option $PLACE_OPTION
+set_option -route_option $ROUTE_OPTION
 set_option -clock_route_order 1
 set_option -correct_hold_violation 0
 set_option -route_maxfan 23

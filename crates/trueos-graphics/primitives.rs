@@ -66,8 +66,6 @@ pub struct UiPresent {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiPresentPath {
     PlaneSourceOffset,
-    PrimarySwapKernelBlit,
-    KernelBlit,
     CpuCopy,
 }
 

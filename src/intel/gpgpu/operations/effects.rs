@@ -21,7 +21,7 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
     params.rect_width = params.rect_width.min(dst.width - params.rect_x);
     params.rect_height = params.rect_height.min(dst.height - params.rect_y);
 
-    let seq = PRESENT_RGBA8_TO_PRIMARY_XRGB_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = SKYBOX_SAMPLE_RGB565_LOG_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
     let trace = seq <= 8 || seq % 120 == 0;
     if trace {
         crate::log_info!(
@@ -379,14 +379,21 @@ pub(crate) fn shell_font_outline_probe(
             state.clear_test_virt,
             input_bytes,
         );
-        core::ptr::write_bytes(state.canvas3d_out_virt, 0, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+        core::ptr::write_bytes(
+            state.font_outline_mesh_out_virt,
+            0,
+            FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
+        );
     }
     super::dma_flush(state.clear_test_virt, input_bytes);
-    super::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
+    super::dma_flush(
+        state.font_outline_mesh_out_virt,
+        FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
+    );
 
     let params = FontOutlineMeshParams {
         src_gpu: DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE,
-        dst_gpu: DIRECT_RCS_GPU_VA_CANVAS3D_OUT_BASE,
+        dst_gpu: DIRECT_RCS_GPU_VA_FONT_OUTLINE_MESH_BASE,
         op_count: ops.len() as u32,
         stage,
         subdivisions: 8,
@@ -415,8 +422,8 @@ pub(crate) fn shell_font_outline_probe(
         && direct_rcs_map_ppgtt_kernel(
             state,
             params.dst_gpu,
-            state.canvas3d_out_phys,
-            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            state.font_outline_mesh_out_phys,
+            FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
         );
     result.batch_ok = result.dst_ppgtt_ok
         && direct_rcs_encode_font_outline_mesh_batch(
@@ -424,7 +431,7 @@ pub(crate) fn shell_font_outline_probe(
             upload,
             params,
             input_bytes,
-            CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
         );
     let submit_start_tick = direct_rcs_now_tick();
     result.submitted = result.batch_ok && direct_rcs_submit_batch(dev, state);
@@ -443,8 +450,13 @@ pub(crate) fn shell_font_outline_probe(
     result.post_marker = observed;
     result.retired = observed == FONT_OUTLINE_MESH_POST_MARKER;
 
-    super::dma_flush(state.canvas3d_out_virt, CANVAS3D_PROJECT_OUT_ALLOC_BYTES);
-    let report = unsafe { core::slice::from_raw_parts(state.canvas3d_out_virt as *const u32, 25) };
+    super::dma_flush(
+        state.font_outline_mesh_out_virt,
+        FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
+    );
+    let report = unsafe {
+        core::slice::from_raw_parts(state.font_outline_mesh_out_virt as *const u32, 25)
+    };
     result.report_marker = report[0];
     result.done_marker = report[24];
     result.kernel_done = report[24] == FONT_OUTLINE_MESH_RESULT_DONE;
@@ -472,7 +484,7 @@ pub(crate) fn shell_font_outline_probe(
     {
         let indices = unsafe {
             core::slice::from_raw_parts(
-                (state.canvas3d_out_virt as *const u32)
+                (state.font_outline_mesh_out_virt as *const u32)
                     .add(FONT_OUTLINE_MESH_INDEX_DWORD_OFFSET as usize),
                 result.indices as usize,
             )
@@ -494,8 +506,8 @@ pub(crate) fn shell_font_outline_probe(
         && result.indices_in_range;
     if result.ok && stage == FONT_OUTLINE_STAGE_STROKE_MESH {
         result.generated_mesh = Some(GpgpuFontOutlineMesh {
-            storage_phys: state.canvas3d_out_phys,
-            storage_bytes: CANVAS3D_PROJECT_OUT_ALLOC_BYTES,
+            storage_phys: state.font_outline_mesh_out_phys,
+            storage_bytes: FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
             vertex_offset_bytes: FONT_OUTLINE_MESH_VERTEX_DWORD_OFFSET * 4,
             vertex_count: result.vertices,
             vertex_stride: 2 * core::mem::size_of::<f32>() as u32,
@@ -546,4 +558,3 @@ pub(crate) fn shell_font_outline_probe(
     }
     result
 }
-

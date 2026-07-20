@@ -83,15 +83,6 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKern
     bin_sha256: GLYPH_MASK_RGBA8_ADLS_BIN_SHA256,
 };
 
-pub(crate) const PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_KERNEL_NAME,
-        target: "adls",
-        bin: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_BIN,
-        spv: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_SPV,
-        bin_sha256: PRESENT_RGBA8_TO_PRIMARY_XRGB_RECT_ADLS_BIN_SHA256,
-    };
-
 pub(crate) const UI4_NV12_YTILE_TO_PRIMARY_XRGB_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact {
         name: UI4_NV12_YTILE_TO_PRIMARY_XRGB_KERNEL_NAME,
@@ -109,14 +100,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifa
         spv: UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV,
         bin_sha256: UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256,
     };
-
-pub(crate) const SPRITE64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
-    target: "adls",
-    bin: SPRITE64_WORKLIST_RGBA8_ADLS_BIN,
-    spv: SPRITE64_WORKLIST_RGBA8_ADLS_SPV,
-    bin_sha256: SPRITE64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
-};
 
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact {
@@ -143,66 +126,6 @@ pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = Gp
     spv: MANDEL64_WORKLIST_RGBA8_ADLS_SPV,
     bin_sha256: MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256,
 };
-
-pub(crate) const CANVAS3D_PROJECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS3D_PROJECT_RGBA8_KERNEL_NAME,
-    target: "adls",
-    bin: CANVAS3D_PROJECT_RGBA8_ADLS_BIN,
-    spv: CANVAS3D_PROJECT_RGBA8_ADLS_SPV,
-    bin_sha256: CANVAS3D_PROJECT_RGBA8_ADLS_BIN_SHA256,
-};
-
-pub(crate) const CANVAS3D_TRANSFORM_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS3D_TRANSFORM_Q16_KERNEL_NAME,
-    target: "adls",
-    bin: CANVAS3D_TRANSFORM_Q16_ADLS_BIN,
-    spv: CANVAS3D_TRANSFORM_Q16_ADLS_SPV,
-    bin_sha256: CANVAS3D_TRANSFORM_Q16_ADLS_BIN_SHA256,
-};
-
-pub(crate) const CANVAS3D_CLIP_BOX_Q16_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
-    name: CANVAS3D_CLIP_BOX_Q16_KERNEL_NAME,
-    target: "adls",
-    bin: CANVAS3D_CLIP_BOX_Q16_ADLS_BIN,
-    spv: CANVAS3D_CLIP_BOX_Q16_ADLS_SPV,
-    bin_sha256: CANVAS3D_CLIP_BOX_Q16_ADLS_BIN_SHA256,
-};
-
-pub(crate) const CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS3D_PLANE_SAMPLE_RGBA8_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_BIN,
-        spv: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_SPV,
-        bin_sha256: CANVAS3D_PLANE_SAMPLE_RGBA8_ADLS_BIN_SHA256,
-    };
-
-pub(crate) const CANVAS3D_PLANE_FILL_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS3D_PLANE_FILL_RGBA8_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS3D_PLANE_FILL_RGBA8_ADLS_BIN,
-        spv: CANVAS3D_PLANE_FILL_RGBA8_ADLS_SPV,
-        bin_sha256: CANVAS3D_PLANE_FILL_RGBA8_ADLS_BIN_SHA256,
-    };
-
-pub(crate) const CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_BIN,
-        spv: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_SPV,
-        bin_sha256: CANVAS3D_PLANE_PATCH_FILL_CUT_RGBA8_ADLS_BIN_SHA256,
-    };
-
-pub(crate) const CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact {
-        name: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_KERNEL_NAME,
-        target: "adls",
-        bin: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN,
-        spv: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_SPV,
-        bin_sha256: CANVAS3D_PLANE_PATCH_WORKLIST_RGBA8_ADLS_BIN_SHA256,
-    };
 
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
     name: SKYBOX_SAMPLE_RGB565_KERNEL_NAME,

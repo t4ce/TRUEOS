@@ -418,15 +418,6 @@ pub(crate) fn present_ui_surface_to_primary_backing(
     self::display::present_ui_surface_to_primary_backing(surface, virt, byte_len, src, dst, reason)
 }
 
-pub(crate) fn present_rgba8_surface_to_primary_swap_xrgb(
-    src: self::gpgpu::GpgpuRgba8Surface,
-    src_rect: self::gpgpu::GpgpuRect,
-    dst_xy: self::gpgpu::GpgpuPoint,
-    reason: &str,
-) -> bool {
-    self::display::present_rgba8_surface_to_primary_swap_xrgb(src, src_rect, dst_xy, reason)
-}
-
 pub(crate) fn present_premultiplied_rgba_primary_tiles(
     tiles: &[RgbaOverlayTile<'_>],
     reason: &str,
@@ -484,16 +475,6 @@ pub fn plane_rebind_present_surface(
     _pitch_bytes: u32,
 ) -> bool {
     false
-}
-
-pub fn rcs_present_rgba_frame(rgba: &[u8], width: usize, height: usize) -> bool {
-    let Ok(width) = u32::try_from(width) else {
-        return false;
-    };
-    let Ok(height) = u32::try_from(height) else {
-        return false;
-    };
-    self::gpgpu::present_rgba_frame_to_primary(rgba, width, height)
 }
 
 pub fn rcs_clear_rgba_surface(

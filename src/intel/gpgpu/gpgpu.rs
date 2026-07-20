@@ -35,4 +35,3 @@ include!("rcs/payloads.rs");
 include!("rcs/descriptors.rs");
 include!("rcs/commands.rs");
 include!("rcs/context.rs");
-include!("compat.rs");

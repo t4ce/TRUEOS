@@ -122,11 +122,6 @@ pub(crate) enum BackendCommand<'a> {
         rect: gpgpu::GpgpuRect,
         color_rgba: u32,
     },
-    Sprite64WorklistRgba8Stub {
-        placements: &'a [gpgpu::GpgpuSprite64Placement],
-        present: bool,
-        present_reason: &'a str,
-    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -214,16 +209,8 @@ impl IntelOpenClBackend {
         gpgpu::upload_fill_rect_worklist_rgba8_kernel().map(UploadedKernelRef::from)
     }
 
-    pub(crate) fn upload_sprite64_worklist_rgba8(&self) -> Option<UploadedKernelRef> {
-        gpgpu::upload_sprite64_worklist_rgba8_kernel().map(UploadedKernelRef::from)
-    }
-
     pub(crate) fn fill_rect_worklist_upload_status(&self) -> Option<UploadedKernelRef> {
         gpgpu::fill_rect_worklist_rgba8_upload_status().map(UploadedKernelRef::from)
-    }
-
-    pub(crate) fn sprite64_worklist_upload_status(&self) -> Option<UploadedKernelRef> {
-        gpgpu::sprite64_worklist_rgba8_upload_status().map(UploadedKernelRef::from)
     }
 
     pub(crate) fn upload_all_known_aot(
@@ -268,18 +255,6 @@ impl IntelOpenClBackend {
         )
     }
 
-    pub(crate) fn execute_sprite64_worklist_rgba8_stub(
-        &self,
-        _placements: &[gpgpu::GpgpuSprite64Placement],
-        _present: bool,
-        _present_reason: &str,
-    ) -> BackendExecutionStub {
-        BackendExecutionStub::recognized(
-            gpgpu::SPRITE64_WORKLIST_RGBA8_KERNEL_NAME,
-            self.sprite64_worklist_upload_status(),
-        )
-    }
-
     pub(crate) fn dispatch(&self, command: BackendCommand<'_>) -> BackendCommandResult {
         match command {
             BackendCommand::QueryUploadStatus { kernel_name } => {
@@ -308,15 +283,6 @@ impl IntelOpenClBackend {
             } => BackendCommandResult::ExecuteStub(
                 self.execute_fill_rect_worklist_rgba8_stub(dst, rect, color_rgba),
             ),
-            BackendCommand::Sprite64WorklistRgba8Stub {
-                placements,
-                present,
-                present_reason,
-            } => BackendCommandResult::ExecuteStub(self.execute_sprite64_worklist_rgba8_stub(
-                placements,
-                present,
-                present_reason,
-            )),
         }
     }
 

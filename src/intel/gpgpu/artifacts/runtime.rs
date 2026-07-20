@@ -125,8 +125,7 @@ fn upload_artifact_bytes(
     let actual_sha256 = sha256_digest(bin);
     let requires_allowlisted_sha = matches!(
         artifact.name,
-        ALPHA_BLEND_RGBA8_OVER_KERNEL_NAME
-            | CHART_SINE_RGBA8_KERNEL_NAME
+        CHART_SINE_RGBA8_KERNEL_NAME
             | PIXEL_PLASMA_RGBA8_KERNEL_NAME
             | FONT_OUTLINE_MESH_KERNEL_NAME
             | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
