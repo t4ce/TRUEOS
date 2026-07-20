@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, env, fmt::Write as _, fs, path::Path};
 
-const PORTAL_CABI_LOCK_PATH: &str = "abi/portal-cabi-v1.sha256";
+const PORTAL_CABI_LOCK_PATH: &str = "abi/portal-cabi-v2.sha256";
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");

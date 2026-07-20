@@ -987,7 +987,9 @@ fn guest_resolved_fs_path(path: &str, allow_empty: bool) -> Result<String, i32> 
     Ok(path)
 }
 
-#[unsafe(no_mangle)]
+// Legacy synchronous filesystem entry point retained only for kernel shims.
+// Its internal export name deliberately cannot satisfy a Blueprint CABI import.
+#[unsafe(export_name = "trueos_kernel_sync_fs_read_file")]
 pub unsafe extern "C" fn trueos_cabi_fs_read_file(
     path_ptr: *const u8,
     path_len: usize,
@@ -1028,7 +1030,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_read_file(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_write_begin")]
 pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
     path_ptr: *const u8,
     path_len: usize,
@@ -1062,7 +1064,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
     0
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_create_dir_all")]
 pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     path_ptr: *const u8,
     path_len: usize,
@@ -1090,7 +1092,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     fs_create_dir_all_host(path)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_write_chunk")]
 pub unsafe extern "C" fn trueos_cabi_fs_write_chunk(
     handle: u32,
     data_ptr: *const u8,
@@ -1110,7 +1112,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_chunk(
     fs_write_chunk_host(handle, data)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_write_finish")]
 pub unsafe extern "C" fn trueos_cabi_fs_write_finish(handle: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, rc) =
@@ -1124,7 +1126,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_finish(handle: u32) -> i32 {
     fs_write_finish_host(handle)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_write_abort")]
 pub unsafe extern "C" fn trueos_cabi_fs_write_abort(handle: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, rc) =
@@ -1138,7 +1140,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_abort(handle: u32) -> i32 {
     fs_write_abort_host(handle)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_exists")]
 pub unsafe extern "C" fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32 {
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM;
@@ -1160,7 +1162,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: us
     fs_exists_host(path)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_stat")]
 pub unsafe extern "C" fn trueos_cabi_fs_stat(
     path_ptr: *const u8,
     path_len: usize,
@@ -1187,7 +1189,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
     unsafe { fs_stat_host(path, &mut *out_kind, &mut *out_len) }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_list_dir")]
 pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
     path_ptr: *const u8,
     path_len: usize,
@@ -1214,7 +1216,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
     fs_list_dir_host(path, out_ptr, out_cap)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_fs_remove")]
 pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32 {
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM;
@@ -1236,7 +1238,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: us
     fs_remove_host(path)
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_trueosfs_primary_html_tree")]
 pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_html_tree(
     max_entries: u32,
     out_ptr: *mut u8,
@@ -1254,7 +1256,7 @@ pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_html_tree(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_trueosfs_primary_json_all")]
 pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_json_all(
     max_entries: u32,
     out_ptr: *mut u8,
@@ -1272,7 +1274,7 @@ pub unsafe extern "C" fn trueos_cabi_trueosfs_primary_json_all(
     }
 }
 
-#[unsafe(no_mangle)]
+#[unsafe(export_name = "trueos_kernel_sync_trueosfs_json_all")]
 pub unsafe extern "C" fn trueos_cabi_trueosfs_json_all(
     max_entries: u32,
     out_ptr: *mut u8,

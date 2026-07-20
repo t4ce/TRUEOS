@@ -11,7 +11,7 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
         mask |= crate::r::readiness::RAYON_READY;
     }
 
-    if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
+    if name.starts_with("trueos_cabi_async_fs_") {
         mask |= crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
     }
 
@@ -34,6 +34,11 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
 }
 
 pub(crate) fn prebind_import_error(name: &str) -> Option<&'static str> {
+    if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
+        return Some(
+            "synchronous Blueprint filesystem ABI removed; rebuild against trueos::async_fs",
+        );
+    }
     match name {
         "trueos_tokio_tls_current_slot" => Some(
             "legacy TLS ABI import trueos_tokio_tls_current_slot; rebuild/refetch the blueprint so TLS uses WLS trueos_cabi_wls_current_slot",

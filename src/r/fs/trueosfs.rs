@@ -1041,6 +1041,33 @@ pub async fn file_in_async(
     Ok(true)
 }
 
+/// Asynchronously materialize every directory prefix using TRUEOSFS marker files.
+///
+/// Returns `Ok(false)` if the filesystem cannot allocate a required marker.
+pub async fn dir_create_all_async(
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<bool, block::Error> {
+    let mut prefix = String::new();
+    for part in path.split('/').filter(|part| !part.is_empty()) {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+
+        let marker = alloc::format!("{prefix}/.keep");
+        if file_exists_async(disk, marker.as_str()).await?
+            || dir_has_children_async(disk, prefix.as_str()).await?
+        {
+            continue;
+        }
+        if !file_in_async(disk, marker.as_str(), &[]).await? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Async TRUEOSFS: begin a streamed write for `name` with known final byte length.
 ///
 /// Returns:

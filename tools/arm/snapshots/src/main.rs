@@ -34,7 +34,6 @@ mod exceptions;
 #[path = "exceptions_disabled.rs"]
 mod exceptions;
 mod executor_cache;
-mod gb_demo;
 mod gpu;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
@@ -77,8 +76,6 @@ mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod tga;
-#[path = "../crates/trueos-gboi/mod.rs"]
-mod trueos_gboi;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;

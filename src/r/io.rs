@@ -392,12 +392,18 @@ pub mod env {
     }
 }
 
+pub mod async_fs_cabi;
 pub mod calculator_cabi;
 pub mod fs_cabi;
 pub mod input_cabi;
 pub mod vgpu_cabi;
 
 pub mod cabi {
+    pub use super::async_fs_cabi::{
+        trueos_cabi_async_fs_discard, trueos_cabi_async_fs_read_start,
+        trueos_cabi_async_fs_remove_start, trueos_cabi_async_fs_result_len,
+        trueos_cabi_async_fs_result_read, trueos_cabi_async_fs_status,
+    };
     pub use super::calculator_cabi::*;
     pub use super::fs_cabi::*;
     pub use super::input_cabi::*;

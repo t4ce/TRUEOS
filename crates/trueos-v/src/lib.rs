@@ -34,16 +34,21 @@ pub mod bp_abi;
 pub mod calculator_base;
 pub mod env;
 pub mod ffi;
+#[doc(hidden)]
+pub mod legacy_fs_abi;
 pub mod qjs_abi;
 pub mod sync;
 pub mod vaudio;
 pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
+#[doc(hidden)]
 pub mod vfs;
+pub mod vfs_async;
 pub mod vgpu;
 pub mod vhttp_srv;
 pub mod vinput;
+#[doc(hidden)]
 pub mod vio;
 pub mod vmail;
 pub mod vnet;

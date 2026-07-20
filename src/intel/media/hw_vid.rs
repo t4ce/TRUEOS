@@ -10,9 +10,7 @@ const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
-pub(crate) const UI4_FRAMED_VIDEO_ASSET: &str = "x31_head_movie.annexb.h264";
-const UI4_FRAMED_VIDEO_ANNEXB: &[u8] =
-    include_bytes!("../../../tools/vid/x31_head_movie.annexb.h264");
+pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
@@ -244,102 +242,14 @@ impl H264PlaybackTiming {
     }
 }
 
-/// Decode the fixed, hardware-validated Annex-B asset and publish every picture
-/// through the native UI4 double-Frame path. Shell2 owns the surrounding UI4
-/// lifetime; this function owns one VDBOX playback lap and its engine lease.
-pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport, &'static str> {
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=embedded-entry source=kernel-embedded-annexb next=media-engine-check\n"
-    );
-    if !crate::intel::has_media_decode_engine() {
-        return Err("media decode engine unavailable");
-    }
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=media-engine-ready source=kernel-embedded-annexb next=playback-lease\n"
-    );
-    let _playback_guard = h264_try_begin_playback("shell-ui4-framed-video")?;
-    let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
-    let heap_before_asset = crate::allocators::host_heap_integrity_bounded();
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=heap-before-asset healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
-        heap_before_asset.healthy,
-        heap_before_asset.reason,
-        heap_before_asset.nodes,
-        heap_before_asset.current,
-        heap_before_asset.next,
-    );
-    if !heap_before_asset.healthy {
-        return Err("host heap free list corrupt before embedded video allocation");
-    }
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=playback-lease-acquired source=kernel-embedded-annexb bytes={} next=asset-reserve\n",
-        UI4_FRAMED_VIDEO_ANNEXB.len()
-    );
-    crate::log!(
-        "intel/hw_vid: ui4-framed-video stage=decode-loop-begin asset={} bytes={} source=kernel-embedded-annexb fps={} presentation=ui4-double-frame\n",
-        UI4_FRAMED_VIDEO_ASSET,
-        UI4_FRAMED_VIDEO_ANNEXB.len(),
-        UI4_FRAMED_VIDEO_FPS,
-    );
-    let old_hw_pic_logging =
-        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
-    let old_surface_probes =
-        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
-    let old_noreset_lite =
-        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let mut annexb = Vec::new();
-    annexb
-        .try_reserve_exact(UI4_FRAMED_VIDEO_ANNEXB.len())
-        .map_err(|_| "embedded video asset allocation failed")?;
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=asset-reserved source=kernel-embedded-annexb capacity={} next=asset-copy\n",
-        annexb.capacity()
-    );
-    annexb.extend_from_slice(UI4_FRAMED_VIDEO_ANNEXB);
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=asset-copied source=kernel-embedded-annexb bytes={} next=annexb-parse\n",
-        annexb.len()
-    );
-    let heap_before_parse = crate::allocators::host_heap_integrity_bounded();
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=heap-before-annexb-parse healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
-        heap_before_parse.healthy,
-        heap_before_parse.reason,
-        heap_before_parse.nodes,
-        heap_before_parse.current,
-        heap_before_parse.next,
-    );
-    if !heap_before_parse.healthy {
-        return Err("host heap free list corrupt before embedded video parsing");
-    }
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=annexb-probe-entry source=kernel-embedded-annexb bytes={} next=reader-init\n",
-        annexb.len()
-    );
-    let report = h264_i_p_playback_probe_annexb_bytes(
-        annexb,
-        "kernel-embedded-annexb",
-        UI4_FRAMED_VIDEO_ASSET,
-        options,
-    )
-    .await;
-    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
-    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
-    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
-    if report.submitted == 0 {
-        Err("embedded video produced no decodable frames")
-    } else {
-        Ok(report)
-    }
-}
-
-/// Load the validated Annex-B asset from the published TRUEOSFS primary root,
-/// then run it through the same decoder and UI4 path as the embedded source.
-pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
--> Result<H264PlaybackReport, &'static str> {
+/// Load an Annex-B asset from the published TRUEOSFS primary root and run it
+/// through the VDBOX decoder and native UI4 double-Frame path.
+pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
+    path: &str,
+) -> Result<H264PlaybackReport, &'static str> {
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=trueosfs-entry source=trueosfs-root-annexb asset={} next=media-engine-check\n",
-        UI4_FRAMED_VIDEO_ASSET,
+        path,
     );
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
@@ -361,7 +271,7 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
 
     let disk =
         crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?;
-    let file = crate::r::fs::trueosfs::file_read_open_async(disk, UI4_FRAMED_VIDEO_ASSET)
+    let file = crate::r::fs::trueosfs::file_read_open_async(disk, path)
         .await
         .map_err(|_| "TRUEOSFS video stream open failed")?
         .ok_or("video asset missing from TRUEOSFS root")?;
@@ -412,13 +322,8 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback()
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let report = h264_i_p_playback_probe_annexb_bytes(
-        annexb,
-        "trueosfs-root-annexb",
-        UI4_FRAMED_VIDEO_ASSET,
-        options,
-    )
-    .await;
+    let report =
+        h264_i_p_playback_probe_annexb_bytes(annexb, "trueosfs-root-annexb", path, options).await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);

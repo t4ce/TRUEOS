@@ -1,7 +1,9 @@
+//! Kernel-internal compatibility facade for filesystem-oriented services.
+
 extern crate alloc;
 
 pub use crate::env;
-pub use crate::vcabi as cabi;
+pub use crate::legacy_fs_abi as cabi;
 pub use crate::vshell as shell;
 
 pub mod kfs {

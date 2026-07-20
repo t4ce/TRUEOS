@@ -1541,16 +1541,25 @@ async fn handle_html_fetch_request(
     }
 
     let html = Html::new(source_url.clone(), html_text);
+    let delegated_handoff = request.auto_handoff_callback.is_some();
     if let Some(callback) = request.auto_handoff_callback.as_mut() {
         callback(html.clone());
     }
-    let ready_len = store_ready_html(html).await;
+    let ready_len = if delegated_handoff {
+        // A mode-specific callback owns the consumer launch. Preserve the
+        // fetched document for inspection, but do not also feed the legacy
+        // in-kernel TrueSurfer path.
+        with_html_shack(|shack| shack.put_ready_html(html))
+    } else {
+        store_ready_html(html).await
+    };
     crate::log!(
-        "html_shack: fetched worker={} url={} bytes={} ready={} transport=hyper-vnet\n",
+        "html_shack: fetched worker={} url={} bytes={} ready={} transport=hyper-vnet delegated={}\n",
         worker_id,
         source_url,
         bytes.len(),
-        ready_len
+        ready_len,
+        if delegated_handoff { 1 } else { 0 }
     );
 }
 

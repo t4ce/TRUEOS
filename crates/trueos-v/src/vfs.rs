@@ -1,8 +1,13 @@
+//! Kernel-internal synchronous filesystem facade.
+//!
+//! Blueprint SDKs do not expose this module. Kernel compatibility crates use
+//! it while they migrate independently to native async storage.
+
 extern crate alloc;
 
 use alloc::{string::String, vec, vec::Vec};
 
-use crate::vcabi;
+use crate::legacy_fs_abi as vcabi;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsNodeKind {

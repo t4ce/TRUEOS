@@ -172,46 +172,17 @@ unsafe extern "C" {
         out_value: *mut f64,
     ) -> i32;
 
-    pub fn trueos_cabi_fs_read_file(
-        path_ptr: *const u8,
-        path_len: usize,
+    pub fn trueos_cabi_async_fs_read_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_status(id: u32) -> i32;
+    pub fn trueos_cabi_async_fs_result_len(id: u32) -> isize;
+    pub fn trueos_cabi_async_fs_result_read(
+        id: u32,
+        offset: usize,
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
-    pub fn trueos_cabi_fs_write_begin(
-        path_ptr: *const u8,
-        path_len: usize,
-        total_len: u64,
-        out_handle: *mut u32,
-    ) -> i32;
-    pub fn trueos_cabi_fs_create_dir_all(path_ptr: *const u8, path_len: usize) -> i32;
-    pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
-    pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
-    pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
-    pub fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: usize) -> i32;
-    pub fn trueos_cabi_fs_stat(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_kind: *mut u32,
-        out_len: *mut u64,
-    ) -> i32;
-    pub fn trueos_cabi_fs_list_dir(
-        path_ptr: *const u8,
-        path_len: usize,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    pub fn trueos_cabi_trueosfs_primary_html_tree(
-        max_entries: u32,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    pub fn trueos_cabi_trueosfs_json_all(
-        max_entries: u32,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_discard(id: u32) -> i32;
 
     pub fn trueos_cabi_gfx_texture_dimensions(
         tex_id: u32,

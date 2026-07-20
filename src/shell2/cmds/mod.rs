@@ -7,7 +7,6 @@ pub(crate) mod disc;
 pub(crate) mod fnt;
 pub(crate) mod format;
 pub(crate) mod fslog;
-pub(crate) mod gboy;
 pub(crate) mod gpgpu;
 pub(crate) mod grid;
 pub(crate) mod hyper;

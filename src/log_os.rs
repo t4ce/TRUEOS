@@ -10,46 +10,57 @@ pub(crate) mod flags {
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy, LogLevelSet};
     use spin::Once;
 
-    // Intel graphics/render diagnostic profile. Keep failures, lifecycle
-    // summaries, and the lowest-level trace records while deliberately leaving
-    // Debug out: LogLevelPolicy::Only selects these non-contiguous levels.
-    const GFX_RENDER_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
+    /// Active hardware hunt. Generic PCI, TGA, and `r::fpga_offload` module
+    /// paths currently route through the Global area; TGA lifecycle and PCI
+    /// MCFG inventory also use Boot records guarded by `BOOT_INFO_LOGS`.
+    pub(crate) const PCI_TGA_FPGA_DIAG_PROFILE_ENABLED: bool = true;
+
+    /// Preserved USB/UAS hunt profile. Reactivate it with this single switch;
+    /// it restores Global+USB Trace, the CrabUSB/UAS detail flag, and the
+    /// unsampled USB device logs used during the X31 investigation.
+    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
+
+    // Keep failures, lifecycle summaries, and lowest-level trace records while
+    // deliberately leaving Debug out of the focused PCI/TGA/FPGA capture.
+    const PCI_TGA_FPGA_DIAG_LEVELS: LogLevelSet = LogLevelSet::ERROR
         .union(LogLevelSet::WARN)
         .union(LogLevelSet::INFO)
         .union(LogLevelSet::TRACE);
 
-    // USB/UAS hunt profile: PCI module paths currently fall through to the
-    // Global area, while CrabUSB, xHCI, and the kernel USB glue route to Usb.
-    // Keep both sides open through Trace so controller discovery, endpoint
-    // context setup, TRB submission/completion, and the staged LBA1 proof are
-    // captured in the same boot log.
-    pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
-    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
+        // Preserve the original USB hunt's full Global side, including Debug.
+        LogLevelPolicy::up(LevelFilter::Trace)
+    } else if PCI_TGA_FPGA_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::only(PCI_TGA_FPGA_DIAG_LEVELS)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Info)
+    };
+    pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if PCI_TGA_FPGA_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Info)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LevelFilter::Trace)
+    } else {
+        LogLevelPolicy::up(LevelFilter::Warn)
+    };
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    // GPGPU diagnosis needs the Intel device/display setup that surrounds
-    // kernel upload and submission, not just the GPGPU records themselves.
-    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::only(GFX_RENDER_DIAG_LEVELS);
-    // Per-submit GuC trace records are a hot stream. GPGPU's ordinary profile
-    // starts at Info; targeted trace capture can be reintroduced explicitly.
-    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::only(GFX_RENDER_DIAG_LEVELS);
+    pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    // Blueprint log facades remain Info by default and opt individual hunt
-    // targets into Debug/Trace before crossing the ABI. Accept those selected
-    // records here without opening the kernel network hot paths at Trace.
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
 
     pub(crate) const NET_LOG_RX_TAP: bool = false;
     pub(crate) const NET_LOG_TX_TAP: bool = false;
@@ -63,7 +74,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_DHCP6_SAMPLES: usize = 8;
     pub(crate) const VNET_EXERCISE_LOGS: bool = false;
     pub(crate) const R8125_VERBOSE_LOGS: bool = false;
-    pub(crate) const BOOT_INFO_LOGS: bool = false;
+    pub(crate) const BOOT_INFO_LOGS: bool = PCI_TGA_FPGA_DIAG_PROFILE_ENABLED;
     pub(crate) const HV_LOGS: bool = true;
     pub(crate) const PORTAL_LOGS: bool = true;
     pub(crate) const HTML_SHACK_VERBOSE: bool = false;
@@ -75,15 +86,13 @@ pub(crate) mod flags {
     pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
     pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
-    // Keep startup operations and the periodic UAS samples emitted by the
-    // block-device backend, without flooding the TCP log path during `lsd`.
-    pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
+    pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = USB_UAS_DIAG_PROFILE_ENABLED;
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
     pub(crate) const NVME_VERBOSE: bool = false;
     pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
     pub(crate) static TGA_MISSING_LOG_ONCE: Once<()> = Once::new();
     pub(crate) static TGA_TASK_STARTED_LOG_ONCE: Once<()> = Once::new();
-    pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(true);
+    pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(USB_UAS_DIAG_PROFILE_ENABLED);
 
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
         match area {

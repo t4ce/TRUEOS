@@ -4,6 +4,7 @@
 //! QuickJS-specific JS runtime declarations inside `trueos-qjs`.
 
 pub use crate::bp_abi::*;
+pub use crate::legacy_fs_abi::*;
 
 unsafe extern "C" {
     pub fn trueos_cabi_gfx_texture_dimensions(

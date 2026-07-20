@@ -30,7 +30,6 @@ mod efi;
 mod efi_img;
 mod exceptions;
 mod executor_cache;
-mod gb_demo;
 mod gpu;
 #[path = "../crates/trueos-graphics/mod.rs"]
 mod graphics;
@@ -65,8 +64,6 @@ mod stackkeeper;
 mod std_abi_shim;
 mod surfer;
 mod tga;
-#[path = "../crates/trueos-gboi/mod.rs"]
-mod trueos_gboi;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
@@ -282,10 +279,7 @@ fn _loop(executor: &'static Executor) -> ! {
         // BSP task was recursively polling its own executor through synchronous
         // kfs access. Blocking filesystem callers belong on leased AP service
         // lanes and cross into the BSP through the TRUEOSFS request broker.
-        debug_assert!(core::ptr::eq(
-            executor,
-            unsafe { &*percpu::this_cpu().executor_ptr() },
-        ));
+        debug_assert!(core::ptr::eq(executor, unsafe { &*percpu::this_cpu().executor_ptr() },));
         runtime::poll_local_executor();
         //if counter.is_multiple_of(10_000_000) {
         //    log_os::debugcon_write_byte_raw(b'0');

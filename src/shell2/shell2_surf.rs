@@ -1,8 +1,22 @@
+use alloc::boxed::Box;
 use alloc::string::String;
-use embassy_executor::Spawner;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
+use embassy_executor::{SendSpawner, Spawner};
 
-use super::{ShellBackend2, print_shell_line};
+use super::{
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
+    print_shell_line, submit_online_to_target,
+};
 use crate::surfer::html_shack::{self, HtmlRoad, HtmlShackFileError};
+
+const SOLARA_APP: &str = "solara";
+const SOLARA_ARCHIVE: &str = "solara.bp";
+const SOLARA_RENDER_ONCE_ARG: &str = "--trueos-render-once";
+const SOLARA_HTML_TAG_ARG: &str = "--trueos-html-tag";
+const SOLARA_SOURCE_URL_ARG: &str = "--trueos-source-url";
+const SURF_HANDOFF_DIR: &str = "apps/common/solara/surf";
+static SURF_HANDOFF_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfPromptPrefix {
@@ -38,11 +52,119 @@ pub(crate) enum SurfSubmit {
     Html(String),
 }
 
+async fn persist_solara_handoff(html: &html_shack::Html) -> Result<String, String> {
+    let disk = crate::r::fs::trueosfs::primary_root_handle()
+        .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
+    match crate::r::fs::trueosfs::dir_create_all_async(disk, SURF_HANDOFF_DIR).await {
+        Ok(true) => {}
+        Ok(false) => return Err(String::from("no space for handoff directory")),
+        Err(error) => {
+            return Err(alloc::format!("create handoff directory failed: {error:?}"));
+        }
+    }
+
+    let sequence = SURF_HANDOFF_SEQUENCE.fetch_add(1, Ordering::AcqRel);
+    let tag = alloc::format!("surf-{sequence:08x}");
+    let path = alloc::format!("{SURF_HANDOFF_DIR}/{tag}.html");
+    let handle =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), html.html.len() as u64)
+            .await
+            .map_err(|error| alloc::format!("write begin failed: {error:?}"))?
+            .ok_or_else(|| String::from("write begin failed: no space"))?;
+    if let Err(error) =
+        crate::r::fs::trueosfs::file_write_chunk_async(handle, html.html.as_bytes()).await
+    {
+        let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+        return Err(alloc::format!("write chunk failed: {error:?}"));
+    }
+    if let Err(error) = crate::r::fs::trueosfs::file_write_finish_async(handle).await {
+        let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+        return Err(alloc::format!("write finish failed: {error:?}"));
+    }
+
+    crate::log!(
+        "shell2-surf: solara handoff ready tag={} bytes={} url={}\n",
+        tag,
+        html.html.len(),
+        html.url
+    );
+    Ok(tag)
+}
+
+async fn remove_solara_handoff(tag: &str) {
+    let path = alloc::format!("{SURF_HANDOFF_DIR}/{tag}.html");
+    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
+        let _ = crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await;
+    }
+}
+
 #[embassy_executor::task(pool_size = 4)]
-async fn surf_handoff_html_task(html: html_shack::Html) {
-    let url = html.url.clone();
-    if !html_shack::handoff_html_to_truesurfer(html).await {
-        crate::log!("shell2-surf: handoff failed url={}\n", url);
+async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
+    let tag = match persist_solara_handoff(&html).await {
+        Ok(tag) => tag,
+        Err(error) => {
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("surf: Solara handoff failed: {error}").as_str(),
+            );
+            return;
+        }
+    };
+    let app_args = alloc::vec![
+        String::from(SOLARA_RENDER_ONCE_ARG),
+        String::from(SOLARA_HTML_TAG_ARG),
+        tag.clone(),
+        String::from(SOLARA_SOURCE_URL_ARG),
+        html.url.clone(),
+    ];
+    let online_args = core::iter::once(String::from(SOLARA_APP))
+        .chain(app_args.iter().cloned())
+        .collect::<Vec<_>>();
+
+    match super::cmds::run::submit_archive_name_to_target_prefer_trueosfs_async(
+        target.clone(),
+        SOLARA_ARCHIVE,
+        app_args,
+    )
+    .await
+    {
+        Ok(source) => {
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("surf: Solara render queued tag={tag} source={source}").as_str(),
+            );
+        }
+        Err(error) if error == "archive not found" => {
+            let spawner = unsafe { Spawner::for_current_executor().await };
+            if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
+                remove_solara_handoff(tag.as_str()).await;
+                print_matrix_target_system_line(
+                    &target,
+                    "surf: Solara online launch task unavailable",
+                );
+            }
+        }
+        Err(error) => {
+            remove_solara_handoff(tag.as_str()).await;
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("surf: could not launch {SOLARA_ARCHIVE}: {error}").as_str(),
+            );
+        }
+    }
+}
+
+fn spawn_solara_handoff(
+    spawner: SendSpawner,
+    target: MatrixTarget,
+    html: html_shack::Html,
+) -> bool {
+    match launch_solara_task(target, html) {
+        Ok(token) => {
+            spawner.spawn(token);
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -90,7 +212,7 @@ pub(crate) fn try_file_reference(line: &str) -> Option<String> {
 
 pub(crate) fn load_inline_html(spawner: &Spawner, io: &'static dyn ShellBackend2, html: String) {
     let html = html_shack::prepare_ready_inline_html(html);
-    enqueue_and_handoff_html(spawner, io, html);
+    enqueue_and_launch_html(spawner, io, html);
 }
 
 pub(crate) fn load_file_reference(
@@ -99,7 +221,7 @@ pub(crate) fn load_file_reference(
     file_ref: &str,
 ) {
     match html_shack::prepare_ready_file_html(file_ref) {
-        Ok(html) => enqueue_and_handoff_html(spawner, io, html),
+        Ok(html) => enqueue_and_launch_html(spawner, io, html),
         Err(HtmlShackFileError::NoRoot) => {
             print_shell_line(io, "surf: no TRUEOSFS root mounted");
         }
@@ -112,26 +234,21 @@ pub(crate) fn load_file_reference(
     }
 }
 
-fn enqueue_and_handoff_html(
+fn enqueue_and_launch_html(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     html: html_shack::Html,
 ) {
-    let url = html.url.clone();
     let _ = html_shack::with_html_shack(|shack| shack.put_ready_html(html.clone()));
-    match surf_handoff_html_task(html) {
-        Ok(token) => {
-            let _ = spawner.spawn(token);
-            print_shell_line(io, "surf: handoff enque");
-        }
-        Err(_) => {
-            print_shell_line(io, "surf: handoff busy");
-            crate::log!("shell2-surf: handoff task busy url={}\n", url);
-        }
+    let target = matrix_target_for_backend(io);
+    if spawn_solara_handoff(spawner.make_send(), target, html) {
+        print_shell_line(io, "surf: Solara handoff queued");
+    } else {
+        print_shell_line(io, "surf: Solara launch busy");
     }
 }
 
-pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
+pub(crate) fn prepare_call_with_url(spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return;
@@ -152,7 +269,14 @@ pub(crate) fn prepare_call_with_url(_spawner: &Spawner, io: &'static dyn ShellBa
         HtmlRoad::Http
     };
 
-    let _ = html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, None));
+    let task_spawner = spawner.make_send();
+    let target = matrix_target_for_backend(io);
+    let callback = Box::new(move |html| {
+        if !spawn_solara_handoff(task_spawner, target.clone(), html) {
+            print_matrix_target_system_line(&target, "surf: Solara launch busy");
+        }
+    });
+    let _ = html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, Some(callback)));
     print_shell_line(io, "shack enque");
 }
 

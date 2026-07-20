@@ -36,6 +36,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
     TTSTT_CPU_SERVICE_STARTED,
@@ -119,7 +120,6 @@ define_stop_flags!(
     STOP_UI_BGRT_DEMO,
     STOP_UI_CORETICKS_DEMO,
     STOP_UI_CURSORPICKER_DEMO,
-    STOP_UI_GBOI_DEMO,
     STOP_UI_MANDELBROT_DEMO,
     STOP_UI_PLAYER_DEMO,
     STOP_UI_RAPLE_DEMO,
@@ -136,7 +136,6 @@ fn stop_flag_by_task_name(name: &str) -> Option<&'static AtomicBool> {
         "ui-bgrt-demo" => Some(&STOP_UI_BGRT_DEMO),
         "ui-coreticks-demo" => Some(&STOP_UI_CORETICKS_DEMO),
         "ui-cursorpicker-demo" => Some(&STOP_UI_CURSORPICKER_DEMO),
-        "ui-gboi-demo" => Some(&STOP_UI_GBOI_DEMO),
         "ui-mandelbrot-demo" => Some(&STOP_UI_MANDELBROT_DEMO),
         "ui-player-demo" => Some(&STOP_UI_PLAYER_DEMO),
         "ui-raple-demo" => Some(&STOP_UI_RAPLE_DEMO),
@@ -249,6 +248,10 @@ fn spawn_bool_result_to_attempt(result: Result<bool, SpawnError>) -> SpawnAttemp
 
 fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::wait::job_runner_task())
+}
+
+fn spawn_blueprint_async_fs_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::io::async_fs_cabi::service_task())
 }
 
 fn spawn_trueosfs_request_broker(spawner: Spawner) -> SpawnAttempt {
@@ -1222,11 +1225,17 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 65
+const TASK_COUNT: usize = 66
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
+    TaskSpec::enabled(
+        "blueprint-async-fs-service",
+        0,
+        &BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
+        spawn_blueprint_async_fs_service,
+    ),
     // BSP half of the synchronous-kfs compatibility bridge. It must remain a
     // local BSP task because TRUEOSFS/block futures are intentionally non-Send.
     TaskSpec::enabled(
@@ -1671,7 +1680,9 @@ pub fn latest_system_service_snapshot_text() -> String {
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";
-            "spawn-svc: boot-profile tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            "spawn-svc: boot-profile pci_tga_fpga_diag={} usb_uas_diag={} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            crate::log_os::flags::PCI_TGA_FPGA_DIAG_PROFILE_ENABLED,
+            crate::log_os::flags::USB_UAS_DIAG_PROFILE_ENABLED,
             crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
             tga_boot_gate(),
             fpga_offload_boot_gate(),

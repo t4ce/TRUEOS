@@ -1,0 +1,7 @@
+# SHA-256 of the sorted, normalized trueos_cabi function contracts declared in
+# crates/trueos-v/src/bp_abi.rs for portal ABI epoch v2.
+#
+# Epoch v2 intentionally removes the synchronous Blueprint filesystem surface
+# and introduces the operation-based async filesystem contract. Keep v1 as the
+# historical baseline; incompatible pre-v2 Blueprints are rejected at prebind.
+5d32326d0fba6e77471472c17af9c0d41a732b20f66f5b4a51465cbd4cbf7b88

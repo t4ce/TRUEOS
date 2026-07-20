@@ -1,3 +1,5 @@
+use alloc::{string::String, vec::Vec};
+
 use embassy_executor::Spawner;
 
 use super::super::{
@@ -8,40 +10,34 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 const VID_SLOT: &str = "vid";
 
-#[derive(Copy, Clone)]
 struct VidCommand {
     source: VidSource,
     loop_playback: bool,
 }
 
-#[derive(Copy, Clone)]
 enum VidSource {
-    Embedded,
-    TrueosFs,
+    TrueosFs(String),
     Online,
 }
 
 impl VidSource {
-    const fn name(self) -> &'static str {
+    const fn name(&self) -> &'static str {
         match self {
-            Self::Embedded => "kernel-embedded",
-            Self::TrueosFs => "trueosfs",
+            Self::TrueosFs(_) => "trueosfs",
             Self::Online => "online-mp4",
         }
     }
 
-    const fn asset(self) -> &'static str {
+    fn asset(&self) -> &str {
         match self {
-            Self::Embedded => crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
-            Self::TrueosFs => crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
+            Self::TrueosFs(path) => path.as_str(),
             Self::Online => "fixed-online-avc1-mp4",
         }
     }
 
-    const fn next_stage(self) -> &'static str {
+    const fn next_stage(&self) -> &'static str {
         match self {
-            Self::Embedded => "embedded-annexb-decode",
-            Self::TrueosFs => "trueosfs-annexb-load-decode",
+            Self::TrueosFs(_) => "trueosfs-annexb-load-decode",
             Self::Online => "fixed-mp4-download-demux-decode",
         }
     }
@@ -72,58 +68,131 @@ impl Drop for VidUi4Session {
     }
 }
 
+fn parse_args(rest: &str) -> Result<Vec<String>, &'static str> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in rest.trim().chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !current.is_empty() {
+                args.push(current);
+                current = String::new();
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+
+    if quote.is_some() {
+        return Err("unterminated quote");
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Ok(args)
+}
+
+fn normalize_trueosfs_path(path: &str) -> Result<String, &'static str> {
+    crate::r::path::FsPath::parse(path, false)
+        .map(|path| path.to_relative_string())
+        .map_err(|_| "bad TRUEOSFS path")
+}
+
+fn parse_command(rest: &str) -> Result<VidCommand, &'static str> {
+    let args = parse_args(rest)?;
+    let Some(source) = args.first() else {
+        return Err("missing source");
+    };
+    let mut loop_playback = false;
+
+    let source = if source.eq_ignore_ascii_case("fs") {
+        let mut path = None;
+        for arg in &args[1..] {
+            if arg.eq_ignore_ascii_case("loop") {
+                if loop_playback {
+                    return Err("duplicate loop option");
+                }
+                loop_playback = true;
+            } else if path.is_none() {
+                path = Some(normalize_trueosfs_path(arg)?);
+            } else {
+                return Err("too many filesystem arguments");
+            }
+        }
+        VidSource::TrueosFs(path.unwrap_or_else(|| {
+            String::from(crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_DEFAULT_PATH)
+        }))
+    } else if source.eq_ignore_ascii_case("on") || source.eq_ignore_ascii_case("online") {
+        for arg in &args[1..] {
+            if arg.eq_ignore_ascii_case("loop") && !loop_playback {
+                loop_playback = true;
+            } else {
+                return Err("online accepts only the loop option");
+            }
+        }
+        VidSource::Online
+    } else {
+        return Err("source must be fs or on");
+    };
+
+    Ok(VidCommand {
+        source,
+        loop_playback,
+    })
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let mut source = VidSource::Embedded;
-    let mut loop_playback = false;
-    let mut saw_source = false;
-    let mut saw_loop = false;
-    for arg in rest.split_whitespace() {
-        if arg.eq_ignore_ascii_case("online") && !saw_source {
-            source = VidSource::Online;
-            saw_source = true;
-        } else if arg.eq_ignore_ascii_case("embedded") && !saw_source {
-            source = VidSource::Embedded;
-            saw_source = true;
-        } else if (arg.eq_ignore_ascii_case("fs")
-            || arg.eq_ignore_ascii_case("trueosfs")
-            || arg.eq_ignore_ascii_case("disc")
-            || arg.eq_ignore_ascii_case("local"))
-            && !saw_source
-        {
-            source = VidSource::TrueosFs;
-            saw_source = true;
-        } else if arg.eq_ignore_ascii_case("loop") && !saw_loop {
-            loop_playback = true;
-            saw_loop = true;
-        } else {
+    let command = match parse_command(rest) {
+        Ok(command) => command,
+        Err(err) => {
+            print_shell_line(io, alloc::format!("vid: {err}").as_str());
             usage(io);
             return ParseOutcome::Handled;
         }
-    }
-    let command = VidCommand {
-        source,
-        loop_playback,
     };
+    let queued = alloc::format!(
+        "vid: queued source={} asset={} fps=60 loop={}",
+        command.source.name(),
+        command.source.asset(),
+        command.loop_playback as u8,
+    );
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, VID_SLOT);
     set_matrix_target_active(&target, true);
     match vid_task(target.clone(), command) {
         Ok(token) => {
             spawner.spawn(token);
-            print_matrix_target_line(
-                &target,
-                alloc::format!(
-                    "vid: queued source={} asset={} fps=60 loop={}",
-                    command.source.name(),
-                    command.source.asset(),
-                    loop_playback as u8,
-                )
-                .as_str(),
-            );
+            print_matrix_target_line(&target, queued.as_str());
         }
         Err(err) => {
             set_matrix_target_active(&target, false);
@@ -134,7 +203,10 @@ pub(crate) fn try_parse(
 }
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vid: usage `vid [embedded|fs|online] [loop]`");
+    print_shell_line(
+        io,
+        "vid: usage `vid fs [path] [loop]` | `vid on [loop]` (`online` also accepted)",
+    );
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -167,12 +239,10 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);
-        let result = match command.source {
-            VidSource::Embedded => {
-                crate::intel::media::hw_vid::run_ui4_framed_video_playback().await
-            }
-            VidSource::TrueosFs => {
-                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback().await
+        let result = match &command.source {
+            VidSource::TrueosFs(path) => {
+                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback(path.as_str())
+                    .await
             }
             VidSource::Online => {
                 crate::intel::media::hw_vid::run_online_ui4_framed_video_playback().await
