@@ -337,6 +337,49 @@ pub(crate) fn font_supports_text(name: &str, text: &str) -> bool {
         .all(|ch| ch.is_whitespace() || charmap.map(ch).is_some())
 }
 
+/// Measure the horizontal advance used by the unhinted tessellator without
+/// constructing any glyph paths.  Document layout uses the same metrics and
+/// fallback advance as `tessellate_text_mesh_grouped`, so wrapping decisions
+/// remain stable when the resulting rows are uploaded as resident geometry.
+pub(crate) fn text_advance_width(
+    name: &'static str,
+    text: &str,
+    px_size: f32,
+) -> Result<f32, &'static str> {
+    if !px_size.is_finite() || px_size <= 0.0 {
+        return Err("font-size-invalid");
+    }
+    match warm_embedded_font_by_name(name).map_err(|_| "font-warm-failed")? {
+        Some(_) => {}
+        None => return Err("font-not-registered"),
+    }
+    let registry = FONT_REGISTRY.lock();
+    let font_record = registry.font_by_name(name).ok_or("font-not-registered")?;
+    let font = FontRef::new(font_record.bytes.as_slice()).map_err(|_| "font-parse-failed")?;
+    let charmap = font.charmap();
+    let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+    let units_per_em = (font_record.units_per_em as f32).max(1.0);
+    let scale = px_size / units_per_em;
+    let fallback_advance = units_per_em * 0.35;
+    let space_advance = charmap
+        .map(' ')
+        .and_then(|glyph_id| metrics.advance_width(glyph_id))
+        .unwrap_or(fallback_advance);
+    let mut advance = 0.0f32;
+    for ch in text.chars() {
+        let glyph_advance = if ch.is_whitespace() {
+            space_advance
+        } else {
+            charmap
+                .map(ch)
+                .and_then(|glyph_id| metrics.advance_width(glyph_id))
+                .unwrap_or(fallback_advance)
+        };
+        advance += glyph_advance * scale;
+    }
+    Ok(advance)
+}
+
 pub(crate) fn registry_summary() -> FontRegistrySummary {
     let registry = FONT_REGISTRY.lock();
     let mut endstates = 0usize;

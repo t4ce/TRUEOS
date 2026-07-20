@@ -13,10 +13,10 @@ pub mod probes {
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
 
-    /// Isolate the three restored TRUEGA boot services from the USB/TRUEOSFS
-    /// hunt. 0 keeps all three asleep, 1 admits the TGA PCI task, 2 also admits
-    /// the FPGA offload worker, and 3 additionally starts its heartbeat client.
-    pub const TGA_FPGA_BOOT_DIAGNOSTIC_CUT: u8 = 0;
+    /// Stage the three TRUEGA boot services when isolating compatibility faults.
+    /// 0 keeps all three asleep, 1 admits the TGA PCI task, 2 also admits the
+    /// FPGA offload worker, and 3 additionally starts its heartbeat client.
+    pub const TGA_FPGA_BOOT_DIAGNOSTIC_CUT: u8 = 3;
 }
 
 pub mod blueprint {

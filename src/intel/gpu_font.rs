@@ -20,6 +20,10 @@ pub(crate) const MAX_DYNAMIC_TEXT_CHARS: usize = 256;
 const MIN_FONT_STAMP_SIZE_PERCENT: u32 = 1;
 const MAX_FONT_STAMP_SIZE_PERCENT: u32 = 100;
 const NATIVE_FONT_STAMP_PADDING_PIXELS: u32 = 2;
+const UI4_DOCUMENT_MIN_FONT_PIXELS: f32 = 12.0;
+const UI4_DOCUMENT_MAX_FONT_PIXELS: f32 = 128.0;
+const UI4_DOCUMENT_LINE_HEIGHT_SCALE: f32 = 1.25;
+const UI4_DOCUMENT_PADDING_PIXELS: u32 = 24;
 const DEFAULT_FONT_FILL_TOLERANCE: f32 = 0.1;
 const MIN_NATIVE_FONT_FILL_TOLERANCE: f32 = 0.005;
 const NATIVE_FONT_CURVE_ERROR_PIXELS: f32 = 0.2;
@@ -696,6 +700,30 @@ pub(crate) struct GpuFontUi4Stamp {
     pub(crate) size_percent: u32,
     pub(crate) stamp_width: u32,
     pub(crate) stamp_height: u32,
+    pub(crate) producer_path: &'static str,
+    pub(crate) release: crate::intel::render::ResidentSceneReleaseFence,
+}
+
+/// One wrapped logical document retained independently of its UI4 buffers.
+///
+/// Geometry is uploaded once into render PPGTT.  A viewport pan subsequently
+/// changes only fixed-function translation; neither line layout nor glyph
+/// geometry is rebuilt on the interactive path.
+pub(crate) struct GpuFontUi4Document {
+    mesh: crate::intel::render::ResidentTriangleMesh,
+    color: [u8; 4],
+    pub(crate) font_name: &'static str,
+    pub(crate) text_chars: usize,
+    pub(crate) rows: usize,
+    pub(crate) glyphs: usize,
+    pub(crate) size_percent: u32,
+    pub(crate) font_pixels: f32,
+    pub(crate) document_width: u32,
+    pub(crate) document_height: u32,
+}
+
+pub(crate) struct GpuFontUi4DocumentFrame {
+    pub(crate) render: crate::intel::render::RenderJokerResult,
     pub(crate) producer_path: &'static str,
     pub(crate) release: crate::intel::render::ResidentSceneReleaseFence,
 }
@@ -1764,6 +1792,249 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
         producer_path,
         release,
     })
+}
+
+/// Lay out a shell font request as a fixed-size logical document and retain
+/// its complete triangle mesh.  The UI4 viewport is intentionally smaller
+/// than the document: vertices outside it are clipped by RCS and become
+/// visible through draw-time viewport translation.
+pub(crate) fn prepare_ui4_font_document(
+    request: GpuFontTextRequest<'_>,
+    font: GpuFontFace,
+    size_percent: u32,
+    rgba: GpuFontRgba,
+    viewport_width: u32,
+    viewport_height: u32,
+    document_width: u32,
+    document_height: u32,
+) -> Result<GpuFontUi4Document, &'static str> {
+    if !(MIN_FONT_STAMP_SIZE_PERCENT..=MAX_FONT_STAMP_SIZE_PERCENT).contains(&size_percent) {
+        return Err("font-size-percent-range-1-to-100");
+    }
+    if viewport_width == 0
+        || viewport_height == 0
+        || document_width < viewport_width
+        || document_height < viewport_height
+        || document_width <= UI4_DOCUMENT_PADDING_PIXELS.saturating_mul(2)
+    {
+        return Err("font-document-shape");
+    }
+    let font_pixels = UI4_DOCUMENT_MIN_FONT_PIXELS
+        + (UI4_DOCUMENT_MAX_FONT_PIXELS - UI4_DOCUMENT_MIN_FONT_PIXELS)
+            * (size_percent.saturating_sub(1) as f32)
+            / (MAX_FONT_STAMP_SIZE_PERCENT - MIN_FONT_STAMP_SIZE_PERCENT) as f32;
+    let registry_name = match ensure_font_face_available(font) {
+        Ok(()) => font.registry_name(),
+        Err(_) => {
+            ensure_font_face_available(GpuFontFace::Default)?;
+            GpuFontFace::Default.registry_name()
+        }
+    };
+    let content_width = document_width
+        .saturating_sub(UI4_DOCUMENT_PADDING_PIXELS.saturating_mul(2))
+        as f32;
+    let wrapped = wrap_ui4_document_rows(request, registry_name, font_pixels, content_width)?;
+    let line_height = libm::ceilf(font_pixels * UI4_DOCUMENT_LINE_HEIGHT_SCALE).max(1.0);
+    let mut entries = Vec::new();
+    for (row, text) in wrapped.iter().enumerate() {
+        if text.trim().is_empty() {
+            continue;
+        }
+        entries.push(GpuFontJobEntry {
+            text: GpuFontTextRequest::SingleLine(text.as_str()),
+            position: [
+                UI4_DOCUMENT_PADDING_PIXELS as f32,
+                UI4_DOCUMENT_PADDING_PIXELS as f32 + row as f32 * line_height,
+            ],
+            font_pixels,
+            slant: 0.0,
+        });
+    }
+    if entries.is_empty() {
+        return Err("text-empty");
+    }
+    // Map document coordinates against the physical viewport. Coordinates
+    // beyond 768x512 remain outside clip until pan translation exposes them;
+    // this preserves a strict one-document-pixel to one-frame-pixel mapping.
+    let mesh = create_resident_font_scene_mesh(
+        entries.as_slice(),
+        font,
+        viewport_width,
+        viewport_height,
+    )?;
+    let text_chars = wrapped
+        .iter()
+        .fold(0usize, |total, row| total.saturating_add(row.chars().count()));
+    let glyphs = wrapped.iter().fold(0usize, |total, row| {
+        total.saturating_add(row.chars().filter(|ch| !ch.is_whitespace()).count())
+    });
+    let alpha = rgba.a;
+    let premultiply =
+        |channel: u8| -> u8 { ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8 };
+    crate::log_info!(
+        target: "render";
+        "intel/gpu-font: ui4-document-ready font={} chars={} rows={} glyphs={} document={}x{} viewport={}x{} font_px={:.2} size={}percent mesh_vertices={} mesh_indices={} residency=render-ppgtt pan=viewport-translation retessellate_on_pan=0 cpu_frame_copy=0\n",
+        registry_name,
+        text_chars,
+        wrapped.len(),
+        glyphs,
+        document_width,
+        document_height,
+        viewport_width,
+        viewport_height,
+        font_pixels,
+        size_percent,
+        mesh.vertex_count,
+        mesh.index_count,
+    );
+    Ok(GpuFontUi4Document {
+        mesh,
+        color: [premultiply(rgba.r), premultiply(rgba.g), premultiply(rgba.b), alpha],
+        font_name: registry_name,
+        text_chars,
+        rows: wrapped.len(),
+        glyphs,
+        size_percent,
+        font_pixels,
+        document_width,
+        document_height,
+    })
+}
+
+fn wrap_ui4_document_rows(
+    request: GpuFontTextRequest<'_>,
+    registry_name: &'static str,
+    font_pixels: f32,
+    maximum_width: f32,
+) -> Result<Vec<String>, &'static str> {
+    let single;
+    let source_rows: &[&str] = match request {
+        GpuFontTextRequest::SingleLine(text) => {
+            single = [text];
+            &single
+        }
+        GpuFontTextRequest::Rows(rows) => rows,
+    };
+    let mut wrapped = Vec::new();
+    for source in source_rows {
+        wrap_ui4_document_paragraph(
+            source,
+            registry_name,
+            font_pixels,
+            maximum_width,
+            &mut wrapped,
+        )?;
+    }
+    Ok(wrapped)
+}
+
+fn wrap_ui4_document_paragraph(
+    source: &str,
+    registry_name: &'static str,
+    font_pixels: f32,
+    maximum_width: f32,
+    output: &mut Vec<String>,
+) -> Result<(), &'static str> {
+    if source.trim().is_empty() {
+        output.push(String::new());
+        return Ok(());
+    }
+    let mut line = String::new();
+    for word in source.split_whitespace() {
+        let mut candidate = line.clone();
+        if !candidate.is_empty() {
+            candidate.push(' ');
+        }
+        candidate.push_str(word);
+        if crate::graphics::font::text_advance_width(
+            registry_name,
+            candidate.as_str(),
+            font_pixels,
+        )? <= maximum_width
+        {
+            line = candidate;
+            continue;
+        }
+        if !line.is_empty() {
+            output.push(core::mem::take(&mut line));
+        }
+        let mut fragment = String::new();
+        for ch in word.chars() {
+            let mut next = fragment.clone();
+            next.push(ch);
+            if !fragment.is_empty()
+                && crate::graphics::font::text_advance_width(
+                    registry_name,
+                    next.as_str(),
+                    font_pixels,
+                )? > maximum_width
+            {
+                output.push(core::mem::take(&mut fragment));
+                fragment.push(ch);
+            } else {
+                fragment = next;
+            }
+        }
+        line = fragment;
+    }
+    if !line.is_empty() {
+        output.push(line);
+    }
+    Ok(())
+}
+
+/// Draw one crop of a retained font document into the exact UI4 lease.
+pub(crate) fn render_ui4_font_document_view(
+    document: &GpuFontUi4Document,
+    pan_x: u32,
+    pan_y: u32,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> Result<GpuFontUi4DocumentFrame, &'static str> {
+    if !destination.is_valid()
+        || pan_x > document.document_width.saturating_sub(destination.width)
+        || pan_y > document.document_height.saturating_sub(destination.height)
+    {
+        return Err("font-document-viewport");
+    }
+    let draw = crate::intel::render::ResidentSceneDraw {
+        mesh: &document.mesh,
+        rgba: document.color,
+        viewport_translation_px: [-(pan_x as f32), -(pan_y as f32)],
+    };
+    let frame = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
+        core::slice::from_ref(&draw),
+        &[],
+        Some([0, 0, 0, 0]),
+        destination,
+        false,
+    )?;
+    if frame.completed_draws != 1 || frame.requested_draws != 1 || !frame.frame_complete {
+        return Err("font-document-render-incomplete");
+    }
+    let release = frame
+        .release_fence
+        .filter(|release| release.matches(destination.phys, destination.bytes))
+        .ok_or("font-document-release-fence")?;
+    let producer_path = "resident-document-triangles";
+    Ok(GpuFontUi4DocumentFrame {
+        render: crate::intel::render::RenderJokerResult {
+            variant: producer_path,
+            submit_name: "font-document-ui4",
+            target: "ui4-font-frame",
+            completed: true,
+            vs_counter: false,
+            ps_state_marker: false,
+            raster_packet: false,
+            clip_counter: false,
+            ps_observed: false,
+        },
+        producer_path,
+        release,
+    })
+}
+
+pub(crate) fn release_ui4_font_document(document: &GpuFontUi4Document) -> bool {
+    crate::intel::render::release_resident_font_mesh(&document.mesh)
 }
 
 /// Retained readback-only implementation used while comparing the old

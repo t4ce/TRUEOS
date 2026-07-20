@@ -112,10 +112,8 @@ unsafe extern "C" {
         height: u32,
     ) -> u32;
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
-    pub fn trueos_cabi_ui4_scene_pan_event_take(
-        window_id: u32,
-        out: *mut TrueosUi4PanEvent,
-    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
+    -> i32;
     pub fn trueos_cabi_ui4_solara_text_rows(
         window_id: u32,
         font_id: u32,
@@ -195,6 +193,21 @@ unsafe extern "C" {
     ) -> i32;
 
     pub fn trueos_cabi_async_fs_read_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_write_begin(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_async_fs_write_chunk(
+        id: u32,
+        offset: usize,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_async_fs_write_commit(id: u32) -> i32;
+    pub fn trueos_cabi_async_fs_create_dir_all_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_status(id: u32) -> i32;
     pub fn trueos_cabi_async_fs_result_len(id: u32) -> isize;

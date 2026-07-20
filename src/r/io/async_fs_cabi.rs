@@ -16,6 +16,10 @@ const ASYNC_FS_IDLE_MS: u64 = 1;
 #[derive(Debug)]
 enum RequestKind {
     Read { path: String },
+    Write { path: String, bytes: Vec<u8> },
+    CreateDirAll { path: String },
+    Stat { path: String },
+    ListDir { path: String },
     Remove { path: String },
 }
 
@@ -29,6 +33,11 @@ struct Request {
 #[derive(Debug)]
 enum OperationState {
     Pending,
+    Upload {
+        path: String,
+        bytes: Vec<u8>,
+        total_len: usize,
+    },
     Read(Vec<u8>),
     Unit,
     Failed(i32),
@@ -107,6 +116,109 @@ pub(crate) fn start_read(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Read { path })
 }
 
+pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
+    if total_len as u64 > ASYNC_FS_MAX_RESULT_BYTES {
+        return FS_ERR_TOO_LARGE;
+    }
+
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(total_len).is_err() {
+        return FS_ERR_NO_SPACE;
+    }
+
+    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
+        return FS_ERR_NO_SPACE;
+    }
+    let Some(id) = next_operation_id(&operations) else {
+        return FS_ERR_NO_SPACE;
+    };
+    operations.insert(
+        id,
+        Operation {
+            owner,
+            state: OperationState::Upload {
+                path,
+                bytes,
+                total_len,
+            },
+        },
+    );
+    id as i32
+}
+
+pub(crate) fn write_chunk(owner: u32, id: u32, offset: usize, data: &[u8]) -> i32 {
+    let mut operations = ASYNC_FS_OPERATIONS.lock();
+    let Some(operation) = operations
+        .get_mut(&id)
+        .filter(|operation| operation.owner == owner)
+    else {
+        return FS_ERR_NOT_FOUND;
+    };
+    let OperationState::Upload {
+        bytes, total_len, ..
+    } = &mut operation.state
+    else {
+        return FS_ERR_BAD_PARAM;
+    };
+    if offset != bytes.len() || data.len() > total_len.saturating_sub(offset) {
+        return FS_ERR_BAD_PARAM;
+    }
+    bytes.extend_from_slice(data);
+    0
+}
+
+pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
+    let request = {
+        let mut operations = ASYNC_FS_OPERATIONS.lock();
+        let Some(operation) = operations
+            .get_mut(&id)
+            .filter(|operation| operation.owner == owner)
+        else {
+            return FS_ERR_NOT_FOUND;
+        };
+        let state = core::mem::replace(&mut operation.state, OperationState::Pending);
+        match state {
+            OperationState::Upload {
+                path,
+                bytes,
+                total_len,
+            } if bytes.len() == total_len => Request {
+                id,
+                owner,
+                kind: RequestKind::Write { path, bytes },
+            },
+            state => {
+                operation.state = state;
+                return FS_ERR_BAD_PARAM;
+            }
+        }
+    };
+
+    let mut requests = ASYNC_FS_REQUESTS.lock();
+    if requests.len() >= ASYNC_FS_MAX_OPERATIONS {
+        drop(requests);
+        if let Some(operation) = ASYNC_FS_OPERATIONS.lock().get_mut(&id) {
+            operation.state = OperationState::Failed(FS_ERR_NO_SPACE);
+        }
+        return FS_ERR_NO_SPACE;
+    }
+    requests.push_back(request);
+    0
+}
+
+pub(crate) fn start_create_dir_all(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::CreateDirAll { path })
+}
+
+pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::Stat { path })
+}
+
+pub(crate) fn start_list_dir(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::ListDir { path })
+}
+
 pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Remove { path })
 }
@@ -120,7 +232,7 @@ pub(crate) fn status(owner: u32, id: u32) -> i32 {
         return FS_ERR_NOT_FOUND;
     };
     match operation.state {
-        OperationState::Pending => 0,
+        OperationState::Pending | OperationState::Upload { .. } => 0,
         OperationState::Read(_) | OperationState::Unit => 1,
         OperationState::Failed(code) => code,
     }
@@ -135,7 +247,7 @@ pub(crate) fn result_len(owner: u32, id: u32) -> isize {
         return FS_ERR_NOT_FOUND as isize;
     };
     match &operation.state {
-        OperationState::Pending => FS_ERR_NOT_FOUND as isize,
+        OperationState::Pending | OperationState::Upload { .. } => FS_ERR_NOT_FOUND as isize,
         OperationState::Read(bytes) => bytes.len() as isize,
         OperationState::Unit => 0,
         OperationState::Failed(code) => *code as isize,
@@ -151,7 +263,7 @@ pub(crate) fn result_read(owner: u32, id: u32, offset: usize, out: &mut [u8]) ->
         return FS_ERR_NOT_FOUND as isize;
     };
     match &operation.state {
-        OperationState::Pending => FS_ERR_NOT_FOUND as isize,
+        OperationState::Pending | OperationState::Upload { .. } => FS_ERR_NOT_FOUND as isize,
         OperationState::Read(bytes) => {
             if offset > bytes.len() {
                 return FS_ERR_BAD_PARAM as isize;
@@ -192,6 +304,68 @@ async fn process(request: &Request) -> OperationState {
                         Err(error) => OperationState::Failed(map_block_error(error)),
                     }
                 }
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::Write { path, bytes } => {
+            match crate::r::fs::trueosfs::file_in_async(disk, path.as_str(), bytes.as_slice()).await
+            {
+                Ok(true) => OperationState::Unit,
+                Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::CreateDirAll { path } => {
+            match crate::r::fs::trueosfs::dir_create_all_async(disk, path.as_str()).await {
+                Ok(true) => OperationState::Unit,
+                Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::Stat { path } => {
+            let stat = if path.is_empty() {
+                Ok((2u32, 0u64))
+            } else {
+                match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+                    Ok(Some(info)) => Ok((1u32, info.data_len)),
+                    Ok(None) => {
+                        let marker = alloc::format!("{}/.keep", path);
+                        match crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await
+                        {
+                            Ok(true) => Ok((2u32, 0u64)),
+                            Ok(false) => match crate::r::fs::trueosfs::dir_has_children_async(
+                                disk,
+                                path.as_str(),
+                            )
+                            .await
+                            {
+                                Ok(true) => Ok((2u32, 0u64)),
+                                Ok(false) => Err(FS_ERR_NOT_FOUND),
+                                Err(error) => Err(map_block_error(error)),
+                            },
+                            Err(error) => Err(map_block_error(error)),
+                        }
+                    }
+                    Err(error) => Err(map_block_error(error)),
+                }
+            };
+            match stat {
+                Ok((kind, len)) => {
+                    let mut bytes = Vec::with_capacity(12);
+                    bytes.extend_from_slice(&kind.to_le_bytes());
+                    bytes.extend_from_slice(&len.to_le_bytes());
+                    OperationState::Read(bytes)
+                }
+                Err(code) => OperationState::Failed(code),
+            }
+        }
+        RequestKind::ListDir { path } => {
+            match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
+                Ok(Some(listing)) if listing.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES => {
+                    OperationState::Failed(FS_ERR_TOO_LARGE)
+                }
+                Ok(Some(listing)) => OperationState::Read(listing.into_bytes()),
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
@@ -259,6 +433,21 @@ fn guest_start(op: u32, path: &str) -> i32 {
     }
 }
 
+fn guest_write_begin(path: &str, total_len: usize) -> i32 {
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_WRITE_BEGIN,
+        total_len as u64,
+        0,
+        path.as_bytes(),
+        &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
     path_ptr: *const u8,
@@ -272,6 +461,129 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START, path.as_str())
     } else {
         start_read(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_write_begin(
+    path_ptr: *const u8,
+    path_len: usize,
+    total_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_write_begin(path.as_str(), total_len)
+    } else {
+        start_write(direct_owner(), path, total_len)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_write_chunk(
+    id: u32,
+    offset: usize,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    if data_ptr.is_null() && data_len != 0 {
+        return FS_ERR_BAD_PARAM;
+    }
+    let data = if data_len == 0 {
+        &[][..]
+    } else {
+        unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut sent = 0usize;
+        while sent < data.len() {
+            let end =
+                core::cmp::min(sent.saturating_add(trueos_vm::vmcall::PAYLOAD_CAP), data.len());
+            let (call_status, value) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_WRITE_CHUNK,
+                id as u64,
+                offset.saturating_add(sent) as u64,
+                &data[sent..end],
+                &mut [],
+            );
+            let rc = if call_status == trueos_vm::vmcall::STATUS_OK {
+                (value as i64) as i32
+            } else {
+                FS_ERR_BAD_PARAM
+            };
+            if rc != 0 {
+                return rc;
+            }
+            sent = end;
+        }
+        0
+    } else {
+        write_chunk(direct_owner(), id, offset, data)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_async_fs_write_commit(id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (call_status, value) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ASYNC_FS_WRITE_COMMIT, id as u64, 0);
+        if call_status == trueos_vm::vmcall::STATUS_OK {
+            (value as i64) as i32
+        } else {
+            FS_ERR_BAD_PARAM
+        }
+    } else {
+        write_commit(direct_owner(), id)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_create_dir_all_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_ALL_START, path.as_str())
+    } else {
+        start_create_dir_all(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_stat_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_STAT_START, path.as_str())
+    } else {
+        start_stat(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_list_dir_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_LIST_DIR_START, path.as_str())
+    } else {
+        start_list_dir(direct_owner(), path)
     }
 }
 

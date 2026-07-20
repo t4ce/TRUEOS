@@ -20,8 +20,8 @@ use super::{
     publish_window_frame, replace_window_frame, set_window_placement, take_owner_input_events,
 };
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontRgba, GpuFontTextRequest, GpuFontUi4Stamp, prepare_text_stamp_for_ui4,
-    render_prepared_text_stamp_to_ui4,
+    GpuFontFace, GpuFontRgba, GpuFontTextRequest, GpuFontUi4Document,
+    prepare_ui4_font_document, release_ui4_font_document, render_ui4_font_document_view,
 };
 
 pub(crate) const MAX_FONT_STAMP_SLOTS: usize = 10;
@@ -30,6 +30,10 @@ const FONT_PLANE_SLOT: u8 = 1;
 const FONT_Z_BASE: i32 = 70;
 const FONT_INPUT_POLL_MS: u64 = 8;
 const FONT_CASCADE_PX: i32 = 18;
+const FONT_DOCUMENT_WIDTH: u32 = 1920;
+const FONT_DOCUMENT_HEIGHT: u32 = 1080;
+const FONT_VIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
+const FONT_VIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
 
 #[derive(Copy, Clone)]
 struct FontSlot {
@@ -42,22 +46,36 @@ struct FontSlot {
     request_serial: u64,
 }
 
+struct FontDocumentView {
+    document: GpuFontUi4Document,
+    pan_x: u32,
+    pan_y: u32,
+    active_pan_source: Option<super::Ui4CursorSource>,
+    dirty: bool,
+}
+
 struct FontStampState {
     slots: [Option<FontSlot>; MAX_FONT_STAMP_SLOTS],
+    documents: [Option<FontDocumentView>; MAX_FONT_STAMP_SLOTS],
     next_reuse: usize,
     next_request_serial: u64,
     retired_frames: Vec<FrameHandle>,
+    retired_documents: Vec<GpuFontUi4Document>,
     quarantined_frames: Vec<FrameHandle>,
+    quarantined_documents: Vec<GpuFontUi4Document>,
 }
 
 impl FontStampState {
     const fn new() -> Self {
         Self {
             slots: [None; MAX_FONT_STAMP_SLOTS],
+            documents: [const { None }; MAX_FONT_STAMP_SLOTS],
             next_reuse: 0,
             next_request_serial: 0,
             retired_frames: Vec::new(),
+            retired_documents: Vec::new(),
             quarantined_frames: Vec::new(),
+            quarantined_documents: Vec::new(),
         }
     }
 
@@ -82,6 +100,10 @@ impl FontStampState {
         if !self.quarantined_frames.contains(&frame) {
             self.quarantined_frames.push(frame);
         }
+    }
+
+    fn queue_document_retirement(&mut self, document: GpuFontUi4Document) {
+        self.retired_documents.push(document);
     }
 }
 
@@ -112,7 +134,19 @@ pub(crate) struct FontStampPresentation {
     pub(crate) request_serial: u64,
     pub(crate) reused_slot: bool,
     pub(crate) reused_frame: bool,
-    pub(crate) stamp: GpuFontUi4Stamp,
+    pub(crate) font_name: &'static str,
+    pub(crate) text_chars: usize,
+    pub(crate) rows: usize,
+    pub(crate) glyphs: usize,
+    pub(crate) size_percent: u32,
+    pub(crate) font_pixels: f32,
+    pub(crate) document_width: u32,
+    pub(crate) document_height: u32,
+    pub(crate) viewport_width: u32,
+    pub(crate) viewport_height: u32,
+    pub(crate) render_completed: bool,
+    pub(crate) producer_path: &'static str,
+    pub(crate) release_sequence: u64,
 }
 
 pub(crate) fn present_font_stamp(
@@ -122,15 +156,30 @@ pub(crate) fn present_font_stamp(
     rgba: GpuFontRgba,
 ) -> Result<FontStampPresentation, &'static str> {
     let _guard = PresentGuard::acquire()?;
-    let prepared = prepare_text_stamp_for_ui4(request, font, size_percent, rgba)?;
-    let width = prepared.width();
-    let height = prepared.height();
+    let document = prepare_ui4_font_document(
+        request,
+        font,
+        size_percent,
+        rgba,
+        FONT_VIEW_WIDTH,
+        FONT_VIEW_HEIGHT,
+        FONT_DOCUMENT_WIDTH,
+        FONT_DOCUMENT_HEIGHT,
+    )?;
+    let width = FONT_VIEW_WIDTH;
+    let height = FONT_VIEW_HEIGHT;
     let (slot_index, existing, request_serial) = FONT_STAMPS.lock().reserve_logical_slot();
 
     let mut candidate_is_new =
         existing.is_none_or(|slot| slot.width != width || slot.height != height);
     let mut frame = if candidate_is_new {
-        create_font_frame(width, height)?
+        match create_font_frame(width, height) {
+            Ok(frame) => frame,
+            Err(error) => {
+                retire_font_document(document);
+                return Err(error);
+            }
+        }
     } else {
         existing.expect("matching font slot checked").frame
     };
@@ -141,13 +190,27 @@ pub(crate) fn present_font_stamp(
             // Preserve it and render the replacement before atomically
             // switching the broker window to the new frame.
             candidate_is_new = true;
-            frame = create_font_frame(width, height)?;
-            acquire_frame_buffer(frame).map_err(|_| "font-ui4-frame-acquire")?
+            frame = match create_font_frame(width, height) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    retire_font_document(document);
+                    return Err(error);
+                }
+            };
+            match acquire_frame_buffer(frame) {
+                Ok(lease) => lease,
+                Err(_) => {
+                    let _ = destroy_frame(frame);
+                    retire_font_document(document);
+                    return Err("font-ui4-frame-acquire");
+                }
+            }
         }
         Err(_) => {
             if candidate_is_new {
                 let _ = destroy_frame(frame);
             }
+            retire_font_document(document);
             return Err("font-ui4-frame-acquire");
         }
     };
@@ -158,24 +221,33 @@ pub(crate) fn present_font_stamp(
             if candidate_is_new {
                 let _ = destroy_frame(frame);
             }
+            retire_font_document(document);
             return Err("font-ui4-gpu-surface");
         }
     };
 
-    let stamp = match render_prepared_text_stamp_to_ui4(prepared, destination) {
-        Ok(stamp) => stamp,
+    let rendered = match render_ui4_font_document_view(&document, 0, 0, destination) {
+        Ok(rendered) => rendered,
         Err(error) => {
-            quarantine_failed_destination(slot_index, existing, frame, candidate_is_new, error);
+            quarantine_failed_destination(
+                slot_index,
+                existing,
+                frame,
+                candidate_is_new,
+                document,
+                error,
+            );
             return Err(error);
         }
     };
-    if let Err(error) = publish_gpu_font_frame_buffer(lease, stamp.release) {
+    if let Err(error) = publish_gpu_font_frame_buffer(lease, rendered.release) {
         // The exact producer fence retired, so cancelling is safe even though
         // publication validation rejected the lease.
         let _ = cancel_frame_buffer(lease);
         if candidate_is_new {
             let _ = destroy_frame(frame);
         }
+        retire_font_document(document);
         crate::log_error!(
             target: "ui4/font-stamp";
             "font stamp publish rejected slot={} frame={} error={:?}\n",
@@ -186,13 +258,14 @@ pub(crate) fn present_font_stamp(
         return Err("font-ui4-frame-publish");
     }
 
-    let placement = font_placement(slot_index, &stamp);
-    let (window, reused_frame) = match existing {
+    let placement = font_placement(slot_index, width, height);
+    let (new_slot, reused_frame) = match existing {
         None => {
             let session = match begin_window_session(FONT_OWNER) {
                 Ok(session) => session,
                 Err(_) => {
                     let _ = destroy_frame(frame);
+                    retire_font_document(document);
                     return Err("font-ui4-session-create");
                 }
             };
@@ -210,39 +283,47 @@ pub(crate) fn present_font_stamp(
                 Err(_) => {
                     let _ = finish_window_session(FONT_OWNER, session);
                     let _ = destroy_frame(frame);
+                    retire_font_document(document);
                     return Err("font-ui4-window-create");
                 }
             };
             if publish_window_frame(FONT_OWNER, window, DamageRect::FULL).is_err() {
                 let _ = finish_window_session(FONT_OWNER, session);
                 let _ = destroy_frame(frame);
+                retire_font_document(document);
                 return Err("font-ui4-window-publish");
             }
-            FONT_STAMPS.lock().slots[slot_index] = Some(FontSlot {
-                session,
-                frame,
-                window,
-                width,
-                height,
-                placement,
-                request_serial,
-            });
-            (window, false)
+            (
+                FontSlot {
+                    session,
+                    frame,
+                    window,
+                    width,
+                    height,
+                    placement,
+                    request_serial,
+                },
+                false,
+            )
         }
         Some(previous) if frame == previous.frame => {
             if publish_window_frame(FONT_OWNER, previous.window, DamageRect::FULL).is_err() {
+                retire_font_document(document);
                 return Err("font-ui4-window-publish");
             }
-            FONT_STAMPS.lock().slots[slot_index] = Some(FontSlot {
-                placement,
-                request_serial,
-                ..previous
-            });
-            (previous.window, true)
+            (
+                FontSlot {
+                    placement,
+                    request_serial,
+                    ..previous
+                },
+                true,
+            )
         }
         Some(previous) => {
             if replace_window_frame(FONT_OWNER, previous.window, frame).is_err() {
                 let _ = destroy_frame(frame);
+                retire_font_document(document);
                 return Err("font-ui4-window-replace");
             }
             if set_window_placement(FONT_OWNER, previous.window, placement).is_err()
@@ -251,11 +332,11 @@ pub(crate) fn present_font_stamp(
                 let _ = replace_window_frame(FONT_OWNER, previous.window, previous.frame);
                 let _ = set_window_placement(FONT_OWNER, previous.window, previous.placement);
                 let _ = destroy_frame(frame);
+                retire_font_document(document);
                 return Err("font-ui4-window-republish");
             }
-            {
-                let mut state = FONT_STAMPS.lock();
-                state.slots[slot_index] = Some(FontSlot {
+            (
+                FontSlot {
                     session: previous.session,
                     frame,
                     window: previous.window,
@@ -263,36 +344,76 @@ pub(crate) fn present_font_stamp(
                     height,
                     placement,
                     request_serial,
-                });
-                state.queue_retirement(previous.frame);
-            }
-            (previous.window, false)
+                },
+                false,
+            )
         }
     };
 
+    let font_name = document.font_name;
+    let text_chars = document.text_chars;
+    let rows = document.rows;
+    let glyphs = document.glyphs;
+    let font_pixels = document.font_pixels;
+    let document_width = document.document_width;
+    let document_height = document.document_height;
+    let old_document = {
+        let mut state = FONT_STAMPS.lock();
+        state.slots[slot_index] = Some(new_slot);
+        if let Some(previous) = existing.filter(|previous| previous.frame != frame) {
+            state.queue_retirement(previous.frame);
+        }
+        state.documents[slot_index].replace(FontDocumentView {
+            document,
+            pan_x: 0,
+            pan_y: 0,
+            active_pan_source: None,
+            dirty: false,
+        })
+    };
+    if let Some(previous) = old_document {
+        retire_font_document(previous.document);
+    }
+
     crate::log_info!(
         target: "ui4/font-stamp";
-        "font stamp presented request={} slot={} frame={} window={} extent={}x{} logical_slots={} reused_slot={} reused_frame={} plane=slot1-alpha buffering=double producer={} producer_release={} compositor=isolated-guc-ui4 surflive_release=1 cpu_readback=0 cpu_frame_copy=0\n",
+        "font document presented request={} slot={} frame={} window={} document={}x{} viewport={}x{} font_px={:.2} rows={} logical_slots={} reused_slot={} reused_frame={} plane=slot1-alpha buffering=double producer={} producer_release={} pan=middle-drag-retained-viewport compositor=isolated-guc-ui4 surflive_release=1 cpu_readback=0 cpu_frame_copy=0\n",
         request_serial,
         slot_index,
         frame.raw(),
-        window.raw(),
+        new_slot.window.raw(),
+        document_width,
+        document_height,
         width,
         height,
+        font_pixels,
+        rows,
         MAX_FONT_STAMP_SLOTS,
         existing.is_some() as u8,
         reused_frame as u8,
-        stamp.producer_path,
-        stamp.release.sequence(),
+        rendered.producer_path,
+        rendered.release.sequence(),
     );
     Ok(FontStampPresentation {
         slot: slot_index,
         frame,
-        window,
+        window: new_slot.window,
         request_serial,
         reused_slot: existing.is_some(),
         reused_frame,
-        stamp,
+        font_name,
+        text_chars,
+        rows,
+        glyphs,
+        size_percent,
+        font_pixels,
+        document_width,
+        document_height,
+        viewport_width: width,
+        viewport_height: height,
+        render_completed: rendered.render.completed,
+        producer_path: rendered.producer_path,
+        release_sequence: rendered.release.sequence(),
     })
 }
 
@@ -311,9 +432,11 @@ fn create_font_frame(width: u32, height: u32) -> Result<FrameHandle, &'static st
     .map_err(|_| "font-ui4-frame-create")
 }
 
-fn font_placement(slot: usize, stamp: &GpuFontUi4Stamp) -> WindowPlacement {
-    let max_x = stamp.scanout_width.saturating_sub(stamp.stamp_width) as i32;
-    let max_y = stamp.scanout_height.saturating_sub(stamp.stamp_height) as i32;
+fn font_placement(slot: usize, width: u32, height: u32) -> WindowPlacement {
+    let (scanout_width, scanout_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+    let max_x = scanout_width.saturating_sub(width) as i32;
+    let max_y = scanout_height.saturating_sub(height) as i32;
     let centered_x = max_x / 2;
     let centered_y = max_y / 2;
     let column = (slot % 5) as i32 - 2;
@@ -325,8 +448,8 @@ fn font_placement(slot: usize, stamp: &GpuFontUi4Stamp) -> WindowPlacement {
         y: centered_y
             .saturating_add(row.saturating_mul(FONT_CASCADE_PX))
             .clamp(0, max_y),
-        width: stamp.stamp_width,
-        height: stamp.stamp_height,
+        width,
+        height,
         z: FONT_Z_BASE.saturating_add(slot as i32),
         opacity: u8::MAX,
         visible: true,

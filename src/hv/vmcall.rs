@@ -86,6 +86,12 @@ pub const OP_BP_ASYNC_FS_RESULT_LEN: u32 = 0xD1; // arg0 operation id -> result 
 pub const OP_BP_ASYNC_FS_RESULT_READ: u32 = 0xD2; // arg0 id,arg1 offset:cap -> payload bytes
 pub const OP_BP_ASYNC_FS_DISCARD: u32 = 0xD3; // arg0 operation id -> rc
 pub const OP_BP_UI4_SCENE_PAN_EVENT_TAKE: u32 = 0xD4; // arg0 window -> rc + PanEvent payload
+pub const OP_BP_ASYNC_FS_WRITE_BEGIN: u32 = 0xD5; // arg0 total length, payload path -> operation id/rc
+pub const OP_BP_ASYNC_FS_WRITE_CHUNK: u32 = 0xD6; // arg0 id, arg1 offset, payload bytes -> rc
+pub const OP_BP_ASYNC_FS_WRITE_COMMIT: u32 = 0xD7; // arg0 operation id -> rc
+pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8; // payload resolved path -> operation id/rc
+pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> operation id/rc
+pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1790,6 +1796,102 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 crate::r::io::async_fs_cabi::start_read(owner, path)
             } else {
                 crate::r::io::async_fs_cabi::start_remove(owner, path)
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ASYNC_FS_WRITE_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::io::async_fs_cabi::start_write(
+                owner,
+                path.to_relative_string(),
+                arg0 as usize,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ASYNC_FS_WRITE_CHUNK => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc =
+                crate::r::io::async_fs_cabi::write_chunk(owner, arg0 as u32, arg1 as usize, bytes);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ASYNC_FS_WRITE_COMMIT => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::io::async_fs_cabi::write_commit(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ASYNC_FS_CREATE_DIR_ALL_START
+        | OP_BP_ASYNC_FS_STAT_START
+        | OP_BP_ASYNC_FS_LIST_DIR_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(path) = crate::r::path::FsPath::parse(path, true) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let path = path.to_relative_string();
+            let rc = match op {
+                OP_BP_ASYNC_FS_CREATE_DIR_ALL_START => {
+                    crate::r::io::async_fs_cabi::start_create_dir_all(owner, path)
+                }
+                OP_BP_ASYNC_FS_STAT_START => crate::r::io::async_fs_cabi::start_stat(owner, path),
+                _ => crate::r::io::async_fs_cabi::start_list_dir(owner, path),
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
