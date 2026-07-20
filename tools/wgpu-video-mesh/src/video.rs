@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+        mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
 };
@@ -13,6 +13,8 @@ use std::{
 pub const VIDEO_WIDTH: u32 = 960;
 pub const VIDEO_HEIGHT: u32 = 540;
 pub const VIDEO_FPS: u32 = 30;
+pub const MIN_PLAYBACK_SPEED: f32 = 0.25;
+pub const MAX_PLAYBACK_SPEED: f32 = 2.0;
 
 pub struct VideoFrame {
     pub rgba: Vec<u8>,
@@ -80,7 +82,6 @@ fn decode_forever(video_path: PathBuf, sender: SyncSender<VideoFrame>, stats: &P
             "-nostdin",
             "-stream_loop",
             "-1",
-            "-re",
             "-i",
         ])
         .arg(&video_path)
@@ -116,9 +117,8 @@ fn decode_forever(video_path: PathBuf, sender: SyncSender<VideoFrame>, stats: &P
         }
 
         stats.decoded_frames.fetch_add(1, Ordering::Relaxed);
-        match sender.try_send(VideoFrame { rgba }) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => break,
+        if sender.send(VideoFrame { rgba }).is_err() {
+            break;
         }
     }
 

@@ -33,16 +33,18 @@ Pass another video as the optional first argument:
 cargo run --release -- /path/to/video.mp4
 ```
 
-FFmpeg performs decode on a background thread, loops the input indefinitely, scales it to a
-960×540 RGBA stream, and keeps only the newest pending frame so a slow or minimized window does
-not accumulate latency. WGPU uploads each new frame without recreating the texture.
+FFmpeg performs decode on a background thread, loops the input indefinitely, and scales it to a
+960×540 RGBA stream. A bounded one-frame queue keeps decode synchronized with playback while WGPU
+paces and uploads each frame without recreating the texture.
 
 Controls:
 
 - Select Plane, Cube, Circle, UV Sphere, Icosphere, Cylinder, Cone, Torus, Grid, or Suzanne from
   the **Geometry** dropdown. Every mesh has a maximum vertex radius of `1.0`.
+- Enable **Perlin noise** and adjust its weight for animated per-vertex mesh warping.
 - Use **Choose video…** to replace the looping texture without restarting the demo.
 - Drag in the scene to orbit and use the mouse wheel to zoom.
 - Press Space or use the button to pause/resume texture updates.
+- Adjust playback speed from `0.25×` to `2.0×`.
 - Pick an object tint and background color.
 - Adjust spin, size, camera distance, exposure, 3D lighting, and saturation live.

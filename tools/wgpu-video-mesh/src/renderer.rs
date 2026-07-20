@@ -1,6 +1,7 @@
 use std::{
     num::NonZeroU64,
     sync::{Mutex, mpsc::Receiver},
+    time::{Duration, Instant},
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -13,7 +14,10 @@ use wgpu::util::DeviceExt as _;
 
 use crate::{
     mesh::{self, MeshData, Vertex},
-    video::{PlaybackStats, VIDEO_HEIGHT, VIDEO_WIDTH, VideoFrame},
+    video::{
+        MAX_PLAYBACK_SPEED, MIN_PLAYBACK_SPEED, PlaybackStats, VIDEO_FPS, VIDEO_HEIGHT,
+        VIDEO_WIDTH, VideoFrame,
+    },
 };
 
 #[repr(usize)]
@@ -85,6 +89,8 @@ pub struct SceneParameters {
     pub exposure: f32,
     pub lighting: f32,
     pub saturation: f32,
+    pub noise_weight: f32,
+    pub noise_time: f32,
     pub object_tint: [f32; 3],
     pub aspect_ratio: f32,
 }
@@ -96,12 +102,14 @@ struct SceneUniform {
     model: [[f32; 4]; 4],
     tuning: [f32; 4],
     tint: [f32; 4],
+    warp: [f32; 4],
 }
 
 pub struct SceneCallback {
     pub mesh: MeshKind,
     pub parameters: SceneParameters,
     pub playing: bool,
+    pub playback_speed: f32,
 }
 
 impl egui_wgpu::CallbackTrait for SceneCallback {
@@ -114,7 +122,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(resources) = resources.get_mut::<SceneRenderResources>() {
-            resources.prepare(queue, self.parameters, self.playing);
+            resources.prepare(queue, self.parameters, self.playing, self.playback_speed);
         }
         Vec::new()
     }
@@ -167,6 +175,8 @@ pub struct SceneRenderResources {
     frames: Mutex<Receiver<VideoFrame>>,
     stats: std::sync::Arc<PlaybackStats>,
     uploaded_frames: u64,
+    next_frame_due: Option<Instant>,
+    playback_speed: f32,
 }
 
 impl SceneRenderResources {
@@ -320,6 +330,8 @@ impl SceneRenderResources {
             frames: Mutex::new(frames),
             stats,
             uploaded_frames: 0,
+            next_frame_due: None,
+            playback_speed: 1.0,
         }
     }
 
@@ -332,10 +344,17 @@ impl SceneRenderResources {
         self.frames = Mutex::new(frames);
         self.stats = stats;
         self.uploaded_frames = 0;
+        self.next_frame_due = None;
         write_placeholder(queue, &self.video_texture);
     }
 
-    fn prepare(&mut self, queue: &wgpu::Queue, parameters: SceneParameters, playing: bool) {
+    fn prepare(
+        &mut self,
+        queue: &wgpu::Queue,
+        parameters: SceneParameters,
+        playing: bool,
+        playback_speed: f32,
+    ) {
         let model = Mat4::from_rotation_y(parameters.yaw)
             * Mat4::from_rotation_x(parameters.tilt)
             * Mat4::from_scale(Vec3::splat(parameters.size));
@@ -362,17 +381,25 @@ impl SceneRenderResources {
                 parameters.object_tint[2],
                 1.0,
             ],
+            warp: [parameters.noise_weight, parameters.noise_time, 0.0, 0.0],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
 
-        if playing {
-            let mut newest_frame = None;
+        let now = Instant::now();
+        let speed = playback_speed.clamp(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED);
+        let frame_interval = Duration::from_secs_f32(1.0 / (VIDEO_FPS as f32 * speed));
+        if (speed - self.playback_speed).abs() > f32::EPSILON {
+            self.playback_speed = speed;
+            self.next_frame_due = Some(now);
+        }
+        let frame_is_due = self.next_frame_due.is_none_or(|deadline| now >= deadline);
+
+        if playing && frame_is_due {
+            let mut next_frame = None;
             if let Ok(frames) = self.frames.get_mut() {
-                while let Ok(frame) = frames.try_recv() {
-                    newest_frame = Some(frame);
-                }
+                next_frame = frames.try_recv().ok();
             }
-            if let Some(frame) = newest_frame {
+            if let Some(frame) = next_frame {
                 queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.video_texture,
@@ -394,6 +421,13 @@ impl SceneRenderResources {
                 );
                 self.uploaded_frames += 1;
                 self.stats.set_uploaded_frames(self.uploaded_frames);
+                let scheduled_next = self.next_frame_due.unwrap_or(now) + frame_interval;
+                self.next_frame_due =
+                    Some(if now.saturating_duration_since(scheduled_next) >= frame_interval {
+                        now + frame_interval
+                    } else {
+                        scheduled_next
+                    });
             }
         }
     }

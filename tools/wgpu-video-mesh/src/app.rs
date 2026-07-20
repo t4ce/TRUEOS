@@ -14,7 +14,11 @@ use crate::{
 
 pub struct VideoMeshApp {
     mesh: MeshKind,
+    perlin_noise: bool,
+    noise_weight: f32,
+    noise_time: f32,
     playing: bool,
+    playback_speed: f32,
     auto_rotate: bool,
     rotation_speed: f32,
     yaw: f32,
@@ -52,7 +56,11 @@ impl VideoMeshApp {
 
         Ok(Self {
             mesh: MeshKind::UvSphere,
+            perlin_noise: false,
+            noise_weight: 0.1,
+            noise_time: 0.0,
             playing: true,
+            playback_speed: 1.0,
             auto_rotate: true,
             rotation_speed: 18.0,
             yaw: 0.0,
@@ -129,6 +137,11 @@ impl VideoMeshApp {
                     ui.selectable_value(&mut self.mesh, kind, kind.label());
                 }
             });
+        ui.checkbox(&mut self.perlin_noise, "Perlin noise");
+        ui.add_enabled(
+            self.perlin_noise,
+            egui::Slider::new(&mut self.noise_weight, 0.0..=0.3).text("Noise weight"),
+        );
 
         ui.add_space(8.0);
         if ui
@@ -141,6 +154,14 @@ impl VideoMeshApp {
         {
             self.playing = !self.playing;
         }
+        ui.add(
+            egui::Slider::new(
+                &mut self.playback_speed,
+                video::MIN_PLAYBACK_SPEED..=video::MAX_PLAYBACK_SPEED,
+            )
+            .custom_formatter(|value, _| format!("{value:.2}×"))
+            .text("Playback speed"),
+        );
         ui.checkbox(&mut self.auto_rotate, "Auto rotate");
         ui.add(
             egui::Slider::new(&mut self.rotation_speed, -90.0..=90.0)
@@ -247,10 +268,17 @@ impl VideoMeshApp {
                     exposure: self.exposure,
                     lighting: self.lighting,
                     saturation: self.saturation,
+                    noise_weight: if self.perlin_noise {
+                        self.noise_weight
+                    } else {
+                        0.0
+                    },
+                    noise_time: self.noise_time,
                     object_tint: [tint[0], tint[1], tint[2]],
                     aspect_ratio: rect.width() / rect.height().max(1.0),
                 },
                 playing: self.playing,
+                playback_speed: self.playback_speed,
             },
         ));
     }
@@ -264,6 +292,9 @@ impl eframe::App for VideoMeshApp {
         if self.auto_rotate {
             self.yaw += self.rotation_speed.to_radians() * elapsed;
         }
+        if self.perlin_noise {
+            self.noise_time = (self.noise_time + elapsed) % 4096.0;
+        }
 
         if ctx.input(|input| input.key_pressed(egui::Key::Space))
             && !ctx.egui_wants_keyboard_input()
@@ -271,7 +302,7 @@ impl eframe::App for VideoMeshApp {
             self.playing = !self.playing;
         }
 
-        if self.playing || self.auto_rotate {
+        if self.playing || self.auto_rotate || self.perlin_noise {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
