@@ -10,7 +10,37 @@ const VID_SLOT: &str = "vid";
 
 #[derive(Copy, Clone)]
 struct VidCommand {
+    source: VidSource,
     loop_playback: bool,
+}
+
+#[derive(Copy, Clone)]
+enum VidSource {
+    Embedded,
+    Online,
+}
+
+impl VidSource {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Embedded => "kernel-embedded",
+            Self::Online => "online-mp4",
+        }
+    }
+
+    const fn asset(self) -> &'static str {
+        match self {
+            Self::Embedded => crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
+            Self::Online => "fixed-online-avc1-mp4",
+        }
+    }
+
+    const fn next_stage(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded-annexb-decode",
+            Self::Online => "fixed-mp4-download-demux-decode",
+        }
+    }
 }
 
 struct VidUi4Session {
@@ -43,16 +73,29 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    let loop_playback = match (args.next(), args.next()) {
-        (None, None) => false,
-        (Some(arg), None) if arg.eq_ignore_ascii_case("loop") => true,
-        _ => {
+    let mut source = VidSource::Embedded;
+    let mut loop_playback = false;
+    let mut saw_source = false;
+    let mut saw_loop = false;
+    for arg in rest.split_whitespace() {
+        if arg.eq_ignore_ascii_case("online") && !saw_source {
+            source = VidSource::Online;
+            saw_source = true;
+        } else if arg.eq_ignore_ascii_case("embedded") && !saw_source {
+            source = VidSource::Embedded;
+            saw_source = true;
+        } else if arg.eq_ignore_ascii_case("loop") && !saw_loop {
+            loop_playback = true;
+            saw_loop = true;
+        } else {
             usage(io);
             return ParseOutcome::Handled;
         }
+    }
+    let command = VidCommand {
+        source,
+        loop_playback,
     };
-    let command = VidCommand { loop_playback };
     let active_target = matrix_target_for_backend(io);
     let target = switch_matrix_target_slot(&active_target, VID_SLOT);
     set_matrix_target_active(&target, true);
@@ -62,8 +105,9 @@ pub(crate) fn try_parse(
             print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: queued source=kernel-embedded asset={} fps=60 loop={}",
-                    crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
+                    "vid: queued source={} asset={} fps=60 loop={}",
+                    command.source.name(),
+                    command.source.asset(),
                     loop_playback as u8,
                 )
                 .as_str(),
@@ -78,7 +122,7 @@ pub(crate) fn try_parse(
 }
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vid: usage `vid [loop]`");
+    print_shell_line(io, "vid: usage `vid [embedded|online] [loop]`");
 }
 
 #[embassy_executor::task(pool_size = 1)]
@@ -86,8 +130,9 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start source=kernel-embedded asset={} fps=60 loop={} path=vd_box+guc_simd16+ui4_double_frame",
-            crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_ASSET,
+            "vid: start source={} asset={} fps=60 loop={} path=vd_box+guc_simd16+ui4_double_frame",
+            command.source.name(),
+            command.source.asset(),
             command.loop_playback as u8,
         )
         .as_str(),
@@ -102,13 +147,23 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     };
     crate::log_info!(
         target: "ui4";
-        "shell2/vid: stage=ui4-lifetime-reserved next=embedded-annexb-decode frame-allocation=deferred-until-first-decoded-frame\n"
+        "shell2/vid: stage=ui4-lifetime-reserved source={} next={} frame-allocation=deferred-until-first-decoded-frame\n",
+        command.source.name(),
+        command.source.next_stage(),
     );
 
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);
-        match crate::intel::media::hw_vid::run_ui4_framed_video_playback().await {
+        let result = match command.source {
+            VidSource::Embedded => {
+                crate::intel::media::hw_vid::run_ui4_framed_video_playback().await
+            }
+            VidSource::Online => {
+                crate::intel::media::hw_vid::run_online_ui4_framed_video_playback().await
+            }
+        };
+        match result {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(

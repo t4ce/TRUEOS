@@ -2,7 +2,7 @@
 
 ## Status
 
-`vid` now starts the one hardware-validated playback path. `vid loop` repeats it while keeping the same UI4 window lifetime. There is no boot delay, autostart playback, ten-cut harness, or alternate Shell2 media route.
+`vid` starts the hardware-validated embedded path. `vid online` downloads the fixed AVC1 MP4 asset, demuxes it to Annex-B, and then enters the same UI4 playback tail. Add `loop` to either mode to repeat it while keeping the same UI4 window lifetime. There is no boot delay, autostart playback, ten-cut harness, browser-media playback route, or configurable legacy Shell2 route.
 
 The recorded 200-frame run showed recognizable moving video, 200 GuC conversion submissions and retirements, normal SURFLIVE ownership, and the final 200 ms shrink/fade close. This validates the fixed asset and hardware path; it does not yet validate arbitrary codecs, resolutions, color metadata, or sources.
 
@@ -10,14 +10,19 @@ The recorded 200-frame run showed recognizable moving video, 200 GuC conversion 
 
 | Stage | Code/API | Ownership |
 |---|---|---|
-| Command | `shell2/cmds/vid.rs::try_parse` accepts only `vid [loop]` and spawns one Embassy `vid_task` | Shell2 task owns the command and UI lifetime |
-| Source | `UI4_FRAMED_VIDEO_ANNEXB` is the fixed embedded `x31_head_movie.annexb.h264` asset | Kernel read-only bytes; no TRUEOSFS/open/demux dependency |
-| Playback | `hw_vid::run_ui4_framed_video_playback` parses/paces one 60 Hz Annex-B lap | The calling Shell2 task awaits it directly; this is not an RPC to a player daemon |
+| Command | `shell2/cmds/vid.rs::try_parse` accepts only `vid [embedded\|online] [loop]` and spawns one Embassy `vid_task` | Shell2 task owns the command and UI lifetime |
+| Embedded source | `UI4_FRAMED_VIDEO_ANNEXB` is the fixed embedded `x31_head_movie.annexb.h264` asset | Kernel read-only bytes; no TRUEOSFS/open/demux dependency |
+| Online source | `run_online_ui4_framed_video_playback` downloads one fixed MP4 and converts its AVC1 samples to Annex-B | Network acquisition and MP4 demux end at the same decoder input contract; they do not own presentation |
+| Playback | The selected `hw_vid` entry parses/paces one 60 Hz Annex-B lap | The calling Shell2 task awaits it directly; this is not an RPC to a player daemon |
 | Decode service | `hw_pic_submit_h264` queues an encoded access unit and returns an ID; resident `hw_pic_service` drives VDBOX; `wait_output_for_id` awaits the matching output | Request/output queue, not a callback |
 | UI producer | `present_decoded_nv12_stream_frame` converts the retired decoder surface into an acquired UI4 RGBA buffer | GuC/RCS owns the conversion interval |
 | Window/display | UI4 Frame pool, window broker, compositor direct import, plane flip, and SURFLIVE | UI4 owns publication and display lifetime |
 
-`vid loop` retains the UI4 session and double-buffered Frame between laps. Each lap independently acquires/releases the media playback guard and restarts the embedded stream. Plain `vid` closes after one lap.
+Loop mode retains the UI4 session and double-buffered Frame between laps. Each lap independently acquires/releases the media playback guard and restarts its selected source. A non-looping command closes after one lap.
+
+Surf browser video references are deliberately dropped at the asset boundary with `no-forward-no-present`. The abandoned browser candidate queue, SABR probes, Innertube resolver, and browser decoder ingress were removed; browser playback will be designed separately later.
+
+The unused TRUEOSFS range-reader ingress, reverse/cache presentation experiment, decoded-frame CPU cache, and stripe-study path were also removed. `hw_vid` now exposes only the embedded UI4 entry, the fixed-online UI4 entry, and their playback report type.
 
 ## What the “player” is
 

@@ -18,6 +18,24 @@ const ASSET_READY_CAP: usize = 256;
 pub(crate) const ASSET_FETCH_WORKERS: usize = 4;
 pub(crate) const ASSET_FETCH_POLICY_PCORE_IMAGE: u8 = 1;
 
+fn is_ignored_browser_media_ref(kind: &str, url: &str) -> bool {
+    let kind = kind.to_ascii_lowercase();
+    let url = url.to_ascii_lowercase();
+    kind.contains("video")
+        || kind.contains("media")
+        || kind.contains("mp4")
+        || kind.contains("h264")
+        || kind.contains("avc")
+        || kind.contains("mpegurl")
+        || kind.contains("m3u8")
+        || url.contains("mime=video")
+        || url.contains("videoplayback")
+        || url.ends_with(".mp4")
+        || url.contains(".mp4?")
+        || url.ends_with(".m3u8")
+        || url.contains(".m3u8?")
+}
+
 #[derive(Clone, Debug)]
 pub struct BrowserAssetRequest {
     pub browser_instance_id: u32,
@@ -297,16 +315,13 @@ pub fn begin_browser_asset_refs(browser_instance_id: u32) -> i32 {
         let dropped_batches = batches_before.saturating_sub(shack.batches.len());
         (dropped_queued, dropped_ready, dropped_batches)
     });
-    let dropped_media_candidates =
-        crate::surfer::media_stream::begin_browser_generation(browser_instance_id, next_generation);
     crate::log!(
-        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} dropped_batches={} dropped_media_candidates={} active_cancel_signal=1\n",
+        "asset_shack: browser begin browser={} generation={} dropped_queued={} dropped_ready={} dropped_batches={} active_cancel_signal=1\n",
         browser_instance_id,
         next_generation,
         dropped_queued,
         dropped_ready,
-        dropped_batches,
-        dropped_media_candidates
+        dropped_batches
     );
     0
 }
@@ -320,16 +335,16 @@ pub fn push_browser_asset_ref(
     let Some(generation) = current_generation(browser_instance_id) else {
         return -1;
     };
-    if crate::surfer::media_stream::is_stream_candidate(kind.as_str(), url.as_str()) {
-        return crate::surfer::media_stream::push_candidate(
-            crate::surfer::media_stream::BrowserMediaCandidate {
-                browser_instance_id,
-                generation,
-                tag,
-                url,
-                kind,
-            },
-        ) as i32;
+    if is_ignored_browser_media_ref(kind.as_str(), url.as_str()) {
+        crate::log!(
+            "asset_shack: browser media ignored browser={} generation={} tag={} kind={} action=drop-no-forward-no-present url={}\n",
+            browser_instance_id,
+            generation,
+            tag,
+            kind,
+            url,
+        );
+        return 0;
     }
     with_asset_shack(|shack| {
         if shack.queued.len() >= ASSET_FETCH_QUEUE_CAP {

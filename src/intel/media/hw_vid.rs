@@ -1,33 +1,18 @@
-use alloc::{format, string::String, string::ToString, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
 };
 use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
-use serde_json::Value;
 
-// Cached reverse frames still use the retired primary-surface presentation
-// path instead of the ordinary UI4 window. Keep that ABI parked until reverse
-// presentation is converted to the native UI4/GuC producer used by forward
-// playback.
-const H264_REVERSE_PLAYBACK_ENABLED: bool = false;
-const H264_STRIPE_STUDY_FRAME_MS: u64 = 120;
-const H264_STRIPE_STUDY_STORE_TOP: usize = 8;
-const H264_STREAM_CHUNK_BYTES: usize = 64 * 1024;
-const H264_TRUEOSFS_MP4_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
-const H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
-const H264_BROWSER_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
-const H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS: u64 = 60_000;
-const H264_BROWSER_INNERTUBE_TIMEOUT_MS: u64 = 45_000;
-const H264_BROWSER_INNERTUBE_MAX_BYTES: usize = 4 * 1024 * 1024;
-const H264_BROWSER_SABR_PROBE_TIMEOUT_MS: u64 = 30_000;
-const H264_BROWSER_SABR_PROBE_BYTES: usize = 64 * 1024;
+const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
+const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 pub(crate) const UI4_FRAMED_VIDEO_ASSET: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_ANNEXB: &[u8] =
     include_bytes!("../../../tools/vid/x31_head_movie.annexb.h264");
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
-const H264_DEFAULT_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
+const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
 static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -52,58 +37,22 @@ fn h264_try_begin_playback(scope: &str) -> Result<H264PlaybackGuard, &'static st
 }
 
 #[derive(Copy, Clone, Debug)]
-pub(crate) enum H264PlaybackCacheMode {
-    Off,
-    Tail,
-    Full,
-}
-
-impl H264PlaybackCacheMode {
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Tail => "tail",
-            Self::Full => "full",
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct H264PlaybackOptions {
+struct H264PlaybackOptions {
     fps: u16,
-    reverse_after_forward: bool,
-    cache_mode: H264PlaybackCacheMode,
-    stripe_study: bool,
-    show_cache_fill: bool,
     diagnostics: bool,
     noreset_lite: bool,
-    loop_playback: bool,
 }
 
 impl H264PlaybackOptions {
-    pub(crate) const fn new(
-        fps: u16,
-        reverse_after_forward: bool,
-        cache_mode: H264PlaybackCacheMode,
-        stripe_study: bool,
-        show_cache_fill: bool,
-        diagnostics: bool,
-        noreset_lite: bool,
-        loop_playback: bool,
-    ) -> Self {
+    const fn new(fps: u16, diagnostics: bool, noreset_lite: bool) -> Self {
         Self {
             fps,
-            reverse_after_forward,
-            cache_mode,
-            stripe_study,
-            show_cache_fill,
             diagnostics,
             noreset_lite,
-            loop_playback,
         }
     }
 
-    pub(crate) const fn fps(self) -> u16 {
+    const fn fps(self) -> u16 {
         self.fps
     }
 
@@ -117,40 +66,12 @@ impl H264PlaybackOptions {
         EmbassyDuration::from_hz(self.fps as u64)
     }
 
-    pub(crate) const fn reverse_after_forward(self) -> bool {
-        self.reverse_after_forward
-    }
-
-    pub(crate) const fn name(self) -> &'static str {
-        if self.reverse_after_forward {
-            "forward-then-reverse"
-        } else {
-            "forward"
-        }
-    }
-
-    pub(crate) const fn cache_mode(self) -> H264PlaybackCacheMode {
-        self.cache_mode
-    }
-
-    pub(crate) const fn stripe_study(self) -> bool {
-        self.stripe_study
-    }
-
-    pub(crate) const fn show_cache_fill(self) -> bool {
-        self.show_cache_fill
-    }
-
-    pub(crate) const fn diagnostics(self) -> bool {
+    const fn diagnostics(self) -> bool {
         self.diagnostics
     }
 
-    pub(crate) const fn noreset_lite(self) -> bool {
+    const fn noreset_lite(self) -> bool {
         self.noreset_lite
-    }
-
-    pub(crate) const fn loop_playback(self) -> bool {
-        self.loop_playback
     }
 }
 
@@ -329,16 +250,7 @@ pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport
         return Err("media decode engine unavailable");
     }
     let _playback_guard = h264_try_begin_playback("shell-ui4-framed-video")?;
-    let options = H264PlaybackOptions::new(
-        UI4_FRAMED_VIDEO_FPS,
-        false,
-        H264PlaybackCacheMode::Off,
-        false,
-        false,
-        false,
-        true,
-        false,
-    );
+    let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     crate::log!(
         "intel/hw_vid: ui4-framed-video stage=decode-loop-begin asset={} bytes={} source=kernel-embedded-annexb fps={} presentation=ui4-double-frame\n",
         UI4_FRAMED_VIDEO_ASSET,
@@ -370,12 +282,27 @@ pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport
     }
 }
 
-pub(crate) async fn run_online_vid_playback(
-    options: H264PlaybackOptions,
-) -> Result<H264PlaybackReport, &'static str> {
-    let _playback_guard = h264_try_begin_playback("shell-online")?;
-    run_media_url_playback(H264_DEFAULT_MEDIA_URL, options, "media-url-shell", "media-url-shell")
-        .await
+pub(crate) async fn run_online_ui4_framed_video_playback()
+-> Result<H264PlaybackReport, &'static str> {
+    let _playback_guard = h264_try_begin_playback("shell-online-ui4-framed-video")?;
+    let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
+    crate::log!(
+        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-double-frame\n",
+        H264_ONLINE_MEDIA_URL,
+        UI4_FRAMED_VIDEO_FPS,
+    );
+    let report = run_media_url_playback(
+        H264_ONLINE_MEDIA_URL,
+        options,
+        "online-ui4-framed-video",
+        "online-ui4-framed-video",
+    )
+    .await?;
+    if report.submitted == 0 {
+        Err("online video produced no decodable frames")
+    } else {
+        Ok(report)
+    }
 }
 
 async fn run_media_url_playback(
@@ -412,734 +339,6 @@ async fn run_media_url_playback(
     Ok(report)
 }
 
-pub(crate) async fn run_browser_media_playback(
-    options: H264PlaybackOptions,
-) -> Result<H264PlaybackReport, &'static str> {
-    if !crate::intel::has_media_decode_engine() {
-        return Err("media decode engine unavailable");
-    }
-    let _playback_guard = h264_try_begin_playback("browser-media")?;
-    let queued_before = crate::surfer::media_stream::candidate_count();
-    crate::log!(
-        "intel/hw_vid: browser-media candidate-wait begin queued={} timeout_ms={}\n",
-        queued_before,
-        H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS
-    );
-    let Some(candidate) =
-        crate::surfer::media_stream::wait_latest_candidate(H264_BROWSER_MEDIA_CANDIDATE_WAIT_MS)
-            .await
-    else {
-        crate::log!(
-            "intel/hw_vid: browser-media candidate-wait timeout queued={} action=open-youtube-in-surf-before-vid\n",
-            crate::surfer::media_stream::candidate_count()
-        );
-        return Err("no browser media candidate queued");
-    };
-    crate::log!(
-        "intel/hw_vid: browser-media start browser={} generation={} tag={} kind={} fetch_timeout_ms={} url={}\n",
-        candidate.browser_instance_id,
-        candidate.generation,
-        candidate.tag,
-        candidate.kind,
-        H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
-        candidate.url
-    );
-    let media_url = if h264_browser_media_is_innertube(
-        candidate.kind.as_str(),
-        candidate.url.as_str(),
-    ) {
-        match h264_resolve_youtube_innertube_candidate(candidate.url.as_str()).await {
-            Ok(url) => url,
-            Err(err) => {
-                if let Some(sabr) = crate::surfer::media_stream::sabr_candidate() {
-                    h264_probe_sabr_candidate(&sabr).await;
-                }
-                return Err(err);
-            }
-        }
-    } else if h264_browser_media_is_sabr(candidate.kind.as_str(), candidate.url.as_str()) {
-        h264_probe_sabr_candidate(&candidate).await;
-        crate::log!(
-            "intel/hw_vid: browser-media unsupported kind=sabr action=needs-sabr-demux-or-innertube-direct-format browser={} generation={} tag={} url={}\n",
-            candidate.browser_instance_id,
-            candidate.generation,
-            candidate.tag,
-            candidate.url
-        );
-        return Err("browser media SABR unsupported");
-    } else {
-        candidate.url.clone()
-    };
-
-    let mp4_bytes = match h264_fetch_browser_media_candidate(media_url.as_str()).await {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            if let Some(sabr) = crate::surfer::media_stream::sabr_candidate() {
-                h264_probe_sabr_candidate(&sabr).await;
-            }
-            return Err(err);
-        }
-    };
-    let annexb = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
-    crate::log!(
-        "intel/hw_vid: browser-media demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} source=browser url={}\n",
-        mp4_bytes.len(),
-        annexb.len(),
-        media_url
-    );
-
-    let old_hw_pic_logging =
-        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
-    let old_surface_probes =
-        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
-    let old_noreset_lite =
-        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let report =
-        h264_i_p_playback_probe_annexb_bytes(annexb, "browser-mp4-avc1", "browser-media", options)
-            .await;
-    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
-    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
-    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
-    Ok(report)
-}
-
-fn h264_browser_media_is_sabr(kind: &str, url: &str) -> bool {
-    let kind = kind.to_ascii_lowercase();
-    let url = url.to_ascii_lowercase();
-    kind.contains("sabr") || url.contains("sabr=1") || url.contains("sabr%3d1")
-}
-
-fn h264_browser_media_is_innertube(kind: &str, url: &str) -> bool {
-    kind.to_ascii_lowercase().contains("youtube-innertube")
-        || url.to_ascii_lowercase().starts_with("innertube://player?")
-}
-
-async fn h264_probe_sabr_candidate(candidate: &crate::surfer::media_stream::BrowserMediaCandidate) {
-    let range_end = H264_BROWSER_SABR_PROBE_BYTES.saturating_sub(1);
-    for profile in [
-        "browser-range",
-        "plain-range",
-        "youtube-range",
-        "sabr-range",
-        "plain-norange",
-        "youtube-norange",
-        "sabr-norange",
-    ] {
-        let started = EmbassyInstant::now();
-        crate::log!(
-            "intel/hw_vid: browser-media sabr-probe begin profile={} browser={} generation={} tag={} timeout_ms={} range=0-{} url={}\n",
-            profile,
-            candidate.browser_instance_id,
-            candidate.generation,
-            candidate.tag,
-            H264_BROWSER_SABR_PROBE_TIMEOUT_MS,
-            range_end,
-            candidate.url
-        );
-        match crate::r::net::https::get_browser_media_probe_bytes_shared(
-            candidate.url.as_str(),
-            range_end,
-            profile,
-            H264_BROWSER_SABR_PROBE_TIMEOUT_MS as u32,
-            H264_BROWSER_SABR_PROBE_BYTES,
-        )
-        .await
-        {
-            Ok(bytes) => {
-                let head = hex_prefix(bytes.as_slice(), 32);
-                crate::log!(
-                    "intel/hw_vid: browser-media sabr-probe done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moof={} marker_mdat={} marker_avcc={} marker_start_code={} marker_sabr={} head_hex={}\n",
-                    profile,
-                    bytes.len(),
-                    started.elapsed().as_millis(),
-                    bytes_contains(bytes.as_slice(), b"ftyp") as u8,
-                    bytes_contains(bytes.as_slice(), b"moof") as u8,
-                    bytes_contains(bytes.as_slice(), b"mdat") as u8,
-                    bytes_contains(bytes.as_slice(), b"avcC") as u8,
-                    has_h264_start_code(bytes.as_slice()) as u8,
-                    bytes_contains(bytes.as_slice(), b"sabr") as u8,
-                    head
-                );
-                return;
-            }
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: browser-media sabr-probe failed profile={} err={} waited_ms={} url={}\n",
-                    profile,
-                    err,
-                    started.elapsed().as_millis(),
-                    candidate.url
-                );
-            }
-        }
-    }
-    crate::log!(
-        "intel/hw_vid: browser-media sabr-probe exhausted profiles=7 action=need-sabr-request-shape-or-demux\n"
-    );
-}
-
-async fn h264_resolve_youtube_innertube_candidate(url: &str) -> Result<String, &'static str> {
-    let probe = YoutubeInnertubeProbe::from_url(url)?;
-    let request_url = format!(
-        "https://www.youtube.com/youtubei/v1/player?key={}&prettyPrint=false",
-        url_query_encode(probe.api_key.as_str())
-    );
-
-    let mut deferred_n_url: Option<String> = None;
-    for profile in
-        youtube_innertube_profiles(probe.client_name.as_str(), probe.client_version.as_str())
-    {
-        let started = EmbassyInstant::now();
-        let visitor = if profile.use_visitor && !probe.visitor_data.is_empty() {
-            Some(probe.visitor_data.as_str())
-        } else {
-            None
-        };
-        crate::log!(
-            "intel/hw_vid: youtube-innertube fetch begin profile={} video_id={} client_name={} client_version={} visitor={} timeout_ms={} max_bytes={}\n",
-            profile.label,
-            probe.video_id,
-            profile.client_name,
-            profile.client_version,
-            visitor.is_some() as u8,
-            H264_BROWSER_INNERTUBE_TIMEOUT_MS,
-            H264_BROWSER_INNERTUBE_MAX_BYTES
-        );
-        let body = youtube_innertube_player_body(&probe, &profile);
-        let bytes = match crate::r::net::https::post_youtubei_player_bytes_shared(
-            request_url.as_str(),
-            body.as_str(),
-            youtube_client_header_name(profile.client_name),
-            profile.client_version,
-            visitor,
-            H264_BROWSER_INNERTUBE_TIMEOUT_MS as u32,
-            H264_BROWSER_INNERTUBE_MAX_BYTES,
-        )
-        .await
-        {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: youtube-innertube fetch failed profile={} err={} waited_ms={} video_id={}\n",
-                    profile.label,
-                    err,
-                    started.elapsed().as_millis(),
-                    probe.video_id
-                );
-                continue;
-            }
-        };
-        crate::log!(
-            "intel/hw_vid: youtube-innertube fetch done profile={} bytes={} waited_ms={} video_id={}\n",
-            profile.label,
-            bytes.len(),
-            started.elapsed().as_millis(),
-            probe.video_id
-        );
-        match h264_pick_youtube_innertube_direct_h264(
-            bytes.as_slice(),
-            probe.video_id.as_str(),
-            profile.label,
-        ) {
-            Ok(url) => {
-                if youtube_url_has_query_field(url.as_str(), "n") {
-                    crate::log!(
-                        "intel/hw_vid: youtube-innertube direct-h264 deferred profile={} reason=n-param-needs-transform video_id={} url={}\n",
-                        profile.label,
-                        probe.video_id,
-                        url
-                    );
-                    deferred_n_url.get_or_insert(url);
-                    continue;
-                }
-                crate::log!(
-                    "intel/hw_vid: youtube-innertube direct-h264 selected profile={} n_param=0 video_id={} url={}\n",
-                    profile.label,
-                    probe.video_id,
-                    url
-                );
-                return Ok(url);
-            }
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: youtube-innertube profile miss profile={} err={} video_id={}\n",
-                    profile.label,
-                    err,
-                    probe.video_id
-                );
-            }
-        }
-    }
-    if let Some(url) = deferred_n_url {
-        crate::log!(
-            "intel/hw_vid: youtube-innertube direct-h264 selected profile=deferred-web n_param=1 action=fetch-to-confirm-or-need-n-transform video_id={} url={}\n",
-            probe.video_id,
-            url
-        );
-        return Ok(url);
-    }
-    Err("browser media innertube no direct h264")
-}
-
-#[derive(Debug)]
-struct YoutubeInnertubeProbe {
-    video_id: String,
-    api_key: String,
-    client_name: String,
-    client_version: String,
-    visitor_data: String,
-    hl: String,
-    gl: String,
-    watch_url: String,
-    signature_timestamp: String,
-}
-
-impl YoutubeInnertubeProbe {
-    fn from_url(url: &str) -> Result<Self, &'static str> {
-        let Some((_, query)) = url.split_once('?') else {
-            return Err("browser media innertube bad probe");
-        };
-        let video_id =
-            query_field(query, "video_id").ok_or("browser media innertube no video id")?;
-        let api_key = query_field(query, "api_key").ok_or("browser media innertube no api key")?;
-        let client_name = query_field(query, "client_name").unwrap_or_else(|| String::from("WEB"));
-        let client_version = query_field(query, "client_version")
-            .ok_or("browser media innertube no client version")?;
-        let visitor_data = query_field(query, "visitor_data").unwrap_or_default();
-        let hl = query_field(query, "hl").unwrap_or_else(|| String::from("en"));
-        let gl = query_field(query, "gl").unwrap_or_else(|| String::from("US"));
-        let watch_url = query_field(query, "watch_url")
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", video_id));
-        let signature_timestamp = query_field(query, "sts").unwrap_or_default();
-        if video_id.is_empty() || api_key.is_empty() || client_version.is_empty() {
-            return Err("browser media innertube bad probe");
-        }
-        Ok(Self {
-            video_id,
-            api_key,
-            client_name,
-            client_version,
-            visitor_data,
-            hl,
-            gl,
-            watch_url,
-            signature_timestamp,
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct YoutubeInnertubeProfile<'a> {
-    label: &'static str,
-    client_name: &'a str,
-    client_version: &'a str,
-    use_visitor: bool,
-    rich_web_context: bool,
-    playback_context: bool,
-    client_extra_json: &'static str,
-    context_extra_json: &'static str,
-}
-
-fn youtube_innertube_profiles<'a>(
-    page_client_name: &'a str,
-    page_client_version: &'a str,
-) -> [YoutubeInnertubeProfile<'a>; 7] {
-    [
-        YoutubeInnertubeProfile {
-            label: "page-web",
-            client_name: page_client_name,
-            client_version: page_client_version,
-            use_visitor: true,
-            rich_web_context: false,
-            playback_context: false,
-            client_extra_json: "",
-            context_extra_json: "",
-        },
-        YoutubeInnertubeProfile {
-            label: "page-web-watch",
-            client_name: page_client_name,
-            client_version: page_client_version,
-            use_visitor: true,
-            rich_web_context: true,
-            playback_context: true,
-            client_extra_json: ",\"clientScreen\":\"WATCH\"",
-            context_extra_json: "",
-        },
-        YoutubeInnertubeProfile {
-            label: "page-web-novisitor",
-            client_name: page_client_name,
-            client_version: page_client_version,
-            use_visitor: false,
-            rich_web_context: false,
-            playback_context: false,
-            client_extra_json: "",
-            context_extra_json: "",
-        },
-        YoutubeInnertubeProfile {
-            label: "page-web-watch-novisitor",
-            client_name: page_client_name,
-            client_version: page_client_version,
-            use_visitor: false,
-            rich_web_context: true,
-            playback_context: true,
-            client_extra_json: ",\"clientScreen\":\"WATCH\"",
-            context_extra_json: "",
-        },
-        YoutubeInnertubeProfile {
-            label: "web-embedded",
-            client_name: "WEB_EMBEDDED_PLAYER",
-            client_version: page_client_version,
-            use_visitor: false,
-            rich_web_context: true,
-            playback_context: true,
-            client_extra_json: "",
-            context_extra_json: ",\"thirdParty\":{\"embedUrl\":\"https://www.youtube.com/\"}",
-        },
-        YoutubeInnertubeProfile {
-            label: "android",
-            client_name: "ANDROID",
-            client_version: "19.09.37",
-            use_visitor: false,
-            rich_web_context: false,
-            playback_context: false,
-            client_extra_json: ",\"androidSdkVersion\":30,\"osName\":\"Android\",\"osVersion\":\"11\"",
-            context_extra_json: "",
-        },
-        YoutubeInnertubeProfile {
-            label: "ios",
-            client_name: "IOS",
-            client_version: "19.09.3",
-            use_visitor: false,
-            rich_web_context: false,
-            playback_context: false,
-            client_extra_json: ",\"deviceMake\":\"Apple\",\"deviceModel\":\"iPhone16,2\",\"osName\":\"iOS\",\"osVersion\":\"17.5.1.21F90\"",
-            context_extra_json: "",
-        },
-    ]
-}
-
-fn youtube_client_header_name(client_name: &str) -> &str {
-    match client_name {
-        "WEB" => "1",
-        "ANDROID" => "3",
-        "IOS" => "5",
-        "WEB_EMBEDDED_PLAYER" => "56",
-        _ => client_name,
-    }
-}
-
-fn youtube_innertube_player_body(
-    probe: &YoutubeInnertubeProbe,
-    profile: &YoutubeInnertubeProfile<'_>,
-) -> String {
-    let rich_client = if profile.rich_web_context {
-        format!(
-            ",\"originalUrl\":\"{}\",\"platform\":\"DESKTOP\",\"userAgent\":\"{}\"",
-            json_escape(probe.watch_url.as_str()),
-            json_escape(YOUTUBE_WEB_USER_AGENT)
-        )
-    } else {
-        String::new()
-    };
-    let request_context = if profile.rich_web_context {
-        String::from(",\"request\":{\"useSsl\":true},\"user\":{\"lockedSafetyMode\":false}")
-    } else {
-        String::new()
-    };
-    let playback_context = if profile.playback_context {
-        let current_url =
-            youtube_watch_path_from_url(probe.watch_url.as_str(), probe.video_id.as_str());
-        let sts = probe.signature_timestamp.trim();
-        let sts_json = if sts.chars().all(|ch| ch.is_ascii_digit()) && !sts.is_empty() {
-            format!(",\"signatureTimestamp\":{}", sts)
-        } else {
-            String::new()
-        };
-        format!(
-            ",\"playbackContext\":{{\"contentPlaybackContext\":{{\"currentUrl\":\"{}\",\"html5Preference\":\"HTML5_PREF_WANTS\",\"lactMilliseconds\":\"-1\"{}}}}}",
-            json_escape(current_url.as_str()),
-            sts_json
-        )
-    } else {
-        String::new()
-    };
-    let client = format!(
-        "\"client\":{{\"clientName\":\"{}\",\"clientVersion\":\"{}\",\"hl\":\"{}\",\"gl\":\"{}\",\"visitorData\":\"{}\"{}{}}}",
-        json_escape(profile.client_name),
-        json_escape(profile.client_version),
-        json_escape(probe.hl.as_str()),
-        json_escape(probe.gl.as_str()),
-        if profile.use_visitor {
-            json_escape(probe.visitor_data.as_str())
-        } else {
-            String::new()
-        },
-        rich_client,
-        profile.client_extra_json
-    );
-    format!(
-        "{{\"context\":{{{}{}{}}},\"videoId\":\"{}\"{},\"contentCheckOk\":true,\"racyCheckOk\":true}}",
-        client,
-        request_context,
-        profile.context_extra_json,
-        json_escape(probe.video_id.as_str()),
-        playback_context
-    )
-}
-
-const YOUTUBE_WEB_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-
-fn youtube_watch_path_from_url(url: &str, video_id: &str) -> String {
-    if let Some(path_start) = url.find("youtube.com") {
-        let after_host = &url[path_start + "youtube.com".len()..];
-        if after_host.starts_with("/watch?") {
-            return after_host.to_string();
-        }
-    }
-    format!("/watch?v={}", video_id)
-}
-
-fn h264_pick_youtube_innertube_direct_h264(
-    bytes: &[u8],
-    video_id: &str,
-    profile: &str,
-) -> Result<String, &'static str> {
-    let value = serde_json::from_slice::<Value>(bytes)
-        .map_err(|_| "browser media innertube json failed")?;
-    let playability_status = value
-        .get("playabilityStatus")
-        .and_then(|entry| entry.get("status"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let playability_reason = value
-        .get("playabilityStatus")
-        .and_then(|entry| entry.get("reason"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let streaming = value.get("streamingData");
-    let regular = streaming
-        .and_then(|entry| entry.get("formats"))
-        .and_then(Value::as_array)
-        .map(|formats| formats.len())
-        .unwrap_or(0);
-    let adaptive = streaming
-        .and_then(|entry| entry.get("adaptiveFormats"))
-        .and_then(Value::as_array)
-        .map(|formats| formats.len())
-        .unwrap_or(0);
-    let server_abr = streaming
-        .and_then(|entry| entry.get("serverAbrStreamingUrl"))
-        .and_then(Value::as_str)
-        .is_some();
-    let mut total_video = 0usize;
-    let mut direct_url = 0usize;
-    let mut h264 = 0usize;
-    let mut h264_direct = 0usize;
-    let mut picked: Option<(String, String, String, u64, u64, u64)> = None;
-    if let Some(streaming) = streaming {
-        for group in ["formats", "adaptiveFormats"] {
-            let Some(formats) = streaming.get(group).and_then(Value::as_array) else {
-                continue;
-            };
-            for format in formats {
-                let mime = format.get("mimeType").and_then(Value::as_str).unwrap_or("");
-                if !mime.to_ascii_lowercase().contains("video/") {
-                    continue;
-                }
-                total_video += 1;
-                let url = format.get("url").and_then(Value::as_str).unwrap_or("");
-                if !url.is_empty() {
-                    direct_url += 1;
-                }
-                if !youtube_format_is_h264(format, mime) {
-                    continue;
-                }
-                h264 += 1;
-                if url.is_empty() {
-                    continue;
-                }
-                h264_direct += 1;
-                let quality = format
-                    .get("qualityLabel")
-                    .or_else(|| format.get("quality"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let itag = format.get("itag").and_then(Value::as_u64).unwrap_or(0);
-                let width = format.get("width").and_then(Value::as_u64).unwrap_or(0);
-                let height = format.get("height").and_then(Value::as_u64).unwrap_or(0);
-                let bitrate = format.get("bitrate").and_then(Value::as_u64).unwrap_or(0);
-                let score = youtube_direct_h264_score(group, itag, height);
-                let replace = picked
-                    .as_ref()
-                    .map(|(_, _, _, old_score, _, _)| score > *old_score)
-                    .unwrap_or(true);
-                if replace {
-                    picked = Some((
-                        String::from(url),
-                        String::from(mime),
-                        String::from(quality),
-                        score,
-                        width,
-                        bitrate,
-                    ));
-                }
-            }
-        }
-    }
-    crate::log!(
-        "intel/hw_vid: youtube-innertube formats profile={} video_id={} playability={} reason={} regular={} adaptive={} total_video={} direct_url={} h264={} h264_direct={} server_abr={}\n",
-        profile,
-        video_id,
-        playability_status,
-        log_token(playability_reason).as_str(),
-        regular,
-        adaptive,
-        total_video,
-        direct_url,
-        h264,
-        h264_direct,
-        server_abr as u8
-    );
-    if let Some((url, mime, quality, score, width, bitrate)) = picked {
-        crate::log!(
-            "intel/hw_vid: youtube-innertube direct-h264 candidate profile={} score={} quality={} width={} bitrate={} mime={} url={}\n",
-            profile,
-            score,
-            quality,
-            width,
-            bitrate,
-            mime,
-            url
-        );
-        return Ok(url);
-    }
-    Err("browser media innertube no direct h264")
-}
-
-fn youtube_format_is_h264(format: &Value, mime: &str) -> bool {
-    let lower = mime.to_ascii_lowercase();
-    if lower.contains("video/mp4") && (lower.contains("avc1") || lower.contains("avc3")) {
-        return true;
-    }
-    matches!(
-        format.get("itag").and_then(Value::as_u64).unwrap_or(0),
-        18 | 22 | 37 | 38 | 82 | 83 | 84 | 85
-    )
-}
-
-fn youtube_direct_h264_score(group: &str, itag: u64, height: u64) -> u64 {
-    if itag == 18 {
-        return 10_000;
-    }
-    let progressive_bonus = if group == "formats" { 1_000 } else { 0 };
-    progressive_bonus + height.min(4_000)
-}
-
-fn query_field(query: &str, key: &str) -> Option<String> {
-    for part in query.split('&') {
-        let (raw_key, raw_value) = part.split_once('=').unwrap_or((part, ""));
-        if url_decode_component(raw_key).as_str() == key {
-            return Some(url_decode_component(raw_value));
-        }
-    }
-    None
-}
-
-fn youtube_url_has_query_field(url: &str, key: &str) -> bool {
-    let Some((_, after_query)) = url.split_once('?') else {
-        return false;
-    };
-    let query = after_query
-        .split_once('#')
-        .map(|(query, _)| query)
-        .unwrap_or(after_query);
-    query.split('&').any(|part| {
-        let raw_key = part
-            .split_once('=')
-            .map(|(raw_key, _)| raw_key)
-            .unwrap_or(part);
-        url_decode_component(raw_key).as_str() == key
-    })
-}
-
-fn url_decode_component(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                out.push((hi << 4) | lo);
-                index += 3;
-                continue;
-            }
-        }
-        out.push(if bytes[index] == b'+' {
-            b' '
-        } else {
-            bytes[index]
-        });
-        index += 1;
-    }
-    String::from_utf8(out).unwrap_or_default()
-}
-
-fn url_query_encode(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            let _ = write!(out, "%{:02X}", byte);
-        }
-    }
-    out
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn json_escape(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if (ch as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04X}", ch as u32);
-            }
-            ch => out.push(ch),
-        }
-    }
-    out
-}
-
-fn log_token(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars().take(96) {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
-            out.push(ch);
-        } else if ch.is_whitespace() {
-            out.push('_');
-        }
-    }
-    if out.is_empty() {
-        out.push('-');
-    }
-    out
-}
-
 fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
@@ -1147,14 +346,10 @@ fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
-fn has_h264_start_code(bytes: &[u8]) -> bool {
-    bytes_contains(bytes, &[0, 0, 1]) || bytes_contains(bytes, &[0, 0, 0, 1])
-}
-
 fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
     let mut out = String::new();
-    for (idx, byte) in bytes.iter().take(max_len).copied().enumerate() {
-        if idx != 0 {
+    for (index, byte) in bytes.iter().take(max_len).copied().enumerate() {
+        if index != 0 {
             out.push('_');
         }
         let _ = write!(out, "{:02X}", byte);
@@ -1165,39 +360,31 @@ fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
     out
 }
 
-async fn h264_fetch_browser_media_candidate(url: &str) -> Result<Vec<u8>, &'static str> {
-    h264_fetch_media_url_bytes(url, "browser-media").await
-}
-
 async fn h264_fetch_media_url_bytes(
     url: &str,
     log_scope: &'static str,
 ) -> Result<Vec<u8>, &'static str> {
-    let youtube_n_param = youtube_url_has_query_field(url, "n");
     let profiles = [
-        "browser-range",
+        "media-range",
         "plain-range",
-        "youtube-range",
-        "browser-norange",
+        "media-norange",
         "plain-norange",
-        "youtube-norange",
     ];
     for profile in profiles {
         let started = EmbassyInstant::now();
         crate::log!(
-            "intel/hw_vid: {} fetch begin profile={} timeout_ms={} max_bytes={} youtube_n_param={} url={}\n",
+            "intel/hw_vid: {} fetch begin profile={} timeout_ms={} max_bytes={} url={}\n",
             log_scope,
             profile,
-            H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS,
-            H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
-            youtube_n_param as u8,
+            H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS,
+            H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
             url
         );
-        match crate::r::net::https::get_browser_media_bytes_profile_shared(
+        match crate::r::net::https::get_media_bytes_profile_shared(
             url,
             profile,
-            H264_BROWSER_MEDIA_FETCH_TIMEOUT_MS as u32,
-            H264_BROWSER_MEDIA_FETCH_MAX_BYTES,
+            H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS as u32,
+            H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
         )
         .await
         {
@@ -1230,13 +417,12 @@ async fn h264_fetch_media_url_bytes(
         }
     }
     crate::log!(
-        "intel/hw_vid: {} fetch exhausted profiles={} youtube_n_param={} action=check-url-signature-or-n-transform url={}\n",
+        "intel/hw_vid: {} fetch exhausted profiles={} action=check-server-or-asset url={}\n",
         log_scope,
         profiles.len(),
-        youtube_n_param as u8,
         url
     );
-    Err("browser media fetch failed")
+    Err("online media fetch failed")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1884,7 +1070,7 @@ fn mp4_emit_track_annexb(
         return Err("mp4 avc track produced no annexb");
     }
     crate::log!(
-        "intel/hw_vid: browser-media mp4-demux track=video codec=avc1 mode={} track_id={} length_size={} samples={} sps={} pps={} annexb_bytes={} first_box={}\n",
+        "intel/hw_vid: online-media mp4-demux track=video codec=avc1 mode={} track_id={} length_size={} samples={} sps={} pps={} annexb_bytes={} first_box={}\n",
         mode,
         track.track_id,
         track.length_size,
@@ -2026,47 +1212,6 @@ struct H264IndexedFrame {
     stream_idr_index: usize,
     decode_start_frame: usize,
     detail: Option<super::h264_cmd::AvcFrameDebug>,
-    sps: Vec<u8>,
-    pps: Vec<u8>,
-}
-
-struct H264DecodedFrame {
-    bytes: Vec<u8>,
-    width: u32,
-    height: u32,
-    visible_width: u32,
-    visible_height: u32,
-    pitch_bytes: usize,
-    uv_offset: usize,
-}
-
-struct H264ForwardTailCache {
-    start_frame: usize,
-    frames: Vec<H264DecodedFrame>,
-}
-
-enum H264ForwardCache {
-    Full(Vec<H264DecodedFrame>),
-    Tail(H264ForwardTailCache),
-}
-
-struct H264StripeStudyCandidate {
-    metric: u64,
-    decoded_y_metric: u64,
-    source_index: usize,
-    reverse_step: usize,
-    snapshot: crate::intel::display::PrimarySurfaceBgra8Snapshot,
-}
-
-struct H264RangeNalReader {
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: String,
-    file_size: u64,
-    file_offset: u64,
-    buffer_base: u64,
-    scan_offset: usize,
-    buffer: Vec<u8>,
-    eof: bool,
 }
 
 struct H264MemoryNalReader {
@@ -2129,215 +1274,13 @@ impl H264MemoryNalReader {
 }
 
 enum H264NalReader {
-    Range(H264RangeNalReader),
     Memory(H264MemoryNalReader),
 }
 
 impl H264NalReader {
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
         match self {
-            Self::Range(reader) => reader.next_nal().await,
             Self::Memory(reader) => reader.next_nal().await,
-        }
-    }
-}
-
-impl H264RangeNalReader {
-    fn new(file: crate::r::fs::trueosfs::FileReadHandle, path: &str, file_size: u64) -> Self {
-        Self {
-            file,
-            path: String::from(path),
-            file_size,
-            file_offset: 0,
-            buffer_base: 0,
-            scan_offset: 0,
-            buffer: Vec::with_capacity(H264_STREAM_CHUNK_BYTES * 2),
-            eof: false,
-        }
-    }
-
-    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
-        loop {
-            if let Some(nal) = self.try_take_nal() {
-                return Some(nal);
-            }
-            if self.eof {
-                return None;
-            }
-            if !self.read_more().await {
-                self.eof = true;
-            }
-        }
-    }
-
-    async fn read_more(&mut self) -> bool {
-        if self.file_offset >= self.file_size {
-            return false;
-        }
-        let remaining = self.file_size.saturating_sub(self.file_offset);
-        let want = remaining.min(H264_STREAM_CHUNK_BYTES as u64) as usize;
-        let old_len = self.buffer.len();
-        self.buffer.resize(old_len + want, 0);
-        let read = match crate::r::fs::trueosfs::file_read_handle_range_async(
-            self.file,
-            self.file_offset,
-            &mut self.buffer[old_len..old_len + want],
-        )
-        .await
-        {
-            Ok(Some(read)) => read,
-            Ok(None) => 0,
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: h264-playback-probe stream-read failed path={} offset=0x{:X} want=0x{:X} err={:?}\n",
-                    self.path.as_str(),
-                    self.file_offset,
-                    want,
-                    err
-                );
-                0
-            }
-        };
-        self.buffer.truncate(old_len + read);
-        if read == 0 {
-            return false;
-        }
-        self.file_offset = self.file_offset.saturating_add(read as u64);
-        true
-    }
-
-    fn try_take_nal(&mut self) -> Option<H264BufferedNal> {
-        loop {
-            let (start, start_code_len) = match h264_find_start_code(&self.buffer, self.scan_offset)
-            {
-                Some(found) => found,
-                None => {
-                    self.discard_start_code_search_prefix();
-                    return None;
-                }
-            };
-            let payload_start = start + start_code_len;
-            let next = h264_find_start_code(&self.buffer, payload_start);
-            let end = if let Some((next_start, _)) = next {
-                next_start
-            } else if self.eof {
-                self.buffer.len()
-            } else {
-                self.scan_offset = start;
-                return None;
-            };
-
-            self.scan_offset = end;
-            if payload_start < end && payload_start < self.buffer.len() {
-                let mut bytes = Vec::with_capacity(end - start);
-                bytes.extend_from_slice(&self.buffer[start..end]);
-                let nal_type = self.buffer[payload_start] & 0x1f;
-                let stream_offset = self.buffer_base.saturating_add(start as u64);
-                self.drain_before(end);
-                return Some(H264BufferedNal {
-                    meta: H264StreamNal {
-                        stream_offset,
-                        bytes: end - start,
-                        nal_type,
-                    },
-                    bytes,
-                });
-            }
-
-            if end > start {
-                self.drain_before(end);
-            } else {
-                self.scan_offset = self.scan_offset.saturating_add(1);
-            }
-        }
-    }
-
-    fn discard_start_code_search_prefix(&mut self) {
-        if self.buffer.len() > 3 {
-            let keep = 3usize;
-            let drain = self.buffer.len() - keep;
-            self.drain_before(drain);
-        }
-    }
-
-    fn drain_before(&mut self, end: usize) {
-        let drain = end.min(self.buffer.len());
-        if drain == 0 {
-            return;
-        }
-        self.buffer.drain(0..drain);
-        self.buffer_base = self.buffer_base.saturating_add(drain as u64);
-        self.scan_offset = self.scan_offset.saturating_sub(drain);
-    }
-}
-
-async fn h264_open_playback_stream_once(
-    path: &str,
-) -> Option<crate::r::fs::trueosfs::FileReadHandle> {
-    crate::log!(
-        "intel/hw_vid: shell-vid stage=stream-root-lookup path={} next=trueosfs-primary-root\n",
-        path
-    );
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!(
-            "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=no-trueosfs-root mode=shell\n",
-            path
-        );
-        return None;
-    };
-    crate::log!(
-        "intel/hw_vid: shell-vid stage=stream-root-ready path={} next=file-open-async\n",
-        path
-    );
-    match crate::r::fs::trueosfs::file_read_open_async(disk, path).await {
-        Ok(Some(file)) => {
-            crate::log!(
-                "intel/hw_vid: h264-playback-probe stream-open accepted=1 path={} bytes={} data_lba={} source=trueosfs-root mode=shell-open-handle-range-stream\n",
-                path,
-                file.data_len(),
-                file.data_lba()
-            );
-            Some(file)
-        }
-        Ok(None) => {
-            crate::log!(
-                "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=file-missing mode=shell\n",
-                path
-            );
-            None
-        }
-        Err(err) => {
-            crate::log!(
-                "intel/hw_vid: h264-playback-probe stream-open accepted=0 path={} reason=read-error err={:?} mode=shell\n",
-                path,
-                err
-            );
-            None
-        }
-    }
-}
-
-fn h264_path_is_mp4(path: &str) -> bool {
-    path.rsplit_once('.')
-        .map(|(_, extension)| extension.eq_ignore_ascii_case("mp4"))
-        .unwrap_or(false)
-}
-
-async fn h264_file_has_mp4_header(
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &str,
-) -> bool {
-    let mut header = [0u8; 12];
-    match crate::r::fs::trueosfs::file_read_handle_range_async(file, 0, &mut header).await {
-        Ok(Some(read)) => read >= 8 && &header[4..8] == b"ftyp",
-        Ok(None) => false,
-        Err(err) => {
-            crate::log!(
-                "intel/hw_vid: h264-playback-probe header-read failed path={} err={:?}\n",
-                path,
-                err
-            );
-            false
         }
     }
 }
@@ -2373,24 +1316,6 @@ async fn h264_wait_until_next_frame(
     }
 }
 
-async fn h264_i_p_playback_probe(
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &str,
-    mode: H264PlaybackOptions,
-) -> H264PlaybackReport {
-    let stream_bytes = file.data_len();
-    let reader = H264NalReader::Range(H264RangeNalReader::new(file, path, stream_bytes));
-    h264_i_p_playback_probe_with_reader(
-        reader,
-        stream_bytes,
-        "trueosfs-root",
-        path,
-        mode,
-        Some(file),
-    )
-    .await
-}
-
 async fn h264_i_p_playback_probe_annexb_bytes(
     bytes: Vec<u8>,
     source: &'static str,
@@ -2399,7 +1324,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
     let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes));
-    h264_i_p_playback_probe_with_reader(reader, stream_bytes, source, path, mode, None).await
+    h264_i_p_playback_probe_with_reader(reader, stream_bytes, source, path, mode).await
 }
 
 async fn h264_i_p_playback_probe_with_reader(
@@ -2408,7 +1333,6 @@ async fn h264_i_p_playback_probe_with_reader(
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
-    reverse_file: Option<crate::r::fs::trueosfs::FileReadHandle>,
 ) -> H264PlaybackReport {
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
@@ -2423,35 +1347,20 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut vcl_nals_seen = 0usize;
     let mut indexed_frames = Vec::new();
     let mut last_idr_frame: Option<usize> = None;
-    let forward_full_cache_enabled = matches!(mode.cache_mode(), H264PlaybackCacheMode::Full)
-        && ((H264_REVERSE_PLAYBACK_ENABLED && mode.reverse_after_forward()) || mode.stripe_study());
-    let forward_tail_cache_enabled = H264_REVERSE_PLAYBACK_ENABLED
-        && matches!(mode.cache_mode(), H264PlaybackCacheMode::Tail)
-        && mode.reverse_after_forward();
-    let capture_forward_output = forward_full_cache_enabled || forward_tail_cache_enabled;
-    let mut forward_full_cache = Vec::new();
-    let mut forward_tail_start_frame = 0usize;
-    let mut forward_tail_cache = Vec::new();
     let mut stopped_at = 0u64;
     let frame_period = mode.frame_period();
     let mut playback_timing = H264PlaybackTiming::default();
 
     crate::log!(
-        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=range-stream chunk=0x{:X} playback_mode={} presentation=ui4-interactive cache={} stripe_study={} fill={} diagnostics={} noreset_lite={} loop={} stop=eos\n",
+        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-double-frame diagnostics={} noreset_lite={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
         frame_period.as_ticks(),
         source,
         path,
-        H264_STREAM_CHUNK_BYTES,
-        mode.name(),
-        mode.cache_mode().name(),
-        mode.stripe_study() as u8,
-        mode.show_cache_fill() as u8,
         mode.diagnostics() as u8,
         mode.noreset_lite() as u8,
-        mode.loop_playback() as u8,
     );
 
     while let Some(nal) = reader.next_nal().await {
@@ -2526,10 +1435,6 @@ async fn h264_i_p_playback_probe_with_reader(
         let indexed_frame = indexed_frames.len();
         if unit.nal_type == 5 {
             last_idr_frame = Some(indexed_frame);
-            if forward_tail_cache_enabled {
-                forward_tail_start_frame = indexed_frame;
-                forward_tail_cache.clear();
-            }
         }
         let mut frame = Vec::with_capacity(unit.sps.len() + unit.pps.len() + unit.data.len());
         frame.extend_from_slice(unit.sps.as_slice());
@@ -2559,8 +1464,6 @@ async fn h264_i_p_playback_probe_with_reader(
             stream_idr_index: idr_seen,
             decode_start_frame: last_idr_frame.unwrap_or(indexed_frame),
             detail,
-            sps: unit.sps,
-            pps: unit.pps,
         });
         if mode.diagnostics() {
             h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
@@ -2579,13 +1482,11 @@ async fn h264_i_p_playback_probe_with_reader(
 
         submitted += 1;
         let decode_start = EmbassyInstant::now();
-        let decoded = h264_submit_wait_probe_frame(
+        let _presented = h264_submit_wait_ui4_frame(
             "forward",
             submitted,
             idr_seen,
             &frame,
-            true,
-            capture_forward_output,
             mode.diagnostics(),
             Some(&mut playback_timing),
         )
@@ -2595,29 +1496,16 @@ async fn h264_i_p_playback_probe_with_reader(
                 .saturating_duration_since(decode_start)
                 .as_ticks(),
         );
-        if capture_forward_output {
-            if let Some(decoded) = decoded {
-                if forward_full_cache_enabled {
-                    forward_full_cache.push(decoded);
-                } else if forward_tail_cache_enabled {
-                    forward_tail_cache.push(decoded);
-                }
-            }
-        }
         h264_wait_until_next_frame(&mut next_frame_deadline, frame_period, &mut playback_timing)
             .await;
     }
 
-    let forward_full_cache_frames = forward_full_cache.len();
-    let forward_full_cache_bytes = h264_decoded_frames_total_bytes(forward_full_cache.as_slice());
-    let forward_tail_cache_frames = forward_tail_cache.len();
-    let forward_tail_cache_bytes = h264_decoded_frames_total_bytes(forward_tail_cache.as_slice());
     h264_log_keyframe_summary(indexed_frames.as_slice(), stream_bytes);
     let playback_report =
         playback_timing.report(mode, submitted, skipped_unsupported_frames, playback_start);
 
     crate::log!(
-        "intel/hw_vid: h264-playback-probe done nals={} idr_seen={} p_seen={} submitted={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} forward_tail_cache_bytes=0x{:X} reason={}\n",
+        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} submitted={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
@@ -2652,63 +1540,27 @@ async fn h264_i_p_playback_probe_with_reader(
         playback_report.avg_present_us,
         playback_report.max_present_us,
         playback_report.avg_poll_iters,
-        forward_full_cache_frames,
-        forward_full_cache_bytes,
-        forward_tail_cache_frames,
-        forward_tail_cache_bytes,
         "eos"
     );
-
-    if mode.stripe_study() && forward_full_cache.len() == indexed_frames.len() {
-        h264_stripe_study_from_full_cache(indexed_frames.as_slice(), forward_full_cache.as_slice())
-            .await;
-    }
-
-    if mode.reverse_after_forward() {
-        let forward_cache = if forward_full_cache_enabled && !forward_full_cache.is_empty() {
-            Some(H264ForwardCache::Full(forward_full_cache))
-        } else if forward_tail_cache_enabled && !forward_tail_cache.is_empty() {
-            Some(H264ForwardCache::Tail(H264ForwardTailCache {
-                start_frame: forward_tail_start_frame,
-                frames: forward_tail_cache,
-            }))
-        } else {
-            None
-        };
-        if let Some(file) = reverse_file {
-            h264_reverse_playback_probe(file, path, indexed_frames.as_slice(), forward_cache, mode)
-                .await;
-        } else {
-            crate::log!(
-                "intel/hw_vid: h264-reverse-probe skipped reason=source-not-seekable source={} path={}\n",
-                source,
-                path
-            );
-        }
-    }
     playback_report
 }
 
-async fn h264_submit_wait_probe_frame(
+async fn h264_submit_wait_ui4_frame(
     phase: &'static str,
     playback_frame: usize,
     stream_idr_index: usize,
     encoded: &[u8],
-    present_output: bool,
-    capture_output: bool,
     diagnostics: bool,
     mut timing: Option<&mut H264PlaybackTiming>,
-) -> Option<H264DecodedFrame> {
+) -> bool {
     if diagnostics {
         let before = crate::intel::hw_pic_snapshot();
         crate::log!(
-            "intel/hw_vid: h264-probe submit phase={} playback_frame={} stream_idr={} bytes={} present={} capture={} pending={} outputs={} service_started={}\n",
+            "intel/hw_vid: h264-frame submit phase={} playback_frame={} stream_idr={} bytes={} destination=ui4-double-frame pending={} outputs={} service_started={}\n",
             phase,
             playback_frame,
             stream_idr_index,
             encoded.len(),
-            present_output as u8,
-            capture_output as u8,
             before.pending,
             before.outputs,
             before.service_started as u8
@@ -2725,7 +1577,7 @@ async fn h264_submit_wait_probe_frame(
                 stream_idr_index,
                 err
             );
-            return None;
+            return false;
         }
     };
 
@@ -2742,18 +1594,14 @@ async fn h264_submit_wait_probe_frame(
             after.outputs,
             after.service_started as u8
         );
-        return None;
+        return false;
     };
 
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_hw_pic_timing(output.timing);
     }
     let present_start = EmbassyInstant::now();
-    let stored = if present_output {
-        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output).await
-    } else {
-        false
-    };
+    let stored = h264_present_probe_output(phase, playback_frame, stream_idr_index, &output).await;
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_present_ticks(
             EmbassyInstant::now()
@@ -2764,7 +1612,7 @@ async fn h264_submit_wait_probe_frame(
 
     if diagnostics {
         crate::log!(
-            "intel/hw_vid: h264-probe output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} present={} err={}\n",
+            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-double-frame err={}\n",
             phase,
             playback_frame,
             stream_idr_index,
@@ -2782,784 +1630,10 @@ async fn h264_submit_wait_probe_frame(
             output.gpu_addr,
             output.phys_addr,
             stored as u8,
-            if present_output {
-                "ytile-nv12-diagnostic"
-            } else {
-                "decode-only"
-            },
             output.error_code
         );
     }
-    if capture_output {
-        h264_capture_probe_output(&output)
-    } else if stored {
-        Some(H264DecodedFrame::empty_marker(&output))
-    } else {
-        None
-    }
-}
-
-async fn h264_reverse_playback_probe(
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &str,
-    frames: &[H264IndexedFrame],
-    forward_cache: Option<H264ForwardCache>,
-    mode: H264PlaybackOptions,
-) {
-    if !H264_REVERSE_PLAYBACK_ENABLED {
-        crate::log!(
-            "intel/hw_vid: h264-reverse-probe skipped reason=reverse-playback-abi-disabled path={}\n",
-            path
-        );
-        return;
-    }
-    if frames.is_empty() {
-        crate::log!("intel/hw_vid: h264-reverse-probe skipped reason=no-indexed-frames\n");
-        return;
-    }
-
-    let mut presented = 0usize;
-    let mut submitted = 0usize;
-    let mut read_failures = 0usize;
-    let mut decode_failures = 0usize;
-    let mut gops = 0usize;
-    let mut cached_peak = 0usize;
-    let mut reused_forward_tail = false;
-    let mut forward_full_cache = None;
-    let mut forward_tail = None;
-    let frame_period = mode.frame_period();
-    let mut next_present_deadline = EmbassyInstant::now();
-    let mut present_timing = H264PlaybackTiming::default();
-    match forward_cache {
-        Some(H264ForwardCache::Full(cache)) => forward_full_cache = Some(cache),
-        Some(H264ForwardCache::Tail(tail)) => forward_tail = Some(tail),
-        None => {}
-    };
-    let forward_full_cache_frames = forward_full_cache
-        .as_ref()
-        .map(|cache| cache.len())
-        .unwrap_or(0);
-    let forward_full_cache_bytes = forward_full_cache
-        .as_ref()
-        .map(|cache| h264_decoded_frames_total_bytes(cache.as_slice()))
-        .unwrap_or(0);
-
-    crate::log!(
-        "intel/hw_vid: h264-reverse-probe start frames={} first_nal={} last_nal={} strategy=cache-gop-forward-present-gop-backward forward_full_cache={} forward_full_cache_bytes=0x{:X} forward_tail_cache={} visible_cache_fill={} source=trueosfs-root path={}\n",
-        frames.len(),
-        frames[0].nal_type,
-        frames[frames.len() - 1].nal_type,
-        forward_full_cache_frames,
-        forward_full_cache_bytes,
-        forward_tail
-            .as_ref()
-            .map(|tail| tail.frames.len())
-            .unwrap_or(0),
-        mode.show_cache_fill() as u8,
-        path
-    );
-
-    if let Some(cache) = forward_full_cache {
-        if cache.len() == frames.len() {
-            let cache_bytes = h264_decoded_frames_total_bytes(cache.as_slice());
-            crate::log!(
-                "intel/hw_vid: h264-reverse-probe full-cache begin frames={} bytes=0x{:X} action=present-backward-only\n",
-                cache.len(),
-                cache_bytes
-            );
-
-            for (source_index, decoded) in cache.iter().enumerate().rev() {
-                let frame = &frames[source_index];
-                presented += 1;
-                let stored = h264_present_decoded_frame(decoded);
-                crate::log!(
-                    "intel/hw_vid: h264-reverse-probe present playback_frame={} source_frame={} gop=0 gop_frame={} stream_idr={} nal={} class={} frame_num={} poc={}/{} poc_type={} refs_l0={} offset=0x{:X} stored={} bytes=0x{:X} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X}\n",
-                    presented,
-                    source_index + 1,
-                    h264_gop_frame_number(frame, source_index),
-                    frame.stream_idr_index,
-                    frame.nal_type,
-                    h264_frame_class_label(frame),
-                    h264_frame_num_i32(frame),
-                    h264_frame_poc_top(frame),
-                    h264_frame_poc_bottom(frame),
-                    h264_frame_poc_type(frame),
-                    h264_frame_refs_l0(frame),
-                    frame.stream_offset,
-                    stored as u8,
-                    decoded.bytes.len(),
-                    decoded.width,
-                    decoded.height,
-                    decoded.visible_width,
-                    decoded.visible_height,
-                    decoded.pitch_bytes,
-                    decoded.uv_offset
-                );
-                h264_wait_until_next_frame(
-                    &mut next_present_deadline,
-                    frame_period,
-                    &mut present_timing,
-                )
-                .await;
-            }
-
-            crate::log!(
-                "intel/hw_vid: h264-reverse-probe done frames={} gops=0 presented={} submitted=0 cached_peak={} read_failures=0 decode_failures=0 visible_cache_fill={} waited_frames={} late_frames={} total_wait_ms={} max_late_ms={} strategy=forward-full-cache reason=eos\n",
-                frames.len(),
-                presented,
-                cache.len(),
-                mode.show_cache_fill() as u8,
-                present_timing.waited_frames,
-                present_timing.late_frames,
-                h264_ticks_to_millis(present_timing.total_wait_ticks),
-                h264_ticks_to_millis(present_timing.max_late_ticks)
-            );
-            return;
-        }
-
-        crate::log!(
-            "intel/hw_vid: h264-reverse-probe full-cache rejected frames={} indexed_frames={} action=fall-back-gop-cache\n",
-            cache.len(),
-            frames.len()
-        );
-    }
-
-    let mut gop_end = frames.len();
-    while gop_end > 0 {
-        let gop_start = frames[gop_end - 1].decode_start_frame.min(gop_end - 1);
-        let mut cached = Vec::new();
-        gops += 1;
-
-        let gop_span_end = frames[gop_end - 1]
-            .stream_offset
-            .saturating_add(frames[gop_end - 1].bytes as u64);
-        let gop_span_bytes = gop_span_end.saturating_sub(frames[gop_start].stream_offset);
-        crate::log!(
-            "intel/hw_vid: h264-reverse-probe gop-cache begin gop={} start_frame={} end_frame={} frames={} idr={} span_offset=0x{:X} span_bytes=0x{:X}\n",
-            gops,
-            gop_start + 1,
-            gop_end,
-            gop_end.saturating_sub(gop_start),
-            frames[gop_start].stream_idr_index,
-            frames[gop_start].stream_offset,
-            gop_span_bytes
-        );
-
-        if let Some(tail) = forward_tail.take() {
-            let expected = gop_end.saturating_sub(gop_start);
-            if tail.start_frame == gop_start && tail.frames.len() == expected {
-                cached = tail.frames;
-                reused_forward_tail = true;
-                crate::log!(
-                    "intel/hw_vid: h264-reverse-probe gop-cache reuse gop={} source=forward-tail start_frame={} frames={}\n",
-                    gops,
-                    gop_start + 1,
-                    cached.len()
-                );
-            } else {
-                crate::log!(
-                    "intel/hw_vid: h264-reverse-probe gop-cache reuse-miss gop={} tail_start={} tail_frames={} want_start={} want_frames={}\n",
-                    gops,
-                    tail.start_frame + 1,
-                    tail.frames.len(),
-                    gop_start + 1,
-                    expected
-                );
-            }
-        }
-
-        if cached.is_empty() {
-            let Some(gop_bytes) =
-                h264_read_indexed_frame_span(file, path, &frames[gop_start..gop_end]).await
-            else {
-                read_failures += 1;
-                gop_end = gop_start;
-                continue;
-            };
-
-            for decode_frame in gop_start..gop_end {
-                let packet =
-                    h264_build_indexed_frame_packet_from_span(&frames[decode_frame], &gop_bytes);
-                submitted += 1;
-                let Some(decoded) = h264_submit_wait_probe_frame(
-                    if mode.show_cache_fill() {
-                        "reverse-cache-visible"
-                    } else {
-                        "reverse-cache"
-                    },
-                    submitted,
-                    frames[decode_frame].stream_idr_index,
-                    packet.as_slice(),
-                    mode.show_cache_fill(),
-                    true,
-                    mode.diagnostics(),
-                    None,
-                )
-                .await
-                else {
-                    decode_failures += 1;
-                    break;
-                };
-                cached.push(decoded);
-            }
-        }
-
-        cached_peak = cached_peak.max(cached.len());
-        crate::log!(
-            "intel/hw_vid: h264-reverse-probe gop-cache end gop={} cached={} submitted={} read_failures={} decode_failures={} source={}\n",
-            gops,
-            cached.len(),
-            submitted,
-            read_failures,
-            decode_failures,
-            if reused_forward_tail {
-                "forward-tail"
-            } else {
-                "decode"
-            }
-        );
-        reused_forward_tail = false;
-
-        for (cache_index, decoded) in cached.iter().enumerate().rev() {
-            let source_index = gop_start + cache_index;
-            let frame = &frames[source_index];
-            presented += 1;
-            let stored = h264_present_decoded_frame(decoded);
-            crate::log!(
-                "intel/hw_vid: h264-reverse-probe present playback_frame={} source_frame={} gop={} gop_frame={} stream_idr={} nal={} class={} frame_num={} poc={}/{} poc_type={} refs_l0={} offset=0x{:X} stored={} bytes=0x{:X} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X}\n",
-                presented,
-                source_index + 1,
-                gops,
-                h264_gop_frame_number(frame, source_index),
-                frame.stream_idr_index,
-                frame.nal_type,
-                h264_frame_class_label(frame),
-                h264_frame_num_i32(frame),
-                h264_frame_poc_top(frame),
-                h264_frame_poc_bottom(frame),
-                h264_frame_poc_type(frame),
-                h264_frame_refs_l0(frame),
-                frame.stream_offset,
-                stored as u8,
-                decoded.bytes.len(),
-                decoded.width,
-                decoded.height,
-                decoded.visible_width,
-                decoded.visible_height,
-                decoded.pitch_bytes,
-                decoded.uv_offset
-            );
-            h264_wait_until_next_frame(
-                &mut next_present_deadline,
-                frame_period,
-                &mut present_timing,
-            )
-            .await;
-        }
-
-        gop_end = gop_start;
-    }
-
-    crate::log!(
-        "intel/hw_vid: h264-reverse-probe done frames={} gops={} presented={} submitted={} cached_peak={} read_failures={} decode_failures={} visible_cache_fill={} waited_frames={} late_frames={} total_wait_ms={} max_late_ms={} reason=eos\n",
-        frames.len(),
-        gops,
-        presented,
-        submitted,
-        cached_peak,
-        read_failures,
-        decode_failures,
-        mode.show_cache_fill() as u8,
-        present_timing.waited_frames,
-        present_timing.late_frames,
-        h264_ticks_to_millis(present_timing.total_wait_ticks),
-        h264_ticks_to_millis(present_timing.max_late_ticks)
-    );
-}
-
-async fn h264_stripe_study_from_full_cache(
-    frames: &[H264IndexedFrame],
-    cache: &[H264DecodedFrame],
-) {
-    if frames.len() != cache.len() || cache.is_empty() {
-        crate::log!(
-            "intel/hw_vid: h264-stripe-study skipped reason=cache-shape frames={} cache={}\n",
-            frames.len(),
-            cache.len()
-        );
-        return;
-    }
-
-    let mut candidates = Vec::new();
-    let mut scanned = 0usize;
-    let mut captured = 0usize;
-    let mut max_metric = 0u64;
-    crate::log!(
-        "intel/hw_vid: h264-stripe-study begin frames={} direction=reverse frame_ms={} store_top={} artifact=primary-bgra8-raw metric=vertical-dark-discontinuity\n",
-        cache.len(),
-        H264_STRIPE_STUDY_FRAME_MS,
-        H264_STRIPE_STUDY_STORE_TOP
-    );
-
-    for (reverse_offset, source_index) in (0..cache.len()).rev().enumerate() {
-        let decoded = &cache[source_index];
-        let frame = &frames[source_index];
-        let reverse_step = reverse_offset + 1;
-        let stored = h264_present_decoded_frame(decoded);
-        let snapshot = crate::intel::capture_primary_surface_bgra8();
-        let primary_metric = snapshot
-            .as_ref()
-            .map(|snapshot| h264_vertical_black_stripe_metric(snapshot, decoded))
-            .unwrap_or(0);
-        let decoded_y_metric = h264_decoded_luma_stripe_metric(decoded);
-        scanned += 1;
-        captured += usize::from(snapshot.is_some());
-        max_metric = max_metric.max(primary_metric);
-        crate::log!(
-            "intel/hw_vid: h264-stripe-study frame reverse_step={} source_frame={} gop_frame={} stream_idr={} class={} frame_num={} poc={}/{} primary_metric={} decoded_y_metric={} stored={} captured={} decoded={}x{} visible={}x{}\n",
-            reverse_step,
-            source_index + 1,
-            h264_gop_frame_number(frame, source_index),
-            frame.stream_idr_index,
-            h264_frame_class_label(frame),
-            h264_frame_num_i32(frame),
-            h264_frame_poc_top(frame),
-            h264_frame_poc_bottom(frame),
-            primary_metric,
-            decoded_y_metric,
-            stored as u8,
-            snapshot.is_some() as u8,
-            decoded.width,
-            decoded.height,
-            decoded.visible_width,
-            decoded.visible_height
-        );
-        if let Some(snapshot) = snapshot {
-            h264_stripe_study_insert_candidate(
-                &mut candidates,
-                H264StripeStudyCandidate {
-                    metric: primary_metric,
-                    decoded_y_metric,
-                    source_index,
-                    reverse_step,
-                    snapshot,
-                },
-            );
-        }
-        Timer::after(EmbassyDuration::from_millis(H264_STRIPE_STUDY_FRAME_MS)).await;
-    }
-
-    h264_write_stripe_study_artifacts(frames, cache, candidates.as_slice()).await;
-    crate::log!(
-        "intel/hw_vid: h264-stripe-study done scanned={} captured={} stored={} max_metric={}\n",
-        scanned,
-        captured,
-        candidates.len(),
-        max_metric
-    );
-}
-
-fn h264_stripe_study_insert_candidate(
-    candidates: &mut Vec<H264StripeStudyCandidate>,
-    candidate: H264StripeStudyCandidate,
-) {
-    if H264_STRIPE_STUDY_STORE_TOP == 0 {
-        return;
-    }
-
-    let insert_at = candidates
-        .iter()
-        .position(|existing| candidate.metric > existing.metric)
-        .unwrap_or(candidates.len());
-    if insert_at >= H264_STRIPE_STUDY_STORE_TOP {
-        return;
-    }
-    candidates.insert(insert_at, candidate);
-    if candidates.len() > H264_STRIPE_STUDY_STORE_TOP {
-        candidates.pop();
-    }
-}
-
-async fn h264_write_stripe_study_artifacts(
-    frames: &[H264IndexedFrame],
-    cache: &[H264DecodedFrame],
-    candidates: &[H264StripeStudyCandidate],
-) {
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        crate::log!("intel/hw_vid: h264-stripe-study write skipped reason=no-trueosfs-root\n");
-        return;
-    };
-
-    let mut manifest = String::new();
-    let _ = writeln!(
-        manifest,
-        "kind=h264-stripe-study format=primary-bgra8-raw+decoded-nv12-raw candidates={}",
-        candidates.len()
-    );
-
-    for (rank, candidate) in candidates.iter().enumerate() {
-        let frame = &frames[candidate.source_index];
-        let primary_path = format!(
-            "h264_stripe_study_rank{:02}_src{:05}_primary_metric{}.bgra",
-            rank + 1,
-            candidate.source_index + 1,
-            candidate.metric
-        );
-        let primary_wrote = match crate::r::fs::trueosfs::file_in_async(
-            disk,
-            primary_path.as_str(),
-            candidate.snapshot.pixels.as_slice(),
-        )
-        .await
-        {
-            Ok(ok) => ok,
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: h264-stripe-study write failed path={} err={:?}\n",
-                    primary_path.as_str(),
-                    err
-                );
-                false
-            }
-        };
-        let decoded_path = format!(
-            "h264_stripe_study_rank{:02}_src{:05}_decoded_nv12.yuv",
-            rank + 1,
-            candidate.source_index + 1
-        );
-        let decoded = cache.get(candidate.source_index);
-        let decoded_wrote = if let Some(decoded) = decoded {
-            match crate::r::fs::trueosfs::file_in_async(
-                disk,
-                decoded_path.as_str(),
-                decoded.bytes.as_slice(),
-            )
-            .await
-            {
-                Ok(ok) => ok,
-                Err(err) => {
-                    crate::log!(
-                        "intel/hw_vid: h264-stripe-study write failed path={} err={:?}\n",
-                        decoded_path.as_str(),
-                        err
-                    );
-                    false
-                }
-            }
-        } else {
-            false
-        };
-        crate::log!(
-            "intel/hw_vid: h264-stripe-study artifact rank={} primary_path={} primary_wrote={} decoded_path={} decoded_wrote={} source_frame={} reverse_step={} primary_metric={} decoded_y_metric={} primary_width={} primary_height={} primary_bytes=0x{:X} decoded_width={} decoded_height={} decoded_visible={}x{} decoded_pitch=0x{:X} decoded_uv=0x{:X} decoded_bytes=0x{:X} class={} frame_num={} poc={}/{}\n",
-            rank + 1,
-            primary_path.as_str(),
-            primary_wrote as u8,
-            decoded_path.as_str(),
-            decoded_wrote as u8,
-            candidate.source_index + 1,
-            candidate.reverse_step,
-            candidate.metric,
-            candidate.decoded_y_metric,
-            candidate.snapshot.width,
-            candidate.snapshot.height,
-            candidate.snapshot.pixels.len(),
-            decoded.map(|decoded| decoded.width).unwrap_or(0),
-            decoded.map(|decoded| decoded.height).unwrap_or(0),
-            decoded.map(|decoded| decoded.visible_width).unwrap_or(0),
-            decoded.map(|decoded| decoded.visible_height).unwrap_or(0),
-            decoded.map(|decoded| decoded.pitch_bytes).unwrap_or(0),
-            decoded.map(|decoded| decoded.uv_offset).unwrap_or(0),
-            decoded.map(|decoded| decoded.bytes.len()).unwrap_or(0),
-            h264_frame_class_label(frame),
-            h264_frame_num_i32(frame),
-            h264_frame_poc_top(frame),
-            h264_frame_poc_bottom(frame)
-        );
-        let _ = writeln!(
-            manifest,
-            "rank={} primary_path={} primary_wrote={} decoded_path={} decoded_wrote={} source_frame={} reverse_step={} primary_metric={} decoded_y_metric={} primary_width={} primary_height={} primary_bytes={} decoded_width={} decoded_height={} decoded_visible_width={} decoded_visible_height={} decoded_pitch={} decoded_uv={} decoded_bytes={} class={} frame_num={} poc_top={} poc_bottom={}",
-            rank + 1,
-            primary_path.as_str(),
-            primary_wrote as u8,
-            decoded_path.as_str(),
-            decoded_wrote as u8,
-            candidate.source_index + 1,
-            candidate.reverse_step,
-            candidate.metric,
-            candidate.decoded_y_metric,
-            candidate.snapshot.width,
-            candidate.snapshot.height,
-            candidate.snapshot.pixels.len(),
-            decoded.map(|decoded| decoded.width).unwrap_or(0),
-            decoded.map(|decoded| decoded.height).unwrap_or(0),
-            decoded.map(|decoded| decoded.visible_width).unwrap_or(0),
-            decoded.map(|decoded| decoded.visible_height).unwrap_or(0),
-            decoded.map(|decoded| decoded.pitch_bytes).unwrap_or(0),
-            decoded.map(|decoded| decoded.uv_offset).unwrap_or(0),
-            decoded.map(|decoded| decoded.bytes.len()).unwrap_or(0),
-            h264_frame_class_label(frame),
-            h264_frame_num_i32(frame),
-            h264_frame_poc_top(frame),
-            h264_frame_poc_bottom(frame)
-        );
-    }
-
-    let manifest_path = "h264_stripe_study_manifest.txt";
-    let wrote_manifest =
-        match crate::r::fs::trueosfs::file_in_async(disk, manifest_path, manifest.as_bytes()).await
-        {
-            Ok(ok) => ok,
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: h264-stripe-study manifest failed path={} err={:?}\n",
-                    manifest_path,
-                    err
-                );
-                false
-            }
-        };
-    crate::log!(
-        "intel/hw_vid: h264-stripe-study manifest path={} wrote={} bytes={}\n",
-        manifest_path,
-        wrote_manifest as u8,
-        manifest.len()
-    );
-}
-
-fn h264_vertical_black_stripe_metric(
-    snapshot: &crate::intel::display::PrimarySurfaceBgra8Snapshot,
-    frame: &H264DecodedFrame,
-) -> u64 {
-    let screen_w = snapshot.width as usize;
-    let screen_h = snapshot.height as usize;
-    let video_w = (frame.visible_width as usize).min(screen_w);
-    let video_h = (frame.visible_height as usize).min(screen_h);
-    if screen_w < 4 || screen_h < 4 || video_w < 16 || video_h < 16 {
-        return 0;
-    }
-
-    let x0 = screen_w.saturating_sub(video_w) / 2;
-    let y0 = screen_h.saturating_sub(video_h) / 2;
-    let x_start = x0 + video_w / 10;
-    let x_end = x0 + video_w.saturating_mul(9) / 10;
-    let y_start = y0 + video_h / 8;
-    let y_end = y0 + video_h.saturating_mul(7) / 8;
-    if x_end <= x_start + 2 || y_end <= y_start {
-        return 0;
-    }
-
-    let mut max_deficit = 0u64;
-    let mut total_deficit = 0u64;
-    let mut x = x_start + 1;
-    while x + 1 < x_end {
-        let cur = h264_bgra_column_luma_average(snapshot, x, y_start, y_end);
-        let left = h264_bgra_column_luma_average(snapshot, x - 1, y_start, y_end);
-        let right = h264_bgra_column_luma_average(snapshot, x + 1, y_start, y_end);
-        let neighbor = (left + right) / 2;
-        if neighbor > cur && cur < 96 {
-            let deficit = neighbor - cur;
-            max_deficit = max_deficit.max(deficit);
-            total_deficit = total_deficit.saturating_add(deficit);
-        }
-        x += 1;
-    }
-
-    max_deficit
-        .saturating_mul(1_000_000)
-        .saturating_add(total_deficit)
-}
-
-fn h264_bgra_column_luma_average(
-    snapshot: &crate::intel::display::PrimarySurfaceBgra8Snapshot,
-    x: usize,
-    y_start: usize,
-    y_end: usize,
-) -> u64 {
-    let width = snapshot.width as usize;
-    if width == 0 || x >= width {
-        return 0;
-    }
-
-    let mut sum = 0u64;
-    let mut count = 0u64;
-    let mut y = y_start;
-    while y < y_end {
-        let off = y.saturating_mul(width).saturating_add(x).saturating_mul(4);
-        if off + 2 < snapshot.pixels.len() {
-            let b = snapshot.pixels[off] as u64;
-            let g = snapshot.pixels[off + 1] as u64;
-            let r = snapshot.pixels[off + 2] as u64;
-            sum = sum.saturating_add((r * 77 + g * 150 + b * 29) >> 8);
-            count += 1;
-        }
-        y += 8;
-    }
-
-    if count == 0 { 0 } else { sum / count }
-}
-
-fn h264_decoded_luma_stripe_metric(frame: &H264DecodedFrame) -> u64 {
-    let width = frame.visible_width as usize;
-    let height = frame.visible_height as usize;
-    let pitch = frame.pitch_bytes;
-    const YTILE_W: usize = 128;
-    if width < 16 || height < 16 || pitch < width || !pitch.is_multiple_of(YTILE_W) {
-        return 0;
-    }
-
-    let tiles_per_row = pitch / YTILE_W;
-    if tiles_per_row == 0 {
-        return 0;
-    }
-
-    let x_start = width / 10;
-    let x_end = width.saturating_mul(9) / 10;
-    let y_start = height / 8;
-    let y_end = height.saturating_mul(7) / 8;
-    if x_end <= x_start + 2 || y_end <= y_start {
-        return 0;
-    }
-
-    let mut max_deficit = 0u64;
-    let mut total_deficit = 0u64;
-    let mut x = x_start + 1;
-    while x + 1 < x_end {
-        let cur = h264_ytile_nv12_luma_column_average(frame, x, y_start, y_end, tiles_per_row);
-        let left = h264_ytile_nv12_luma_column_average(frame, x - 1, y_start, y_end, tiles_per_row);
-        let right =
-            h264_ytile_nv12_luma_column_average(frame, x + 1, y_start, y_end, tiles_per_row);
-        let neighbor = (left + right) / 2;
-        if neighbor > cur && cur < 96 {
-            let deficit = neighbor - cur;
-            max_deficit = max_deficit.max(deficit);
-            total_deficit = total_deficit.saturating_add(deficit);
-        }
-        x += 1;
-    }
-
-    max_deficit
-        .saturating_mul(1_000_000)
-        .saturating_add(total_deficit)
-}
-
-fn h264_ytile_nv12_luma_column_average(
-    frame: &H264DecodedFrame,
-    x: usize,
-    y_start: usize,
-    y_end: usize,
-    tiles_per_row: usize,
-) -> u64 {
-    let width = frame.visible_width as usize;
-    if width == 0 || x >= width {
-        return 0;
-    }
-
-    let mut sum = 0u64;
-    let mut count = 0u64;
-    let mut y = y_start;
-    while y < y_end {
-        let off = h264_ytile_8bpp_offset(x, y, tiles_per_row);
-        if off < frame.bytes.len() && off < frame.uv_offset {
-            sum = sum.saturating_add(frame.bytes[off] as u64);
-            count += 1;
-        }
-        y += 8;
-    }
-
-    if count == 0 { 0 } else { sum / count }
-}
-
-#[inline(always)]
-fn h264_ytile_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
-    const YTILE_W: usize = 128;
-    const YTILE_H: usize = 32;
-    let tile_col = byte_x / YTILE_W;
-    let tile_row = row_y / YTILE_H;
-    let in_x = byte_x % YTILE_W;
-    let in_y = row_y % YTILE_H;
-    let oword_col = in_x / 16;
-    let byte_in_oword = in_x % 16;
-    let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
-    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
-}
-
-async fn h264_read_indexed_frame_span(
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &str,
-    frames: &[H264IndexedFrame],
-) -> Option<H264IndexedSpan> {
-    let first = frames.first()?;
-    let last = frames.last()?;
-    let span_end = last.stream_offset.saturating_add(last.bytes as u64);
-    let span_len_u64 = span_end.checked_sub(first.stream_offset)?;
-    let span_len = usize::try_from(span_len_u64).ok()?;
-    let bytes = h264_read_stream_range(file, path, first.stream_offset, span_len).await?;
-    Some(H264IndexedSpan {
-        stream_offset: first.stream_offset,
-        bytes,
-    })
-}
-
-struct H264IndexedSpan {
-    stream_offset: u64,
-    bytes: Vec<u8>,
-}
-
-fn h264_build_indexed_frame_packet_from_span(
-    frame: &H264IndexedFrame,
-    span: &H264IndexedSpan,
-) -> Vec<u8> {
-    let rel = frame.stream_offset.saturating_sub(span.stream_offset);
-    let rel = usize::try_from(rel).unwrap_or(usize::MAX);
-    let end = rel.saturating_add(frame.bytes);
-    let nal = if rel <= span.bytes.len() && end <= span.bytes.len() {
-        &span.bytes[rel..end]
-    } else {
-        &[]
-    };
-    let mut packet = Vec::with_capacity(frame.sps.len() + frame.pps.len() + nal.len());
-    packet.extend_from_slice(frame.sps.as_slice());
-    packet.extend_from_slice(frame.pps.as_slice());
-    packet.extend_from_slice(nal);
-    packet
-}
-
-async fn h264_read_stream_range(
-    file: crate::r::fs::trueosfs::FileReadHandle,
-    path: &str,
-    offset: u64,
-    bytes: usize,
-) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    out.resize(bytes, 0);
-    let mut done = 0usize;
-    while done < bytes {
-        let read = match crate::r::fs::trueosfs::file_read_handle_range_async(
-            file,
-            offset.saturating_add(done as u64),
-            &mut out[done..bytes],
-        )
-        .await
-        {
-            Ok(Some(read)) => read,
-            Ok(None) => 0,
-            Err(err) => {
-                crate::log!(
-                    "intel/hw_vid: h264-playback-probe stream-read failed path={} offset=0x{:X} want=0x{:X} err={:?}\n",
-                    path,
-                    offset.saturating_add(done as u64),
-                    bytes.saturating_sub(done),
-                    err
-                );
-                0
-            }
-        };
-        if read == 0 {
-            return None;
-        }
-        done = done.saturating_add(read);
-    }
-    Some(out)
+    stored
 }
 
 async fn h264_present_probe_output(
@@ -3646,61 +1720,6 @@ async fn h264_present_probe_output(
     } else {
         false
     }
-}
-
-impl H264DecodedFrame {
-    fn empty_marker(output: &super::hw_pic::HwPicOutput) -> Self {
-        Self {
-            bytes: Vec::new(),
-            width: output.width,
-            height: output.height,
-            visible_width: output.visible_width,
-            visible_height: output.visible_height,
-            pitch_bytes: output.pitch_bytes,
-            uv_offset: output.uv_offset,
-        }
-    }
-}
-
-fn h264_capture_probe_output(output: &super::hw_pic::HwPicOutput) -> Option<H264DecodedFrame> {
-    if !matches!(
-        output.status,
-        super::hw_pic::HwPicStatus::Ready | super::hw_pic::HwPicStatus::Streamed
-    ) || output.format != super::hw_pic::HwPicPixelFormat::Nv12
-        || output.width == 0
-        || output.height == 0
-        || output.pitch_bytes == 0
-        || output.byte_len == 0
-        || output.virt_addr == 0
-    {
-        return None;
-    }
-
-    let src =
-        unsafe { core::slice::from_raw_parts(output.virt_addr as *const u8, output.byte_len) };
-    let mut bytes = Vec::with_capacity(output.byte_len);
-    bytes.extend_from_slice(src);
-    Some(H264DecodedFrame {
-        bytes,
-        width: output.width,
-        height: output.height,
-        visible_width: output.visible_width,
-        visible_height: output.visible_height,
-        pitch_bytes: output.pitch_bytes,
-        uv_offset: output.uv_offset,
-    })
-}
-
-fn h264_present_decoded_frame(_frame: &H264DecodedFrame) -> bool {
-    // Cached reverse playback remains parked. In particular, it must not
-    // bypass UI4 by calling the retired direct display.rs NV12 presenter.
-    false
-}
-
-fn h264_decoded_frames_total_bytes(frames: &[H264DecodedFrame]) -> usize {
-    frames
-        .iter()
-        .fold(0usize, |total, frame| total.saturating_add(frame.bytes.len()))
 }
 
 fn h264_log_keyframe_summary(frames: &[H264IndexedFrame], stream_bytes: u64) {
