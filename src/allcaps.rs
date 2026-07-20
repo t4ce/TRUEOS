@@ -12,6 +12,11 @@ pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const INTEL_GPGPU_ARTIFACT_BOOT_SMOKETESTS: bool = false;
     pub const TOKIO_NET_WRITABLE_TIMEOUT_MS: u64 = 1000;
+
+    /// Isolate the three restored TRUEGA boot services from the USB/TRUEOSFS
+    /// hunt. 0 keeps all three asleep, 1 admits the TGA PCI task, 2 also admits
+    /// the FPGA offload worker, and 3 additionally starts its heartbeat client.
+    pub const TGA_FPGA_BOOT_DIAGNOSTIC_CUT: u8 = 0;
 }
 
 pub mod blueprint {
@@ -78,6 +83,18 @@ pub mod storage {
     pub const NVME_IO_TRANSFER_PAGES_CAP: u64 = 128;
 
     pub const USB_MASS_UAS_IO_TIMEOUT_MS: u64 = 10_000;
+
+    /// SK hynix UAS bring-up cut used while proving the detached-endpoint
+    /// ownership handoff. 0 continues into the ordinary TRUEOSFS mount, 1
+    /// stops after the parent Device is retained by the runtime, 2 stops after
+    /// the block worker owns that runtime, 3 performs one worker-mediated LBA1
+    /// read, 4 completes the TRUEOSFS placement probe, 5 installs an unpublished
+    /// internal root, 6 replays its index read-only, 7 exposes that prepared root
+    /// to direct/manual VFS users without global readiness, 8 additionally admits
+    /// only HTTP TRUEOSFS, and 9 finally publishes ordinary root/index readiness.
+    /// Cut 6 forbids checkpoint writes; cuts 7 and 8 keep automatic readiness
+    /// consumers asleep so Shell2 `lsd` and HTTP can be proved independently.
+    pub const USB_MASS_UAS_DIAGNOSTIC_CUT: u8 = 9;
 }
 
 pub mod input {

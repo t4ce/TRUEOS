@@ -18,11 +18,16 @@ pub(crate) mod flags {
         .union(LogLevelSet::INFO)
         .union(LogLevelSet::TRACE);
 
+    // USB/UAS hunt profile: PCI module paths currently fall through to the
+    // Global area, while CrabUSB, xHCI, and the kernel USB glue route to Usb.
+    // Keep both sides open through Trace so controller discovery, endpoint
+    // context setup, TRB submission/completion, and the staged LBA1 proof are
+    // captured in the same boot log.
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Trace);
     pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     // GPGPU diagnosis needs the Intel device/display setup that surrounds
     // kernel upload and submission, not just the GPGPU records themselves.
@@ -70,6 +75,8 @@ pub(crate) mod flags {
     pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
     pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
+    // Keep startup operations and the periodic UAS samples emitted by the
+    // block-device backend, without flooding the TCP log path during `lsd`.
     pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = false;
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
     pub(crate) const NVME_VERBOSE: bool = false;

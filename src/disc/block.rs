@@ -779,7 +779,11 @@ where
     register_boxed_device(descriptor, Box::new(device), false)
 }
 
-pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
+fn register_device_with_worker_inner<D>(
+    descriptor: DeviceDescriptor,
+    device: D,
+    request_trueosfs_mount: bool,
+) -> DeviceHandle
 where
     D: BlockDevice + 'static,
 {
@@ -801,7 +805,24 @@ where
         next_seq: 1,
     };
 
-    register_boxed_device(descriptor, Box::new(proxy), true)
+    register_boxed_device(descriptor, Box::new(proxy), request_trueosfs_mount)
+}
+
+pub fn register_device_with_worker<D>(descriptor: DeviceDescriptor, device: D) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    register_device_with_worker_inner(descriptor, device, true)
+}
+
+pub fn register_device_with_worker_deferred_mount<D>(
+    descriptor: DeviceDescriptor,
+    device: D,
+) -> DeviceHandle
+where
+    D: BlockDevice + 'static,
+{
+    register_device_with_worker_inner(descriptor, device, false)
 }
 
 pub fn device_handles() -> Vec<DeviceHandle> {

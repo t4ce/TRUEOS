@@ -255,11 +255,41 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
         return ParseOutcome::Handled;
     }
 
+    let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+    if matches!(diagnostic_cut, 7..=9) {
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-lsd status=start path={} mode={}\n",
+            diagnostic_cut,
+            display_path.as_deref().unwrap_or("."),
+            if table { "table" } else { "native" }
+        );
+    }
+
     let result = if table {
         run_lsd_table(io, args)
     } else {
         run_lsd(io, args)
     };
+
+    if matches!(diagnostic_cut, 7..=9) {
+        let heap = crate::allocators::host_heap_integrity_bounded();
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-lsd heap_healthy={} heap_reason={} heap_nodes={} heap_current={:#x} heap_next={:#x}\n",
+            diagnostic_cut,
+            heap.healthy,
+            heap.reason,
+            heap.nodes,
+            heap.current,
+            heap.next
+        );
+        crate::log_info!(target: "usb";
+            "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=shell2-lsd status={} path={} mode={}\n",
+            diagnostic_cut,
+            if result.is_ok() { "ok" } else { "failed" },
+            display_path.as_deref().unwrap_or("."),
+            if table { "table" } else { "native" }
+        );
+    }
 
     if let Err(err) = result {
         if err.kind() == trueos_io::ErrorKind::NotFound {

@@ -885,6 +885,13 @@ pub async fn http_trueosfs_task() {
                         let roots = crate::r::fs::trueosfs::list_roots();
 
                         let path_only = vhttp_srv::path_only(target.as_str());
+                        if crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8 {
+                            crate::log_info!(target: "usb";
+                                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs phase=request method={} target={}\n",
+                                method,
+                                path_only
+                            );
+                        }
                         let response: HttpResponsePlan = if method == "GET"
                             && path_only.starts_with("/dl/")
                         {
@@ -1243,6 +1250,14 @@ pub async fn http_trueosfs_task() {
                             body_len,
                             body,
                         } = response;
+                        if crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT == 8 {
+                            crate::log_info!(target: "usb";
+                                "crabusb: skhynix-green proof=diagnostic-consumer stage=8 name=http-trueosfs phase=response method={} target={} status={}\n",
+                                method,
+                                path_only,
+                                status.trim()
+                            );
+                        }
                         let mut cmds = Vec::new();
                         let pending = vhttp_srv::queue_response_head(
                             &mut cmds,

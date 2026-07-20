@@ -618,6 +618,39 @@ fn virtio_gpu_ui_gate() -> bool {
     crate::virtio_gpu_logo::present()
 }
 
+#[inline]
+fn http_trueosfs_gate() -> bool {
+    const HTTP_ONLY_CUT: u8 = 8;
+    const GLOBAL_READINESS_CUT: u8 = 9;
+
+    let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+    if diagnostic_cut == HTTP_ONLY_CUT {
+        return crate::r::fs::trueosfs::has_published_root_with_index();
+    }
+    if diagnostic_cut != 0 && diagnostic_cut != GLOBAL_READINESS_CUT {
+        return false;
+    }
+
+    crate::r::readiness::is_set(
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+    )
+}
+
+#[inline]
+fn tga_boot_gate() -> bool {
+    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 1
+}
+
+#[inline]
+fn fpga_offload_boot_gate() -> bool {
+    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 2
+}
+
+#[inline]
+fn fpga_offload_heartbeat_boot_gate() -> bool {
+    crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT >= 3
+}
+
 fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
 }
@@ -1167,9 +1200,6 @@ fn spawn_executor_realm_migration_smoke(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const NET_ANY_CONFIGURED_AND_INDEX_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
-    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::TRUEOSFS_INDEX_READY;
 const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
     | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::QJS_ASYNC_FS_READY;
@@ -1302,9 +1332,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &AI_QJS_ONESHOT_STARTED,
         spawn_ai_qjs_oneshot,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "http-trueosfs",
-        NET_ANY_CONFIGURED_AND_INDEX_READY,
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        http_trueosfs_gate,
         &HTTP_TRUEOSFS_STARTED,
         spawn_http_trueosfs,
     ),
@@ -1375,11 +1406,18 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
-    TaskSpec::disabled("fpga-offload", 0, &FPGA_OFFLOAD_SERVICE_STARTED, spawn_fpga_offload_service),
-    TaskSpec::disabled(
+    TaskSpec::enabled_gated("tga", 0, tga_boot_gate, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::enabled_gated(
+        "fpga-offload",
+        0,
+        fpga_offload_boot_gate,
+        &FPGA_OFFLOAD_SERVICE_STARTED,
+        spawn_fpga_offload_service,
+    ),
+    TaskSpec::enabled_gated(
         "fpga-offload-heartbeat",
         0,
+        fpga_offload_heartbeat_boot_gate,
         &FPGA_OFFLOAD_HEARTBEAT_STARTED,
         spawn_fpga_offload_heartbeat,
     ),
@@ -1606,6 +1644,14 @@ pub fn latest_system_service_snapshot_text() -> String {
 #[embassy_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
+        crate::log_info!(target: "boot";
+            "spawn-svc: diagnostic-profile usb_uas_cut={} tga_fpga_cut={} tga={} offload={} heartbeat={}\n",
+            crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT,
+            crate::allcaps::probes::TGA_FPGA_BOOT_DIAGNOSTIC_CUT,
+            tga_boot_gate(),
+            fpga_offload_boot_gate(),
+            fpga_offload_heartbeat_boot_gate()
+        );
         let mut next_snapshot_ms = 0u64;
         loop {
             let ready = crate::r::readiness::mask();

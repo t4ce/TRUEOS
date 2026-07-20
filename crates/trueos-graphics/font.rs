@@ -932,6 +932,43 @@ pub(crate) async fn font_warm_task() {
             return;
         }
 
+        // A primary-root handle is an addressability detail, not permission
+        // for an automatic consumer to start filesystem work. In particular,
+        // the USB/UAS cut harness deliberately exposes a prepared root to
+        // direct Shell2 commands before publishing global TRUEOSFS readiness.
+        // Polling only `primary_root_handle()` here made that diagnostic
+        // publication silently launch two eager font reads (including the
+        // 17 MiB Noto face) and their synchronous all-glyph outline warmup.
+        if !crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
+            let diagnostic_cut = crate::allcaps::storage::USB_MASS_UAS_DIAGNOSTIC_CUT;
+            if matches!(diagnostic_cut, 7..=8) {
+                crate::log_info!(
+                    target: "usb";
+                    "crabusb: skhynix-green proof=diagnostic-consumer stage={} name=graphics-font-fs-warm status=blocked reason=root-readiness-withheld heartbeat={} automatic_io=false\n",
+                    diagnostic_cut,
+                    heartbeat,
+                );
+            }
+            for spec in TRUEOSFS_FONTS
+                .iter()
+                .filter(|spec| font_summary(spec.name).is_none())
+            {
+                crate::log_info!(
+                    target: "boot";
+                    "graphics-font: status=waiting name={} path=trueosfs:/{} reason=root-not-ready heartbeat={} retry_secs={}\n",
+                    spec.name,
+                    spec.path,
+                    heartbeat,
+                    TRUEOSFS_FONT_HEARTBEAT_SECS,
+                );
+            }
+            embassy_time::Timer::after(embassy_time::Duration::from_secs(
+                TRUEOSFS_FONT_HEARTBEAT_SECS,
+            ))
+            .await;
+            continue;
+        }
+
         let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
             for spec in TRUEOSFS_FONTS
                 .iter()

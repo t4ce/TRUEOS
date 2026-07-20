@@ -1090,6 +1090,114 @@ pub struct HeapStats {
     pub source: HeapSourceKind,
 }
 
+/// Allocation-free, bounded validation of the host heap free list.
+///
+/// Unlike [`heap_stats`], this stops at the first non-increasing pointer,
+/// overlap, invalid node, or traversal limit. It is therefore safe to use as a
+/// diagnostic when a duplicate free may have made a node point to itself.
+#[derive(Clone, Copy, Debug)]
+pub struct HeapIntegrityReport {
+    pub healthy: bool,
+    pub reason: &'static str,
+    pub nodes: usize,
+    pub current: usize,
+    pub next: usize,
+}
+
+pub fn host_heap_integrity_bounded() -> HeapIntegrityReport {
+    const NODE_LIMIT: usize = 1_000_000;
+
+    let mut guard = ALLOCATOR.lock();
+    unsafe {
+        if !guard.initialized {
+            guard.init_once();
+        }
+    }
+
+    let (heap_start, heap_len) = guard.ensure_heap_backing();
+    let heap_end = heap_start.saturating_add(heap_len);
+    let mut nodes = 0usize;
+    let mut previous_end = align_up(heap_start, align_of::<FreeBlock>());
+    let mut current = guard.head;
+
+    while let Some(block_ptr) = current {
+        let address = block_ptr.as_ptr() as usize;
+        if nodes >= NODE_LIMIT {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "node-limit",
+                nodes,
+                current: address,
+                next: address,
+            };
+        }
+        if !guard.is_plausible_free_block_ptr(address) {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "invalid-node",
+                nodes,
+                current: address,
+                next: 0,
+            };
+        }
+
+        // Safety: the pointer has just been checked against the configured
+        // heap bounds and FreeBlock alignment.
+        let block = unsafe { block_ptr.as_ref() };
+        let block_end = address.saturating_add(block.size);
+        if block.size < minimum_block_size() || block_end > heap_end {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "invalid-size",
+                nodes,
+                current: address,
+                next: block.next.map(|next| next.as_ptr() as usize).unwrap_or(0),
+            };
+        }
+        if address < previous_end {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "unordered-or-overlap",
+                nodes,
+                current: address,
+                next: block.next.map(|next| next.as_ptr() as usize).unwrap_or(0),
+            };
+        }
+
+        nodes = nodes.saturating_add(1);
+        let next_address = block.next.map(|next| next.as_ptr() as usize).unwrap_or(0);
+        if next_address != 0 && next_address <= address {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "non-increasing-next",
+                nodes,
+                current: address,
+                next: next_address,
+            };
+        }
+        if next_address != 0 && block_end > next_address {
+            return HeapIntegrityReport {
+                healthy: false,
+                reason: "overlapping-next",
+                nodes,
+                current: address,
+                next: next_address,
+            };
+        }
+
+        previous_end = block_end;
+        current = block.next;
+    }
+
+    HeapIntegrityReport {
+        healthy: true,
+        reason: "ok",
+        nodes,
+        current: 0,
+        next: 0,
+    }
+}
+
 pub fn heap_stats() -> HeapStats {
     let mut guard = ALLOCATOR.lock();
     unsafe {

@@ -20,7 +20,14 @@ fn upload_artifact_from_sources(
     // core. Runtime-artifact overrides remain available to callers outside an
     // executor poll; a strict reload attempted inside one is rejected instead
     // of deadlocking and must eventually be exposed through an async loader.
-    if !crate::percpu::in_executor_poll() {
+    // Filesystem visibility alone must not opt an automatic graphics path into
+    // disk I/O. Diagnostic TRUEOSFS publication exposes a root to explicit
+    // Shell2 consumers before global readiness; runtime overrides remain on
+    // their embedded artifacts until the filesystem capability is published.
+    let trueosfs_ready = crate::r::readiness::is_set(
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
+    );
+    if trueosfs_ready && !crate::percpu::in_executor_poll() {
         match read_runtime_artifact_bytes(artifact.name) {
             Ok(Some(bytes)) if !bytes.is_empty() => {
                 let path = runtime_artifact_display_path(artifact.name);
@@ -63,8 +70,13 @@ fn upload_artifact_from_sources(
     } else if strict_runtime_artifact {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: {} runtime artifact reload rejected reason=executor-context-would-deadlock path={}\n",
+            "intel/gpgpu: {} runtime artifact reload rejected reason={} path={}\n",
             artifact.name,
+            if trueosfs_ready {
+                "executor-context-would-deadlock"
+            } else {
+                "trueosfs-not-ready"
+            },
             runtime_artifact_display_path(artifact.name),
         );
         return None;
@@ -73,8 +85,13 @@ fn upload_artifact_from_sources(
         if !EXECUTOR_EMBEDDED_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
             crate::log_info!(
                 target: "gpgpu";
-                "intel/gpgpu: runtime artifact lookup bypassed kernel={} reason=executor-context-would-deadlock fallback=embedded\n",
+                "intel/gpgpu: runtime artifact lookup bypassed kernel={} reason={} fallback=embedded\n",
                 artifact.name,
+                if trueosfs_ready {
+                    "executor-context-would-deadlock"
+                } else {
+                    "trueosfs-not-ready"
+                },
             );
         }
     }

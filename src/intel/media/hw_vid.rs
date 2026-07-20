@@ -246,11 +246,33 @@ impl H264PlaybackTiming {
 /// through the native UI4 double-Frame path. Shell2 owns the surrounding UI4
 /// lifetime; this function owns one VDBOX playback lap and its engine lease.
 pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport, &'static str> {
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=embedded-entry source=kernel-embedded-annexb next=media-engine-check\n"
+    );
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=media-engine-ready source=kernel-embedded-annexb next=playback-lease\n"
+    );
     let _playback_guard = h264_try_begin_playback("shell-ui4-framed-video")?;
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
+    let heap_before_asset = crate::allocators::host_heap_integrity_bounded();
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=heap-before-asset healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
+        heap_before_asset.healthy,
+        heap_before_asset.reason,
+        heap_before_asset.nodes,
+        heap_before_asset.current,
+        heap_before_asset.next,
+    );
+    if !heap_before_asset.healthy {
+        return Err("host heap free list corrupt before embedded video allocation");
+    }
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=playback-lease-acquired source=kernel-embedded-annexb bytes={} next=asset-reserve\n",
+        UI4_FRAMED_VIDEO_ANNEXB.len()
+    );
     crate::log!(
         "intel/hw_vid: ui4-framed-video stage=decode-loop-begin asset={} bytes={} source=kernel-embedded-annexb fps={} presentation=ui4-double-frame\n",
         UI4_FRAMED_VIDEO_ASSET,
@@ -263,8 +285,35 @@ pub(crate) async fn run_ui4_framed_video_playback() -> Result<H264PlaybackReport
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let mut annexb = Vec::with_capacity(UI4_FRAMED_VIDEO_ANNEXB.len());
+    let mut annexb = Vec::new();
+    annexb
+        .try_reserve_exact(UI4_FRAMED_VIDEO_ANNEXB.len())
+        .map_err(|_| "embedded video asset allocation failed")?;
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=asset-reserved source=kernel-embedded-annexb capacity={} next=asset-copy\n",
+        annexb.capacity()
+    );
     annexb.extend_from_slice(UI4_FRAMED_VIDEO_ANNEXB);
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=asset-copied source=kernel-embedded-annexb bytes={} next=annexb-parse\n",
+        annexb.len()
+    );
+    let heap_before_parse = crate::allocators::host_heap_integrity_bounded();
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=heap-before-annexb-parse healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
+        heap_before_parse.healthy,
+        heap_before_parse.reason,
+        heap_before_parse.nodes,
+        heap_before_parse.current,
+        heap_before_parse.next,
+    );
+    if !heap_before_parse.healthy {
+        return Err("host heap free list corrupt before embedded video parsing");
+    }
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=annexb-probe-entry source=kernel-embedded-annexb bytes={} next=reader-init\n",
+        annexb.len()
+    );
     let report = h264_i_p_playback_probe_annexb_bytes(
         annexb,
         "kernel-embedded-annexb",
@@ -1216,6 +1265,7 @@ struct H264IndexedFrame {
 
 struct H264MemoryNalReader {
     scan_offset: usize,
+    emitted_nals: usize,
     buffer: Vec<u8>,
 }
 
@@ -1223,6 +1273,7 @@ impl H264MemoryNalReader {
     fn new(buffer: Vec<u8>) -> Self {
         Self {
             scan_offset: 0,
+            emitted_nals: 0,
             buffer,
         }
     }
@@ -1251,9 +1302,31 @@ impl H264MemoryNalReader {
 
             self.scan_offset = end;
             if payload_start < end && payload_start < self.buffer.len() {
+                let first_nal = self.emitted_nals == 0;
+                if first_nal {
+                    crate::log_info!(target: "ui4";
+                        "shell2/vid: stage=first-nal-span source=kernel-embedded-annexb offset=0x{:X} bytes={} next=first-nal-allocation\n",
+                        start,
+                        end - start,
+                    );
+                }
                 let mut bytes = Vec::with_capacity(end - start);
+                if first_nal {
+                    crate::log_info!(target: "ui4";
+                        "shell2/vid: stage=first-nal-reserved source=kernel-embedded-annexb capacity={} next=first-nal-copy\n",
+                        bytes.capacity(),
+                    );
+                }
                 bytes.extend_from_slice(&self.buffer[start..end]);
                 let nal_type = self.buffer[payload_start] & 0x1f;
+                self.emitted_nals = self.emitted_nals.saturating_add(1);
+                if first_nal {
+                    crate::log_info!(target: "ui4";
+                        "shell2/vid: stage=first-nal-copied source=kernel-embedded-annexb bytes={} nal_type={} next=parse-remaining-nals\n",
+                        bytes.len(),
+                        nal_type,
+                    );
+                }
                 return Some(H264BufferedNal {
                     meta: H264StreamNal {
                         stream_offset: start as u64,
@@ -1324,6 +1397,11 @@ async fn h264_i_p_playback_probe_annexb_bytes(
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
     let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes));
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=annexb-reader-ready source={} bytes={} next=parse-state-init\n",
+        source,
+        stream_bytes,
+    );
     h264_i_p_playback_probe_with_reader(reader, stream_bytes, source, path, mode).await
 }
 
@@ -1350,6 +1428,12 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut stopped_at = 0u64;
     let frame_period = mode.frame_period();
     let mut playback_timing = H264PlaybackTiming::default();
+
+    crate::log_info!(target: "ui4";
+        "shell2/vid: stage=annexb-parse-loop-enter source={} bytes={} next=first-nal\n",
+        source,
+        stream_bytes,
+    );
 
     crate::log!(
         "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-double-frame diagnostics={} noreset_lite={} stop=eos\n",
