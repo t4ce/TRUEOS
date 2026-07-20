@@ -283,10 +283,11 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
         ),
     ];
-    // A maximizable direct producer replaces its complete Frame ring after
-    // receiving the broker resize callback. Keep the old exact scanout live
-    // during that short handoff instead of copying/scaling it or reporting a
-    // failed present for the temporary placement/source mismatch.
+    // During restore, a resize-capable direct producer replaces its complete
+    // Frame ring after receiving the broker callback. Keep the old exact
+    // scanout live during that short handoff. Maximize takes the other path:
+    // the old allocation is immediately centered at 1:1 until its larger
+    // replacement arrives.
     for plan in &mut plans {
         if plan.changed && direct_resize_handoff_pending(*plan, &windows, &views) {
             plan.changed = false;
@@ -356,11 +357,12 @@ fn build_plane_plan(
     let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
     let mut composition_changed = !state.initialized;
     for (local_slot, (global_slot, window)) in plane_windows.iter().copied().enumerate() {
+        let placement = presentation_placement(window, views[global_slot]);
         let current = CompositionWindowStamp {
             id: window.id,
             frame: window.frame,
             publish_serial: window.publish_serial,
-            placement: window.placement,
+            placement,
         };
         plan.next_windows[local_slot] = Some(current);
         let previous = state
@@ -409,7 +411,7 @@ fn build_plane_plan(
                     &mut plan.damage,
                     local,
                     views[global_slot],
-                    window.placement,
+                    placement,
                     output_width,
                     output_height,
                 );
@@ -509,6 +511,10 @@ fn queue_async_plane(
         .copied()
         .zip(views.iter().copied())
         .filter(|(window, _)| window.plane.slot() == target_plane_slot(plan.target))
+        .map(|(mut window, view)| {
+            window.placement = presentation_placement(window, view);
+            (window, view)
+        })
         .collect();
     // Immutable single-buffer images are already complete rectangles. They do
     // not need a per-output-pixel layer search: the first pristine backbuffer
@@ -784,6 +790,33 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
             .is_some_and(|bottom| bottom <= output_height)
 }
 
+/// A resize-capable producer may need several service turns to replace its
+/// complete Frame ring after maximize. Preserve the old allocation exactly:
+/// center it inside the new logical window without scaling or copying. Once
+/// the replacement extent matches, the ordinary full-output placement wins.
+fn presentation_placement(window: WindowSnapshot, view: FrameRgbaView) -> WindowPlacement {
+    let placement = window.placement;
+    if !window.maximized
+        || !window.interaction.resize_on_maximize
+        || (placement.width == view.width && placement.height == view.height)
+        || view.width > placement.width
+        || view.height > placement.height
+    {
+        return placement;
+    }
+    WindowPlacement {
+        x: placement
+            .x
+            .saturating_add(placement.width.saturating_sub(view.width) as i32 / 2),
+        y: placement
+            .y
+            .saturating_add(placement.height.saturating_sub(view.height) as i32 / 2),
+        width: view.width,
+        height: view.height,
+        ..placement
+    }
+}
+
 fn direct_resize_handoff_pending(
     plan: PlanePlan,
     windows: &[WindowSnapshot],
@@ -804,6 +837,8 @@ fn direct_resize_handoff_pending(
         && window.state == super::WindowState::Ready
         && window.interaction.maximizable
         && window.interaction.receives_input
+        && window.interaction.resize_on_maximize
+        && !window.maximized
         && view
             .gpu_release
             .is_some_and(|release| release.matches(view.phys, view.byte_len))

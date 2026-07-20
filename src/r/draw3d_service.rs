@@ -82,12 +82,19 @@ impl From<crate::ui4::WindowBrokerError> for Draw3dUi4Error {
     }
 }
 
+#[derive(Copy, Clone)]
 struct Draw3dUi4Surface {
     session: crate::ui4::WindowSessionId,
     frame: crate::ui4::FrameHandle,
     window: Option<crate::ui4::WindowId>,
     width: u32,
     height: u32,
+}
+
+#[derive(Copy, Clone)]
+struct PendingDraw3dUi4Resize {
+    event: crate::ui4::Ui4ResizeEvent,
+    frame: crate::ui4::FrameHandle,
 }
 
 fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
@@ -123,11 +130,11 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     })
 }
 
-/// Replace the complete producer ring after UI4's top-edge maximize/restore
-/// gesture changes the requested window extent. The old ring remains alive
-/// until the compositor releases its exact SURFLIVE-backed read lease.
-fn resize_ui4_surface_frame(
-    surface: &mut Draw3dUi4Surface,
+/// Allocate a replacement ring without exposing it through the broker. The
+/// first new-resolution frame must render and acquire a producer release
+/// before `commit_ui4_surface_resize` atomically switches window ownership.
+fn create_resized_ui4_surface_frame(
+    surface: Draw3dUi4Surface,
     width: u32,
     height: u32,
 ) -> Result<crate::ui4::FrameHandle, Draw3dUi4Error> {
@@ -135,7 +142,7 @@ fn resize_ui4_surface_frame(
     if width == 0 || height == 0 || width as usize > max_width || height as usize > max_height {
         return Err(Draw3dUi4Error::InvalidFrame);
     }
-    let window = surface.window.ok_or(Draw3dUi4Error::InvalidFrame)?;
+    surface.window.ok_or(Draw3dUi4Error::InvalidFrame)?;
     let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
     let replacement = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
@@ -147,14 +154,29 @@ fn resize_ui4_surface_frame(
         height,
         base_color: Some(crate::ui4::PremultipliedRgba8::TRANSPARENT),
     })?;
+    Ok(replacement)
+}
+
+/// Publish an already rendered replacement as one broker-visible transition.
+/// If the Ready commit fails, restore the exact old front instead of allowing
+/// a Pending window to clear its hardware plane.
+fn commit_ui4_surface_resize(
+    surface: &mut Draw3dUi4Surface,
+    replacement: PendingDraw3dUi4Resize,
+) -> Result<crate::ui4::FrameHandle, Draw3dUi4Error> {
+    let window = surface.window.ok_or(Draw3dUi4Error::InvalidFrame)?;
     let previous = surface.frame;
-    if let Err(error) = crate::ui4::replace_window_frame(UI4_OWNER, window, replacement) {
-        let _ = crate::ui4::destroy_frame(replacement);
+    crate::ui4::replace_window_frame(UI4_OWNER, window, replacement.frame)?;
+    if let Err(error) =
+        crate::ui4::publish_window_frame(UI4_OWNER, window, crate::ui4::DamageRect::FULL)
+    {
+        let _ = crate::ui4::replace_window_frame(UI4_OWNER, window, previous);
+        let _ = crate::ui4::publish_window_frame(UI4_OWNER, window, crate::ui4::DamageRect::FULL);
         return Err(error.into());
     }
-    surface.frame = replacement;
-    surface.width = width;
-    surface.height = height;
+    surface.frame = replacement.frame;
+    surface.width = replacement.event.width;
+    surface.height = replacement.event.height;
     Ok(previous)
 }
 
@@ -162,10 +184,14 @@ fn publish_ui4_scene_frame(
     surface: &mut Draw3dUi4Surface,
     lease: crate::ui4::FrameWriteLease,
     release: crate::intel::render::ResidentSceneReleaseFence,
+    publish_window: bool,
 ) -> Result<(), Draw3dUi4Error> {
     if let Err(error) = crate::ui4::publish_gpu_frame_buffer(lease, release) {
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(error.into());
+    }
+    if !publish_window {
+        return Ok(());
     }
     if surface.window.is_none() {
         let output = crate::ui4::OutputId::from_slot(0).expect("UI4 D01 must exist");
@@ -207,6 +233,7 @@ fn render_and_publish_ui4_scene_frame(
     draws: &[crate::intel::render::ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     revision: u64,
+    publish_window: bool,
 ) -> Result<crate::intel::render::ResidentSceneFrameResult, Draw3dUi4Error> {
     let destination = match crate::ui4::gpgpu_rgba_surface(lease) {
         Ok(destination) => destination,
@@ -251,7 +278,7 @@ fn render_and_publish_ui4_scene_frame(
         let _ = crate::ui4::cancel_frame_buffer(lease);
         return Err(Draw3dUi4Error::Render("missing-render-release-fence"));
     };
-    publish_ui4_scene_frame(surface, lease, release)?;
+    publish_ui4_scene_frame(surface, lease, release, publish_window)?;
     if !UI4_GPU_DIRECT_FRAME_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(
             target: "draw3d";
@@ -639,6 +666,7 @@ pub async fn draw3d_ui4_render_task() {
     let mut backpressure_timeouts = 0u64;
     let mut retired_frames = Vec::new();
     let mut pending_resize = None;
+    let mut pending_replacement: Option<PendingDraw3dUi4Resize> = None;
 
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
@@ -662,6 +690,9 @@ pub async fn draw3d_ui4_render_task() {
             if surface.window != Some(event.window) {
                 continue;
             }
+            if let Some(replacement) = pending_replacement.take() {
+                let _ = crate::ui4::destroy_frame(replacement.frame);
+            }
             pending_resize = Some(event);
             if !running {
                 crate::log_info!(
@@ -676,33 +707,49 @@ pub async fn draw3d_ui4_render_task() {
             }
         }
         if let Some(event) = running.then(|| pending_resize.take()).flatten() {
-            match resize_ui4_surface_frame(&mut surface, event.width, event.height) {
-                Ok(previous) => {
-                    retired_frames.push(previous);
-                    rendered_revision = 0;
-                    retry_frame = running;
-                    last_render_error = None;
-                    crate::log_info!(
-                        target: "draw3d";
-                        "draw3d: UI4 maximize/restore resize window={} old={}x{} new={}x{} frame={} action=replace-triple-buffer+rerender old_release=surflive running={}\n",
-                        event.window.raw(),
-                        event.old_width,
-                        event.old_height,
-                        event.width,
-                        event.height,
-                        surface.frame.raw(),
-                        running as u8,
-                    );
-                }
-                Err(error) => {
-                    crate::log_warn!(
-                        target: "draw3d";
-                        "draw3d: UI4 maximize/restore resize rejected window={} requested={}x{} error={:?} action=retain-current-frame\n",
-                        event.window.raw(),
-                        event.width,
-                        event.height,
-                        error,
-                    );
+            if event.width == surface.width && event.height == surface.height {
+                rendered_revision = 0;
+                retry_frame = running;
+                last_render_error = None;
+                crate::log_info!(
+                    target: "draw3d";
+                    "draw3d: UI4 maximize/restore resize window={} old={}x{} new={}x{} action=retain-existing-ring extent-already-exact running={}\n",
+                    event.window.raw(),
+                    event.old_width,
+                    event.old_height,
+                    event.width,
+                    event.height,
+                    running as u8,
+                );
+            } else {
+                match create_resized_ui4_surface_frame(surface, event.width, event.height) {
+                    Ok(frame) => {
+                        pending_replacement = Some(PendingDraw3dUi4Resize { event, frame });
+                        rendered_revision = 0;
+                        retry_frame = running;
+                        last_render_error = None;
+                        crate::log_info!(
+                            target: "draw3d";
+                            "draw3d: UI4 maximize/restore resize prepared window={} old={}x{} new={}x{} replacement_frame={} action=render-before-broker-swap old_front=retain-surflive running={}\n",
+                            event.window.raw(),
+                            event.old_width,
+                            event.old_height,
+                            event.width,
+                            event.height,
+                            frame.raw(),
+                            running as u8,
+                        );
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "draw3d";
+                            "draw3d: UI4 maximize/restore resize rejected window={} requested={}x{} error={:?} action=retain-current-frame\n",
+                            event.window.raw(),
+                            event.width,
+                            event.height,
+                            error,
+                        );
+                    }
                 }
             }
         }
@@ -723,12 +770,21 @@ pub async fn draw3d_ui4_render_task() {
             );
         }
 
-        if running && (revision != rendered_revision || orbit_moving || retry_frame) {
-            if surface.width == 0 || surface.height == 0 {
+        let (render_frame, render_width, render_height) = pending_replacement
+            .map_or((surface.frame, surface.width, surface.height), |replacement| {
+                (replacement.frame, replacement.event.width, replacement.event.height)
+            });
+        if running
+            && (revision != rendered_revision
+                || orbit_moving
+                || retry_frame
+                || pending_replacement.is_some())
+        {
+            if render_width == 0 || render_height == 0 {
                 Timer::at(next_frame).await;
                 continue;
             }
-            let lease = match crate::ui4::acquire_frame_buffer(surface.frame) {
+            let lease = match crate::ui4::acquire_frame_buffer(render_frame) {
                 Ok(lease) => Some(lease),
                 Err(crate::ui4::FramePoolError::Busy) => {
                     retry_frame = true;
@@ -738,7 +794,7 @@ pub async fn draw3d_ui4_render_task() {
                         crate::log_trace!(
                             target: "draw3d";
                             "draw3d: UI4 producer backpressure frame={} revision={} busy_events={} action=coalesce-until-buffer-release-or-16ms-deadline cpu_projection=skipped guc_submit=0\n",
-                            surface.frame.raw(),
+                            render_frame.raw(),
                             revision,
                             backpressure_events,
                         );
@@ -765,7 +821,7 @@ pub async fn draw3d_ui4_render_task() {
                 if wait_for_buffer_release {
                     if with_timeout(
                         EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US),
-                        crate::ui4::wait_frame_buffer_release(surface.frame),
+                        crate::ui4::wait_frame_buffer_release(render_frame),
                     )
                     .await
                     .is_ok()
@@ -786,7 +842,7 @@ pub async fn draw3d_ui4_render_task() {
             let now_ns = crate::chronos::monotonic_nanos();
             let epoch_ns = SCENE_CAMERA_EPOCH_NS.load(Ordering::Acquire);
             let elapsed_seconds = now_ns.saturating_sub(epoch_ns) as f64 / 1_000_000_000.0;
-            let aspect = surface.width as f32 / surface.height as f32;
+            let aspect = render_width as f32 / render_height as f32;
             let (projected, clear_rgba) = with_scene(|scene| {
                 let angle = scene
                     .camera_orbit()
@@ -808,14 +864,61 @@ pub async fn draw3d_ui4_render_task() {
                             viewport_translation_px: [0.0, 0.0],
                         })
                         .collect::<Vec<_>>();
+                    let replacing = pending_replacement.is_some();
+                    let mut render_surface = Draw3dUi4Surface {
+                        frame: render_frame,
+                        width: render_width,
+                        height: render_height,
+                        ..surface
+                    };
                     match render_and_publish_ui4_scene_frame(
-                        &mut surface,
+                        &mut render_surface,
                         lease,
                         &draws,
                         clear_rgba,
                         revision,
+                        !replacing,
                     ) {
                         Ok(result) => {
+                            let committed = if let Some(replacement) = pending_replacement.take() {
+                                match commit_ui4_surface_resize(&mut surface, replacement) {
+                                    Ok(previous) => {
+                                        retired_frames.push(previous);
+                                        crate::log_info!(
+                                            target: "draw3d";
+                                            "draw3d: UI4 maximize/restore resize committed window={} old={}x{} new={}x{} frame={} action=broker-swap-after-first-guc-release old_release=surflive running={}\n",
+                                            replacement.event.window.raw(),
+                                            replacement.event.old_width,
+                                            replacement.event.old_height,
+                                            replacement.event.width,
+                                            replacement.event.height,
+                                            replacement.frame.raw(),
+                                            running as u8,
+                                        );
+                                        true
+                                    }
+                                    Err(error) => {
+                                        let _ = crate::ui4::destroy_frame(replacement.frame);
+                                        crate::log_warn!(
+                                            target: "draw3d";
+                                            "draw3d: UI4 maximize/restore commit rejected window={} requested={}x{} error={:?} action=old-front-restored\n",
+                                            replacement.event.window.raw(),
+                                            replacement.event.width,
+                                            replacement.event.height,
+                                            error,
+                                        );
+                                        false
+                                    }
+                                }
+                            } else {
+                                surface = render_surface;
+                                true
+                            };
+                            if !committed {
+                                retry_frame = false;
+                                last_render_error = None;
+                                continue;
+                            }
                             rendered_revision = revision;
                             retry_frame = false;
                             last_render_error = None;

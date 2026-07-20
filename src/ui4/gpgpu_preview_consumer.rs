@@ -599,9 +599,9 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             opacity: u8::MAX,
             visible: true,
         },
-        // This checkpoint restores compute-frame publication and broker-level
-        // motion only. Dynamic resize/maximize remains parked until the
-        // fixed-size double-buffer path is proven under composition.
+        // Compute previews keep their proven fixed-size double-buffer rings.
+        // UI4 may move them or center the unchanged pixels through its generic
+        // maximize/restore placement path, without asking compute to resize.
         interaction: super::WindowInteraction::MOVABLE_FRAME,
     }) {
         Ok(window) => window,

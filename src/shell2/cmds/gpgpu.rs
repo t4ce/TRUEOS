@@ -6,22 +6,19 @@ use embassy_executor::Spawner;
 
 use super::super::{ShellBackend2, print_shell_line};
 use crate::intel::gpgpu::{
-    CHART_SINE_RGBA8_ADLS_ARTIFACT, FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT,
-    FONT_OUTLINE_STAGE_FLATTEN, FONT_OUTLINE_STAGE_STROKE_MESH, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
-    reload_all_known_kernel_artifacts, reload_known_kernel_artifact, shell_font_outline_probe,
-    upload_chart_sine_rgba8_kernel, upload_font_outline_mesh_kernel,
-    upload_pixel_plasma_rgba8_kernel,
+    FONT_OUTLINE_MESH_ADLS_ARTIFACT, FONT_OUTLINE_STAGE_AUDIT, FONT_OUTLINE_STAGE_FLATTEN,
+    FONT_OUTLINE_STAGE_STROKE_MESH, shell_font_outline_probe, upload_font_outline_mesh_kernel,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "gpgpu preview start [duration_ms] [cadence_ms] [publish_every]");
+    print_shell_line(
+        io,
+        "gpgpu preview start [all|static|static30|mandelbrot|chart|plasma] [duration_ms] [cadence_ms] [publish_every]",
+    );
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
-    print_shell_line(io, "gpgpu chart artifact");
-    print_shell_line(io, "gpgpu pixel artifact");
     print_shell_line(io, "gpgpu probe font-tessel [artifact|audit|flatten|mesh|all]");
-    print_shell_line(io, "gpgpu artifacts reload <kernel|all>");
 }
 
 fn expect_no_more(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
@@ -39,6 +36,13 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         return;
     };
     if action.eq_ignore_ascii_case("start") {
+        let preset = match args.clone().next().and_then(parse_preview_preset) {
+            Some(preset) => {
+                let _ = args.next();
+                preset
+            }
+            None => crate::ui4::GpgpuPreviewPreset::All,
+        };
         let duration_ms = match args.next() {
             Some(raw) => match raw.parse::<u64>() {
                 Ok(value) => value,
@@ -72,7 +76,6 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         if !expect_no_more(io, args) {
             return;
         }
-        let preset = crate::ui4::GpgpuPreviewPreset::All;
         let config = crate::ui4::GpgpuPreviewConfig {
             preset,
             duration_ms,
@@ -85,12 +88,15 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} demos=mandelbrot+chart+plasma service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 frames=3 windows=3 buffering={} plane_layout={} slot_policy=fixed-per-window/no-round-robin interaction=movable-fixed-size",
+                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 frames={} windows={} buffering={} plane_layout={} slot_policy=fixed-per-window/no-round-robin interaction=movable-fixed-size",
                         serial,
+                        preset.label(),
                         status.online as u8,
                         duration_ms,
                         cadence_ms,
                         publish_every,
+                        preview_surface_count(preset),
+                        preview_surface_count(preset),
                         preset.buffering_label(),
                         preset.plane_layout_label(),
                     )
@@ -116,6 +122,35 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         }
     } else {
         usage(io);
+    }
+}
+
+fn parse_preview_preset(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
+    if raw.eq_ignore_ascii_case("all") {
+        Some(crate::ui4::GpgpuPreviewPreset::All)
+    } else if raw.eq_ignore_ascii_case("static") {
+        Some(crate::ui4::GpgpuPreviewPreset::Static)
+    } else if raw.eq_ignore_ascii_case("static30") {
+        Some(crate::ui4::GpgpuPreviewPreset::Static30)
+    } else if raw.eq_ignore_ascii_case("mandelbrot") {
+        Some(crate::ui4::GpgpuPreviewPreset::Mandelbrot)
+    } else if raw.eq_ignore_ascii_case("chart") {
+        Some(crate::ui4::GpgpuPreviewPreset::Chart)
+    } else if raw.eq_ignore_ascii_case("plasma") {
+        Some(crate::ui4::GpgpuPreviewPreset::Plasma)
+    } else {
+        None
+    }
+}
+
+const fn preview_surface_count(preset: crate::ui4::GpgpuPreviewPreset) -> usize {
+    match preset {
+        crate::ui4::GpgpuPreviewPreset::All => 3,
+        crate::ui4::GpgpuPreviewPreset::Static30 => 30,
+        crate::ui4::GpgpuPreviewPreset::Static
+        | crate::ui4::GpgpuPreviewPreset::Mandelbrot
+        | crate::ui4::GpgpuPreviewPreset::Chart
+        | crate::ui4::GpgpuPreviewPreset::Plasma => 1,
     }
 }
 
@@ -173,153 +208,6 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             )
             .as_str(),
         );
-    }
-}
-
-fn run_chart(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(probe) = args.next() else {
-        usage(io);
-        return;
-    };
-    if probe.eq_ignore_ascii_case("artifact") {
-        if expect_no_more(io, args) {
-            run_chart_artifact(io);
-        }
-    } else {
-        usage(io);
-    }
-}
-
-fn run_chart_artifact(io: &'static dyn ShellBackend2) {
-    let artifact = CHART_SINE_RGBA8_ADLS_ARTIFACT;
-    let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
-    let Some(known) = crate::intel::opencl::registry::known_aot_kernel(artifact.name) else {
-        print_shell_line(
-            io,
-            "gpgpu chart artifact: ok=0 stage=registry reason=missing-known-aot-contract",
-        );
-        crate::log_error!(
-            target: "gpgpu";
-            "gpgpu chart artifact failed stage=registry kernel={}\n",
-            artifact.name
-        );
-        return;
-    };
-    let Some(upload) = upload_chart_sine_rgba8_kernel() else {
-        print_shell_line(io, "gpgpu chart artifact: ok=0 stage=upload reason=unavailable");
-        return;
-    };
-    let hash_ok = upload.bin_sha256 == artifact.bin_sha256;
-    let contract_ok = known.contract.name == artifact.name
-        && known.contract.target == artifact.target
-        && known.contract.cross_thread_bytes == 128
-        && known.contract.per_thread_bytes == 96
-        && known.contract.binding_count == 1;
-    let ok = upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
-    let message = alloc::format!(
-        "gpgpu chart artifact: ok={} stage=artifact kernel={} role={:?} target={} producer={:?} source={} source_path={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} mapped=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_ok={} registry_kernels={} registry_issues={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
-        ok as u8,
-        artifact.name,
-        known.role,
-        artifact.target,
-        known.contract.producer,
-        upload.source,
-        known.contract.source_path,
-        artifact.bin.len(),
-        artifact.spv.len(),
-        upload.gpu,
-        upload.mapped_bytes,
-        upload.verified as u8,
-        hash_ok as u8,
-        contract_ok as u8,
-        registry_report.passed() as u8,
-        registry_report.registry_kernels,
-        registry_report.issues,
-        known.contract.args.len(),
-        known.contract.binding_count,
-        known.contract.cross_thread_bytes,
-        known.contract.per_thread_bytes,
-        digest_hex(&upload.bin_sha256),
-    );
-    print_shell_line(io, message.as_str());
-    if ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
-    }
-}
-
-fn run_pixel(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(probe) = args.next() else {
-        usage(io);
-        return;
-    };
-    if probe.eq_ignore_ascii_case("artifact") {
-        if expect_no_more(io, args) {
-            run_pixel_artifact(io);
-        }
-    } else {
-        usage(io);
-    }
-}
-
-fn run_pixel_artifact(io: &'static dyn ShellBackend2) {
-    let artifact = PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT;
-    let registry_report = crate::intel::opencl::trueos_cl_validate_known_aot_registry();
-    let Some(known) = crate::intel::opencl::registry::known_aot_kernel(artifact.name) else {
-        print_shell_line(
-            io,
-            "gpgpu pixel artifact: ok=0 stage=registry reason=missing-known-aot-contract",
-        );
-        crate::log_error!(
-            target: "gpgpu";
-            "gpgpu pixel artifact failed stage=registry kernel={}\n",
-            artifact.name
-        );
-        return;
-    };
-    let Some(upload) = upload_pixel_plasma_rgba8_kernel() else {
-        print_shell_line(io, "gpgpu pixel artifact: ok=0 stage=upload reason=unavailable");
-        return;
-    };
-    let hash_ok = upload.bin_sha256 == artifact.bin_sha256;
-    let contract_ok = known.contract.name == artifact.name
-        && known.contract.target == artifact.target
-        && known.contract.cross_thread_bytes == 128
-        && known.contract.per_thread_bytes == 96
-        && known.contract.binding_count == 1;
-    let ok =
-        registry_report.passed() && upload.verified && upload.bytes != 0 && hash_ok && contract_ok;
-    let message = alloc::format!(
-        "gpgpu pixel artifact: ok={} stage=artifact kernel={} role={:?} target={} producer={:?} source={} source_path={} bin_bytes=0x{:X} spv_bytes=0x{:X} gpu=0x{:X} mapped=0x{:X} verified={} hash_allowlisted={} contract_ok={} registry_ok={} registry_kernels={} registry_issues={} args={} bindings={} cross_thread={} per_thread={} sha256={}",
-        ok as u8,
-        artifact.name,
-        known.role,
-        artifact.target,
-        known.contract.producer,
-        upload.source,
-        known.contract.source_path,
-        artifact.bin.len(),
-        artifact.spv.len(),
-        upload.gpu,
-        upload.mapped_bytes,
-        upload.verified as u8,
-        hash_ok as u8,
-        contract_ok as u8,
-        registry_report.passed() as u8,
-        registry_report.registry_kernels,
-        registry_report.issues,
-        known.contract.args.len(),
-        known.contract.binding_count,
-        known.contract.cross_thread_bytes,
-        known.contract.per_thread_bytes,
-        digest_hex(&upload.bin_sha256),
-    );
-    print_shell_line(io, message.as_str());
-    if ok {
-        crate::log_info!(target: "gpgpu"; "{}\n", message.as_str());
-    } else {
-        crate::log_error!(target: "gpgpu"; "{}\n", message.as_str());
     }
 }
 
@@ -596,59 +484,6 @@ fn digest_hex(digest: &[u8; 32]) -> String {
     out
 }
 
-fn run_artifacts(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
-    let Some(cmd) = args.next() else {
-        usage(io);
-        return;
-    };
-    if !cmd.eq_ignore_ascii_case("reload") {
-        usage(io);
-        return;
-    }
-    let Some(name) = args.next() else {
-        usage(io);
-        return;
-    };
-    if !expect_no_more(io, args) {
-        return;
-    }
-
-    if name.eq_ignore_ascii_case("all") {
-        let summary = reload_all_known_kernel_artifacts();
-        print_shell_line(
-            io,
-            alloc::format!(
-                "gpgpu artifacts reload all: attempted={} reloaded={} failed={}",
-                summary.attempted,
-                summary.reloaded,
-                summary.failed
-            )
-            .as_str(),
-        );
-        return;
-    }
-
-    match reload_known_kernel_artifact(name) {
-        Ok(upload) => print_shell_line(
-            io,
-            alloc::format!(
-                "gpgpu artifacts reload {}: ok source={} gpu=0x{:X} bytes=0x{:X} sha256={}",
-                upload.name,
-                upload.source,
-                upload.gpu,
-                upload.bytes,
-                digest_hex(&upload.bin_sha256)
-            )
-            .as_str(),
-        ),
-        Err(err) => print_shell_line(
-            io,
-            alloc::format!("gpgpu artifacts reload {}: failed reason={}", name, err.label())
-                .as_str(),
-        ),
-    }
-}
-
 pub(crate) fn try_parse(
     _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -661,14 +496,8 @@ pub(crate) fn try_parse(
 
     if cmd.eq_ignore_ascii_case("preview") {
         run_preview(io, args);
-    } else if cmd.eq_ignore_ascii_case("chart") {
-        run_chart(io, args);
-    } else if cmd.eq_ignore_ascii_case("pixel") {
-        run_pixel(io, args);
     } else if cmd.eq_ignore_ascii_case("probe") {
         run_probe(io, args);
-    } else if cmd.eq_ignore_ascii_case("artifacts") {
-        run_artifacts(io, args);
     } else {
         usage(io);
     }

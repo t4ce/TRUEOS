@@ -1,9 +1,9 @@
 //! Independent UI4 interaction-plane service.
 //!
-//! Slot 4 contains only software cursors, selection outlines, and the tiny
-//! context menu. It deliberately does not participate in application-plane
-//! composition or its atomic SURF batch. Cursor input is coalesced to the
-//! display cadence and only the old/new visual rectangles are rewritten.
+//! Slot 4 contains only software cursors, selection/maximize outlines, and the
+//! tiny context menu. It deliberately does not participate in application-
+//! plane composition or its atomic SURF batch. Cursor input is coalesced to
+//! the display cadence and only the old/new visual rectangles are rewritten.
 
 use embassy_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
@@ -45,7 +45,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+context-menu hardware-cursor=preferred-physical-source/concurrent present_ms={} wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic_motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu hardware-cursor=preferred-physical-source/concurrent present_ms={} wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic-motion=off\n",
         SLOT4_PRESENT_PERIOD_MS,
     );
 
@@ -189,6 +189,25 @@ fn software_cursor_rects() -> Slot4Rects {
 
     let visuals = super::software_cursor_visuals();
     let mut rects = Slot4Rects::new();
+
+    for visual in &visuals {
+        let Some(preview) = visual.maximize_preview else {
+            continue;
+        };
+        let hint = Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 210);
+        push_rect_border(&mut rects, preview, 3, hint);
+        let marker_width = preview.width.min(192);
+        push_overlay_rect(
+            &mut rects,
+            preview
+                .x
+                .saturating_add(preview.width.saturating_sub(marker_width) / 2),
+            preview.y,
+            marker_width,
+            7.min(preview.height),
+            Rgba8::new(visual.color.r, visual.color.g, visual.color.b, 235),
+        );
+    }
 
     for visual in &visuals {
         if let Some(selection) = visual.selection {

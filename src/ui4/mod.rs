@@ -38,8 +38,8 @@ pub(crate) use gpgpu_preview_consumer::{
 #[cfg(feature = "trueos_h264_encode_probe")]
 pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4CursorSource, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4VisualRect,
-    software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
+    Ui4ButtonPhase, Ui4CursorSource, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
+    Ui4VisualRect, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;

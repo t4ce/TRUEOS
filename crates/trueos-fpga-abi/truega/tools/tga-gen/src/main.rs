@@ -265,4 +265,16 @@ mod tests {
         }
         assert!(!TOP_VHDL.contains("tx_pending_valid <= \"00001111\";"));
     }
+
+    #[test]
+    fn gowin_completion_appends_function_zero_to_bus_device() {
+        // IPUG1020 defines tl_cfg_busdev as Bus[12:5], Device[4:0]. PCIe's
+        // 16-bit Completer ID adds Function[2:0] after those thirteen bits.
+        assert!(TOP_VHDL.contains(
+            "dw1(31 downto 16) := tl_cfg_busdev & \"000\";"
+        ));
+        assert!(!TOP_VHDL.contains(
+            "dw1(31 downto 16) := \"000\" & tl_cfg_busdev;"
+        ));
+    }
 }

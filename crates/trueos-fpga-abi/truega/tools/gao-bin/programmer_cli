@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# GAO needs Gowin's Qt library path plus the host FreeType preload, but those
+# overrides break Programmer's bundled CLI (its older libz is then paired with
+# the host libpng). Keep the analyzer environment out of cable-scan children.
+unset LD_LIBRARY_PATH LD_PRELOAD
+
+real_cli="${TRUEGA_PROGRAMMER_CLI_REAL:-$HOME/Programmme/Gowin/Programmer/bin/programmer_cli}"
+exec "$real_cli" "$@"

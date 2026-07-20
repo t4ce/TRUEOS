@@ -459,8 +459,8 @@ static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_DIRECT_UI4_TARGETS: Mutex<
-    [Option<ResidentSceneDirectUi4Mapping>; DRAW3D_UI4_FRAME_BUFFER_COUNT],
-> = Mutex::new([None; DRAW3D_UI4_FRAME_BUFFER_COUNT]);
+    [Option<ResidentSceneDirectUi4Mapping>; DRAW3D_UI4_DIRECT_MAPPING_COUNT],
+> = Mutex::new([None; DRAW3D_UI4_DIRECT_MAPPING_COUNT]);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -507,8 +507,9 @@ fn prepare_resident_scene_direct_ui4_target(
     });
     crate::log_info!(
         target: "render";
-        "draw3d: acquired UI4 triple buffer render_slot={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} ppgtt_pat=3 ppgtt_cache=uc leaf_readback=verified persistent_render_va=1 hot_remap=0\n",
+        "draw3d: acquired UI4 direct target render_slot={} render_slots={} render_gpu=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} ppgtt_pat=3 ppgtt_cache=uc leaf_readback=verified persistent_render_va=1 hot_remap=0\n",
         slot,
+        DRAW3D_UI4_DIRECT_MAPPING_COUNT,
         gpu,
         destination.phys,
         destination.bytes,

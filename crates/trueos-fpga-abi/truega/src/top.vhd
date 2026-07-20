@@ -131,7 +131,9 @@ architecture rtl of top is
 	signal tl_cfg_busdev : std_logic_vector(12 downto 0);
 
 	signal led_reg : std_logic_vector(4 downto 0) := (others => '0');
-	signal debug_led_mode : std_logic := '0';
+	-- Bring-up image: expose the five sticky PCIe milestones directly on the LEDs.
+	-- Restore this default to '0' after the read-completion path is proven.
+	signal debug_led_mode : std_logic := '1';
 	-- The complete 256-byte work-package address map remains visible to software, but
 	-- only words used by the three fused functions need physical storage. Unused and
 	-- reserved words read as zero. This is a fixed register file, not command memory.
@@ -458,7 +460,9 @@ begin
 			dw2 := (others => '0');
 				dw0(31 downto 24) := x"4A";
 				dw0(9 downto 0) := "0000000001";
-				dw1(31 downto 16) := "000" & tl_cfg_busdev;
+				-- Gowin reports {Bus[7:0], Device[4:0]}. The PCIe Completer ID
+				-- is {Bus, Device, Function}, and this endpoint is function zero.
+				dw1(31 downto 16) := tl_cfg_busdev & "000";
 				dw1(11 downto 0) := std_logic_vector(to_unsigned(4, 12));
 				dw2(31 downto 16) := req_id_in;
 				dw2(15 downto 8) := req_tag_in;
@@ -494,7 +498,7 @@ begin
 
 			if pcie_perst_n = '0' then
 				led_reg <= (others => '0');
-				debug_led_mode <= '0';
+				debug_led_mode <= '1';
 				call_magic <= WORK_PACKAGE_MAGIC;
 				call_abi_function <= x"0000" & WORK_ABI_VERSION;
 				call_id_low <= (others => '0');

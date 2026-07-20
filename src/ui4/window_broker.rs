@@ -128,6 +128,10 @@ pub(crate) struct WindowInteraction {
     pub(crate) movable: bool,
     pub(crate) maximizable: bool,
     pub(crate) receives_input: bool,
+    /// The producer can replace its complete frame allocation after a
+    /// maximize/restore extent notification. Fixed-size producers still use
+    /// maximize as a broker-owned 1:1 centering operation.
+    pub(crate) resize_on_maximize: bool,
 }
 
 impl WindowInteraction {
@@ -135,16 +139,18 @@ impl WindowInteraction {
     /// pointer/keyboard delivery and keeps a fixed pixel extent.
     pub(crate) const MOVABLE_FRAME: Self = Self {
         movable: true,
-        maximizable: false,
+        maximizable: true,
         receives_input: false,
+        resize_on_maximize: false,
     };
 
-    /// The producer consumes application input, but its native frame extent is
-    /// fixed and therefore cannot participate in maximize/restore replacement.
+    /// The producer consumes application input and can be centered/restored,
+    /// but its native frame extent remains fixed throughout that transition.
     pub(crate) const APPLICATION_FIXED_FRAME: Self = Self {
         movable: true,
-        maximizable: false,
+        maximizable: true,
         receives_input: true,
+        resize_on_maximize: false,
     };
 
     /// Full broker interaction for producers which drain owner events and can
@@ -153,6 +159,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: true,
+        resize_on_maximize: true,
     };
 }
 
@@ -920,10 +927,39 @@ pub(crate) fn move_window(
     Ok(())
 }
 
-/// Toggle one broker window between its saved geometry and full-output
-/// geometry. Gesture recognition and per-cursor hysteresis stay in the input
-/// broker; this function owns the atomic placement/restore transition and the
-/// ordinary resize callback seen by the consumer.
+/// Return the broker geometry represented by a maximize preview or commit.
+///
+/// Fixed-size producers preserve their exact pixel extent and are centered on
+/// the output. Resize-capable producers receive full-output geometry; until
+/// their replacement frame arrives, the compositor centers the previous
+/// allocation at 1:1 inside that geometry.
+pub(super) fn maximized_window_placement(
+    interaction: WindowInteraction,
+    previous: WindowPlacement,
+    output_width: u32,
+    output_height: u32,
+) -> WindowPlacement {
+    if interaction.resize_on_maximize {
+        WindowPlacement {
+            x: 0,
+            y: 0,
+            width: output_width,
+            height: output_height,
+            ..previous
+        }
+    } else {
+        WindowPlacement {
+            x: output_width.saturating_sub(previous.width) as i32 / 2,
+            y: output_height.saturating_sub(previous.height) as i32 / 2,
+            ..previous
+        }
+    }
+}
+
+/// Toggle one broker window between its saved geometry and its generic
+/// maximize geometry. Gesture recognition stays in the input broker; this
+/// function owns the atomic placement/restore transition and emits resize
+/// callbacks only for producers which explicitly support frame replacement.
 pub(crate) fn toggle_window_maximized(
     owner: WindowOwner,
     id: WindowId,
@@ -945,13 +981,7 @@ pub(crate) fn toggle_window_maximized(
     } else {
         window.restore_placement = Some(restore_placement.unwrap_or(previous));
         (
-            WindowPlacement {
-                x: 0,
-                y: 0,
-                width: output_width,
-                height: output_height,
-                ..previous
-            },
+            maximized_window_placement(window.interaction, previous, output_width, output_height),
             true,
         )
     };
@@ -960,6 +990,7 @@ pub(crate) fn toggle_window_maximized(
         window.revision = next_serial(window.revision);
     }
     let notify_resize = window.interaction.receives_input
+        && window.interaction.resize_on_maximize
         && (previous.width != placement.width || previous.height != placement.height);
     drop(broker);
     if notify_resize {
