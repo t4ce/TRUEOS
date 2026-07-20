@@ -155,10 +155,7 @@ impl FrameParser {
         let (hdr, hdr_len) = match UvcPayloadHeader::parse(data) {
             Some(v) => v,
             None => {
-                debug!(
-                    "Invalid UVC payload header, dropping packet: {} bytes",
-                    data.len()
-                );
+                debug!("Invalid UVC payload header, dropping packet: {} bytes", data.len());
                 return Ok(None);
             }
         };

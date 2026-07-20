@@ -132,11 +132,7 @@ mod tests {
                     Ok(frames) => {
                         for frame in frames {
                             total_frames += 1;
-                            info!(
-                                "Received frame {}: {} bytes",
-                                total_frames,
-                                frame.data.len()
-                            );
+                            info!("Received frame {}: {} bytes", total_frames, frame.data.len());
 
                             // 检查是否为完整帧（有EOF标志）
                             if frame.eof && !frame.data.is_empty() {
@@ -243,10 +239,7 @@ mod tests {
                 let regs = node.reg().unwrap().collect::<Vec<_>>();
                 println!("usb regs: {:?}", regs);
 
-                let addr = iomap(
-                    (regs[0].address as usize).into(),
-                    regs[0].size.unwrap_or(0x1000),
-                );
+                let addr = iomap((regs[0].address as usize).into(), regs[0].size.unwrap_or(0x1000));
 
                 let irq = node.irq_info();
 
@@ -275,10 +268,7 @@ mod tests {
         println!("pcie: {}", pcie.node.name);
 
         for reg in pcie.node.reg().unwrap() {
-            println!(
-                "pcie reg: {:#x}, bus: {:#x}",
-                reg.address, reg.child_bus_address
-            );
+            println!("pcie reg: {:#x}, bus: {:#x}", reg.address, reg.child_bus_address);
             let size = reg.size.unwrap_or_default().align_up(0x1000);
 
             pcie_regs.push(iomap((reg.address as usize).into(), size));

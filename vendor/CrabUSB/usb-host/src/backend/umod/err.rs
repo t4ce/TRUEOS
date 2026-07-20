@@ -59,9 +59,7 @@ pub(crate) fn transfer_status_to_result(status: i32) -> Result<(), TransferError
         LIBUSB_TRANSFER_STALL => Err(TransferError::Stall),
         LIBUSB_TRANSFER_NO_DEVICE => Err(TransferError::Other(anyhow!("No device"))),
         LIBUSB_TRANSFER_OVERFLOW => Err(TransferError::Other(anyhow!("Overflow"))),
-        _ => Err(TransferError::Other(anyhow!(
-            "Unknown transfer status: {status}"
-        ))),
+        _ => Err(TransferError::Other(anyhow!("Unknown transfer status: {status}"))),
     }
 }
 

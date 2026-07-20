@@ -62,16 +62,8 @@ impl AudioOutputDevice for AlsaSoundDevice {
             check(snd_pcm_hw_params_malloc(&mut hw_params))?;
             check(snd_pcm_hw_params_any(playback_device, hw_params))?;
             let access = SND_PCM_ACCESS_RW_INTERLEAVED;
-            check(snd_pcm_hw_params_set_access(
-                playback_device,
-                hw_params,
-                access,
-            ))?;
-            check(snd_pcm_hw_params_set_format(
-                playback_device,
-                hw_params,
-                SND_PCM_FORMAT_S16_LE,
-            ))?;
+            check(snd_pcm_hw_params_set_access(playback_device, hw_params, access))?;
+            check(snd_pcm_hw_params_set_format(playback_device, hw_params, SND_PCM_FORMAT_S16_LE))?;
             let mut exact_rate = params.sample_rate as ::std::os::raw::c_uint;
             check(snd_pcm_hw_params_set_rate_near(
                 playback_device,

@@ -1,4 +1,3 @@
-
 //! Small Intel NEO dispatch definition leaves translated from compute-runtime.
 
 // Source: opencl/source/helpers/dispatch_info_builder.h

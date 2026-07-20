@@ -285,10 +285,7 @@ fn clean_mjpeg_data(mut data: Vec<u8>) -> Result<Vec<u8>, Box<dyn std::error::Er
     }
 
     if end_pos < original_len {
-        info!(
-            "Removed {} trailing zero bytes from MJPEG data",
-            original_len - end_pos
-        );
+        info!("Removed {} trailing zero bytes from MJPEG data", original_len - end_pos);
         data.truncate(end_pos);
     }
 

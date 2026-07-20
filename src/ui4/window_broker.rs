@@ -1090,9 +1090,7 @@ fn close_transition_placement(
                 .saturating_mul(scale_remaining)
                 / 1_000_000,
         );
-        1_000u64.saturating_sub(
-            shrink_per_mille.saturating_mul(scale_eased) / 1_000,
-        )
+        1_000u64.saturating_sub(shrink_per_mille.saturating_mul(scale_eased) / 1_000)
     } else {
         1_000
     };

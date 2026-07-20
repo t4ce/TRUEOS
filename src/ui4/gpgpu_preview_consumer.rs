@@ -481,13 +481,13 @@ fn initialize_compute_preview_set(
     desired: DesiredPreview,
 ) -> Result<Vec<ActivePreview>, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let session = begin_window_session(PREVIEW_OWNER)
-        .map_err(|_| "compute-trio-session-create-failed")?;
-    let (output_width, output_height) = crate::intel::active_scanout_dimensions()
-        .unwrap_or((2560, 1440));
+    let session =
+        begin_window_session(PREVIEW_OWNER).map_err(|_| "compute-trio-session-create-failed")?;
+    let (output_width, output_height) =
+        crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
     let columns = ((output_width.saturating_sub(PREVIEW_GRID_GAP))
         / PREVIEW_WIDTH.saturating_add(PREVIEW_GRID_GAP))
-        .clamp(1, COMPUTE_PREVIEW_PRESETS.len() as u32);
+    .clamp(1, COMPUTE_PREVIEW_PRESETS.len() as u32);
     let mut previews = Vec::with_capacity(COMPUTE_PREVIEW_PRESETS.len());
 
     for (index, preset) in COMPUTE_PREVIEW_PRESETS.iter().copied().enumerate() {
@@ -500,12 +500,10 @@ fn initialize_compute_preview_set(
         };
         let column = index as u32 % columns;
         let row = index as u32 / columns;
-        let x = PREVIEW_GRID_GAP.saturating_add(
-            column.saturating_mul(PREVIEW_WIDTH.saturating_add(PREVIEW_GRID_GAP)),
-        );
-        let y = PREVIEW_GRID_GAP.saturating_add(
-            row.saturating_mul(PREVIEW_HEIGHT.saturating_add(PREVIEW_GRID_GAP)),
-        );
+        let x = PREVIEW_GRID_GAP
+            .saturating_add(column.saturating_mul(PREVIEW_WIDTH.saturating_add(PREVIEW_GRID_GAP)));
+        let y = PREVIEW_GRID_GAP
+            .saturating_add(row.saturating_mul(PREVIEW_HEIGHT.saturating_add(PREVIEW_GRID_GAP)));
         if x.saturating_add(PREVIEW_WIDTH) > output_width
             || y.saturating_add(PREVIEW_HEIGHT) > output_height
         {
@@ -559,10 +557,7 @@ fn initialize_compute_preview_set(
     Ok(previews)
 }
 
-fn abandon_compute_preview_initialization(
-    session: WindowSessionId,
-    previews: &[ActivePreview],
-) {
+fn abandon_compute_preview_initialization(session: WindowSessionId, previews: &[ActivePreview]) {
     let _ = finish_window_session(PREVIEW_OWNER, session);
     for preview in previews {
         let _ = destroy_frame(preview.frame);
@@ -641,8 +636,8 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
     let cell_height = (output_height / STATIC30_ROWS).max(1);
     let mut frames = Vec::with_capacity(STATIC30_FRAME_COUNT);
     let mut surfaces = Vec::with_capacity(STATIC30_FRAME_COUNT);
-    let session = begin_window_session(PREVIEW_OWNER)
-        .map_err(|_| "static30-session-create-failed")?;
+    let session =
+        begin_window_session(PREVIEW_OWNER).map_err(|_| "static30-session-create-failed")?;
 
     for index in 0..STATIC30_FRAME_COUNT {
         let index_u32 = index as u32;
@@ -718,10 +713,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         session,
         frame: first.frame,
         window: first.window,
-        width: cell_width
-            .saturating_sub(24)
-            .min(STATIC30_MAX_WIDTH)
-            .max(1),
+        width: cell_width.saturating_sub(24).min(STATIC30_MAX_WIDTH).max(1),
         height: cell_height
             .saturating_sub(24)
             .min(STATIC30_MAX_HEIGHT)
@@ -898,10 +890,8 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         return Err("window-publish-failed");
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
-    if !matches!(
-        preview.config.preset,
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30
-    ) && should_log_preview_checkpoint(preview.metrics.published)
+    if !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
+        && should_log_preview_checkpoint(preview.metrics.published)
     {
         crate::log_info!(
             target: "ui4";
@@ -1172,9 +1162,7 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::All
         | GpgpuPreviewPreset::Mandelbrot
         | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma => {
-            "pipe-control+post-marker-exact-surface"
-        }
+        | GpgpuPreviewPreset::Plasma => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             "clflush-mfence-before-publish"
         }
@@ -1186,9 +1174,9 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         GpgpuPreviewPreset::All | GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
         }
-        GpgpuPreviewPreset::Mandelbrot
-        | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma => WindowPlane::Universal(preview_plane_slot(preset) as u8),
+        GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
+            WindowPlane::Universal(preview_plane_slot(preset) as u8)
+        }
     }
 }
 
@@ -1211,10 +1199,8 @@ const fn should_log_preview_checkpoint(sequence: u64) -> bool {
 }
 
 fn preview_needs_render(preview: &ActivePreview) -> bool {
-    !matches!(
-        preview.config.preset,
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30
-    ) || preview.static_needs_publish
+    !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
+        || preview.static_needs_publish
 }
 
 fn schedule_next_render(preview: &mut ActivePreview) {
@@ -1521,10 +1507,18 @@ fn publish_active_status(
 fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics {
     let mut aggregate = GpgpuPreviewMetrics::default();
     for preview in previews {
-        aggregate.attempted = aggregate.attempted.saturating_add(preview.metrics.attempted);
-        aggregate.submitted = aggregate.submitted.saturating_add(preview.metrics.submitted);
-        aggregate.completed = aggregate.completed.saturating_add(preview.metrics.completed);
-        aggregate.published = aggregate.published.saturating_add(preview.metrics.published);
+        aggregate.attempted = aggregate
+            .attempted
+            .saturating_add(preview.metrics.attempted);
+        aggregate.submitted = aggregate
+            .submitted
+            .saturating_add(preview.metrics.submitted);
+        aggregate.completed = aggregate
+            .completed
+            .saturating_add(preview.metrics.completed);
+        aggregate.published = aggregate
+            .published
+            .saturating_add(preview.metrics.published);
         aggregate.dropped_busy = aggregate
             .dropped_busy
             .saturating_add(preview.metrics.dropped_busy);
@@ -1535,9 +1529,7 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
     aggregate
 }
 
-fn preview_member_statuses(
-    previews: &[ActivePreview],
-) -> [GpgpuPreviewMemberStatus; 3] {
+fn preview_member_statuses(previews: &[ActivePreview]) -> [GpgpuPreviewMemberStatus; 3] {
     let mut members = INACTIVE_PREVIEW_MEMBERS;
     for preview in previews {
         let Some(index) = compute_preview_index(preview.config.preset) else {

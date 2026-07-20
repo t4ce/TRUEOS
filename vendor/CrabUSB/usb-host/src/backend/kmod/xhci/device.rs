@@ -444,9 +444,8 @@ impl Device {
         {
             let dci = desc.dci();
             let mut ep_raw = self.new_ep(dci.into())?;
-            let use_streams = uas_alt
-                && matches!(desc.transfer_type, EndpointType::Bulk)
-                && desc.address != 0x04;
+            let use_streams =
+                uas_alt && matches!(desc.transfer_type, EndpointType::Bulk) && desc.address != 0x04;
             let endpoint_burst_size = match self.port_speed {
                 Speed::High
                     if matches!(
@@ -492,10 +491,7 @@ impl Device {
                 control_context.set_add_context_flag(dci as _);
                 control_context.clear_drop_context_flag(dci as _);
 
-                debug!(
-                    "init ep addr {:#x}  dci {dci} {:?}",
-                    desc.address, desc.transfer_type
-                );
+                debug!("init ep addr {:#x}  dci {dci} {:?}", desc.address, desc.transfer_type);
 
                 let ep_mut = input.device_mut().endpoint_mut(dci as _);
 

@@ -1,4 +1,3 @@
-
 pub(crate) mod rapl;
 pub(crate) mod thermal;
 pub(crate) mod turbo;

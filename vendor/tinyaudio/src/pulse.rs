@@ -96,10 +96,7 @@ where
             pa_context_unref(context);
         });
 
-        check(
-            pa_context_connect(context, ptr::null(), PA_CONTEXT_NOFLAGS, ptr::null()),
-            context,
-        )?;
+        check(pa_context_connect(context, ptr::null(), PA_CONTEXT_NOFLAGS, ptr::null()), context)?;
 
         loop {
             match pa_context_get_state(context) {
@@ -145,12 +142,7 @@ where
         }
 
         let stream = check_ptr(
-            pa_stream_new(
-                context,
-                "PulseAudio Stream\0".as_ptr().cast(),
-                &spec,
-                ptr::null(),
-            ),
+            pa_stream_new(context, "PulseAudio Stream\0".as_ptr().cast(), &spec, ptr::null()),
             context,
         )?;
 

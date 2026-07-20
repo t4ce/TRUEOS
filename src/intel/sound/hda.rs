@@ -9,7 +9,6 @@
 //!   Responses received via RIRB (Response Input Ring Buffer)  
 //!   Audio data streamed via DMA through BDL (Buffer Descriptor List)
 
-
 use alloc::{format, string::String, vec, vec::Vec};
 use core::{
     self,

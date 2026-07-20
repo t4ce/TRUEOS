@@ -1,4 +1,3 @@
-
 // These registers keep continuous count of statistics regarding the graphics
 // pipeline. They are saved and restored with context, but software should not
 // modify them except to reset them to 0 at context creation time. Writes to

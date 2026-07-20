@@ -1,10 +1,11 @@
 //! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder remains a native Y-tiled NV12 producer.  The broker publishes a
-//! lightweight frame serial while the compositor consumes the native decoder
-//! surface directly.  One GuC dispatch rebuilds the primary back buffer from
-//! the immutable desktop base and that NV12 picture; the decoder surface is
-//! retained until the resulting scanout flip is acknowledged.
+//! The decoder remains a native Y-tiled NV12 producer. Each exact decoder
+//! surface is attached to the exact UI4 triple-buffer slot being published and
+//! is exposed only while that slot's read lease is retained. One GuC dispatch
+//! rebuilds the primary back buffer from the immutable desktop base and that
+//! NV12 picture; the decoder surface remains owned until SURFLIVE acknowledges
+//! the resulting scanout flip.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,8 +17,8 @@ use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId, ScanoutFormat,
     Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowSessionId,
     acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame, create_window,
-    destroy_frame, finish_window_session, publish_frame_buffer, publish_window_frame,
-    replace_window_frame, take_owner_input_events,
+    destroy_frame, finish_window_session, publish_frame_buffer, publish_native_video_frame_buffer,
+    publish_window_frame, replace_window_frame, take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -30,6 +31,7 @@ const VIDEO_PRESENT_ACK_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
+    pub(crate) decode_sequence: u64,
     pub(crate) gpu: u64,
     pub(crate) phys: u64,
     pub(crate) virt: usize,
@@ -52,20 +54,9 @@ pub(crate) struct NativeViewportLayout {
     pub(crate) height: u32,
 }
 
-/// Exact native producer record corresponding to one broker frame serial.
-/// The compositor must match both fields before using the decoder surface.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NativeVideoPublication {
-    pub(crate) source: DecodedNv12Source,
-    pub(crate) frame: FrameHandle,
-    pub(crate) frame_publish_serial: u64,
-    pub(crate) layout: NativeViewportLayout,
-    pub(crate) sequence: u64,
-}
-
 /// Dimensions used to bind one decoded picture to its UI4 viewport.  Pixel
-/// storage stays decoder-owned; the UI4 frame is only the broker serial and
-/// cadence carrier for the native publication.
+/// storage stays decoder-owned; the UI4 frame owns the publication lifetime
+/// and binds the native source to one exact leased buffer slot.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedVideoFrameSpec {
     pub(crate) coded_width: u32,
@@ -113,7 +104,6 @@ struct VideoStream {
 static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
-static VIDEO_NATIVE_PUBLICATION: Mutex<Option<NativeVideoPublication>> = Mutex::new(None);
 static VIDEO_NATIVE_ACK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_PLAYBACK_PAUSED: AtomicBool = AtomicBool::new(true);
 
@@ -395,30 +385,8 @@ fn reap_retired_video_frames() {
         .retain(|frame| matches!(destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
-pub(crate) fn native_video_publication(
-    frame: FrameHandle,
-    frame_publish_serial: u64,
-) -> Option<NativeVideoPublication> {
-    VIDEO_NATIVE_PUBLICATION
-        .lock()
-        .filter(|publication| {
-            publication.frame == frame
-                && publication.frame_publish_serial == frame_publish_serial
-        })
-}
-
 pub(crate) fn acknowledge_native_video_publication(sequence: u64) {
     VIDEO_NATIVE_ACK.fetch_max(sequence, Ordering::AcqRel);
-}
-
-fn clear_native_video_publication(sequence: u64) {
-    let mut publication = VIDEO_NATIVE_PUBLICATION.lock();
-    if publication
-        .as_ref()
-        .is_some_and(|publication| publication.sequence == sequence)
-    {
-        *publication = None;
-    }
 }
 
 /// Publish a native decoder surface and retain it until the compositor has
@@ -431,10 +399,13 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
     if !valid_source(source) {
         return false;
     }
-    let Some(stream) = bind_decoded_source_stream(
-        DecodedVideoFrameSpec::from_nv12_source(source),
-        reason,
-    ) else {
+    // Shell-driven playback owns the same application window as boot playback;
+    // drain its broker queue at frame cadence so move/resize/pan never depends
+    // on the boot-only pause gate.
+    poll_decoded_video_player_input();
+    let Some(stream) =
+        bind_decoded_source_stream(DecodedVideoFrameSpec::from_nv12_source(source), reason)
+    else {
         return false;
     };
     let Some(layout) = native_viewport_layout(
@@ -456,7 +427,36 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             return false;
         }
     };
-    let published = match publish_frame_buffer(write) {
+    let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    let native = super::NativeVideoFrameView {
+        source: super::NativeNv12Surface {
+            phys: source.phys,
+            gpu: source.gpu,
+            virt: source.virt,
+            byte_len: source.byte_len,
+            width: source.width,
+            height: source.height,
+            pitch_bytes: match u32::try_from(source.pitch_bytes) {
+                Ok(pitch) => pitch,
+                Err(_) => {
+                    let _ = cancel_frame_buffer(write);
+                    return false;
+                }
+            },
+            uv_offset: source.uv_offset,
+            layout: super::Nv12Layout::YTiled,
+            pipeline_slot: VIDEO_OUTPUT.slot(),
+        },
+        source_x: layout.source_x,
+        source_y: layout.source_y,
+        destination_x: layout.destination_x,
+        destination_y: layout.destination_y,
+        width: layout.width,
+        height: layout.height,
+        decode_sequence: source.decode_sequence,
+        presentation_sequence: sequence,
+    };
+    let published = match publish_native_video_frame_buffer(write, native) {
         Ok(published) => published,
         Err(error) => {
             let _ = cancel_frame_buffer(write);
@@ -467,33 +467,22 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             return false;
         }
     };
-    let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    let publication = NativeVideoPublication {
-        source,
-        frame: stream.frame,
-        frame_publish_serial: published.publish_serial,
-        layout,
-        sequence,
-    };
-
-    // Publish the sidecar first: the compositor must never observe a new
-    // broker serial without the exact native source record that belongs to it.
-    *VIDEO_NATIVE_PUBLICATION.lock() = Some(publication);
     let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
         Ok(serial) => serial,
         Err(error) => {
-            clear_native_video_publication(sequence);
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={}\n",
+                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream-before-source-reuse\n",
                 stream.frame.raw(), stream.window.raw(), error, reason,
             );
+            let _ = stop_decoded_nv12_stream("window-publish-failed");
             return false;
         }
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-direct-primary source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X}\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-native-nv12-frame-primary source=tile64-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} source_gpu=0x{:X}\n",
             sequence,
+            source.decode_sequence,
             stream.frame.raw(),
             stream.window.raw(),
             published.buffer_index,
@@ -513,27 +502,23 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
         );
     }
 
-    let deadline = embassy_time::Instant::now()
-        + Duration::from_millis(VIDEO_PRESENT_ACK_TIMEOUT_MS);
+    let deadline =
+        embassy_time::Instant::now() + Duration::from_millis(VIDEO_PRESENT_ACK_TIMEOUT_MS);
+    let mut overdue_logged = false;
     while VIDEO_NATIVE_ACK.load(Ordering::Acquire) < sequence {
-        if embassy_time::Instant::now() >= deadline {
-            clear_native_video_publication(sequence);
+        if !overdue_logged && embassy_time::Instant::now() >= deadline {
+            overdue_logged = true;
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame present timeout seq={} frame={} window={} reason={} action=drop-after-retain-timeout\n",
+                "ui4 video-frame present overdue seq={} frame={} window={} reason={} action=retain-native-source-and-wait-for-surflive\n",
                 sequence, stream.frame.raw(), stream.window.raw(), reason,
             );
-            return false;
         }
         Timer::after(Duration::from_millis(1)).await;
     }
-    clear_native_video_publication(sequence);
     true
 }
 
-fn bind_decoded_source_stream(
-    spec: DecodedVideoFrameSpec,
-    reason: &str,
-) -> Option<VideoStream> {
+fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Option<VideoStream> {
     if !spec.valid() {
         return None;
     }
@@ -560,7 +545,7 @@ fn bind_decoded_source_stream(
                     stream.pan_y,
                 )?;
                 crate::log_info!(target: "ui4";
-                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-native-nv12-direct-primary reason={}\n",
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback={} producer=guc-native-nv12-frame-primary attachment=per-frame-buffer reason={}\n",
                     stream.frame.raw(),
                     stream.window.raw(),
                     spec.coded_width,
@@ -582,20 +567,13 @@ fn bind_decoded_source_stream(
             return Some(*stream);
         }
     }
-    let stream = create_stream(
-        spec,
-        super::DEFAULT_FRAME_WIDTH,
-        super::DEFAULT_FRAME_HEIGHT,
-        false,
-    )?;
+    let stream =
+        create_stream(spec, super::DEFAULT_FRAME_WIDTH, super::DEFAULT_FRAME_HEIGHT, false)?;
     *VIDEO_STREAM.lock() = Some(stream);
     Some(stream)
 }
 
 pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
-    if let Some(publication) = VIDEO_NATIVE_PUBLICATION.lock().take() {
-        acknowledge_native_video_publication(publication.sequence);
-    }
     let stream = VIDEO_STREAM.lock().take();
     if let Some(stream) = stream {
         let _ = finish_window_session(VIDEO_OWNER, stream.session);
@@ -671,7 +649,7 @@ fn create_stream(
     )?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming format=rgba8-premultiplied source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} buffers=3 cadence=streaming carrier_format=rgba8-premultiplied native_format=tile64-nv12 attachment=per-frame-buffer source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
@@ -751,7 +729,8 @@ fn native_viewport_layout(
 }
 
 fn valid_source(source: DecodedNv12Source) -> bool {
-    source.gpu != 0
+    source.decode_sequence != 0
+        && source.gpu != 0
         && source.phys != 0
         && source.virt != 0
         && source.byte_len != 0

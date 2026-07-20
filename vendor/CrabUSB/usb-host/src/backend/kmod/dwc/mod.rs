@@ -203,10 +203,7 @@ impl Dwc {
             let dma_addr = ev_buff.dma_addr();
             let length = ev_buff.buffer.len();
 
-            debug!(
-                "DWC3: Event buffer {} - DMA addr: {:#x}, length: {}",
-                i, dma_addr, length
-            );
+            debug!("DWC3: Event buffer {} - DMA addr: {:#x}, length: {}", i, dma_addr, length);
 
             // 使用 gevnt 数组访问事件缓冲区寄存器
             regs.gevnt[i].adrlo.set((dma_addr & 0xffffffff) as u32);
@@ -234,10 +231,7 @@ impl Dwc {
     async fn core_init(&mut self) -> Result<()> {
         self.revistion = self.dwc_regs.read_revision() as _;
         if self.revistion != 0x55330000 {
-            Err(anyhow!(
-                "Unsupported DWC3 revision: 0x{:08x}",
-                self.revistion
-            ))?;
+            Err(anyhow!("Unsupported DWC3 revision: 0x{:08x}", self.revistion))?;
         }
         self.revistion += self.dwc_regs.read_product_id();
         debug!("DWC3: Detected revision 0x{:08x}", self.revistion);
@@ -394,10 +388,7 @@ impl Dwc {
         // === USB3 PHY 配置 ===
         // **关键：读取当前寄存器值（保留硬件状态）**
         let gusb3_init = self.dwc_regs.globals().gusb3pipectl0.extract();
-        info!(
-            "DWC3: Initial GUSB3PIPECTL = {:#010x} before config",
-            gusb3_init.get()
-        );
+        info!("DWC3: Initial GUSB3PIPECTL = {:#010x} before config", gusb3_init.get());
 
         let mut gusb3 = self.dwc_regs.globals().gusb3pipectl0.extract();
 
@@ -463,10 +454,7 @@ impl Dwc {
         // === USB2 PHY 配置 ===
         // **关键：读取当前寄存器值（保留硬件状态）**
         let gusb2_init = self.dwc_regs.globals().gusb2phycfg0.extract();
-        info!(
-            "DWC3: Initial GUSB2PHYCFG = {:#010x} before config",
-            gusb2_init.get()
-        );
+        info!("DWC3: Initial GUSB2PHYCFG = {:#010x} before config", gusb2_init.get());
 
         let mut gusb2 = self.dwc_regs.globals().gusb2phycfg0.extract();
 
@@ -596,10 +584,7 @@ impl Dwc {
         info!("GUSB3PIPECTL = {:#010x}", gusb3_val);
         info!("  SUSPHY      = {}", gusb3.is_set(GUSB3PIPECTL::SUSPHY));
         info!("  U2SSINP3OK  = {}", gusb3.is_set(GUSB3PIPECTL::U2SSINP3OK));
-        info!(
-            "  REQP0P1P2P3 = {}",
-            gusb3.is_set(GUSB3PIPECTL::REQP0P1P2P3)
-        );
+        info!("  REQP0P1P2P3 = {}", gusb3.is_set(GUSB3PIPECTL::REQP0P1P2P3));
         info!("  DEP1P2P3    = {}", gusb3.is_set(GUSB3PIPECTL::DEP1P2P3));
 
         // 检查 GUSB2PHYCFG
@@ -609,11 +594,7 @@ impl Dwc {
         info!("  SUSPHY      = {}", gusb2.is_set(GUSB2PHYCFG::SUSPHY));
         info!("  ENBLSLPM    = {}", gusb2.is_set(GUSB2PHYCFG::ENBLSLPM));
         let phyif = gusb2.read(GUSB2PHYCFG::PHYIF);
-        info!(
-            "  PHYIF       = {} ({}-bit)",
-            phyif,
-            if phyif == 0 { 8 } else { 16 }
-        );
+        info!("  PHYIF       = {} ({}-bit)", phyif, if phyif == 0 { 8 } else { 16 });
         let usbtrdtim = gusb2.read(GUSB2PHYCFG::USBTRDTIM);
         info!("  USBTRDTIM   = {}", usbtrdtim);
 

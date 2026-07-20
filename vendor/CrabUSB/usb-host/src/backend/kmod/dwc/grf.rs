@@ -392,17 +392,9 @@ impl Grf {
         log::info!("  U3_PORT_DISABLE (bit8): {} (expected 0)", u3_port_disable);
 
         if pipe_enable == 1 && phy_disable == 0 && suspend_enable == 0 && u3_port_disable == 0 {
-            log::info!(
-                "✓ GRF@{:x}: USB3 U3 port {} enabled successfully",
-                base,
-                port
-            );
+            log::info!("✓ GRF@{:x}: USB3 U3 port {} enabled successfully", base, port);
         } else {
-            log::warn!(
-                "⚠ GRF@{:x}: USB3 U3 port {} may not be configured correctly!",
-                base,
-                port
-            );
+            log::warn!("⚠ GRF@{:x}: USB3 U3 port {} may not be configured correctly!", base, port);
         }
     }
 

@@ -92,10 +92,7 @@ impl<'a> DescriptorIter<'a> {
         }
 
         if self.0[0] < 2 {
-            warn!(
-                "descriptor with bLength {} can't point to next descriptor",
-                self.0[0]
-            );
+            warn!("descriptor with bLength {} can't point to next descriptor", self.0[0]);
             return None;
         }
 
@@ -207,10 +204,7 @@ impl DeviceDescriptor {
             );
             None
         } else if buf[1] != DESCRIPTOR_TYPE_DEVICE {
-            warn!(
-                "device bDescriptorType is {}, not a device descriptor",
-                buf[1]
-            );
+            warn!("device bDescriptorType is {}, not a device descriptor", buf[1]);
             None
         } else {
             Some(Self(buf))
@@ -331,19 +325,10 @@ impl Debug for DeviceDescriptor {
             .field("max_packet_size_0", &self.max_packet_size_0())
             .field("vendor_id", &format_args!("0x{:04X}", self.vendor_id()))
             .field("product_id", &format_args!("0x{:04X}", self.product_id()))
-            .field(
-                "device_version",
-                &format_args!("0x{:04X}", self.device_version()),
-            )
-            .field(
-                "manufacturer_string_index",
-                &self.manufacturer_string_index(),
-            )
+            .field("device_version", &format_args!("0x{:04X}", self.device_version()))
+            .field("manufacturer_string_index", &self.manufacturer_string_index())
             .field("product_string_index", &self.product_string_index())
-            .field(
-                "serial_number_string_index",
-                &self.serial_number_string_index(),
-            )
+            .field("serial_number_string_index", &self.serial_number_string_index())
             .field("num_configurations", &self.num_configurations())
             .finish()
     }
@@ -378,10 +363,7 @@ impl<'a> ConfigurationDescriptor<'a> {
         }
 
         if buf[1] != DESCRIPTOR_TYPE_CONFIGURATION {
-            warn!(
-                "config bDescriptorType is {}, not a configuration descriptor",
-                buf[0]
-            );
+            warn!("config bDescriptorType is {}, not a configuration descriptor", buf[0]);
             return None;
         }
 
@@ -494,10 +476,7 @@ impl<'a> Debug for ConfigurationDescriptor<'a> {
             .field("attributes", &self.attributes())
             .field("max_power", &self.max_power())
             .field("string_index", &self.string_index())
-            .field(
-                "interface_alt_settings",
-                &DebugEntries(|| self.interface_alt_settings()),
-            )
+            .field("interface_alt_settings", &DebugEntries(|| self.interface_alt_settings()))
             .finish()
     }
 }

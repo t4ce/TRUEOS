@@ -309,10 +309,7 @@ impl HubDevice {
             }
         );
 
-        debug!(
-            "over current condition exists: {}",
-            if status.over_current() { "" } else { "no " }
-        );
+        debug!("over current condition exists: {}", if status.over_current() { "" } else { "no " });
 
         // 构造 HubParams
         let params = crate::backend::ty::HubParams {
@@ -327,11 +324,7 @@ impl HubDevice {
         self.data.dev.update_hub(params).await?;
 
         if info.hub_depth > -1 && self.is_superspeed() {
-            assert!(
-                info.hub_depth < 5,
-                "Hub depth too large: {}",
-                info.hub_depth
-            );
+            assert!(info.hub_depth < 5, "Hub depth too large: {}", info.hub_depth);
 
             // 外部 SuperSpeed Hub 需要设置 Hub 深度
             self.set_hub_depth(info.hub_depth as _).await?;
@@ -482,15 +475,9 @@ impl HubDevice {
         let status_raw = u16::from_le_bytes([buffer[0], buffer[1]]);
         let change_raw = u16::from_le_bytes([buffer[2], buffer[3]]);
 
-        trace!(
-            "Port {} raw status: 0x{:04x}, change: 0x{:04x}",
-            port_id, status_raw, change_raw
-        );
+        trace!("Port {} raw status: 0x{:04x}, change: 0x{:04x}", port_id, status_raw, change_raw);
 
-        Ok((
-            self.parse_port_status(status_raw),
-            self.parse_port_change(change_raw),
-        ))
+        Ok((self.parse_port_status(status_raw), self.parse_port_change(change_raw)))
     }
 
     /// 解析端口状态原始数据
@@ -617,10 +604,7 @@ impl HubDevice {
                 );
 
                 if stable_count >= required_stable {
-                    info!(
-                        "Port {} debounce stable (connected: {})",
-                        port_index, status.connected
-                    );
+                    info!("Port {} debounce stable (connected: {})", port_index, status.connected);
                     return Ok(status);
                 }
             } else {
@@ -696,10 +680,7 @@ impl HubDevice {
         port_id: u8,
         initial_status: &PortStatus,
     ) -> Result<PortChangeInfo, USBError> {
-        info!(
-            "Handling connection on port {}, speed: {:?}",
-            port_id, initial_status.speed
-        );
+        info!("Handling connection on port {}, speed: {:?}", port_id, initial_status.speed);
 
         // 阶段 1: 防抖动检测（确保连接稳定）
         let stable_status = self.debounce_port(port_id, true).await?;

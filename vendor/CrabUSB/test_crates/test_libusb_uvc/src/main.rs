@@ -165,10 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_frame_numbers = saved_frames.lock().unwrap().clone();
 
     let avg_fps = frame_count as f32 / start_time.elapsed().as_secs_f32();
-    info!(
-        "Capture completed. Total frames: {}, Average FPS: {:.2}",
-        frame_count, avg_fps
-    );
+    info!("Capture completed. Total frames: {}, Average FPS: {:.2}", frame_count, avg_fps);
 
     // 生成视频文件
     if !saved_frame_numbers.is_empty() {

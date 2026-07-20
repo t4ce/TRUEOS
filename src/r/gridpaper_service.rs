@@ -1662,9 +1662,8 @@ fn publish_page(
         page.pan.x * surface.width as f32 / SCENE_WIDTH as f32,
         page.pan.y * surface.height as f32 / SCENE_HEIGHT as f32,
     ];
-    let cursor_rects = selection.and_then(|selection| {
-        grid_cursor_rects(surface, page, selection, input_field)
-    });
+    let cursor_rects =
+        selection.and_then(|selection| grid_cursor_rects(surface, page, selection, input_field));
     let final_rects = cursor_rects.as_ref().map_or(&[][..], |rects| &rects[..]);
     let result = match capture_resident_page_frame(
         page,
@@ -2184,8 +2183,7 @@ fn release_runtime_presentation(
     retire_frame: bool,
 ) -> bool {
     let close_request = if retire_frame {
-        crate::ui4::WindowSessionCloseRequest::default()
-            .direct_plane_animate_and_retire_frames()
+        crate::ui4::WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames()
     } else {
         crate::ui4::WindowSessionCloseRequest::default().direct_plane_animate()
     };

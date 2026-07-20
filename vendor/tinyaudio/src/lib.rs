@@ -25,7 +25,7 @@ mod web;
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use super::{OutputDevice, OutputDeviceParameters, run_output_device};
+    pub use super::{run_output_device, OutputDevice, OutputDeviceParameters};
 }
 
 /// Parameters of an output device.

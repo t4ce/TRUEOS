@@ -212,10 +212,7 @@ mod tests {
                 info!("=== Checking DWC3 node ===");
                 info!("  Node name: {}", node.name());
                 info!("  Node level: {}", node.level);
-                info!(
-                    "  Compatibles: {:?}",
-                    node.compatibles().collect::<Vec<_>>()
-                );
+                info!("  Compatibles: {:?}", node.compatibles().collect::<Vec<_>>());
 
                 println!("usb node: {}", node.name);
                 let regs = node.reg().unwrap().collect::<Vec<_>>();
@@ -229,10 +226,7 @@ mod tests {
 
                 // preper_3588_clk(&fdt, &node);
 
-                let addr = iomap(
-                    (regs[0].address as usize).into(),
-                    regs[0].size.unwrap_or(0x1000),
-                );
+                let addr = iomap((regs[0].address as usize).into(), regs[0].size.unwrap_or(0x1000));
 
                 let irq = node.irq_info();
 
@@ -327,10 +321,8 @@ mod tests {
 
                 let u3phy_reg = u3_phy_node.reg().unwrap().collect::<Vec<_>>().remove(0);
 
-                let phy = iomap(
-                    (u3phy_reg.address as usize).into(),
-                    u3phy_reg.size.unwrap_or(0x1000),
-                );
+                let phy =
+                    iomap((u3phy_reg.address as usize).into(), u3phy_reg.size.unwrap_or(0x1000));
 
                 let u2phy_grf = get_grf(
                     u3_phy_node
@@ -558,10 +550,7 @@ mod tests {
         match pm.power_domain_on(rockchip_pm::PowerDomain(32)) {
             Ok(_) => info!("PHP power domain (32) enabled successfully"),
             Err(e) => {
-                warn!(
-                    "Failed to enable PHP power domain: {:?} (may be optional)",
-                    e
-                );
+                warn!("Failed to enable PHP power domain: {:?} (may be optional)", e);
             }
         }
 
@@ -817,10 +806,8 @@ fn find_pinctrl() -> PinCtrl {
         info!("Found GPIO bank node: {}", node.name());
         let reg = node.reg().unwrap().next().unwrap();
 
-        let gpio_mmio = iomap(
-            (reg.address as usize).into(),
-            reg.size.unwrap_or(0).align_up(page_size()),
-        );
+        let gpio_mmio =
+            iomap((reg.address as usize).into(), reg.size.unwrap_or(0).align_up(page_size()));
         gpio_banks[idx] = gpio_mmio;
     }
 

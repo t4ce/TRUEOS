@@ -164,10 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let saved_frame_numbers = saved_frames.lock().unwrap().clone();
 
     let avg_fps = frame_count as f32 / start_time.elapsed().as_secs_f32();
-    info!(
-        "Capture completed. Total frames: {}, Average FPS: {:.2}",
-        frame_count, avg_fps
-    );
+    info!("Capture completed. Total frames: {}, Average FPS: {:.2}", frame_count, avg_fps);
 
     // 生成视频文件
     if !saved_frame_numbers.is_empty() {
@@ -212,11 +209,7 @@ async fn create_video_from_frames(
     fps: f32,
     video_format: &crab_uvc::VideoFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    info!(
-        "Creating video with {} frames at {:.2} fps",
-        frame_numbers.len(),
-        fps
-    );
+    info!("Creating video with {} frames at {:.2} fps", frame_numbers.len(), fps);
     info!("Video format: {:?}", video_format);
 
     // 根据 VideoFormat 确定 FFmpeg 参数
@@ -245,10 +238,7 @@ async fn create_video_from_frames(
         }
     };
 
-    info!(
-        "Using FFmpeg parameters: {}x{}, format: {}",
-        width, height, pixel_format
-    );
+    info!("Using FFmpeg parameters: {}x{}, format: {}", width, height, pixel_format);
 
     // 使用 ffmpeg-next 从原始帧创建视频
     match tokio::task::spawn_blocking(
@@ -531,10 +521,7 @@ async fn convert_raw_to_images(
         crab_uvc::VideoFormat::H264 { width, height, .. } => (*width, *height, "H264".to_string()),
     };
 
-    info!(
-        "Converting frames to images: {}x{}, format: {}",
-        width, height, format_info
-    );
+    info!("Converting frames to images: {}x{}, format: {}", width, height, format_info);
 
     for &frame_num in frame_numbers {
         let raw_file = format!("frames/frame_{:06}.raw", frame_num);
@@ -543,11 +530,7 @@ async fn convert_raw_to_images(
         // 读取原始数据
         if let Ok(raw_data) = fs::read(&raw_file).await {
             // 这里需要根据实际的图像格式进行转换
-            info!(
-                "Converting frame {} to PNG (size: {} bytes)",
-                frame_num,
-                raw_data.len()
-            );
+            info!("Converting frame {} to PNG (size: {} bytes)", frame_num, raw_data.len());
 
             if let Err(e) =
                 convert_raw_to_png(&raw_data, &png_file, width, height, video_format).await
@@ -790,10 +773,7 @@ async fn write_format_info(
     let mut file = File::create("video_format_info.txt").await?;
     file.write_all(format_info.as_bytes()).await?;
 
-    info!(
-        "Format info written to video_format_info.txt: {}x{}, {}",
-        width, height, pixel_format
-    );
+    info!("Format info written to video_format_info.txt: {}x{}, {}", width, height, pixel_format);
 
     Ok(())
 }
@@ -903,10 +883,7 @@ async fn convert_frames_to_images(
             convert_mjpeg_frames_to_images(frame_numbers).await
         }
         VideoFormat::Uncompressed { format_type, .. } => {
-            info!(
-                "Converting uncompressed frames ({:?}) to PNG images...",
-                format_type
-            );
+            info!("Converting uncompressed frames ({:?}) to PNG images...", format_type);
             convert_raw_frames_to_images(frame_numbers, format_type, &video_format).await
         }
         VideoFormat::H264 { .. } => {

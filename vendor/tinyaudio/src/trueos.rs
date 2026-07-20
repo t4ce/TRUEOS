@@ -184,7 +184,11 @@ impl StreamInner {
                 self.output_buffer.len(),
             )
         };
-        if rc == 0 { Ok(()) } else { Err(()) }
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 

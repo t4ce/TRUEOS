@@ -1,4 +1,3 @@
-
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
 pub(crate) const CL_SUCCESS: i32 = 0;

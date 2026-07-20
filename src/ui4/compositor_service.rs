@@ -12,8 +12,8 @@ use embassy_time::{Duration as EmbassyDuration, Timer};
 use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, OutputId, WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame,
-    acquire_published_frame, frame_snapshot, published_rgba_view, release_published_frame,
-    retain_published_frame, visible_windows_for_output,
+    acquire_published_frame, frame_snapshot, published_native_video_view, published_rgba_view,
+    release_published_frame, retain_published_frame, visible_windows_for_output,
 };
 
 const COMPOSITION_PERIOD_MS: u64 = 16;
@@ -543,12 +543,9 @@ fn queue_async_plane(
         );
     }
     if let CompositionTarget::Overlay(slot) = plan.target {
-        let released_gpu = selected
-            .iter()
-            .any(|(_, view)| view.gpu_release.is_some());
+        let released_gpu = selected.iter().any(|(_, view)| view.gpu_release.is_some());
         if released_gpu
-            && (selected.len() != 1
-                || !direct_overlay_eligible(selected[0].0, selected[0].1))
+            && (selected.len() != 1 || !direct_overlay_eligible(selected[0].0, selected[0].1))
         {
             crate::log_warn!(target: "ui4";
                 "ui4/direct-present: released GPU frame rejected slot={} windows={} action=retain-front-and-retry no-copy-fallback=1\n",
@@ -761,28 +758,25 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     // Each producer's final PIPE_CONTROL release covers this exact allocation.
     // The compositor read lease then prevents reuse through the SURFLIVE latch;
     // no copy or CPU cache sweep is part of either transition.
-    frame_snapshot(window.frame).is_ok_and(|snapshot| {
-        match release {
-            FrameGpuRelease::ResidentScene(_) => {
-                matches!(
-                    window.plane.slot(),
-                    super::RGB_OVERLAY_PLANE_SLOT_2 | super::RGB_OVERLAY_PLANE_SLOT_3
-                )
-                    && snapshot.plan.content == FrameContent::RenderScene3d
-                    && snapshot.plan.buffering == super::FrameBuffering::Triple
-            }
-            FrameGpuRelease::Compute(_) => {
-                matches!(
-                    window.plane.slot(),
-                    super::ALPHA_OVERLAY_PLANE_SLOT
-                        | super::RGB_OVERLAY_PLANE_SLOT_2
-                        | super::RGB_OVERLAY_PLANE_SLOT_3
-                ) && matches!(
-                    (snapshot.plan.content, snapshot.plan.buffering),
-                    (FrameContent::Image, super::FrameBuffering::Double)
-                        | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-                )
-            }
+    frame_snapshot(window.frame).is_ok_and(|snapshot| match release {
+        FrameGpuRelease::ResidentScene(_) => {
+            matches!(
+                window.plane.slot(),
+                super::RGB_OVERLAY_PLANE_SLOT_2 | super::RGB_OVERLAY_PLANE_SLOT_3
+            ) && snapshot.plan.content == FrameContent::RenderScene3d
+                && snapshot.plan.buffering == super::FrameBuffering::Triple
+        }
+        FrameGpuRelease::Compute(_) => {
+            matches!(
+                window.plane.slot(),
+                super::ALPHA_OVERLAY_PLANE_SLOT
+                    | super::RGB_OVERLAY_PLANE_SLOT_2
+                    | super::RGB_OVERLAY_PLANE_SLOT_3
+            ) && matches!(
+                (snapshot.plan.content, snapshot.plan.buffering),
+                (FrameContent::Image, super::FrameBuffering::Double)
+                    | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
+            )
         }
     })
 }
@@ -831,7 +825,9 @@ fn direct_resize_handoff_pending(
         && window.state == super::WindowState::Ready
         && window.interaction.maximizable
         && window.interaction.receives_input
-        && view.gpu_release.is_some_and(|release| release.matches(view.phys, view.byte_len))
+        && view
+            .gpu_release
+            .is_some_and(|release| release.matches(view.phys, view.byte_len))
         && (window.placement.width != view.width || window.placement.height != view.height)
 }
 
@@ -853,8 +849,10 @@ fn queue_native_video_primary(
     let mut primary = pending
         .windows
         .iter()
-        .filter(|window| window.plane.slot() == super::PRIMARY_PLANE_SLOT);
-    let window = *primary.next()?;
+        .copied()
+        .enumerate()
+        .filter(|(_, window)| window.plane.slot() == super::PRIMARY_PLANE_SLOT);
+    let (lease_index, window) = primary.next()?;
     if primary.next().is_some() || window.placement.opacity != u8::MAX {
         return None;
     }
@@ -865,19 +863,14 @@ fn queue_native_video_primary(
     {
         return None;
     }
-    let publication = super::native_video_publication(
-        window.frame,
-        snapshot.publish_serial,
-    )?;
+    let publication = published_native_video_view(pending.leases[lease_index]).ok()?;
     Some((|| {
-        let (output_width, output_height) = crate::intel::active_scanout_dimensions()
-            .ok_or(Ui4CompositorError::PresentFailed)?;
-        let intended_x =
-            i64::from(window.placement.x) + i64::from(publication.layout.destination_x);
-        let intended_y =
-            i64::from(window.placement.y) + i64::from(publication.layout.destination_y);
-        let intended_right = intended_x + i64::from(publication.layout.width);
-        let intended_bottom = intended_y + i64::from(publication.layout.height);
+        let (output_width, output_height) =
+            crate::intel::active_scanout_dimensions().ok_or(Ui4CompositorError::PresentFailed)?;
+        let intended_x = i64::from(window.placement.x) + i64::from(publication.destination_x);
+        let intended_y = i64::from(window.placement.y) + i64::from(publication.destination_y);
+        let intended_right = intended_x + i64::from(publication.width);
+        let intended_bottom = intended_y + i64::from(publication.height);
         let destination_x = intended_x.clamp(0, i64::from(output_width));
         let destination_y = intended_y.clamp(0, i64::from(output_height));
         let destination_right = intended_right.clamp(0, i64::from(output_width));
@@ -894,17 +887,14 @@ fn queue_native_video_primary(
         let clipped_top = u32::try_from(destination_y.saturating_sub(intended_y))
             .map_err(|_| Ui4CompositorError::PresentFailed)?;
         let source_x = publication
-            .layout
             .source_x
             .checked_add(clipped_left)
             .ok_or(Ui4CompositorError::PresentFailed)?;
         let source_y = publication
-            .layout
             .source_y
             .checked_add(clipped_top)
             .ok_or(Ui4CompositorError::PresentFailed)?;
-        let pitch_bytes = u32::try_from(publication.source.pitch_bytes)
-            .map_err(|_| Ui4CompositorError::PresentFailed)?;
+        let pitch_bytes = publication.source.pitch_bytes;
         let uv_offset = u32::try_from(publication.source.uv_offset)
             .map_err(|_| Ui4CompositorError::PresentFailed)?;
         let source = crate::intel::gpgpu::GpgpuNv12Tile64Surface::new(
@@ -949,18 +939,14 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         state.initialized = true;
         state.windows = plan.next_windows;
         let slot = target_plane_slot(plan.target);
-        for window in pending
+        for (lease_index, window) in pending
             .windows
             .iter()
-            .filter(|window| window.plane.slot() == slot)
+            .enumerate()
+            .filter(|(_, window)| window.plane.slot() == slot)
         {
-            if let Ok(snapshot) = frame_snapshot(window.frame) {
-                if let Some(publication) = super::native_video_publication(
-                    window.frame,
-                    snapshot.publish_serial,
-                ) {
-                    super::acknowledge_native_video_publication(publication.sequence);
-                }
+            if let Ok(publication) = published_native_video_view(pending.leases[lease_index]) {
+                super::acknowledge_native_video_publication(publication.presentation_sequence);
             }
             let _ = acknowledge_window_frame(window.id, window.publish_serial);
         }

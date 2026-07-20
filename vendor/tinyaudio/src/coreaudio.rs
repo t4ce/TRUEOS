@@ -132,11 +132,9 @@ impl AudioOutputDevice for CoreaudioSoundDevice {
 
                 check(res, "Failed to `AudioQueueAllocateBuffer`")?;
                 if buf == std::ptr::null_mut() {
-                    return Err(
-                        "Succeeded in `AudioQueueAllocateBuffer` but the buffer is null"
-                            .to_string()
-                            .into(),
-                    );
+                    return Err("Succeeded in `AudioQueueAllocateBuffer` but the buffer is null"
+                        .to_string()
+                        .into());
                 }
 
                 // fill the buffer with zeroes

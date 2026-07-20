@@ -302,10 +302,7 @@ impl UvcDevice {
                 .map(|iface| iface.first_alt_setting());
 
             (
-                (
-                    video_control_iface.interface_number,
-                    video_control_iface.alternate_setting,
-                ),
+                (video_control_iface.interface_number, video_control_iface.alternate_setting),
                 video_streaming_iface.map(|vs| (vs.interface_number, vs.alternate_setting)),
             )
         };
@@ -341,20 +338,14 @@ impl UvcDevice {
         // 首先尝试通过GET_DESCRIPTOR控制请求获取完整的配置描述符
         match self.get_full_configuration_descriptor().await {
             Ok(config_data) => {
-                trace!(
-                    "Got full configuration descriptor: {} bytes",
-                    config_data.len()
-                );
+                trace!("Got full configuration descriptor: {} bytes", config_data.len());
 
                 // 解析配置描述符中的VS接口部分
                 if let Ok(parsed_formats) =
                     self.parse_vs_interface_descriptors(&config_data, vs_interface_num)
                     && !parsed_formats.is_empty()
                 {
-                    trace!(
-                        "Parsed {} formats from VS interface descriptors",
-                        parsed_formats.len()
-                    );
+                    trace!("Parsed {} formats from VS interface descriptors", parsed_formats.len());
                     formats.extend(parsed_formats);
                 }
             }
@@ -536,10 +527,7 @@ impl UvcDevice {
             pos += length;
         }
 
-        trace!(
-            "Parsed {} video formats from VS interface descriptors",
-            formats.len()
-        );
+        trace!("Parsed {} video formats from VS interface descriptors", formats.len());
         Ok(formats)
     }
 
@@ -705,10 +693,7 @@ impl UvcDevice {
             });
         }
 
-        debug!(
-            "Generated {} MJPEG formats based on format descriptor",
-            formats.len()
-        );
+        debug!("Generated {} MJPEG formats based on format descriptor", formats.len());
         Ok(formats)
     }
 
@@ -763,10 +748,7 @@ impl UvcDevice {
             });
         }
 
-        debug!(
-            "Generated {} uncompressed formats based on format descriptor",
-            formats.len()
-        );
+        debug!("Generated {} uncompressed formats based on format descriptor", formats.len());
         Ok(formats)
     }
 
@@ -880,11 +862,7 @@ impl UvcDevice {
 
         debug!("Starting video streaming");
         self.state = UvcDeviceState::Streaming;
-        Ok(VideoStream::new(
-            ep,
-            ep_desc,
-            self.current_format.clone().unwrap(),
-        ))
+        Ok(VideoStream::new(ep, ep_desc, self.current_format.clone().unwrap()))
     }
 
     /// 获取当前设备状态
@@ -1133,11 +1111,7 @@ impl UvcDevice {
             index: vs_interface_num as u16,
         };
 
-        debug!(
-            "Sending VS control: selector=0x{:02x}, data_len={}",
-            control_selector,
-            data.len()
-        );
+        debug!("Sending VS control: selector=0x{:02x}, data_len={}", control_selector, data.len());
 
         // 使用 video control 接口发送请求到 video streaming 接口
         self.device.control_out(setup, &data).await?;

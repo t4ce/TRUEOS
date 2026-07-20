@@ -133,11 +133,7 @@ pub(crate) fn build_sparse_ppgtt_for_ranges(ranges: &[PpgttRange]) -> Option<Spa
     let mut ppgtt = SparsePpgtt::new()?;
 
     for range in ranges {
-        map_range(
-            &mut ppgtt,
-            *range,
-            GEN12_SYSTEM_MEMORY_WB_PAT_INDEX,
-        )?;
+        map_range(&mut ppgtt, *range, GEN12_SYSTEM_MEMORY_WB_PAT_INDEX)?;
     }
 
     ppgtt.flush();

@@ -154,12 +154,8 @@ const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("opacity", 9, 1),
     DescriptorField::new("flags", 10, 1),
 ];
-const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> = DescriptorLayout::new(
-    "Ui4ComposeLayerDesc",
-    12,
-    Some(32),
-    UI4_COMPOSE_LAYER_DESC_FIELDS,
-);
+const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> =
+    DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(32), UI4_COMPOSE_LAYER_DESC_FIELDS);
 
 const MANDEL64_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("src_xy", 0, 1),

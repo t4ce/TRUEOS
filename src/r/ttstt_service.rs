@@ -7,7 +7,6 @@
 //! slices against the resident images. A decoder/backend can implement
 //! [`InferenceJob`] without putting filesystem I/O on an inference path.
 
-
 extern crate alloc;
 
 use alloc::boxed::Box;

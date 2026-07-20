@@ -1,4 +1,3 @@
-
 #[inline]
 pub fn client_count() -> u32 {
     0

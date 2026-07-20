@@ -206,16 +206,10 @@ impl Device {
     }
 
     async fn _claim_interface(&mut self, interface: u8, alternate: u8) -> Result<()> {
-        let res = usb!(libusb_kernel_driver_active(
-            self.handle.raw(),
-            interface as _
-        ))?;
+        let res = usb!(libusb_kernel_driver_active(self.handle.raw(), interface as _))?;
 
         if res == 1 {
-            usb!(libusb_detach_kernel_driver(
-                self.handle.raw(),
-                interface as _
-            ))?;
+            usb!(libusb_detach_kernel_driver(self.handle.raw(), interface as _))?;
             debug!("Kernel driver detached for interface {interface}");
         }
 
@@ -272,10 +266,7 @@ impl DeviceOp for Device {
         configuration_value: u8,
     ) -> futures::future::BoxFuture<'a, std::result::Result<(), USBError>> {
         async move {
-            usb!(libusb_set_configuration(
-                self.handle.raw(),
-                configuration_value as _
-            ))?;
+            usb!(libusb_set_configuration(self.handle.raw(), configuration_value as _))?;
             Ok(())
         }
         .boxed()

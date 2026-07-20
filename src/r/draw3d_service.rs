@@ -95,12 +95,8 @@ fn initialize_ui4_surface() -> Result<Draw3dUi4Surface, Draw3dUi4Error> {
     let (max_width, max_height) = crate::intel::render::resident_scene_target_dimensions();
     let (scanout_width, scanout_height) = crate::intel::active_scanout_dimensions()
         .unwrap_or((crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT));
-    let width = UI4_FRAME_WIDTH
-        .min(scanout_width)
-        .min(max_width as u32);
-    let height = UI4_FRAME_HEIGHT
-        .min(scanout_height)
-        .min(max_height as u32);
+    let width = UI4_FRAME_WIDTH.min(scanout_width).min(max_width as u32);
+    let height = UI4_FRAME_HEIGHT.min(scanout_height).min(max_height as u32);
     let frame = crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::RenderScene3d,
@@ -135,11 +131,7 @@ fn resize_ui4_surface_frame(
     height: u32,
 ) -> Result<crate::ui4::FrameHandle, Draw3dUi4Error> {
     let (max_width, max_height) = crate::intel::render::resident_scene_target_dimensions();
-    if width == 0
-        || height == 0
-        || width as usize > max_width
-        || height as usize > max_height
-    {
+    if width == 0 || height == 0 || width as usize > max_width || height as usize > max_height {
         return Err(Draw3dUi4Error::InvalidFrame);
     }
     let window = surface.window.ok_or(Draw3dUi4Error::InvalidFrame)?;
@@ -184,12 +176,9 @@ fn publish_ui4_scene_frame(
             output,
             plane: crate::ui4::WindowPlane::Universal(UI4_PLANE_SLOT as u8),
             placement: crate::ui4::WindowPlacement {
-                x: scanout_width
-                    .saturating_sub(surface.width.saturating_add(UI4_FRAME_MARGIN))
+                x: scanout_width.saturating_sub(surface.width.saturating_add(UI4_FRAME_MARGIN))
                     as i32,
-                y: UI4_FRAME_MARGIN
-                    .min(scanout_height.saturating_sub(surface.height))
-                    as i32,
+                y: UI4_FRAME_MARGIN.min(scanout_height.saturating_sub(surface.height)) as i32,
                 width: surface.width,
                 height: surface.height,
                 z: 80,
@@ -652,10 +641,7 @@ pub async fn draw3d_ui4_render_task() {
     loop {
         next_frame += EmbassyDuration::from_micros(UI4_FRAME_PERIOD_US);
         retired_frames.retain(|frame| {
-            matches!(
-                crate::ui4::destroy_frame(*frame),
-                Err(crate::ui4::FramePoolError::Busy)
-            )
+            matches!(crate::ui4::destroy_frame(*frame), Err(crate::ui4::FramePoolError::Busy))
         });
         let mut wait_for_buffer_release = false;
         let revision = SCENE_REVISION.load(Ordering::Acquire);

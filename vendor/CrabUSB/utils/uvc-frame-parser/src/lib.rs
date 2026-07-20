@@ -143,11 +143,7 @@ impl Parser {
         fps: f32,
         video_format: &VideoFormat,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        info!(
-            "Creating video with {} frames at {:.2} fps",
-            frame_numbers.len(),
-            fps
-        );
+        info!("Creating video with {} frames at {:.2} fps", frame_numbers.len(), fps);
         info!("Video format: {:?}", video_format);
 
         // 根据 VideoFormat 确定 FFmpeg 参数
@@ -190,10 +186,7 @@ impl Parser {
             }
         };
 
-        info!(
-            "Using FFmpeg parameters: {}x{}, format: {}",
-            width, height, pixel_format
-        );
+        info!("Using FFmpeg parameters: {}x{}, format: {}", width, height, pixel_format);
 
         let input_dir = self.input_dir.clone();
         let output_dir = self.output_dir.clone();
@@ -503,10 +496,7 @@ impl Parser {
             } => (*width, *height, "H264".to_string()),
         };
 
-        info!(
-            "Converting frames to images: {}x{}, format: {}",
-            width, height, format_info
-        );
+        info!("Converting frames to images: {}x{}, format: {}", width, height, format_info);
 
         for &frame_num in frame_numbers {
             let raw_file = self.input_dir.join(format!("frame_{:06}.raw", frame_num));
@@ -515,11 +505,7 @@ impl Parser {
             // 读取原始数据
             if let Ok(raw_data) = fs::read(&raw_file).await {
                 // 这里需要根据实际的图像格式进行转换
-                info!(
-                    "Converting frame {} to PNG (size: {} bytes)",
-                    frame_num,
-                    raw_data.len()
-                );
+                info!("Converting frame {} to PNG (size: {} bytes)", frame_num, raw_data.len());
 
                 if let Err(e) = self
                     .convert_raw_to_png(
@@ -878,10 +864,7 @@ impl Parser {
                 format_type: VideoFormatType::Uncompressed(format_type),
                 ..
             } => {
-                info!(
-                    "Converting uncompressed frames ({:?}) to PNG images...",
-                    format_type
-                );
+                info!("Converting uncompressed frames ({:?}) to PNG images...", format_type);
                 self.convert_raw_frames_to_images(frame_numbers, format_type, &video_format)
                     .await
             }

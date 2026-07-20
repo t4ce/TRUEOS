@@ -67,8 +67,7 @@ const DIRECT_BLT_COPY_BYTES: usize = 4096;
 // invalidation between jobs and is not a safe frame contract.
 const DIRECT_BLT_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_BLT_PPGTT_BYTES: usize = (3 + DIRECT_BLT_PPGTT_PT_COUNT) * 4096;
-const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 =
-    DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
+const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 = DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
 const DIRECT_BLT_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_BLT_GPU_VA_RING_BASE: u64 = 0x00B0_0000;
 const DIRECT_BLT_GPU_VA_CONTEXT_BASE: u64 = 0x00B1_0000;
@@ -459,7 +458,9 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
         if !ppgtt || !guc_blt_map_ui4_surfaces(state, destination, copies) {
             return None;
         }
-        let sequence = DIRECT_BLT_SUBMIT_COUNTER.fetch_add(1, Ordering::Relaxed).max(1);
+        let sequence = DIRECT_BLT_SUBMIT_COUNTER
+            .fetch_add(1, Ordering::Relaxed)
+            .max(1);
         let marker = 0xBC50_0000 | (sequence & 0xFFFF);
         let (copy_count, copied_bytes) =
             guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?;
@@ -939,10 +940,7 @@ fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
     allocation_valid && gpu_range_valid
 }
 
-fn guc_blt_valid_copy(
-    destination: GucBcs0RgbaSurface,
-    copy: GucBcs0RgbaCopy,
-) -> bool {
+fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
     guc_blt_valid_surface(copy.source)
         && !guc_blt_physical_ranges_overlap(destination, copy.source)
         && copy.width != 0
@@ -976,13 +974,12 @@ fn guc_blt_map_ui4_surfaces(
     // rather than requiring a post-copy CPU sweep of the destination.
     let pte_present_rw_scanout_uc = pte_present_rw_wb | (1 << 3) | (1 << 4);
     if !direct_blt_map_ppgtt_region(
-            state,
-            destination.gpu,
-            destination.phys,
-            destination.bytes,
-            pte_present_rw_scanout_uc,
-        )
-    {
+        state,
+        destination.gpu,
+        destination.phys,
+        destination.bytes,
+        pte_present_rw_scanout_uc,
+    ) {
         return false;
     }
 
@@ -991,13 +988,12 @@ fn guc_blt_map_ui4_surfaces(
             return false;
         }
         if !direct_blt_map_ppgtt_region(
-                state,
-                copy.source.gpu,
-                copy.source.phys,
-                copy.source.bytes,
-                pte_present_rw_wb,
-            )
-        {
+            state,
+            copy.source.gpu,
+            copy.source.phys,
+            copy.source.bytes,
+            pte_present_rw_wb,
+        ) {
             return false;
         }
     }
@@ -1065,18 +1061,12 @@ fn guc_blt_encode_ui4_copy_batch(
     batch[cursor + 6] = MI_BATCH_BUFFER_END;
     batch[cursor + 7] = MI_NOOP;
     cursor += 8;
-    super::dma_flush(
-        state.batch_virt,
-        cursor.saturating_mul(core::mem::size_of::<u32>()),
-    );
+    super::dma_flush(state.batch_virt, cursor.saturating_mul(core::mem::size_of::<u32>()));
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     Some((copies.len(), copied_bytes))
 }
 
-fn guc_blt_physical_ranges_overlap(
-    left: GucBcs0RgbaSurface,
-    right: GucBcs0RgbaSurface,
-) -> bool {
+fn guc_blt_physical_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {
     let left_end = u64::try_from(left.bytes)
         .ok()
         .and_then(|bytes| left.phys.checked_add(bytes));
@@ -1216,10 +1206,7 @@ fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> 
     let start = tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = state.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(
-            dwords.add(start),
-            MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT,
-        );
+        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT);
         core::ptr::write_volatile(dwords.add(start + 1), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
         core::ptr::write_volatile(
             dwords.add(start + 2),
@@ -1368,9 +1355,8 @@ fn guc_blt_write_lrc_ring_tail(state: DirectBltState, ring_tail: u32) {
     if total_dwords <= DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW {
         return;
     }
-    let dwords = unsafe {
-        core::slice::from_raw_parts_mut(state.context_virt.cast::<u32>(), total_dwords)
-    };
+    let dwords =
+        unsafe { core::slice::from_raw_parts_mut(state.context_virt.cast::<u32>(), total_dwords) };
     dwords[DIRECT_BLT_LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW] = ring_tail;
     super::dma_flush(state.context_virt, DIRECT_BLT_CONTEXT_BYTES);
 }

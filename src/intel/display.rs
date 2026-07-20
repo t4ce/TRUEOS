@@ -160,8 +160,7 @@ const _: () = assert!(
 );
 const _: () = assert!(
     OVERLAY_COMPOSE_RCS_GPU_ALIAS_BASE
-        + DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT as u64
-            * OVERLAY_COMPOSE_RCS_GPU_PLANE_STRIDE
+        + DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT as u64 * OVERLAY_COMPOSE_RCS_GPU_PLANE_STRIDE
         <= 0x2800_0000
 );
 const _: () = assert!(PRIMARY_SWAP_PIPE_GPU_STRIDE >= PRIMARY_SWAP_GPU_STRIDE * 2);
@@ -4086,14 +4085,7 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
     };
 
     for damaged in effective.rects() {
-        fill_overlay_rect(
-            surface,
-            damaged.x,
-            damaged.y,
-            damaged.width,
-            damaged.height,
-            0,
-        );
+        fill_overlay_rect(surface, damaged.x, damaged.y, damaged.width, damaged.height, 0);
         for rect in rects {
             fill_overlay_rect_rgba_clipped(surface, *rect, *damaged);
         }
@@ -4104,33 +4096,15 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
 
     let surface_reg = u32::try_from(surface.gpu).ok()?;
     let plane_base = overlay_plane_base(surface.pipe, surface.plane_slot);
-    let already_live = !overlay_plane_needs_rearm(
-        dev,
-        surface,
-        0,
-        0,
-        UI4_RGBA8_OVERLAY_CONTRACT,
-    );
+    let already_live = !overlay_plane_needs_rearm(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT);
     if !already_live
-        && overlay_plane_surface_flip_guard(
-            dev,
-            surface,
-            0,
-            0,
-            UI4_RGBA8_OVERLAY_CONTRACT,
-        )
-        .is_err()
+        && overlay_plane_surface_flip_guard(dev, surface, 0, 0, UI4_RGBA8_OVERLAY_CONTRACT).is_err()
     {
         return None;
     }
     if !already_live {
-        let geometry = overlay_plane_geometry(
-            surface.pitch_bytes,
-            surface.width,
-            surface.height,
-            0,
-            0,
-        )?;
+        let geometry =
+            overlay_plane_geometry(surface.pitch_bytes, surface.width, surface.height, 0, 0)?;
         program_overlay_plane_geometry(dev, plane_base, geometry);
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_SURF_OFF, surface_reg);
     }
@@ -4147,9 +4121,7 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
 
 /// Read slot-local SURFLIVE exactly once.  No executor turn spins waiting for
 /// the display engine; ownership and damage debt advance only after the latch.
-pub(crate) fn poll_ui4_live_overlay_flip(
-    flip: Ui4LiveOverlayFlip,
-) -> Ui4LiveOverlayFlipPoll {
+pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOverlayFlipPoll {
     let Some(dev) = crate::intel::claimed_device() else {
         return Ui4LiveOverlayFlipPoll::Failed;
     };
@@ -4256,12 +4228,7 @@ pub(crate) fn present_premultiplied_rgba_overlay_tiles_on_slot_damage(
 
     let composition_started_ns = crate::chronos::monotonic_nanos();
     let gpu_composed = compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
-        surface,
-        tiles,
-        effective,
-        false,
-        false,
-        false,
+        surface, tiles, effective, false, false, false,
     );
     let compositor = match gpu_composed {
         GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
@@ -4736,7 +4703,8 @@ pub(crate) fn present_premultiplied_rgba_primary_tiles_damage(
     };
     let composition_started_ns = crate::chronos::monotonic_nanos();
     let compositor =
-        match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective, false) {
+        match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective, false)
+        {
             GpgpuCompositionResult::Complete => "guc-simd16-sprite-quad",
             GpgpuCompositionResult::Unavailable => {
                 // Reconstruct damaged pixels from the original opaque primary,
@@ -5786,11 +5754,7 @@ fn disable_pipe_scaler(dev: crate::intel::Dev, regs: PipeScalerRegisters) {
     crate::intel::mmio_write(dev, regs.window_size, 0);
 }
 
-fn detach_pipe_scalers_from_plane(
-    dev: crate::intel::Dev,
-    pipe_slot: usize,
-    plane_slot: usize,
-) {
+fn detach_pipe_scalers_from_plane(dev: crate::intel::Dev, pipe_slot: usize, plane_slot: usize) {
     for scaler_id in 0..2 {
         if pipe_scaler_bound_to_plane(dev, pipe_slot, scaler_id, plane_slot)
             && let Some(regs) = pipe_scaler_registers(pipe_slot, scaler_id)
@@ -5800,7 +5764,10 @@ fn detach_pipe_scalers_from_plane(
     }
 }
 
-fn prepare_plane_scaler_flips(dev: crate::intel::Dev, entries: &[Option<PlaneSurfaceFlip>]) -> bool {
+fn prepare_plane_scaler_flips(
+    dev: crate::intel::Dev,
+    entries: &[Option<PlaneSurfaceFlip>],
+) -> bool {
     for scaler in entries.iter().flatten().filter_map(|entry| entry.scaler) {
         let wanted_scaler = match scaler.mode {
             PlaneScalerMode::Detached => None,
@@ -5815,12 +5782,8 @@ fn prepare_plane_scaler_flips(dev: crate::intel::Dev, entries: &[Option<PlaneSur
             let Some(regs) = pipe_scaler_registers(scaler.pipe_slot, scaler_id) else {
                 continue;
             };
-            let bound_to_plane = pipe_scaler_bound_to_plane(
-                dev,
-                scaler.pipe_slot,
-                scaler_id,
-                scaler.plane_slot,
-            );
+            let bound_to_plane =
+                pipe_scaler_bound_to_plane(dev, scaler.pipe_slot, scaler_id, scaler.plane_slot);
             let target_rebound = wanted_scaler == Some(scaler_id)
                 && crate::intel::mmio_read(dev, regs.control)
                     & (PIPE_SCALER_ENABLE | PIPE_SCALER_BINDING_MASK)
@@ -5862,12 +5825,7 @@ fn program_plane_scaler_flip(dev: crate::intel::Dev, scaler: PlaneScalerFlip) ->
 fn plane_scaler_flip_matches(dev: crate::intel::Dev, scaler: PlaneScalerFlip) -> bool {
     match scaler.mode {
         PlaneScalerMode::Detached => !(0..2).any(|scaler_id| {
-            pipe_scaler_bound_to_plane(
-                dev,
-                scaler.pipe_slot,
-                scaler_id,
-                scaler.plane_slot,
-            )
+            pipe_scaler_bound_to_plane(dev, scaler.pipe_slot, scaler_id, scaler.plane_slot)
         }),
         PlaneScalerMode::Scaled {
             scaler_id,
@@ -5879,12 +5837,8 @@ fn plane_scaler_flip_matches(dev: crate::intel::Dev, scaler: PlaneScalerFlip) ->
             let Some(regs) = pipe_scaler_registers(scaler.pipe_slot, scaler_id) else {
                 return false;
             };
-            pipe_scaler_bound_to_plane(
-                dev,
-                scaler.pipe_slot,
-                scaler_id,
-                scaler.plane_slot,
-            ) && crate::intel::mmio_read(dev, regs.window_pos) == window_pos_reg
+            pipe_scaler_bound_to_plane(dev, scaler.pipe_slot, scaler_id, scaler.plane_slot)
+                && crate::intel::mmio_read(dev, regs.window_pos) == window_pos_reg
                 && crate::intel::mmio_read(dev, regs.window_size) == window_size_reg
                 && crate::intel::mmio_read(dev, regs.hphase) == hphase_reg
                 && crate::intel::mmio_read(dev, regs.vphase) == vphase_reg
@@ -5929,16 +5883,8 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
                 entry.plane_base + UNI_PLANE_STRIDE_OFF,
                 geometry.stride_reg,
             );
-            crate::intel::mmio_write(
-                dev,
-                entry.plane_base + UNI_PLANE_POS_OFF,
-                geometry.pos_reg,
-            );
-            crate::intel::mmio_write(
-                dev,
-                entry.plane_base + UNI_PLANE_SIZE_OFF,
-                geometry.size_reg,
-            );
+            crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_POS_OFF, geometry.pos_reg);
+            crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SIZE_OFF, geometry.size_reg);
             crate::intel::mmio_write(
                 dev,
                 entry.plane_base + UNI_PLANE_OFFSET_OFF,
@@ -5974,9 +5920,10 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         if live[index] == entry.surface_reg {
             live_mask |= 1u32 << index;
         }
-        if entry.constant_alpha.is_none_or(|alpha| {
-            overlay_plane_constant_alpha_matches(dev, entry.plane_base, alpha)
-        }) {
+        if entry
+            .constant_alpha
+            .is_none_or(|alpha| overlay_plane_constant_alpha_matches(dev, entry.plane_base, alpha))
+        {
             alpha_mask |= 1u32 << index;
         }
         if entry
@@ -5992,8 +5939,7 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         (1u32 << batch.len) - 1
     };
     let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(batch.submitted_ns);
-    let committed =
-        live_mask == want_mask && alpha_mask == want_mask && scaler_mask == want_mask;
+    let committed = live_mask == want_mask && alpha_mask == want_mask && scaler_mask == want_mask;
     let timed_out = !committed && elapsed_ns >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS;
     if !committed && !timed_out {
         return Ui4PlaneSurfaceFlipPoll::Pending;
@@ -6131,8 +6077,7 @@ fn overlay_plane_constant_alpha_matches(
     plane_base: usize,
     alpha: u8,
 ) -> bool {
-    crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF)
-        == plane_keymsk_alpha(alpha)
+    crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMSK_OFF) == plane_keymsk_alpha(alpha)
         && crate::intel::mmio_read(dev, plane_base + UNI_PLANE_KEYMAX_OFF)
             == plane_keymax_alpha(alpha)
 }
@@ -6146,16 +6091,8 @@ fn overlay_plane_constant_alpha_is_valid(dev: crate::intel::Dev, plane_base: usi
 }
 
 fn program_overlay_plane_constant_alpha(dev: crate::intel::Dev, plane_base: usize, alpha: u8) {
-    crate::intel::mmio_write(
-        dev,
-        plane_base + UNI_PLANE_KEYMSK_OFF,
-        plane_keymsk_alpha(alpha),
-    );
-    crate::intel::mmio_write(
-        dev,
-        plane_base + UNI_PLANE_KEYMAX_OFF,
-        plane_keymax_alpha(alpha),
-    );
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, plane_keymsk_alpha(alpha));
+    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, plane_keymax_alpha(alpha));
 }
 
 pub(super) fn decoded_nv12_overlay_plane_alpha() -> u8 {
@@ -7074,9 +7011,8 @@ fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u6
     if surface.buffer_index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
     }
-    PRIMARY_COMPOSE_RCS_GPU_ALIAS_BASE.checked_add(
-        (surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?,
-    )
+    PRIMARY_COMPOSE_RCS_GPU_ALIAS_BASE
+        .checked_add((surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?)
 }
 
 fn overlay_compose_rcs_gpu_for_surface(surface: OverlaySurface) -> Option<u64> {
@@ -7088,9 +7024,7 @@ fn overlay_compose_rcs_gpu_for_surface(surface: OverlaySurface) -> Option<u64> {
     }
     OVERLAY_COMPOSE_RCS_GPU_ALIAS_BASE
         .checked_add((plane_index as u64).checked_mul(OVERLAY_COMPOSE_RCS_GPU_PLANE_STRIDE)?)?
-        .checked_add(
-            (surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?,
-        )
+        .checked_add((surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?)
 }
 
 fn overlay_back_buffer_index(pool: OverlaySurfacePool) -> usize {
@@ -8106,7 +8040,10 @@ pub(crate) fn queue_ui4_primary_composition(
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target.pipeline.pipe().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target
+        .pipeline
+        .pipe()
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
     if target.width == 0 || target.height == 0 {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
@@ -8122,19 +8059,8 @@ pub(crate) fn queue_ui4_primary_composition(
         effective.add_region(change);
         effective
     };
-    let proof = prepare_ui4_composition_proof(
-        tiles,
-        effective,
-        target.width,
-        target.height,
-        true,
-    );
-    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(
-        surface,
-        tiles,
-        effective,
-        true,
-    ) {
+    let proof = prepare_ui4_composition_proof(tiles, effective, target.width, target.height, true);
+    match compose_premultiplied_rgba_tiles_into_primary_gpgpu(surface, tiles, effective, true) {
         GpgpuCompositionResult::Queued(gpu) => Ok(Ui4AsyncComposition {
             work: Some(Ui4AsyncCompositionWork::GucRcs(gpu)),
             target: Ui4AsyncCompositionTarget::Primary {
@@ -8169,7 +8095,10 @@ pub(crate) fn queue_ui4_primary_native_nv12_composition(
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target.pipeline.pipe().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target
+        .pipeline
+        .pipe()
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
     if target.width == 0 || target.height == 0 {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
@@ -8266,13 +8195,8 @@ pub(crate) fn queue_ui4_overlay_composition(
         effective.add_region(change);
         (effective, !pool.content_initialized[surface.buffer_index])
     };
-    let proof = prepare_ui4_composition_proof(
-        tiles,
-        effective,
-        surface.width,
-        surface.height,
-        false,
-    );
+    let proof =
+        prepare_ui4_composition_proof(tiles, effective, surface.width, surface.height, false);
     let content_change = if sparse_static_painter && destination_fresh_transparent {
         let mut painted = CompositionDamageRegion::EMPTY;
         for tile in tiles {
@@ -8406,18 +8330,19 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
     };
-    let blit = crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
-        |error| match error {
-            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
-            crate::intel::GucBcs0CopySubmitError::Unavailable => {
-                Ui4AsyncCompositionError::Unavailable
-            }
-            crate::intel::GucBcs0CopySubmitError::InvalidRequest
-            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
-                Ui4AsyncCompositionError::Failed
-            }
-        },
-    )?;
+    let blit =
+        crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
+            |error| match error {
+                crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
+                crate::intel::GucBcs0CopySubmitError::Unavailable => {
+                    Ui4AsyncCompositionError::Unavailable
+                }
+                crate::intel::GucBcs0CopySubmitError::InvalidRequest
+                | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
+                    Ui4AsyncCompositionError::Failed
+                }
+            },
+        )?;
     mark_overlay_surface_content_initialized(surface);
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
@@ -8487,14 +8412,7 @@ pub(crate) fn queue_ui4_static_overlay_composition_cpu(
 
     for damaged in work_damage.rects() {
         if !destination_fresh_transparent {
-            fill_overlay_rect(
-                surface,
-                damaged.x,
-                damaged.y,
-                damaged.width,
-                damaged.height,
-                0,
-            );
+            fill_overlay_rect(surface, damaged.x, damaged.y, damaged.width, damaged.height, 0);
         }
         for tile in tiles {
             copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damaged)
@@ -8569,8 +8487,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     let plane_base = overlay_plane_base(pipe, plane_slot);
     let current_surf = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURF_OFF);
     let current_live = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF);
-    let pool_mutex = ui4_direct_scanout_pool(pipe, plane_slot)
-        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pool_mutex =
+        ui4_direct_scanout_pool(pipe, plane_slot).ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let mut pool = pool_mutex.lock();
     let alias_index = (0..UI4_DIRECT_SCANOUT_ALIAS_COUNT)
         .map(|offset| (pool.next_alias + offset) % UI4_DIRECT_SCANOUT_ALIAS_COUNT)
@@ -8676,9 +8594,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     })
 }
 
-pub(crate) fn poll_ui4_composition(
-    composition: Ui4AsyncComposition,
-) -> Ui4AsyncCompositionPoll {
+pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4AsyncCompositionPoll {
     match composition.work {
         None => Ui4AsyncCompositionPoll::Ready,
         Some(Ui4AsyncCompositionWork::GucRcs(gpu)) => {
@@ -8766,7 +8682,9 @@ fn prepare_ui4_composition_proof(
             let source_offset = source_y
                 .checked_mul(tile.pitch_bytes)?
                 .checked_add(source_x.checked_mul(PRIMARY_BYTES_PER_PIXEL as usize)?)?;
-            let pixel = tile.pixels.get(source_offset..source_offset.saturating_add(4))?;
+            let pixel = tile
+                .pixels
+                .get(source_offset..source_offset.saturating_add(4))?;
             let source_ptr = pixel.as_ptr().cast_mut();
             crate::intel::dma_flush(source_ptr, 4);
             let source_rgba = unsafe { core::ptr::read_volatile(source_ptr.cast::<u32>()) };
@@ -8830,8 +8748,7 @@ fn verify_ui4_composition_proof(composition: Ui4AsyncComposition) {
     };
     let destination_ptr = unsafe { virt.add(offset) };
     crate::intel::dma_flush(destination_ptr, 4);
-    let observed_destination =
-        unsafe { core::ptr::read_volatile(destination_ptr.cast::<u32>()) };
+    let observed_destination = unsafe { core::ptr::read_volatile(destination_ptr.cast::<u32>()) };
     crate::log_info!(target: "ui4";
         "ui4/guc-compositor-proof: seq={} reason={} target={} slot={} buffer={} xy={},{} source_xy={},{} source_gpu=0x{:X} destination_gpu=0x{:X} source_rgba=0x{:08X} expected=0x{:08X} observed=0x{:08X} match={} boundary=post-marker-before-flip\n",
         proof.sequence,
@@ -8903,9 +8820,8 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         }
         Ui4AsyncCompositionTarget::DirectOverlay { .. } => {}
     }
-    let elapsed_us = crate::chronos::monotonic_nanos()
-        .saturating_sub(composition.queued_ns)
-        / 1_000;
+    let elapsed_us =
+        crate::chronos::monotonic_nanos().saturating_sub(composition.queued_ns) / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
         let scanout_sequence = UI4_DIRECT_SCANOUT_LOG_SEQUENCE
@@ -8954,18 +8870,14 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
     }
 }
 
-pub(crate) fn ui4_direct_composition_plane_slot(
-    composition: Ui4AsyncComposition,
-) -> Option<usize> {
+pub(crate) fn ui4_direct_composition_plane_slot(composition: Ui4AsyncComposition) -> Option<usize> {
     match composition.target {
         Ui4AsyncCompositionTarget::DirectOverlay { surface } => Some(surface.plane_slot),
         _ => None,
     }
 }
 
-pub(crate) const fn ui4_composition_has_guc_work(
-    composition: Ui4AsyncComposition,
-) -> bool {
+pub(crate) const fn ui4_composition_has_guc_work(composition: Ui4AsyncComposition) -> bool {
     composition.work.is_some()
 }
 
@@ -8977,14 +8889,12 @@ pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> 
         Ui4AsyncCompositionTarget::Primary { surface, .. } => {
             (surface.pipe.primary_plane().base(), u32::try_from(surface.gpu).ok())
         }
-        Ui4AsyncCompositionTarget::Overlay { surface } => (
-            overlay_plane_base(surface.pipe, surface.plane_slot),
-            u32::try_from(surface.gpu).ok(),
-        ),
-        Ui4AsyncCompositionTarget::DirectOverlay { surface } => (
-            overlay_plane_base(surface.pipe, surface.plane_slot),
-            u32::try_from(surface.gpu).ok(),
-        ),
+        Ui4AsyncCompositionTarget::Overlay { surface } => {
+            (overlay_plane_base(surface.pipe, surface.plane_slot), u32::try_from(surface.gpu).ok())
+        }
+        Ui4AsyncCompositionTarget::DirectOverlay { surface } => {
+            (overlay_plane_base(surface.pipe, surface.plane_slot), u32::try_from(surface.gpu).ok())
+        }
     };
     surface_reg.is_some_and(|surface_reg| {
         crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF) == surface_reg
@@ -9114,16 +9024,19 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
                 || source.pitch_bytes as usize != tile.pitch_bytes
                 || tile.width == 0
                 || tile.height == 0
-                || gpgpu_ranges_overlap(destination.gpu, destination.bytes, source.gpu, source.bytes)
+                || gpgpu_ranges_overlap(
+                    destination.gpu,
+                    destination.bytes,
+                    source.gpu,
+                    source.bytes,
+                )
             {
                 return GpgpuCompositionResult::Unavailable;
             }
             let tile_rect = CompositionDamageRect::new(tile.x, tile.y, tile.width, tile.height);
-            let Some(restored) = restore_primary_composition_base_outside_opaque_rect(
-                surface,
-                damage,
-                tile_rect,
-            ) else {
+            let Some(restored) =
+                restore_primary_composition_base_outside_opaque_rect(surface, damage, tile_rect)
+            else {
                 return GpgpuCompositionResult::Unavailable;
             };
             if !restored.is_empty() && !dma_flush_primary_swap_region(surface, restored) {
@@ -9276,10 +9189,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
             }),
     );
     if asynchronous {
-        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
-            destination,
-            &runs,
-        ) {
+        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(destination, &runs)
+        {
             Ok(submission) => GpgpuCompositionResult::Queued(submission),
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
                 GpgpuCompositionResult::SubmittedIncomplete
@@ -9287,10 +9198,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
             Err(_) => GpgpuCompositionResult::Unavailable,
         };
     }
-    let result = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(
-        destination,
-        &runs,
-    );
+    let result =
+        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
     match result.outcome {
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
             if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
@@ -9484,10 +9393,8 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
         return GpgpuCompositionResult::Complete;
     }
     if asynchronous {
-        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(
-            destination,
-            &runs,
-        ) {
+        return match crate::intel::gpgpu::queue_ui4_compositor_sprite_quad_runs(destination, &runs)
+        {
             Ok(submission) => GpgpuCompositionResult::Queued(submission),
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
                 GpgpuCompositionResult::SubmittedIncomplete
@@ -9495,10 +9402,8 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
             Err(_) => GpgpuCompositionResult::Unavailable,
         };
     }
-    let result = crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(
-        destination,
-        &runs,
-    );
+    let result =
+        crate::intel::gpgpu::sprite_quad_worklist_rgba8_runs_over_result(destination, &runs);
     match result.outcome {
         crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete
             if result.stats.descs == expected_descriptors && result.stats.submits == 1 =>
@@ -9955,8 +9860,8 @@ fn overlay_plane_surface_flip_guard(
     alpha: OverlayAlphaMode,
 ) -> Result<(), &'static str> {
     {
-        let surface_pool = overlay_surface_pool(surface.pipe, surface.plane_slot)
-            .ok_or("surface-plane-slot")?;
+        let surface_pool =
+            overlay_surface_pool(surface.pipe, surface.plane_slot).ok_or("surface-plane-slot")?;
         let pool = surface_pool.lock();
         if !pool.matches(surface.width, surface.height, surface.pipe) {
             return Err("surface-pool-shape");
@@ -9967,12 +9872,7 @@ fn overlay_plane_surface_flip_guard(
         }
     }
     plane_stride_reg_value(surface.pitch_bytes).ok_or("stride-range")?;
-    overlay_plane_dynamic_flip_guard(
-        dev,
-        surface.pipe,
-        surface.plane_slot,
-        alpha,
-    )
+    overlay_plane_dynamic_flip_guard(dev, surface.pipe, surface.plane_slot, alpha)
 }
 
 fn overlay_plane_dynamic_flip_guard(
@@ -10126,13 +10026,7 @@ fn direct_overlay_geometry_and_scaler(
     let window_pos_reg = (surface.pos_x.checked_shl(16)?) | surface.pos_y;
     let window_size_reg = (surface.dest_width.checked_shl(16)?) | surface.dest_height;
     Some((
-        overlay_plane_geometry(
-            surface.pitch_bytes,
-            surface.width,
-            surface.height,
-            0,
-            0,
-        )?,
+        overlay_plane_geometry(surface.pitch_bytes, surface.width, surface.height, 0, 0)?,
         PlaneScalerFlip {
             pipe_slot: surface.pipe.slot,
             plane_slot: surface.plane_slot,
@@ -10183,13 +10077,9 @@ fn flip_overlay_plane_surface(
     let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
-    let Some(geometry) = overlay_plane_geometry(
-        surface.pitch_bytes,
-        surface.width,
-        surface.height,
-        pos_x,
-        pos_y,
-    ) else {
+    let Some(geometry) =
+        overlay_plane_geometry(surface.pitch_bytes, surface.width, surface.height, pos_x, pos_y)
+    else {
         return false;
     };
     match queue_ui4_plane_surface_flip(
@@ -10261,13 +10151,9 @@ fn stage_overlay_plane_surface_flip(
     let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
-    let Some(geometry) = overlay_plane_geometry(
-        surface.pitch_bytes,
-        surface.width,
-        surface.height,
-        0,
-        0,
-    ) else {
+    let Some(geometry) =
+        overlay_plane_geometry(surface.pitch_bytes, surface.width, surface.height, 0, 0)
+    else {
         return false;
     };
     queue_ui4_plane_surface_flip(
@@ -10281,8 +10167,7 @@ fn stage_overlay_plane_surface_flip(
             mode: PlaneScalerMode::Detached,
         }),
         reason,
-    )
-        == PlaneSurfaceFlipQueueResult::Queued
+    ) == PlaneSurfaceFlipQueueResult::Queued
 }
 
 fn stage_ui4_direct_overlay_flip(
@@ -10305,7 +10190,13 @@ fn stage_ui4_direct_overlay_flip(
         return false;
     }
     let mapping_matches = ui4_direct_scanout_pool(surface.pipe, surface.plane_slot)
-        .and_then(|pool| pool.lock().mappings.get(surface.alias_index).copied().flatten())
+        .and_then(|pool| {
+            pool.lock()
+                .mappings
+                .get(surface.alias_index)
+                .copied()
+                .flatten()
+        })
         .is_some_and(|mapping| {
             mapping.phys == surface.phys && mapping.byte_len == surface.byte_len
         });

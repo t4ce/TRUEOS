@@ -1,4 +1,3 @@
-
 // Translated from compute-runtime/shared/source/helpers/driver_model_type.h.
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

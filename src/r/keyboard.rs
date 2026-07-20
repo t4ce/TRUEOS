@@ -1,4 +1,3 @@
-
 use heapless::Vec;
 use spin::Mutex;
 

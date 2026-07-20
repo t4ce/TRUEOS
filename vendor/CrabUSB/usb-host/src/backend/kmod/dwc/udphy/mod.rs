@@ -218,10 +218,7 @@ impl Udphy {
         self.u3_port_disable(!self.mode.contains(UdphyMode::USB));
 
         let dplanes = self.dplane_get();
-        debug!(
-            "Configured for {:?} mode with {} DP lanes",
-            self.mode, dplanes
-        );
+        debug!("Configured for {:?} mode with {} DP lanes", self.mode, dplanes);
         self.dplane_enable(dplanes);
         self.dplane_select();
 
@@ -537,10 +534,7 @@ impl Udphy {
             );
         }
 
-        info!(
-            "  U3 Port Disable = {}",
-            !self.mode.contains(UdphyMode::USB)
-        );
+        info!("  U3 Port Disable = {}", !self.mode.contains(UdphyMode::USB));
         info!("================================");
     }
 

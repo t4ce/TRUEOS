@@ -423,12 +423,7 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
     damage: CompositionDamageRegion,
     reason: &'static str,
 ) -> Result<Ui4AsyncComposition, self::display::Ui4AsyncCompositionError> {
-    self::display::queue_ui4_static_overlay_composition_bcs0(
-        plane_slot,
-        tiles,
-        damage,
-        reason,
-    )
+    self::display::queue_ui4_static_overlay_composition_bcs0(plane_slot, tiles, damage, reason)
 }
 
 pub(crate) fn queue_ui4_direct_overlay_frame(
@@ -453,9 +448,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     )
 }
 
-pub(crate) fn poll_ui4_composition(
-    composition: Ui4AsyncComposition,
-) -> Ui4AsyncCompositionPoll {
+pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4AsyncCompositionPoll {
     self::display::poll_ui4_composition(composition)
 }
 
@@ -467,9 +460,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
     self::display::commit_ui4_composition_flip(composition)
 }
 
-pub(crate) fn ui4_direct_composition_plane_slot(
-    composition: Ui4AsyncComposition,
-) -> Option<usize> {
+pub(crate) fn ui4_direct_composition_plane_slot(composition: Ui4AsyncComposition) -> Option<usize> {
     self::display::ui4_direct_composition_plane_slot(composition)
 }
 
@@ -718,9 +709,7 @@ pub(crate) fn queue_ui4_live_overlay_rects_on_slot_damage_region(
     )
 }
 
-pub(crate) fn poll_ui4_live_overlay_flip(
-    flip: Ui4LiveOverlayFlip,
-) -> Ui4LiveOverlayFlipPoll {
+pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOverlayFlipPoll {
     self::display::poll_ui4_live_overlay_flip(flip)
 }
 

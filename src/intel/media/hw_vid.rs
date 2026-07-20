@@ -3796,6 +3796,7 @@ async fn h264_present_probe_output(
             phase, playback_frame, stream_idr_index, output.id
         );
         let source = crate::ui4::DecodedNv12Source {
+            decode_sequence: u64::from(output.id),
             gpu: output.gpu_addr,
             phys: output.phys_addr,
             virt: output.virt_addr,

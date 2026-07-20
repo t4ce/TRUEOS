@@ -1,4 +1,3 @@
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PipelineStage13 {
     CommandStream,

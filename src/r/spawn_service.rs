@@ -525,9 +525,7 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
 
 #[cfg(feature = "trueos_h264_encode_probe")]
 fn spawn_ui4_h264_encode_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
-        crate::ui4::ui4_h264_encode_probe_task()
-    })
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_h264_encode_probe_task())
 }
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {

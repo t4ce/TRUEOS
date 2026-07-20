@@ -285,15 +285,15 @@ impl Class {
             (0xE0, 0x01, 0x02) => Self::Wireless(WirelessType::UwbRadioControl),
             (0xE0, 0x01, 0x03) => Self::Wireless(WirelessType::RemoteNdis),
             (0xE0, 0x01, 0x04) => Self::Wireless(WirelessType::BluetoothAmp),
-            (0xE0, 0x02, 0x01) => Self::Wireless(WirelessType::HostWireAdapter(
-                WireAdapterInterface::ControlData,
-            )),
-            (0xE0, 0x02, 0x02) => Self::Wireless(WirelessType::DeviceWireAdapter(
-                WireAdapterInterface::ControlData,
-            )),
-            (0xE0, 0x02, 0x03) => Self::Wireless(WirelessType::DeviceWireAdapter(
-                WireAdapterInterface::Isochronous,
-            )),
+            (0xE0, 0x02, 0x01) => {
+                Self::Wireless(WirelessType::HostWireAdapter(WireAdapterInterface::ControlData))
+            }
+            (0xE0, 0x02, 0x02) => {
+                Self::Wireless(WirelessType::DeviceWireAdapter(WireAdapterInterface::ControlData))
+            }
+            (0xE0, 0x02, 0x03) => {
+                Self::Wireless(WirelessType::DeviceWireAdapter(WireAdapterInterface::Isochronous))
+            }
 
             // Base Class EFh - Miscellaneous
             (0xEF, 0x01, 0x01) => Self::Miscellaneous(MiscellaneousType::ActiveSync),
@@ -334,9 +334,9 @@ impl Class {
             // Base Class FEh - Application Specific
             (0xFE, 0x01, 0x01) => Self::Application(ApplicationType::DeviceFirmwareUpgrade),
             (0xFE, 0x02, 0x00) => Self::Application(ApplicationType::IrdaBridge),
-            (0xFE, 0x03, 0x00) => Self::Application(ApplicationType::TestMeasurement(
-                TestMeasurementType::Standard,
-            )),
+            (0xFE, 0x03, 0x00) => {
+                Self::Application(ApplicationType::TestMeasurement(TestMeasurementType::Standard))
+            }
             (0xFE, 0x03, 0x01) => Self::Application(ApplicationType::TestMeasurement(
                 TestMeasurementType::Usb488Subclass,
             )),

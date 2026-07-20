@@ -1,4 +1,3 @@
-
 use super::{DriverStatus, NetworkDriver};
 use crate::pci::PciDevice;
 use alloc::boxed::Box;

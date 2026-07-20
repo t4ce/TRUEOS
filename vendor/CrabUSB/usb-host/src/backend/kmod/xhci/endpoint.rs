@@ -228,14 +228,16 @@ impl Endpoint {
 
     pub fn configure_primary_streams(&mut self, count: usize) -> crate::err::Result<BusAddr> {
         let count = count.clamp(2, 32);
-        let allocated_contexts = (self.kernel.page_size() / core::mem::size_of::<StreamContext>())
-            .max(count);
-        let mut contexts = self.kernel.array_zero_with_align::<StreamContext>(
-            allocated_contexts,
-            self.kernel.page_size(),
-            DmaDirection::Bidirectional,
-        )
-        .map_err(|_| USBError::NoMemory)?;
+        let allocated_contexts =
+            (self.kernel.page_size() / core::mem::size_of::<StreamContext>()).max(count);
+        let mut contexts = self
+            .kernel
+            .array_zero_with_align::<StreamContext>(
+                allocated_contexts,
+                self.kernel.page_size(),
+                DmaDirection::Bidirectional,
+            )
+            .map_err(|_| USBError::NoMemory)?;
         let mut stream_rings = Vec::with_capacity(count);
         stream_rings.push(None);
         for stream_id in 1..count {
@@ -244,10 +246,7 @@ impl Endpoint {
                 DmaDirection::Bidirectional,
                 &self.kernel,
             )?;
-            contexts.set(
-                stream_id,
-                StreamContext::transfer_ring(ring.bus_addr(), ring.cycle()),
-            );
+            contexts.set(stream_id, StreamContext::transfer_ring(ring.bus_addr(), ring.cycle()));
             stream_rings.push(Some(ring));
         }
         let addr = contexts.dma_addr().as_u64().into();
@@ -877,9 +876,7 @@ impl EndpointOp for Endpoint {
                     let td_size = if max_packet_size == 0 {
                         0
                     } else {
-                        remaining_after
-                            .div_ceil(max_packet_size)
-                            .min(0x1f) as u8
+                        remaining_after.div_ceil(max_packet_size).min(0x1f) as u8
                     };
                     let mut normal = Normal::new();
                     normal
@@ -1028,9 +1025,7 @@ fn iso_packet_actual_length(
                 Ok(requested.saturating_sub(remaining))
             }
         },
-        Err(e) => Err(TransferError::Other(anyhow!(
-            "unknown XHCI ISO completion code: {e:?}"
-        ))),
+        Err(e) => Err(TransferError::Other(anyhow!("unknown XHCI ISO completion code: {e:?}"))),
     }
 }
 

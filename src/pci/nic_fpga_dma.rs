@@ -1,4 +1,3 @@
-
 use core::sync::atomic::{Ordering, fence};
 
 use heapless::Vec;

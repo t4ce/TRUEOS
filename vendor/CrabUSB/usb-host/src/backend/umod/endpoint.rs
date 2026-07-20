@@ -50,9 +50,7 @@ impl EndpointImpl {
 
         let trans_ptr = unsafe { libusb1_sys::libusb_alloc_transfer(iso_packets) };
         if trans_ptr.is_null() {
-            return Err(TransferError::Other(anyhow!(
-                "Failed to allocate libusb transfer"
-            )));
+            return Err(TransferError::Other(anyhow!("Failed to allocate libusb transfer")));
         }
 
         // 保存类型和方向
@@ -243,9 +241,7 @@ impl EndpointOp for EndpointImpl {
         if res == libusb1_sys::constants::LIBUSB_SUCCESS {
             Ok(())
         } else {
-            Err(TransferError::Other(anyhow!(
-                "Failed to cancel transfer: libusb error {res}"
-            )))
+            Err(TransferError::Other(anyhow!("Failed to cancel transfer: libusb error {res}")))
         }
     }
 }

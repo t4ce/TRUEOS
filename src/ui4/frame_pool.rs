@@ -102,6 +102,22 @@ pub(crate) struct FrameRgbaView {
 unsafe impl Send for FrameRgbaView {}
 unsafe impl Sync for FrameRgbaView {}
 
+/// One decoder-authored native picture attached to an exact UI4 Frame buffer.
+/// The Frame read lease is the lifetime token: users may sample `source` only
+/// while retaining the lease from which this view was obtained.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NativeVideoFrameView {
+    pub(crate) source: NativeNv12Surface,
+    pub(crate) source_x: u32,
+    pub(crate) source_y: u32,
+    pub(crate) destination_x: u32,
+    pub(crate) destination_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) decode_sequence: u64,
+    pub(crate) presentation_sequence: u64,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PublishedFrame {
     pub(crate) frame: FrameHandle,
@@ -132,6 +148,7 @@ struct FrameRecord {
     plan: FramePlan,
     surfaces: [Option<UiSurfaceHandle>; 3],
     native_nv12: [Option<NativeNv12Surface>; 3],
+    native_video: [Option<NativeVideoFrameView>; 3],
     buffer_count: u8,
     front_buffer: Option<u8>,
     next_buffer: u8,
@@ -151,6 +168,7 @@ impl FrameRecord {
             plan: EMPTY_PLAN,
             surfaces: [None; 3],
             native_nv12: [None; 3],
+            native_video: [None; 3],
             buffer_count: 0,
             front_buffer: None,
             next_buffer: 0,
@@ -174,6 +192,7 @@ impl FrameRecord {
         self.plan = plan;
         self.surfaces = surfaces;
         self.native_nv12 = native_nv12;
+        self.native_video = [None; 3];
         self.buffer_count = plan.buffering.count() as u8;
         self.front_buffer = None;
         self.next_buffer = 0;
@@ -331,6 +350,7 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
         frame.front_buffer = None;
         frame.buffer_count = 0;
         frame.native_nv12 = [None; 3];
+        frame.native_video = [None; 3];
         core::mem::replace(&mut frame.surfaces, [None; 3])
     };
     destroy_surfaces(surfaces);
@@ -361,6 +381,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
     frame.next_buffer = (index + 1) % count;
     frame.gpu_authored[index as usize] = false;
     frame.gpu_release[index as usize] = None;
+    frame.native_video[index as usize] = None;
     frame.next_token = next_serial(frame.next_token);
     let acquired = AcquiredBuffer {
         index,
@@ -488,6 +509,23 @@ pub(crate) fn published_native_nv12_view(
     frame.native_nv12[lease.buffer_index as usize].ok_or(FramePoolError::InvalidLease)
 }
 
+/// Resolve the native video source attached to this exact published buffer.
+/// Unlike the former global sidecar, a newer publication cannot replace the
+/// source observed through an older retained read lease.
+pub(crate) fn published_native_video_view(
+    lease: FrameReadLease,
+) -> Result<NativeVideoFrameView, FramePoolError> {
+    let pool = FRAME_POOL.lock();
+    let frame = pool.checked(lease.frame)?;
+    if frame.readers[lease.buffer_index as usize] == 0
+        || frame.plan.content != FrameContent::Video
+        || frame.plan.buffering != super::FrameBuffering::Triple
+    {
+        return Err(FramePoolError::InvalidLease);
+    }
+    frame.native_video[lease.buffer_index as usize].ok_or(FramePoolError::NotPublished)
+}
+
 pub(crate) fn release_published_frame(lease: FrameReadLease) -> Result<(), FramePoolError> {
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
@@ -548,10 +586,7 @@ pub(crate) fn publish_frame_buffer(
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
-    if matches!(
-        frame.plan.content,
-        FrameContent::RenderScene3d | FrameContent::BlueprintScene
-    )
+    if matches!(frame.plan.content, FrameContent::RenderScene3d | FrameContent::BlueprintScene)
         && frame.gpu_authored[lease.buffer_index as usize]
     {
         return Err(FramePoolError::ProducerReleaseRequired);
@@ -559,12 +594,32 @@ pub(crate) fn publish_frame_buffer(
     publish_checked_frame(frame, lease)
 }
 
+/// Publish one decoder-retired Tile64 NV12 picture as the native attachment
+/// of this exact triple-buffered video Frame allocation. The broker-managed
+/// RGBA allocation remains only the initialized fallback/serial carrier; the
+/// native source is consumed without a CPU conversion or copy.
+pub(crate) fn publish_native_video_frame_buffer(
+    lease: FrameWriteLease,
+    view: NativeVideoFrameView,
+) -> Result<PublishedFrame, FramePoolError> {
+    let mut pool = FRAME_POOL.lock();
+    let frame = pool.checked_mut(lease.frame)?;
+    checked_lease(frame, lease)?;
+    if frame.plan.content != FrameContent::Video
+        || frame.plan.buffering != super::FrameBuffering::Triple
+        || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
+        || !valid_native_video_view(view, frame.plan)
+    {
+        return Err(FramePoolError::ProducerReleaseRequired);
+    }
+    frame.native_video[lease.buffer_index as usize] = Some(view);
+    publish_checked_frame(frame, lease)
+}
+
 /// Reclassify a leased RGBA allocation for a complete CPU overwrite path. This
 /// is used only when a compute dispatch was never admitted; an accepted GPU
 /// submission must instead retire or quarantine its exact allocation.
-pub(crate) fn mark_frame_buffer_cpu_authored(
-    lease: FrameWriteLease,
-) -> Result<(), FramePoolError> {
+pub(crate) fn mark_frame_buffer_cpu_authored(lease: FrameWriteLease) -> Result<(), FramePoolError> {
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
@@ -719,6 +774,52 @@ fn valid_native_nv12_surface(
         && surface.uv_offset >= y_bytes
         && surface.byte_len >= required
         && surface.layout == expected_layout
+}
+
+fn valid_native_video_view(view: NativeVideoFrameView, plan: FramePlan) -> bool {
+    let source = view.source;
+    let pitch = source.pitch_bytes as usize;
+    let Some(y_bytes) = pitch.checked_mul(source.height as usize) else {
+        return false;
+    };
+    let Some(uv_bytes) = pitch.checked_mul(source.height.div_ceil(2) as usize) else {
+        return false;
+    };
+    let Some(required) = source.uv_offset.checked_add(uv_bytes) else {
+        return false;
+    };
+    source.phys != 0
+        && source.gpu != 0
+        && source.virt != 0
+        && source.width != 0
+        && source.height != 0
+        && source.pitch_bytes >= source.width
+        && source.pitch_bytes.is_multiple_of(128)
+        && source.uv_offset >= y_bytes
+        && source.uv_offset.is_multiple_of(pitch)
+        && source.byte_len >= required
+        && source.layout == Nv12Layout::YTiled
+        && source.pipeline_slot == plan.output.slot()
+        && view.width != 0
+        && view.height != 0
+        && view.decode_sequence != 0
+        && view.presentation_sequence != 0
+        && view
+            .source_x
+            .checked_add(view.width)
+            .is_some_and(|right| right <= source.width)
+        && view
+            .source_y
+            .checked_add(view.height)
+            .is_some_and(|bottom| bottom <= source.height)
+        && view
+            .destination_x
+            .checked_add(view.width)
+            .is_some_and(|right| right <= plan.width)
+        && view
+            .destination_y
+            .checked_add(view.height)
+            .is_some_and(|bottom| bottom <= plan.height)
 }
 
 fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; 3]) {

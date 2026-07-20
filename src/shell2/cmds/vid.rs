@@ -21,7 +21,6 @@ const DEFAULT_FILL: bool = false;
 const DEFAULT_DIAGNOSTICS: bool = false;
 const DEFAULT_NORESET_LITE: bool = true;
 const DEFAULT_LOOP: bool = false;
-const DEFAULT_VIDEO_ALPHA: u8 = 0xFF;
 
 #[derive(Clone)]
 enum VidSource {
@@ -49,7 +48,6 @@ impl VidSource {
 struct VidCommand {
     source: VidSource,
     options: H264PlaybackOptions,
-    plane_alpha: u8,
 }
 
 pub(crate) fn try_parse(
@@ -72,7 +70,7 @@ pub(crate) fn try_parse(
             print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: queued source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={} alpha={}",
+                    "vid: queued source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
                     command.source.name(),
                     command.source.asset(),
                     options.fps(),
@@ -82,8 +80,7 @@ pub(crate) fn try_parse(
                     options.show_cache_fill() as u8,
                     options.diagnostics() as u8,
                     options.noreset_lite() as u8,
-                    options.loop_playback() as u8,
-                    command.plane_alpha
+                    options.loop_playback() as u8
                 )
                 .as_str(),
             );
@@ -123,7 +120,6 @@ fn parse_options(
     let mut diagnostics = DEFAULT_DIAGNOSTICS;
     let mut noreset_lite = DEFAULT_NORESET_LITE;
     let mut loop_playback = DEFAULT_LOOP;
-    let mut plane_alpha = DEFAULT_VIDEO_ALPHA;
     let mut online = false;
     let mut path = String::from(H264_BOOT_PROBE_STREAM_PATH);
     let mut path_set = false;
@@ -196,12 +192,6 @@ fn parse_options(
         } else if let Some(raw) = arg.strip_prefix("cache=") {
             cache = parse_cache(raw)?;
             cache_set = true;
-        } else if let Some(raw) = arg.strip_prefix("alpha=") {
-            let Some(value) = parse_alpha(raw) else {
-                usage(io);
-                return None;
-            };
-            plane_alpha = value;
         } else if arg.eq_ignore_ascii_case("full") {
             cache = H264PlaybackCacheMode::Full;
             cache_set = true;
@@ -236,7 +226,6 @@ fn parse_options(
         } else {
             VidSource::TrueosFs(path)
         },
-        plane_alpha,
         options: H264PlaybackOptions::new(
             fps,
             reverse,
@@ -268,26 +257,14 @@ fn parse_cache(raw: &str) -> Option<H264PlaybackCacheMode> {
     }
 }
 
-fn parse_alpha(raw: &str) -> Option<u8> {
-    if raw.eq_ignore_ascii_case("opaque") || raw.eq_ignore_ascii_case("on") {
-        Some(0xFF)
-    } else if raw.eq_ignore_ascii_case("half") {
-        Some(0x80)
-    } else if raw.eq_ignore_ascii_case("zero") || raw.eq_ignore_ascii_case("off") {
-        Some(0)
-    } else {
-        raw.parse::<u8>().ok()
-    }
-}
-
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid <fps 1..144> [<TRUEOSFS path>|path=<path>|online] [loop|once] [reverse|forward] [cache=full|tail|off] [alpha=0..255|half|opaque|off] [study] [fill] [quiet|debug] [warm|cold]`",
+        "vid: usage `vid <fps 1..144> [<TRUEOSFS path>|path=<path>|online] [loop|once] [reverse|forward] [cache=full|tail|off] [study] [fill] [quiet|debug] [warm|cold]`",
     );
     print_shell_line(
         io,
-        "vid: examples `vid 60`, `vid 60 video.mp4 alpha=128`, `vid 60 path=video.mp4 alpha=0`, `vid 60 online`, `vid 15 reverse`",
+        "vid: examples `vid 60`, `vid 60 video.mp4`, `vid 60 path=video.mp4`, `vid 60 online`, `vid 15 reverse`",
     );
 }
 
@@ -297,7 +274,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={} alpha={}",
+            "vid: start source={} asset={} fps={} mode={} cache={} study={} fill={} diag={} warm={} loop={}",
             command.source.name(),
             command.source.asset(),
             options.fps(),
@@ -307,18 +284,10 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             options.show_cache_fill() as u8,
             options.diagnostics() as u8,
             options.noreset_lite() as u8,
-            options.loop_playback() as u8,
-            command.plane_alpha
+            options.loop_playback() as u8
         )
         .as_str(),
     );
-    let alpha_set =
-        crate::intel::set_decoded_nv12_overlay_plane_alpha(command.plane_alpha, "shell2-vid-start");
-    print_matrix_target_line(
-        &target,
-        alloc::format!("vid: alpha={} set={}", command.plane_alpha, alpha_set as u8).as_str(),
-    );
-
     let mut lap = 0usize;
     loop {
         lap = lap.saturating_add(1);

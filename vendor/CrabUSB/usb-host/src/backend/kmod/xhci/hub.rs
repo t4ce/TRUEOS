@@ -121,10 +121,7 @@ impl HubOp for XhciRootHub {
 
 impl XhciRootHub {
     /// 创建新的 xHCI Root Hub
-    pub fn new(
-        reg: XhciRegisters,
-        init_policy: XhciRootHubInitPolicy,
-    ) -> Result<Self, USBError> {
+    pub fn new(reg: XhciRegisters, init_policy: XhciRootHubInitPolicy) -> Result<Self, USBError> {
         let port_num = reg.port_register_set.len();
         let ports = PortChangeWaker::new(port_num as _).ports.clone();
 
@@ -147,9 +144,7 @@ impl XhciRootHub {
 
     fn request_root_port_reset(&mut self, port_id: u8) -> Result<(), USBError> {
         let Some(idx) = port_id.checked_sub(1).map(usize::from) else {
-            return Err(USBError::Other(anyhow::anyhow!(
-                "invalid root port reset request port=0"
-            )));
+            return Err(USBError::Other(anyhow::anyhow!("invalid root port reset request port=0")));
         };
         if self.root_port_ignored_by_physics(port_id) {
             info!(

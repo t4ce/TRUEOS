@@ -20,11 +20,12 @@ pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{
     FrameGpuRelease, FramePoolError, FrameReadLease, FrameRgbaView, FrameWriteLease,
-    acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer, create_frame, destroy_frame,
-    frame_snapshot, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
-    publish_gpgpu_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_gpu_frame_buffer,
-    published_rgba_view, release_published_frame, retain_published_frame,
-    wait_frame_buffer_release, writable_rgba_view,
+    NativeVideoFrameView, acquire_frame_buffer, acquire_published_frame, cancel_frame_buffer,
+    create_frame, destroy_frame, frame_snapshot, gpgpu_rgba_surface,
+    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_frame_buffer,
+    publish_gpgpu_scene_frame_buffer, publish_gpu_frame_buffer, publish_native_video_frame_buffer,
+    published_native_video_view, published_rgba_view, release_published_frame,
+    retain_published_frame, wait_frame_buffer_release, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_DURATION_MS,
@@ -41,9 +42,8 @@ pub(crate) use input_broker::{
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
-    DecodedNv12Source, acknowledge_native_video_publication, native_video_publication,
-    prepare_decoded_video_player, present_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
-    wait_decoded_video_playback_ready,
+    DecodedNv12Source, acknowledge_native_video_publication, prepare_decoded_video_player,
+    present_decoded_nv12_stream_frame, stop_decoded_nv12_stream, wait_decoded_video_playback_ready,
 };
 
 pub(crate) use window_broker::{

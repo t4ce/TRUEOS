@@ -1,4 +1,3 @@
-
 use heapless::Vec;
 use spin::Mutex;
 
@@ -257,12 +256,7 @@ pub fn preferred_kernel_hw_cursor_snapshot_with_slot_buttons() -> Option<(u32, f
         .iter()
         .find(|snapshot| snapshot.hid_kind == HID_KIND_MOUSE)
     {
-        return Some((
-            snapshot.slot_id,
-            snapshot.x,
-            snapshot.y,
-            snapshot.buttons_down,
-        ));
+        return Some((snapshot.slot_id, snapshot.x, snapshot.y, snapshot.buttons_down));
     }
 
     let mut best: Option<(u8, usize, &CursorSnapshot)> = None;

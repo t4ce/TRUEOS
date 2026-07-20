@@ -16,9 +16,7 @@ static FINISHED_QUEUE_LOG_BUDGET: AtomicUsize = AtomicUsize::new(128);
 
 fn take_queue_log_budget() -> bool {
     FINISHED_QUEUE_LOG_BUDGET
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| {
-            left.checked_sub(1)
-        })
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |left| left.checked_sub(1))
         .is_ok()
 }
 
@@ -187,12 +185,7 @@ impl<C> FinishedData<C> {
     pub fn set_finished(&self, value: C) {
         if self
             .state
-            .compare_exchange(
-                SLOT_EMPTY,
-                SLOT_WRITING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(SLOT_EMPTY, SLOT_WRITING, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             if take_queue_log_budget() {
@@ -211,12 +204,7 @@ impl<C> FinishedData<C> {
     pub fn get_finished(&self) -> Option<C> {
         if self
             .state
-            .compare_exchange(
-                SLOT_READY,
-                SLOT_READING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
+            .compare_exchange(SLOT_READY, SLOT_READING, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
             return None;

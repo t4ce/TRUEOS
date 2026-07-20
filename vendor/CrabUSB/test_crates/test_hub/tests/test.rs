@@ -125,10 +125,7 @@ mod tests {
                     info!("endpoint: {ep_desc:?}");
                     if matches!(
                         (ep_desc.transfer_type, ep_desc.direction),
-                        (
-                            usb_if::descriptor::EndpointType::Bulk,
-                            usb_if::transfer::Direction::In
-                        )
+                        (usb_if::descriptor::EndpointType::Bulk, usb_if::transfer::Direction::In)
                     ) {
                         let mut ep = device.endpoint(ep_desc.address).unwrap();
                         let mut buff = alloc::vec![0u8; 64];
@@ -143,10 +140,7 @@ mod tests {
                             }
                         }
                     } else {
-                        info!(
-                            "unsupported {:?} {:?}",
-                            ep_desc.transfer_type, ep_desc.direction
-                        );
+                        info!("unsupported {:?} {:?}", ep_desc.transfer_type, ep_desc.direction);
                     }
                 }
 
@@ -176,10 +170,7 @@ mod tests {
         println!("pcie: {}", pcie.node.name);
 
         for reg in pcie.node.reg().unwrap() {
-            println!(
-                "pcie reg: {:#x}, bus: {:#x}",
-                reg.address, reg.child_bus_address
-            );
+            println!("pcie reg: {:#x}, bus: {:#x}", reg.address, reg.child_bus_address);
             let size = reg.size.unwrap_or_default().align_up(0x1000);
 
             pcie_regs.push(iomap((reg.address as usize).into(), size));
@@ -303,10 +294,7 @@ mod tests {
                 let regs = node.reg().unwrap().collect::<Vec<_>>();
                 println!("usb regs: {:?}", regs);
 
-                let addr = iomap(
-                    (regs[0].address as usize).into(),
-                    regs[0].size.unwrap_or(0x1000),
-                );
+                let addr = iomap((regs[0].address as usize).into(), regs[0].size.unwrap_or(0x1000));
 
                 let irq = node.irq_info();
 

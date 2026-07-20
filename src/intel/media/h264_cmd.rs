@@ -1,4 +1,3 @@
-
 use alloc::vec::Vec;
 
 pub(crate) const UPSTREAM_INTEL_MEDIA_DRIVER_REPO: &str = "https://github.com/intel/media-driver";

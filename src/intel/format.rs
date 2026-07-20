@@ -1,4 +1,3 @@
-
 // Source element formats supported by the VF unit, distilled from the PRM
 // table the user pasted into this file. Page headers and repeated captions
 // have been removed, and the remaining rows are represented as typed Rust

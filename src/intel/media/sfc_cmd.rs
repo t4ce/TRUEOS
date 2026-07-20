@@ -1,4 +1,3 @@
-
 //! Mechanical VD-to-SFC bring-up contract for Xe-LP media.
 //!
 //! Nothing in this module submits SFC work.  It establishes the checked plan,

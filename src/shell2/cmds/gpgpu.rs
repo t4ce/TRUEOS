@@ -15,10 +15,7 @@ use crate::intel::gpgpu::{
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "gpgpu preview start [duration_ms] [cadence_ms] [publish_every]",
-    );
+    print_shell_line(io, "gpgpu preview start [duration_ms] [cadence_ms] [publish_every]");
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
     print_shell_line(io, "gpgpu chart artifact");
