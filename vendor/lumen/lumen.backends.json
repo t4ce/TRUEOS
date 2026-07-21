@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "default_backend": "cpu",
+  "target_backends": [
+    {
+      "name": "cpu_trueos",
+      "kind": "cpu",
+      "targets": [
+        "trueos",
+        "zkvm"
+      ],
+      "cargo_feature": "cpu-trueos",
+      "parallelism": "external_kernel_ap_chunks",
+      "threading_contract": "no_rayon_no_std_threads",
+      "matmul_contract": "cooperative_chunked_ap_worker",
+      "notes": [
+        "TRUEOS owns CPU parallel scheduling outside Lumen.",
+        "Use this backend when compiling Lumen for TRUEOS/zkvm-style targets."
+      ]
+    },
+    {
+      "name": "cpu",
+      "kind": "cpu",
+      "targets": [
+        "*"
+      ],
+      "parallelism": "host_runtime",
+      "threading_contract": "host_threads_or_library_default"
+    },
+    {
+      "name": "cuda",
+      "kind": "gpu",
+      "cargo_feature": "cuda",
+      "parallelism": "cuda_runtime"
+    }
+  ]
+}

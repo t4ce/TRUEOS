@@ -1,0 +1,10 @@
+Source: https://github.com/t4ce/Lumen.git
+Pinned commit: f0a9fa408de39594b99d864deab50d027e105f07
+
+This directory is a source-vendored snapshot of the Lumen commit previously
+recorded by TRUEOS as vendor/lumen.  It is stored as ordinary files so an
+offline TRUEOS checkout retains the no-std CPU implementation without needing
+to initialize another submodule.
+
+TRUEOS enables Lumen with default features disabled and `cpu-trueos` enabled.
+The host callback required by that feature lives in src/lumen/mod.rs.
