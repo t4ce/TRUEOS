@@ -320,6 +320,11 @@ mod tests {
     fn final_image_gives_leds_to_the_fused_heartbeat_function() {
         assert!(TOP_VHDL.contains("signal debug_led_mode : std_logic := '0';"));
         assert!(TOP_VHDL.contains("debug_led_mode <= '0';"));
+        assert!(TOP_VHDL.contains(
+            "signal led_reg : std_logic_vector(4 downto 0) := \"00001\";"
+        ));
+        assert!(TOP_VHDL.contains("led_reg <= function_next_led;"));
+        assert!(TOP_VHDL.contains("usr_led0 <= not led_reg(0);"));
         assert!(!TOP_VHDL.contains("signal debug_led_mode : std_logic := '1';"));
     }
 }

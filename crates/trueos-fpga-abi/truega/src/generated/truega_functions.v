@@ -100,7 +100,21 @@ module truega_functions$heartbeat(led_state,next_led,result);
     
     // Update code
     always @(*) begin
-        next_led = led_state + 32'h1;
+        if (led_state == 32'h1) begin
+            next_led = 32'h2;
+        end
+        else if (led_state == 32'h2) begin
+            next_led = 32'h4;
+        end
+        else if (led_state == 32'h4) begin
+            next_led = 32'h8;
+        end
+        else if (led_state == 32'h8) begin
+            next_led = 32'h10;
+        end
+        else begin
+            next_led = 32'h1;
+        end
         result = 32'h54534154;
     end
     

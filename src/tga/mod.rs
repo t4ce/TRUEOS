@@ -283,6 +283,28 @@ fn log_liveness_once() {
     }
 }
 
+fn candidate_liveness_ready(tga: &Tga) -> bool {
+    let magic = tga.protocol_magic();
+    if magic == TGA_MAGIC_EXPECTED {
+        return true;
+    }
+
+    // A live SRAM program can expose PCI config space a few seconds before the
+    // new fabric has finished configuring.  Keep that candidate private and
+    // retry it instead of publishing an unusable transport connection.
+    if !TGA_LIVENESS_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_warn!(
+            "tga: endpoint present but protocol not ready magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}; retrying without publishing connection\n",
+            magic,
+            TGA_MAGIC_EXPECTED,
+            tga.bus,
+            tga.slot,
+            tga.function
+        );
+    }
+    false
+}
+
 fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
     TgaHotplugSnapshot {
         bus: tga.bus,
@@ -495,6 +517,11 @@ pub fn try_init() -> bool {
         return false;
     };
 
+    if !candidate_liveness_ready(&tga) {
+        let _ = crate::pci::release_device_claim(dev.bus, dev.slot, dev.function, TGA_PCI_OWNER);
+        return false;
+    }
+
     if let Some(prev) = TGA_LAST_DISCONNECT.lock().take() {
         log_reconnect_delta(prev, &tga);
     } else {
@@ -503,7 +530,8 @@ pub fn try_init() -> bool {
 
     *TGA.lock() = Some(tga);
     TGA_CONNECTION_GENERATION.fetch_add(1, Ordering::AcqRel);
-    TGA_LIVENESS_LOGGED.store(false, Ordering::Relaxed);
+    TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
+    log_liveness_once();
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         // Keep contract explicit when MMIO touch is enabled: default to LED off.
         tga_led_set(false);
@@ -664,6 +692,30 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     } else {
         // If the BAR was already valid, ensure the device is enabled now.
         crate::pci::enable_mem_space_only(dev.bus, dev.slot, dev.function);
+    }
+
+    // A retry after an early, not-yet-live candidate sees the BAR value that
+    // the first attempt already restored. Preserve that reconnect provenance
+    // instead of relabelling the same lease as a firmware assignment.
+    if bar_assignment == TgaBarAssignment::Firmware {
+        let disconnected = TGA_LAST_DISCONNECT.lock().as_ref().copied();
+        let working = TGA_LAST_WORKING_LEASE.lock().as_ref().copied();
+        if disconnected.is_some_and(|previous| {
+            previous.bus == dev.bus
+                && previous.slot == dev.slot
+                && previous.function == dev.function
+                && previous.bar_size == bar_size
+                && previous.bar_is_64 == bar_is_64
+        }) && working.is_some_and(|previous| {
+            previous.bus == dev.bus
+                && previous.slot == dev.slot
+                && previous.function == dev.function
+                && previous.bar_phys == bar_phys
+                && previous.bar_size == bar_size
+                && previous.bar_is_64 == bar_is_64
+        }) {
+            bar_assignment = TgaBarAssignment::Restored;
+        }
     }
 
     // We only need the first few BAR0 registers, so mapping 1 page keeps it minimal.

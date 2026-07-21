@@ -141,7 +141,9 @@ architecture rtl of top is
 	signal tl_tx_eop    : std_logic := '0';
 	signal tl_cfg_busdev : std_logic_vector(12 downto 0);
 
-	signal led_reg : std_logic_vector(4 downto 0) := (others => '0');
+	-- Active-high logical state (the board outputs are inverted below).  Seed a
+	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
+	signal led_reg : std_logic_vector(4 downto 0) := "00001";
 	-- Normal image: the five LEDs belong to the fused heartbeat function. A
 	-- transport diagnostic can still enable the sticky PCIe milestones through
 	-- the explicit LED_DEBUG_ON BAR write.
@@ -523,7 +525,7 @@ begin
 	begin
 		if rising_edge(tlp_clk) then
 			if (pcie_perst_n = '0') or (pll_lock = '0') then
-				led_reg <= (others => '0');
+				led_reg <= "00001";
 				debug_led_mode <= '0';
 				call_magic <= WORK_PACKAGE_MAGIC;
 				call_abi_function <= x"0000" & WORK_ABI_VERSION;
@@ -699,7 +701,7 @@ begin
 											debug_led_mode <= '1';
 										elsif payload_dw = LED_DEBUG_OFF then
 											debug_led_mode <= '0';
-											led_reg <= (others => '0');
+											led_reg <= "00001";
 										elsif debug_led_mode = '0' then
 											val8 := payload_byte(payload_dw);
 											led_reg <= val8(4 downto 0);

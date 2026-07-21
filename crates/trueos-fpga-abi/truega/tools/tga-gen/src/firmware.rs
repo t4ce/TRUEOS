@@ -8,7 +8,7 @@ use rust_hdl::prelude::*;
 
 pub const HEARTBEAT_REPLY: u32 = 0x5453_4154;
 
-/// Slot 0: advance the visible five-bit LED heartbeat and return the protocol magic.
+/// Slot 0: rotate one visibly lit LED and return the protocol magic.
 #[derive(LogicBlock, Default)]
 pub struct Heartbeat {
     pub led_state: Signal<In, Bits<5>>,
@@ -19,7 +19,20 @@ pub struct Heartbeat {
 impl Logic for Heartbeat {
     #[hdl_gen]
     fn update(&mut self) {
-        self.next_led.next = self.led_state.val() + 1;
+        // Keep exactly one LED lit.  The fallback also seeds the heartbeat after
+        // reset or recovers from any non-one-hot value written through the debug
+        // BAR.  State advances only when the surrounding VHDL retires slot 0.
+        if self.led_state.val() == 0x01 {
+            self.next_led.next = 0x02.into();
+        } else if self.led_state.val() == 0x02 {
+            self.next_led.next = 0x04.into();
+        } else if self.led_state.val() == 0x04 {
+            self.next_led.next = 0x08.into();
+        } else if self.led_state.val() == 0x08 {
+            self.next_led.next = 0x10.into();
+        } else {
+            self.next_led.next = 0x01.into();
+        }
         self.result.next = 0x5453_4154.into();
     }
 }
@@ -121,7 +134,14 @@ pub mod reference {
     use super::HEARTBEAT_REPLY;
 
     pub const fn led_step_heartbeat(led_state: u8) -> (u8, u32) {
-        (led_state.wrapping_add(1) & 0x1f, HEARTBEAT_REPLY)
+        let next = match led_state & 0x1f {
+            0x01 => 0x02,
+            0x02 => 0x04,
+            0x04 => 0x08,
+            0x08 => 0x10,
+            _ => 0x01,
+        };
+        (next, HEARTBEAT_REPLY)
     }
 
     pub const fn add_u32(a: u32, b: u32) -> u32 {
@@ -139,7 +159,9 @@ mod tests {
 
     #[test]
     fn reference_functions_are_exact() {
-        assert_eq!(reference::led_step_heartbeat(0x1f), (0, 0x5453_4154));
+        assert_eq!(reference::led_step_heartbeat(0x01), (0x02, 0x5453_4154));
+        assert_eq!(reference::led_step_heartbeat(0x10), (0x01, 0x5453_4154));
+        assert_eq!(reference::led_step_heartbeat(0x00), (0x01, 0x5453_4154));
         assert_eq!(reference::add_u32(u32::MAX, 2), 1);
         assert_eq!(reference::xor_u32(0xAA55_AA55, 0xFFFF_0000), 0x55AA_AA55);
     }
