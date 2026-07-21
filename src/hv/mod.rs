@@ -1455,9 +1455,12 @@ fn prepare_blueprint_launch_on_lane(
     if memory::prepare_guest_stack_mb_for_vm(vm_id, profile.stack_recommended_mib).is_err() {
         return Err(AllocString::from("app-vm stack profile allocation failed"));
     }
+    if !memory::arm_guest_rel_exec_for_vm(vm_id) {
+        return Err(AllocString::from("app-vm REL execute policy unavailable"));
+    }
 
     let lifecycle_archive = pending.archive.clone();
-    stage_blueprint_launch(
+    if let Err(err) = stage_blueprint_launch(
         vm_id,
         BlueprintLaunchState {
             archive: pending.archive,
@@ -1467,8 +1470,10 @@ fn prepare_blueprint_launch_on_lane(
         },
         pending.console_target,
         console_surface,
-    )
-    .map_err(|err| alloc::format!("app-vm stage failed: {:?}", err))?;
+    ) {
+        memory::release_guest_rel_exec_for_vm(vm_id);
+        return Err(alloc::format!("app-vm stage failed: {:?}", err));
+    }
     set_blueprint_lifecycle_capability(vm_id, lifecycle_archive.as_str(), replicatable);
 
     crate::log!(
@@ -2709,6 +2714,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
             vm_id
         ));
     } else {
+        memory::release_guest_rel_exec_for_vm(vm_id);
         let _ = take_blueprint_launch(vm_id);
         clear_blueprint_process_context(vm_id);
     }

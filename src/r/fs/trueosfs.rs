@@ -1203,6 +1203,35 @@ pub async fn file_write_abort_async(stream_handle: u32) -> Result<(), block::Err
     }
 }
 
+/// Asynchronously write a complete file from a BSP-owned executor task.
+///
+/// Filesystem consumers that already run in async kernel context must use this
+/// native path. The synchronous `kfs` facade is a compatibility bridge for AP
+/// blocking lanes and must never be entered from the BSP executor.
+///
+/// Returns `Ok(false)` when the filesystem cannot allocate the file.
+pub async fn file_write_all_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+) -> Result<bool, block::Error> {
+    let Some(handle) = file_write_begin_async(disk, name, bytes.len() as u64).await? else {
+        return Ok(false);
+    };
+
+    for chunk in bytes.chunks(64 * 1024) {
+        if let Err(error) = file_write_chunk_async(handle, chunk).await {
+            // A failed chunk is removed by `file_write_chunk_async`; abort is
+            // still useful if that implementation later retains failed state.
+            let _ = file_write_abort_async(handle).await;
+            return Err(error);
+        }
+    }
+
+    file_write_finish_async(handle).await?;
+    Ok(true)
+}
+
 async fn lookup_via_index_async(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,

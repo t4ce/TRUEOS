@@ -44,18 +44,17 @@ fn fetch_error_to_code(err: &str) -> i32 {
     }
 }
 
-fn write_bytes_to_file(path: &str, bytes: &[u8]) -> i32 {
-    let Ok(handle) = crate::r::io::kfs::write_file_begin(path, bytes.len() as u64) else {
+async fn write_bytes_to_file(path: &str, bytes: &[u8]) -> i32 {
+    // These C-ABI operations are implemented by BSP-local async tasks after
+    // their network await. They therefore need native async TRUEOSFS I/O, not
+    // the synchronous AP-lane compatibility bridge.
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return FS_ERR_IO;
     };
-    if crate::r::io::kfs::write_file_chunk(handle, bytes).is_err() {
-        let _ = crate::r::io::kfs::write_file_abort(handle);
-        return FS_ERR_IO;
+    match crate::r::fs::trueosfs::file_write_all_async(disk, path, bytes).await {
+        Ok(true) => 0,
+        Ok(false) | Err(_) => FS_ERR_IO,
     }
-    if crate::r::io::kfs::write_file_finish(handle).is_err() {
-        return FS_ERR_IO;
-    }
-    0
 }
 
 struct FetchTarget {
@@ -638,7 +637,7 @@ async fn post_json_bytes(
 fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_bytes: usize) {
     crate::wait::spawn_local_detached(async move {
         let rc = match fetch_bytes(url, timeout_ms, max_bytes).await {
-            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()),
+            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()).await,
             Err(rc) => rc,
         };
         if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
@@ -671,7 +670,7 @@ fn spawn_post_json_file(
 ) {
     crate::wait::spawn_local_detached(async move {
         let rc = match post_json_bytes(url, body_json, bearer, timeout_ms, max_bytes).await {
-            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()),
+            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()).await,
             Err(rc) => rc,
         };
         if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {

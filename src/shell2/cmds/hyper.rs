@@ -73,15 +73,17 @@ fn normalize_path(path: &str) -> Result<String, &'static str> {
         .map_err(|_| "bad path")
 }
 
-fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    let handle = crate::r::io::kfs::write_file_begin(path, bytes.len() as u64)
-        .map_err(|err| format!("write begin failed: {:?}", err))?;
-    if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, bytes) {
-        let _ = crate::r::io::kfs::write_file_abort(handle);
-        return Err(format!("write chunk failed: {:?}", err));
+async fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
+    // `hyper_download_task` is already on the BSP async executor. Going
+    // through synchronous kfs here would recursively bridge back into that
+    // same executor, so use the native TRUEOSFS path directly.
+    let disk = crate::r::fs::trueosfs::primary_root_handle()
+        .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
+    match crate::r::fs::trueosfs::file_write_all_async(disk, path, bytes).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(String::from("write begin failed: no space")),
+        Err(err) => Err(format!("write failed: {:?}", err)),
     }
-    crate::r::io::kfs::write_file_finish(handle)
-        .map_err(|err| format!("write finish failed: {:?}", err))
 }
 
 async fn fetch_download_bytes(url: String) -> Result<Vec<u8>, String> {
@@ -117,7 +119,7 @@ async fn hyper_download_task(target: MatrixTarget, url: String, path: String) {
     let log = |line: &str| print_matrix_target_line(&target, line);
 
     match fetch_download_bytes(url.clone()).await {
-        Ok(bytes) => match write_file(path.as_str(), bytes.as_slice()) {
+        Ok(bytes) => match write_file(path.as_str(), bytes.as_slice()).await {
             Ok(()) => log(format!("hyper: saved {} bytes -> {}", bytes.len(), path).as_str()),
             Err(err) => log(format!("hyper: write failed: {}", err).as_str()),
         },

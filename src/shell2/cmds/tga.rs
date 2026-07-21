@@ -56,10 +56,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "tga: irq={} wakes={} timeout_recoveries={} hw_retire={} hw_req={} hw_ack={} hw_state={:#04x}",
+            "tga: irq={} wakes={} timeout_recoveries={} bar_repairs={} hw_retire={} hw_req={} hw_ack={} hw_state={:#04x}",
             stats.interrupts,
             stats.interrupt_wakes,
             stats.timeout_recoveries,
+            crate::tga::offload_write_repair_count(),
             hardware.retirements,
             hardware.requests,
             hardware.controller_acks,
@@ -197,20 +198,22 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
     print_matrix_target_line(
         target,
         alloc::format!(
-            "tga: model ffn0=start path=trueosfs:/{} seal=checking expected_calls={}",
+            "tga: model ffn0=start path=trueosfs:/{} seal=checking preflight_calls={} expected_calls={}",
             crate::r::lfm25_model::NATIVE_IMAGE_PATH,
+            lfm25_ffn::FPGA_PREFLIGHT_CALLS,
             lfm25_ffn::FPGA_CALLS_PER_FFN,
         )
         .as_str(),
     );
     let start_tick = embassy_time_driver::now();
-    let mut milestones = [0u8; 4];
+    let mut milestones = [0u8; 5];
     let report = match lfm25_ffn::run(|progress| {
         let stage_index = match progress.stage {
-            lfm25_ffn::Stage::Gate => 0,
-            lfm25_ffn::Stage::Up => 1,
-            lfm25_ffn::Stage::Silu => 2,
-            lfm25_ffn::Stage::Down => 3,
+            lfm25_ffn::Stage::Preflight => 0,
+            lfm25_ffn::Stage::Gate => 1,
+            lfm25_ffn::Stage::Up => 2,
+            lfm25_ffn::Stage::Silu => 3,
+            lfm25_ffn::Stage::Down => 4,
         };
         let quarter =
             core::cmp::min(4, progress.completed.saturating_mul(4) / progress.total.max(1)) as u8;

@@ -1893,6 +1893,7 @@ pub(crate) fn invoke_host_rel(
         stats.largest_free_block,
         stats.free_blocks,
     ));
+    set_rel_image_exec_policy(image.base as u64, image.used_len, true)?;
     let (_arg_storage, argv) = build_argv(process_args.as_slice());
     let main_fn: extern "C" fn(usize, *const *const c_char) =
         unsafe { core::mem::transmute(main_addr) };
@@ -1912,6 +1913,31 @@ pub(crate) fn invoke_host_rel(
             );
         },
     );
+    set_rel_image_exec_policy(image.base as u64, image.used_len, false)?;
     drop(image);
+    Ok(())
+}
+
+fn set_rel_image_exec_policy(guest_va: u64, bytes: usize, executable: bool) -> Result<(), String> {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return Ok(());
+    }
+    let op = if executable {
+        trueos_vm::vmcall::OP_BP_REL_IMAGE_EXEC_ENABLE
+    } else {
+        trueos_vm::vmcall::OP_BP_REL_IMAGE_EXEC_DISABLE
+    };
+    let (status, data) = trueos_vm::vmcall::call(op, guest_va, bytes as u64);
+    let rc = (data as i64) as i32;
+    if status != trueos_vm::vmcall::STATUS_OK || rc != 0 {
+        return Err(alloc::format!(
+            "REL execute policy {} failed status={} rc={} gva=0x{:016X} bytes={}",
+            if executable { "enable" } else { "disable" },
+            status,
+            rc,
+            guest_va,
+            bytes,
+        ));
+    }
     Ok(())
 }

@@ -44,6 +44,7 @@ const EPT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
 pub const PT_ENTRY_PRESENT: u64 = 1 << 0;
 pub const PT_ENTRY_WRITABLE: u64 = 1 << 1;
 const PT_ENTRY_LARGE_PAGE: u64 = 1 << 7;
+const PT_ENTRY_NO_EXECUTE: u64 = 1 << 63;
 
 #[repr(C, align(4096))]
 #[derive(Copy, Clone)]
@@ -89,6 +90,33 @@ static GUEST_TABLES: StaticSlots<Option<usize>, { crate::allcaps::hv::VM_ID_LIMI
     StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
 static GUEST_TABLES_ARENAS: StaticSlots<Option<HeapArena>, { crate::allcaps::hv::VM_ID_LIMIT }> =
     StaticSlots::from_slots([const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT]);
+static GUEST_DYNAMIC_PT_NEXT: StaticSlots<usize, { crate::allcaps::hv::VM_ID_LIMIT }> =
+    StaticSlots::from_slots([const { Mutex::new(0) }; crate::allcaps::hv::VM_ID_LIMIT]);
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum GuestRelExecPhase {
+    Closed,
+    Armed,
+    Active,
+}
+
+#[derive(Copy, Clone)]
+struct GuestRelExecState {
+    phase: GuestRelExecPhase,
+    start: u64,
+    end: u64,
+}
+
+static GUEST_REL_EXEC_STATES: StaticSlots<GuestRelExecState, { crate::allcaps::hv::VM_ID_LIMIT }> =
+    StaticSlots::from_slots(
+        [const {
+            Mutex::new(GuestRelExecState {
+                phase: GuestRelExecPhase::Closed,
+                start: 0,
+                end: 0,
+            })
+        }; crate::allcaps::hv::VM_ID_LIMIT],
+    );
 
 #[derive(Copy, Clone)]
 struct GuestStackBacking {
@@ -1311,6 +1339,11 @@ pub fn build_guest_cr3_for_vm_with_mode(
             mapped_code_base,
             mapped_code_base.saturating_add(mapped_code_len),
         )?;
+        let Some(next_pt) = GUEST_DYNAMIC_PT_NEXT.get(vm_id as usize) else {
+            return Err("guest dynamic pt slot");
+        };
+        *next_pt.lock() = pt_slot;
+        reapply_active_guest_rel_exec(vm_id)?;
         hvlogf(format_args!(
             "hv: vm{} reporting: heap map done pt_used={}",
             current_vm_id_for_log(),
@@ -1565,7 +1598,7 @@ pub fn log_guest_mapping_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
     ));
 }
 
-fn guest_va_to_pa_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<u64> {
+fn guest_va_leaf_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<(u64, u64)> {
     let pml4_pa = pde_addr(guest_cr3);
     if pml4_pa == 0 {
         return None;
@@ -1584,13 +1617,17 @@ fn guest_va_to_pa_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<u64> {
         return None;
     }
     if pde & PT_ENTRY_LARGE_PAGE != 0 {
-        return Some(pde_addr(pde) + (guest_va & (PAGE_SIZE_2M - 1)));
+        return Some((pde_addr(pde) + (guest_va & (PAGE_SIZE_2M - 1)), pml4e | pdpte | pde));
     }
     let pte = unsafe { read_phys_page_entry(pde_addr(pde), pt_index(guest_va)) }?;
     if pte & PT_ENTRY_PRESENT == 0 {
         return None;
     }
-    Some(pde_addr(pte) + (guest_va & ((PAGE_SIZE_4K as u64) - 1)))
+    Some((pde_addr(pte) + (guest_va & ((PAGE_SIZE_4K as u64) - 1)), pml4e | pdpte | pde | pte))
+}
+
+fn guest_va_to_pa_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<u64> {
+    guest_va_leaf_from_cr3(guest_cr3, guest_va).map(|(phys, _)| phys)
 }
 
 /// Resolve one page-aligned address from a VM's private heap and prove that
@@ -1612,8 +1649,228 @@ pub(crate) fn guest_heap_page_phys_for_vm(vm_id: u8, guest_va: u64) -> Option<u6
     }
     let expected = (heap.phys_start as u64).checked_add(guest_va.checked_sub(heap_start)?)?;
     let guest_cr3 = guest_cr3_pa_for_vm(vm_id).ok()?;
-    let translated = guest_va_to_pa_from_cr3(guest_cr3, guest_va)?;
-    (translated == expected).then_some(translated)
+    let (translated, effective_flags) = guest_va_leaf_from_cr3(guest_cr3, guest_va)?;
+    (translated == expected && effective_flags & PT_ENTRY_NO_EXECUTE != 0).then_some(translated)
+}
+
+pub(crate) fn arm_guest_rel_exec_for_vm(vm_id: u8) -> bool {
+    let Some(slot) = GUEST_REL_EXEC_STATES.get(vm_id as usize) else {
+        return false;
+    };
+    *slot.lock() = GuestRelExecState {
+        phase: GuestRelExecPhase::Armed,
+        start: 0,
+        end: 0,
+    };
+    true
+}
+
+pub(crate) fn release_guest_rel_exec_for_vm(vm_id: u8) {
+    let Some(slot) = GUEST_REL_EXEC_STATES.get(vm_id as usize) else {
+        return;
+    };
+    *slot.lock() = GuestRelExecState {
+        phase: GuestRelExecPhase::Closed,
+        start: 0,
+        end: 0,
+    };
+}
+
+/// Temporarily make only the trusted loader's REL allocation executable.
+/// Guest heap leaves are NX by default, and vVideoMem admission requires that
+/// NX bit, so an active code page cannot also become a GPU buffer.
+pub(crate) fn set_guest_rel_image_exec(
+    vm_id: u8,
+    guest_va: u64,
+    bytes: usize,
+    executable: bool,
+) -> Result<(u64, u64), &'static str> {
+    let (start, end) = validate_guest_rel_exec_range(vm_id, guest_va, bytes)?;
+    let state_slot = GUEST_REL_EXEC_STATES
+        .get(vm_id as usize)
+        .ok_or("guest rel exec vm")?;
+    let state = *state_slot.lock();
+    if executable {
+        if state.phase != GuestRelExecPhase::Armed {
+            return Err("guest rel exec not armed");
+        }
+        apply_guest_rel_exec_pages(vm_id, start, end, false)?;
+        *state_slot.lock() = GuestRelExecState {
+            phase: GuestRelExecPhase::Active,
+            start,
+            end,
+        };
+    } else {
+        if state.phase != GuestRelExecPhase::Active || state.start != start || state.end != end {
+            return Err("guest rel exec range mismatch");
+        }
+        apply_guest_rel_exec_pages(vm_id, start, end, true)?;
+        *state_slot.lock() = GuestRelExecState {
+            phase: GuestRelExecPhase::Closed,
+            start: 0,
+            end: 0,
+        };
+    }
+    Ok((start, end))
+}
+
+fn validate_guest_rel_exec_range(
+    vm_id: u8,
+    guest_va: u64,
+    bytes: usize,
+) -> Result<(u64, u64), &'static str> {
+    if bytes == 0 || bytes > crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES {
+        return Err("guest rel exec size");
+    }
+    let raw_end = guest_va
+        .checked_add(bytes as u64)
+        .ok_or("guest rel exec overflow")?;
+    let start = page_align_down(guest_va);
+    let end = raw_end
+        .checked_add(PAGE_SIZE_4K as u64 - 1)
+        .map(page_align_down)
+        .ok_or("guest rel exec align overflow")?;
+    let heap =
+        crate::allocators::hv_guest_heap_stats_if_configured(vm_id).ok_or("guest rel exec heap")?;
+    if !heap.initialized
+        || heap.phys_start == 0
+        || start < heap.heap_start as u64
+        || end > heap.heap_end as u64
+        || start >= end
+    {
+        return Err("guest rel exec outside heap");
+    }
+    let guest_cr3 = guest_cr3_pa_for_vm(vm_id)?;
+    let mut page = start;
+    while page < end {
+        let expected = (heap.phys_start as u64)
+            .checked_add(page.saturating_sub(heap.heap_start as u64))
+            .ok_or("guest rel exec phys overflow")?;
+        let (translated, _) =
+            guest_va_leaf_from_cr3(guest_cr3, page).ok_or("guest rel exec unmapped")?;
+        if translated != expected {
+            return Err("guest rel exec foreign page");
+        }
+        page = page
+            .checked_add(PAGE_SIZE_4K as u64)
+            .ok_or("guest rel exec page overflow")?;
+    }
+    Ok((start, end))
+}
+
+fn reapply_active_guest_rel_exec(vm_id: u8) -> Result<(), &'static str> {
+    let Some(slot) = GUEST_REL_EXEC_STATES.get(vm_id as usize) else {
+        return Err("guest rel exec vm");
+    };
+    let state = *slot.lock();
+    if state.phase == GuestRelExecPhase::Active {
+        apply_guest_rel_exec_pages(vm_id, state.start, state.end, false)?;
+    }
+    Ok(())
+}
+
+fn apply_guest_rel_exec_pages(
+    vm_id: u8,
+    start: u64,
+    end: u64,
+    no_execute: bool,
+) -> Result<(), &'static str> {
+    let mut page = start;
+    while page < end {
+        if let Err(error) = set_guest_heap_page_no_execute(vm_id, page, no_execute) {
+            if !no_execute {
+                let mut rollback = start;
+                while rollback < page {
+                    let _ = set_guest_heap_page_no_execute(vm_id, rollback, true);
+                    rollback = rollback.saturating_add(PAGE_SIZE_4K as u64);
+                }
+            }
+            return Err(error);
+        }
+        page = page
+            .checked_add(PAGE_SIZE_4K as u64)
+            .ok_or("guest rel exec page overflow")?;
+    }
+    Ok(())
+}
+
+fn set_guest_heap_page_no_execute(
+    vm_id: u8,
+    guest_va: u64,
+    no_execute: bool,
+) -> Result<(), &'static str> {
+    let guest_cr3 = guest_cr3_pa_for_vm(vm_id)?;
+    let pml4e = unsafe { read_phys_page_entry(pde_addr(guest_cr3), pml4_index(guest_va)) }
+        .ok_or("guest rel exec pml4")?;
+    let pdpte = unsafe { read_phys_page_entry(pde_addr(pml4e), pdpt_index(guest_va)) }
+        .ok_or("guest rel exec pdpt")?;
+    let pde_page_pa = pde_addr(pdpte);
+    let pde_ptr = unsafe { phys_page_entry_mut(pde_page_pa, pd_index(guest_va)) }
+        .ok_or("guest rel exec pd")?;
+    let mut pde = unsafe { core::ptr::read_volatile(pde_ptr) };
+    if pde & PT_ENTRY_PRESENT == 0 {
+        return Err("guest rel exec pde absent");
+    }
+    if pde & PT_ENTRY_LARGE_PAGE != 0 {
+        if no_execute {
+            unsafe { core::ptr::write_volatile(pde_ptr, pde | PT_ENTRY_NO_EXECUTE) };
+            return Ok(());
+        }
+        pde = split_guest_heap_large_page(vm_id, pde_ptr, pde)?;
+    }
+    let pte_ptr = unsafe { phys_page_entry_mut(pde_addr(pde), pt_index(guest_va)) }
+        .ok_or("guest rel exec pt")?;
+    let pte = unsafe { core::ptr::read_volatile(pte_ptr) };
+    if pte & PT_ENTRY_PRESENT == 0 {
+        return Err("guest rel exec pte absent");
+    }
+    let next = if no_execute {
+        pte | PT_ENTRY_NO_EXECUTE
+    } else {
+        pte & !PT_ENTRY_NO_EXECUTE
+    };
+    unsafe { core::ptr::write_volatile(pte_ptr, next) };
+    Ok(())
+}
+
+fn split_guest_heap_large_page(
+    vm_id: u8,
+    pde_ptr: *mut u64,
+    pde: u64,
+) -> Result<u64, &'static str> {
+    let next_slot = GUEST_DYNAMIC_PT_NEXT
+        .get(vm_id as usize)
+        .ok_or("guest dynamic pt vm")?;
+    let mut next = next_slot.lock();
+    if *next >= GUEST_HIGH_IMAGE_PT_COUNT {
+        return Err("guest dynamic pt pool");
+    }
+    let tables = guest_tables_ptr_for_vm(vm_id)?;
+    let pt = unsafe { core::ptr::addr_of_mut!((*tables).image_pts[*next].0) };
+    unsafe { zero_guest_page(pt) };
+    let phys_base = pde & 0x000F_FFFF_FFE0_0000;
+    let leaf_flags = (pde & 0xFFF & !PT_ENTRY_LARGE_PAGE) | (pde & PT_ENTRY_NO_EXECUTE);
+    for index in 0..512usize {
+        let phys = phys_base
+            .checked_add((index * PAGE_SIZE_4K) as u64)
+            .ok_or("guest rel exec split overflow")?;
+        unsafe {
+            (*pt)[index] = (phys & 0x000F_FFFF_FFFF_F000) | leaf_flags;
+        }
+    }
+    let pt_pa = host_va_to_pa(pt as u64).ok_or("guest rel exec split pa")?;
+    let table_entry = (pt_pa & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE;
+    unsafe { core::ptr::write_volatile(pde_ptr, table_entry) };
+    *next += 1;
+    Ok(table_entry)
+}
+
+unsafe fn phys_page_entry_mut(page_pa: u64, index: usize) -> Option<*mut u64> {
+    if page_pa == 0 || index >= 512 {
+        return None;
+    }
+    let page = crate::phys::phys_to_virt(page_pa as usize) as *mut u64;
+    Some(unsafe { page.add(index) })
 }
 
 pub fn log_guest_code_bytes_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
@@ -2234,6 +2491,7 @@ fn map_guest_heap_span(
                         (*heap_pd)[pd_index(va)] = (phys & 0x000F_FFFF_FFE0_0000)
                             | PT_ENTRY_PRESENT
                             | PT_ENTRY_WRITABLE
+                            | PT_ENTRY_NO_EXECUTE
                             | PT_ENTRY_LARGE_PAGE;
                     }
                 } else {
@@ -2249,7 +2507,7 @@ fn map_guest_heap_span(
                         chunk_start,
                         phys,
                         chunk_end.saturating_sub(chunk_start) as usize,
-                        PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE,
+                        PT_ENTRY_PRESENT | PT_ENTRY_WRITABLE | PT_ENTRY_NO_EXECUTE,
                     )?;
                     *pt_slot += 1;
                 }

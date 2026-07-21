@@ -49,10 +49,17 @@ pub fn ept_permissions_for_span(label: &str, default_perms: u64) -> u64 {
     // Today callers pass the legacy RWX-style EPT permission bits. Future patch:
     // assign R/W/X per span so host data mappings are never executable and guest
     // code mappings are not writable unless explicitly staged.
-    if matches!(label, "hv-guest-heap" | "guest-stack" | "comm-page" | "hull-rw-private") {
+    if matches!(label, "guest-stack" | "comm-page" | "hull-rw-private") {
         // EPT execute is bit 2. Guest data/shared spans remain readable and
         // writable but cannot become executable through a guest PTE edit.
         default_perms & !(1 << 2)
+    } else if label == "hv-guest-heap" {
+        // The private heap contains dynamically linked Blueprint REL images as
+        // well as data. Its guest page-table leaves are NX by default and the
+        // trusted loader clears NX only for the exact active image pages. EPT
+        // must therefore permit execute so that finer-grained guest PTE policy
+        // can take effect; vVideoMem separately rejects every non-NX leaf.
+        default_perms
     } else {
         default_perms
     }

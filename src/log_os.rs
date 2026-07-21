@@ -52,7 +52,7 @@ pub(crate) mod flags {
     pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
@@ -60,7 +60,7 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
 
     pub(crate) const NET_LOG_RX_TAP: bool = false;
     pub(crate) const NET_LOG_TX_TAP: bool = false;

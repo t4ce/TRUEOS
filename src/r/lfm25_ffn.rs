@@ -44,10 +44,14 @@ const Q8_BLOCK_BYTES: usize = 34;
 const MODEL_READ_CHUNK: usize = 256 * 1024;
 const PROJECTION_BOUND: f32 = 2.0e-6;
 const SILU_BOUND: f32 = 2.0e-6;
+const PREFLIGHT_GATE_ROW: usize = 125;
+const PREFLIGHT_GATE_BLOCKS: usize = 6;
+pub const FPGA_PREFLIGHT_CALLS: u64 = PREFLIGHT_GATE_BLOCKS as u64;
 pub const FPGA_CALLS_PER_FFN: u64 = 446_976;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stage {
+    Preflight,
     Gate,
     Up,
     Silu,
@@ -57,6 +61,7 @@ pub enum Stage {
 impl Stage {
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Preflight => "preflight",
             Self::Gate => "gate",
             Self::Up => "up",
             Self::Silu => "silu",
@@ -136,9 +141,17 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     let image = lfm25_model::open().await?;
     lfm25_model::verify_with_progress(&image, |_, _| {}).await?;
     let _lane = fpga_offload::acquire_lfm25_ffn_step_lane().await;
-    let before = fpga_offload::stats();
-
     let normalized = quantize_golden_vector(0)?;
+    preflight_gate_transition(&image, &normalized).await?;
+    progress(Progress {
+        stage: Stage::Preflight,
+        completed: 1,
+        total: 1,
+    });
+
+    // The six-call preflight is intentionally outside the full-pipeline
+    // counters so the sealed 446,976-call contract stays unchanged.
+    let before = fpga_offload::stats();
     let (gate, gate_max_abs) = project(
         &image,
         tensor("blk.0.ffn_gate.weight")?,
@@ -228,6 +241,61 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     })
 }
 
+async fn preflight_gate_transition(
+    image: &lfm25_model::NativeImage,
+    activation: &[[u8; Q8_BLOCK_BYTES]],
+) -> Result<(), Error> {
+    let descriptor = tensor("blk.0.ffn_gate.weight")?;
+    let blocks_per_row = descriptor.ggml_ne0 as usize / Q8_BLOCK_VALUES;
+    if descriptor.format != 2
+        || blocks_per_row != 32
+        || activation.len() != blocks_per_row
+        || PREFLIGHT_GATE_BLOCKS > blocks_per_row
+    {
+        return Err(Error::Tensor);
+    }
+
+    let row_bytes = blocks_per_row * Q8_BLOCK_BYTES;
+    let mut expected_row_q30 = 0i64;
+    for block in 0..PREFLIGHT_GATE_BLOCKS {
+        let mut weight = [0u8; Q8_BLOCK_BYTES];
+        let offset = descriptor.native_offset as u64
+            + (PREFLIGHT_GATE_ROW * row_bytes + block * Q8_BLOCK_BYTES) as u64;
+        image.read_exact_at(offset, &mut weight).await?;
+        let activation_block = &activation[block];
+        let expected_dot = integer_dot(activation_block, &weight);
+        let expected_term_q30 = q30_term(
+            expected_dot,
+            u16::from_le_bytes([activation_block[0], activation_block[1]]),
+            u16::from_le_bytes([weight[0], weight[1]]),
+        )?;
+        expected_row_q30 = expected_row_q30
+            .checked_add(expected_term_q30)
+            .ok_or(Error::Arithmetic)?;
+        let result = fpga_offload::lfm25_q8_projection_block(
+            false,
+            block == 0,
+            false,
+            block as u8,
+            activation_block,
+            &weight,
+        )
+        .await?;
+        require_hardware_result(
+            Stage::Preflight,
+            PREFLIGHT_GATE_ROW,
+            block,
+            activation_block,
+            &weight,
+            result,
+            expected_dot,
+            expected_term_q30,
+            expected_row_q30,
+        )?;
+    }
+    Ok(())
+}
+
 async fn project(
     image: &lfm25_model::NativeImage,
     descriptor: trueos_fpga_abi::lfm25::NativeTensorDescriptor,
@@ -280,27 +348,17 @@ async fn project(
                 weight,
             )
             .await?;
-            if result.dot != expected_dot
-                || result.term_q30 != expected_term_q30
-                || result.row_q30 != expected_row_q30
-            {
-                return Err(Error::HardwareMismatch {
-                    stage,
-                    row: row as u16,
-                    block: block as u8,
-                    activation_scale: u16::from_le_bytes([
-                        activation_block[0],
-                        activation_block[1],
-                    ]),
-                    weight_scale: u16::from_le_bytes([weight[0], weight[1]]),
-                    observed_dot: result.dot,
-                    expected_dot,
-                    observed_term_q30: result.term_q30,
-                    expected_term_q30,
-                    observed_row_q30: result.row_q30,
-                    expected_row_q30,
-                });
-            }
+            require_hardware_result(
+                stage,
+                row,
+                block,
+                activation_block,
+                weight,
+                result,
+                expected_dot,
+                expected_term_q30,
+                expected_row_q30,
+            )?;
             row_q30 = result.row_q30;
         }
         output.push(row_q30);
@@ -327,6 +385,38 @@ async fn project(
     }
 
     Ok((output, max_abs))
+}
+
+fn require_hardware_result(
+    stage: Stage,
+    row: usize,
+    block: usize,
+    activation: &[u8; Q8_BLOCK_BYTES],
+    weight: &[u8; Q8_BLOCK_BYTES],
+    result: trueos_fpga_abi::builtins::lfm25_ffn_step::Q8RowBlockResult,
+    expected_dot: i32,
+    expected_term_q30: i64,
+    expected_row_q30: i64,
+) -> Result<(), Error> {
+    if result.dot == expected_dot
+        && result.term_q30 == expected_term_q30
+        && result.row_q30 == expected_row_q30
+    {
+        return Ok(());
+    }
+    Err(Error::HardwareMismatch {
+        stage,
+        row: row as u16,
+        block: block as u8,
+        activation_scale: u16::from_le_bytes([activation[0], activation[1]]),
+        weight_scale: u16::from_le_bytes([weight[0], weight[1]]),
+        observed_dot: result.dot,
+        expected_dot,
+        observed_term_q30: result.term_q30,
+        expected_term_q30,
+        observed_row_q30: result.row_q30,
+        expected_row_q30,
+    })
 }
 
 fn integer_dot(left: &[u8; Q8_BLOCK_BYTES], right: &[u8; Q8_BLOCK_BYTES]) -> i32 {

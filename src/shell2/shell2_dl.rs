@@ -308,34 +308,41 @@ async fn wait_for_online_ready() -> bool {
     .await
 }
 
-fn write_blueprint(app: &OnlineApp, bytes: &[u8]) -> Result<String, String> {
+async fn write_blueprint(app: &OnlineApp, bytes: &[u8]) -> Result<String, String> {
+    // Downloads run on the BSP async executor. Keep all filesystem work on
+    // native TRUEOSFS futures; synchronous kfs is only for AP blocking lanes.
+    let disk = crate::r::fs::trueosfs::primary_root_handle()
+        .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
     let dir = crate::hv::blueprint::app_fs_root_for_archive(app.archive_name.as_str(), bytes);
-    crate::r::io::kfs::create_dir_all(dir.as_str())
-        .map_err(|err| alloc::format!("create {} failed: {:?}", dir, err))?;
+    match crate::r::fs::trueosfs::dir_create_all_async(disk, dir.as_str()).await {
+        Ok(true) => {}
+        Ok(false) => return Err(alloc::format!("create {} failed: no space", dir)),
+        Err(err) => return Err(alloc::format!("create {} failed: {:?}", dir, err)),
+    }
     let path = alloc::format!("{}/{}", dir.trim_end_matches('/'), app.archive_name);
-    write_file(path.as_str(), bytes)?;
+    write_file(disk, path.as_str(), bytes).await?;
 
     let hash_path = alloc::format!("{}.sha256", path);
     if app.sha256 == "-" {
-        let _ = crate::r::io::kfs::remove(hash_path.as_str());
-    } else if let Err(err) = write_file(hash_path.as_str(), app.sha256.as_bytes()) {
-        let _ = crate::r::io::kfs::remove(path.as_str());
+        let _ = crate::r::fs::trueosfs::file_delete_async(disk, hash_path.as_str()).await;
+    } else if let Err(err) = write_file(disk, hash_path.as_str(), app.sha256.as_bytes()).await {
+        let _ = crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await;
         return Err(alloc::format!("hash metadata failed: {}", err));
     }
 
     Ok(alloc::format!("/{}", path))
 }
 
-fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
-    let handle = crate::r::io::kfs::write_file_begin(path, bytes.len() as u64)
-        .map_err(|err| alloc::format!("write begin failed: {:?}", err))?;
-    if let Err(err) = crate::r::io::kfs::write_file_chunk(handle, bytes) {
-        let _ = crate::r::io::kfs::write_file_abort(handle);
-        return Err(alloc::format!("write chunk failed: {:?}", err));
+async fn write_file(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    match crate::r::fs::trueosfs::file_write_all_async(disk, path, bytes).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(String::from("write begin failed: no space")),
+        Err(err) => Err(alloc::format!("write failed: {:?}", err)),
     }
-    crate::r::io::kfs::write_file_finish(handle)
-        .map_err(|err| alloc::format!("write finish failed: {:?}", err))?;
-    Ok(())
 }
 
 #[embassy_executor::task(pool_size = 2)]
@@ -435,7 +442,7 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
             if !online_app_sha256_matches(app, bytes.as_slice()) {
                 log("dl: SHA-256 mismatch");
             } else {
-                match write_blueprint(app, bytes.as_slice()) {
+                match write_blueprint(app, bytes.as_slice()).await {
                     Ok(path) => {
                         log(alloc::format!("dl: saved {} bytes -> {}", bytes.len(), path).as_str())
                     }

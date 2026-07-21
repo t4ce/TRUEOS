@@ -164,6 +164,8 @@ static TGA_IRQ_CONFIG_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TGA_COMPLETION_IRQ_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static TGA_COMPLETION_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 static TGA_COMPLETION_IRQ_WAKER: AtomicWaker = AtomicWaker::new();
+static TGA_OFFLOAD_WRITE_REPAIR_COUNT: AtomicU64 = AtomicU64::new(0);
+static TGA_OFFLOAD_WRITE_REPAIR_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -188,6 +190,10 @@ extern "x86-interrupt" fn tga_completion_isr(_stack_frame: InterruptStackFrame) 
 
 pub(crate) fn completion_interrupt_count() -> u64 {
     TGA_COMPLETION_IRQ_COUNT.load(Ordering::Acquire)
+}
+
+pub(crate) fn offload_write_repair_count() -> u64 {
+    TGA_OFFLOAD_WRITE_REPAIR_COUNT.load(Ordering::Acquire)
 }
 
 pub(crate) fn completion_interrupt_configured() -> bool {
@@ -570,6 +576,7 @@ pub(crate) fn submit_offload_work_package(
         || package.abi_version != trueos_fpga_abi::ABI_VERSION
         || trueos_fpga_abi::FunctionId::new(package.function).is_none()
         || package.state != trueos_fpga_abi::WorkState::HostReady as u32
+        || package.input_len as usize > trueos_fpga_abi::INLINE_INPUT_BYTES
     {
         return Err(OffloadTransportError::InvalidPackage);
     }
@@ -584,12 +591,45 @@ pub(crate) fn submit_offload_work_package(
         let value = unsafe { source.add(index).read() };
         Tga::write_reg(tga.offload_work_package_reg + index * 4, value);
     }
-    fence(Ordering::Release);
-    let observed_state =
-        Tga::read_reg(tga.offload_work_package_reg + trueos_fpga_abi::WORK_PACKAGE_STATE_OFFSET);
-    if observed_state != trueos_fpga_abi::WorkState::HostReady as u32 {
+
+    // The endpoint accepts one-dword posted writes.  Before the doorbell, use
+    // non-posted reads to prove that the complete request prefix actually
+    // reached its BAR registers.  This is stronger than reading only `state`:
+    // that flushes ordering but cannot detect a dropped payload TLP.  A live
+    // LFM2.5 run exposed exactly that case as one input dword left over from
+    // the preceding call.
+    const VERIFY_PASSES: usize = 3;
+    let input_end =
+        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, input) + package.input_len as usize;
+    let request_word_count = input_end.div_ceil(core::mem::size_of::<u32>());
+    let mut verified = false;
+    for _ in 0..VERIFY_PASSES {
+        fence(Ordering::SeqCst);
+        let mut repaired = 0u64;
+        for index in 0..request_word_count {
+            let expected = unsafe { source.add(index).read() };
+            let register = tga.offload_work_package_reg + index * 4;
+            if Tga::read_reg(register) != expected {
+                Tga::write_reg(register, expected);
+                repaired += 1;
+            }
+        }
+        if repaired == 0 {
+            verified = true;
+            break;
+        }
+        TGA_OFFLOAD_WRITE_REPAIR_COUNT.fetch_add(repaired, Ordering::Relaxed);
+        if !TGA_OFFLOAD_WRITE_REPAIR_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(
+                "tga: repaired stale BAR work-package word before doorbell; request integrity preserved\n"
+            );
+        }
+    }
+    if !verified {
         return Err(OffloadTransportError::InvalidPackage);
     }
+
+    fence(Ordering::Release);
     Tga::write_reg(tga.offload_doorbell_reg, TGA_OFFLOAD_DOORBELL_MAGIC);
     Ok(())
 }

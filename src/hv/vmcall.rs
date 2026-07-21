@@ -33,6 +33,8 @@ pub const OP_RAND_BYTES: u32 = 0x06; // arg0 requested bytes, response payload i
 pub const OP_BP_CPU_COUNT: u32 = 0x07; // response is app-visible CPU/service lane count
 pub const OP_MONOTONIC_NANOS: u32 = 0x08; // response_data = host monotonic nanos
 pub const OP_LIFECYCLE_PAUSE: u32 = 0x09; // tagged Blueprint pause + snapshot + stop
+pub const OP_BP_REL_IMAGE_EXEC_ENABLE: u32 = 0x0A; // trusted loader: arg0 GVA,arg1 bytes
+pub const OP_BP_REL_IMAGE_EXEC_DISABLE: u32 = 0x0B; // trusted loader: exact active range
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
@@ -501,6 +503,45 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_MONOTONIC_NANOS => {
             let t = crate::chronos::monotonic_nanos();
             write_response(vm_id, seq, STATUS_OK, t, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_REL_IMAGE_EXEC_ENABLE | OP_BP_REL_IMAGE_EXEC_DISABLE => {
+            let executable = op == OP_BP_REL_IMAGE_EXEC_ENABLE;
+            match crate::hv::memory::set_guest_rel_image_exec(
+                vm_id,
+                arg0,
+                arg1 as usize,
+                executable,
+            ) {
+                Ok((start, end)) => {
+                    hvlogf(format_args!(
+                        "blueprint-rel: vm={} stage={} status=ok pages={} gva=0x{:016X}..0x{:016X}",
+                        vm_id,
+                        if executable {
+                            "exec-enable"
+                        } else {
+                            "exec-disable"
+                        },
+                        end.saturating_sub(start).div_ceil(4096),
+                        start,
+                        end,
+                    ));
+                    write_response(vm_id, seq, STATUS_OK, 0, 0);
+                }
+                Err(error) => {
+                    hvwarnf(format_args!(
+                        "blueprint-rel: vm={} stage={} status=error reason={}",
+                        vm_id,
+                        if executable {
+                            "exec-enable"
+                        } else {
+                            "exec-disable"
+                        },
+                        error,
+                    ));
+                    write_response(vm_id, seq, STATUS_OK, (-13i64) as u64, 0);
+                }
+            }
             DispatchOutcome::Resume
         }
         OP_BP_VGPU_OPEN => {
