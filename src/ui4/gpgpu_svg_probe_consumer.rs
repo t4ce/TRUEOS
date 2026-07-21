@@ -344,7 +344,7 @@ fn render_svg_probe(probe: &mut ActiveSvgProbe) -> Result<(), &'static str> {
     probe.metrics.ops = result.ops;
     probe.metrics.nonzero_pixels = result.nonzero_pixels;
     probe.metrics.submit_ms = result.submit_ms;
-    if result.destination_submitted {
+    if result.submitted {
         probe.metrics.submitted = probe.metrics.submitted.saturating_add(1);
     }
     if !result.ok {
@@ -369,7 +369,12 @@ fn render_svg_probe(probe: &mut ActiveSvgProbe) -> Result<(), &'static str> {
         }
         return Err("svg-probe-release-missing");
     };
-    publish_gpgpu_frame_buffer(lease, release).map_err(|_| "svg-probe-frame-publish-failed")?;
+    if publish_gpgpu_frame_buffer(lease, release).is_err() {
+        // The final GPU release retired, so a metadata handoff failure is
+        // safe to cancel rather than quarantine.
+        let _ = cancel_frame_buffer(lease);
+        return Err("svg-probe-frame-publish-failed");
+    }
     publish_window_frame(SVG_PROBE_OWNER, probe.window, DamageRect::FULL)
         .map_err(|_| "svg-probe-window-publish-failed")?;
     probe.metrics.published = probe.metrics.published.saturating_add(1);

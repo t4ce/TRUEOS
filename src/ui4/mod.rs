@@ -37,9 +37,8 @@ pub(crate) use gpgpu_preview_consumer::{
     request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
-    GpgpuSvgProbeConfig, GpgpuSvgProbeMetrics, GpgpuSvgProbePhase, GpgpuSvgProbeStatus,
-    gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status, request_gpgpu_svg_probe_start,
-    request_gpgpu_svg_probe_stop,
+    GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
+    request_gpgpu_svg_probe_start, request_gpgpu_svg_probe_stop,
 };
 #[cfg(feature = "trueos_h264_encode_probe")]
 pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;

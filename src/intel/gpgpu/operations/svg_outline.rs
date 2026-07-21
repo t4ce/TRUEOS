@@ -53,19 +53,13 @@ impl SvgOutlineProbeDemo {
             Self::Holes => SVG_HOLES,
         }
     }
-
-    const fn background_rgba(self) -> u32 {
-        match self {
-            Self::Basic => pack_rgba(13, 24, 36, 255),
-            Self::Curves => pack_rgba(8, 19, 38, 255),
-            Self::Holes => pack_rgba(27, 20, 38, 255),
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct GpgpuSvgOutlineProbeResult {
     pub(crate) ok: bool,
+    /// At least one destination-writing batch was accepted for this attempt.
+    pub(crate) submitted: bool,
     /// True only when hardware may still own the destination after a timeout.
     /// The UI4 caller must retain rather than cancel that exact write lease.
     pub(crate) destination_submitted: bool,
@@ -81,6 +75,7 @@ impl GpgpuSvgOutlineProbeResult {
     const fn failed(error: &'static str) -> Self {
         Self {
             ok: false,
+            submitted: false,
             destination_submitted: false,
             release: None,
             layers: 0,
@@ -146,15 +141,9 @@ pub(crate) fn submit_svg_outline_probe(
         Ok(layers) => layers,
         Err(error) => return GpgpuSvgOutlineProbeResult::failed(error),
     };
-    let mut result = GpgpuSvgOutlineProbeResult::failed("svg-background-submit");
+    let mut result = GpgpuSvgOutlineProbeResult::failed("svg-coverage-not-submitted");
     result.layers = layers.len();
     result.ops = layers.iter().map(|layer| layer.ops.len()).sum();
-
-    let background = fill_rect_rgba8_stats(dst, dst.bounds(), demo.background_rgba());
-    if background.submits == 0 {
-        result.submit_ms = direct_rcs_elapsed_ms_since(started);
-        return result;
-    }
 
     let mut masks = Vec::with_capacity(layers.len());
     let mut blits = Vec::with_capacity(layers.len());
@@ -193,9 +182,7 @@ pub(crate) fn submit_svg_outline_probe(
             result.submit_ms = direct_rcs_elapsed_ms_since(started);
             return result;
         };
-        result.nonzero_pixels = result
-            .nonzero_pixels
-            .saturating_add(audit.nonzero_pixels);
+        result.nonzero_pixels = result.nonzero_pixels.saturating_add(audit.nonzero_pixels);
         blits.push(GpgpuGlyphMaskLayer {
             mask: mask.surface(),
             mask_rect: GpgpuRect::new(0, 0, canvas, canvas),
@@ -206,6 +193,7 @@ pub(crate) fn submit_svg_outline_probe(
     }
 
     let composite = glyph_mask_layers_rgba8_2d_mode(blits.as_slice(), dst, false);
+    result.submitted = composite.submitted;
     if !composite.ok || composite.requested_layers != blits.len() {
         result.destination_submitted = composite.submitted;
         if composite.submitted {
@@ -224,6 +212,7 @@ pub(crate) fn submit_svg_outline_probe(
     drop(masks);
 
     let finalizer = release_rgba8_surface_for_scanout(dst);
+    result.submitted |= finalizer.submitted;
     if !finalizer.ok {
         result.destination_submitted = finalizer.submitted;
         if finalizer.submitted {
@@ -262,10 +251,7 @@ pub(crate) fn submit_svg_outline_probe(
     result
 }
 
-fn parse_svg_probe(
-    source: &[u8],
-    canvas: u32,
-) -> Result<Vec<SvgOutlineProbeLayer>, &'static str> {
+fn parse_svg_probe(source: &[u8], canvas: u32) -> Result<Vec<SvgOutlineProbeLayer>, &'static str> {
     if source.is_empty() || source.len() > SVG_OUTLINE_PROBE_MAX_SOURCE_BYTES || canvas == 0 {
         return Err("svg-source-size");
     }
@@ -436,9 +422,7 @@ impl<'a> SvgNumberCursor<'a> {
     }
 
     fn skip_separators(&mut self) {
-        while !self.at_end()
-            && matches!(self.peek(), b' ' | b'\t' | b'\r' | b'\n' | b',')
-        {
+        while !self.at_end() && matches!(self.peek(), b' ' | b'\t' | b'\r' | b'\n' | b',') {
             self.index += 1;
         }
     }
@@ -477,8 +461,8 @@ impl<'a> SvgNumberCursor<'a> {
                 return Err("svg-number-exponent");
             }
         }
-        let text = core::str::from_utf8(&self.bytes[start..self.index])
-            .map_err(|_| "svg-number-utf8")?;
+        let text =
+            core::str::from_utf8(&self.bytes[start..self.index]).map_err(|_| "svg-number-utf8")?;
         let value = text.parse::<f32>().map_err(|_| "svg-number")?;
         value.is_finite().then_some(value).ok_or("svg-number-range")
     }
@@ -553,7 +537,9 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 const fn outline_move(x: f32, y: f32) -> [u32; 8] {
@@ -565,17 +551,19 @@ const fn outline_line(x: f32, y: f32) -> [u32; 8] {
 }
 
 const fn outline_quad(cx: f32, cy: f32, x: f32, y: f32) -> [u32; 8] {
-    [1 + 1, cx.to_bits(), cy.to_bits(), x.to_bits(), y.to_bits(), 0, 0, 0]
+    [
+        1 + 1,
+        cx.to_bits(),
+        cy.to_bits(),
+        x.to_bits(),
+        y.to_bits(),
+        0,
+        0,
+        0,
+    ]
 }
 
-const fn outline_cubic(
-    c0x: f32,
-    c0y: f32,
-    c1x: f32,
-    c1y: f32,
-    x: f32,
-    y: f32,
-) -> [u32; 8] {
+const fn outline_cubic(c0x: f32, c0y: f32, c1x: f32, c1y: f32, x: f32, y: f32) -> [u32; 8] {
     [
         3,
         c0x.to_bits(),
@@ -598,10 +586,12 @@ mod svg_outline_tests {
             let layers = parse_svg_probe(source, 256).expect("embedded SVG must parse");
             assert!(!layers.is_empty());
             assert!(layers.iter().all(|layer| !layer.ops.is_empty()));
-            assert!(layers
-                .iter()
-                .flat_map(|layer| layer.ops.iter())
-                .all(|op| op[0] <= 4));
+            assert!(
+                layers
+                    .iter()
+                    .flat_map(|layer| layer.ops.iter())
+                    .all(|op| op[0] <= 4)
+            );
         }
     }
 }
