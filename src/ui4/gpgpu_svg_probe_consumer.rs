@@ -325,7 +325,9 @@ fn create_svg_probe_frame(
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,
-        base_color: Some(PremultipliedRgba8::from_straight_rgba(0, 0, 0, u8::MAX)),
+        // The SVG probe is an alpha-composited UI4 consumer.  Keep untouched
+        // pixels transparent so only the colored vector layers reach scanout.
+        base_color: Some(PremultipliedRgba8::from_straight_rgba(0, 0, 0, 0)),
     })
 }
 
