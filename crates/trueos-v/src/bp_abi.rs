@@ -57,6 +57,22 @@ pub struct TrueosUi4PanEvent {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4KeyboardState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub combo_id: u32,
+    pub modifiers: u8,
+    pub source_kind: u8,
+    pub virtual_keyboard: u8,
+    pub reserved0: u8,
+    pub keys: [u8; 6],
+    pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4SkyboxRenderParams {
     pub right_x: f32,
     pub right_y: f32,
@@ -105,6 +121,12 @@ unsafe extern "C" {
         out_cap: usize,
     ) -> isize;
     pub fn trueos_cabi_ui4_solara_frame_open(x: i32, y: i32, width: u32, height: u32) -> u32;
+    pub fn trueos_cabi_ui4_scene_frame_open_immutable(
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> u32;
     pub fn trueos_cabi_ui4_scene_frame_open_streaming(
         x: i32,
         y: i32,
@@ -114,6 +136,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
     -> i32;
+    pub fn trueos_cabi_ui4_scene_keyboard_state(
+        window_id: u32,
+        out: *mut TrueosUi4KeyboardState,
+    ) -> i32;
     pub fn trueos_cabi_ui4_solara_text_rows(
         window_id: u32,
         font_id: u32,

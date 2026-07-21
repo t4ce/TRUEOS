@@ -25,9 +25,9 @@ use super::{
     WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
     create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
-    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, publish_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
-    set_window_placement, take_owner_input_events, writable_rgba_view,
+    focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
+    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
+    replace_window_frame, set_window_placement, take_owner_input_events, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -106,6 +106,26 @@ pub struct TrueosUi4PanEvent {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4PanEvent>() == 13 * 4);
+
+/// Held-key snapshot for the keyboard assigned to this window's focused
+/// cursor/HUT route. HID usages index `key_down_bits` directly.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4KeyboardState {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub combo_id: u32,
+    pub modifiers: u8,
+    pub source_kind: u8,
+    pub virtual_keyboard: u8,
+    pub reserved0: u8,
+    pub keys: [u8; 6],
+    pub ascii: [u8; 6],
+    pub key_down_bits: [u32; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4KeyboardState>() == 16 * 4);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -256,6 +276,35 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
         };
     }
     open_blueprint_frame(x, y, width, height, FrameCadence::Dirty)
+}
+
+/// Create one single-buffered Blueprint snapshot frame for an active VM.
+///
+/// A published immutable allocation is never written in place. A later
+/// `frame_begin` allocates a fresh one-buffer generation privately and
+/// `frame_publish` swaps it into the existing window only after it is ready.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_open_immutable(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> u32 {
+    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, window) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE,
+            pack_i32_pair(x, y),
+            pack_u32_pair(width, height),
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            window as u32
+        } else {
+            0
+        };
+    }
+    open_blueprint_frame(x, y, width, height, FrameCadence::Immutable)
 }
 
 /// Create one streaming/triple-buffered UI4 scene frame for an active VM.
@@ -436,6 +485,36 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     }
     let lease = match acquire_frame_buffer(surface.frame) {
         Ok(lease) => lease,
+        Err(FramePoolError::ImmutablePublished) if surface.cadence == FrameCadence::Immutable => {
+            let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+            let replacement = match create_frame(FrameSpec {
+                output,
+                content: FrameContent::BlueprintScene,
+                cadence: FrameCadence::Immutable,
+                buffering: super::FrameBuffering::Single,
+                format: ScanoutFormat::Rgba8888Premultiplied,
+                width: surface.width,
+                height: surface.height,
+                base_color: Some(PremultipliedRgba8::TRANSPARENT),
+            }) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh allocation failed owner={:?} window={} old_frame={} error={:?} action=retain-surflive-front\n", owner, window_id, surface.frame.raw(), error);
+                    return ERROR_UI4;
+                }
+            };
+            match acquire_frame_buffer(replacement) {
+                Ok(lease) => {
+                    crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh prepared owner={:?} window={} old_frame={} replacement_frame={} extent={}x{} action=paint-before-broker-swap\n", owner, window_id, surface.frame.raw(), replacement.raw(), surface.width, surface.height);
+                    lease
+                }
+                Err(error) => {
+                    let _ = destroy_frame(replacement);
+                    crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh acquire failed owner={:?} window={} replacement_frame={} error={:?} action=retain-surflive-front\n", owner, window_id, replacement.raw(), error);
+                    return ERROR_UI4;
+                }
+            }
+        }
         Err(FramePoolError::Busy) => return ERROR_BUSY,
         Err(error) => {
             crate::log_warn!(target: "ui4/blueprint-frame"; "frame begin failed owner={:?} window={} frame={} error={:?}\n", owner, window_id, surface.frame.raw(), error);
@@ -446,6 +525,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
         Ok(view) => view,
         Err(_) => {
             let _ = cancel_frame_buffer(lease);
+            if lease.frame != surface.frame {
+                let _ = destroy_frame(lease.frame);
+            }
             return ERROR_UI4;
         }
     };
@@ -493,18 +575,83 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
         }
     }
 
-    let input_events = take_owner_input_events(owner);
+    route_owner_input_events(owner);
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    let Some(event) = surface.pending_pan_events.pop_front() else {
+        return 1;
+    };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
+    0
+}
+
+/// Read the held HID usages for the keyboard routed to this focused window.
+///
+/// This is window-scoped state, not the global HUT inventory. A return value
+/// of one means the window currently has no keyboard-bearing focus route.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
+    window_id: u32,
+    out: *mut TrueosUi4KeyboardState,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_keyboard_state(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    route_owner_input_events(owner);
+    let Some(keyboard) = focused_keyboard_state(owner, window) else {
+        return 1;
+    };
+    let state = TrueosUi4KeyboardState {
+        controller_id: keyboard.controller_id,
+        slot_id: keyboard.slot_id,
+        ep_target: keyboard.ep_target,
+        combo_id: keyboard.combo_id,
+        modifiers: keyboard.modifiers,
+        source_kind: keyboard.source_kind as u8,
+        virtual_keyboard: u8::from(keyboard.virtual_device),
+        reserved0: 0,
+        keys: keyboard.keys,
+        ascii: keyboard.ascii,
+        key_down_bits: keyboard.key_down_bits,
+    };
+    // SAFETY: the non-null output points to one writable ABI state record.
+    unsafe { out.write(state) };
+    0
+}
+
+/// Drain one VM owner's broker queue once and preserve every pan event for its
+/// exact surface. Keyboard held state remains in the input broker; draining
+/// its cooked events here prevents an interactive Blueprint from filling the
+/// owner queue while it polls the focused state contract.
+fn route_owner_input_events(owner: WindowOwner) {
+    let input_events = take_owner_input_events(owner);
+    if input_events.is_empty() {
+        return;
+    }
+    let mut surfaces = SURFACES.lock();
     for input in input_events {
         let Ui4InputEvent::Pan(event) = input else {
             continue;
         };
-        if event.window.raw() != window_id
-            || surface.pending_pan_events.len() >= MAX_PENDING_PAN_EVENTS
-        {
+        let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
+            continue;
+        };
+        if surface.pending_pan_events.len() >= MAX_PENDING_PAN_EVENTS {
             continue;
         }
         let phase = match event.phase {
@@ -528,12 +675,6 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
             vcursor: u32::from(event.vcursor),
         });
     }
-    let Some(event) = surface.pending_pan_events.pop_front() else {
-        return 1;
-    };
-    // SAFETY: the non-null output points to one writable ABI event.
-    unsafe { out.write(event) };
-    0
 }
 
 /// Move a Blueprint scene window without exposing a broker handle.
@@ -1208,11 +1349,35 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         surface.pending_gpu_release = release;
         return ERROR_UI4;
     }
+    let immutable_replacement =
+        (lease.frame != surface.frame).then_some((surface.frame, lease.frame));
+    if let Some((previous, replacement)) = immutable_replacement
+        && replace_window_frame(owner, surface.window, replacement).is_err()
+    {
+        let _ = destroy_frame(replacement);
+        crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh broker swap failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-surflive-front\n", owner, window_id, previous.raw(), replacement.raw());
+        return ERROR_UI4;
+    }
     if damage.width == 0
         || damage.height == 0
         || publish_window_frame(owner, surface.window, damage).is_err()
     {
+        if let Some((previous, replacement)) = immutable_replacement {
+            let _ = replace_window_frame(owner, surface.window, previous);
+            let _ = publish_window_frame(owner, surface.window, DamageRect::FULL);
+            let _ = destroy_frame(replacement);
+            crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=old-front-restored\n", owner, window_id, previous.raw(), replacement.raw());
+        }
         return ERROR_UI4;
+    }
+    if let Some((previous, replacement)) = immutable_replacement {
+        surface.frame = replacement;
+        if let Err(error) = destroy_frame(previous) {
+            if error == FramePoolError::Busy {
+                RETIRED_FRAMES.lock().push(previous);
+            }
+        }
+        crate::log_info!(target: "ui4/blueprint-frame"; "immutable refresh committed owner={:?} window={} old_frame={} frame={} extent={}x{} action=broker-swap-after-complete-publish old_release=surflive\n", owner, window_id, previous.raw(), replacement.raw(), surface.width, surface.height);
     }
     0
 }
@@ -1306,6 +1471,27 @@ unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i
     }
     let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
     unsafe { out.write(event) };
+    0
+}
+
+unsafe fn guest_keyboard_state(window_id: u32, out: *mut TrueosUi4KeyboardState) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4KeyboardState>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_STATE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let state = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(state) };
     0
 }
 
@@ -1705,8 +1891,18 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
                 .animate_and_retire_frames()
         }
     };
+    let pending_immutable_frame = surface
+        .write_lease
+        .filter(|lease| lease.frame != surface.frame)
+        .map(|lease| lease.frame);
     if let Some(lease) = surface.write_lease.take() {
         let _ = cancel_frame_buffer(lease);
+    }
+    if let Some(frame) = pending_immutable_frame
+        && let Err(error) = destroy_frame(frame)
+        && error == FramePoolError::Busy
+    {
+        RETIRED_FRAMES.lock().push(frame);
     }
     if let Some(upload) = surface.skybox_upload.take() {
         destroy_rgb565_surface(upload.owned);

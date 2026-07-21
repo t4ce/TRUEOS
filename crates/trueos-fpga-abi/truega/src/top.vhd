@@ -16,6 +16,14 @@ entity top is
 end entity;
 
 architecture rtl of top is
+	component Truega_Pcie_Clock is
+		port (
+			clkin   : in  std_logic;
+			tlp_clk : out std_logic;
+			lock    : out std_logic
+		);
+	end component;
+
 	component SerDes_Top is
 		port (
 			PCIE_Controller_Top_pcie_tl_rx_sop_o        : out std_logic;
@@ -116,6 +124,9 @@ architecture rtl of top is
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
 
 	signal pcie_linkup : std_logic;
+	signal tlp_clk : std_logic;
+	signal pll_lock : std_logic;
+	signal pcie_core_reset_n : std_logic;
 
 	signal tl_rx_sop    : std_logic;
 	signal tl_rx_eop    : std_logic;
@@ -286,6 +297,14 @@ architecture rtl of top is
 	end function;
 
 begin
+	pcie_core_reset_n <= pcie_perst_n and pll_lock;
+	-- Present a queued completion continuously. The controller samples the beat
+	-- on a rising TLP clock edge where VALID is asserted and WAIT is deasserted;
+	-- therefore VALID/data must not be pulsed based on the previous WAIT value.
+	tl_tx_data <= tx_pending_data when tx_pending = '1' else (others => '0');
+	tl_tx_valid <= tx_pending_valid when tx_pending = '1' else (others => '0');
+	tl_tx_sop <= tx_pending_sop when tx_pending = '1' else '0';
+	tl_tx_eop <= tx_pending_eop when tx_pending = '1' else '0';
 	tl_rx_backpressure <= capture_pending or decode_pending or transaction_pending;
 	-- A BAR read is a non-posted request: keep later non-posted requests out of
 	-- the controller until our completion has actually entered its TX buffer.
@@ -293,6 +312,13 @@ begin
 	-- is accepted, as required by the Gowin transaction-layer handshake.
 	tl_rx_masknp <= rx_nonposted_busy or
 		(tl_rx_sop and tl_rx_eop and pcie_linkup and tl_rx_bardec(0));
+
+	u_clock: Truega_Pcie_Clock
+		port map(
+			clkin   => clk,
+			tlp_clk => tlp_clk,
+			lock    => pll_lock
+		);
 
 	u_functions: truega_functions
 		port map(
@@ -331,8 +357,8 @@ begin
 			debug_refclk_det_o => open,
 			debug_rx_lock_o    => open,
 
-			PCIE_Controller_Top_pcie_rstn_i          => pcie_perst_n,
-			PCIE_Controller_Top_pcie_tl_clk_i        => clk,
+			PCIE_Controller_Top_pcie_rstn_i          => pcie_core_reset_n,
+			PCIE_Controller_Top_pcie_tl_clk_i        => tlp_clk,
 			PCIE_Controller_Top_pcie_tl_rx_wait_i    => tl_rx_backpressure,
 			PCIE_Controller_Top_pcie_tl_rx_masknp_i  => tl_rx_masknp,
 			PCIE_Controller_Top_pcie_tl_tx_sop_i     => tl_tx_sop,
@@ -346,14 +372,10 @@ begin
 			PCIE_Controller_Top_pcie_tl_drp_rd_i     => '0'
 		);
 
-	process(clk)
+	process(tlp_clk)
 		variable dw : word_arr_t;
 		variable next_words_fwd : word_arr_t;
 		variable next_words_rev : word_arr_t;
-		variable next_tx_data : std_logic_vector(255 downto 0);
-		variable next_tx_valid : std_logic_vector(7 downto 0);
-		variable next_tx_sop : std_logic;
-		variable next_tx_eop : std_logic;
 		variable next_cnt_fwd : integer range 0 to PKT_MAX_WORDS;
 		variable next_cnt_rev : integer range 0 to PKT_MAX_WORDS;
 		variable hit_write : boolean;
@@ -488,15 +510,10 @@ begin
 			tx_pending_sop <= '1';
 			tx_pending_eop <= '1';
 			tx_pending <= '1';
-		end procedure;
+	end procedure;
 	begin
-		if rising_edge(clk) then
-			next_tx_data := (others => '0');
-			next_tx_valid := (others => '0');
-			next_tx_sop := '0';
-			next_tx_eop := '0';
-
-			if pcie_perst_n = '0' then
+		if rising_edge(tlp_clk) then
+			if (pcie_perst_n = '0') or (pll_lock = '0') then
 				led_reg <= (others => '0');
 				debug_led_mode <= '1';
 				call_magic <= WORK_PACKAGE_MAGIC;
@@ -608,10 +625,6 @@ begin
 					end if;
 
 					if (tx_pending = '1') and (tl_tx_wait = '0') then
-						next_tx_data := tx_pending_data;
-						next_tx_valid := tx_pending_valid;
-						next_tx_sop := tx_pending_sop;
-						next_tx_eop := tx_pending_eop;
 						dbg_tx_fire <= '1';
 						dbg_seen_tx_fire <= '1';
 						tx_pending <= '0';
@@ -877,10 +890,6 @@ begin
 					led_reg(3) <= dbg_seen_magic_read;
 					led_reg(4) <= dbg_seen_queue_cpld;
 				end if;
-				tl_tx_data <= next_tx_data;
-				tl_tx_valid <= next_tx_valid;
-				tl_tx_sop <= next_tx_sop;
-				tl_tx_eop <= next_tx_eop;
 			end if;
 		end if;
 	end process;

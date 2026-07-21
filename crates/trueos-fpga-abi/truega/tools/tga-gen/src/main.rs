@@ -231,6 +231,9 @@ mod tests {
     use super::*;
 
     const TOP_VHDL: &str = include_str!("../../../src/top.vhd");
+    const BOARD_CST: &str = include_str!("../../../src/min_pci_led.cst");
+    const BOARD_SDC: &str = include_str!("../../../src/min_pci_led.sdc");
+    const PCIE_PLL: &str = include_str!("../../../src/gowin_pll/gowin_pll.v");
 
     #[test]
     fn binary_manifest_matches_shared_abi_layout() {
@@ -276,5 +279,30 @@ mod tests {
         assert!(!TOP_VHDL.contains(
             "dw1(31 downto 16) := \"000\" & tl_cfg_busdev;"
         ));
+    }
+
+    #[test]
+    fn tang_mega_pro_generates_the_required_tlp_clock() {
+        assert!(BOARD_CST.contains("IO_LOC \"clk\" P16;"));
+        assert!(BOARD_SDC.contains("create_clock -name board_clk -period 20.000"));
+        assert!(PCIE_PLL.contains("defparam PLL_inst.FCLKIN = \"50\";"));
+        assert!(PCIE_PLL.contains(".DIV_MODE(\"2\")"));
+        assert!(TOP_VHDL.contains(
+            "PCIE_Controller_Top_pcie_tl_clk_i        => tlp_clk,"
+        ));
+        assert!(!TOP_VHDL.contains(
+            "PCIE_Controller_Top_pcie_tl_clk_i        => clk,"
+        ));
+    }
+
+    #[test]
+    fn completion_is_held_until_the_controller_accepts_it() {
+        assert!(TOP_VHDL.contains(
+            "tl_tx_valid <= tx_pending_valid when tx_pending = '1' else (others => '0');"
+        ));
+        assert!(TOP_VHDL.contains(
+            "if (tx_pending = '1') and (tl_tx_wait = '0') then"
+        ));
+        assert!(!TOP_VHDL.contains("next_tx_valid := tx_pending_valid;"));
     }
 }

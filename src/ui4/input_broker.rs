@@ -186,6 +186,23 @@ impl From<WindowSnapshot> for WindowTarget {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct KeyboardSource {
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+}
+
+impl From<crate::r::keyboard::TrueosKeyboardOutputEvent> for KeyboardSource {
+    fn from(event: crate::r::keyboard::TrueosKeyboardOutputEvent) -> Self {
+        Self {
+            controller_id: event.controller_id,
+            slot_id: event.slot_id,
+            ep_target: event.ep_target,
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 struct CursorRoute {
     source: Ui4CursorSource,
@@ -194,6 +211,7 @@ struct CursorRoute {
     buttons_down: u32,
     focus: Option<WindowTarget>,
     capture: Option<WindowTarget>,
+    keyboard_source: Option<KeyboardSource>,
     focus_serial: u64,
     visible_after_motion: bool,
     color: crate::graphics::primitives::Rgba8,
@@ -215,6 +233,7 @@ impl CursorRoute {
             buttons_down,
             focus: None,
             capture: None,
+            keyboard_source: None,
             focus_serial: 0,
             visible_after_motion: false,
             color: software_cursor_color(source),
@@ -282,6 +301,7 @@ impl InputBroker {
         }
         self.focus_serial = self.focus_serial.wrapping_add(1).max(1);
         self.cursors[cursor_index].focus = next;
+        self.cursors[cursor_index].keyboard_source = None;
         self.cursors[cursor_index].focus_serial = self.focus_serial;
         let source = self.cursors[cursor_index].source;
         if let Some(previous) = previous {
@@ -320,6 +340,7 @@ impl InputBroker {
             }
             if owned_focus {
                 route.focus = None;
+                route.keyboard_source = None;
             }
             if owned_capture {
                 route.capture = None;
@@ -676,7 +697,7 @@ impl InputBroker {
         }
     }
 
-    fn process_keyboard(&self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
+    fn process_keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
         if INTERACTIVE_SCREENSHOT_ENABLED
             && event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
@@ -716,10 +737,11 @@ impl InputBroker {
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
-        let matched_target = self
+        let matched_route = self
             .cursors
             .iter()
-            .filter_map(|route| {
+            .enumerate()
+            .filter_map(|(index, route)| {
                 let focus = route.focus?;
                 if window_snapshot_for_target(focus).is_none() {
                     return None;
@@ -730,28 +752,36 @@ impl InputBroker {
                     route.source.controller_id == event.controller_id
                         && route.source.slot_id == event.slot_id
                 };
-                matches.then_some((route.focus_serial, focus))
+                matches.then_some((route.focus_serial, index))
             })
             .max_by_key(|(serial, _)| *serial)
-            .map(|(_, focus)| focus);
-        let target = matched_target.or_else(|| {
+            .map(|(_, index)| index);
+        let route_index = matched_route.or_else(|| {
             if combo_id != 0 {
                 return None;
             }
             self.cursors
                 .iter()
-                .filter_map(|route| {
+                .enumerate()
+                .filter_map(|(index, route)| {
                     let focus = route.focus?;
                     window_snapshot_for_target(focus)
                         .is_some()
-                        .then_some((route.focus_serial, focus))
+                        .then_some((route.focus_serial, index))
                 })
                 .max_by_key(|(serial, _)| *serial)
-                .map(|(_, focus)| focus)
+                .map(|(_, index)| index)
         });
-        let Some(target) = target else {
+        let Some(route_index) = route_index else {
             return;
         };
+        let Some(target) = self.cursors[route_index].focus else {
+            return;
+        };
+        // Keep the focused keyboard identity beside the cursor-owned focus.
+        // Blueprint game consumers can then sample held HID usages without
+        // gaining access to the global HUT keyboard list.
+        self.cursors[route_index].keyboard_source = Some(event.into());
         enqueue_owner_event(
             target.owner,
             Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
@@ -761,6 +791,33 @@ impl InputBroker {
                 virtual_keyboard,
             }),
         );
+    }
+
+    fn focused_keyboard_state(
+        &self,
+        target: WindowTarget,
+    ) -> Option<crate::usb2::hid::hut::HidKeyboardState> {
+        if window_snapshot_for_target(target).is_none() {
+            return None;
+        }
+        let source = self
+            .cursors
+            .iter()
+            .filter(|route| route.focus == Some(target))
+            .filter_map(|route| {
+                route
+                    .keyboard_source
+                    .map(|source| (route.focus_serial, source))
+            })
+            .max_by_key(|(serial, _)| *serial)
+            .map(|(_, source)| source)?;
+        crate::usb2::hid::hut::keyboards_snapshot()
+            .into_iter()
+            .find(|keyboard| {
+                keyboard.controller_id == source.controller_id
+                    && keyboard.slot_id == source.slot_id
+                    && keyboard.ep_target == source.ep_target
+            })
     }
 
     fn pump(&mut self) -> bool {
@@ -875,6 +932,15 @@ pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, 
     let mut out = Vec::new();
     core::mem::swap(&mut out, &mut queue.events);
     out
+}
+
+pub(crate) fn focused_keyboard_state(
+    owner: WindowOwner,
+    window: WindowId,
+) -> Option<crate::usb2::hid::hut::HidKeyboardState> {
+    INPUT_BROKER
+        .lock()
+        .focused_keyboard_state(WindowTarget { owner, window })
 }
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {

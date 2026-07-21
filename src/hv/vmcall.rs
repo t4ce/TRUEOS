@@ -92,6 +92,8 @@ pub const OP_BP_ASYNC_FS_WRITE_COMMIT: u32 = 0xD7; // arg0 operation id -> rc
 pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
+pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
+pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -999,6 +1001,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE => {
+            let (x, y) = unpack_i32_pair(arg0);
+            let (width, height) = unpack_u32_pair(arg1);
+            let window = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_immutable(
+                x, y, width, height,
+            );
+            write_response(vm_id, seq, STATUS_OK, window as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_PAN_EVENT_TAKE => {
             let mut event = crate::ui4::blueprint_text::TrueosUi4PanEvent::default();
             let rc = unsafe {
@@ -1009,6 +1020,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             if rc == 0 {
                 write_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_KEYBOARD_STATE => {
+            let mut state = crate::ui4::blueprint_text::TrueosUi4KeyboardState::default();
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_state(
+                    arg0 as u32,
+                    &mut state,
+                )
+            };
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &state);
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
