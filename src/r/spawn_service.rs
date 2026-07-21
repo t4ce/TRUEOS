@@ -79,6 +79,7 @@ define_started_flags!(
     UI4_H264_ENCODE_PROBE_STARTED,
     UI4_COMPOSITOR_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
+    GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
     HW_LOGO_PRESENT_TASK_STARTED,
     VIRTIO_GPU_UI_STARTED,
@@ -553,6 +554,12 @@ fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
 fn spawn_gpgpu_ui4_preview_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |worker_spawner| {
         crate::ui4::gpgpu_preview_consumer_service_task(worker_spawner.cpu_slot())
+    })
+}
+
+fn spawn_gpgpu_ui4_svg_probe_consumer_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_worker(spawner, |worker_spawner| {
+        crate::ui4::gpgpu_svg_probe_consumer_service_task(worker_spawner.cpu_slot())
     })
 }
 
@@ -1230,7 +1237,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 67
+const TASK_COUNT: usize = 68
     + cfg!(feature = "trueos_rdp") as usize
     + cfg!(feature = "trueos_h264_encode_probe") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1532,6 +1539,15 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ui4_compositor_gate,
         &GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
         spawn_gpgpu_ui4_preview_consumer_service_task,
+    ),
+    // Online only exposes the Shell2 control endpoint. The inline SVG probe
+    // is normalized, submitted, and assigned a UI4 frame on explicit start.
+    TaskSpec::enabled_gated(
+        "gpgpu-ui4-svg-probe-consumer-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        ui4_compositor_gate,
+        &GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
+        spawn_gpgpu_ui4_svg_probe_consumer_service_task,
     ),
     TaskSpec::enabled_gated(
         "hw_pic_service",

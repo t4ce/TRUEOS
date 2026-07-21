@@ -9,6 +9,7 @@ mod damage;
 mod font_stamp;
 mod frame_pool;
 mod gpgpu_preview_consumer;
+mod gpgpu_svg_probe_consumer;
 #[cfg(feature = "trueos_h264_encode_probe")]
 mod h264_encode_probe;
 mod input_broker;
@@ -34,6 +35,11 @@ pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewConfig, GpgpuPreviewPreset,
     gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_gpgpu_preview_start,
     request_gpgpu_preview_stop,
+};
+pub(crate) use gpgpu_svg_probe_consumer::{
+    GpgpuSvgProbeConfig, GpgpuSvgProbeMetrics, GpgpuSvgProbePhase, GpgpuSvgProbeStatus,
+    gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status, request_gpgpu_svg_probe_start,
+    request_gpgpu_svg_probe_stop,
 };
 #[cfg(feature = "trueos_h264_encode_probe")]
 pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;
