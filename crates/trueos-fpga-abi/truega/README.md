@@ -192,6 +192,7 @@ and published firmware files. The enabled sequential SiLU slot reaches 136.857 M
 
 The integrated image closes the 100 MHz TLP clock with zero setup/hold violations. The
 build refuses to publish if the timing report is missing, if TLP Fmax is below 100 MHz, or
-if any endpoint is violated. The complete FFN-step image closes at 100.043 MHz and uses
+if any endpoint is violated. With timing-driven placement/routing, the complete FFN-step
+image closes at 104.030 MHz and uses
 7,797/138,240 logic elements (6%), 5,599/139,140 registers (5%), 18.5/298 DSP units
 (7%), and no SSRAM.

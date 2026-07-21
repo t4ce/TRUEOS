@@ -505,14 +505,36 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VGPU_OPEN => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
-            let data = crate::r::io::vgpu_cabi::broker_open(principal, arg0)
-                .unwrap_or_else(|rc| (rc as i64) as u64);
+            let data = match crate::r::io::vgpu_cabi::broker_open(principal, arg0) {
+                Ok(device) => {
+                    hvlogf(format_args!(
+                        "vgpu-vvideo: vm={} stage=open status=ok capabilities=0x{:X}",
+                        vm_id, arg0
+                    ));
+                    device
+                }
+                Err(rc) => {
+                    hvwarnf(format_args!(
+                        "vgpu-vvideo: vm={} stage=open status=error rc={} capabilities=0x{:X}",
+                        vm_id, rc, arg0
+                    ));
+                    (rc as i64) as u64
+                }
+            };
             write_response(vm_id, seq, STATUS_OK, data, 0);
             DispatchOutcome::Resume
         }
         OP_BP_VGPU_CLOSE => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let rc = crate::r::io::vgpu_cabi::broker_close(principal, arg0);
+            if rc == 0 {
+                hvlogf(format_args!("vgpu-vvideo: vm={} stage=close status=ok", vm_id));
+            } else {
+                hvwarnf(format_args!(
+                    "vgpu-vvideo: vm={} stage=close status=error rc={}",
+                    vm_id, rc
+                ));
+            }
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -527,8 +549,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VGPU_DEVICE_DIAGNOSTICS => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             match crate::r::io::vgpu_cabi::broker_device_diagnostics(principal, arg0) {
-                Ok(diagnostics) => write_record_response(vm_id, seq, 0, &diagnostics),
-                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+                Ok(diagnostics) => {
+                    hvlogf(format_args!(
+                        "vgpu-vvideo: vm={} stage=diagnostics status=ok copied_upload_bytes={} flushed_vvideo_bytes={} buffers={} mapping_identity={} mapping_digest=0x{:016X}",
+                        vm_id,
+                        diagnostics.copied_upload_bytes,
+                        diagnostics.flushed_vvideo_bytes,
+                        diagnostics.vvideo_buffers,
+                        u8::from(
+                            diagnostics.flags & v::vgpu::DeviceDiagnostics::FLAG_MAPPING_IDENTITY
+                                != 0
+                        ),
+                        diagnostics.mapping_digest,
+                    ));
+                    write_record_response(vm_id, seq, 0, &diagnostics)
+                }
+                Err(rc) => {
+                    hvwarnf(format_args!(
+                        "vgpu-vvideo: vm={} stage=diagnostics status=error rc={}",
+                        vm_id, rc
+                    ));
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0)
+                }
             }
             DispatchOutcome::Resume
         }
@@ -628,8 +670,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VGPU_QUEUE_CREATE => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
-            let data = crate::r::io::vgpu_cabi::broker_queue_create(principal, arg0, arg1 as u32)
-                .unwrap_or_else(|rc| (rc as i64) as u64);
+            let data =
+                match crate::r::io::vgpu_cabi::broker_queue_create(principal, arg0, arg1 as u32) {
+                    Ok(queue) => {
+                        hvlogf(format_args!(
+                            "vgpu-vvideo: vm={} stage=queue-create status=ok class={}",
+                            vm_id, arg1
+                        ));
+                        queue
+                    }
+                    Err(rc) => {
+                        hvwarnf(format_args!(
+                            "vgpu-vvideo: vm={} stage=queue-create status=error rc={} class={}",
+                            vm_id, rc, arg1
+                        ));
+                        (rc as i64) as u64
+                    }
+                };
             write_response(vm_id, seq, STATUS_OK, data, 0);
             DispatchOutcome::Resume
         }
@@ -681,14 +738,36 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     let usage = u32::from_le_bytes(payload[8..12].try_into().ok()?);
                     Some((bytes, usage))
                 });
-            let data = parsed
-                .map(|(bytes, usage)| {
-                    crate::r::io::vgpu_cabi::broker_vvideo_create(
-                        principal, arg0, arg1, bytes, usage,
-                    )
-                    .unwrap_or_else(|rc| (rc as i64) as u64)
-                })
-                .unwrap_or((-22i64) as u64);
+            let data = match parsed {
+                Some((bytes, usage)) => match crate::r::io::vgpu_cabi::broker_vvideo_create(
+                    principal, arg0, arg1, bytes, usage,
+                ) {
+                    Ok(buffer) => {
+                        hvlogf(format_args!(
+                            "vgpu-vvideo: vm={} stage=map status=ok bytes={} pages={} usage=0x{:X}",
+                            vm_id,
+                            bytes,
+                            bytes.div_ceil(4096),
+                            usage
+                        ));
+                        buffer
+                    }
+                    Err(rc) => {
+                        hvwarnf(format_args!(
+                            "vgpu-vvideo: vm={} stage=map status=error rc={} bytes={} usage=0x{:X}",
+                            vm_id, rc, bytes, usage
+                        ));
+                        (rc as i64) as u64
+                    }
+                },
+                None => {
+                    hvwarnf(format_args!(
+                        "vgpu-vvideo: vm={} stage=map status=error rc=-22 reason=bad-request",
+                        vm_id
+                    ));
+                    (-22i64) as u64
+                }
+            };
             write_response(vm_id, seq, STATUS_OK, data, 0);
             DispatchOutcome::Resume
         }
@@ -729,12 +808,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|payload| unsafe {
                     core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::SceneAabbDispatch>())
                 });
+            let rows = dispatch.as_ref().map_or(0, |dispatch| dispatch.rows);
             let result = dispatch.ok_or(-22).and_then(|dispatch| {
                 crate::r::io::vgpu_cabi::broker_submit_scene_aabb(principal, arg0, arg1, dispatch)
             });
             match result {
-                Ok(result) => write_record_response(vm_id, seq, 0, &result),
-                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+                Ok(result) => {
+                    hvlogf(format_args!(
+                        "vgpu-vvideo: vm={} stage=scene-aabb status=ok rows={} hits={} timeline={} physical_serial={}",
+                        vm_id, rows, result.hits, result.point.value, result.point.physical_serial,
+                    ));
+                    write_record_response(vm_id, seq, 0, &result)
+                }
+                Err(rc) => {
+                    hvwarnf(format_args!(
+                        "vgpu-vvideo: vm={} stage=scene-aabb status=error rc={} rows={}",
+                        vm_id, rc, rows
+                    ));
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0)
+                }
             }
             DispatchOutcome::Resume
         }

@@ -234,6 +234,63 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
             print_model_verify_error(target, error);
             return Err(crate::r::fpga_offload::Error::Protocol);
         }
+        Err(lfm25_ffn::Error::HardwareMismatch {
+            stage,
+            row,
+            block,
+            activation_scale,
+            weight_scale,
+            observed_dot,
+            expected_dot,
+            observed_term_q30,
+            expected_term_q30,
+            observed_row_q30,
+            expected_row_q30,
+        }) => {
+            print_matrix_target_line(
+                target,
+                alloc::format!(
+                    "tga: model ffn0=fail reason=hardware-mismatch stage={} row={} block={} a_scale={:#06x} w_scale={:#06x}",
+                    stage.name(), row, block, activation_scale, weight_scale,
+                )
+                .as_str(),
+            );
+            print_matrix_target_line(
+                target,
+                alloc::format!(
+                    "tga: model ffn0 observed/expected dot={}/{} term_q30={}/{} row_q30={}/{}",
+                    observed_dot,
+                    expected_dot,
+                    observed_term_q30,
+                    expected_term_q30,
+                    observed_row_q30,
+                    expected_row_q30,
+                )
+                .as_str(),
+            );
+            return Err(crate::r::fpga_offload::Error::Protocol);
+        }
+        Err(lfm25_ffn::Error::ProjectionBound {
+            stage,
+            row,
+            observed_q30,
+            expected_f32_bits,
+            error_f32_bits,
+        }) => {
+            print_matrix_target_line(
+                target,
+                alloc::format!(
+                    "tga: model ffn0=fail reason=projection-bound stage={} row={} observed_q30={} expected_f32={:.9} error={:.9}",
+                    stage.name(),
+                    row,
+                    observed_q30,
+                    f32::from_bits(expected_f32_bits),
+                    f32::from_bits(error_f32_bits),
+                )
+                .as_str(),
+            );
+            return Err(crate::r::fpga_offload::Error::Protocol);
+        }
         Err(error) => {
             print_matrix_target_line(
                 target,

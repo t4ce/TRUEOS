@@ -2675,8 +2675,7 @@ async fn vm_task(vm_id: u8, _lane_lease: crate::hv::lane::LaneLease) {
         }
     }
 
-    let (vgpu_released, vgpu_quarantined, vgpu_epoch) =
-        crate::gpu::vgpu::release_hull_guest(vm_id);
+    let (vgpu_released, vgpu_quarantined, vgpu_epoch) = crate::gpu::vgpu::release_hull_guest(vm_id);
     if vgpu_released != 0 || vgpu_quarantined != 0 {
         hvlogf(format_args!(
             "hv: vm{} lifecycle: vgpu cleanup released={} quarantined={} epoch={}",

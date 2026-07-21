@@ -708,13 +708,19 @@ fn log_blueprint_memory_profile(profile: BlueprintVmMemoryProfile, log: &dyn Fn(
 fn log_blueprint_import(import: &crate::hv::blueprint::ElfImport<'_>, log: &dyn Fn(&str)) {
     match import.resolved_addr {
         Some(addr) if crate::hv::blueprint::is_joker_import(import.name) => {
-            let line =
-                if let Some(note) = crate::hv::blueprint::rustc_runtime_import_note(import.name) {
-                    alloc::format!("rust-runtime import {} -> 0x{:x} {}", import.name, addr, note)
-                } else {
-                    alloc::format!("rust-runtime import {} -> 0x{:x}", import.name, addr)
-                };
-            crate::log_warn!(target: "apps"; "{}\n", line.as_str());
+            let note = crate::hv::blueprint::rustc_runtime_import_note(import.name);
+            let marker_only =
+                note.is_some_and(|note| note.starts_with("class=rustc-no-alloc-shim "));
+            let line = if let Some(note) = note {
+                alloc::format!("rust-runtime import {} -> 0x{:x} {}", import.name, addr, note)
+            } else {
+                alloc::format!("rust-runtime import {} -> 0x{:x}", import.name, addr)
+            };
+            if marker_only {
+                crate::log_info!(target: "apps"; "{}\n", line.as_str());
+            } else {
+                crate::log_warn!(target: "apps"; "{}\n", line.as_str());
+            }
             log(line.as_str());
         }
         Some(addr) => {

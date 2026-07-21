@@ -95,7 +95,26 @@ pub enum Error {
     BufferUnavailable,
     Arithmetic,
     Fpga(fpga_offload::Error),
-    ProjectionBound(Stage),
+    HardwareMismatch {
+        stage: Stage,
+        row: u16,
+        block: u8,
+        activation_scale: u16,
+        weight_scale: u16,
+        observed_dot: i32,
+        expected_dot: i32,
+        observed_term_q30: i64,
+        expected_term_q30: i64,
+        observed_row_q30: i64,
+        expected_row_q30: i64,
+    },
+    ProjectionBound {
+        stage: Stage,
+        row: u16,
+        observed_q30: i64,
+        expected_f32_bits: u32,
+        error_f32_bits: u32,
+    },
     FixedVectorMismatch(Stage),
     CompletionPath,
 }
@@ -143,7 +162,18 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     for (index, (&gate_q30, &up_q30)) in gate.iter().zip(&up).enumerate() {
         let value = fpga_offload::lfm25_silu_mul_q30(gate_q30, up_q30).await?;
         silu.push(value);
-        silu_max_abs = silu_max_abs.max(q30_error(value, golden_f32(3, index)?));
+        let expected = golden_f32(3, index)?;
+        let error = q30_error(value, expected);
+        silu_max_abs = silu_max_abs.max(error);
+        if error > SILU_BOUND {
+            return Err(Error::ProjectionBound {
+                stage: Stage::Silu,
+                row: index as u16,
+                observed_q30: value,
+                expected_f32_bits: expected.to_bits(),
+                error_f32_bits: error.to_bits(),
+            });
+        }
         if index % 512 == 511 || index + 1 == gate.len() {
             progress(Progress {
                 stage: Stage::Silu,
@@ -151,9 +181,6 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
                 total: gate.len(),
             });
         }
-    }
-    if silu_max_abs > SILU_BOUND {
-        return Err(Error::ProjectionBound(Stage::Silu));
     }
     let silu_sha256 = q30_vector_sha256(&silu);
     require_hash(Stage::Silu, silu_sha256, SILU_Q30_SHA256)?;
@@ -227,6 +254,7 @@ async fn project(
 
     for row in 0..rows {
         let mut row_q30 = 0i64;
+        let mut expected_row_q30 = 0i64;
         for (block, activation_block) in activation.iter().enumerate() {
             let offset = row * row_bytes + block * Q8_BLOCK_BYTES;
             let weight: &[u8; Q8_BLOCK_BYTES] = matrix
@@ -234,6 +262,15 @@ async fn project(
                 .ok_or(Error::Tensor)?
                 .try_into()
                 .map_err(|_| Error::Tensor)?;
+            let expected_dot = integer_dot(activation_block, weight);
+            let expected_term_q30 = q30_term(
+                expected_dot,
+                u16::from_le_bytes([activation_block[0], activation_block[1]]),
+                u16::from_le_bytes([weight[0], weight[1]]),
+            )?;
+            expected_row_q30 = expected_row_q30
+                .checked_add(expected_term_q30)
+                .ok_or(Error::Arithmetic)?;
             let result = fpga_offload::lfm25_q8_projection_block(
                 wide,
                 block == 0,
@@ -243,10 +280,42 @@ async fn project(
                 weight,
             )
             .await?;
+            if result.dot != expected_dot
+                || result.term_q30 != expected_term_q30
+                || result.row_q30 != expected_row_q30
+            {
+                return Err(Error::HardwareMismatch {
+                    stage,
+                    row: row as u16,
+                    block: block as u8,
+                    activation_scale: u16::from_le_bytes([
+                        activation_block[0],
+                        activation_block[1],
+                    ]),
+                    weight_scale: u16::from_le_bytes([weight[0], weight[1]]),
+                    observed_dot: result.dot,
+                    expected_dot,
+                    observed_term_q30: result.term_q30,
+                    expected_term_q30,
+                    observed_row_q30: result.row_q30,
+                    expected_row_q30,
+                });
+            }
             row_q30 = result.row_q30;
         }
         output.push(row_q30);
-        max_abs = max_abs.max(q30_error(row_q30, golden_f32(golden_vector, row)?));
+        let expected = golden_f32(golden_vector, row)?;
+        let error = q30_error(row_q30, expected);
+        max_abs = max_abs.max(error);
+        if error > PROJECTION_BOUND {
+            return Err(Error::ProjectionBound {
+                stage,
+                row: row as u16,
+                observed_q30: row_q30,
+                expected_f32_bits: expected.to_bits(),
+                error_f32_bits: error.to_bits(),
+            });
+        }
         let interval = if rows > 2048 { 512 } else { 128 };
         if row % interval == interval - 1 || row + 1 == rows {
             progress(Progress {
@@ -257,10 +326,65 @@ async fn project(
         }
     }
 
-    if max_abs > PROJECTION_BOUND {
-        return Err(Error::ProjectionBound(stage));
-    }
     Ok((output, max_abs))
+}
+
+fn integer_dot(left: &[u8; Q8_BLOCK_BYTES], right: &[u8; Q8_BLOCK_BYTES]) -> i32 {
+    left[2..]
+        .iter()
+        .zip(&right[2..])
+        .map(|(&left, &right)| i32::from(left as i8) * i32::from(right as i8))
+        .sum()
+}
+
+fn q30_term(dot: i32, activation_scale: u16, weight_scale: u16) -> Result<i64, Error> {
+    let (activation_significand, activation_exponent) = half_parts(activation_scale)?;
+    let (weight_significand, weight_exponent) = half_parts(weight_scale)?;
+    if activation_significand == 0 || weight_significand == 0 || dot == 0 {
+        return Ok(0);
+    }
+    let raw = i64::from(dot)
+        .checked_mul(i64::from(activation_significand))
+        .and_then(|value| value.checked_mul(i64::from(weight_significand)))
+        .ok_or(Error::Arithmetic)?;
+    let shift = activation_exponent + weight_exponent - 20;
+    if shift >= 0 {
+        raw.checked_shl(shift as u32).ok_or(Error::Arithmetic)
+    } else {
+        Ok(round_shift_right_even(raw, (-shift) as u32))
+    }
+}
+
+fn half_parts(bits: u16) -> Result<(u16, i32), Error> {
+    if bits & 0x8000 != 0 {
+        return Err(Error::Arithmetic);
+    }
+    let exponent = ((bits >> 10) & 0x1f) as i32;
+    let fraction = bits & 0x03ff;
+    match exponent {
+        0 => Ok((fraction, 1)),
+        31 => Err(Error::Arithmetic),
+        _ => Ok((1024 + fraction, exponent)),
+    }
+}
+
+fn round_shift_right_even(value: i64, shift: u32) -> i64 {
+    let negative = value < 0;
+    let magnitude = value.unsigned_abs();
+    if shift >= 64 {
+        return 0;
+    }
+    let quotient = magnitude >> shift;
+    let mask = if shift == 0 { 0 } else { (1u64 << shift) - 1 };
+    let remainder = magnitude & mask;
+    let halfway = if shift == 0 { 0 } else { 1u64 << (shift - 1) };
+    let rounded =
+        quotient + u64::from(remainder > halfway || (remainder == halfway && quotient & 1 != 0));
+    if negative {
+        -(rounded as i64)
+    } else {
+        rounded as i64
+    }
 }
 
 async fn read_tensor(
