@@ -31,8 +31,9 @@ architecture rtl of top is
 			PCIE_Controller_Top_pcie_tl_rx_data_o       : out std_logic_vector(255 downto 0);
 			PCIE_Controller_Top_pcie_tl_rx_valid_o      : out std_logic_vector(7 downto 0);
 			PCIE_Controller_Top_pcie_tl_rx_bardec_o     : out std_logic_vector(5 downto 0);
-			PCIE_Controller_Top_pcie_tl_rx_err_o        : out std_logic_vector(7 downto 0);
-			PCIE_Controller_Top_pcie_tl_tx_wait_o       : out std_logic;
+				PCIE_Controller_Top_pcie_tl_rx_err_o        : out std_logic_vector(7 downto 0);
+				PCIE_Controller_Top_pcie_tl_tx_wait_o       : out std_logic;
+				PCIE_Controller_Top_pcie_tl_int_ack_o       : out std_logic;
 			PCIE_Controller_Top_pcie_ltssm_o            : out std_logic_vector(4 downto 0);
 			PCIE_Controller_Top_pcie_tl_tx_creditsp_o   : out std_logic_vector(31 downto 0);
 			PCIE_Controller_Top_pcie_tl_tx_creditsnp_o  : out std_logic_vector(31 downto 0);
@@ -54,13 +55,30 @@ architecture rtl of top is
 			PCIE_Controller_Top_pcie_tl_rx_masknp_i  : in  std_logic;
 			PCIE_Controller_Top_pcie_tl_tx_sop_i     : in  std_logic;
 			PCIE_Controller_Top_pcie_tl_tx_eop_i     : in  std_logic;
-			PCIE_Controller_Top_pcie_tl_tx_data_i    : in  std_logic_vector(255 downto 0);
-			PCIE_Controller_Top_pcie_tl_tx_valid_i   : in  std_logic_vector(7 downto 0);
+				PCIE_Controller_Top_pcie_tl_tx_data_i    : in  std_logic_vector(255 downto 0);
+				PCIE_Controller_Top_pcie_tl_tx_valid_i   : in  std_logic_vector(7 downto 0);
+				PCIE_Controller_Top_pcie_tl_int_status_i : in  std_logic;
+				PCIE_Controller_Top_pcie_tl_int_req_i    : in  std_logic;
+				PCIE_Controller_Top_pcie_tl_int_msinum_i : in  std_logic_vector(4 downto 0);
 			PCIE_Controller_Top_pcie_tl_drp_addr_i   : in  std_logic_vector(23 downto 0);
 			PCIE_Controller_Top_pcie_tl_drp_wrdata_i : in  std_logic_vector(31 downto 0);
 			PCIE_Controller_Top_pcie_tl_drp_strb_i   : in  std_logic_vector(7 downto 0);
 			PCIE_Controller_Top_pcie_tl_drp_wr_i     : in  std_logic;
 			PCIE_Controller_Top_pcie_tl_drp_rd_i     : in  std_logic
+		);
+		end component;
+
+	component truega_completion_irq is
+		port (
+			clk                : in  std_logic;
+			reset_n            : in  std_logic;
+			retire_i           : in  std_logic;
+			interrupt_enable_i : in  std_logic;
+			bar_ack_i          : in  std_logic;
+			controller_ack_i   : in  std_logic;
+			status_o           : out std_logic;
+			request_o          : out std_logic;
+			msinum_o           : out std_logic_vector(4 downto 0)
 		);
 	end component;
 
@@ -158,6 +176,12 @@ architecture rtl of top is
 	signal tl_tx_sop    : std_logic := '0';
 	signal tl_tx_eop    : std_logic := '0';
 	signal tl_cfg_busdev : std_logic_vector(12 downto 0);
+	signal call_irq_controller_ack : std_logic;
+	signal call_irq_status : std_logic;
+	signal call_irq_request : std_logic;
+	signal call_irq_msinum : std_logic_vector(4 downto 0);
+	signal call_irq_retire : std_logic := '0';
+	signal call_irq_bar_ack : std_logic := '0';
 
 	-- Active-high logical state (the board outputs are inverted below).  Seed a
 	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
@@ -383,6 +407,19 @@ begin
 		port map(
 			word_index => transaction_addr_dw(4 downto 0),
 			data       => firmware_manifest_word
+			);
+
+	u_completion_irq: truega_completion_irq
+		port map(
+			clk                => tlp_clk,
+			reset_n            => pcie_core_reset_n,
+			retire_i           => call_irq_retire,
+			interrupt_enable_i => call_flags(0),
+			bar_ack_i          => call_irq_bar_ack,
+			controller_ack_i   => call_irq_controller_ack,
+			status_o           => call_irq_status,
+			request_o          => call_irq_request,
+			msinum_o           => call_irq_msinum
 		);
 
 	u_serdes: SerDes_Top
@@ -392,8 +429,9 @@ begin
 			PCIE_Controller_Top_pcie_tl_rx_data_o       => tl_rx_data,
 			PCIE_Controller_Top_pcie_tl_rx_valid_o      => tl_rx_valid,
 			PCIE_Controller_Top_pcie_tl_rx_bardec_o     => tl_rx_bardec,
-			PCIE_Controller_Top_pcie_tl_rx_err_o        => tl_rx_err,
-			PCIE_Controller_Top_pcie_tl_tx_wait_o       => tl_tx_wait,
+				PCIE_Controller_Top_pcie_tl_rx_err_o        => tl_rx_err,
+				PCIE_Controller_Top_pcie_tl_tx_wait_o       => tl_tx_wait,
+				PCIE_Controller_Top_pcie_tl_int_ack_o       => call_irq_controller_ack,
 			PCIE_Controller_Top_pcie_ltssm_o            => open,
 			PCIE_Controller_Top_pcie_tl_tx_creditsp_o   => open,
 			PCIE_Controller_Top_pcie_tl_tx_creditsnp_o  => open,
@@ -415,8 +453,11 @@ begin
 			PCIE_Controller_Top_pcie_tl_rx_masknp_i  => tl_rx_masknp,
 			PCIE_Controller_Top_pcie_tl_tx_sop_i     => tl_tx_sop,
 			PCIE_Controller_Top_pcie_tl_tx_eop_i     => tl_tx_eop,
-			PCIE_Controller_Top_pcie_tl_tx_data_i    => tl_tx_data,
-			PCIE_Controller_Top_pcie_tl_tx_valid_i   => tl_tx_valid,
+				PCIE_Controller_Top_pcie_tl_tx_data_i    => tl_tx_data,
+				PCIE_Controller_Top_pcie_tl_tx_valid_i   => tl_tx_valid,
+				PCIE_Controller_Top_pcie_tl_int_status_i => call_irq_status,
+				PCIE_Controller_Top_pcie_tl_int_req_i    => call_irq_request,
+				PCIE_Controller_Top_pcie_tl_int_msinum_i => call_irq_msinum,
 			PCIE_Controller_Top_pcie_tl_drp_addr_i   => (others => '0'),
 			PCIE_Controller_Top_pcie_tl_drp_wrdata_i => (others => '0'),
 			PCIE_Controller_Top_pcie_tl_drp_strb_i   => (others => '0'),
@@ -582,10 +623,12 @@ begin
 				call_output_words <= (others => (others => '0'));
 				call_pending <= '0';
 				call_active <= '0';
-				call_active_function <= (others => '0');
-				call_active_output_bytes <= (others => '0');
-				function_start <= '0';
-				call_retire_count <= (others => '0');
+					call_active_function <= (others => '0');
+					call_active_output_bytes <= (others => '0');
+					function_start <= '0';
+					call_irq_retire <= '0';
+					call_irq_bar_ack <= '0';
+					call_retire_count <= (others => '0');
 				capture_pending <= '0';
 				rx_snapshot_data <= (others => '0');
 				rx_snapshot_valid <= (others => '0');
@@ -638,8 +681,10 @@ begin
 					dbg_last_cpld_dw1 <= (others => '0');
 					dbg_last_cpld_dw2 <= (others => '0');
 					dbg_last_cpld_data <= (others => '0');
-			else
-				function_start <= '0';
+				else
+					function_start <= '0';
+					call_irq_retire <= '0';
+					call_irq_bar_ack <= '0';
 					dbg_rx_bar0_eop <= '0';
 					dbg_hit_write <= '0';
 					dbg_hit_read <= '0';
@@ -659,24 +704,29 @@ begin
 							or (call_abi_function(15 downto 0) /= WORK_ABI_VERSION) then
 							call_error <= CALL_ERROR_BAD_PACKAGE;
 							call_state <= WORK_STATE_FAILED;
+							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
 						elsif function_valid = '0' then
 							call_error <= CALL_ERROR_BAD_FUNCTION;
 							call_state <= WORK_STATE_FAILED;
+							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
 						elsif unsigned(call_input_len)
 							/= resize(unsigned(function_required_input_bytes), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
+							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
 						elsif unsigned(call_output_cap)
 							< resize(unsigned(function_output_bytes), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
+							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
 						elsif function_busy = '1' then
 							call_error <= CALL_ERROR_BAD_PACKAGE;
 							call_state <= WORK_STATE_FAILED;
+							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
 						else
 							function_start <= '1';
@@ -687,6 +737,7 @@ begin
 						call_pending <= '0';
 					elsif (call_active = '1') and (function_done = '1') then
 						call_active <= '0';
+						call_irq_retire <= '1';
 						call_retire_count <= call_retire_count + 1;
 						if function_error = '1' then
 							call_output_len <= (others => '0');
@@ -769,9 +820,13 @@ begin
 										call_output_len <= (others => '0');
 										call_error <= CALL_ERROR_BAD_PACKAGE;
 										call_state <= WORK_STATE_FAILED;
+										call_irq_retire <= '1';
+										call_retire_count <= call_retire_count + 1;
 									end if;
 								elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
-									null;
+									if payload_dw(0) = '1' then
+										call_irq_bar_ack <= '1';
+									end if;
 								else
 									case addr_dw is
 									when BAR0_LED_DW =>
@@ -801,6 +856,7 @@ begin
 									call_active <= '0';
 									call_active_function <= (others => '0');
 									call_active_output_bytes <= (others => '0');
+									call_irq_bar_ack <= '1';
 									when others =>
 										null;
 									end case;

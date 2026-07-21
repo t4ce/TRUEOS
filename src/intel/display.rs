@@ -132,10 +132,12 @@ const OVERLAY_UNIVERSAL_PLANE_COUNT: usize = crate::ui4::UNIVERSAL_PLANE_COUNT -
 const DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT: usize = 3;
 const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
 // Published UI4 buffers keep producer-owned PPGTT addresses. Direct scanout
-// imports only the selected front buffer into one of these display-owned GGTT
-// aliases. Display needs only live/next aliases because it never remaps the
-// old one before replacement SURFLIVE; producer cadence remains independent.
-const UI4_DIRECT_SCANOUT_ALIAS_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
+// imports each producer surface into a display-owned GGTT alias. Keep enough
+// aliases for the deepest UI4 buffering contract so a triple-buffered scene
+// reaches a steady state with one stable mapping per render target. SURF and
+// SURFLIVE still protect queued/live aliases; remapping is only a fallback for
+// a genuinely new allocation (for example after resize or frame teardown).
+const UI4_DIRECT_SCANOUT_ALIAS_COUNT: usize = crate::ui4::FrameBuffering::Triple.count();
 const UI4_DIRECT_SCANOUT_GPU_BASE: u64 = 0x5000_0000;
 // Match the trusted UI-surface maximum so a 4K RGBA frame remains eligible.
 const UI4_DIRECT_SCANOUT_GPU_STRIDE: u64 = 0x0200_0000;
@@ -8250,13 +8252,35 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
     let pool_mutex =
         ui4_direct_scanout_pool(pipe, plane_slot).ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let mut pool = pool_mutex.lock();
-    let alias_index = (0..UI4_DIRECT_SCANOUT_ALIAS_COUNT)
-        .map(|offset| (pool.next_alias + offset) % UI4_DIRECT_SCANOUT_ALIAS_COUNT)
+    let next_alias = pool.next_alias;
+    let aliases_from_next = || {
+        (0..UI4_DIRECT_SCANOUT_ALIAS_COUNT)
+            .map(move |offset| (next_alias + offset) % UI4_DIRECT_SCANOUT_ALIAS_COUNT)
+    };
+    let alias_is_idle = |index| {
+        ui4_direct_scanout_gpu_for_alias(pipe, plane_slot, index)
+            .and_then(|gpu| u32::try_from(gpu).ok())
+            .is_some_and(|gpu| gpu != current_surf && gpu != current_live)
+    };
+    let mapping_matches_source = |mapping: Ui4DirectScanoutMapping| {
+        mapping.phys == source.phys && mapping.byte_len == source.byte_len
+    };
+    let alias_index = aliases_from_next()
+        // Stable mappings are the normal triple-buffered path. Never choose a
+        // live/queued alias even when it already names the requested bytes.
         .find(|index| {
-            ui4_direct_scanout_gpu_for_alias(pipe, plane_slot, *index)
-                .and_then(|gpu| u32::try_from(gpu).ok())
-                .is_some_and(|gpu| gpu != current_surf && gpu != current_live)
+            alias_is_idle(*index) && pool.mappings[*index].is_some_and(mapping_matches_source)
         })
+        // A never-used alias is preferable to evicting another resident
+        // producer surface during bring-up or after a buffering-mode change.
+        .or_else(|| {
+            aliases_from_next()
+                .find(|index| alias_is_idle(*index) && pool.mappings[*index].is_none())
+        })
+        // Resize and frame replacement can introduce a fourth allocation.
+        // Only then recycle an alias which hardware proves is neither queued
+        // in SURF nor latched in SURFLIVE.
+        .or_else(|| aliases_from_next().find(|index| alias_is_idle(*index)))
         .ok_or(Ui4AsyncCompositionError::Busy)?;
     let gpu = ui4_direct_scanout_gpu_for_alias(pipe, plane_slot, alias_index)
         .ok_or(Ui4AsyncCompositionError::Unavailable)?;

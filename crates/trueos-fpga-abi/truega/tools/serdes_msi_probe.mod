@@ -1,5 +1,5 @@
 -type SERDES
--path /home/t4ce/REPOS/TRUEOS/crates/trueos-fpga-abi/truega/src/serdes/
+-path /tmp/truega-serdes-msi/
 -file_type vlg
 -file_name serdes
 -mod_name SerDes_Top

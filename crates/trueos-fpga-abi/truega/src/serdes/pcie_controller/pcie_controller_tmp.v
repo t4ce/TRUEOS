@@ -1,11 +1,11 @@
-//Copyright (C)2014-2025 Gowin Semiconductor Corporation.
+//Copyright (C)2014-2026 Gowin Semiconductor Corporation.
 //All rights reserved.
 //File Title: Template file for instantiation
-//Tool Version: V1.9.12.01
+//Tool Version: V1.9.12.02_SP1
 //Part Number: GW5AST-LV138FPG676AES
 //Device: GW5AST-138
 //Device Version: B
-//Created Time: Sun Feb  8 03:28:45 2026
+//Created Time: Tue Jul 21 15:03:57 2026
 
 //Change the instance name and port connections to the signal names
 //--------Copy here to design--------
@@ -26,6 +26,10 @@
 		.pcie_tl_tx_data_i(pcie_tl_tx_data_i), //input [255:0] pcie_tl_tx_data_i
 		.pcie_tl_tx_valid_i(pcie_tl_tx_valid_i), //input [7:0] pcie_tl_tx_valid_i
 		.pcie_tl_tx_wait_o(pcie_tl_tx_wait_o), //output pcie_tl_tx_wait_o
+		.pcie_tl_int_status_i(pcie_tl_int_status_i), //input pcie_tl_int_status_i
+		.pcie_tl_int_req_i(pcie_tl_int_req_i), //input pcie_tl_int_req_i
+		.pcie_tl_int_msinum_i(pcie_tl_int_msinum_i), //input [4:0] pcie_tl_int_msinum_i
+		.pcie_tl_int_ack_o(pcie_tl_int_ack_o), //output pcie_tl_int_ack_o
 		.pcie_tl_drp_clk_o(pcie_tl_drp_clk_o), //output pcie_tl_drp_clk_o
 		.pcie_tl_drp_addr_i(pcie_tl_drp_addr_i), //input [23:0] pcie_tl_drp_addr_i
 		.pcie_tl_drp_wrdata_i(pcie_tl_drp_wrdata_i), //input [31:0] pcie_tl_drp_wrdata_i

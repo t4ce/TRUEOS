@@ -1,21 +1,12 @@
 [General]
 ipc_version=4
+file=pcie_controller
+module=PCIE_Controller_Top
 target_device=gw5ast138b-002
-type=Serdes
+type=pcie
 version=1.2
 
-[All_access]
-Q0_LANE0_RX=Q0_LANE0_RX -> Q0_MUX0 -> Q0_REFCLK0
-Q0_LANE0_TX=Q0_LANE0_TX -> Q0_QPLL0 -> Q0_MUX0 -> Q0_REFCLK0
-
 [Config]
-LANG=0
-Synthesis_tool=GowinSynthesis
-file=serdes
-global_reset_enable=false
-module=SerDes_Top
-
-[PCI%20Express%20Controller%3Apcie_controller%3APCIE_Controller_Top]
 Bar0_Enable=true
 Bar1_Enable=false
 Bar2_Enable=false
@@ -55,15 +46,9 @@ Sub_Class_Value=80
 Synthesis_tool=GowinSynthesis
 TLP_Clock_Fequency=100MHz
 Vendor_ID=22C2
-file=pcie_controller
-module=PCIE_Controller_Top
-recordlanes=Q0 Lane0
-target_device=gw5ast138b-002
-type=pcie
 value0=FFFFFC04
 value1=00000000
 value2=00000000
 value3=00000000
 value4=00000000
 value5=00000000
-version=1.0

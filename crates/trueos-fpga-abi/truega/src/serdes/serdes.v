@@ -1,14 +1,14 @@
-//Copyright (C)2014-2025 Gowin Semiconductor Corporation.
+//Copyright (C)2014-2026 Gowin Semiconductor Corporation.
 //All rights reserved.
 //File Title: IP file
-//Tool Version: V1.9.12.01
+//Tool Version: V1.9.12.02_SP1
 //IP Version: 1.0
 //Part Number: GW5AST-LV138FPG676AES
 //Device: GW5AST-138
 //Device Version: B
-//Created Time: Sun Feb  8 03:28:46 2026
+//Created Time: Tue Jul 21 14:59:13 2026
 
-module SerDes_Top (PCIE_Controller_Top_pcie_tl_rx_sop_o, PCIE_Controller_Top_pcie_tl_rx_eop_o, PCIE_Controller_Top_pcie_tl_rx_data_o, PCIE_Controller_Top_pcie_tl_rx_valid_o, PCIE_Controller_Top_pcie_tl_rx_bardec_o, PCIE_Controller_Top_pcie_tl_rx_err_o, PCIE_Controller_Top_pcie_tl_tx_wait_o, PCIE_Controller_Top_pcie_ltssm_o, PCIE_Controller_Top_pcie_tl_tx_creditsp_o, PCIE_Controller_Top_pcie_tl_tx_creditsnp_o, PCIE_Controller_Top_pcie_tl_tx_creditscpl_o, PCIE_Controller_Top_pcie_tl_cfg_busdev_o, PCIE_Controller_Top_pcie_linkup_o, PCIE_Controller_Top_pcie_tl_drp_clk_o, PCIE_Controller_Top_pcie_tl_drp_rddata_o, PCIE_Controller_Top_pcie_tl_drp_resp_o, PCIE_Controller_Top_pcie_tl_drp_rd_valid_o, PCIE_Controller_Top_pcie_tl_drp_ready_o, PCIE_Controller_Top_pcie_rstn_i, PCIE_Controller_Top_pcie_tl_clk_i, PCIE_Controller_Top_pcie_tl_rx_wait_i, PCIE_Controller_Top_pcie_tl_rx_masknp_i, PCIE_Controller_Top_pcie_tl_tx_sop_i, PCIE_Controller_Top_pcie_tl_tx_eop_i, PCIE_Controller_Top_pcie_tl_tx_data_i, PCIE_Controller_Top_pcie_tl_tx_valid_i, PCIE_Controller_Top_pcie_tl_drp_addr_i, PCIE_Controller_Top_pcie_tl_drp_wrdata_i, PCIE_Controller_Top_pcie_tl_drp_strb_i, PCIE_Controller_Top_pcie_tl_drp_wr_i, PCIE_Controller_Top_pcie_tl_drp_rd_i,
+module SerDes_Top (PCIE_Controller_Top_pcie_tl_rx_sop_o, PCIE_Controller_Top_pcie_tl_rx_eop_o, PCIE_Controller_Top_pcie_tl_rx_data_o, PCIE_Controller_Top_pcie_tl_rx_valid_o, PCIE_Controller_Top_pcie_tl_rx_bardec_o, PCIE_Controller_Top_pcie_tl_rx_err_o, PCIE_Controller_Top_pcie_tl_tx_wait_o, PCIE_Controller_Top_pcie_tl_int_ack_o, PCIE_Controller_Top_pcie_ltssm_o, PCIE_Controller_Top_pcie_tl_tx_creditsp_o, PCIE_Controller_Top_pcie_tl_tx_creditsnp_o, PCIE_Controller_Top_pcie_tl_tx_creditscpl_o, PCIE_Controller_Top_pcie_tl_cfg_busdev_o, PCIE_Controller_Top_pcie_linkup_o, PCIE_Controller_Top_pcie_tl_drp_clk_o, PCIE_Controller_Top_pcie_tl_drp_rddata_o, PCIE_Controller_Top_pcie_tl_drp_resp_o, PCIE_Controller_Top_pcie_tl_drp_rd_valid_o, PCIE_Controller_Top_pcie_tl_drp_ready_o, PCIE_Controller_Top_pcie_rstn_i, PCIE_Controller_Top_pcie_tl_clk_i, PCIE_Controller_Top_pcie_tl_rx_wait_i, PCIE_Controller_Top_pcie_tl_rx_masknp_i, PCIE_Controller_Top_pcie_tl_tx_sop_i, PCIE_Controller_Top_pcie_tl_tx_eop_i, PCIE_Controller_Top_pcie_tl_tx_data_i, PCIE_Controller_Top_pcie_tl_tx_valid_i, PCIE_Controller_Top_pcie_tl_int_status_i, PCIE_Controller_Top_pcie_tl_int_req_i, PCIE_Controller_Top_pcie_tl_int_msinum_i, PCIE_Controller_Top_pcie_tl_drp_addr_i, PCIE_Controller_Top_pcie_tl_drp_wrdata_i, PCIE_Controller_Top_pcie_tl_drp_strb_i, PCIE_Controller_Top_pcie_tl_drp_wr_i, PCIE_Controller_Top_pcie_tl_drp_rd_i,
 debug_refclk_det_o, debug_rx_lock_o);
 
 output PCIE_Controller_Top_pcie_tl_rx_sop_o;
@@ -18,6 +18,7 @@ output [7:0] PCIE_Controller_Top_pcie_tl_rx_valid_o;
 output [5:0] PCIE_Controller_Top_pcie_tl_rx_bardec_o;
 output [7:0] PCIE_Controller_Top_pcie_tl_rx_err_o;
 output PCIE_Controller_Top_pcie_tl_tx_wait_o;
+output PCIE_Controller_Top_pcie_tl_int_ack_o;
 output [4:0] PCIE_Controller_Top_pcie_ltssm_o;
 output [31:0] PCIE_Controller_Top_pcie_tl_tx_creditsp_o;
 output [31:0] PCIE_Controller_Top_pcie_tl_tx_creditsnp_o;
@@ -37,6 +38,9 @@ input PCIE_Controller_Top_pcie_tl_tx_sop_i;
 input PCIE_Controller_Top_pcie_tl_tx_eop_i;
 input [255:0] PCIE_Controller_Top_pcie_tl_tx_data_i;
 input [7:0] PCIE_Controller_Top_pcie_tl_tx_valid_i;
+input PCIE_Controller_Top_pcie_tl_int_status_i;
+input PCIE_Controller_Top_pcie_tl_int_req_i;
+input [4:0] PCIE_Controller_Top_pcie_tl_int_msinum_i;
 input [23:0] PCIE_Controller_Top_pcie_tl_drp_addr_i;
 input [31:0] PCIE_Controller_Top_pcie_tl_drp_wrdata_i;
 input [7:0] PCIE_Controller_Top_pcie_tl_drp_strb_i;
@@ -475,8 +479,6 @@ GTR12_QUAD gtr12_quad_inst0 (
     .INET_Q_PMAC(q0_inet_q_pmac),
     .INET_Q_TEST(q0_inet_q_test),
     .INET_Q_UPAR(q0_inet_q_upar),
-    // The CSR selects the GTR12 hard block's dedicated PCIe package pins.
-    // These primitive inputs are fabric injection points, not board I/O.
     .LN0_RXM_I(gw_gnd),
     .LN0_RXP_I(gw_gnd),
     .LN1_RXM_I(gw_gnd),
@@ -695,6 +697,7 @@ PCIE_Controller_Top PCIE_Controller_Top_inst (
     .pcie_tl_rx_bardec_o(PCIE_Controller_Top_pcie_tl_rx_bardec_o[5:0]),
     .pcie_tl_rx_err_o(PCIE_Controller_Top_pcie_tl_rx_err_o[7:0]),
     .pcie_tl_tx_wait_o(PCIE_Controller_Top_pcie_tl_tx_wait_o),
+    .pcie_tl_int_ack_o(PCIE_Controller_Top_pcie_tl_int_ack_o),
     .pcie_ltssm_o(PCIE_Controller_Top_pcie_ltssm_o[4:0]),
     .pcie_tl_tx_creditsp_o(PCIE_Controller_Top_pcie_tl_tx_creditsp_o[31:0]),
     .pcie_tl_tx_creditsnp_o(PCIE_Controller_Top_pcie_tl_tx_creditsnp_o[31:0]),
@@ -736,6 +739,9 @@ PCIE_Controller_Top PCIE_Controller_Top_inst (
     .pcie_tl_tx_eop_i(PCIE_Controller_Top_pcie_tl_tx_eop_i),
     .pcie_tl_tx_data_i(PCIE_Controller_Top_pcie_tl_tx_data_i[255:0]),
     .pcie_tl_tx_valid_i(PCIE_Controller_Top_pcie_tl_tx_valid_i[7:0]),
+    .pcie_tl_int_status_i(PCIE_Controller_Top_pcie_tl_int_status_i),
+    .pcie_tl_int_req_i(PCIE_Controller_Top_pcie_tl_int_req_i),
+    .pcie_tl_int_msinum_i(PCIE_Controller_Top_pcie_tl_int_msinum_i[4:0]),
     .pcie_tl_rx_sop_i(PCIE_Controller_Top_pcie_tl_rx_sop_i),
     .pcie_tl_rx_eop_i(PCIE_Controller_Top_pcie_tl_rx_eop_i),
     .pcie_tl_rx_data_i(PCIE_Controller_Top_pcie_tl_rx_data_i[255:0]),
