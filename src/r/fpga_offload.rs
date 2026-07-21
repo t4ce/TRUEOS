@@ -241,9 +241,11 @@ pub async fn call(function: FunctionId, input: &[u8], output_capacity: usize) ->
 /// First typed function in the TRUEGA firmware: advance the visible LED state and
 /// return the liveness magic through the same work-package completion path.
 pub async fn led_step_heartbeat() -> Result<bool, Error> {
-    let completion = call(trueos_fpga_abi::builtins::LED_STEP_HEARTBEAT, &[], 4).await?;
-    let reply =
-        trueos_fpga_abi::builtins::result_u32(completion.output()).ok_or(Error::Protocol)?;
+    use trueos_fpga_abi::builtins::led_step_heartbeat as function;
+
+    let input = function::encode();
+    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
+    let reply = function::decode(completion.output()).ok_or(Error::Protocol)?;
     Ok(reply == trueos_fpga_abi::builtins::HEARTBEAT_REPLY)
 }
 
@@ -252,15 +254,19 @@ pub async fn heartbeat() -> Result<bool, Error> {
 }
 
 pub async fn add_u32(a: u32, b: u32) -> Result<u32, Error> {
-    let input = trueos_fpga_abi::builtins::binary_u32_args(a, b);
-    let completion = call(trueos_fpga_abi::builtins::ADD_U32, &input, 4).await?;
-    trueos_fpga_abi::builtins::result_u32(completion.output()).ok_or(Error::Protocol)
+    use trueos_fpga_abi::builtins::add_u32 as function;
+
+    let input = function::encode(a, b);
+    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
+    function::decode(completion.output()).ok_or(Error::Protocol)
 }
 
 pub async fn xor_u32(a: u32, b: u32) -> Result<u32, Error> {
-    let input = trueos_fpga_abi::builtins::binary_u32_args(a, b);
-    let completion = call(trueos_fpga_abi::builtins::XOR_U32, &input, 4).await?;
-    trueos_fpga_abi::builtins::result_u32(completion.output()).ok_or(Error::Protocol)
+    use trueos_fpga_abi::builtins::xor_u32 as function;
+
+    let input = function::encode(a, b);
+    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
+    function::decode(completion.output()).ok_or(Error::Protocol)
 }
 
 pub fn stats() -> Stats {

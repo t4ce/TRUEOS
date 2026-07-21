@@ -134,3 +134,47 @@ module truega_functions$xor_u32(a,b,result);
     end
     
 endmodule // truega_functions$xor_u32
+
+// Read-only build manifest paired with the generated host interface.
+module truega_firmware_manifest(word_index,data);
+input wire [4:0] word_index;
+output reg [31:0] data;
+always @(*) begin
+data = 32'h00000000;
+case (word_index)
+            5'd0: data = 32'h4D465754;
+            5'd1: data = 32'h00030001;
+            5'd2: data = 32'h00000100;
+            5'd3: data = 32'h00000000;
+            5'd4: data = 32'h5DAF6234;
+            5'd5: data = 32'hA47D6F08;
+            5'd6: data = 32'hB74E326F;
+            5'd7: data = 32'hBD0E6676;
+            5'd8: data = 32'h5273C3D6;
+            5'd9: data = 32'hC4F9869B;
+            5'd10: data = 32'h036F462E;
+            5'd11: data = 32'h4772E56F;
+            5'd12: data = 32'h00000000;
+            5'd13: data = 32'h00000004;
+            5'd14: data = 32'h82C72268;
+            5'd15: data = 32'h63D2650B;
+            5'd16: data = 32'h00080001;
+            5'd17: data = 32'h00000004;
+            5'd18: data = 32'h379E9CDF;
+            5'd19: data = 32'hE32D0CD1;
+            5'd20: data = 32'h00080002;
+            5'd21: data = 32'h00000004;
+            5'd22: data = 32'h26D65E41;
+            5'd23: data = 32'hAFCAD32A;
+            5'd24: data = 32'h00000000;
+            5'd25: data = 32'h00000000;
+            5'd26: data = 32'h00000000;
+            5'd27: data = 32'h00000000;
+            5'd28: data = 32'h00000000;
+            5'd29: data = 32'h00000000;
+            5'd30: data = 32'h00000000;
+            5'd31: data = 32'h00000000;
+            default: data = 32'h00000000;
+endcase
+end
+endmodule

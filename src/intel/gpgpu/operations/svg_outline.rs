@@ -192,7 +192,12 @@ pub(crate) fn submit_svg_outline_probe(
         masks.push(mask);
     }
 
-    let composite = glyph_mask_layers_rgba8_2d_mode(blits.as_slice(), dst, false);
+    // This destination is the UI4 back buffer that will cross directly to
+    // display ownership.  Write it under the proven PAT3/UC contract from the
+    // first destination-touching batch; remapping a dirty PAT0/WB target only
+    // in the later release batch can retire every marker while losing the
+    // colored writes at the cache-policy transition.
+    let composite = glyph_mask_layers_rgba8_2d_mode(blits.as_slice(), dst, true);
     result.submitted = composite.submitted;
     if !composite.ok || composite.requested_layers != blits.len() {
         result.destination_submitted = composite.submitted;
@@ -237,7 +242,7 @@ pub(crate) fn submit_svg_outline_probe(
     result.submit_ms = direct_rcs_elapsed_ms_since(started);
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: svg-outline probe={} ok=1 source_bytes={} parser=bounded-viewbox+solid-path commands=M/L/Q/C/Z layers={} ops={} masks={} canvas={}x{} nonzero={} fill=simd16-nonzero-r8 composite=single-batch final=pipe-control+post-marker submit_ms={}\n",
+        "intel/gpgpu: svg-outline probe={} ok=1 source_bytes={} parser=bounded-viewbox+solid-path commands=M/L/Q/C/Z layers={} ops={} masks={} canvas={}x{} nonzero={} fill=simd16-nonzero-r8 composite=single-batch-dst-pat3-uc final=pipe-control+post-marker submit_ms={}\n",
         demo.label(),
         demo.source().len(),
         result.layers,

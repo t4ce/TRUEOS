@@ -20,6 +20,7 @@ const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
 // - BAR0 + 0x20 is a 32-bit read-only liveness magic ("TGAT")
 // - BAR0 + 0x80 is the function-call doorbell
 // - BAR0 + 0x100..0x1FF is one fixed, inline work package
+// - BAR0 + 0x200..0x27F is the read-only firmware manifest
 //
 // The LED/magic plane stays independent of function execution so it remains useful when
 // function firmware wedges.  There is no FPGA-side command processor, DMA requester, or
@@ -29,6 +30,7 @@ const TGA_MAGIC_OFF: usize = trueos_fpga_abi::BAR0_LIVENESS_MAGIC_OFFSET;
 const TGA_OFFLOAD_DOORBELL_OFF: usize = trueos_fpga_abi::BAR0_CALL_DOORBELL_OFFSET;
 const TGA_OFFLOAD_IRQ_ACK_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_ACK_OFFSET;
 const TGA_OFFLOAD_WORK_PACKAGE_OFF: usize = trueos_fpga_abi::BAR0_WORK_PACKAGE_OFFSET;
+const TGA_FIRMWARE_MANIFEST_OFF: usize = trueos_fpga_abi::BAR0_FIRMWARE_MANIFEST_OFFSET;
 
 const TGA_OFFLOAD_DOORBELL_MAGIC: u32 = 0x4C4C_4143; // "CALL"
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
@@ -51,6 +53,7 @@ struct Tga {
     offload_work_package_reg: usize,
     offload_doorbell_reg: usize,
     offload_irq_ack_reg: usize,
+    firmware_manifest_reg: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -109,6 +112,21 @@ impl Tga {
 
     fn protocol_magic(&self) -> u32 {
         Self::read_reg(self.magic_reg)
+    }
+
+    fn firmware_manifest_mismatch(&self) -> Option<(usize, u32, u32)> {
+        let expected = &trueos_fpga_abi::builtins::FIRMWARE_MANIFEST
+            as *const trueos_fpga_abi::FirmwareManifest as *const u32;
+        let word_count = core::mem::size_of::<trueos_fpga_abi::FirmwareManifest>() / 4;
+        fence(Ordering::Acquire);
+        for index in 0..word_count {
+            let observed = Self::read_reg(self.firmware_manifest_reg + index * 4);
+            let wanted = unsafe { expected.add(index).read() };
+            if observed != wanted {
+                return Some((index, observed, wanted));
+            }
+        }
+        None
     }
 }
 
@@ -265,7 +283,7 @@ fn log_liveness_once() {
     if magic == TGA_MAGIC_EXPECTED {
         *TGA_LAST_WORKING_LEASE.lock() = Some(snapshot_from_tga(tga));
         crate::log!(
-            "tga: liveness reply=yep-alive magic=0x{:08X} bdf={:02X}:{:02X}.{}\n",
+            "tga: liveness reply=yep-alive magic=0x{:08X} bundle=matched bdf={:02X}:{:02X}.{}\n",
             magic,
             tga.bus,
             tga.slot,
@@ -283,26 +301,41 @@ fn log_liveness_once() {
     }
 }
 
-fn candidate_liveness_ready(tga: &Tga) -> bool {
+fn candidate_bundle_ready(tga: &Tga) -> bool {
     let magic = tga.protocol_magic();
-    if magic == TGA_MAGIC_EXPECTED {
-        return true;
+    if magic != TGA_MAGIC_EXPECTED {
+        // A live SRAM program can expose PCI config space a few seconds before the
+        // new fabric has finished configuring. Keep that candidate private and
+        // retry it instead of publishing an unusable transport connection.
+        if !TGA_LIVENESS_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(
+                "tga: endpoint present but protocol not ready magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}; retrying without publishing connection\n",
+                magic,
+                TGA_MAGIC_EXPECTED,
+                tga.bus,
+                tga.slot,
+                tga.function
+            );
+        }
+        return false;
     }
 
-    // A live SRAM program can expose PCI config space a few seconds before the
-    // new fabric has finished configuring.  Keep that candidate private and
-    // retry it instead of publishing an unusable transport connection.
-    if !TGA_LIVENESS_LOGGED.swap(true, Ordering::AcqRel) {
-        crate::log_warn!(
-            "tga: endpoint present but protocol not ready magic=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}; retrying without publishing connection\n",
-            magic,
-            TGA_MAGIC_EXPECTED,
-            tga.bus,
-            tga.slot,
-            tga.function
-        );
+    if let Some((word, observed, expected)) = tga.firmware_manifest_mismatch() {
+        if !TGA_LIVENESS_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(
+                "tga: firmware bundle mismatch manifest_word={} observed=0x{:08X} expected=0x{:08X} bdf={:02X}:{:02X}.{}; transport remains unpublished\n",
+                word,
+                observed,
+                expected,
+                tga.bus,
+                tga.slot,
+                tga.function
+            );
+        }
+        return false;
     }
-    false
+
+    true
 }
 
 fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
@@ -517,7 +550,7 @@ pub fn try_init() -> bool {
         return false;
     };
 
-    if !candidate_liveness_ready(&tga) {
+    if !candidate_bundle_ready(&tga) {
         let _ = crate::pci::release_device_claim(dev.bus, dev.slot, dev.function, TGA_PCI_OWNER);
         return false;
     }
@@ -742,6 +775,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let offload_work_package_reg = base + TGA_OFFLOAD_WORK_PACKAGE_OFF;
     let offload_doorbell_reg = base + TGA_OFFLOAD_DOORBELL_OFF;
     let offload_irq_ack_reg = base + TGA_OFFLOAD_IRQ_ACK_OFF;
+    let firmware_manifest_reg = base + TGA_FIRMWARE_MANIFEST_OFF;
 
     let tga = Tga {
         bus: dev.bus,
@@ -757,6 +791,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         offload_work_package_reg,
         offload_doorbell_reg,
         offload_irq_ack_reg,
+        firmware_manifest_reg,
     };
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         tga.write_led(0);

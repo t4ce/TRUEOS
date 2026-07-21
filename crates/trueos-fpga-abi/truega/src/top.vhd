@@ -80,6 +80,15 @@ architecture rtl of top is
 		);
 	end component;
 
+	-- Generated from the same catalogue and function RTL as the host Rust interface.
+	-- This is a constant ROM exposed for exact bundle admission, not executable state.
+	component truega_firmware_manifest is
+		port (
+			word_index : in  std_logic_vector(4 downto 0);
+			data       : out std_logic_vector(31 downto 0)
+		);
+	end component;
+
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
 	constant PKT_MAX_WORDS : integer := 8;
@@ -98,6 +107,8 @@ architecture rtl of top is
 	constant BAR0_CALL_DOORBELL_DW : integer := 16#080# / 4;
 	constant BAR0_CALL_IRQ_ACK_DW : integer := 16#084# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
+	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
+	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
 	constant CALL_WORD_COUNT : integer := 64;
 	constant CALL_MAGIC_WORD : integer := 0;
 	constant CALL_ABI_FUNCTION_WORD : integer := 1;
@@ -171,6 +182,7 @@ architecture rtl of top is
 	signal function_output_bytes : std_logic_vector(15 downto 0);
 	signal function_next_led : std_logic_vector(4 downto 0);
 	signal function_valid : std_logic;
+	signal firmware_manifest_word : std_logic_vector(31 downto 0);
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal tx_pending_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -342,6 +354,12 @@ begin
 			required_input_bytes => function_required_input_bytes,
 			output_bytes         => function_output_bytes,
 			valid                => function_valid
+		);
+
+	u_firmware_manifest: truega_firmware_manifest
+		port map(
+			word_index => transaction_addr_dw(4 downto 0),
+			data       => firmware_manifest_word
 		);
 
 	u_serdes: SerDes_Top
@@ -681,6 +699,9 @@ begin
 									when CALL_OUTPUT_WORD => call_output0 <= payload_dw;
 									when others => null;
 									end case;
+								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
+									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
+									null;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									if (payload_dw = CALL_DOORBELL_MAGIC)
 										and (call_state = WORK_STATE_HOST_READY)
@@ -748,6 +769,9 @@ begin
 									when CALL_OUTPUT_WORD => read_data_dw := call_output0;
 									when others => null;
 									end case;
+								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
+									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
+									read_data_dw := firmware_manifest_word;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									read_data_dw := std_logic_vector(call_retire_count);
 								else

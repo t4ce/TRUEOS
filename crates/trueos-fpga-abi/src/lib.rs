@@ -136,7 +136,7 @@ pub struct FunctionDescriptor {
 /// TRUEOS may compare this fixed metadata with the generated Rust interface, but it never
 /// compiles or interprets the firmware source at runtime.
 #[repr(C, align(64))]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FirmwareManifest {
     pub magic: u32,
     pub abi_version: u16,
@@ -158,7 +158,10 @@ pub const BAR0_CALL_DOORBELL_OFFSET: usize = 0x080;
 pub const BAR0_CALL_IRQ_ACK_OFFSET: usize = 0x084;
 /// First byte of the fixed, dword-addressable call window.
 pub const BAR0_WORK_PACKAGE_OFFSET: usize = 0x100;
-pub const BAR0_REQUIRED_BYTES: usize = BAR0_WORK_PACKAGE_OFFSET + size_of::<WorkPackage>();
+/// Read-only manifest fused into the same firmware image as the function circuits.
+pub const BAR0_FIRMWARE_MANIFEST_OFFSET: usize = 0x200;
+pub const BAR0_REQUIRED_BYTES: usize =
+    BAR0_FIRMWARE_MANIFEST_OFFSET + size_of::<FirmwareManifest>();
 pub const WORK_PACKAGE_STATE_OFFSET: usize = core::mem::offset_of!(WorkPackage, state);
 
 /// Typed host interface emitted beside the RustHDL-generated firmware RTL.
@@ -183,6 +186,7 @@ mod tests {
         assert_eq!(align_of::<WorkPackage>(), 64);
         assert_eq!(size_of::<FirmwareManifest>(), 128);
         assert_eq!(align_of::<FirmwareManifest>(), 64);
+        assert_eq!(BAR0_REQUIRED_BYTES, 0x280);
     }
 
     #[test]
@@ -201,8 +205,19 @@ mod tests {
 
     #[test]
     fn builtin_binary_interface_is_little_endian() {
-        let args = builtins::binary_u32_args(0x1122_3344, 0xAABB_CCDD);
+        let args = builtins::add_u32::encode(0x1122_3344, 0xAABB_CCDD);
         assert_eq!(args, [0x44, 0x33, 0x22, 0x11, 0xDD, 0xCC, 0xBB, 0xAA]);
-        assert_eq!(builtins::result_u32(&args), Some(0x1122_3344));
+        assert_eq!(builtins::add_u32::decode(&args), Some(0x1122_3344));
+        assert_eq!(builtins::led_step_heartbeat::encode(), []);
+    }
+
+    #[test]
+    fn generated_manifest_matches_the_host_contract() {
+        let manifest = builtins::FIRMWARE_MANIFEST;
+        assert_eq!(manifest.magic, FIRMWARE_MANIFEST_MAGIC);
+        assert_eq!(manifest.abi_version, ABI_VERSION);
+        assert_eq!(manifest.function_count as usize, FUNCTION_COUNT);
+        assert_eq!(manifest.work_package_bytes as usize, size_of::<WorkPackage>());
+        assert_eq!(manifest.functions, builtins::FUNCTIONS);
     }
 }

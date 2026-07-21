@@ -8,6 +8,47 @@ use rust_hdl::prelude::*;
 
 pub const HEARTBEAT_REPLY: u32 = 0x5453_4154;
 
+/// Build contract for one physical function slot.
+///
+/// The catalogue lives beside the circuits so the RTL selector, binary manifest, and
+/// generated host bindings cannot acquire independent slot declarations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FunctionSpec {
+    pub id: u16,
+    pub rust_name: &'static str,
+    pub rust_module: &'static str,
+    pub signature: &'static str,
+    pub input_bytes: u16,
+    pub output_bytes: u16,
+}
+
+pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
+    FunctionSpec {
+        id: 0,
+        rust_name: "LED_STEP_HEARTBEAT",
+        rust_module: "led_step_heartbeat",
+        signature: "led_step_heartbeat()->u32",
+        input_bytes: 0,
+        output_bytes: 4,
+    },
+    FunctionSpec {
+        id: 1,
+        rust_name: "ADD_U32",
+        rust_module: "add_u32",
+        signature: "add_u32(u32,u32)->u32",
+        input_bytes: 8,
+        output_bytes: 4,
+    },
+    FunctionSpec {
+        id: 2,
+        rust_name: "XOR_U32",
+        rust_module: "xor_u32",
+        signature: "xor_u32(u32,u32)->u32",
+        input_bytes: 8,
+        output_bytes: 4,
+    },
+];
+
 /// Slot 0: rotate one visibly lit LED and return the protocol magic.
 #[derive(LogicBlock, Default)]
 pub struct Heartbeat {
