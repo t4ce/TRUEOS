@@ -19,12 +19,16 @@ static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::n
 static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SCENE_AABB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
 static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static FONT_OUTLINE_COVERAGE_R8_SELF_TEST: Once<bool> = Once::new();
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static SCENE_AABB_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static SCENE_AABB_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static SCENE_AABB_QUARANTINED: AtomicBool = AtomicBool::new(false);
 
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);

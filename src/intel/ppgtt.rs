@@ -119,6 +119,13 @@ impl SparsePpgtt {
         self.flush();
         Some(())
     }
+
+    pub(crate) fn maps_page(&self, gpu: u64, phys: u64) -> bool {
+        gpu.is_multiple_of(PAGE_BYTES as u64)
+            && phys.is_multiple_of(PAGE_BYTES as u64)
+            && read_leaf_entry(self, gpu)
+                == Some((phys & ENTRY_ADDR_MASK) | PTE_PRESENT_RW_PAT0_WB)
+    }
 }
 
 impl Drop for SparsePpgtt {

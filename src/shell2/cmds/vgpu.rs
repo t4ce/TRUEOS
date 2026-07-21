@@ -80,7 +80,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
         print_shell_line(
             io,
             format!(
-                "vgpu: device=0x{:016X} principal={:?} caps=0x{:016X} epoch={} lost={} memory={}/{} buffers={} queues={} contexts={}",
+                "vgpu: device=0x{:016X} principal={:?} caps=0x{:016X} epoch={} lost={} memory={}/{} buffers={} queues={} contexts={} vvideo={} identity={} digest=0x{:016X} copied_upload_bytes={} flushed_vvideo_bytes={}",
                 device.handle.raw(),
                 device.principal,
                 device.capabilities.bits(),
@@ -91,6 +91,11 @@ fn print_status(io: &'static dyn ShellBackend2) {
                 device.buffers,
                 device.queues,
                 device.contexts,
+                device.vvideo_buffers,
+                device.vvideo_mapping_identity as u8,
+                device.vvideo_mapping_digest,
+                device.copied_upload_bytes,
+                device.flushed_vvideo_bytes,
             )
             .as_str(),
         );

@@ -47,6 +47,8 @@ pub(crate) const FONT_OUTLINE_MESH_OPENCL_SOURCE: &str =
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME: &str = "font_outline_coverage_r8";
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE: &str =
     include_str!("kernels/font_outline_coverage_r8.cl");
+pub(crate) const SCENE_AABB_KERNEL_NAME: &str = "scene_aabb";
+pub(crate) const SCENE_AABB_OPENCL_SOURCE: &str = include_str!("kernels/scene_aabb.cl");
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -73,6 +75,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         FONT_OUTLINE_MESH_KERNEL_NAME => Some(FONT_OUTLINE_MESH_OPENCL_SOURCE),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(FONT_OUTLINE_COVERAGE_R8_OPENCL_SOURCE),
+        SCENE_AABB_KERNEL_NAME => Some(SCENE_AABB_OPENCL_SOURCE),
         _ => None,
     }
 }
@@ -116,6 +119,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/font_outline_coverage_r8.cl")
         }
+        SCENE_AABB_KERNEL_NAME => Some("src/intel/gpgpu/kernels/scene_aabb.cl"),
         _ => None,
     }
 }
@@ -190,6 +194,10 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/font_outline_coverage_r8.bin");
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/font_outline_coverage_r8.spv");
+pub(crate) const SCENE_AABB_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/scene_aabb.bin");
+pub(crate) const SCENE_AABB_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/scene_aabb.spv");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,
@@ -259,4 +267,8 @@ pub(crate) const FONT_OUTLINE_MESH_ADLS_BIN_SHA256: [u8; 32] = [
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] = [
     0xA4, 0xF0, 0xDD, 0xDC, 0x7F, 0x2A, 0x9D, 0x9D, 0x67, 0xE5, 0xE7, 0x14, 0x59, 0xD5, 0x4D, 0xA2,
     0xE4, 0xA7, 0xAD, 0xE8, 0xCD, 0x1A, 0xF8, 0xC2, 0x72, 0x83, 0xA8, 0x84, 0xF2, 0x21, 0xB8, 0x36,
+];
+pub(crate) const SCENE_AABB_ADLS_BIN_SHA256: [u8; 32] = [
+    0xB4, 0x1B, 0xA8, 0x00, 0x0A, 0x68, 0x2A, 0xAC, 0x20, 0x1B, 0xB0, 0x49, 0x88, 0x51, 0xD2, 0x16,
+    0x0D, 0x9F, 0xAF, 0xFE, 0x4A, 0x12, 0x09, 0x1D, 0xB2, 0x8E, 0x11, 0x55, 0xB6, 0x0F, 0x3F, 0x2D,
 ];

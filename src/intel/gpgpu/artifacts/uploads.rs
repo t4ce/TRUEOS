@@ -379,6 +379,16 @@ pub(crate) fn upload_font_outline_coverage_r8_kernel() -> Option<UploadedKernelA
     Some(upload)
 }
 
+pub(crate) fn upload_scene_aabb_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *SCENE_AABB_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(dev, SCENE_AABB_ADLS_ARTIFACT, SCENE_AABB_ADLS_GPU)?;
+    *SCENE_AABB_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactReloadError {
     UnknownKernel,
@@ -425,6 +435,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
+    SCENE_AABB_KERNEL_NAME,
 ];
 
 pub(crate) fn reload_known_kernel_artifact(
@@ -512,6 +523,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: GLYPH_MASK_RGBA8_ADLS_ARTIFACT,
             gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
             upload: &GLYPH_MASK_RGBA8_UPLOAD,
+        }),
+        SCENE_AABB_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SCENE_AABB_ADLS_ARTIFACT,
+            gpu: SCENE_AABB_ADLS_GPU,
+            upload: &SCENE_AABB_UPLOAD,
         }),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,

@@ -378,6 +378,7 @@ struct BufferRecord {
     usage: u32,
     epoch: u64,
     in_flight: u32,
+    mapping_digest: u64,
 }
 
 unsafe impl Send for BufferRecord {}
@@ -452,6 +453,11 @@ pub(crate) struct DeviceStatusSnapshot {
     pub(crate) buffers: usize,
     pub(crate) queues: usize,
     pub(crate) contexts: usize,
+    pub(crate) vvideo_buffers: usize,
+    pub(crate) vvideo_mapping_identity: bool,
+    pub(crate) vvideo_mapping_digest: u64,
+    pub(crate) copied_upload_bytes: u64,
+    pub(crate) flushed_vvideo_bytes: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -639,6 +645,7 @@ pub(crate) fn create_buffer(
             usage,
             epoch: device.epoch,
             in_flight: 0,
+            mapping_digest: 0,
         },
     ))
 }
@@ -726,6 +733,11 @@ pub(crate) fn create_vvideo_mem(
         }
         mapped += 1;
     }
+    if !physical.verify_gpuvm_pages(vm, gpu, &pages)? {
+        let _ = physical.unmap_gpuvm(vm, gpu, bytes);
+        return Err(VgpuError::Physical(PhysicalGpuError::MapFailed));
+    }
+    let mapping_digest = vvideo_mapping_digest(device.epoch, gpu, &pages);
     device.next_gpu_va = next;
     device.memory_used = device.memory_used.saturating_add(bytes);
     Ok(insert_buffer(
@@ -741,6 +753,7 @@ pub(crate) fn create_vvideo_mem(
             usage,
             epoch: device.epoch,
             in_flight: 0,
+            mapping_digest,
         },
     ))
 }
@@ -794,6 +807,9 @@ fn cache_maintain_vvideo(
         let record = lookup_buffer(device, buffer_handle)?;
         if record.epoch != device.epoch {
             return Err(VgpuError::DeviceLost);
+        }
+        if record.in_flight != 0 {
+            return Err(VgpuError::Busy);
         }
         if record.usage & required_usage == 0 {
             return Err(VgpuError::PermissionDenied);
@@ -1089,14 +1105,22 @@ pub(crate) fn submit_scene_aabb(
         query_min: dispatch.query_min,
         query_max: dispatch.query_max,
     };
+    pin_scene_aabb_buffers(device, &dispatch)?;
     let completion = match physical.submit_scene_aabb(request) {
         Ok(completion) => completion,
         Err(error) => {
+            // A timeout means hardware ownership is unknown. Preserve the
+            // pins permanently; freeing or remapping those pages could turn a
+            // late GPU access into cross-tenant corruption.
+            if error != PhysicalGpuError::CompletionTimeout {
+                unpin_scene_aabb_buffers(device, &dispatch);
+            }
             let queue = lookup_queue_mut(device, queue_handle)?;
             queue.timeline.failures = queue.timeline.failures.saturating_add(1);
             return Err(error.into());
         }
     };
+    unpin_scene_aabb_buffers(device, &dispatch);
     let queue = lookup_queue_mut(device, queue_handle)?;
     queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
     queue.timeline.completed = queue.timeline.submitted;
@@ -1109,6 +1133,46 @@ pub(crate) fn submit_scene_aabb(
         },
         hits: completion.hits,
     })
+}
+
+fn scene_aabb_buffer_handles(dispatch: &SceneAabbDispatch) -> [BufferHandle; 8] {
+    [
+        dispatch.bounds[0].buffer,
+        dispatch.bounds[1].buffer,
+        dispatch.bounds[2].buffer,
+        dispatch.bounds[3].buffer,
+        dispatch.bounds[4].buffer,
+        dispatch.bounds[5].buffer,
+        dispatch.liveness.buffer,
+        dispatch.output.buffer,
+    ]
+}
+
+fn pin_scene_aabb_buffers(
+    device: &mut VirtualDevice,
+    dispatch: &SceneAabbDispatch,
+) -> Result<(), VgpuError> {
+    let handles = scene_aabb_buffer_handles(dispatch);
+    for index in 0..handles.len() {
+        if handles[..index].contains(&handles[index]) {
+            continue;
+        }
+        let record = lookup_buffer_mut(device, handles[index])?;
+        record.in_flight = record.in_flight.checked_add(1).ok_or(VgpuError::Busy)?;
+    }
+    Ok(())
+}
+
+fn unpin_scene_aabb_buffers(device: &mut VirtualDevice, dispatch: &SceneAabbDispatch) {
+    let handles = scene_aabb_buffer_handles(dispatch);
+    for index in 0..handles.len() {
+        if handles[..index].contains(&handles[index]) {
+            continue;
+        }
+        if let Ok(record) = lookup_buffer_mut(device, handles[index]) {
+            record.in_flight = record.in_flight.saturating_sub(1);
+        }
+    }
 }
 
 fn validate_vvideo_slice(
@@ -1319,6 +1383,25 @@ pub(crate) fn broker_status() -> BrokerStatus {
         let Some(device) = entry.record.as_ref() else {
             continue;
         };
+        let vm = match device.gpuvm {
+            GpuVmBinding::Owned(vm) => Some(vm),
+            GpuVmBinding::Borrowed { .. } => None,
+        };
+        let mut vvideo_buffers = 0usize;
+        let mut vvideo_mapping_identity = true;
+        let mut vvideo_mapping_digest = 0u64;
+        for record in device.buffers.iter().filter_map(|slot| slot.record.as_ref()) {
+            let BufferBacking::GuestPages { pages, .. } = &record.backing else {
+                continue;
+            };
+            vvideo_buffers = vvideo_buffers.saturating_add(1);
+            vvideo_mapping_digest ^= record.mapping_digest.rotate_left((vvideo_buffers & 63) as u32);
+            vvideo_mapping_identity &= vm.is_some_and(|vm| {
+                physical
+                    .and_then(|gpu| gpu.verify_gpuvm_pages(vm, record.gpu, pages).ok())
+                    .unwrap_or(false)
+            });
+        }
         devices.push(DeviceStatusSnapshot {
             handle: DeviceHandle(encode_handle(slot, entry.generation)),
             principal: device.principal,
@@ -1338,6 +1421,11 @@ pub(crate) fn broker_status() -> BrokerStatus {
                 .filter(|slot| slot.record.is_some())
                 .count(),
             contexts: device.contexts.len(),
+            vvideo_buffers,
+            vvideo_mapping_identity,
+            vvideo_mapping_digest,
+            copied_upload_bytes: device.copied_upload_bytes,
+            flushed_vvideo_bytes: device.flushed_vvideo_bytes,
         });
     }
     BrokerStatus {
@@ -1565,6 +1653,14 @@ fn destroy_device_resources(
     physical: &'static dyn PhysicalGpuDevice,
     device: &mut VirtualDevice,
 ) -> Result<(), VgpuError> {
+    if device
+        .buffers
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+        .any(|record| record.in_flight != 0)
+    {
+        return Err(VgpuError::Busy);
+    }
     while let Some(binding) = device.contexts.pop() {
         physical.destroy_context(binding.context)?;
     }
@@ -1725,6 +1821,21 @@ fn lookup_buffer(device: &VirtualDevice, handle: BufferHandle) -> Result<&Buffer
         return Err(VgpuError::InvalidHandle);
     }
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
+}
+
+fn lookup_buffer_mut(
+    device: &mut VirtualDevice,
+    handle: BufferHandle,
+) -> Result<&mut BufferRecord, VgpuError> {
+    let (slot, generation) = decode_handle(handle.raw())?;
+    let entry = device
+        .buffers
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
+    entry.record.as_mut().ok_or(VgpuError::InvalidHandle)
 }
 
 fn lookup_queue(device: &VirtualDevice, handle: QueueHandle) -> Result<&QueueRecord, VgpuError> {

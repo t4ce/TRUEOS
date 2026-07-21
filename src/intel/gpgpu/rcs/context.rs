@@ -4,6 +4,22 @@ fn direct_rcs_init_lrc_context_image(
     ring_tail: u32,
     ring_ctl: u32,
 ) -> bool {
+    direct_rcs_init_lrc_context_image_with_root(
+        state,
+        ring_start,
+        ring_tail,
+        ring_ctl,
+        state.ppgtt_phys,
+    )
+}
+
+fn direct_rcs_init_lrc_context_image_with_root(
+    state: DirectRcsState,
+    ring_start: u32,
+    ring_tail: u32,
+    ring_ctl: u32,
+    ppgtt_root_phys: u64,
+) -> bool {
     let total_dwords = DIRECT_RCS_CONTEXT_BYTES / core::mem::size_of::<u32>();
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(state.context_virt as *mut u32, total_dwords) };
@@ -70,9 +86,9 @@ fn direct_rcs_init_lrc_context_image(
     lrc[idx + 12] = 0x2278;
     lrc[idx + 13] = 0;
     lrc[idx + 14] = 0x2274;
-    lrc[idx + 15] = (state.ppgtt_phys >> 32) as u32;
+    lrc[idx + 15] = (ppgtt_root_phys >> 32) as u32;
     lrc[idx + 16] = 0x2270;
-    lrc[idx + 17] = state.ppgtt_phys as u32;
+    lrc[idx + 17] = ppgtt_root_phys as u32;
     idx += 18;
 
     lrc[idx] = direct_rcs_mi_lri_cmd(3, MI_LRI_FORCE_POSTED);

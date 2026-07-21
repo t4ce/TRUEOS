@@ -167,3 +167,11 @@ pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         spv: FONT_OUTLINE_COVERAGE_R8_ADLS_SPV,
         bin_sha256: FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256,
     };
+
+pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: SCENE_AABB_KERNEL_NAME,
+    target: "adls",
+    bin: SCENE_AABB_ADLS_BIN,
+    spv: SCENE_AABB_ADLS_SPV,
+    bin_sha256: SCENE_AABB_ADLS_BIN_SHA256,
+};

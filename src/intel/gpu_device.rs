@@ -144,13 +144,33 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
         Ok(())
     }
 
+    fn verify_gpuvm_pages(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        pages: &[u64],
+    ) -> Result<bool, PhysicalGpuError> {
+        let slots = GPUVMS.lock();
+        let (slot, generation) = decode_vm_handle(vm)?;
+        let record = slots.get(slot).ok_or(PhysicalGpuError::InvalidGpuVm)?;
+        if record.generation != generation {
+            return Err(PhysicalGpuError::InvalidGpuVm);
+        }
+        let ppgtt = record
+            .ppgtt
+            .as_ref()
+            .ok_or(PhysicalGpuError::InvalidGpuVm)?;
+        Ok(pages.iter().copied().enumerate().all(|(page, phys)| {
+            ppgtt.maps_page(gpu + (page * 4096) as u64, phys)
+        }))
+    }
+
     fn submit_scene_aabb(
         &self,
         request: PhysicalSceneAabbRequest,
     ) -> Result<PhysicalSceneAabbCompletion, PhysicalGpuError> {
         let root = self.gpuvm_root_phys(request.vm)?;
         crate::intel::gpgpu::submit_tenant_scene_aabb(root, request)
-            .ok_or(PhysicalGpuError::SubmitFailed)
     }
 
     fn register_context(

@@ -42,6 +42,14 @@ const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
+const SCENE_AABB_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
+    ring: SCENE_AABB_RCS_GPU_VA_RING_BASE,
+    context: SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE,
+    batch: SCENE_AABB_RCS_GPU_VA_BATCH_BASE,
+    result: SCENE_AABB_RCS_GPU_VA_RESULT_BASE,
+    map_general_auxiliary: false,
+};
+
 #[derive(Copy, Clone, Debug)]
 struct DirectRcsSubmitRuntime {
     context_initialized: bool,
@@ -113,6 +121,15 @@ fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
 
     let state = allocate_direct_rcs_state(UI4_COMPOSITOR_RCS_GPU_VA)?;
     *UI4_COMPOSITOR_RCS_STATE.lock() = Some(state);
+    Some(state)
+}
+
+fn scene_aabb_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if let Some(state) = *SCENE_AABB_RCS_STATE.lock() {
+        return Some(state);
+    }
+    let state = allocate_direct_rcs_state(SCENE_AABB_RCS_GPU_VA)?;
+    *SCENE_AABB_RCS_STATE.lock() = Some(state);
     Some(state)
 }
 

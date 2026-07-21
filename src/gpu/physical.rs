@@ -110,6 +110,7 @@ pub(crate) enum PhysicalGpuError {
     RegisterFailed,
     SubmitFailed,
     DestroyFailed,
+    CompletionTimeout,
 }
 
 impl PhysicalGpuError {
@@ -125,6 +126,7 @@ impl PhysicalGpuError {
             Self::RegisterFailed => "register-failed",
             Self::SubmitFailed => "submit-failed",
             Self::DestroyFailed => "destroy-failed",
+            Self::CompletionTimeout => "completion-timeout",
         }
     }
 }
@@ -150,6 +152,12 @@ pub(crate) trait PhysicalGpuDevice: Sync {
         bytes: usize,
     ) -> Result<(), PhysicalGpuError>;
     fn destroy_gpuvm(&self, vm: PhysicalGpuVmHandle) -> Result<(), PhysicalGpuError>;
+    fn verify_gpuvm_pages(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        pages: &[u64],
+    ) -> Result<bool, PhysicalGpuError>;
 
     fn submit_scene_aabb(
         &self,
