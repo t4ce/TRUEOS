@@ -318,7 +318,22 @@ fn verify_fixed_pipeline(golden_path: &Path, native_path: &Path) -> Result<(), S
         "fixed-pipeline sample0 gate_q30={} up_q30={} silu_q30={} down_q30={}",
         gate.q30_raw[0], up.q30_raw[0], silu_q30_raw[0], down.q30_raw[0],
     );
+    println!(
+        "fixed-pipeline sha256 gate={} up={} silu={} down={}",
+        hex(&q30_vector_sha256(&gate.q30_raw)),
+        hex(&q30_vector_sha256(&up.q30_raw)),
+        hex(&q30_vector_sha256(&silu_q30_raw)),
+        hex(&q30_vector_sha256(&down.q30_raw)),
+    );
     Ok(())
+}
+
+fn q30_vector_sha256(values: &[i64]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    hasher.finalize().into()
 }
 
 fn artifact_vectors(artifact: &[u8]) -> Result<Vec<Vec<f32>>, String> {

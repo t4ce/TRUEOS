@@ -33,8 +33,7 @@ const TGA_LED_SET_OFF: usize = trueos_fpga_abi::BAR0_LED_OFFSET;
 const TGA_MAGIC_OFF: usize = trueos_fpga_abi::BAR0_LIVENESS_MAGIC_OFFSET;
 const TGA_OFFLOAD_DOORBELL_OFF: usize = trueos_fpga_abi::BAR0_CALL_DOORBELL_OFFSET;
 const TGA_OFFLOAD_IRQ_ACK_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_ACK_OFFSET;
-const TGA_OFFLOAD_IRQ_RETIRE_COUNT_OFF: usize =
-    trueos_fpga_abi::BAR0_CALL_IRQ_RETIRE_COUNT_OFFSET;
+const TGA_OFFLOAD_IRQ_RETIRE_COUNT_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_RETIRE_COUNT_OFFSET;
 const TGA_OFFLOAD_IRQ_REQUEST_COUNT_OFF: usize =
     trueos_fpga_abi::BAR0_CALL_IRQ_REQUEST_COUNT_OFFSET;
 const TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF: usize =
@@ -202,9 +201,7 @@ pub(crate) fn completion_irq_hardware_stats() -> Option<CompletionIrqHardwareSta
     Some(CompletionIrqHardwareStats {
         retirements: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_RETIRE_COUNT_OFF),
         requests: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_REQUEST_COUNT_OFF),
-        controller_acks: Tga::read_reg(
-            tga.mmio_base + TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF,
-        ),
+        controller_acks: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF),
         state: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_STATE_OFF),
     })
 }

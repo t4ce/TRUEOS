@@ -20,8 +20,8 @@ use super::{
     publish_window_frame, replace_window_frame, set_window_placement, take_owner_input_events,
 };
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontRgba, GpuFontTextRequest, GpuFontUi4Document,
-    prepare_ui4_font_document, release_ui4_font_document, render_ui4_font_document_view,
+    GpuFontFace, GpuFontRgba, GpuFontTextRequest, GpuFontUi4Document, prepare_ui4_font_document,
+    release_ui4_font_document, render_ui4_font_document_view,
 };
 
 pub(crate) const MAX_FONT_STAMP_SLOTS: usize = 10;

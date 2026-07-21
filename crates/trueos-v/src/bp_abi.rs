@@ -440,6 +440,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
     pub fn trueos_cabi_vgpu_device_info(device: u64, out_info: *mut crate::vgpu::DeviceInfo)
     -> i32;
+    pub fn trueos_cabi_vgpu_device_diagnostics(
+        device: u64,
+        out: *mut crate::vgpu::DeviceDiagnostics,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_buffer_create(
         device: u64,
         bytes: usize,

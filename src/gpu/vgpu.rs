@@ -26,6 +26,11 @@ pub(crate) const BUFFER_USAGE_STORAGE: u32 = 1 << 2;
 pub(crate) const BUFFER_USAGE_COPY_SRC: u32 = 1 << 3;
 pub(crate) const BUFFER_USAGE_COPY_DST: u32 = 1 << 4;
 pub(crate) const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
+const BUFFER_USAGE_ALL: u32 = BUFFER_USAGE_MAP_READ
+    | BUFFER_USAGE_MAP_WRITE
+    | BUFFER_USAGE_STORAGE
+    | BUFFER_USAGE_COPY_SRC
+    | BUFFER_USAGE_COPY_DST;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
@@ -270,6 +275,15 @@ pub(crate) struct DeviceInfo {
     pub(crate) buffer_count: usize,
     pub(crate) queue_count: usize,
     pub(crate) lost: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeviceDiagnostics {
+    pub(crate) copied_upload_bytes: u64,
+    pub(crate) flushed_vvideo_bytes: u64,
+    pub(crate) mapping_digest: u64,
+    pub(crate) vvideo_buffers: usize,
+    pub(crate) mapping_identity: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -582,6 +596,44 @@ pub(crate) fn device_info(
     })
 }
 
+pub(crate) fn device_diagnostics(
+    principal: Principal,
+    handle: DeviceHandle,
+) -> Result<DeviceDiagnostics, VgpuError> {
+    let physical = require_physical()?;
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, handle, principal)?;
+    ensure_live(device)?;
+    let vm = match device.gpuvm {
+        GpuVmBinding::Owned(vm) => vm,
+        GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+    };
+    let mut mapping_digest = 0u64;
+    let mut vvideo_buffers = 0usize;
+    let mut mapping_identity = true;
+    for record in device
+        .buffers
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+    {
+        let BufferBacking::GuestPages { pages, .. } = &record.backing else {
+            continue;
+        };
+        vvideo_buffers = vvideo_buffers.saturating_add(1);
+        mapping_digest ^= record
+            .mapping_digest
+            .rotate_left((vvideo_buffers & 63) as u32);
+        mapping_identity &= physical.verify_gpuvm_pages(vm, record.gpu, pages)?;
+    }
+    Ok(DeviceDiagnostics {
+        copied_upload_bytes: device.copied_upload_bytes,
+        flushed_vvideo_bytes: device.flushed_vvideo_bytes,
+        mapping_digest,
+        vvideo_buffers,
+        mapping_identity,
+    })
+}
+
 pub(crate) fn create_buffer(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -667,6 +719,7 @@ pub(crate) fn create_vvideo_mem(
     if bytes == 0
         || guest_va & (PAGE_BYTES as u64 - 1) != 0
         || bytes & (PAGE_BYTES - 1) != 0
+        || usage & !BUFFER_USAGE_ALL != 0
         || usage & (BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE | BUFFER_USAGE_STORAGE) == 0
     {
         return Err(VgpuError::Unsupported);
@@ -695,8 +748,7 @@ pub(crate) fn create_vvideo_mem(
         .filter_map(|slot| slot.record.as_ref())
         .any(|record| match &record.backing {
             BufferBacking::GuestPages {
-                guest_va: existing,
-                ..
+                guest_va: existing, ..
             } => ranges_overlap(*existing, record.bytes, guest_va, bytes),
             BufferBacking::Dma { .. } => false,
         })
@@ -714,7 +766,9 @@ pub(crate) fn create_vvideo_mem(
         return Err(VgpuError::QuotaExceeded);
     }
     let gpu = align_up_u64(device.next_gpu_va, PAGE_BYTES as u64).ok_or(VgpuError::OutOfMemory)?;
-    let next = gpu.checked_add(bytes as u64).ok_or(VgpuError::OutOfMemory)?;
+    let next = gpu
+        .checked_add(bytes as u64)
+        .ok_or(VgpuError::OutOfMemory)?;
     if next > CLIENT_GPU_VA_LIMIT {
         return Err(VgpuError::QuotaExceeded);
     }
@@ -733,9 +787,16 @@ pub(crate) fn create_vvideo_mem(
         }
         mapped += 1;
     }
-    if !physical.verify_gpuvm_pages(vm, gpu, &pages)? {
-        let _ = physical.unmap_gpuvm(vm, gpu, bytes);
-        return Err(VgpuError::Physical(PhysicalGpuError::MapFailed));
+    match physical.verify_gpuvm_pages(vm, gpu, &pages) {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = physical.unmap_gpuvm(vm, gpu, bytes);
+            return Err(VgpuError::Physical(PhysicalGpuError::MapFailed));
+        }
+        Err(error) => {
+            let _ = physical.unmap_gpuvm(vm, gpu, bytes);
+            return Err(error.into());
+        }
     }
     let mapping_digest = vvideo_mapping_digest(device.epoch, gpu, &pages);
     device.next_gpu_va = next;
@@ -889,7 +950,9 @@ pub(crate) fn write_buffer(
             crate::intel::dma_flush(unsafe { virt.add(offset) }, bytes.len());
         }
     }
-    device.copied_upload_bytes = device.copied_upload_bytes.saturating_add(bytes.len() as u64);
+    device.copied_upload_bytes = device
+        .copied_upload_bytes
+        .saturating_add(bytes.len() as u64);
     Ok(bytes.len())
 }
 
@@ -1067,12 +1130,8 @@ pub(crate) fn submit_scene_aabb(
     for (dst, src) in bounds.iter_mut().zip(dispatch.bounds) {
         *dst = validate_vvideo_slice(device, src, row_bytes, BUFFER_USAGE_STORAGE)?;
     }
-    let liveness = validate_vvideo_slice(
-        device,
-        dispatch.liveness,
-        live_bytes,
-        BUFFER_USAGE_STORAGE,
-    )?;
+    let liveness =
+        validate_vvideo_slice(device, dispatch.liveness, live_bytes, BUFFER_USAGE_STORAGE)?;
     let output = validate_vvideo_slice(
         device,
         dispatch.output,
@@ -1157,8 +1216,21 @@ fn pin_scene_aabb_buffers(
         if handles[..index].contains(&handles[index]) {
             continue;
         }
-        let record = lookup_buffer_mut(device, handles[index])?;
-        record.in_flight = record.in_flight.checked_add(1).ok_or(VgpuError::Busy)?;
+        let result = lookup_buffer_mut(device, handles[index]).and_then(|record| {
+            record.in_flight = record.in_flight.checked_add(1).ok_or(VgpuError::Busy)?;
+            Ok(())
+        });
+        if let Err(error) = result {
+            for rollback in 0..index {
+                if handles[..rollback].contains(&handles[rollback]) {
+                    continue;
+                }
+                if let Ok(record) = lookup_buffer_mut(device, handles[rollback]) {
+                    record.in_flight = record.in_flight.saturating_sub(1);
+                }
+            }
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -1390,12 +1462,18 @@ pub(crate) fn broker_status() -> BrokerStatus {
         let mut vvideo_buffers = 0usize;
         let mut vvideo_mapping_identity = true;
         let mut vvideo_mapping_digest = 0u64;
-        for record in device.buffers.iter().filter_map(|slot| slot.record.as_ref()) {
+        for record in device
+            .buffers
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+        {
             let BufferBacking::GuestPages { pages, .. } = &record.backing else {
                 continue;
             };
             vvideo_buffers = vvideo_buffers.saturating_add(1);
-            vvideo_mapping_digest ^= record.mapping_digest.rotate_left((vvideo_buffers & 63) as u32);
+            vvideo_mapping_digest ^= record
+                .mapping_digest
+                .rotate_left((vvideo_buffers & 63) as u32);
             vvideo_mapping_identity &= vm.is_some_and(|vm| {
                 physical
                     .and_then(|gpu| gpu.verify_gpuvm_pages(vm, record.gpu, pages).ok())

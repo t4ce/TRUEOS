@@ -1,0 +1,418 @@
+//! One complete, sealed LFM2.5 layer-0 FFN executed through fixed FPGA calls.
+//!
+//! The native model remains a pinned TRUEOSFS file. Rust performs only range
+//! reads, Q8_0 activation packing, orchestration, and verification; every
+//! projection dot/scale accumulation and SiLU(gate)*up value is produced by
+//! the ahead-of-time TRUEGA circuits and completed through the MSI callback
+//! worker.
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+use half::f16;
+use sha2::{Digest, Sha256};
+
+use crate::r::{fpga_offload, lfm25_model};
+
+const GOLDEN: &[u8; 64_000] =
+    include_bytes!("../../crates/trueos-fpga-abi/truega/artifacts/lfm25_layer0_ffn.golden.bin");
+const GOLDEN_SHA256: [u8; 32] = [
+    0xeb, 0x12, 0x4c, 0x33, 0x3e, 0x7a, 0x70, 0x95, 0xa7, 0x8f, 0xc6, 0xc0, 0x00, 0x4f, 0x90, 0xa4,
+    0x3f, 0xa8, 0x25, 0xbd, 0xfd, 0x1a, 0x8f, 0x74, 0xac, 0x9d, 0x67, 0xc5, 0x38, 0x48, 0x41, 0x85,
+];
+const GATE_Q30_SHA256: [u8; 32] = [
+    0x83, 0xea, 0x62, 0x62, 0x6c, 0x1f, 0xe4, 0x36, 0x77, 0xc5, 0x59, 0x90, 0x3d, 0xf9, 0x83, 0xb6,
+    0xfc, 0x86, 0x48, 0xfa, 0x10, 0x8f, 0x89, 0xa6, 0xa5, 0xb7, 0xd4, 0xbd, 0xc3, 0x13, 0xad, 0x65,
+];
+const UP_Q30_SHA256: [u8; 32] = [
+    0x4a, 0xa1, 0xd6, 0x08, 0xbb, 0x02, 0xf1, 0xb8, 0x2b, 0x4e, 0x70, 0x6c, 0x87, 0x0b, 0x51, 0xe5,
+    0x06, 0x0b, 0x32, 0x4d, 0x7e, 0xa9, 0x7f, 0xe7, 0x4c, 0x30, 0x2a, 0x3e, 0xf4, 0xe3, 0x58, 0xa1,
+];
+const SILU_Q30_SHA256: [u8; 32] = [
+    0x0b, 0xcf, 0x3a, 0xfd, 0x42, 0x70, 0xe2, 0xd4, 0xe1, 0xb7, 0xea, 0xd0, 0xc0, 0x9b, 0x11, 0xf2,
+    0xea, 0x08, 0x09, 0x82, 0xed, 0x5d, 0xe2, 0x38, 0xdd, 0x7b, 0x88, 0xed, 0xb1, 0xaf, 0x5a, 0x63,
+];
+const DOWN_Q30_SHA256: [u8; 32] = [
+    0x32, 0xe1, 0xf3, 0xdb, 0x56, 0x1c, 0xc2, 0x7a, 0x7b, 0xe3, 0xdc, 0x7d, 0x35, 0xf7, 0x84, 0xda,
+    0xf1, 0x0b, 0x4c, 0xb7, 0x8f, 0xd2, 0x85, 0x80, 0x13, 0x4b, 0xda, 0x83, 0x70, 0x07, 0xda, 0x7a,
+];
+
+const GOLDEN_PAYLOAD_OFFSET: usize = 512;
+const GOLDEN_VECTOR_LENGTHS: [usize; 5] = [1024, 4608, 4608, 4608, 1024];
+const Q8_BLOCK_VALUES: usize = 32;
+const Q8_BLOCK_BYTES: usize = 34;
+const MODEL_READ_CHUNK: usize = 256 * 1024;
+const PROJECTION_BOUND: f32 = 2.0e-6;
+const SILU_BOUND: f32 = 2.0e-6;
+pub const FPGA_CALLS_PER_FFN: u64 = 446_976;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stage {
+    Gate,
+    Up,
+    Silu,
+    Down,
+}
+
+impl Stage {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Gate => "gate",
+            Self::Up => "up",
+            Self::Silu => "silu",
+            Self::Down => "down",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Progress {
+    pub stage: Stage,
+    pub completed: usize,
+    pub total: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Report {
+    pub gate_max_abs: f32,
+    pub up_max_abs: f32,
+    pub silu_max_abs: f32,
+    pub down_max_abs: f32,
+    pub gate_sha256: [u8; 32],
+    pub up_sha256: [u8; 32],
+    pub silu_sha256: [u8; 32],
+    pub down_sha256: [u8; 32],
+    pub fpga_calls: u64,
+    pub interrupt_delta: u64,
+    pub timeout_recovery_delta: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Error {
+    Golden,
+    Model(lfm25_model::Error),
+    Tensor,
+    BufferUnavailable,
+    Arithmetic,
+    Fpga(fpga_offload::Error),
+    ProjectionBound(Stage),
+    FixedVectorMismatch(Stage),
+    CompletionPath,
+}
+
+impl From<lfm25_model::Error> for Error {
+    fn from(value: lfm25_model::Error) -> Self {
+        Self::Model(value)
+    }
+}
+
+impl From<fpga_offload::Error> for Error {
+    fn from(value: fpga_offload::Error) -> Self {
+        Self::Fpga(value)
+    }
+}
+
+pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
+    validate_golden()?;
+    let image = lfm25_model::open().await?;
+    lfm25_model::verify_with_progress(&image, |_, _| {}).await?;
+    let before = fpga_offload::stats();
+
+    let normalized = quantize_golden_vector(0)?;
+    let (gate, gate_max_abs) = project(
+        &image,
+        tensor("blk.0.ffn_gate.weight")?,
+        &normalized,
+        1,
+        Stage::Gate,
+        &mut progress,
+    )
+    .await?;
+    let gate_sha256 = q30_vector_sha256(&gate);
+    require_hash(Stage::Gate, gate_sha256, GATE_Q30_SHA256)?;
+
+    let (up, up_max_abs) =
+        project(&image, tensor("blk.0.ffn_up.weight")?, &normalized, 2, Stage::Up, &mut progress)
+            .await?;
+    let up_sha256 = q30_vector_sha256(&up);
+    require_hash(Stage::Up, up_sha256, UP_Q30_SHA256)?;
+
+    let mut silu = try_i64_vec(gate.len())?;
+    let mut silu_max_abs = 0.0f32;
+    for (index, (&gate_q30, &up_q30)) in gate.iter().zip(&up).enumerate() {
+        let value = fpga_offload::lfm25_silu_mul_q30(gate_q30, up_q30).await?;
+        silu.push(value);
+        silu_max_abs = silu_max_abs.max(q30_error(value, golden_f32(3, index)?));
+        if index % 256 == 255 || index + 1 == gate.len() {
+            progress(Progress {
+                stage: Stage::Silu,
+                completed: index + 1,
+                total: gate.len(),
+            });
+        }
+    }
+    if silu_max_abs > SILU_BOUND {
+        return Err(Error::ProjectionBound(Stage::Silu));
+    }
+    let silu_sha256 = q30_vector_sha256(&silu);
+    require_hash(Stage::Silu, silu_sha256, SILU_Q30_SHA256)?;
+
+    let down_activation = quantize_q30_vector(&silu)?;
+    let (down, down_max_abs) = project(
+        &image,
+        tensor("blk.0.ffn_down.weight")?,
+        &down_activation,
+        4,
+        Stage::Down,
+        &mut progress,
+    )
+    .await?;
+    let down_sha256 = q30_vector_sha256(&down);
+    require_hash(Stage::Down, down_sha256, DOWN_Q30_SHA256)?;
+
+    let after = fpga_offload::stats();
+    let fpga_calls = after.completed.saturating_sub(before.completed);
+    let interrupt_delta = after.interrupts.saturating_sub(before.interrupts);
+    let timeout_recovery_delta = after
+        .timeout_recoveries
+        .saturating_sub(before.timeout_recoveries);
+    if fpga_calls < FPGA_CALLS_PER_FFN
+        || interrupt_delta < FPGA_CALLS_PER_FFN
+        || timeout_recovery_delta != 0
+    {
+        return Err(Error::CompletionPath);
+    }
+
+    Ok(Report {
+        gate_max_abs,
+        up_max_abs,
+        silu_max_abs,
+        down_max_abs,
+        gate_sha256,
+        up_sha256,
+        silu_sha256,
+        down_sha256,
+        fpga_calls,
+        interrupt_delta,
+        timeout_recovery_delta,
+    })
+}
+
+async fn project(
+    image: &lfm25_model::NativeImage,
+    descriptor: trueos_fpga_abi::lfm25::NativeTensorDescriptor,
+    activation: &[[u8; Q8_BLOCK_BYTES]],
+    golden_vector: usize,
+    stage: Stage,
+    progress: &mut impl FnMut(Progress),
+) -> Result<(Vec<i64>, f32), Error> {
+    let blocks_per_row = descriptor.ggml_ne0 as usize / Q8_BLOCK_VALUES;
+    let rows = descriptor.ggml_ne1 as usize;
+    if descriptor.format != 2
+        || descriptor.ggml_ne0 as usize % Q8_BLOCK_VALUES != 0
+        || activation.len() != blocks_per_row
+        || !matches!(blocks_per_row, 32 | 144)
+        || descriptor.native_bytes as usize != rows * blocks_per_row * Q8_BLOCK_BYTES
+    {
+        return Err(Error::Tensor);
+    }
+    let wide = blocks_per_row == 144;
+    let matrix = read_tensor(image, descriptor).await?;
+    let row_bytes = blocks_per_row * Q8_BLOCK_BYTES;
+    let mut output = try_i64_vec(rows)?;
+    let mut max_abs = 0.0f32;
+
+    for row in 0..rows {
+        let mut row_q30 = 0i64;
+        for (block, activation_block) in activation.iter().enumerate() {
+            let offset = row * row_bytes + block * Q8_BLOCK_BYTES;
+            let weight: &[u8; Q8_BLOCK_BYTES] = matrix
+                .get(offset..offset + Q8_BLOCK_BYTES)
+                .ok_or(Error::Tensor)?
+                .try_into()
+                .map_err(|_| Error::Tensor)?;
+            let result = fpga_offload::lfm25_q8_projection_block(
+                wide,
+                block == 0,
+                block + 1 == blocks_per_row,
+                block as u8,
+                activation_block,
+                weight,
+            )
+            .await?;
+            row_q30 = result.row_q30;
+        }
+        output.push(row_q30);
+        max_abs = max_abs.max(q30_error(row_q30, golden_f32(golden_vector, row)?));
+        let interval = if rows > 2048 { 128 } else { 32 };
+        if row % interval == interval - 1 || row + 1 == rows {
+            progress(Progress {
+                stage,
+                completed: row + 1,
+                total: rows,
+            });
+        }
+    }
+
+    if max_abs > PROJECTION_BOUND {
+        return Err(Error::ProjectionBound(stage));
+    }
+    Ok((output, max_abs))
+}
+
+async fn read_tensor(
+    image: &lfm25_model::NativeImage,
+    descriptor: trueos_fpga_abi::lfm25::NativeTensorDescriptor,
+) -> Result<Vec<u8>, Error> {
+    let bytes = descriptor.native_bytes as usize;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(bytes)
+        .map_err(|_| Error::BufferUnavailable)?;
+    output.resize(bytes, 0);
+    let mut done = 0usize;
+    while done < bytes {
+        let chunk = core::cmp::min(MODEL_READ_CHUNK, bytes - done);
+        image
+            .read_exact_at(
+                descriptor.native_offset as u64 + done as u64,
+                &mut output[done..done + chunk],
+            )
+            .await?;
+        done += chunk;
+    }
+    Ok(output)
+}
+
+fn tensor(name: &str) -> Result<trueos_fpga_abi::lfm25::NativeTensorDescriptor, Error> {
+    let index = trueos_fpga_abi::lfm25::generated::TENSOR_NAMES
+        .iter()
+        .position(|candidate| *candidate == name)
+        .ok_or(Error::Tensor)?;
+    Ok(trueos_fpga_abi::lfm25::generated::TENSORS[index])
+}
+
+fn quantize_golden_vector(index: usize) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
+    let length = *GOLDEN_VECTOR_LENGTHS.get(index).ok_or(Error::Golden)?;
+    let mut values = try_f32_vec(length)?;
+    for element in 0..length {
+        values.push(golden_f32(index, element)?);
+    }
+    quantize_f32_vector(&values)
+}
+
+fn quantize_q30_vector(values: &[i64]) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
+    let mut float_values = try_f32_vec(values.len())?;
+    for value in values {
+        float_values.push(*value as f32 / ((1u64 << 30) as f32));
+    }
+    quantize_f32_vector(&float_values)
+}
+
+fn quantize_f32_vector(values: &[f32]) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
+    if values.len() % Q8_BLOCK_VALUES != 0 {
+        return Err(Error::Arithmetic);
+    }
+    let blocks = values.len() / Q8_BLOCK_VALUES;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(blocks)
+        .map_err(|_| Error::BufferUnavailable)?;
+    for values in values.chunks_exact(Q8_BLOCK_VALUES) {
+        let maximum = values
+            .iter()
+            .fold(0.0f32, |current, value| current.max(value.abs()));
+        let scale = maximum / 127.0;
+        let inverse = if maximum == 0.0 { 0.0 } else { 127.0 / maximum };
+        let mut block = [0u8; Q8_BLOCK_BYTES];
+        block[..2].copy_from_slice(&f16::from_f32(scale).to_bits().to_le_bytes());
+        for (quant, value) in block[2..].iter_mut().zip(values) {
+            *quant = ((*value * inverse).round_ties_even() as i8) as u8;
+        }
+        output.push(block);
+    }
+    Ok(output)
+}
+
+fn golden_f32(vector: usize, element: usize) -> Result<f32, Error> {
+    let length = *GOLDEN_VECTOR_LENGTHS.get(vector).ok_or(Error::Golden)?;
+    if element >= length {
+        return Err(Error::Golden);
+    }
+    let preceding = GOLDEN_VECTOR_LENGTHS[..vector].iter().sum::<usize>();
+    let offset = GOLDEN_PAYLOAD_OFFSET + (preceding + element) * 4;
+    let bytes = GOLDEN.get(offset..offset + 4).ok_or(Error::Golden)?;
+    let value = f32::from_bits(u32::from_le_bytes(bytes.try_into().map_err(|_| Error::Golden)?));
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::Golden)
+    }
+}
+
+fn validate_golden() -> Result<(), Error> {
+    if &GOLDEN[..8] != b"TGAGFFN1"
+        || GOLDEN[92..124] != lfm25_model::NATIVE_IMAGE_SHA256
+        || GOLDEN[124..156] != trueos_fpga_abi::lfm25::generated::MODEL_CONTRACT_SHA256
+        || <[u8; 32]>::from(Sha256::digest(GOLDEN)) != GOLDEN_SHA256
+    {
+        return Err(Error::Golden);
+    }
+    Ok(())
+}
+
+fn q30_error(actual: i64, expected: f32) -> f32 {
+    (actual as f32 / ((1u64 << 30) as f32) - expected).abs()
+}
+
+fn q30_vector_sha256(values: &[i64]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    hasher.finalize().into()
+}
+
+fn require_hash(stage: Stage, observed: [u8; 32], expected: [u8; 32]) -> Result<(), Error> {
+    if observed == expected {
+        Ok(())
+    } else {
+        Err(Error::FixedVectorMismatch(stage))
+    }
+}
+
+fn try_i64_vec(capacity: usize) -> Result<Vec<i64>, Error> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| Error::BufferUnavailable)?;
+    Ok(values)
+}
+
+fn try_f32_vec(capacity: usize) -> Result<Vec<f32>, Error> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(capacity)
+        .map_err(|_| Error::BufferUnavailable)?;
+    Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_in_golden_and_vector_offsets_are_exact() {
+        validate_golden().unwrap();
+        assert_eq!(golden_f32(0, 0).unwrap().to_bits(), 0x3cd6_d3a5);
+        assert_eq!(golden_f32(3, 0).unwrap().to_bits(), 0xb90b_4f42);
+        assert_eq!(golden_f32(4, 1023).unwrap().to_bits(), 0x3a45_5612);
+    }
+
+    #[test]
+    fn sealed_input_quantizes_to_the_runtime_fixture() {
+        let blocks = quantize_golden_vector(0).unwrap();
+        assert_eq!(blocks.len(), 32);
+        assert_eq!(blocks[0], trueos_fpga_abi::builtins::lfm25_ffn_step::GOLDEN_ACTIVATION);
+    }
+}

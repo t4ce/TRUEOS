@@ -134,6 +134,12 @@ module truega_functions(
     wire signed [63:0] q8_term_q30;
     wire signed [63:0] q8_row_q30;
     wire q8_scale_error;
+    reg silu_start;
+    wire silu_busy;
+    wire silu_done;
+    wire silu_error;
+    wire signed [63:0] silu_result_q30;
+    reg active_silu;
 
     truega_scalar_functions scalar_functions(
         .function_id(function_id),
@@ -164,6 +170,20 @@ module truega_functions(
         .error_o(q8_scale_error)
     );
 
+    truega_lfm25_silu_q30_slot #(
+        .SILU_ENABLE(1)
+    ) silu_slot(
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(silu_start),
+        .gate_q30_i(input_data[95:32]),
+        .up_q30_i(input_data[159:96]),
+        .busy_o(silu_busy),
+        .done_o(silu_done),
+        .error_o(silu_error),
+        .result_q30_o(silu_result_q30)
+    );
+
     always @* begin
         required_input_bytes = 16'd0;
         output_bytes = 16'd0;
@@ -192,6 +212,8 @@ module truega_functions(
         if (!reset_n) begin
             active_function <= 16'd0;
             q8_start <= 1'b0;
+            silu_start <= 1'b0;
+            active_silu <= 1'b0;
             next_led <= 5'b00001;
             output_data <= 768'd0;
             busy <= 1'b0;
@@ -199,6 +221,7 @@ module truega_functions(
             error <= 1'b0;
         end else begin
             q8_start <= 1'b0;
+            silu_start <= 1'b0;
             done <= 1'b0;
             if (start && !busy) begin
                 active_function <= function_id;
@@ -214,7 +237,11 @@ module truega_functions(
                         done <= 1'b1;
                     end
                     16'd2: begin
-                        q8_start <= 1'b1;
+                        active_silu <= input_data[3];
+                        if (input_data[3])
+                            silu_start <= 1'b1;
+                        else
+                            q8_start <= 1'b1;
                     end
                     default: begin
                         busy <= 1'b0;
@@ -222,7 +249,13 @@ module truega_functions(
                         error <= 1'b1;
                     end
                 endcase
-            end else if (busy && active_function == 16'd2 && q8_done) begin
+            end else if (busy && active_function == 16'd2 && active_silu && silu_done) begin
+                output_data <= 768'd0;
+                output_data[159:96] <= silu_result_q30;
+                busy <= 1'b0;
+                done <= 1'b1;
+                error <= silu_error;
+            end else if (busy && active_function == 16'd2 && !active_silu && q8_done) begin
                 output_data <= 768'd0;
                 output_data[31:0] <= q8_dot;
                 output_data[95:32] <= q8_term_q30;
@@ -233,9 +266,10 @@ module truega_functions(
             end
         end
     end
+    wire unused_silu_busy = silu_busy;
 endmodule
 
-// Exact native Q8_0 compute sources fused into this generated bundle.
+// Exact native Q8_0/FFN compute sources fused into this generated bundle.
 // Exact 32-lane signed Q8_0 integer dot product.
 // Six-cycle latency, one unchanged 34-byte native-image block per cycle.
 module truega_q8_0_dot32 (
@@ -595,6 +629,7 @@ endmodule
 // The caller supplies a four-byte little-endian control header followed by the
 // unchanged 34-byte activation and weight blocks:
 //   byte 0: bit 0 = first, bit 1 = last; all other bits must be zero
+//           bit 2 = wide row (144 blocks instead of 32)
 //   byte 1: block index, 0..31
 //   byte 2..3: reserved, must be zero
 //
@@ -624,15 +659,17 @@ module truega_q8_0_row_block_slot #(
 );
     wire first_i = control_i[0];
     wire last_i = control_i[1];
+    wire wide_i = control_i[2];
     wire [7:0] block_index_i = control_i[15:8];
     wire control_reserved = (control_i[31:16] != 16'd0)
-                         || (control_i[7:2] != 6'd0);
+                         || (control_i[7:3] != 5'd0);
     wire accept = ROW_DIAGNOSTIC_ENABLE && start_i && !busy_o;
     reg row_active;
-    reg [5:0] expected_index;
+    reg [7:0] expected_index;
     reg signed [63:0] accumulator;
     reg active_first;
     reg active_last;
+    reg active_wide;
     reg [271:0] activation_block_reg;
     reg [271:0] weight_block_reg;
     reg block_start;
@@ -642,16 +679,18 @@ module truega_q8_0_row_block_slot #(
     wire signed [63:0] block_term_q30;
     wire block_scale_error;
 
+    wire [7:0] final_index_i = wide_i ? 8'd143 : 8'd31;
     wire sequence_valid = !control_reserved
-                       && (block_index_i < 8'd32)
+                       && (block_index_i <= final_index_i)
                        && (first_i
                            ? (block_index_i == 8'd0)
                            : (row_active
+                              && (wide_i == active_wide)
                               && (block_index_i == expected_index)))
                        && (last_i
                            ? ((first_i && (block_index_i == 8'd0))
-                              || (block_index_i == 8'd31))
-                           : (block_index_i != 8'd31));
+                              || (block_index_i == final_index_i))
+                           : (block_index_i != final_index_i));
 
     truega_q8_0_block_slot block_slot (
         .clk(clk),
@@ -675,10 +714,11 @@ module truega_q8_0_row_block_slot #(
             term_q30_o <= 64'sd0;
             row_q30_o <= 64'sd0;
             row_active <= 1'b0;
-            expected_index <= 6'd0;
+            expected_index <= 8'd0;
             accumulator <= 64'sd0;
             active_first <= 1'b0;
             active_last <= 1'b0;
+            active_wide <= 1'b0;
             activation_block_reg <= 272'd0;
             weight_block_reg <= 272'd0;
             block_start <= 1'b0;
@@ -695,19 +735,20 @@ module truega_q8_0_row_block_slot #(
                     done_o <= 1'b1;
                     error_o <= 1'b1;
                     row_active <= 1'b0;
-                    expected_index <= 6'd0;
+                    expected_index <= 8'd0;
                     accumulator <= 64'sd0;
                 end else begin
                     busy_o <= 1'b1;
                     error_o <= 1'b0;
                     active_first <= first_i;
                     active_last <= last_i;
+                    active_wide <= wide_i;
                     activation_block_reg <= activation_block_i;
                     weight_block_reg <= weight_block_i;
                     block_start <= 1'b1;
                     if (first_i) begin
                         row_active <= 1'b0;
-                        expected_index <= 6'd0;
+                        expected_index <= 8'd0;
                         accumulator <= 64'sd0;
                     end
                 end
@@ -727,16 +768,200 @@ module truega_q8_0_row_block_slot #(
 
                 if (block_scale_error || active_last) begin
                     row_active <= 1'b0;
-                    expected_index <= 6'd0;
+                    expected_index <= 8'd0;
                 end else begin
                     row_active <= 1'b1;
-                    expected_index <= active_first ? 6'd1 : expected_index + 6'd1;
+                    expected_index <= active_first ? 8'd1 : expected_index + 8'd1;
                 end
             end
         end
     end
 
     wire unused_block_busy = block_busy;
+endmodule
+
+// Fixed layer-0 LFM2.5 SiLU(gate) * up datapath.
+//
+// Inputs and output are signed Q30.  The sigmoid is the odd ninth-order
+// expansion around zero, evaluated with one shared multiplier:
+//   1/2 + x*(1/4 - x^2/48 + x^4/480 - 17*x^6/80640
+//              + 31*x^8/1451520)
+// The sealed layer-0 gate is inside +/-1.01; +/-1.125 is enforced so this
+// circuit cannot silently operate outside its verified approximation domain.
+module truega_lfm25_silu_q30_slot #(
+    parameter SILU_ENABLE = 0
+) (
+    input  wire                clk,
+    input  wire                reset_n,
+    input  wire                start_i,
+    input  wire signed [63:0]  gate_q30_i,
+    input  wire signed [63:0]  up_q30_i,
+    output reg                 busy_o,
+    output reg                 done_o,
+    output reg                 error_o,
+    output reg signed [63:0]   result_q30_o
+);
+    localparam signed [63:0] GATE_LIMIT_Q30 = 64'sd1207959552; // 1.125
+    localparam signed [63:0] UP_LIMIT_Q30   = 64'sd2147483648; // 2.0
+    localparam signed [63:0] HALF_Q30 = 64'sd536870912;
+    localparam signed [63:0] C1_Q30 = 64'sd268435456;
+    localparam signed [63:0] C3_Q30 = -64'sd22369621;
+    localparam signed [63:0] C5_Q30 = 64'sd2236962;
+    localparam signed [63:0] C7_Q30 = -64'sd226359;
+    localparam signed [63:0] C9_Q30 = 64'sd22931;
+
+    localparam [3:0] ST_IDLE = 4'd0;
+    localparam [3:0] ST_X2   = 4'd1;
+    localparam [3:0] ST_P7   = 4'd2;
+    localparam [3:0] ST_P5   = 4'd3;
+    localparam [3:0] ST_P3   = 4'd4;
+    localparam [3:0] ST_P1   = 4'd5;
+    localparam [3:0] ST_SIG  = 4'd6;
+    localparam [3:0] ST_SILU = 4'd7;
+    localparam [3:0] ST_OUT  = 4'd8;
+
+    reg [3:0] state;
+    reg signed [63:0] gate_q30;
+    reg signed [63:0] up_q30;
+    reg signed [63:0] x2_q30;
+    reg signed [63:0] polynomial_q30;
+    reg signed [63:0] sigmoid_q30;
+    reg signed [63:0] silu_q30;
+
+    reg signed [39:0] multiply_left;
+    reg signed [39:0] multiply_right;
+    wire signed [79:0] multiply_product = multiply_left * multiply_right;
+
+    function automatic signed [63:0] round_q30_even;
+        input signed [79:0] value;
+        reg negative;
+        reg [79:0] magnitude;
+        reg [79:0] quotient;
+        reg [29:0] remainder;
+        reg increment;
+        reg [79:0] rounded;
+        begin
+            negative = value[79];
+            magnitude = negative ? -value : value;
+            quotient = magnitude >> 30;
+            remainder = magnitude[29:0];
+            increment = (remainder > 30'h20000000)
+                     || ((remainder == 30'h20000000) && quotient[0]);
+            rounded = quotient + increment;
+            round_q30_even = negative ? -$signed(rounded[63:0]) : $signed(rounded[63:0]);
+        end
+    endfunction
+
+    wire signed [63:0] multiply_q30 = round_q30_even(multiply_product);
+    wire input_range_valid = (gate_q30_i >= -GATE_LIMIT_Q30)
+                          && (gate_q30_i <= GATE_LIMIT_Q30)
+                          && (up_q30_i >= -UP_LIMIT_Q30)
+                          && (up_q30_i <= UP_LIMIT_Q30);
+
+    always @* begin
+        multiply_left = 40'sd0;
+        multiply_right = 40'sd0;
+        case (state)
+            ST_X2: begin
+                multiply_left = gate_q30[39:0];
+                multiply_right = gate_q30[39:0];
+            end
+            ST_P7, ST_P5, ST_P3, ST_P1: begin
+                multiply_left = x2_q30[39:0];
+                multiply_right = polynomial_q30[39:0];
+            end
+            ST_SIG: begin
+                multiply_left = gate_q30[39:0];
+                multiply_right = polynomial_q30[39:0];
+            end
+            ST_SILU: begin
+                multiply_left = gate_q30[39:0];
+                multiply_right = sigmoid_q30[39:0];
+            end
+            ST_OUT: begin
+                multiply_left = silu_q30[39:0];
+                multiply_right = up_q30[39:0];
+            end
+            default: begin end
+        endcase
+    end
+
+    always @(posedge clk) begin
+        if (!reset_n) begin
+            state <= ST_IDLE;
+            busy_o <= 1'b0;
+            done_o <= 1'b0;
+            error_o <= 1'b0;
+            result_q30_o <= 64'sd0;
+            gate_q30 <= 64'sd0;
+            up_q30 <= 64'sd0;
+            x2_q30 <= 64'sd0;
+            polynomial_q30 <= 64'sd0;
+            sigmoid_q30 <= 64'sd0;
+            silu_q30 <= 64'sd0;
+        end else begin
+            done_o <= 1'b0;
+            if (SILU_ENABLE && start_i && !busy_o) begin
+                result_q30_o <= 64'sd0;
+                if (!input_range_valid) begin
+                    state <= ST_IDLE;
+                    busy_o <= 1'b0;
+                    done_o <= 1'b1;
+                    error_o <= 1'b1;
+                end else begin
+                    gate_q30 <= gate_q30_i;
+                    up_q30 <= up_q30_i;
+                    state <= ST_X2;
+                    busy_o <= 1'b1;
+                    error_o <= 1'b0;
+                end
+            end else if (busy_o) begin
+                case (state)
+                    ST_X2: begin
+                        x2_q30 <= multiply_q30;
+                        polynomial_q30 <= C9_Q30;
+                        state <= ST_P7;
+                    end
+                    ST_P7: begin
+                        polynomial_q30 <= C7_Q30 + multiply_q30;
+                        state <= ST_P5;
+                    end
+                    ST_P5: begin
+                        polynomial_q30 <= C5_Q30 + multiply_q30;
+                        state <= ST_P3;
+                    end
+                    ST_P3: begin
+                        polynomial_q30 <= C3_Q30 + multiply_q30;
+                        state <= ST_P1;
+                    end
+                    ST_P1: begin
+                        polynomial_q30 <= C1_Q30 + multiply_q30;
+                        state <= ST_SIG;
+                    end
+                    ST_SIG: begin
+                        sigmoid_q30 <= HALF_Q30 + multiply_q30;
+                        state <= ST_SILU;
+                    end
+                    ST_SILU: begin
+                        silu_q30 <= multiply_q30;
+                        state <= ST_OUT;
+                    end
+                    ST_OUT: begin
+                        result_q30_o <= multiply_q30;
+                        busy_o <= 1'b0;
+                        done_o <= 1'b1;
+                        state <= ST_IDLE;
+                    end
+                    default: begin
+                        busy_o <= 1'b0;
+                        done_o <= 1'b1;
+                        error_o <= 1'b1;
+                        state <= ST_IDLE;
+                    end
+                endcase
+            end
+        end
+    end
 endmodule
 
 
@@ -751,14 +976,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'hB2D3F237;
-            5'd5: data = 32'h0FB7EB4C;
-            5'd6: data = 32'h20C08542;
-            5'd7: data = 32'h52C1D50B;
-            5'd8: data = 32'h8C95393B;
-            5'd9: data = 32'h3503694F;
-            5'd10: data = 32'h42B6982F;
-            5'd11: data = 32'h7F1B02BC;
+            5'd4: data = 32'h6F619F7D;
+            5'd5: data = 32'h61679EE1;
+            5'd6: data = 32'h5D8534B3;
+            5'd7: data = 32'h0B3CD17B;
+            5'd8: data = 32'h59D50040;
+            5'd9: data = 32'h1FCBBF8E;
+            5'd10: data = 32'hCA6D9407;
+            5'd11: data = 32'h8CA5CA11;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;
@@ -769,8 +994,8 @@ case (word_index)
             5'd19: data = 32'hE32D0CD1;
             5'd20: data = 32'h00480002;
             5'd21: data = 32'h00000014;
-            5'd22: data = 32'h146A1E49;
-            5'd23: data = 32'h954041AD;
+            5'd22: data = 32'hBF717A14;
+            5'd23: data = 32'h61BA3158;
             5'd24: data = 32'h00000000;
             5'd25: data = 32'h00000000;
             5'd26: data = 32'h00000000;

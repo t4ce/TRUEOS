@@ -41,6 +41,7 @@ pub const OP_BP_VGPU_VVIDEO_CREATE: u32 = 0x95; // arg0 device,arg1 guest VA,pay
 pub const OP_BP_VGPU_VVIDEO_FLUSH: u32 = 0x96; // arg0 device,arg1 buffer,payload offset+bytes -> rc
 pub const OP_BP_VGPU_VVIDEO_INVALIDATE: u32 = 0x97; // arg0 device,arg1 buffer,payload offset+bytes -> rc
 pub const OP_BP_VGPU_SCENE_AABB: u32 = 0x98; // arg0 device,arg1 queue,payload dispatch -> result
+pub const OP_BP_VGPU_DEVICE_DIAGNOSTICS: u32 = 0x90; // arg0 device -> counters + mapping proof
 pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
 pub const OP_BP_VGPU_OPEN: u32 = 0xA5; // arg0 requested caps -> opaque device/rc
 pub const OP_BP_VGPU_CLOSE: u32 = 0xA6; // arg0 device -> rc
@@ -523,6 +524,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_VGPU_DEVICE_DIAGNOSTICS => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            match crate::r::io::vgpu_cabi::broker_device_diagnostics(principal, arg0) {
+                Ok(diagnostics) => write_record_response(vm_id, seq, 0, &diagnostics),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_VGPU_BUFFER_CREATE => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let usage = request_payload(vm_id, req_len)
@@ -688,10 +697,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let parsed = request_payload(vm_id, req_len)
                 .filter(|payload| payload.len() >= 16)
                 .and_then(|payload| {
-                    let offset = usize::try_from(u64::from_le_bytes(payload[..8].try_into().ok()?))
-                        .ok()?;
-                    let bytes = usize::try_from(u64::from_le_bytes(payload[8..16].try_into().ok()?))
-                        .ok()?;
+                    let offset =
+                        usize::try_from(u64::from_le_bytes(payload[..8].try_into().ok()?)).ok()?;
+                    let bytes =
+                        usize::try_from(u64::from_le_bytes(payload[8..16].try_into().ok()?))
+                            .ok()?;
                     Some((offset, bytes))
                 });
             let rc = parsed
@@ -719,14 +729,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|payload| unsafe {
                     core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::SceneAabbDispatch>())
                 });
-            match dispatch.and_then(|dispatch| {
-                crate::r::io::vgpu_cabi::broker_submit_scene_aabb(
-                    principal, arg0, arg1, dispatch,
-                )
-                .ok()
-            }) {
-                Some(result) => write_record_response(vm_id, seq, 0, &result),
-                None => write_response(vm_id, seq, STATUS_OK, (-5i64) as u64, 0),
+            let result = dispatch.ok_or(-22).and_then(|dispatch| {
+                crate::r::io::vgpu_cabi::broker_submit_scene_aabb(principal, arg0, arg1, dispatch)
+            });
+            match result {
+                Ok(result) => write_record_response(vm_id, seq, 0, &result),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
             DispatchOutcome::Resume
         }

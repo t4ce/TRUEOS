@@ -41,9 +41,7 @@ include!("rcs/scene_aabb.rs");
 pub(crate) fn submit_tenant_scene_aabb(
     tenant_root_phys: u64,
     request: crate::gpu::physical::PhysicalSceneAabbRequest,
-) -> Result<
-    crate::gpu::physical::PhysicalSceneAabbCompletion,
-    crate::gpu::physical::PhysicalGpuError,
-> {
+) -> Result<crate::gpu::physical::PhysicalSceneAabbCompletion, crate::gpu::physical::PhysicalGpuError>
+{
     submit_tenant_scene_aabb_rcs(tenant_root_phys, request)
 }

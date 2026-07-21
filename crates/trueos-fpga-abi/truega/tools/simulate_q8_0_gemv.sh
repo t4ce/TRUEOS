@@ -87,6 +87,15 @@ fi
   "$RTL_DIR/truega_q8_0_block_slot_tb.sv"
 "$VVP" "${vvp_args[@]}" "$STAGE_DIR/q8_0_block_slot.vvp" "+VECTORS=$VECTORS"
 
+iverilog_args=(-g2012 -s truega_lfm25_silu_q30_slot_tb -o "$STAGE_DIR/lfm25_silu_q30_slot.vvp")
+if [[ -n "$IVERILOG_BASE" ]]; then
+  iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")
+fi
+"$IVERILOG" "${iverilog_args[@]}" \
+  "$RTL_DIR/truega_lfm25_silu_q30_slot.v" \
+  "$RTL_DIR/truega_lfm25_silu_q30_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/lfm25_silu_q30_slot.vvp"
+
 iverilog_args=(-g2012 -s truega_functions_tb -o "$STAGE_DIR/functions.vvp")
 if [[ -n "$IVERILOG_BASE" ]]; then
   iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")

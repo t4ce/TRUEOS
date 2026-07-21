@@ -7,8 +7,8 @@ use spin::Mutex;
 
 use crate::gpu::physical::{
     PhysicalAdapterInfo, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice,
-    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSchedulerStatus, PhysicalSubmission,
-    PhysicalSceneAabbCompletion, PhysicalSceneAabbRequest,
+    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbCompletion, PhysicalSceneAabbRequest,
+    PhysicalSchedulerStatus, PhysicalSubmission,
 };
 
 pub(crate) static INTEL_PHYSICAL_GPU: IntelPhysicalGpuDevice = IntelPhysicalGpuDevice;
@@ -160,9 +160,11 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             .ppgtt
             .as_ref()
             .ok_or(PhysicalGpuError::InvalidGpuVm)?;
-        Ok(pages.iter().copied().enumerate().all(|(page, phys)| {
-            ppgtt.maps_page(gpu + (page * 4096) as u64, phys)
-        }))
+        Ok(pages
+            .iter()
+            .copied()
+            .enumerate()
+            .all(|(page, phys)| ppgtt.maps_page(gpu + (page * 4096) as u64, phys)))
     }
 
     fn submit_scene_aabb(

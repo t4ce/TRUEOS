@@ -5,11 +5,11 @@ use super::{FirmwareManifest, FunctionDescriptor, FunctionId};
 
 pub const LED_STEP_HEARTBEAT: FunctionId = FunctionId::SLOT_0;
 pub const ADD_U32: FunctionId = FunctionId::SLOT_1;
-pub const LFM25_Q8_ROW_BLOCK: FunctionId = FunctionId::SLOT_2;
+pub const LFM25_FFN_STEP: FunctionId = FunctionId::SLOT_2;
 pub const HEARTBEAT_REPLY: u32 = 0x54534154; // "TGAT"
 pub const FIRMWARE_RTL_SHA256: [u8; 32] = [
-    0x37, 0xf2, 0xd3, 0xb2, 0x4c, 0xeb, 0xb7, 0x0f, 0x42, 0x85, 0xc0, 0x20, 0x0b, 0xd5, 0xc1, 0x52,
-    0x3b, 0x39, 0x95, 0x8c, 0x4f, 0x69, 0x03, 0x35, 0x2f, 0x98, 0xb6, 0x42, 0xbc, 0x02, 0x1b, 0x7f,
+    0x7d, 0x9f, 0x61, 0x6f, 0xe1, 0x9e, 0x67, 0x61, 0xb3, 0x34, 0x85, 0x5d, 0x7b, 0xd1, 0x3c, 0x0b,
+    0x40, 0x00, 0xd5, 0x59, 0x8e, 0xbf, 0xcb, 0x1f, 0x07, 0x94, 0x6d, 0xca, 0x11, 0xca, 0xa5, 0x8c,
 ];
 
 pub const FUNCTIONS: [FunctionDescriptor; 3] = [
@@ -28,11 +28,11 @@ pub const FUNCTIONS: [FunctionDescriptor; 3] = [
         symbol_hash: 0xe32d0cd1379e9cdf,
     },
     FunctionDescriptor {
-        id: LFM25_Q8_ROW_BLOCK.raw(),
+        id: LFM25_FFN_STEP.raw(),
         input_bytes: 72,
         output_bytes: 20,
         flags: 0,
-        symbol_hash: 0x954041ad146a1e49,
+        symbol_hash: 0x61ba3158bf717a14,
     },
 ];
 
@@ -78,14 +78,15 @@ pub mod add_u32 {
     }
 }
 
-pub mod lfm25_q8_row_block {
+pub mod lfm25_ffn_step {
     use super::FunctionId;
 
-    pub const ID: FunctionId = super::LFM25_Q8_ROW_BLOCK;
+    pub const ID: FunctionId = super::LFM25_FFN_STEP;
     pub const INPUT_BYTES: usize = 72;
     pub const OUTPUT_BYTES: usize = 20;
     pub const Q8_0_BLOCK_BYTES: usize = 34;
     pub const GATE_ROW0_BLOCKS: usize = 32;
+    pub const WIDE_ROW_BLOCKS: usize = 144;
     pub const GATE_ROW0_NATIVE_OFFSET: u64 = 0x048c9000;
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -95,6 +96,22 @@ pub mod lfm25_q8_row_block {
         pub row_q30: i64,
     }
 
+    pub fn encode_projection(
+        first: bool,
+        last: bool,
+        wide: bool,
+        block_index: u8,
+        activation: &[u8; Q8_0_BLOCK_BYTES],
+        weight: &[u8; Q8_0_BLOCK_BYTES],
+    ) -> [u8; INPUT_BYTES] {
+        let mut bytes = [0; INPUT_BYTES];
+        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(wide) << 2) | (u32::from(block_index) << 8);
+        bytes[..4].copy_from_slice(&control.to_le_bytes());
+        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);
+        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight);
+        bytes
+    }
+
     pub fn encode(
         first: bool,
         last: bool,
@@ -102,16 +119,19 @@ pub mod lfm25_q8_row_block {
         activation: &[u8; Q8_0_BLOCK_BYTES],
         weight: &[u8; Q8_0_BLOCK_BYTES],
     ) -> [u8; INPUT_BYTES] {
-        let mut bytes = [0; INPUT_BYTES];
-        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(block_index) << 8);
-        bytes[..4].copy_from_slice(&control.to_le_bytes());
-        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);
-        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight);
-        bytes
+        encode_projection(first, last, false, block_index, activation, weight)
     }
 
     pub fn encode_single(activation: &[u8; Q8_0_BLOCK_BYTES], weight: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {
         encode(true, true, 0, activation, weight)
+    }
+
+    pub fn encode_silu(gate_q30: i64, up_q30: i64) -> [u8; INPUT_BYTES] {
+        let mut bytes = [0; INPUT_BYTES];
+        bytes[..4].copy_from_slice(&8u32.to_le_bytes());
+        bytes[4..12].copy_from_slice(&gate_q30.to_le_bytes());
+        bytes[12..20].copy_from_slice(&up_q30.to_le_bytes());
+        bytes
     }
 
     pub fn decode(bytes: &[u8]) -> Option<Q8RowBlockResult> {
@@ -191,6 +211,8 @@ pub mod lfm25_q8_row_block {
     pub const GOLDEN_GATE_ROW0_FP_Q30: i64 = 29481200;
     pub const GOLDEN_GATE_ROW0_FP_BOUND_Q30: i64 = 2148;
 }
+
+pub use lfm25_ffn_step as lfm25_q8_row_block;
 
 pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {
     add_u32::encode(a, b)

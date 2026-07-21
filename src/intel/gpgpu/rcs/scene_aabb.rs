@@ -40,8 +40,10 @@ fn submit_tenant_scene_aabb_rcs(
         return Err(PhysicalGpuError::SubmitFailed);
     }
     let ring_tail = direct_rcs_append_ring_batch_start(state, 0, state.gpu_va.batch);
-    let ring_ctl = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES)
-        .ok_or(PhysicalGpuError::SubmitFailed)?;
+    let Some(ring_ctl) = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES) else {
+        unmap_scene_aabb_ranges(physical, request.vm, &mappings);
+        return Err(PhysicalGpuError::SubmitFailed);
+    };
     if !direct_rcs_init_lrc_context_image_with_root(
         state,
         state.gpu_va.ring as u32,

@@ -108,8 +108,31 @@ module truega_functions_tb;
             end
         end
 
+        // The same fixed slot also owns the chained layer-0 SiLU(gate)*up
+        // operation. This sample is the exact row-0 result of the two full
+        // projection accumulators.
+        input_data = 768'd0;
+        input_data[31:0] = 32'h0000_0008;
+        input_data[95:32] = 64'sd29481209;
+        input_data[159:96] = -64'sd10250472;
+        @(negedge clk);
+        start = 1'b1;
+        @(negedge clk);
+        start = 1'b0;
+        wait_cycles = 0;
+        while (!done && wait_cycles < 100) begin
+            @(negedge clk);
+            wait_cycles = wait_cycles + 1;
+        end
+        if (!done || busy || error || output_data[159:96] !== -64'sd142653
+                || output_data[95:0] !== 96'd0 || output_data[767:160] !== 608'd0) begin
+            $display("FAIL functions wrapper silu done=%b busy=%b error=%b result=%0d",
+                done, busy, error, $signed(output_data[159:96]));
+            failures = failures + 1;
+        end
+
         if (failures == 0) begin
-            $display("PASS functions_wrapper calls=2 envelope=96B exact_dot exact_q30");
+            $display("PASS functions_wrapper q8_calls=2 silu_calls=1 envelope=96B exact_dot exact_q30");
             $finish;
         end
         $display("FAIL functions_wrapper failures=%0d", failures);

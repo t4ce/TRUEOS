@@ -51,6 +51,25 @@ pub(crate) fn broker_device_info(
         .map_err(|error| error.errno())
 }
 
+pub(crate) fn broker_device_diagnostics(
+    principal: Principal,
+    device: u64,
+) -> Result<v::vgpu::DeviceDiagnostics, i32> {
+    vgpu::device_diagnostics(principal, DeviceHandle::from_raw(device))
+        .map(|diagnostics| v::vgpu::DeviceDiagnostics {
+            copied_upload_bytes: diagnostics.copied_upload_bytes,
+            flushed_vvideo_bytes: diagnostics.flushed_vvideo_bytes,
+            mapping_digest: diagnostics.mapping_digest,
+            vvideo_buffers: diagnostics.vvideo_buffers as u32,
+            flags: if diagnostics.mapping_identity {
+                v::vgpu::DeviceDiagnostics::FLAG_MAPPING_IDENTITY
+            } else {
+                0
+            },
+        })
+        .map_err(|error| error.errno())
+}
+
 pub(crate) fn broker_buffer_create(
     principal: Principal,
     device: u64,
@@ -123,15 +142,9 @@ pub(crate) fn broker_vvideo_create(
     bytes: usize,
     usage: u32,
 ) -> Result<u64, i32> {
-    vgpu::create_vvideo_mem(
-        principal,
-        DeviceHandle::from_raw(device),
-        guest_va,
-        bytes,
-        usage,
-    )
-    .map(BufferHandle::raw)
-    .map_err(|error| error.errno())
+    vgpu::create_vvideo_mem(principal, DeviceHandle::from_raw(device), guest_va, bytes, usage)
+        .map(BufferHandle::raw)
+        .map_err(|error| error.errno())
 }
 
 pub(crate) fn broker_vvideo_flush(
@@ -200,8 +213,16 @@ pub(crate) fn broker_submit_scene_aabb(
             liveness: convert(dispatch.liveness)?,
             output: convert(dispatch.output)?,
             rows: dispatch.rows,
-            query_min: [dispatch.query_min[0], dispatch.query_min[1], dispatch.query_min[2]],
-            query_max: [dispatch.query_max[0], dispatch.query_max[1], dispatch.query_max[2]],
+            query_min: [
+                dispatch.query_min[0],
+                dispatch.query_min[1],
+                dispatch.query_min[2],
+            ],
+            query_max: [
+                dispatch.query_max[0],
+                dispatch.query_max[1],
+                dispatch.query_max[2],
+            ],
         },
     )
     .map_err(|error| error.errno())?;
@@ -364,6 +385,28 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_device_info(
     match result {
         Ok(info) => {
             unsafe { out_info.write(info) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_device_diagnostics(
+    device: u64,
+    out: *mut v::vgpu::DeviceDiagnostics,
+) -> i32 {
+    if out.is_null() {
+        return -14;
+    }
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_DEVICE_DIAGNOSTICS, device, 0, &[])
+    } else {
+        broker_device_diagnostics(direct_principal(), device)
+    };
+    match result {
+        Ok(diagnostics) => {
+            unsafe { out.write(diagnostics) };
             0
         }
         Err(rc) => rc,
@@ -539,19 +582,14 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_vvideo_create(
     if out_buffer.is_null() {
         return -14;
     }
-    let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
+    let Some(_vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
         return -95;
     };
     let mut request = [0u8; 12];
     request[..8].copy_from_slice(&(bytes as u64).to_le_bytes());
     request[8..].copy_from_slice(&usage.to_le_bytes());
-    let result = guest_handle(
-        trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_CREATE,
-        device,
-        guest_va,
-        &request,
-    );
-    let _ = vm_id;
+    let result =
+        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_CREATE, device, guest_va, &request);
     match result {
         Ok(handle) => {
             unsafe { out_buffer.write(handle) };
@@ -578,13 +616,7 @@ pub extern "C" fn trueos_cabi_vgpu_vvideo_flush(
     offset: usize,
     bytes: usize,
 ) -> i32 {
-    guest_vvideo_range(
-        trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_FLUSH,
-        device,
-        buffer,
-        offset,
-        bytes,
-    )
+    guest_vvideo_range(trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_FLUSH, device, buffer, offset, bytes)
 }
 
 #[unsafe(no_mangle)]
@@ -676,12 +708,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_submit_scene_aabb(
         )
     };
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_record(
-            trueos_vm::vmcall::OP_BP_VGPU_SCENE_AABB,
-            device,
-            queue,
-            request,
-        )
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_SCENE_AABB, device, queue, request)
     } else {
         broker_submit_scene_aabb(direct_principal(), device, queue, dispatch)
     };

@@ -8,5 +8,6 @@
 # calls plus async filesystem write, mkdir, stat, and directory-list calls are
 # strictly additive v2 extensions; older v2 artifacts do not import them and
 # remain compatible. The vGPU vVideoMem create/cache-maintenance operations
-# and fixed SceneDB AABB dispatch are likewise strictly additive.
-b03e46d84230e7e152a58e291b60448ad99faf7a49fd4d5834650b76abba0bae
+# and fixed SceneDB AABB dispatch are likewise strictly additive. The vGPU
+# diagnostics record reports zero-copy counters and opaque mapping proof data.
+7e12f8ae0b08ca44ae0f951f25bdac1ddad1060d0c4808402d93bc22964a06a4

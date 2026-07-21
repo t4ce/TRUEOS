@@ -80,6 +80,24 @@ pub struct DeviceInfo {
     pub reserved: u32,
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct DeviceDiagnostics {
+    pub copied_upload_bytes: u64,
+    pub flushed_vvideo_bytes: u64,
+    pub mapping_digest: u64,
+    pub vvideo_buffers: u32,
+    pub flags: u32,
+}
+
+impl DeviceDiagnostics {
+    pub const FLAG_MAPPING_IDENTITY: u32 = 1 << 0;
+
+    pub const fn mapping_identity(self) -> bool {
+        self.flags & Self::FLAG_MAPPING_IDENTITY != 0
+    }
+}
+
 impl DeviceInfo {
     pub const FLAG_LOST: u32 = 1 << 0;
 
@@ -201,6 +219,14 @@ impl Device {
         let mut info = DeviceInfo::default();
         rc_result(unsafe { vcabi::trueos_cabi_vgpu_device_info(self.0, &mut info) })?;
         Ok(info)
+    }
+
+    pub fn diagnostics(self) -> Result<DeviceDiagnostics, i32> {
+        let mut diagnostics = DeviceDiagnostics::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_device_diagnostics(self.0, &mut diagnostics)
+        })?;
+        Ok(diagnostics)
     }
 
     pub fn create_buffer(self, bytes: usize, usage: u32) -> Result<Buffer, i32> {
@@ -474,6 +500,7 @@ mod tests {
     #[test]
     fn abi_records_have_stable_sizes() {
         assert_eq!(core::mem::size_of::<DeviceInfo>(), 48);
+        assert_eq!(core::mem::size_of::<DeviceDiagnostics>(), 32);
         assert_eq!(core::mem::size_of::<BufferInfo>(), 16);
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
         assert_eq!(core::mem::size_of::<SceneAabbDispatch>(), 232);

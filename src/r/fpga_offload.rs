@@ -9,6 +9,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -277,11 +278,47 @@ pub async fn lfm25_q8_row_block(
     activation: &[u8; 34],
     weight: &[u8; 34],
 ) -> Result<trueos_fpga_abi::builtins::lfm25_q8_row_block::Q8RowBlockResult, Error> {
-    use trueos_fpga_abi::builtins::lfm25_q8_row_block as function;
+    lfm25_q8_projection_block(false, first, last, block_index, activation, weight).await
+}
 
-    let input = function::encode(first, last, block_index, activation, weight);
-    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
+/// Execute one block of either a 32-block (1,024 element) or 144-block
+/// (4,608 element) projection row. The width bit is part of the fixed slot
+/// protocol and is checked by hardware throughout the row.
+pub async fn lfm25_q8_projection_block(
+    wide: bool,
+    first: bool,
+    last: bool,
+    block_index: u8,
+    activation: &[u8; 34],
+    weight: &[u8; 34],
+) -> Result<trueos_fpga_abi::builtins::lfm25_ffn_step::Q8RowBlockResult, Error> {
+    use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+    let input = function::encode_projection(first, last, wide, block_index, activation, weight);
+    let completion = lfm25_ffn_step_with_callback(&input).await?;
     function::decode(completion.output()).ok_or(Error::Protocol)
+}
+
+/// Fixed hardware vector operation used between the gate/up projections and
+/// the down projection. Inputs and output are signed Q30.
+pub async fn lfm25_silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {
+    use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+    let input = function::encode_silu(gate_q30, up_q30);
+    let completion = lfm25_ffn_step_with_callback(&input).await?;
+    let result = function::decode(completion.output()).ok_or(Error::Protocol)?;
+    Ok(result.row_q30)
+}
+
+async fn lfm25_ffn_step_with_callback(input: &[u8]) -> Result<Completion, Error> {
+    use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+    let reply = Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, CallResult>::new());
+    let callback_reply = Arc::clone(&reply);
+    submit_with_callback(function::ID, input, function::OUTPUT_BYTES, move |result| {
+        callback_reply.signal(result);
+    })?;
+    reply.wait().await
 }
 
 /// Compatibility probe: execute one block as a one-block row.

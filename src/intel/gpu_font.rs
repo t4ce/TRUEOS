@@ -1830,9 +1830,8 @@ pub(crate) fn prepare_ui4_font_document(
             GpuFontFace::Default.registry_name()
         }
     };
-    let content_width = document_width
-        .saturating_sub(UI4_DOCUMENT_PADDING_PIXELS.saturating_mul(2))
-        as f32;
+    let content_width =
+        document_width.saturating_sub(UI4_DOCUMENT_PADDING_PIXELS.saturating_mul(2)) as f32;
     let wrapped = wrap_ui4_document_rows(request, registry_name, font_pixels, content_width)?;
     let line_height = libm::ceilf(font_pixels * UI4_DOCUMENT_LINE_HEIGHT_SCALE).max(1.0);
     let mut entries = Vec::new();
@@ -1856,12 +1855,8 @@ pub(crate) fn prepare_ui4_font_document(
     // Map document coordinates against the physical viewport. Coordinates
     // beyond 768x512 remain outside clip until pan translation exposes them;
     // this preserves a strict one-document-pixel to one-frame-pixel mapping.
-    let mesh = create_resident_font_scene_mesh(
-        entries.as_slice(),
-        font,
-        viewport_width,
-        viewport_height,
-    )?;
+    let mesh =
+        create_resident_font_scene_mesh(entries.as_slice(), font, viewport_width, viewport_height)?;
     let text_chars = wrapped
         .iter()
         .fold(0usize, |total, row| total.saturating_add(row.chars().count()));
@@ -1889,7 +1884,12 @@ pub(crate) fn prepare_ui4_font_document(
     );
     Ok(GpuFontUi4Document {
         mesh,
-        color: [premultiply(rgba.r), premultiply(rgba.g), premultiply(rgba.b), alpha],
+        color: [
+            premultiply(rgba.r),
+            premultiply(rgba.g),
+            premultiply(rgba.b),
+            alpha,
+        ],
         font_name: registry_name,
         text_chars,
         rows: wrapped.len(),
