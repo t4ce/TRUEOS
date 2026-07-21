@@ -70,7 +70,7 @@ define_started_flags!(
     FPGA_OFFLOAD_SERVICE_STARTED,
     FPGA_OFFLOAD_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
-    INTEL_CURSOR_SERVICE_STARTED,
+    TRUEOS_SPIRIT_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
     UI4_FONT_STAMP_SERVICE_STARTED,
@@ -503,21 +503,36 @@ fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::intel::gpgpu::gpu_completion_reaper_task())
 }
 
-#[embassy_executor::task]
-async fn intel_cursor_service_task() {
-    crate::log_info!(
-        target: "gfx";
-        "boot-probe: intel-cursor-service task start ms={}\n",
-        boot_probe_ms()
-    );
-    loop {
-        let _ = crate::intel::update_kernel_hw_cursor();
-        Timer::after(EmbassyDuration::from_millis(16)).await;
-    }
-}
+fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    let Some(ap1_spawner) = crate::workers::ap1_ui_core_spawner() else {
+        return SpawnAttempt::Skipped;
+    };
 
-fn spawn_intel_cursor_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| intel_cursor_service_task())
+    let mut spawned = 0usize;
+    for fence in 0..crate::spirit::SPIRIT_WORKER_POOL_LIMIT {
+        match crate::spirit::spirit_worker_task(fence as u8) {
+            Ok(token) => {
+                ap1_spawner.spawn(token);
+                spawned = spawned.saturating_add(1);
+            }
+            Err(error) if spawned == 0 => return SpawnAttempt::Failed(error),
+            Err(error) => {
+                crate::log_warn!(
+                    target: "service";
+                    "trueos-spirit: worker spawn failed fence={} error={:?}\n",
+                    fence,
+                    error,
+                );
+            }
+        }
+    }
+
+    if spawned == 0 {
+        SpawnAttempt::Skipped
+    } else {
+        SpawnAttempt::Spawned
+    }
 }
 
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -611,8 +626,13 @@ fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
 }
 
 #[inline]
-fn intel_cursor_service_gate() -> bool {
+fn intel_device_gate() -> bool {
     crate::intel::has_claimed_device()
+}
+
+#[inline]
+fn trueos_spirit_gate() -> bool {
+    crate::spirit::hardware_ready() && crate::workers::ap1_ui_core_spawner().is_some()
 }
 
 #[inline]
@@ -1468,19 +1488,19 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
         0,
-        intel_cursor_service_gate,
+        intel_device_gate,
         &GPU_COMPLETION_REAPER_STARTED,
         spawn_gpu_completion_reaper,
     ),
-    // The first/preferred physical cursor drives the dedicated hardware
-    // cursor while UI4 also renders its software peer on slot 4. Keeping both
-    // visible makes their latency and coordinate agreement directly testable.
+    // TrueOS-Spirit reserves all four cursor-pipe fences, but its sane initial
+    // deployment activates only fence 0 and one Embassy worker. No input or
+    // UI path writes CUR_* registers directly.
     TaskSpec::enabled_gated(
-        "intel-cursor-service",
+        "trueos-spirit",
         0,
-        intel_cursor_service_gate,
-        &INTEL_CURSOR_SERVICE_STARTED,
-        spawn_intel_cursor_service_task,
+        trueos_spirit_gate,
+        &TRUEOS_SPIRIT_STARTED,
+        spawn_trueos_spirit_workers,
     ),
     TaskSpec::enabled_gated(
         "mouse-motion-service",

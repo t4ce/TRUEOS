@@ -145,6 +145,7 @@ fn upload_artifact_bytes(
             | PIXEL_PLASMA_RGBA8_KERNEL_NAME
             | FONT_OUTLINE_MESH_KERNEL_NAME
             | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
+            | LAB256_MULTIPHASE_KERNEL_NAME
     );
     if requires_allowlisted_sha && actual_sha256 != artifact.bin_sha256 {
         crate::log_error!(

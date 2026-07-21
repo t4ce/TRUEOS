@@ -1269,6 +1269,7 @@ fn submit_resident_scene_geometry_batched(
     opaque_depth_enabled: bool,
     depth_config: Option<TriangleDepthConfig>,
     render_target_gpu: u64,
+    render_target_surface_format: u32,
     render_target_pitch: usize,
     target_width: usize,
     target_height: usize,
@@ -1277,6 +1278,12 @@ fn submit_resident_scene_geometry_batched(
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     if draws.len() > DRAW3D_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
+    }
+    if !matches!(
+        render_target_surface_format,
+        SURFACE_FORMAT_R8G8B8A8_UNORM | SURFACE_FORMAT_B8G8R8A8_UNORM
+    ) {
+        return Err("scene-frame-target-format");
     }
     let max_secondary_count = draws.len().saturating_add(1);
     let used_batch_bytes = DRAW3D_SCENE_PRIMARY_BATCH_BYTES
@@ -1311,7 +1318,8 @@ fn submit_resident_scene_geometry_batched(
         "draw3d-fullscreen-clear",
         &CLEAR_TRIANGLE,
     )
-    .ok_or("target-clear-resources")?;
+    .ok_or("target-clear-resources")?
+    .with_rt_surface_format(render_target_surface_format);
     stage_resident_scene_secondary(
         warm,
         clear_warm,
@@ -1353,7 +1361,8 @@ fn submit_resident_scene_geometry_batched(
             target_height,
             scene_draw.mesh,
         )
-        .ok_or("scene-frame-resident-draw")?;
+        .ok_or("scene-frame-resident-draw")?
+        .with_rt_surface_format(render_target_surface_format);
         stage_resident_scene_secondary(
             warm,
             state_warm,
@@ -1429,6 +1438,14 @@ fn submit_resident_triangle_scene_capture(
             || destination.height as usize != target_height)
     {
         return Err("resident-scene-output-surface-shape");
+    }
+    if let ResidentSceneFrameOutput::GpuSurface(destination)
+    | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination) = frame_output
+        && destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
+    {
+        // Resolve/coverage compute kernels currently expose raw linear RGBA.
+        // BGRA is supported only by the direct 3D render-target surface state.
+        return Err("resident-scene-output-storage-order");
     }
     for (index, draw) in coverage_draws.iter().enumerate() {
         if !draw.mask.is_valid() {
@@ -1528,6 +1545,15 @@ fn submit_resident_triangle_scene_capture(
             ResidentSceneFrameOutput::DirectGpuSurface(destination) => Some(destination),
             _ => None,
         };
+        let render_target_surface_format = if msaa_color.is_some() {
+            SURFACE_FORMAT_R8G8B8A8_UNORM
+        } else if direct_output.is_some_and(|destination| {
+            destination.storage_order == crate::intel::gpgpu::GpgpuRgba8StorageOrder::Bgra
+        }) {
+            SURFACE_FORMAT_B8G8R8A8_UNORM
+        } else {
+            SURFACE_FORMAT_R8G8B8A8_UNORM
+        };
         let (render_target_gpu, render_target_pitch) = if let Some(target) = msaa_color {
             (target.surface.gpu, target.surface.pitch_bytes as usize)
         } else if let Some(destination) = direct_output {
@@ -1601,6 +1627,7 @@ fn submit_resident_triangle_scene_capture(
             opaque_depth_enabled,
             depth_config,
             render_target_gpu,
+            render_target_surface_format,
             render_target_pitch,
             target_width,
             target_height,

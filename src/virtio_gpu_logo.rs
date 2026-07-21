@@ -829,7 +829,7 @@ pub(crate) fn present() -> bool {
 
 fn cursor_snapshot_to_pixels(width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
     let (slot, nx, ny, buttons) =
-        crate::r::cursor::preferred_kernel_hw_cursor_snapshot_with_slot_buttons()?;
+        crate::r::cursor::preferred_physical_cursor_snapshot_with_slot_buttons()?;
     let x = normalized_cursor_to_px(nx, width);
     let y = normalized_cursor_to_px(ny, height);
     Some((slot, x, y, buttons))

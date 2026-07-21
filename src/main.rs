@@ -61,6 +61,7 @@ mod remote_work_wake;
 mod runtime;
 mod shell2;
 mod smp;
+mod spirit;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 mod stackkeeper;
 mod std_abi_shim;

@@ -116,11 +116,12 @@ pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2
 // Pipe-local DBUF policy for the five universal planes exposed by display
 // version 13: primary plus four sprites. UI4 converts decoded video into its
 // normal RGBA frame contract, so every slot is independently usable as a
-// linear RGB8 plane. Split all 1024 pipe blocks nearly evenly; the first four
-// receive 205 and the top interaction plane receives the remaining 204.
-pub(in crate::intel) const PLANE_DBUF_TOTAL_BLOCKS: u16 = 1024;
+// linear RGB8 plane. Spirit permanently owns the final 16 blocks of DBUF_S1
+// for the pipe A/B cursor channels, so universal planes stop at block 1007.
+// The first four retain 205 blocks and the top interaction plane receives 188.
+pub(in crate::intel) const PLANE_DBUF_TOTAL_BLOCKS: u16 = 1008;
 pub(in crate::intel) const PLANE_DBUF_BALANCED_BLOCKS: u16 = 205;
-pub(in crate::intel) const PLANE_DBUF_TOP_BLOCKS: u16 = 204;
+pub(in crate::intel) const PLANE_DBUF_TOP_BLOCKS: u16 = 188;
 pub(in crate::intel) const PLANE_DBUF_SLOT_0_START: u16 = 0;
 pub(in crate::intel) const PLANE_DBUF_SLOT_0_END: u16 = 204;
 pub(in crate::intel) const PLANE_DBUF_SLOT_1_START: u16 = 205;
@@ -130,7 +131,8 @@ pub(in crate::intel) const PLANE_DBUF_SLOT_2_END: u16 = 614;
 pub(in crate::intel) const PLANE_DBUF_SLOT_3_START: u16 = 615;
 pub(in crate::intel) const PLANE_DBUF_SLOT_3_END: u16 = 819;
 pub(in crate::intel) const PLANE_DBUF_SLOT_4_START: u16 = 820;
-pub(in crate::intel) const PLANE_DBUF_SLOT_4_END: u16 = 1023;
+pub(in crate::intel) const PLANE_DBUF_SLOT_4_END: u16 =
+    crate::intel::SPIRIT_CURSOR_DBUF_S1_START - 1;
 const _: () =
     assert!(PLANE_DBUF_SLOT_0_END - PLANE_DBUF_SLOT_0_START + 1 == PLANE_DBUF_BALANCED_BLOCKS);
 const _: () =

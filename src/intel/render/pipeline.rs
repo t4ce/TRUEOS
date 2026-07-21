@@ -413,7 +413,7 @@ fn write_triangle_probe_state_with_flush(
         backend_probe_mode.surface_halign_raw(warm.device_id)
     };
     surface[0] = (SURFTYPE_2D << 29)
-        | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
+        | (draw.rt_surface_format << 18)
         | (surface_halign << 14)
         | (SURFACE_VALIGN_4 << 16)
         | if resident_msaa4 {

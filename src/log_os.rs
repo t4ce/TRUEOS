@@ -83,7 +83,6 @@ pub(crate) mod flags {
     pub(crate) const INTEL_STAGE1_LOGS: bool = false;
     pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
     pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = true;
-    pub(crate) const INTEL_CURSOR_PROBE_LOGS: bool = false;
     pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
     pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = USB_UAS_DIAG_PROFILE_ENABLED;

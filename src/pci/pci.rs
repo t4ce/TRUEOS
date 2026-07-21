@@ -39,8 +39,12 @@ const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
 const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
 const PCI_EXP_DEVCTL: u16 = 0x08;
+const PCI_EXP_LNKCTL: u16 = 0x10;
+const PCI_EXP_LNKSTA: u16 = 0x12;
 const PCI_EXP_DEVCAP_FLR: u32 = 1 << 28;
 const PCI_EXP_DEVCTL_BCR_FLR: u16 = 1 << 15;
+const PCI_EXP_LNKCTL_LINK_DISABLE: u16 = 1 << 4;
+const PCI_EXP_LNKCTL_RETRAIN_LINK: u16 = 1 << 5;
 
 // PCI-to-PCI Bridge class/subclass
 const PCI_CLASS_BRIDGE: u8 = 0x06;
@@ -65,6 +69,23 @@ struct BridgeAlloc {
 }
 
 static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Vec::new());
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DownstreamLinkRecovery {
+    pub bridge_bus: u8,
+    pub bridge_slot: u8,
+    pub bridge_function: u8,
+    pub link_status_before: u16,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DownstreamLinkRecoveryError {
+    ParentBridgeNotFound,
+    SharedHierarchy { secondary: u8, subordinate: u8 },
+    DownstreamDevicePresent { bus: u8, slot: u8, function: u8 },
+    PcieCapabilityNotFound,
+    BridgeConfigUnavailable,
+}
 
 pub mod class {
     pub const NETWORK: u8 = 0x02;
@@ -865,6 +886,94 @@ fn parent_bridge_for_bus(target_bus: u8) -> Option<(u8, u8, u8)> {
         }
     });
     best.map(|(bdf, _)| bdf)
+}
+
+/// Restart one dedicated downstream PCIe link after a known endpoint disappears.
+///
+/// This is deliberately narrower than generic hotplug support. The target bus must be
+/// the bridge's complete secondary hierarchy and must currently contain no enumerated
+/// device. That prevents a live SRAM reload of our FPGA from resetting an unrelated
+/// endpoint which happens to sit behind the same bridge.
+pub fn recover_dedicated_downstream_link(
+    target_bus: u8,
+    target_slot: u8,
+    target_function: u8,
+) -> Result<DownstreamLinkRecovery, DownstreamLinkRecoveryError> {
+    let Some((bridge_bus, bridge_slot, bridge_function)) = parent_bridge_for_bus(target_bus) else {
+        return Err(DownstreamLinkRecoveryError::ParentBridgeNotFound);
+    };
+
+    let (_primary, secondary, subordinate) =
+        bridge_bus_numbers(bridge_bus, bridge_slot, bridge_function);
+    if secondary != target_bus || subordinate != target_bus {
+        return Err(DownstreamLinkRecoveryError::SharedHierarchy {
+            secondary,
+            subordinate,
+        });
+    }
+
+    let mut occupied = None;
+    with_devices(|devices| {
+        occupied = devices
+            .iter()
+            .find(|device| device.bus == target_bus)
+            .map(|device| (device.bus, device.slot, device.function));
+    });
+    if let Some((bus, slot, function)) = occupied {
+        return Err(DownstreamLinkRecoveryError::DownstreamDevicePresent {
+            bus,
+            slot,
+            function,
+        });
+    }
+
+    // Refuse to disturb the bridge if the endpoint already returned between the
+    // enumeration pass above and this operation.
+    if config_read_u16(target_bus, target_slot, target_function, 0x00) != u16::MAX {
+        return Err(DownstreamLinkRecoveryError::DownstreamDevicePresent {
+            bus: target_bus,
+            slot: target_slot,
+            function: target_function,
+        });
+    }
+
+    let Some(pcie_cap) =
+        find_capability_bdf(bridge_bus, bridge_slot, bridge_function, PCI_CAP_ID_PCI_EXPRESS)
+    else {
+        return Err(DownstreamLinkRecoveryError::PcieCapabilityNotFound);
+    };
+    let link_control =
+        config_read_u16(bridge_bus, bridge_slot, bridge_function, pcie_cap + PCI_EXP_LNKCTL);
+    let link_status_before =
+        config_read_u16(bridge_bus, bridge_slot, bridge_function, pcie_cap + PCI_EXP_LNKSTA);
+    if link_control == u16::MAX || link_status_before == u16::MAX {
+        return Err(DownstreamLinkRecoveryError::BridgeConfigUnavailable);
+    }
+
+    // Force the root/downstream port out of its stale LTSSM state, give Link Disable
+    // time to take effect, then let it train against the already-configured FPGA.
+    config_write_u16(
+        bridge_bus,
+        bridge_slot,
+        bridge_function,
+        pcie_cap + PCI_EXP_LNKCTL,
+        link_control | PCI_EXP_LNKCTL_LINK_DISABLE,
+    );
+    let _ = crate::wait::spin_until_timeout_no_exec(20, || false);
+    config_write_u16(
+        bridge_bus,
+        bridge_slot,
+        bridge_function,
+        pcie_cap + PCI_EXP_LNKCTL,
+        (link_control & !PCI_EXP_LNKCTL_LINK_DISABLE) | PCI_EXP_LNKCTL_RETRAIN_LINK,
+    );
+
+    Ok(DownstreamLinkRecovery {
+        bridge_bus,
+        bridge_slot,
+        bridge_function,
+        link_status_before,
+    })
 }
 
 fn alloc_from_bridge_window(

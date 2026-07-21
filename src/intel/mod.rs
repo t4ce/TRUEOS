@@ -13,7 +13,6 @@ pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
 #[path = "sound/hda.rs"]
 pub mod hda;
-mod hw_cursor;
 pub(crate) mod media;
 pub(crate) mod opencl;
 pub(crate) mod ppgtt;
@@ -52,6 +51,7 @@ pub(crate) const GPU_VA_GUC_RUNTIME_LIMIT: u64 = 0x0800_0000;
 pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
+pub(crate) const SPIRIT_CURSOR_DBUF_S1_START: u16 = 1008;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
@@ -855,14 +855,6 @@ pub fn present_rgba_primary_top_right(
     src_pitch_bytes: usize,
 ) -> bool {
     self::display::present_rgba_primary_top_right(src, src_width, src_height, src_pitch_bytes)
-}
-
-pub fn update_kernel_hw_cursor() -> Option<u32> {
-    self::hw_cursor::update_kernel_hw_cursor()
-}
-
-pub fn kernel_hw_cursor_slot() -> Option<u32> {
-    self::hw_cursor::kernel_hw_cursor_slot()
 }
 
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>

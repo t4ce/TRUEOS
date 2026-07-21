@@ -250,10 +250,6 @@ fn print_hv_status(io: &'static dyn ShellBackend2) {
     );
 }
 
-fn print_available(io: &'static dyn ShellBackend2) {
-    run::print_app_archive_table(io);
-}
-
 fn online_app(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
     super::shell2_dl::submit_online(spawner, io, args.join(" ").as_str());
 }
@@ -655,18 +651,51 @@ fn load_remote(io: &'static dyn ShellBackend2, endpoint: &str, vm_id: u8) {
     }
 }
 
-fn start_app(io: &'static dyn ShellBackend2, mut args: impl Iterator<Item = String>) {
-    let Some(id_text) = args.next() else {
-        print_available(io);
-        return;
-    };
-    let Ok(id) = id_text.parse::<usize>() else {
-        line(io, "apps: start expects an app id");
-        print_available(io);
-        return;
+#[embassy_executor::task(pool_size = 2)]
+async fn start_app_task(
+    target: MatrixTarget,
+    width: usize,
+    id: Option<usize>,
+    app_args: Vec<String>,
+) {
+    // F2 is executing on the BSP executor. Discovery, hash verification, and
+    // module loading must stay async all the way to the Blueprint run queue;
+    // never route this task through synchronous kfs or spawn_and_wait_local.
+    match id {
+        Some(id) => {
+            let _ = run::submit_archive_id(target.clone(), width, id, app_args).await;
+        }
+        None => run::print_app_archive_table(&target, width).await,
+    }
+    set_matrix_target_active(&target, false);
+}
+
+fn start_app(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    mut args: impl Iterator<Item = String>,
+) {
+    let id = match args.next() {
+        Some(id_text) => match id_text.parse::<usize>() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                line(io, "apps: start expects an app id");
+                None
+            }
+        },
+        None => None,
     };
     let app_args = args.collect::<Vec<_>>();
-    run::submit_archive_id(io, id, app_args);
+    let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
+    set_matrix_target_active(&target, true);
+    match start_app_task(target.clone(), width, id, app_args) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            line(io, "apps: start task unavailable");
+        }
+    }
 }
 
 pub(crate) fn submit(
@@ -698,7 +727,7 @@ pub(crate) fn submit(
     };
 
     match action {
-        AppsPromptMode::Start => start_app(io, rest.into_iter()),
+        AppsPromptMode::Start => start_app(spawner, io, rest.into_iter()),
         AppsPromptMode::Online => online_app(spawner, io, rest),
         AppsPromptMode::Dl => {
             super::shell2_dl::submit_download(spawner, io, rest.join(" ").as_str())

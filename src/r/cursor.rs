@@ -8,14 +8,14 @@ pub const HID_KIND_TABLET: u8 = 3;
 pub const HID_KIND_EYETRACKER: u8 = 4;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum KernelHwCursorSourceKind {
+pub enum PhysicalCursorSourceKind {
     Tablet,
     Mouse,
     VirtualService,
     EyeTracker,
 }
 
-impl KernelHwCursorSourceKind {
+impl PhysicalCursorSourceKind {
     pub const fn from_hid_kind(hid_kind: u8) -> Option<Self> {
         match hid_kind {
             HID_KIND_TABLET => Some(Self::Tablet),
@@ -26,8 +26,8 @@ impl KernelHwCursorSourceKind {
         }
     }
 
-    pub const fn kernel_hw_cursor_priority(self) -> u8 {
-        // Contract for kernel-hw-cursor source promotion:
+    pub const fn physical_cursor_priority(self) -> u8 {
+        // Contract for selecting one physical pointing source:
         // Virtual app cursors are composed by UI4's software-cursor plane;
         // physical pointing devices retain the dedicated hardware cursor,
         // and eyetracker is reserved as the final/highest-priority source.
@@ -88,9 +88,9 @@ fn snapshot_source_match(
 }
 
 #[inline]
-fn snapshot_kernel_hw_cursor_priority(snapshot: &CursorSnapshot) -> u8 {
-    KernelHwCursorSourceKind::from_hid_kind(snapshot.hid_kind)
-        .map(|kind| kind.kernel_hw_cursor_priority())
+fn snapshot_physical_cursor_priority(snapshot: &CursorSnapshot) -> u8 {
+    PhysicalCursorSourceKind::from_hid_kind(snapshot.hid_kind)
+        .map(|kind| kind.physical_cursor_priority())
         .unwrap_or(0)
 }
 
@@ -246,7 +246,7 @@ pub fn ordered_cursor_snapshot_with_slot_buttons() -> Vec<(u32, f64, f64, u32), 
     out
 }
 
-pub fn preferred_kernel_hw_cursor_snapshot_with_slot_buttons() -> Option<(u32, f64, f64, u32)> {
+pub fn preferred_physical_cursor_snapshot_with_slot_buttons() -> Option<(u32, f64, f64, u32)> {
     let guard = CURSOR_SNAPSHOTS.lock();
 
     // A real mouse is the reference source for the dual-cursor checkpoint.
@@ -262,7 +262,7 @@ pub fn preferred_kernel_hw_cursor_snapshot_with_slot_buttons() -> Option<(u32, f
     let mut best: Option<(u8, usize, &CursorSnapshot)> = None;
 
     for (idx, snapshot) in guard.iter().enumerate() {
-        let priority = snapshot_kernel_hw_cursor_priority(snapshot);
+        let priority = snapshot_physical_cursor_priority(snapshot);
         if priority == 0 {
             continue;
         }

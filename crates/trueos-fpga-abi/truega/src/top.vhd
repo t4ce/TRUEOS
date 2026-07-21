@@ -170,6 +170,7 @@ architecture rtl of top is
 	signal tlp_clk : std_logic;
 	signal pll_lock : std_logic;
 	signal pcie_core_reset_n : std_logic;
+	signal pcie_reset_hold : unsigned(15 downto 0) := (others => '0');
 
 	signal tl_rx_sop    : std_logic;
 	signal tl_rx_eop    : std_logic;
@@ -377,7 +378,25 @@ architecture rtl of top is
 	end function;
 
 begin
-	pcie_core_reset_n <= pcie_perst_n and pll_lock;
+	-- PERST is already high during a live SRAM reload. Do not release the newly
+	-- configured PCIe hard block on the same edge that the local PLL first reports
+	-- lock: cold boot happens to receive a long host reset, while live reload would
+	-- otherwise receive none. Assert reset asynchronously and release it only after
+	-- 65,536 stable 100 MHz TLP clocks (~0.65 ms).
+	process(tlp_clk, pcie_perst_n, pll_lock)
+	begin
+		if (pcie_perst_n = '0') or (pll_lock = '0') then
+			pcie_reset_hold <= (others => '0');
+			pcie_core_reset_n <= '0';
+		elsif rising_edge(tlp_clk) then
+			if pcie_reset_hold /= x"FFFF" then
+				pcie_reset_hold <= pcie_reset_hold + 1;
+				pcie_core_reset_n <= '0';
+			else
+				pcie_core_reset_n <= '1';
+			end if;
+		end if;
+	end process;
 	-- Present a queued completion continuously. The controller samples the beat
 	-- on a rising TLP clock edge where VALID is asserted and WAIT is deasserted;
 	-- therefore VALID/data must not be pulsed based on the previous WAIT value.

@@ -33,6 +33,16 @@ impl GpgpuRect {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) enum GpgpuRgba8StorageOrder {
+    /// Bytes in increasing memory order are R, G, B, A.
+    #[default]
+    Rgba,
+    /// Bytes in increasing memory order are B, G, R, A while shader-facing
+    /// channels remain logical RGBA. Intel ARGB cursor scanout needs this.
+    Bgra,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuRgba8Surface {
     pub(crate) phys: u64,
@@ -41,6 +51,7 @@ pub(crate) struct GpgpuRgba8Surface {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
+    pub(crate) storage_order: GpgpuRgba8StorageOrder,
 }
 
 impl GpgpuRgba8Surface {
@@ -59,12 +70,26 @@ impl GpgpuRgba8Surface {
             width,
             height,
             pitch_bytes,
+            storage_order: GpgpuRgba8StorageOrder::Rgba,
         };
         if surface.is_valid() {
             Some(surface)
         } else {
             None
         }
+    }
+
+    pub(crate) fn new_bgra(
+        phys: u64,
+        gpu: u64,
+        bytes: usize,
+        width: u32,
+        height: u32,
+        pitch_bytes: u32,
+    ) -> Option<Self> {
+        let mut surface = Self::new(phys, gpu, bytes, width, height, pitch_bytes)?;
+        surface.storage_order = GpgpuRgba8StorageOrder::Bgra;
+        Some(surface)
     }
 
     pub(crate) fn is_valid(self) -> bool {

@@ -96,6 +96,7 @@ struct TriangleDrawPrep {
     index_buffer: Option<TriangleIndexBufferPrep>,
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
+    rt_surface_format: u32,
     rt_pitch: u32,
     target_w: u32,
     target_h: u32,
@@ -104,6 +105,11 @@ struct TriangleDrawPrep {
 impl TriangleDrawPrep {
     fn uses_resident_scene_msaa4(self) -> bool {
         self.rt_gpu_addr == GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE
+    }
+
+    fn with_rt_surface_format(mut self, format: u32) -> Self {
+        self.rt_surface_format = format;
+        self
     }
 }
 

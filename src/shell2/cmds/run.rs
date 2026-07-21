@@ -8,10 +8,10 @@ use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 use super::super::{
-    MatrixTarget, NET_TCP_SHELL_BACKEND, ShellBackend2, line_width_for_backend,
-    matrix_target_for_backend, matrix_target_interrupted, print_shell_line,
-    release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
-    set_matrix_target_active, set_matrix_target_app_label,
+    MatrixTarget, NET_TCP_SHELL_BACKEND, matrix_target_interrupted,
+    print_matrix_target_system_line, release_matrix_target_vm_reservation,
+    reserve_matrix_target_for_vm_slot_selected, set_matrix_target_active,
+    set_matrix_target_app_label,
 };
 use super::tlb_helper::TlbTable;
 use crate::hv::BlueprintConsoleSurface;
@@ -146,42 +146,46 @@ fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
     Some(archive)
 }
 
-fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
+// Shell2 runs inside the BSP executor. Keep the complete app discovery and
+// loading path natively async: `kfs` is a compatibility API for AP blocking
+// lanes, and synchronously polling this executor recursively can stall USB.
+async fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         return Ok(Vec::new());
     };
 
-    let (root_listing, apps_listing) = crate::wait::spawn_and_wait_local(async move {
-        let root = crate::r::fs::trueosfs::list_dir_async(disk, "").await?;
-        let apps = crate::r::fs::trueosfs::list_dir_async(disk, "apps").await?;
-        Ok::<_, crate::disc::block::Error>((root, apps))
-    })
-    .map_err(|_| "root listing failed")?;
+    let root_listing = crate::r::fs::trueosfs::list_dir_async(disk, "")
+        .await
+        .map_err(|_| "root listing failed")?;
+    let apps_listing = crate::r::fs::trueosfs::list_dir_async(disk, "apps")
+        .await
+        .map_err(|_| "app root listing failed")?;
     let root_listing = root_listing.ok_or("root is not TRUEOSFS")?;
 
-    let mut out = root_listing
+    let mut out = Vec::new();
+    for name in root_listing
         .lines()
         .map(str::trim)
         .filter(|name| is_runnable_root_artifact(name))
-        .map(|name| ArchiveEntry {
+    {
+        out.push(ArchiveEntry {
             archive: String::from(name),
             source: ArchiveSource::Trueosfs {
                 path: String::from(name),
             },
-            updated: root_archive_updated(disk, name),
-        })
-        .collect::<Vec<_>>();
+            updated: root_archive_updated(disk, name).await,
+        });
+    }
 
     for app_dir in apps_listing.unwrap_or_default().lines().map(str::trim) {
         if app_dir.is_empty() || app_dir == "common" || app_dir == ".keep" {
             continue;
         }
         let dir = alloc::format!("apps/{}", app_dir);
-        let listing = crate::wait::spawn_and_wait_local(async move {
-            crate::r::fs::trueosfs::list_dir_async(disk, dir.as_str()).await
-        })
-        .map_err(|_| "app directory listing failed")?
-        .unwrap_or_default();
+        let listing = crate::r::fs::trueosfs::list_dir_async(disk, dir.as_str())
+            .await
+            .map_err(|_| "app directory listing failed")?
+            .unwrap_or_default();
         for name in listing
             .lines()
             .map(str::trim)
@@ -206,12 +210,14 @@ fn root_archive_timestamp_path(name: &str) -> String {
     alloc::format!("apps/common/.bp-meta/root/{}.updated", name)
 }
 
-fn root_archive_updated(disk: crate::disc::block::DeviceHandle, name: &str) -> Option<String> {
+async fn root_archive_updated(
+    disk: crate::disc::block::DeviceHandle,
+    name: &str,
+) -> Option<String> {
     let stamp_path = root_archive_timestamp_path(name);
-    let bytes = crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::file_out_async(disk, stamp_path.as_str()).await
-    })
-    .ok()??;
+    let bytes = crate::r::fs::trueosfs::file_out_async(disk, stamp_path.as_str())
+        .await
+        .ok()??;
     let text = String::from_utf8_lossy(bytes.as_slice()).trim().to_string();
     if text.is_empty() { None } else { Some(text) }
 }
@@ -228,7 +234,7 @@ async fn trueosfs_module_by_archive_name(
         .await
         .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
     {
-        verify_trueosfs_module_hash(archive_name, module_bytes.as_slice())?;
+        verify_trueosfs_module_hash(disk, archive_name, module_bytes.as_slice()).await?;
         return Ok(Some((module_bytes, "TRUEOSFS root")));
     }
 
@@ -239,7 +245,7 @@ async fn trueosfs_module_by_archive_name(
         .await
         .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?;
     if let Some(bytes) = module_bytes {
-        verify_trueosfs_module_hash(app_path.as_str(), bytes.as_slice())?;
+        verify_trueosfs_module_hash(disk, app_path.as_str(), bytes.as_slice()).await?;
         Ok(Some((bytes, "TRUEOSFS app")))
     } else {
         Ok(None)
@@ -257,19 +263,24 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn verify_trueosfs_module_hash(path: &str, bytes: &[u8]) -> Result<Option<String>, String> {
+async fn verify_trueosfs_module_hash(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    bytes: &[u8],
+) -> Result<Option<String>, String> {
     let hash_path = alloc::format!("{}.sha256", path);
-    let expected_bytes = match crate::r::io::kfs::read_file(hash_path.as_str()) {
-        Ok(bytes) => bytes,
-        Err(crate::r::io::kfs::FsError::NotFound) => return Ok(None),
-        Err(err) => {
-            return Err(alloc::format!(
-                "SHA-256 metadata read failed path={} err={:?}",
-                hash_path,
-                err
-            ));
-        }
-    };
+    let expected_bytes =
+        match crate::r::fs::trueosfs::file_out_async(disk, hash_path.as_str()).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return Ok(None),
+            Err(err) => {
+                return Err(alloc::format!(
+                    "SHA-256 metadata read failed path={} err={:?}",
+                    hash_path,
+                    err
+                ));
+            }
+        };
     let expected = core::str::from_utf8(expected_bytes.as_slice())
         .map(str::trim)
         .map_err(|_| alloc::format!("invalid SHA-256 metadata path={}", hash_path))?;
@@ -343,8 +354,8 @@ fn embedded_module_bytes_by_archive_name(
     Ok(None)
 }
 
-fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
-    let mut out = trueosfs_archives()?;
+async fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
+    let mut out = trueosfs_archives().await?;
     for entry in embedded_archives() {
         if !out.iter().any(|existing| existing.archive == entry.archive) {
             out.push(entry);
@@ -369,9 +380,9 @@ fn archive_display_path(entry: &ArchiveEntry) -> &str {
     }
 }
 
-fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[ArchiveEntry]) {
-    let table = TlbTable::with_width(TABLE_HEADERS, line_width_for_backend(io).saturating_sub(2));
-    table.emit_header(|text| print_shell_line(io, text));
+fn print_archive_table(target: &MatrixTarget, width: usize, archives: &[ArchiveEntry]) {
+    let table = TlbTable::with_width(TABLE_HEADERS, width.saturating_sub(2));
+    table.emit_header(|text| print_matrix_target_system_line(target, text));
     for (idx, archive) in archives.iter().enumerate() {
         let id = alloc::format!("{}", idx + 1);
         let row = [
@@ -380,18 +391,20 @@ fn print_archive_table(io: &'static dyn ShellBackend2, archives: &[ArchiveEntry]
             source_label(&archive.source),
             archive.updated.as_deref().unwrap_or("-"),
         ];
-        table.emit_row(&row, |text| print_shell_line(io, text));
+        table.emit_row(&row, |text| print_matrix_target_system_line(target, text));
     }
-    table.emit_footer(|text| print_shell_line(io, text));
+    table.emit_footer(|text| print_matrix_target_system_line(target, text));
 }
 
-pub(crate) fn print_app_archive_table(io: &'static dyn ShellBackend2) {
-    match archive_entries() {
+pub(crate) async fn print_app_archive_table(target: &MatrixTarget, width: usize) {
+    match archive_entries().await {
         Ok(archives) if archives.is_empty() => {
-            print_shell_line(io, "apps: no .bp or .vm modules available");
+            print_matrix_target_system_line(target, "apps: no .bp or .vm modules available");
         }
-        Ok(archives) => print_archive_table(io, archives.as_slice()),
-        Err(err) => print_shell_line(io, alloc::format!("apps: {}", err).as_str()),
+        Ok(archives) => print_archive_table(target, width, archives.as_slice()),
+        Err(err) => {
+            print_matrix_target_system_line(target, alloc::format!("apps: {}", err).as_str())
+        }
     }
 }
 
@@ -1171,85 +1184,106 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
     Err(String::from("archive not found"))
 }
 
-pub(crate) fn submit_run(io: &'static dyn ShellBackend2, archive: String, app_args: Vec<String>) {
-    let target = matrix_target_for_backend(io);
-    let module_bytes = match crate::r::io::kfs::read_file(archive.as_str()) {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            print_shell_line(io, "apps: failed to read selected module from TRUEOSFS");
-            return;
-        }
-    };
-    if let Err(err) = verify_trueosfs_module_hash(archive.as_str(), module_bytes.as_slice()) {
-        print_shell_line(io, alloc::format!("apps: start refused: {}", err).as_str());
-        return;
-    }
-
-    let _ = enqueue_blueprint_bytes(target, archive, module_bytes, app_args);
-}
-
-fn submit_archive_entry(
-    io: &'static dyn ShellBackend2,
+async fn submit_archive_entry(
+    target: MatrixTarget,
     entry: &ArchiveEntry,
     app_args: Vec<String>,
-) {
-    match &entry.source {
+) -> bool {
+    let (module_bytes, source) = match &entry.source {
         ArchiveSource::Trueosfs { path } => {
-            let module_bytes = match crate::r::io::kfs::read_file(path.as_str()) {
-                Ok(bytes) => bytes,
-                Err(_) => {
-                    print_shell_line(io, "apps: failed to read selected module from TRUEOSFS");
-                    return;
-                }
+            let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+                print_matrix_target_system_line(&target, "apps: no TRUEOSFS root mounted");
+                return false;
             };
-            match verify_trueosfs_module_hash(path.as_str(), module_bytes.as_slice()) {
-                Ok(Some(hash)) => print_shell_line(
-                    io,
+            let module_bytes =
+                match crate::r::fs::trueosfs::file_out_async(disk, path.as_str()).await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => {
+                        print_matrix_target_system_line(
+                            &target,
+                            "apps: selected TRUEOSFS module disappeared",
+                        );
+                        return false;
+                    }
+                    Err(err) => {
+                        print_matrix_target_system_line(
+                            &target,
+                            alloc::format!(
+                                "apps: failed to read selected module from TRUEOSFS: {:?}",
+                                err
+                            )
+                            .as_str(),
+                        );
+                        return false;
+                    }
+                };
+            match verify_trueosfs_module_hash(disk, path.as_str(), module_bytes.as_slice()).await {
+                Ok(Some(hash)) => print_matrix_target_system_line(
+                    &target,
                     alloc::format!("apps: SHA-256 verified {} {}", entry.archive, hash).as_str(),
                 ),
                 Ok(None) => {}
                 Err(err) => {
-                    print_shell_line(io, alloc::format!("apps: start refused: {}", err).as_str());
-                    return;
+                    print_matrix_target_system_line(
+                        &target,
+                        alloc::format!("apps: start refused: {}", err).as_str(),
+                    );
+                    return false;
                 }
             }
-            let target = matrix_target_for_backend(io);
-            let _ = enqueue_blueprint_bytes(target, entry.archive.clone(), module_bytes, app_args);
+            (module_bytes, source_label(&entry.source))
         }
         ArchiveSource::EmbeddedModule { cmdline } => {
-            let target = matrix_target_for_backend(io);
             let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
             else {
-                print_shell_line(io, "apps: failed to read selected embedded module");
-                return;
+                print_matrix_target_system_line(
+                    &target,
+                    "apps: failed to read selected embedded module",
+                );
+                return false;
             };
-            let _ = enqueue_blueprint_bytes(
-                target,
-                entry.archive.clone(),
-                module_bytes.to_vec(),
-                app_args,
+            let bytes = crate::allocators::with_host_alloc_domain(|| module_bytes.to_vec());
+            (bytes, "boot embedded")
+        }
+    };
+
+    match submit_module_bytes_to_target_async(
+        target.clone(),
+        entry.archive.as_str(),
+        module_bytes,
+        app_args,
+        source,
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(err) => {
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("apps: start refused: {}", err).as_str(),
             );
+            false
         }
     }
 }
 
-pub(crate) fn submit_archive_id(
-    io: &'static dyn ShellBackend2,
+pub(crate) async fn submit_archive_id(
+    target: MatrixTarget,
+    width: usize,
     id: usize,
     app_args: Vec<String>,
 ) -> bool {
-    let archives = match archive_entries() {
+    let archives = match archive_entries().await {
         Ok(archives) => archives,
         Err(err) => {
-            print_shell_line(io, alloc::format!("apps: {}", err).as_str());
+            print_matrix_target_system_line(&target, alloc::format!("apps: {}", err).as_str());
             return false;
         }
     };
     let Some(archive) = id.checked_sub(1).and_then(|idx| archives.get(idx)) else {
-        print_shell_line(io, "apps: unknown app id");
-        print_archive_table(io, archives.as_slice());
+        print_matrix_target_system_line(&target, "apps: unknown app id");
+        print_archive_table(&target, width, archives.as_slice());
         return false;
     };
-    submit_archive_entry(io, archive, app_args);
-    true
+    submit_archive_entry(target, archive, app_args).await
 }

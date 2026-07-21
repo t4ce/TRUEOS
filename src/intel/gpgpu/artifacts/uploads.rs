@@ -389,6 +389,16 @@ pub(crate) fn upload_scene_aabb_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
+pub(crate) fn upload_lab256_multiphase_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *LAB256_MULTIPHASE_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(dev, LAB256_MULTIPHASE_ADLS_ARTIFACT, LAB256_MULTIPHASE_ADLS_GPU)?;
+    *LAB256_MULTIPHASE_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuArtifactReloadError {
     UnknownKernel,
@@ -436,6 +446,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     FONT_OUTLINE_MESH_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     SCENE_AABB_KERNEL_NAME,
+    LAB256_MULTIPHASE_KERNEL_NAME,
 ];
 
 pub(crate) fn reload_known_kernel_artifact(
@@ -528,6 +539,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: SCENE_AABB_ADLS_ARTIFACT,
             gpu: SCENE_AABB_ADLS_GPU,
             upload: &SCENE_AABB_UPLOAD,
+        }),
+        LAB256_MULTIPHASE_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: LAB256_MULTIPHASE_ADLS_ARTIFACT,
+            gpu: LAB256_MULTIPHASE_ADLS_GPU,
+            upload: &LAB256_MULTIPHASE_UPLOAD,
         }),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT,

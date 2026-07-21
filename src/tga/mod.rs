@@ -158,6 +158,7 @@ static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
 static TGA_LAST_WORKING_LEASE: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
+static TGA_LINK_RECOVERY_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
@@ -1015,7 +1016,63 @@ pub(crate) async fn tga_task() {
     loop {
         if !is_online() {
             crate::pci::enumerate_impl();
-            let _ = try_init();
+            let mut initialized = try_init();
+            let disconnected = TGA_LAST_DISCONNECT.lock().as_ref().copied();
+            if !initialized
+                && let Some(previous) = disconnected
+                && TGA_LINK_RECOVERY_ATTEMPTED
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
+                match crate::pci::recover_dedicated_downstream_link(
+                    previous.bus,
+                    previous.slot,
+                    previous.function,
+                ) {
+                    Ok(recovery) => {
+                        // Link training is asynchronous. Do not block the kernel while the
+                        // root port and freshly configured FPGA negotiate it.
+                        Timer::after(EmbassyDuration::from_millis(100)).await;
+                        crate::pci::enumerate_impl();
+                        initialized = try_init();
+                        if initialized {
+                            crate::log_warn!(
+                                target: "boot";
+                                "tga: hotplug event (warn marks a significant low-level event, not a detected fault): upstream link retrain completed bridge={:02X}:{:02X}.{} target={:02X}:{:02X}.{} link_status_before=0x{:04X} result=endpoint-online\n",
+                                recovery.bridge_bus,
+                                recovery.bridge_slot,
+                                recovery.bridge_function,
+                                previous.bus,
+                                previous.slot,
+                                previous.function,
+                                recovery.link_status_before
+                            );
+                        } else {
+                            crate::log_warn!(
+                                target: "boot";
+                                "tga: hotplug recovery failed: upstream link retrain did not return endpoint bridge={:02X}:{:02X}.{} target={:02X}:{:02X}.{} link_status_before=0x{:04X}\n",
+                                recovery.bridge_bus,
+                                recovery.bridge_slot,
+                                recovery.bridge_function,
+                                previous.bus,
+                                previous.slot,
+                                previous.function,
+                                recovery.link_status_before
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        crate::log_warn!(
+                            target: "boot";
+                            "tga: hotplug recovery skipped (warn marks a significant low-level event, not a detected fault): target={:02X}:{:02X}.{} reason={:?}\n",
+                            previous.bus,
+                            previous.slot,
+                            previous.function,
+                            error
+                        );
+                    }
+                }
+            }
             presence_miss_streak = 0;
             next_tick = Instant::now() + period;
             next_presence_probe = Instant::now() + presence_probe_period;
@@ -1043,6 +1100,7 @@ pub(crate) async fn tga_task() {
                                 TGA_PCI_OWNER,
                             );
                             *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
+                            TGA_LINK_RECOVERY_ATTEMPTED.store(false, Ordering::Release);
                             TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
                             wake_completion_waiter_offline();
                         }

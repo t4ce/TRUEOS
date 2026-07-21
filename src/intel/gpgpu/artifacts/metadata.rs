@@ -175,3 +175,11 @@ pub(crate) const SCENE_AABB_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArti
     spv: SCENE_AABB_ADLS_SPV,
     bin_sha256: SCENE_AABB_ADLS_BIN_SHA256,
 };
+
+pub(crate) const LAB256_MULTIPHASE_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact {
+    name: LAB256_MULTIPHASE_KERNEL_NAME,
+    target: "adls",
+    bin: LAB256_MULTIPHASE_ADLS_BIN,
+    spv: LAB256_MULTIPHASE_ADLS_SPV,
+    bin_sha256: LAB256_MULTIPHASE_ADLS_BIN_SHA256,
+};
