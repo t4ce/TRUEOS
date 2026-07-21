@@ -43,7 +43,10 @@ module truega_completion_irq (
                     request_issued <= 1'b1;
                 end
 
-                if (controller_ack_i && request_issued) begin
+                // ACK may be returned in the same cycle as request_o. Include
+                // the pre-clock pending state so that zero-latency controller
+                // models cannot lose the acceptance edge.
+                if (controller_ack_i && (request_issued || (pending && !request_issued))) begin
                     controller_accepted <= 1'b1;
                 end
 

@@ -285,9 +285,25 @@ fn _loop(executor: &'static Executor) -> ! {
         // lanes and cross into the BSP through the TRUEOSFS request broker.
         debug_assert!(core::ptr::eq(executor, unsafe { &*percpu::this_cpu().executor_ptr() },));
         runtime::poll_local_executor();
+        service_pending_bsp_interrupts();
         //if counter.is_multiple_of(10_000_000) {
         //    log_os::debugcon_write_byte_raw(b'0');
         //}
         core::hint::spin_loop()
+    }
+}
+
+/// Admit pending hardware interrupts at a controlled boundary in the BSP's
+/// polling scheduler.
+///
+/// AP runtimes already open an interrupt window with `sti; hlt`, but the BSP
+/// never halts and historically left IF clear for its entire executor loop.
+/// Keep interrupts masked while Rust tasks and their locks are being polled;
+/// the instruction after `sti` consumes the architectural interrupt shadow,
+/// allowing a pending vector to enter before `cli` closes the window again.
+#[inline(always)]
+fn service_pending_bsp_interrupts() {
+    unsafe {
+        core::arch::asm!("sti", "nop", "cli", options(nomem, nostack));
     }
 }

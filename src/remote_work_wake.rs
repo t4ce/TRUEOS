@@ -104,7 +104,7 @@ fn local_x2apic_enabled() -> bool {
 }
 
 #[inline]
-fn local_eoi() {
+pub(crate) fn local_eoi() {
     unsafe {
         if local_x2apic_enabled() {
             Msr::new(MSR_IA32_X2APIC_EOI).write(0);

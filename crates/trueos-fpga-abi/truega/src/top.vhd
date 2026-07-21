@@ -130,6 +130,10 @@ architecture rtl of top is
 	constant BAR0_DBG_LAST_CPLD_DATA_DW : std_logic_vector(9 downto 0) := "0000010111";
 	constant BAR0_CALL_DOORBELL_DW : integer := 16#080# / 4;
 	constant BAR0_CALL_IRQ_ACK_DW : integer := 16#084# / 4;
+	constant BAR0_CALL_IRQ_RETIRE_COUNT_DW : integer := 16#088# / 4;
+	constant BAR0_CALL_IRQ_REQUEST_COUNT_DW : integer := 16#08C# / 4;
+	constant BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW : integer := 16#090# / 4;
+	constant BAR0_CALL_IRQ_STATE_DW : integer := 16#094# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
@@ -182,6 +186,10 @@ architecture rtl of top is
 	signal call_irq_msinum : std_logic_vector(4 downto 0);
 	signal call_irq_retire : std_logic := '0';
 	signal call_irq_bar_ack : std_logic := '0';
+	signal call_irq_request_prev : std_logic := '0';
+	signal call_irq_controller_ack_prev : std_logic := '0';
+	signal call_irq_request_count : unsigned(31 downto 0) := (others => '0');
+	signal call_irq_controller_ack_count : unsigned(31 downto 0) := (others => '0');
 
 	-- Active-high logical state (the board outputs are inverted below).  Seed a
 	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
@@ -629,6 +637,10 @@ begin
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
 					call_retire_count <= (others => '0');
+					call_irq_request_prev <= '0';
+					call_irq_controller_ack_prev <= '0';
+					call_irq_request_count <= (others => '0');
+					call_irq_controller_ack_count <= (others => '0');
 				capture_pending <= '0';
 				rx_snapshot_data <= (others => '0');
 				rx_snapshot_valid <= (others => '0');
@@ -685,6 +697,14 @@ begin
 					function_start <= '0';
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
+					if (call_irq_request = '1') and (call_irq_request_prev = '0') then
+						call_irq_request_count <= call_irq_request_count + 1;
+					end if;
+					if (call_irq_controller_ack = '1') and (call_irq_controller_ack_prev = '0') then
+						call_irq_controller_ack_count <= call_irq_controller_ack_count + 1;
+					end if;
+					call_irq_request_prev <= call_irq_request;
+					call_irq_controller_ack_prev <= call_irq_controller_ack;
 					dbg_rx_bar0_eop <= '0';
 					dbg_hit_write <= '0';
 					dbg_hit_read <= '0';
@@ -893,6 +913,17 @@ begin
 									read_data_dw := firmware_manifest_word;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									read_data_dw := std_logic_vector(call_retire_count);
+								elsif addr_index = BAR0_CALL_IRQ_RETIRE_COUNT_DW then
+									read_data_dw := std_logic_vector(call_retire_count);
+								elsif addr_index = BAR0_CALL_IRQ_REQUEST_COUNT_DW then
+									read_data_dw := std_logic_vector(call_irq_request_count);
+								elsif addr_index = BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW then
+									read_data_dw := std_logic_vector(call_irq_controller_ack_count);
+								elsif addr_index = BAR0_CALL_IRQ_STATE_DW then
+									read_data_dw(0) := call_irq_status;
+									read_data_dw(1) := call_irq_request;
+									read_data_dw(2) := call_irq_controller_ack;
+									read_data_dw(3) := call_flags(0);
 								else
 									case addr_dw is
 									when BAR0_LED_DW =>

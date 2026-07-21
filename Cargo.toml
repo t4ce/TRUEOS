@@ -20,6 +20,7 @@ trueos_lumen = ["dep:lumen"]
 x86_64 = { version = "0.15.4", default-features = false, features = ["instructions", "nightly"] }
 core3 = { version = "0.1.2", default-features = false, features = ["alloc"] }
 spin = "0.10"
+atomic-waker = { version = "1.1.2", default-features = false }
 embassy-executor = { version = "0.10.0", default-features = false, features = ["executor-thread", "platform-spin"] }
 embassy-sync = { version = "0.8.0", default-features = false }
 embassy-time = { version = "0.5.1", default-features = false, features = ["tick-hz-1_000"] }

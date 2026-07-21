@@ -156,6 +156,14 @@ pub const BAR0_LIVENESS_MAGIC_OFFSET: usize = 0x020;
 pub const BAR0_CALL_DOORBELL_OFFSET: usize = 0x080;
 /// Optional completion-interrupt acknowledgement. Polling firmware may ignore it.
 pub const BAR0_CALL_IRQ_ACK_OFFSET: usize = 0x084;
+/// Read-only count of work-package retirements presented to the interrupt bridge.
+pub const BAR0_CALL_IRQ_RETIRE_COUNT_OFFSET: usize = 0x088;
+/// Read-only count of interrupt request pulses presented to the PCIe controller.
+pub const BAR0_CALL_IRQ_REQUEST_COUNT_OFFSET: usize = 0x08C;
+/// Read-only count of request acknowledgements returned by the PCIe controller.
+pub const BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_OFFSET: usize = 0x090;
+/// Read-only live interrupt bridge state: status, request, controller ACK, enable.
+pub const BAR0_CALL_IRQ_STATE_OFFSET: usize = 0x094;
 /// First byte of the fixed, dword-addressable call window.
 pub const BAR0_WORK_PACKAGE_OFFSET: usize = 0x100;
 /// Read-only manifest fused into the same firmware image as the function circuits.

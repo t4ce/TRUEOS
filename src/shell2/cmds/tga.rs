@@ -1,4 +1,6 @@
+use alloc::sync::Arc;
 use embassy_executor::Spawner;
+use embassy_sync::signal::Signal;
 
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
@@ -26,18 +28,34 @@ fn parse_u32(value: &str) -> Option<u32> {
 
 fn print_status(io: &'static dyn ShellBackend2) {
     let stats = crate::r::fpga_offload::stats();
+    let hardware = crate::tga::completion_irq_hardware_stats().unwrap_or_default();
     print_shell_line(
         io,
         alloc::format!(
-            "tga: online={} protocol={} generation={} submitted={} completed={} failed={} queued={} active={}",
+            "tga: online={} protocol={} irq_ready={} generation={} submitted={} completed={} failed={} queued={} active={}",
             crate::tga::is_online(),
             crate::tga::protocol_alive(),
+            crate::tga::completion_interrupt_configured(),
             crate::tga::connection_generation(),
             stats.submitted,
             stats.completed,
             stats.failed,
             stats.queued,
             stats.active,
+        )
+        .as_str(),
+    );
+    print_shell_line(
+        io,
+        alloc::format!(
+            "tga: irq={} wakes={} timeout_recoveries={} hw_retire={} hw_req={} hw_ack={} hw_state={:#04x}",
+            stats.interrupts,
+            stats.interrupt_wakes,
+            stats.timeout_recoveries,
+            hardware.retirements,
+            hardware.requests,
+            hardware.controller_acks,
+            hardware.state,
         )
         .as_str(),
     );
@@ -151,28 +169,69 @@ async fn tga_call_task(target: MatrixTarget, call: TgaCall) {
 async fn run_test(target: &MatrixTarget) -> Result<(), crate::r::fpga_offload::Error> {
     let before = crate::r::fpga_offload::stats();
     let heartbeat = crate::r::fpga_offload::led_step_heartbeat().await?;
-    let sum = crate::r::fpga_offload::add_u32(0x1234_5678, 0x1111_1111).await?;
+    let sum = add_u32_via_callback(0x1234_5678, 0x1111_1111).await?;
     let q8 = run_q8_golden().await?;
-    let pass = heartbeat && sum == 0x2345_6789 && q8_matches_golden(&q8);
     let after = crate::r::fpga_offload::stats();
+    let interrupt_delta = after.interrupts.saturating_sub(before.interrupts);
+    let timeout_recovery_delta = after
+        .timeout_recoveries
+        .saturating_sub(before.timeout_recoveries);
+    let pass = heartbeat
+        && sum == 0x2345_6789
+        && q8_matches_golden(&q8)
+        && interrupt_delta >= 3
+        && timeout_recovery_delta == 0;
 
     print_matrix_target_line(
         target,
         alloc::format!(
-            "tga: test={} heartbeat={} add={sum:#010x} q8_dot={} q8_term_q30={} calls_completed_delta={} transport=bar0-work-package",
+            "tga: test={} heartbeat={} add={sum:#010x} q8_dot={} q8_term_q30={}",
             if pass { "pass" } else { "fail" },
             heartbeat,
             q8.dot,
             q8.term_q30,
-            after.completed.saturating_sub(before.completed),
         )
         .as_str(),
+    );
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "tga: test counters completed_delta={} irq_delta={} timeout_recovery_delta={}",
+            after.completed.saturating_sub(before.completed),
+            interrupt_delta,
+            timeout_recovery_delta,
+        )
+        .as_str(),
+    );
+    print_matrix_target_line(
+        target,
+        "tga: test path transport=bar0-inline completion=msi-worker-callback",
     );
     if pass {
         Ok(())
     } else {
         Err(crate::r::fpga_offload::Error::Protocol)
     }
+}
+
+async fn add_u32_via_callback(a: u32, b: u32) -> Result<u32, crate::r::fpga_offload::Error> {
+    use trueos_fpga_abi::builtins::add_u32 as function;
+
+    let reply = Arc::new(Signal::<
+        crate::wait::EmbassySpinRawMutex,
+        crate::r::fpga_offload::CallResult,
+    >::new());
+    let callback_reply = Arc::clone(&reply);
+    let input = function::encode(a, b);
+    crate::r::fpga_offload::submit_with_callback(
+        function::ID,
+        &input,
+        function::OUTPUT_BYTES,
+        move |result| callback_reply.signal(result),
+    )?;
+
+    let completion = reply.wait().await?;
+    function::decode(completion.output()).ok_or(crate::r::fpga_offload::Error::Protocol)
 }
 
 async fn run_q8_golden()

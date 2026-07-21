@@ -23,10 +23,20 @@ const MAX_PCI_CLAIMS: usize = 64;
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
+const PCI_COMMAND_INTX_DISABLE: u16 = 1 << 10;
 const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
 
 const PCI_CAP_PTR: u16 = 0x34;
+const PCI_CAP_ID_MSI: u8 = 0x05;
 const PCI_CAP_ID_PCI_EXPRESS: u8 = 0x10;
+const PCI_MSI_CONTROL: u16 = 0x02;
+const PCI_MSI_ADDRESS_LO: u16 = 0x04;
+const PCI_MSI_ADDRESS_HI: u16 = 0x08;
+const PCI_MSI_DATA_32: u16 = 0x08;
+const PCI_MSI_DATA_64: u16 = 0x0C;
+const PCI_MSI_ENABLE: u16 = 1 << 0;
+const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
+const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
 const PCI_EXP_DEVCTL: u16 = 0x08;
 const PCI_EXP_DEVCAP_FLR: u32 = 1 << 28;
@@ -495,6 +505,65 @@ pub fn enable_mem_space_only(bus: u8, slot: u8, function: u8) {
     cmd |= PCI_COMMAND_MEM_SPACE;
     cmd &= !PCI_COMMAND_BUS_MASTER;
     config_write_u16(bus, slot, function, 0x04, cmd);
+}
+
+/// Program one edge-triggered, fixed-delivery MSI.
+///
+/// The destination is intentionally restricted to an 8-bit APIC ID. Systems that
+/// need wider x2APIC destinations require interrupt remapping, which is outside this
+/// endpoint's small inline-BAR transport contract.
+///
+/// PCI_COMMAND_BUS_MASTER is required even though this transport does not implement
+/// DMA: an MSI is a device-originated Memory Write TLP, and PCIe suppresses it while
+/// Bus Master Enable is clear. Enabling the command bit grants requester permission;
+/// it does not create a DMA/requester datapath in the endpoint firmware.
+pub fn enable_single_msi(
+    bus: u8,
+    slot: u8,
+    function: u8,
+    vector: u8,
+    destination_apic_id: u32,
+) -> bool {
+    if destination_apic_id > u8::MAX as u32 || vector < 0x20 {
+        return false;
+    }
+
+    let Some(cap) = find_capability_bdf(bus, slot, function, PCI_CAP_ID_MSI) else {
+        return false;
+    };
+    let control = config_read_u16(bus, slot, function, cap + PCI_MSI_CONTROL);
+    if control == u16::MAX {
+        return false;
+    }
+
+    // Disable while changing the message and request exactly one vector.
+    let disabled = control & !(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_MESSAGE_ENABLE);
+    config_write_u16(bus, slot, function, cap + PCI_MSI_CONTROL, disabled);
+
+    let address = 0xFEE0_0000u32 | ((destination_apic_id & 0xFF) << 12);
+    config_write_u32(bus, slot, function, cap + PCI_MSI_ADDRESS_LO, address);
+    let data_offset = if (control & PCI_MSI_64_BIT_CAPABLE) != 0 {
+        config_write_u32(bus, slot, function, cap + PCI_MSI_ADDRESS_HI, 0);
+        PCI_MSI_DATA_64
+    } else {
+        PCI_MSI_DATA_32
+    };
+    config_write_u16(bus, slot, function, cap + data_offset, vector as u16);
+    config_write_u16(bus, slot, function, cap + PCI_MSI_CONTROL, disabled | PCI_MSI_ENABLE);
+
+    let mut command = config_read_u16(bus, slot, function, 0x04);
+    command |= PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER | PCI_COMMAND_INTX_DISABLE;
+    config_write_u16(bus, slot, function, 0x04, command);
+
+    let enabled = config_read_u16(bus, slot, function, cap + PCI_MSI_CONTROL);
+    let programmed_address = config_read_u32(bus, slot, function, cap + PCI_MSI_ADDRESS_LO);
+    let programmed_data = config_read_u16(bus, slot, function, cap + data_offset);
+    let programmed_command = config_read_u16(bus, slot, function, 0x04);
+    (enabled & PCI_MSI_ENABLE) != 0
+        && programmed_address == address
+        && programmed_data == vector as u16
+        && (programmed_command & (PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER))
+            == (PCI_COMMAND_MEM_SPACE | PCI_COMMAND_BUS_MASTER)
 }
 
 pub fn try_function_level_reset(bus: u8, slot: u8, function: u8) -> bool {

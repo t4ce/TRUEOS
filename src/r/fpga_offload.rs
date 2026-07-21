@@ -16,7 +16,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use spin::Mutex;
 use trueos_fpga_abi::{
     ABI_VERSION, FLAG_INTERRUPT_ON_COMPLETE, FunctionId, INLINE_INPUT_BYTES, INLINE_OUTPUT_BYTES,
@@ -25,8 +25,7 @@ use trueos_fpga_abi::{
 
 const MAX_ACTIVE_CALLS: usize = 32;
 const DEVICE_RETRY_MS: u64 = 100;
-const COMPLETION_POLL_MS: u64 = 1;
-const COMPLETION_POLL_LIMIT: u32 = 2_000;
+const COMPLETION_INTERRUPT_TIMEOUT_MS: u64 = 2_000;
 const HEARTBEAT_PERIOD_MS: u64 = 250;
 
 static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(1);
@@ -78,6 +77,9 @@ pub struct Stats {
     pub failed: u64,
     pub queued: usize,
     pub active: usize,
+    pub interrupts: u64,
+    pub interrupt_wakes: u64,
+    pub timeout_recoveries: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -116,6 +118,8 @@ struct ServiceState {
     submitted: u64,
     completed: u64,
     failed: u64,
+    interrupt_wakes: u64,
+    timeout_recoveries: u64,
 }
 
 impl ServiceState {
@@ -126,6 +130,8 @@ impl ServiceState {
             submitted: 0,
             completed: 0,
             failed: 0,
+            interrupt_wakes: 0,
+            timeout_recoveries: 0,
         }
     }
 }
@@ -284,7 +290,20 @@ pub fn stats() -> Stats {
         failed: service.failed,
         queued: service.queue.len(),
         active: service.calls.len(),
+        interrupts: crate::tga::completion_interrupt_count(),
+        interrupt_wakes: service.interrupt_wakes,
+        timeout_recoveries: service.timeout_recoveries,
     }
+}
+
+fn record_interrupt_wake() {
+    let mut service = SERVICE.lock();
+    service.interrupt_wakes = service.interrupt_wakes.saturating_add(1);
+}
+
+fn record_timeout_recovery() {
+    let mut service = SERVICE.lock();
+    service.timeout_recoveries = service.timeout_recoveries.saturating_add(1);
 }
 
 fn enqueue(
@@ -430,7 +449,7 @@ pub async fn fpga_offload_service_task() {
         return;
     }
     crate::log!(
-        "fpga-offload: single worker started functions=3 transport=tga-bar package_bytes={}\n",
+        "fpga-offload: single worker started functions=3 transport=tga-bar completion=msi-worker-wake package_bytes={}\n",
         core::mem::size_of::<WorkPackage>()
     );
 
@@ -443,6 +462,18 @@ pub async fn fpga_offload_service_task() {
         while !crate::tga::is_online() {
             Timer::after(EmbassyDuration::from_millis(DEVICE_RETRY_MS)).await;
         }
+
+        let interrupt_sequence = match crate::tga::arm_offload_interrupt() {
+            Ok(sequence) => sequence,
+            Err(crate::tga::OffloadTransportError::Offline) => {
+                finish_call(request.call_id, Err(Error::DeviceLost));
+                continue;
+            }
+            Err(crate::tga::OffloadTransportError::InvalidPackage) => {
+                finish_call(request.call_id, Err(Error::Protocol));
+                continue;
+            }
+        };
 
         let package = package_for(request);
         match crate::tga::submit_offload_work_package(&package) {
@@ -457,35 +488,55 @@ pub async fn fpga_offload_service_task() {
             }
         }
 
-        let mut completion_polls = 0u32;
-        loop {
-            Timer::after(EmbassyDuration::from_millis(COMPLETION_POLL_MS)).await;
-            match crate::tga::offload_work_state() {
-                Ok(WorkState::Complete | WorkState::Failed) => {
-                    let result = crate::tga::read_offload_work_package()
-                        .map_err(|_| Error::Protocol)
-                        .and_then(|package| decode_completion(request, package));
-                    let _ = crate::tga::ack_offload_interrupt();
-                    finish_call(request.call_id, result);
-                    break;
-                }
-                Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
-                    completion_polls = completion_polls.saturating_add(1);
-                    if completion_polls >= COMPLETION_POLL_LIMIT {
-                        finish_call(request.call_id, Err(Error::Protocol));
-                        break;
+        let interrupt_wait =
+            with_timeout(EmbassyDuration::from_millis(COMPLETION_INTERRUPT_TIMEOUT_MS), async {
+                let mut sequence = interrupt_sequence;
+                loop {
+                    sequence = crate::tga::wait_for_completion_interrupt(sequence).await;
+                    record_interrupt_wake();
+                    match crate::tga::offload_work_state() {
+                        Ok(WorkState::Complete | WorkState::Failed) => return Ok(()),
+                        Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
+                            // A stale or unrelated edge cannot complete the call. Re-arm
+                            // the sequence wait without re-polling the BAR.
+                        }
+                        Err(crate::tga::OffloadTransportError::Offline) => {
+                            return Err(Error::DeviceLost);
+                        }
+                        Err(crate::tga::OffloadTransportError::InvalidPackage) => {
+                            return Err(Error::Protocol);
+                        }
                     }
                 }
-                Err(crate::tga::OffloadTransportError::Offline) => {
-                    finish_call(request.call_id, Err(Error::DeviceLost));
-                    break;
+            })
+            .await;
+
+        let terminal = match interrupt_wait {
+            Ok(result) => result,
+            Err(_) => match crate::tga::offload_work_state() {
+                Ok(WorkState::Complete | WorkState::Failed) => {
+                    // Timeout recovery is intentionally a single diagnostic read,
+                    // never a replacement polling loop.
+                    record_timeout_recovery();
+                    Ok(())
                 }
-                Err(crate::tga::OffloadTransportError::InvalidPackage) => {
-                    finish_call(request.call_id, Err(Error::Protocol));
-                    break;
+                Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
+                    Err(Error::Protocol)
                 }
-            }
+                Err(crate::tga::OffloadTransportError::Offline) => Err(Error::DeviceLost),
+                Err(crate::tga::OffloadTransportError::InvalidPackage) => Err(Error::Protocol),
+            },
+        };
+
+        let result = terminal.and_then(|()| {
+            crate::tga::read_offload_work_package()
+                .map_err(|_| Error::Protocol)
+                .and_then(|package| decode_completion(request, package))
+        });
+        if terminal.is_ok() {
+            let _ = crate::tga::ack_offload_interrupt();
         }
+        finish_call(request.call_id, result);
     }
 }
 

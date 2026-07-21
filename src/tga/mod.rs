@@ -1,7 +1,11 @@
+use atomic_waker::AtomicWaker;
+use core::future::poll_fn;
 use core::ptr::{NonNull, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering, fence};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
+use core::task::Poll;
 use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 // this connected to the FPGA-based "TGA" adapter in the FPGA lab, which implements a tiny MMIO protocol
 
@@ -29,6 +33,13 @@ const TGA_LED_SET_OFF: usize = trueos_fpga_abi::BAR0_LED_OFFSET;
 const TGA_MAGIC_OFF: usize = trueos_fpga_abi::BAR0_LIVENESS_MAGIC_OFFSET;
 const TGA_OFFLOAD_DOORBELL_OFF: usize = trueos_fpga_abi::BAR0_CALL_DOORBELL_OFFSET;
 const TGA_OFFLOAD_IRQ_ACK_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_ACK_OFFSET;
+const TGA_OFFLOAD_IRQ_RETIRE_COUNT_OFF: usize =
+    trueos_fpga_abi::BAR0_CALL_IRQ_RETIRE_COUNT_OFFSET;
+const TGA_OFFLOAD_IRQ_REQUEST_COUNT_OFF: usize =
+    trueos_fpga_abi::BAR0_CALL_IRQ_REQUEST_COUNT_OFFSET;
+const TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF: usize =
+    trueos_fpga_abi::BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_OFFSET;
+const TGA_OFFLOAD_IRQ_STATE_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_STATE_OFFSET;
 const TGA_OFFLOAD_WORK_PACKAGE_OFF: usize = trueos_fpga_abi::BAR0_WORK_PACKAGE_OFFSET;
 const TGA_FIRMWARE_MANIFEST_OFF: usize = trueos_fpga_abi::BAR0_FIRMWARE_MANIFEST_OFFSET;
 
@@ -38,6 +49,7 @@ const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
 // fpga_offload::led_step_heartbeat so it proves the complete function-call path.
 const TGA_HEARTBEAT_MMIO_ENABLED: bool = false;
 const TGA_MAGIC_EXPECTED: u32 = 0x5453_4154;
+pub(crate) const TGA_COMPLETION_VECTOR: u8 = 0x42;
 
 struct Tga {
     bus: u8,
@@ -94,6 +106,14 @@ pub(crate) enum OffloadTransportError {
     InvalidPackage,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct CompletionIrqHardwareStats {
+    pub retirements: u32,
+    pub requests: u32,
+    pub controller_acks: u32,
+    pub state: u32,
+}
+
 impl Tga {
     #[inline(always)]
     fn write_led(&self, value: u32) {
@@ -140,6 +160,11 @@ static TGA_LAST_WORKING_LEASE: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(No
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static TGA_LIVENESS_LOGGED: AtomicBool = AtomicBool::new(false);
 static TGA_CONNECTION_GENERATION: AtomicU32 = AtomicU32::new(0);
+static TGA_IRQ_CONFIGURED: AtomicBool = AtomicBool::new(false);
+static TGA_IRQ_CONFIG_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+static TGA_COMPLETION_IRQ_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static TGA_COMPLETION_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+static TGA_COMPLETION_IRQ_WAKER: AtomicWaker = AtomicWaker::new();
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -149,6 +174,124 @@ const TGA_PRESENCE_MISS_THRESHOLD: u8 = 10;
 
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
+
+pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
+    idt[TGA_COMPLETION_VECTOR].set_handler_fn(tga_completion_isr);
+}
+
+#[allow(non_snake_case)]
+extern "x86-interrupt" fn tga_completion_isr(_stack_frame: InterruptStackFrame) {
+    TGA_COMPLETION_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+    TGA_COMPLETION_IRQ_SEQUENCE.fetch_add(1, Ordering::Release);
+    TGA_COMPLETION_IRQ_WAKER.wake();
+    crate::remote_work_wake::local_eoi();
+}
+
+pub(crate) fn completion_interrupt_count() -> u64 {
+    TGA_COMPLETION_IRQ_COUNT.load(Ordering::Acquire)
+}
+
+pub(crate) fn completion_interrupt_configured() -> bool {
+    TGA_IRQ_CONFIGURED.load(Ordering::Acquire)
+}
+
+pub(crate) fn completion_irq_hardware_stats() -> Option<CompletionIrqHardwareStats> {
+    let guard = TGA.lock();
+    let tga = guard.as_ref()?;
+    fence(Ordering::Acquire);
+    Some(CompletionIrqHardwareStats {
+        retirements: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_RETIRE_COUNT_OFF),
+        requests: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_REQUEST_COUNT_OFF),
+        controller_acks: Tga::read_reg(
+            tga.mmio_base + TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF,
+        ),
+        state: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_STATE_OFF),
+    })
+}
+
+/// Clear any sticky device-side completion and return the interrupt sequence
+/// against which the next single-slot submission must wait.
+pub(crate) fn arm_offload_interrupt() -> Result<u64, OffloadTransportError> {
+    if !completion_interrupt_configured() {
+        return Err(OffloadTransportError::Offline);
+    }
+    ack_offload_interrupt()?;
+    fence(Ordering::SeqCst);
+    Ok(TGA_COMPLETION_IRQ_SEQUENCE.load(Ordering::Acquire))
+}
+
+/// Sleep the worker until the ISR advances the hardware completion sequence.
+/// AtomicWaker keeps the ISR free of MMIO, allocation, callbacks, and spin locks.
+pub(crate) async fn wait_for_completion_interrupt(after: u64) -> u64 {
+    poll_fn(|cx| {
+        let observed = TGA_COMPLETION_IRQ_SEQUENCE.load(Ordering::Acquire);
+        if observed != after {
+            return Poll::Ready(observed);
+        }
+
+        TGA_COMPLETION_IRQ_WAKER.register(cx.waker());
+        let observed = TGA_COMPLETION_IRQ_SEQUENCE.load(Ordering::Acquire);
+        if observed != after {
+            Poll::Ready(observed)
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+fn wake_completion_waiter_offline() {
+    TGA_IRQ_CONFIGURED.store(false, Ordering::Release);
+    TGA_COMPLETION_IRQ_SEQUENCE.fetch_add(1, Ordering::Release);
+    TGA_COMPLETION_IRQ_WAKER.wake();
+}
+
+fn configure_completion_interrupt(tga: &Tga) -> bool {
+    let Some(destination_apic_id) = crate::percpu::cpu_slots()
+        .iter()
+        .find(|cpu| cpu.slot == 0)
+        .map(|cpu| cpu.lapic_id)
+    else {
+        return false;
+    };
+
+    // Drop any terminal status left by an earlier software generation before
+    // unmasking MSI in config space.
+    Tga::write_reg(tga.offload_irq_ack_reg, 1);
+    fence(Ordering::SeqCst);
+
+    if !crate::pci::enable_single_msi(
+        tga.bus,
+        tga.slot,
+        tga.function,
+        TGA_COMPLETION_VECTOR,
+        destination_apic_id,
+    ) {
+        if !TGA_IRQ_CONFIG_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_warn!(
+                "tga: endpoint protocol ready but single-vector MSI setup failed bdf={:02X}:{:02X}.{}; completion transport remains unpublished\n",
+                tga.bus,
+                tga.slot,
+                tga.function
+            );
+        }
+        return false;
+    }
+
+    TGA_IRQ_CONFIG_FAILURE_LOGGED.store(false, Ordering::Release);
+    TGA_IRQ_CONFIGURED.store(true, Ordering::Release);
+    let command = crate::pci::config_read_u16(tga.bus, tga.slot, tga.function, 0x04);
+    crate::log!(
+        "tga: completion interrupt enabled mode=msi vector=0x{:02X} destination_apic={} command=0x{:04X} requester=msi-only bdf={:02X}:{:02X}.{}\n",
+        TGA_COMPLETION_VECTOR,
+        destination_apic_id,
+        command,
+        tga.bus,
+        tga.slot,
+        tga.function
+    );
+    true
+}
 
 fn tga_bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
     // BAR sizing writes can confuse some devices if decode is enabled.
@@ -555,6 +698,12 @@ pub fn try_init() -> bool {
         return false;
     }
 
+    if !configure_completion_interrupt(&tga) {
+        TGA_IRQ_CONFIGURED.store(false, Ordering::Release);
+        let _ = crate::pci::release_device_claim(dev.bus, dev.slot, dev.function, TGA_PCI_OWNER);
+        return false;
+    }
+
     if let Some(prev) = TGA_LAST_DISCONNECT.lock().take() {
         log_reconnect_delta(prev, &tga);
     } else {
@@ -841,6 +990,7 @@ pub(crate) async fn tga_task() {
                             );
                             *TGA_LAST_DISCONNECT.lock() = Some(snapshot_from_tga(&old));
                             TGA_LIVENESS_LOGGED.store(false, Ordering::Release);
+                            wake_completion_waiter_offline();
                         }
                     }
                     presence_miss_streak = 0;
