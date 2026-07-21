@@ -267,19 +267,29 @@ pub async fn add_u32(a: u32, b: u32) -> Result<u32, Error> {
     function::decode(completion.output()).ok_or(Error::Protocol)
 }
 
-/// Execute one fused 32-lane Q8_0 dot and scale operation.
-///
-/// Both arguments retain the native model-image layout: a little-endian FP16
-/// scale followed by 32 signed quant bytes.
+/// Feed one unchanged native Q8_0 activation/weight pair into the fixed
+/// layer-row accumulator. The slot keeps only the signed Q30 accumulator
+/// between calls; the single worker remains the transport owner.
+pub async fn lfm25_q8_row_block(
+    first: bool,
+    last: bool,
+    block_index: u8,
+    activation: &[u8; 34],
+    weight: &[u8; 34],
+) -> Result<trueos_fpga_abi::builtins::lfm25_q8_row_block::Q8RowBlockResult, Error> {
+    use trueos_fpga_abi::builtins::lfm25_q8_row_block as function;
+
+    let input = function::encode(first, last, block_index, activation, weight);
+    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
+    function::decode(completion.output()).ok_or(Error::Protocol)
+}
+
+/// Compatibility probe: execute one block as a one-block row.
 pub async fn lfm25_q8_block(
     activation: &[u8; 34],
     weight: &[u8; 34],
-) -> Result<trueos_fpga_abi::builtins::lfm25_q8_block::Q8BlockResult, Error> {
-    use trueos_fpga_abi::builtins::lfm25_q8_block as function;
-
-    let input = function::encode(activation, weight);
-    let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
-    function::decode(completion.output()).ok_or(Error::Protocol)
+) -> Result<trueos_fpga_abi::builtins::lfm25_q8_row_block::Q8RowBlockResult, Error> {
+    lfm25_q8_row_block(true, true, 0, activation, weight).await
 }
 
 pub fn stats() -> Stats {

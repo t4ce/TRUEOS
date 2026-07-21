@@ -132,6 +132,7 @@ module truega_functions(
     wire q8_done;
     wire signed [31:0] q8_dot;
     wire signed [63:0] q8_term_q30;
+    wire signed [63:0] q8_row_q30;
     wire q8_scale_error;
 
     truega_scalar_functions scalar_functions(
@@ -146,17 +147,21 @@ module truega_functions(
         .valid(scalar_valid)
     );
 
-    truega_q8_0_block_slot q8_block_slot(
+    truega_q8_0_row_block_slot #(
+        .ROW_DIAGNOSTIC_ENABLE(1)
+    ) q8_row_block_slot(
         .clk(clk),
         .reset_n(reset_n),
         .start_i(q8_start),
-        .activation_block_i(input_data[271:0]),
-        .weight_block_i(input_data[543:272]),
+        .control_i(input_data[31:0]),
+        .activation_block_i(input_data[303:32]),
+        .weight_block_i(input_data[575:304]),
         .busy_o(q8_busy),
         .done_o(q8_done),
         .dot_o(q8_dot),
         .term_q30_o(q8_term_q30),
-        .scale_error_o(q8_scale_error)
+        .row_q30_o(q8_row_q30),
+        .error_o(q8_scale_error)
     );
 
     always @* begin
@@ -175,8 +180,8 @@ module truega_functions(
                 valid = 1'b1;
             end
             16'd2: begin
-                required_input_bytes = 16'd68;
-                output_bytes = 16'd12;
+                required_input_bytes = 16'd72;
+                output_bytes = 16'd20;
                 valid = 1'b1;
             end
             default: begin end
@@ -221,6 +226,7 @@ module truega_functions(
                 output_data <= 768'd0;
                 output_data[31:0] <= q8_dot;
                 output_data[95:32] <= q8_term_q30;
+                output_data[159:96] <= q8_row_q30;
                 busy <= 1'b0;
                 done <= 1'b1;
                 error <= q8_scale_error;
@@ -584,6 +590,155 @@ module truega_q8_0_block_slot (
     end
 endmodule
 
+// Stateful Q8_0 row sequencer for one block per 72-byte inline BAR call.
+//
+// The caller supplies a four-byte little-endian control header followed by the
+// unchanged 34-byte activation and weight blocks:
+//   byte 0: bit 0 = first, bit 1 = last; all other bits must be zero
+//   byte 1: block index, 0..31
+//   byte 2..3: reserved, must be zero
+//
+// Every accepted call returns the exact block dot, exact block Q30 term, and
+// the signed Q30 row accumulator after that term.  A normal row is 0..31;
+// first|last with index zero preserves the existing one-block diagnostic.  A
+// new valid first block explicitly restarts an incomplete row.  Invalid order
+// aborts row state and retires with error_o asserted.
+//
+// ROW_DIAGNOSTIC_ENABLE defaults to zero.  The active generated function
+// wrapper must opt in together with its paired Rust ABI change.
+module truega_q8_0_row_block_slot #(
+    parameter ROW_DIAGNOSTIC_ENABLE = 0
+) (
+    input  wire                 clk,
+    input  wire                 reset_n,
+    input  wire                 start_i,
+    input  wire [31:0]          control_i,
+    input  wire [271:0]         activation_block_i,
+    input  wire [271:0]         weight_block_i,
+    output reg                  busy_o,
+    output reg                  done_o,
+    output reg                  error_o,
+    output reg  signed [31:0]   dot_o,
+    output reg  signed [63:0]   term_q30_o,
+    output reg  signed [63:0]   row_q30_o
+);
+    wire first_i = control_i[0];
+    wire last_i = control_i[1];
+    wire [7:0] block_index_i = control_i[15:8];
+    wire control_reserved = (control_i[31:16] != 16'd0)
+                         || (control_i[7:2] != 6'd0);
+    wire accept = ROW_DIAGNOSTIC_ENABLE && start_i && !busy_o;
+    reg row_active;
+    reg [5:0] expected_index;
+    reg signed [63:0] accumulator;
+    reg active_first;
+    reg active_last;
+    reg [271:0] activation_block_reg;
+    reg [271:0] weight_block_reg;
+    reg block_start;
+    wire block_busy;
+    wire block_done;
+    wire signed [31:0] block_dot;
+    wire signed [63:0] block_term_q30;
+    wire block_scale_error;
+
+    wire sequence_valid = !control_reserved
+                       && (block_index_i < 8'd32)
+                       && (first_i
+                           ? (block_index_i == 8'd0)
+                           : (row_active
+                              && (block_index_i == expected_index)))
+                       && (last_i
+                           ? ((first_i && (block_index_i == 8'd0))
+                              || (block_index_i == 8'd31))
+                           : (block_index_i != 8'd31));
+
+    truega_q8_0_block_slot block_slot (
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(block_start),
+        .activation_block_i(activation_block_reg),
+        .weight_block_i(weight_block_reg),
+        .busy_o(block_busy),
+        .done_o(block_done),
+        .dot_o(block_dot),
+        .term_q30_o(block_term_q30),
+        .scale_error_o(block_scale_error)
+    );
+
+    always @(posedge clk) begin
+        if (!reset_n) begin
+            busy_o <= 1'b0;
+            done_o <= 1'b0;
+            error_o <= 1'b0;
+            dot_o <= 32'sd0;
+            term_q30_o <= 64'sd0;
+            row_q30_o <= 64'sd0;
+            row_active <= 1'b0;
+            expected_index <= 6'd0;
+            accumulator <= 64'sd0;
+            active_first <= 1'b0;
+            active_last <= 1'b0;
+            activation_block_reg <= 272'd0;
+            weight_block_reg <= 272'd0;
+            block_start <= 1'b0;
+        end else begin
+            done_o <= 1'b0;
+            block_start <= 1'b0;
+
+            if (accept) begin
+                dot_o <= 32'sd0;
+                term_q30_o <= 64'sd0;
+                row_q30_o <= 64'sd0;
+                if (!sequence_valid) begin
+                    busy_o <= 1'b0;
+                    done_o <= 1'b1;
+                    error_o <= 1'b1;
+                    row_active <= 1'b0;
+                    expected_index <= 6'd0;
+                    accumulator <= 64'sd0;
+                end else begin
+                    busy_o <= 1'b1;
+                    error_o <= 1'b0;
+                    active_first <= first_i;
+                    active_last <= last_i;
+                    activation_block_reg <= activation_block_i;
+                    weight_block_reg <= weight_block_i;
+                    block_start <= 1'b1;
+                    if (first_i) begin
+                        row_active <= 1'b0;
+                        expected_index <= 6'd0;
+                        accumulator <= 64'sd0;
+                    end
+                end
+            end else if (busy_o && block_done) begin
+                busy_o <= 1'b0;
+                done_o <= 1'b1;
+                error_o <= block_scale_error;
+                dot_o <= block_dot;
+                term_q30_o <= block_term_q30;
+                if (active_first) begin
+                    accumulator <= block_term_q30;
+                    row_q30_o <= block_term_q30;
+                end else begin
+                    accumulator <= accumulator + block_term_q30;
+                    row_q30_o <= accumulator + block_term_q30;
+                end
+
+                if (block_scale_error || active_last) begin
+                    row_active <= 1'b0;
+                    expected_index <= 6'd0;
+                end else begin
+                    row_active <= 1'b1;
+                    expected_index <= active_first ? 6'd1 : expected_index + 6'd1;
+                end
+            end
+        end
+    end
+
+    wire unused_block_busy = block_busy;
+endmodule
+
 
 // Read-only build manifest paired with the generated host interface.
 module truega_firmware_manifest(word_index,data);
@@ -596,14 +751,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'h90B1BC1E;
-            5'd5: data = 32'h91C2385F;
-            5'd6: data = 32'hF7CFDFC0;
-            5'd7: data = 32'h92244F33;
-            5'd8: data = 32'h8B3E1709;
-            5'd9: data = 32'h75715722;
-            5'd10: data = 32'hA739BE75;
-            5'd11: data = 32'h7F8A3E85;
+            5'd4: data = 32'hB2D3F237;
+            5'd5: data = 32'h0FB7EB4C;
+            5'd6: data = 32'h20C08542;
+            5'd7: data = 32'h52C1D50B;
+            5'd8: data = 32'h8C95393B;
+            5'd9: data = 32'h3503694F;
+            5'd10: data = 32'h42B6982F;
+            5'd11: data = 32'h7F1B02BC;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;
@@ -612,10 +767,10 @@ case (word_index)
             5'd17: data = 32'h00000004;
             5'd18: data = 32'h379E9CDF;
             5'd19: data = 32'hE32D0CD1;
-            5'd20: data = 32'h00440002;
-            5'd21: data = 32'h0000000C;
-            5'd22: data = 32'h5EBFDC00;
-            5'd23: data = 32'h7FCC04C8;
+            5'd20: data = 32'h00480002;
+            5'd21: data = 32'h00000014;
+            5'd22: data = 32'h146A1E49;
+            5'd23: data = 32'h954041AD;
             5'd24: data = 32'h00000000;
             5'd25: data = 32'h00000000;
             5'd26: data = 32'h00000000;

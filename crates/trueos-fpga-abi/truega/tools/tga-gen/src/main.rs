@@ -6,15 +6,17 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use trueos_fpga_abi::{
-    ABI_VERSION, FIRMWARE_MANIFEST_MAGIC, FUNCTION_COUNT, FirmwareManifest, FunctionDescriptor,
-    WorkPackage,
+    FirmwareManifest, FunctionDescriptor, WorkPackage, ABI_VERSION, FIRMWARE_MANIFEST_MAGIC,
+    FUNCTION_COUNT,
 };
 
-use firmware::{BindingKind, FUNCTIONS, FunctionSpec};
+use firmware::{BindingKind, FunctionSpec, FUNCTIONS};
 
 const Q8_DOT32_RTL: &str = include_str!("../../../src/compute/truega_q8_0_dot32.v");
 const Q8_SCALE_SEQ_RTL: &str = include_str!("../../../src/compute/truega_q8_0_scale_q30_seq.v");
 const Q8_BLOCK_SLOT_RTL: &str = include_str!("../../../src/compute/truega_q8_0_block_slot.v");
+const Q8_ROW_BLOCK_SLOT_RTL: &str =
+    include_str!("../../../src/compute/truega_q8_0_row_block_slot.v");
 const Q8_GOLDEN_ARTIFACT: &[u8] = include_bytes!("../../../artifacts/lfm25_q8_block.golden.bin");
 const LFM25_FFN_GOLDEN: &[u8] = include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin");
 const LFM25_FFN_VECTORS: &[u8] =
@@ -26,6 +28,16 @@ struct GoldenQ8Block {
     weight: [u8; 34],
     dot: i32,
     term_q30: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GoldenQ8Row {
+    activations: [[u8; 34]; 32],
+    dots: [i32; 32],
+    terms_q30: [i64; 32],
+    row_q30: i64,
+    fp_q30: i64,
+    fp_bound_q30: i64,
 }
 
 struct Config {
@@ -56,7 +68,11 @@ fn main() {
         eprintln!("invalid sealed Q8_0 runtime fixture: {error}");
         std::process::exit(2);
     });
-    let rust_interface = emit_rust_interface(firmware_hash, golden);
+    let golden_row = parse_golden_gate_row().unwrap_or_else(|error| {
+        eprintln!("invalid sealed layer-0 gate-row fixture: {error}");
+        std::process::exit(2);
+    });
+    let rust_interface = emit_rust_interface(firmware_hash, golden, golden_row);
 
     write_if_changed(&cfg.rtl_out, rtl.as_bytes());
     write_if_changed(&cfg.manifest_out, &manifest);
@@ -88,7 +104,7 @@ fn validate_catalogue() -> Result<(), String> {
         let expected_shape = match spec.binding {
             BindingKind::NoArgsU32 => (0, 4),
             BindingKind::BinaryU32 => (8, 4),
-            BindingKind::Lfm25Q8Block => (68, 12),
+            BindingKind::Lfm25Q8RowBlock => (72, 20),
         };
         if (spec.input_bytes, spec.output_bytes) != expected_shape {
             return Err(format!(
@@ -136,11 +152,12 @@ fn rename_rust_hdl_scalar_top(verilog: String) -> String {
 fn assembled_function_rtl() -> String {
     let scalar = rename_rust_hdl_scalar_top(firmware::generate());
     format!(
-        "{scalar}\n{}\n\n// Exact native Q8_0 compute sources fused into this generated bundle.\n{}\n{}\n{}\n",
+        "{scalar}\n{}\n\n// Exact native Q8_0 compute sources fused into this generated bundle.\n{}\n{}\n{}\n{}\n",
         emit_slot_wrapper_verilog(),
         Q8_DOT32_RTL,
         Q8_SCALE_SEQ_RTL,
         Q8_BLOCK_SLOT_RTL,
+        Q8_ROW_BLOCK_SLOT_RTL,
     )
 }
 
@@ -173,6 +190,7 @@ module truega_functions(
     wire q8_done;
     wire signed [31:0] q8_dot;
     wire signed [63:0] q8_term_q30;
+    wire signed [63:0] q8_row_q30;
     wire q8_scale_error;
 
     truega_scalar_functions scalar_functions(
@@ -187,17 +205,21 @@ module truega_functions(
         .valid(scalar_valid)
     );
 
-    truega_q8_0_block_slot q8_block_slot(
+    truega_q8_0_row_block_slot #(
+        .ROW_DIAGNOSTIC_ENABLE(1)
+    ) q8_row_block_slot(
         .clk(clk),
         .reset_n(reset_n),
         .start_i(q8_start),
-        .activation_block_i(input_data[271:0]),
-        .weight_block_i(input_data[543:272]),
+        .control_i(input_data[31:0]),
+        .activation_block_i(input_data[303:32]),
+        .weight_block_i(input_data[575:304]),
         .busy_o(q8_busy),
         .done_o(q8_done),
         .dot_o(q8_dot),
         .term_q30_o(q8_term_q30),
-        .scale_error_o(q8_scale_error)
+        .row_q30_o(q8_row_q30),
+        .error_o(q8_scale_error)
     );
 
     always @* begin
@@ -216,8 +238,8 @@ module truega_functions(
                 valid = 1'b1;
             end
             16'd2: begin
-                required_input_bytes = 16'd68;
-                output_bytes = 16'd12;
+                required_input_bytes = 16'd72;
+                output_bytes = 16'd20;
                 valid = 1'b1;
             end
             default: begin end
@@ -262,6 +284,7 @@ module truega_functions(
                 output_data <= 768'd0;
                 output_data[31:0] <= q8_dot;
                 output_data[95:32] <= q8_term_q30;
+                output_data[159:96] <= q8_row_q30;
                 busy <= 1'b0;
                 done <= 1'b1;
                 error <= q8_scale_error;
@@ -335,6 +358,103 @@ fn parse_golden_q8_block() -> Result<GoldenQ8Block, String> {
     })
 }
 
+fn parse_golden_gate_row() -> Result<GoldenQ8Row, String> {
+    let text = core::str::from_utf8(LFM25_FFN_VECTORS)
+        .map_err(|_| "golden vectors are not UTF-8".to_string())?;
+    let mut activations = [[0u8; 34]; 32];
+    let mut dots = [0i32; 32];
+    let mut terms_q30 = [0i64; 32];
+    let mut row_q30 = 0i64;
+    let mut fp_q30 = None;
+    let mut fp_bound_q30 = None;
+    let mut count = 0usize;
+
+    for line in text
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+    {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() != 12 {
+            return Err(format!("row vector has {} fields, expected 12", fields.len()));
+        }
+        let row: usize = fields[0].parse().map_err(|_| "invalid row index")?;
+        if row != 0 {
+            break;
+        }
+        if count >= 32 {
+            return Err("gate row contains more than 32 blocks".into());
+        }
+        let block: usize = fields[1].parse().map_err(|_| "invalid block index")?;
+        let first: u8 = fields[2].parse().map_err(|_| "invalid first flag")?;
+        let last: u8 = fields[3].parse().map_err(|_| "invalid last flag")?;
+        if block != count || first != u8::from(count == 0) || last != u8::from(count == 31) {
+            return Err(format!("non-canonical row control at block {count}"));
+        }
+
+        let activation_scale = u16::from_str_radix(fields[4], 16)
+            .map_err(|_| format!("invalid activation scale at block {count}"))?;
+        activations[count][..2].copy_from_slice(&activation_scale.to_le_bytes());
+        activations[count][2..].copy_from_slice(&parse_hex_32(fields[6])?);
+        dots[count] = fields[8]
+            .parse()
+            .map_err(|_| format!("invalid dot at block {count}"))?;
+        terms_q30[count] = u64::from_str_radix(fields[9], 16)
+            .map_err(|_| format!("invalid Q30 term at block {count}"))?
+            as i64;
+        row_q30 = row_q30
+            .checked_add(terms_q30[count])
+            .ok_or_else(|| "gate-row Q30 accumulator overflow".to_string())?;
+        let block_fp = u64::from_str_radix(fields[10], 16)
+            .map_err(|_| format!("invalid F32 reference at block {count}"))?
+            as i64;
+        let block_bound: i64 = fields[11]
+            .parse()
+            .map_err(|_| format!("invalid F32 bound at block {count}"))?;
+        if fp_q30
+            .replace(block_fp)
+            .is_some_and(|previous| previous != block_fp)
+            || fp_bound_q30
+                .replace(block_bound)
+                .is_some_and(|previous| previous != block_bound)
+        {
+            return Err("gate-row reference/bound changes between blocks".into());
+        }
+        count += 1;
+    }
+
+    if count != 32 {
+        return Err(format!("gate row has {count} blocks, expected 32"));
+    }
+    let fp_q30 = fp_q30.ok_or_else(|| "missing gate-row F32 reference".to_string())?;
+    let fp_bound_q30 = fp_bound_q30.ok_or_else(|| "missing gate-row F32 bound".to_string())?;
+    if (row_q30 - fp_q30).abs() > fp_bound_q30 {
+        return Err("gate-row accumulated result exceeds frozen F32 bound".into());
+    }
+    Ok(GoldenQ8Row {
+        activations,
+        dots,
+        terms_q30,
+        row_q30,
+        fp_q30,
+        fp_bound_q30,
+    })
+}
+
+fn parse_hex_32(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64 {
+        return Err(format!("Q8 quant payload has {} hex digits, expected 64", value.len()));
+    }
+    let mut bytes = [0u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        // The vector file prints a Verilog [255:0] literal most-significant byte
+        // first. The work-package/native block uses byte lane zero first.
+        let text_index = (31 - index) * 2;
+        *byte = u8::from_str_radix(&value[text_index..text_index + 2], 16)
+            .map_err(|_| "invalid Q8 quant payload".to_string())?;
+    }
+    Ok(bytes)
+}
+
 fn artifact_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
     let value = bytes
         .get(offset..offset + 2)
@@ -404,7 +524,11 @@ endmodule\n",
     verilog
 }
 
-fn emit_rust_interface(firmware_hash: [u8; 32], golden: GoldenQ8Block) -> String {
+fn emit_rust_interface(
+    firmware_hash: [u8; 32],
+    golden: GoldenQ8Block,
+    golden_row: GoldenQ8Row,
+) -> String {
     let mut rust = String::new();
     rust.push_str("// @generated by TRUEGA tools/tga-gen; do not hand-edit.\n");
     rust.push_str(
@@ -462,7 +586,7 @@ fn emit_rust_interface(firmware_hash: [u8; 32], golden: GoldenQ8Block) -> String
             BindingKind::NoArgsU32 | BindingKind::BinaryU32 => {
                 rust.push_str("    use super::{FunctionId, result_u32};\n\n");
             }
-            BindingKind::Lfm25Q8Block => {
+            BindingKind::Lfm25Q8RowBlock => {
                 rust.push_str("    use super::FunctionId;\n\n");
             }
         }
@@ -487,24 +611,34 @@ fn emit_rust_interface(firmware_hash: [u8; 32], golden: GoldenQ8Block) -> String
                     "    pub fn decode(bytes: &[u8]) -> Option<u32> {\n        result_u32(bytes)\n    }\n",
                 );
             }
-            BindingKind::Lfm25Q8Block => {
-                rust.push_str("    pub const Q8_0_BLOCK_BYTES: usize = 34;\n\n");
+            BindingKind::Lfm25Q8RowBlock => {
+                rust.push_str("    pub const Q8_0_BLOCK_BYTES: usize = 34;\n");
+                rust.push_str("    pub const GATE_ROW0_BLOCKS: usize = 32;\n");
+                rust.push_str("    pub const GATE_ROW0_NATIVE_OFFSET: u64 = 0x048c9000;\n\n");
                 rust.push_str("    #[derive(Copy, Clone, Debug, Eq, PartialEq)]\n");
-                rust.push_str("    pub struct Q8BlockResult {\n");
+                rust.push_str("    pub struct Q8RowBlockResult {\n");
                 rust.push_str("        pub dot: i32,\n");
                 rust.push_str("        pub term_q30: i64,\n");
+                rust.push_str("        pub row_q30: i64,\n");
                 rust.push_str("    }\n\n");
                 rust.push_str(
-                    "    pub fn encode(\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n",
+                    "    pub fn encode(\n        first: bool,\n        last: bool,\n        block_index: u8,\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n",
                 );
                 rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
-                rust.push_str("        bytes[..Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n");
-                rust.push_str("        bytes[Q8_0_BLOCK_BYTES..].copy_from_slice(weight);\n");
+                rust.push_str("        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(block_index) << 8);\n");
+                rust.push_str("        bytes[..4].copy_from_slice(&control.to_le_bytes());\n");
+                rust.push_str(
+                    "        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n",
+                );
+                rust.push_str("        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight);\n");
                 rust.push_str("        bytes\n");
                 rust.push_str("    }\n\n");
-                rust.push_str("    pub fn decode(bytes: &[u8]) -> Option<Q8BlockResult> {\n");
+                rust.push_str("    pub fn encode_single(activation: &[u8; Q8_0_BLOCK_BYTES], weight: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
+                rust.push_str("        encode(true, true, 0, activation, weight)\n");
+                rust.push_str("    }\n\n");
+                rust.push_str("    pub fn decode(bytes: &[u8]) -> Option<Q8RowBlockResult> {\n");
                 rust.push_str(
-                    "        Some(Q8BlockResult {\n            dot: i32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),\n            term_q30: i64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?),\n        })\n",
+                    "        Some(Q8RowBlockResult {\n            dot: i32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),\n            term_q30: i64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?),\n            row_q30: i64::from_le_bytes(bytes.get(12..20)?.try_into().ok()?),\n        })\n",
                 );
                 rust.push_str("    }\n\n");
                 emit_rust_byte_array(
@@ -519,10 +653,13 @@ fn emit_rust_interface(firmware_hash: [u8; 32], golden: GoldenQ8Block) -> String
                 );
                 writeln!(
                     rust,
-                    "    pub const GOLDEN_RESULT: Q8BlockResult = Q8BlockResult {{\n        dot: {},\n        term_q30: {},\n    }};",
-                    golden.dot, golden.term_q30
+                    "    pub const GOLDEN_RESULT: Q8RowBlockResult = Q8RowBlockResult {{\n        dot: {},\n        term_q30: {},\n        row_q30: {},\n    }};",
+                    golden.dot,
+                    golden.term_q30,
+                    golden.term_q30,
                 )
                 .unwrap();
+                emit_rust_q8_row(&mut rust, &golden_row);
             }
         }
         rust.push_str("}\n\n");
@@ -551,6 +688,56 @@ fn emit_rust_byte_array(rust: &mut String, declaration: &str, bytes: &[u8]) {
         }
     }
     rust.push_str("    ];\n");
+}
+
+fn emit_rust_q8_row(rust: &mut String, golden: &GoldenQ8Row) {
+    rust.push_str(
+        "    pub const GOLDEN_GATE_ROW0_ACTIVATIONS: [[u8; Q8_0_BLOCK_BYTES]; GATE_ROW0_BLOCKS] = [\n",
+    );
+    for activation in &golden.activations {
+        rust.push_str("        [");
+        for byte in activation {
+            write!(rust, "0x{byte:02x},").unwrap();
+        }
+        rust.push_str("],\n");
+    }
+    rust.push_str("    ];\n");
+
+    rust.push_str("    pub const GOLDEN_GATE_ROW0_DOTS: [i32; GATE_ROW0_BLOCKS] = [\n        ");
+    for (index, value) in golden.dots.iter().enumerate() {
+        write!(rust, "{value},").unwrap();
+        if index % 8 == 7 {
+            rust.push('\n');
+            if index + 1 != golden.dots.len() {
+                rust.push_str("        ");
+            }
+        } else {
+            rust.push(' ');
+        }
+    }
+    rust.push_str("    ];\n");
+
+    rust.push_str(
+        "    pub const GOLDEN_GATE_ROW0_TERMS_Q30: [i64; GATE_ROW0_BLOCKS] = [\n        ",
+    );
+    for (index, value) in golden.terms_q30.iter().enumerate() {
+        write!(rust, "{value},").unwrap();
+        if index % 4 == 3 {
+            rust.push('\n');
+            if index + 1 != golden.terms_q30.len() {
+                rust.push_str("        ");
+            }
+        } else {
+            rust.push(' ');
+        }
+    }
+    rust.push_str("    ];\n");
+    writeln!(
+        rust,
+        "    pub const GOLDEN_GATE_ROW0_Q30: i64 = {};\n    pub const GOLDEN_GATE_ROW0_FP_Q30: i64 = {};\n    pub const GOLDEN_GATE_ROW0_FP_BOUND_Q30: i64 = {};",
+        golden.row_q30, golden.fp_q30, golden.fp_bound_q30,
+    )
+    .unwrap();
 }
 
 fn write_if_changed(path: &Path, contents: &[u8]) {
@@ -603,16 +790,18 @@ mod tests {
     #[test]
     fn generated_interface_has_exactly_three_slots() {
         let golden = parse_golden_q8_block().unwrap();
-        let interface = emit_rust_interface([0; 32], golden);
+        let golden_row = parse_golden_gate_row().unwrap();
+        let interface = emit_rust_interface([0; 32], golden, golden_row);
         assert!(interface.contains("HEARTBEAT"));
         assert!(interface.contains("ADD_U32"));
-        assert!(interface.contains("LFM25_Q8_BLOCK"));
+        assert!(interface.contains("LFM25_Q8_ROW_BLOCK"));
         assert!(interface.contains("pub const FIRMWARE_MANIFEST: FirmwareManifest"));
         assert!(interface.contains("pub mod led_step_heartbeat"));
         assert!(interface.contains("pub mod add_u32"));
-        assert!(interface.contains("pub mod lfm25_q8_block"));
-        assert!(interface.contains("pub struct Q8BlockResult"));
+        assert!(interface.contains("pub mod lfm25_q8_row_block"));
+        assert!(interface.contains("pub struct Q8RowBlockResult"));
         assert!(interface.contains("pub const GOLDEN_ACTIVATION"));
+        assert!(interface.contains("pub const GOLDEN_GATE_ROW0_ACTIVATIONS"));
         assert_eq!(FUNCTIONS.len(), 3);
     }
 
@@ -620,8 +809,8 @@ mod tests {
     fn v1_catalogue_is_contiguous_and_physically_supported() {
         validate_catalogue().unwrap();
         assert_eq!(FUNCTIONS.map(|function| function.id), [0, 1, 2]);
-        assert_eq!(FUNCTIONS.map(|function| function.input_bytes), [0, 8, 68]);
-        assert_eq!(FUNCTIONS.map(|function| function.output_bytes), [4, 4, 12]);
+        assert_eq!(FUNCTIONS.map(|function| function.input_bytes), [0, 8, 72]);
+        assert_eq!(FUNCTIONS.map(|function| function.output_bytes), [4, 4, 20]);
     }
 
     #[test]
@@ -634,6 +823,17 @@ mod tests {
     }
 
     #[test]
+    fn sealed_gate_row_fixture_is_canonical() {
+        let row = parse_golden_gate_row().unwrap();
+        assert_eq!(row.activations[0][..4], [0x30, 0x18, 0x0d, 0xa8]);
+        assert_eq!(row.dots[0], -14_901);
+        assert_eq!(row.terms_q30[0], -9_429_888);
+        assert_eq!(row.row_q30, 29_481_209);
+        assert_eq!(row.fp_q30, 29_481_200);
+        assert_eq!(row.fp_bound_q30, 2_148);
+    }
+
+    #[test]
     fn generated_rtl_binds_compute_and_common_handoff() {
         let rtl = assembled_function_rtl();
         assert!(rtl.contains("module truega_functions("));
@@ -641,6 +841,8 @@ mod tests {
         assert!(rtl.contains("module truega_q8_0_dot32"));
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
+        assert!(rtl.contains("module truega_q8_0_row_block_slot"));
+        assert!(rtl.contains(".ROW_DIAGNOSTIC_ENABLE(1)"));
         assert!(rtl.contains("output reg          busy"));
         assert!(rtl.contains("output reg          done"));
     }

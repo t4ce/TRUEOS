@@ -27,7 +27,7 @@ pub struct FunctionSpec {
 pub enum BindingKind {
     NoArgsU32,
     BinaryU32,
-    Lfm25Q8Block,
+    Lfm25Q8RowBlock,
 }
 
 pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
@@ -51,12 +51,12 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
     },
     FunctionSpec {
         id: 2,
-        rust_name: "LFM25_Q8_BLOCK",
-        rust_module: "lfm25_q8_block",
-        signature: "lfm25_q8_block(q8_0_block,q8_0_block)->(i32,i64_q30)",
-        input_bytes: 68,
-        output_bytes: 12,
-        binding: BindingKind::Lfm25Q8Block,
+        rust_name: "LFM25_Q8_ROW_BLOCK",
+        rust_module: "lfm25_q8_row_block",
+        signature: "lfm25_q8_row_block(control,q8_0_block,q8_0_block)->(i32,i64_q30,i64_row_q30)",
+        input_bytes: 72,
+        output_bytes: 20,
+        binding: BindingKind::Lfm25Q8RowBlock,
     },
 ];
 

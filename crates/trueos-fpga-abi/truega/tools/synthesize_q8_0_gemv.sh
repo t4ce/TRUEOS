@@ -47,6 +47,10 @@ cat > "$PROJECT_FILE" <<EOF
         <File path="$RTL_DIR/truega_q8_0_dot32.v" type="file.verilog" enable="1"/>
         <File path="$RTL_DIR/truega_q8_0_scale_q30.v" type="file.verilog" enable="1"/>
         <File path="$RTL_DIR/truega_q8_0_gemv.v" type="file.verilog" enable="1"/>
+        <File path="$RTL_DIR/truega_lfm25_gate_row_slot.v" type="file.verilog" enable="1"/>
+        <File path="$RTL_DIR/truega_q8_0_scale_q30_seq.v" type="file.verilog" enable="1"/>
+        <File path="$RTL_DIR/truega_q8_0_block_slot.v" type="file.verilog" enable="1"/>
+        <File path="$RTL_DIR/truega_q8_0_row_block_slot.v" type="file.verilog" enable="1"/>
         <File path="$RTL_DIR/truega_q8_0_gemv_standalone.v" type="file.verilog" enable="1"/>
     </FileList>
 </Project>

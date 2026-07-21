@@ -1,15 +1,15 @@
 `timescale 1ns/1ps
 
 // Exercises the generated common slot wrapper, including the exact byte order
-// seen by the 96-byte BAR work-package envelopes.  The lower 68 input bytes are
-// the sealed layer-0 gate row-0/block-0 vector.
+// seen by the 96-byte BAR work-package envelopes. The lower 72 input bytes are
+// the row-control dword plus sealed layer-0 gate row-0/block-0 vector.
 module truega_functions_tb;
     localparam [271:0] GOLDEN_ACTIVATION =
         272'h211da756d317082a81dab021e7cfd24a8925f6e7a8253cb3b616491f4ed4a80d1830;
     localparam [271:0] GOLDEN_WEIGHT =
         272'h82a227e1c1f97ffaf176e4fcf803f228360701e305d2b113e3f82cb52f18147a0cb9;
-    localparam [95:0] GOLDEN_OUTPUT =
-        96'hffffffffff701c80ffffc5cb;
+    localparam [159:0] GOLDEN_OUTPUT =
+        160'hffffffffff701c80ffffffffff701c80ffffc5cb;
 
     reg clk = 1'b0;
     reg reset_n = 1'b0;
@@ -53,11 +53,12 @@ module truega_functions_tb;
         repeat (4) @(negedge clk);
         reset_n = 1'b1;
         function_id = 16'd2;
-        input_data[271:0] = GOLDEN_ACTIVATION;
-        input_data[543:272] = GOLDEN_WEIGHT;
+        input_data[31:0] = 32'h0000_0003;
+        input_data[303:32] = GOLDEN_ACTIVATION;
+        input_data[575:304] = GOLDEN_WEIGHT;
 
         #1;
-        if (!valid || required_input_bytes !== 16'd68 || output_bytes !== 16'd12) begin
+        if (!valid || required_input_bytes !== 16'd72 || output_bytes !== 16'd20) begin
             $display("FAIL functions wrapper descriptor valid=%b input=%0d output=%0d",
                 valid, required_input_bytes, output_bytes);
             failures = failures + 1;
@@ -89,12 +90,12 @@ module truega_functions_tb;
                         call_index, busy, error);
                     failures = failures + 1;
                 end
-                if (output_data[95:0] !== GOLDEN_OUTPUT) begin
+                if (output_data[159:0] !== GOLDEN_OUTPUT) begin
                     $display("FAIL functions wrapper call=%0d output=%h expected=%h",
-                        call_index, output_data[95:0], GOLDEN_OUTPUT);
+                        call_index, output_data[159:0], GOLDEN_OUTPUT);
                     failures = failures + 1;
                 end
-                if (output_data[767:96] !== 672'd0) begin
+                if (output_data[767:160] !== 608'd0) begin
                     $display("FAIL functions wrapper call=%0d nonzero output padding", call_index);
                     failures = failures + 1;
                 end

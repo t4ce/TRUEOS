@@ -43,6 +43,30 @@ if [[ -n "$VVP_MODULE_DIR" ]]; then
 fi
 "$VVP" "${vvp_args[@]}" "$STAGE_DIR/q8_0_gemv.vvp" "+VECTORS=$VECTORS"
 
+iverilog_args=(-g2012 -s truega_lfm25_gate_row_slot_tb -o "$STAGE_DIR/lfm25_gate_row_slot.vvp")
+if [[ -n "$IVERILOG_BASE" ]]; then
+  iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")
+fi
+"$IVERILOG" "${iverilog_args[@]}" \
+  "$RTL_DIR/truega_q8_0_dot32.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_gemv.v" \
+  "$RTL_DIR/truega_lfm25_gate_row_slot.v" \
+  "$RTL_DIR/truega_lfm25_gate_row_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/lfm25_gate_row_slot.vvp" "+VECTORS=$VECTORS"
+
+iverilog_args=(-g2012 -s truega_q8_0_row_block_slot_tb -o "$STAGE_DIR/q8_0_row_block_slot.vvp")
+if [[ -n "$IVERILOG_BASE" ]]; then
+  iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")
+fi
+"$IVERILOG" "${iverilog_args[@]}" \
+  "$RTL_DIR/truega_q8_0_dot32.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
+  "$RTL_DIR/truega_q8_0_block_slot.v" \
+  "$RTL_DIR/truega_q8_0_row_block_slot.v" \
+  "$RTL_DIR/truega_q8_0_row_block_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/q8_0_row_block_slot.vvp" "+VECTORS=$VECTORS"
+
 iverilog_args=(-g2012 -s truega_q8_0_scale_q30_seq_tb -o "$STAGE_DIR/q8_0_scale_q30_seq.vvp")
 if [[ -n "$IVERILOG_BASE" ]]; then
   iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")

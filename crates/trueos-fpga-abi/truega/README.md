@@ -16,7 +16,7 @@ The Ubuntu build has three inputs/outputs:
 
 1. `tools/tga-gen/src/firmware.rs` is the authoritative catalogue and RustHDL source
    for exactly three physical circuits: `led_step_heartbeat`, `add_u32`, and
-   `lfm25_q8_block`.
+   `lfm25_q8_row_block`.
 2. `tools/tga-gen` emits staged copies of `src/generated/truega_functions.v`, the
    128-byte `artifacts/truega_firmware.manifest.bin`, and the ordinary typed Rust
    interface at `../src/generated.rs`.
@@ -44,8 +44,9 @@ function RTL are the bundle the running kernel was compiled to call.
 The physical shell backs the complete ABI-reserved 96-byte input and 96-byte output
 envelopes. Every generated slot uses one clocked `start/busy/done/error` handoff; the shell
 validates the exact declared input length and output capacity before asserting `start`,
-then retires only after `done`. Slot 2 consumes two unchanged 34-byte Q8_0 blocks and
-returns a signed 32-bit integer dot plus a signed 64-bit Q30 term.
+then retires only after `done`. Slot 2 consumes a four-byte row-control header plus two
+unchanged 34-byte Q8_0 blocks and returns the signed integer dot, block Q30 term, and
+partial/final signed Q30 row accumulator.
 
 Build on Ubuntu with:
 
@@ -62,9 +63,9 @@ renamed into place. `artifacts/SHA256SUMS` is published last as the seal for the
 `min_pci_led.fs` and `truega_firmware.manifest.bin` entries; the legacy single-file
 `artifacts/min_pci_led.fs.sha256` is retained for convenience.
 
-The current completion callback is delivered by the single kernel worker after polling
-the hardware state. The ABI reserves interrupt-on-complete and IRQ-ack fields, but actual
-MSI/MSI-X wiring is a later transport optimization and does not change the call interface.
+The FPGA raises MSI on retirement. Vector `0x42` wakes the single kernel worker, which
+acknowledges the slot and delivers the result to the registered Rust callback. Polling is
+retained only as timeout recovery and is expected to remain at zero during normal calls.
 
 ## LFM2.5 native model checkpoint
 
@@ -134,12 +135,30 @@ The synthesizable implementation is under `src/compute`:
 - `truega_q8_0_block_slot.v` latches one 68-byte call, sequences the dot and scale units,
   and exposes the common reusable `start/busy/done/error` contract.
 - `truega_q8_0_gemv.v` streams blocks and retires one signed 64-bit Q30 row result.
+- `truega_lfm25_gate_row_slot.v` wraps that engine with the fixed 32-block layer-0
+  gate-row contract. Its ready/valid feeder and requested block index are the explicit
+  boundary for the future native-image DDR reader. `DIAGNOSTIC_ENABLE` defaults to zero,
+  and the slot is not instantiated by `top.vhd`, so heartbeat firmware is unchanged.
+- `truega_q8_0_row_block_slot.v` is the nearer inline-BAR boundary: a 4-byte
+  first/last/index header plus the existing 68-byte native blocks per call. It retains
+  the signed-Q30 accumulator across calls 0..31 and returns dot, term, and partial/final
+  row result. Its enable parameter defaults to zero, and the generated slot-2 wrapper
+  explicitly enables it together with the paired 72-byte/20-byte Rust ABI.
 
 The checked-in `artifacts/lfm25_q8_block.golden.bin` is a separately sealed 336-byte
 runtime vector derived from gate row 0, block 0. Its 68-byte input is the activation block
 followed by the native-image weight block; its 12-byte expected output is dot `-14901` and
 Q30 term `-9429888`. The generator verifies the artifact provenance, payload hash, and
-self-seal before emitting the Rust constants used by `tga q8` and `tga test`.
+self-seal before emitting the Rust constants used by `tga q8` and `tga test`; the active
+slot wraps that fixture with `first|last,index=0` and also returns row Q30 `-9429888`.
+
+TRUEOS exposes two fixed model checks. `tga model verify` streams
+`trueosfs:/models/lfm2.5/LFM2.5-350M-Q8_0.truega.bin` in 256 KiB chunks and checks the
+exact 376,701,952-byte size and pinned SHA-256 without parsing GGUF. `tga model row0`
+range-reads the 32 native layer-0 gate-row blocks, supplies the sealed activation blocks,
+and requires every callback's dot, term, and accumulated row result to match bit-for-bit.
+The final exact row is `29481209` Q30; its distance from captured F32 is 9 against the
+frozen bound of 2148.
 
 Run the reproducible checks with:
 
@@ -154,12 +173,16 @@ The HDL simulation covers 208 unchanged native-image blocks (row 0 of gate, up, 
 plus two signed extremes. All 210 integer dots and scaled Q30 terms match bit-for-bit, and
 the row results satisfy the captured-F32 error bound. The same simulation also calls the
 multi-cycle block slot for all 210 vectors and calls the generated 96-byte wrapper twice
-with the sealed runtime vector. The isolated block-slot synthesis reaches 142.908 MHz and
+with the sealed runtime vector. It also runs the fixed layer-0 gate row slot twice, with
+intentional feeder stalls, proves its default-disabled state, and runs the BAR-oriented
+32-call sequencer including one-block compatibility and malformed-order recovery. The
+isolated block-slot synthesis reaches 142.908 MHz and
 uses 2,155 logic elements, 1,429 registers, 33 `MULT12X12` plus one `MULT27X36`, and no
 block RAM. It does not emit an `.fs`; pre/post hashes guard the integrated project inputs
 and published firmware files.
 
 The integrated image closes the 100 MHz TLP clock with zero setup/hold violations. The
 build refuses to publish if the timing report is missing, if TLP Fmax is below 100 MHz, or
-if any endpoint is violated. Current routed usage is 5,985/138,240 logic elements (5%),
-4,508/139,140 registers (4%), 18.5/298 DSP units (7%), and no SSRAM.
+if any endpoint is violated. The row-enabled image closes at 100.004 MHz and uses
+6,550/138,240 logic elements (5%), 4,902/139,140 registers (4%), 18.5/298 DSP units
+(7%), and no SSRAM.

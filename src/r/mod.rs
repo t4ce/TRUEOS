@@ -10,6 +10,7 @@ pub mod hid_udp_srv;
 pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;
+pub mod lfm25_model;
 pub mod mouse_motion_service;
 pub mod net;
 pub mod pat;
