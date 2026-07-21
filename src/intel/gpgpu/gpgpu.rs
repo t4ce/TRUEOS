@@ -36,3 +36,13 @@ include!("rcs/payloads.rs");
 include!("rcs/descriptors.rs");
 include!("rcs/commands.rs");
 include!("rcs/context.rs");
+
+pub(crate) fn submit_tenant_scene_aabb(
+    _tenant_root_phys: u64,
+    _request: crate::gpu::physical::PhysicalSceneAabbRequest,
+) -> Option<crate::gpu::physical::PhysicalSceneAabbCompletion> {
+    // Filled by the tenant-RCS implementation below; keeping the entry point
+    // here makes the physical-device boundary explicit and prevents the vGPU
+    // broker from depending on Intel command details.
+    None
+}

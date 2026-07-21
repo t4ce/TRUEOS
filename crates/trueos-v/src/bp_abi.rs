@@ -466,12 +466,37 @@ unsafe extern "C" {
         buffer: u64,
         out_info: *mut crate::vgpu::BufferInfo,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_vvideo_create(
+        device: u64,
+        guest_va: u64,
+        bytes: usize,
+        usage: u32,
+        out_buffer: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_vvideo_flush(
+        device: u64,
+        buffer: u64,
+        offset: usize,
+        bytes: usize,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_vvideo_invalidate(
+        device: u64,
+        buffer: u64,
+        offset: usize,
+        bytes: usize,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_queue_create(device: u64, class: u32, out_queue: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_queue_destroy(device: u64, queue: u64) -> i32;
     pub fn trueos_cabi_vgpu_submit_control_nop(
         device: u64,
         queue: u64,
         out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_submit_scene_aabb(
+        device: u64,
+        queue: u64,
+        dispatch: *const crate::vgpu::SceneAabbDispatch,
+        out_result: *mut crate::vgpu::SceneAabbResult,
     ) -> i32;
     pub fn trueos_cabi_vgpu_timeline(
         device: u64,

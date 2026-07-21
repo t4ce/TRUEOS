@@ -44,10 +44,16 @@ pub fn before_building_guest_ept(_vm_id: u8) {
 }
 
 #[inline(always)]
-pub fn ept_permissions_for_span(_label: &str, default_perms: u64) -> u64 {
+pub fn ept_permissions_for_span(label: &str, default_perms: u64) -> u64 {
     // Securit Risk and a Id to it: HVSR-0003
     // Today callers pass the legacy RWX-style EPT permission bits. Future patch:
     // assign R/W/X per span so host data mappings are never executable and guest
     // code mappings are not writable unless explicitly staged.
-    default_perms
+    if matches!(label, "hv-guest-heap" | "guest-stack" | "comm-page" | "hull-rw-private") {
+        // EPT execute is bit 2. Guest data/shared spans remain readable and
+        // writable but cannot become executable through a guest PTE edit.
+        default_perms & !(1 << 2)
+    } else {
+        default_perms
+    }
 }

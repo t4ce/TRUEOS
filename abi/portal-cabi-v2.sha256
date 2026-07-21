@@ -7,5 +7,6 @@
 # The UI4 scene pan-event take, focused keyboard-state, and immutable-frame-open
 # calls plus async filesystem write, mkdir, stat, and directory-list calls are
 # strictly additive v2 extensions; older v2 artifacts do not import them and
-# remain compatible.
-9b37aa80248c5a9b7cbc33ab7d3dc8f71e2a7ddb69e34a9cacc6db7dbaee95e0
+# remain compatible. The vGPU vVideoMem create/cache-maintenance operations
+# and fixed SceneDB AABB dispatch are likewise strictly additive.
+b03e46d84230e7e152a58e291b60448ad99faf7a49fd4d5834650b76abba0bae

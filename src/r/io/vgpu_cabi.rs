@@ -111,9 +111,108 @@ pub(crate) fn broker_buffer_info(
         .map(|info| v::vgpu::BufferInfo {
             bytes: info.bytes as u64,
             usage: info.usage,
-            reserved: 0,
+            flags: info.flags,
         })
         .map_err(|error| error.errno())
+}
+
+pub(crate) fn broker_vvideo_create(
+    principal: Principal,
+    device: u64,
+    guest_va: u64,
+    bytes: usize,
+    usage: u32,
+) -> Result<u64, i32> {
+    vgpu::create_vvideo_mem(
+        principal,
+        DeviceHandle::from_raw(device),
+        guest_va,
+        bytes,
+        usage,
+    )
+    .map(BufferHandle::raw)
+    .map_err(|error| error.errno())
+}
+
+pub(crate) fn broker_vvideo_flush(
+    principal: Principal,
+    device: u64,
+    buffer: u64,
+    offset: usize,
+    bytes: usize,
+) -> i32 {
+    vgpu::flush_vvideo_mem(
+        principal,
+        DeviceHandle::from_raw(device),
+        BufferHandle::from_raw(buffer),
+        offset,
+        bytes,
+    )
+    .map(|_| 0)
+    .unwrap_or_else(|error| error.errno())
+}
+
+pub(crate) fn broker_vvideo_invalidate(
+    principal: Principal,
+    device: u64,
+    buffer: u64,
+    offset: usize,
+    bytes: usize,
+) -> i32 {
+    vgpu::invalidate_vvideo_mem(
+        principal,
+        DeviceHandle::from_raw(device),
+        BufferHandle::from_raw(buffer),
+        offset,
+        bytes,
+    )
+    .map(|_| 0)
+    .unwrap_or_else(|error| error.errno())
+}
+
+pub(crate) fn broker_submit_scene_aabb(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    dispatch: v::vgpu::SceneAabbDispatch,
+) -> Result<v::vgpu::SceneAabbResult, i32> {
+    let convert = |slice: v::vgpu::BufferSlice| -> Result<vgpu::BufferSlice, i32> {
+        Ok(vgpu::BufferSlice {
+            buffer: BufferHandle::from_raw(slice.buffer),
+            offset: usize::try_from(slice.offset).map_err(|_| -95)?,
+            bytes: usize::try_from(slice.bytes).map_err(|_| -95)?,
+        })
+    };
+    let mut bounds = [vgpu::BufferSlice {
+        buffer: BufferHandle::from_raw(0),
+        offset: 0,
+        bytes: 0,
+    }; 6];
+    for (dst, src) in bounds.iter_mut().zip(dispatch.bounds) {
+        *dst = convert(src)?;
+    }
+    let result = vgpu::submit_scene_aabb(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        vgpu::SceneAabbDispatch {
+            bounds,
+            liveness: convert(dispatch.liveness)?,
+            output: convert(dispatch.output)?,
+            rows: dispatch.rows,
+            query_min: [dispatch.query_min[0], dispatch.query_min[1], dispatch.query_min[2]],
+            query_max: [dispatch.query_max[0], dispatch.query_max[1], dispatch.query_max[2]],
+        },
+    )
+    .map_err(|error| error.errno())?;
+    Ok(v::vgpu::SceneAabbResult {
+        point: v::vgpu::TimelinePoint {
+            value: result.point.value,
+            physical_serial: result.point.physical_serial,
+        },
+        hits: result.hits,
+        reserved: 0,
+    })
 }
 
 pub(crate) fn broker_queue_create(
@@ -430,6 +529,81 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_buffer_info(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_vvideo_create(
+    device: u64,
+    guest_va: u64,
+    bytes: usize,
+    usage: u32,
+    out_buffer: *mut u64,
+) -> i32 {
+    if out_buffer.is_null() {
+        return -14;
+    }
+    let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
+        return -95;
+    };
+    let mut request = [0u8; 12];
+    request[..8].copy_from_slice(&(bytes as u64).to_le_bytes());
+    request[8..].copy_from_slice(&usage.to_le_bytes());
+    let result = guest_handle(
+        trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_CREATE,
+        device,
+        guest_va,
+        &request,
+    );
+    let _ = vm_id;
+    match result {
+        Ok(handle) => {
+            unsafe { out_buffer.write(handle) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+fn guest_vvideo_range(op: u32, device: u64, buffer: u64, offset: usize, bytes: usize) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -95;
+    }
+    let mut request = [0u8; 16];
+    request[..8].copy_from_slice(&(offset as u64).to_le_bytes());
+    request[8..].copy_from_slice(&(bytes as u64).to_le_bytes());
+    guest_rc(op, device, buffer, &request)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vgpu_vvideo_flush(
+    device: u64,
+    buffer: u64,
+    offset: usize,
+    bytes: usize,
+) -> i32 {
+    guest_vvideo_range(
+        trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_FLUSH,
+        device,
+        buffer,
+        offset,
+        bytes,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vgpu_vvideo_invalidate(
+    device: u64,
+    buffer: u64,
+    offset: usize,
+    bytes: usize,
+) -> i32 {
+    guest_vvideo_range(
+        trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_INVALIDATE,
+        device,
+        buffer,
+        offset,
+        bytes,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vgpu_queue_create(
     device: u64,
     class: u32,
@@ -478,6 +652,42 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_submit_control_nop(
     match result {
         Ok(point) => {
             unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_submit_scene_aabb(
+    device: u64,
+    queue: u64,
+    dispatch: *const v::vgpu::SceneAabbDispatch,
+    out_result: *mut v::vgpu::SceneAabbResult,
+) -> i32 {
+    if dispatch.is_null() || out_result.is_null() {
+        return -14;
+    }
+    let dispatch = unsafe { dispatch.read() };
+    let request = unsafe {
+        core::slice::from_raw_parts(
+            (&dispatch as *const v::vgpu::SceneAabbDispatch).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::SceneAabbDispatch>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(
+            trueos_vm::vmcall::OP_BP_VGPU_SCENE_AABB,
+            device,
+            queue,
+            request,
+        )
+    } else {
+        broker_submit_scene_aabb(direct_principal(), device, queue, dispatch)
+    };
+    match result {
+        Ok(result) => {
+            unsafe { out_result.write(result) };
             0
         }
         Err(rc) => rc,

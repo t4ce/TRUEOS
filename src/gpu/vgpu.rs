@@ -12,8 +12,9 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 use super::physical::{
-    PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice, PhysicalGpuError,
-    PhysicalGpuVmHandle, PhysicalSchedulerStatus, physical_device,
+    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextHandle, PhysicalGpuDevice,
+    PhysicalGpuError, PhysicalGpuVmHandle, PhysicalSceneAabbRequest, PhysicalSchedulerStatus,
+    physical_device,
 };
 
 const PAGE_BYTES: usize = 4096;
@@ -21,6 +22,10 @@ const CLIENT_GPU_VA_BASE: u64 = 0x1_0000_0000;
 const CLIENT_GPU_VA_LIMIT: u64 = 0x0000_7FFF_0000_0000;
 pub(crate) const BUFFER_USAGE_MAP_READ: u32 = 1 << 0;
 pub(crate) const BUFFER_USAGE_MAP_WRITE: u32 = 1 << 1;
+pub(crate) const BUFFER_USAGE_STORAGE: u32 = 1 << 2;
+pub(crate) const BUFFER_USAGE_COPY_SRC: u32 = 1 << 3;
+pub(crate) const BUFFER_USAGE_COPY_DST: u32 = 1 << 4;
+pub(crate) const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
@@ -230,6 +235,30 @@ pub(crate) struct TimelineStatus {
 pub(crate) struct BufferInfo {
     pub(crate) bytes: usize,
     pub(crate) usage: u32,
+    pub(crate) flags: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BufferSlice {
+    pub(crate) buffer: BufferHandle,
+    pub(crate) offset: usize,
+    pub(crate) bytes: usize,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) struct SceneAabbDispatch {
+    pub(crate) bounds: [BufferSlice; 6],
+    pub(crate) liveness: BufferSlice,
+    pub(crate) output: BufferSlice,
+    pub(crate) rows: u32,
+    pub(crate) query_min: [f32; 3],
+    pub(crate) query_max: [f32; 3],
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct SceneAabbResult {
+    pub(crate) point: TimelinePoint,
+    pub(crate) hits: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -330,12 +359,25 @@ impl Quota {
     };
 }
 
+enum BufferBacking {
+    Dma {
+        phys: u64,
+        virt: *mut u8,
+    },
+    GuestPages {
+        vm_id: u8,
+        guest_va: u64,
+        pages: Vec<u64>,
+    },
+}
+
 struct BufferRecord {
-    phys: u64,
-    virt: *mut u8,
+    backing: BufferBacking,
     bytes: usize,
     gpu: u64,
     usage: u32,
+    epoch: u64,
+    in_flight: u32,
 }
 
 unsafe impl Send for BufferRecord {}
@@ -376,6 +418,8 @@ struct VirtualDevice {
     gpuvm: GpuVmBinding,
     next_gpu_va: u64,
     memory_used: usize,
+    copied_upload_bytes: u64,
+    flushed_vvideo_bytes: u64,
     buffers: Vec<BufferSlot>,
     queues: Vec<QueueSlot>,
     contexts: Vec<ContextBinding>,
@@ -474,6 +518,8 @@ pub(crate) fn open(
         gpuvm: GpuVmBinding::Owned(gpuvm),
         next_gpu_va: CLIENT_GPU_VA_BASE,
         memory_used: 0,
+        copied_upload_bytes: 0,
+        flushed_vvideo_bytes: 0,
         buffers: Vec::new(),
         queues: Vec::new(),
         contexts: Vec::new(),
@@ -587,13 +633,192 @@ pub(crate) fn create_buffer(
     Ok(insert_buffer(
         device,
         BufferRecord {
-            phys,
-            virt,
+            backing: BufferBacking::Dma { phys, virt },
             bytes: alloc_bytes,
             gpu,
             usage,
+            epoch: device.epoch,
+            in_flight: 0,
         },
     ))
+}
+
+/// Register page-granular storage already owned by a Hull guest as
+/// vVideoMem. The CPU mapping stays in the guest while the same physical
+/// pages become one contiguous virtual range in that guest's PPGTT.
+pub(crate) fn create_vvideo_mem(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    guest_va: u64,
+    bytes: usize,
+    usage: u32,
+) -> Result<BufferHandle, VgpuError> {
+    let Principal::HullGuest(raw_vm_id) = principal else {
+        return Err(VgpuError::PermissionDenied);
+    };
+    let vm_id = u8::try_from(raw_vm_id).map_err(|_| VgpuError::PermissionDenied)?;
+    if bytes == 0
+        || guest_va & (PAGE_BYTES as u64 - 1) != 0
+        || bytes & (PAGE_BYTES - 1) != 0
+        || usage & (BUFFER_USAGE_MAP_READ | BUFFER_USAGE_MAP_WRITE | BUFFER_USAGE_STORAGE) == 0
+    {
+        return Err(VgpuError::Unsupported);
+    }
+    let page_count = bytes / PAGE_BYTES;
+    let mut pages = Vec::with_capacity(page_count);
+    for page in 0..page_count {
+        let gva = guest_va
+            .checked_add((page * PAGE_BYTES) as u64)
+            .ok_or(VgpuError::Unsupported)?;
+        let phys = crate::hv::memory::guest_heap_page_phys_for_vm(vm_id, gva)
+            .ok_or(VgpuError::PermissionDenied)?;
+        pages.push(phys);
+    }
+
+    let physical = require_physical()?;
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    if !device.capabilities.contains(Capabilities::BUFFER) {
+        return Err(VgpuError::PermissionDenied);
+    }
+    if device
+        .buffers
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+        .any(|record| match &record.backing {
+            BufferBacking::GuestPages {
+                guest_va: existing,
+                ..
+            } => ranges_overlap(*existing, record.bytes, guest_va, bytes),
+            BufferBacking::Dma { .. } => false,
+        })
+    {
+        return Err(VgpuError::Busy);
+    }
+    let buffer_count = device
+        .buffers
+        .iter()
+        .filter(|slot| slot.record.is_some())
+        .count();
+    if buffer_count >= device.quota.buffers
+        || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes
+    {
+        return Err(VgpuError::QuotaExceeded);
+    }
+    let gpu = align_up_u64(device.next_gpu_va, PAGE_BYTES as u64).ok_or(VgpuError::OutOfMemory)?;
+    let next = gpu.checked_add(bytes as u64).ok_or(VgpuError::OutOfMemory)?;
+    if next > CLIENT_GPU_VA_LIMIT {
+        return Err(VgpuError::QuotaExceeded);
+    }
+    let vm = match device.gpuvm {
+        GpuVmBinding::Owned(vm) => vm,
+        GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+    };
+    let mut mapped = 0usize;
+    for (page, phys) in pages.iter().copied().enumerate() {
+        let page_gpu = gpu + (page * PAGE_BYTES) as u64;
+        if let Err(error) = physical.map_gpuvm(vm, page_gpu, phys, PAGE_BYTES) {
+            if mapped != 0 {
+                let _ = physical.unmap_gpuvm(vm, gpu, mapped * PAGE_BYTES);
+            }
+            return Err(error.into());
+        }
+        mapped += 1;
+    }
+    device.next_gpu_va = next;
+    device.memory_used = device.memory_used.saturating_add(bytes);
+    Ok(insert_buffer(
+        device,
+        BufferRecord {
+            backing: BufferBacking::GuestPages {
+                vm_id,
+                guest_va,
+                pages,
+            },
+            bytes,
+            gpu,
+            usage,
+            epoch: device.epoch,
+            in_flight: 0,
+        },
+    ))
+}
+
+pub(crate) fn flush_vvideo_mem(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    buffer_handle: BufferHandle,
+    offset: usize,
+    bytes: usize,
+) -> Result<usize, VgpuError> {
+    cache_maintain_vvideo(
+        principal,
+        device_handle,
+        buffer_handle,
+        offset,
+        bytes,
+        BUFFER_USAGE_MAP_WRITE,
+    )
+}
+
+pub(crate) fn invalidate_vvideo_mem(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    buffer_handle: BufferHandle,
+    offset: usize,
+    bytes: usize,
+) -> Result<usize, VgpuError> {
+    cache_maintain_vvideo(
+        principal,
+        device_handle,
+        buffer_handle,
+        offset,
+        bytes,
+        BUFFER_USAGE_MAP_READ,
+    )
+}
+
+fn cache_maintain_vvideo(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    buffer_handle: BufferHandle,
+    offset: usize,
+    bytes: usize,
+    required_usage: u32,
+) -> Result<usize, VgpuError> {
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    {
+        let record = lookup_buffer(device, buffer_handle)?;
+        if record.epoch != device.epoch {
+            return Err(VgpuError::DeviceLost);
+        }
+        if record.usage & required_usage == 0 {
+            return Err(VgpuError::PermissionDenied);
+        }
+        let end = offset.checked_add(bytes).ok_or(VgpuError::Unsupported)?;
+        if end > record.bytes {
+            return Err(VgpuError::Unsupported);
+        }
+        let BufferBacking::GuestPages { pages, .. } = &record.backing else {
+            return Err(VgpuError::Unsupported);
+        };
+        let mut cursor = offset;
+        let mut remaining = bytes;
+        while remaining != 0 {
+            let page = cursor / PAGE_BYTES;
+            let in_page = cursor % PAGE_BYTES;
+            let count = core::cmp::min(PAGE_BYTES - in_page, remaining);
+            let virt = crate::phys::phys_to_virt(pages[page] as usize) as *mut u8;
+            crate::intel::dma_flush(unsafe { virt.add(in_page) }, count);
+            cursor += count;
+            remaining -= count;
+        }
+    }
+    device.flushed_vvideo_bytes = device.flushed_vvideo_bytes.saturating_add(bytes as u64);
+    Ok(bytes)
 }
 
 pub(crate) fn buffer_info(
@@ -608,6 +833,11 @@ pub(crate) fn buffer_info(
     Ok(BufferInfo {
         bytes: record.bytes,
         usage: record.usage,
+        flags: if matches!(&record.backing, BufferBacking::GuestPages { .. }) {
+            BUFFER_INFO_FLAG_VVIDEO_MEM
+        } else {
+            0
+        },
     })
 }
 
@@ -618,25 +848,32 @@ pub(crate) fn write_buffer(
     offset: usize,
     bytes: &[u8],
 ) -> Result<usize, VgpuError> {
-    let broker = BROKER.lock();
-    let device = lookup_device(&broker, device_handle, principal)?;
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
-    let record = lookup_buffer(device, buffer_handle)?;
-    if record.usage & BUFFER_USAGE_MAP_WRITE == 0 {
-        return Err(VgpuError::PermissionDenied);
-    }
-    let end = offset
-        .checked_add(bytes.len())
-        .ok_or(VgpuError::Unsupported)?;
-    if end > record.bytes {
-        return Err(VgpuError::Unsupported);
-    }
-    if !bytes.is_empty() {
-        unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), record.virt.add(offset), bytes.len());
+    {
+        let record = lookup_buffer(device, buffer_handle)?;
+        if record.usage & BUFFER_USAGE_MAP_WRITE == 0 {
+            return Err(VgpuError::PermissionDenied);
         }
-        crate::intel::dma_flush(unsafe { record.virt.add(offset) }, bytes.len());
+        let end = offset
+            .checked_add(bytes.len())
+            .ok_or(VgpuError::Unsupported)?;
+        if end > record.bytes {
+            return Err(VgpuError::Unsupported);
+        }
+        let virt = match &record.backing {
+            BufferBacking::Dma { virt, .. } => *virt,
+            BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+        };
+        if !bytes.is_empty() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), virt.add(offset), bytes.len());
+            }
+            crate::intel::dma_flush(unsafe { virt.add(offset) }, bytes.len());
+        }
     }
+    device.copied_upload_bytes = device.copied_upload_bytes.saturating_add(bytes.len() as u64);
     Ok(bytes.len())
 }
 
@@ -660,11 +897,13 @@ pub(crate) fn read_buffer(
     if end > record.bytes {
         return Err(VgpuError::Unsupported);
     }
+    let virt = match &record.backing {
+        BufferBacking::Dma { virt, .. } => *virt,
+        BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+    };
     if !out.is_empty() {
-        crate::intel::dma_flush(unsafe { record.virt.add(offset) }, out.len());
-        unsafe {
-            core::ptr::copy_nonoverlapping(record.virt.add(offset), out.as_mut_ptr(), out.len());
-        }
+        crate::intel::dma_flush(unsafe { virt.add(offset) }, out.len());
+        unsafe { core::ptr::copy_nonoverlapping(virt.add(offset), out.as_mut_ptr(), out.len()) };
     }
     Ok(out.len())
 }
@@ -690,14 +929,17 @@ pub(crate) fn destroy_buffer(
         .record
         .as_ref()
         .ok_or(VgpuError::InvalidHandle)?;
+    if record.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
     let vm = match device.gpuvm {
         GpuVmBinding::Owned(vm) => vm,
         GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
     };
     physical.unmap_gpuvm(vm, record.gpu, record.bytes)?;
-    let record = buffer_slot.record.take().expect("validated vgpu buffer");
+    let mut record = buffer_slot.record.take().expect("validated vgpu buffer");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
-    crate::dma::dealloc(record.virt, record.bytes);
+    release_buffer_backing(&mut record);
     Ok(())
 }
 
@@ -777,6 +1019,127 @@ pub(crate) fn submit_control_nop(
         queue: queue_handle,
         value: queue.timeline.submitted,
         physical_serial: 0,
+    })
+}
+
+/// Execute the fixed SceneDB AABB kernel in the tenant's own GPUVM. This is a
+/// typed operation rather than an arbitrary batch/shader submission surface.
+pub(crate) fn submit_scene_aabb(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    queue_handle: QueueHandle,
+    dispatch: SceneAabbDispatch,
+) -> Result<SceneAabbResult, VgpuError> {
+    let physical = require_physical()?;
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    if lookup_queue(device, queue_handle)?.class != QueueClass::Compute {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let row_bytes = (dispatch.rows as usize)
+        .checked_mul(core::mem::size_of::<f32>())
+        .ok_or(VgpuError::Unsupported)?;
+    let live_bytes = (dispatch.rows as usize)
+        .div_ceil(64)
+        .checked_mul(core::mem::size_of::<u64>())
+        .ok_or(VgpuError::Unsupported)?;
+    let output_bytes = (dispatch.rows as usize)
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or(VgpuError::Unsupported)?;
+    let mut bounds = [PhysicalBufferSlice { gpu: 0, bytes: 0 }; 6];
+    for (dst, src) in bounds.iter_mut().zip(dispatch.bounds) {
+        *dst = validate_vvideo_slice(device, src, row_bytes, BUFFER_USAGE_STORAGE)?;
+    }
+    let liveness = validate_vvideo_slice(
+        device,
+        dispatch.liveness,
+        live_bytes,
+        BUFFER_USAGE_STORAGE,
+    )?;
+    let output = validate_vvideo_slice(
+        device,
+        dispatch.output,
+        output_bytes,
+        BUFFER_USAGE_STORAGE | BUFFER_USAGE_MAP_READ,
+    )?;
+    let vm = match device.gpuvm {
+        GpuVmBinding::Owned(vm) => vm,
+        GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+    };
+    if dispatch.rows == 0 {
+        let queue = lookup_queue_mut(device, queue_handle)?;
+        queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
+        queue.timeline.completed = queue.timeline.submitted;
+        return Ok(SceneAabbResult {
+            point: TimelinePoint {
+                queue: queue_handle,
+                value: queue.timeline.submitted,
+                physical_serial: 0,
+            },
+            hits: 0,
+        });
+    }
+    let request = PhysicalSceneAabbRequest {
+        vm,
+        bounds,
+        liveness,
+        output,
+        rows: dispatch.rows,
+        query_min: dispatch.query_min,
+        query_max: dispatch.query_max,
+    };
+    let completion = match physical.submit_scene_aabb(request) {
+        Ok(completion) => completion,
+        Err(error) => {
+            let queue = lookup_queue_mut(device, queue_handle)?;
+            queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+            return Err(error.into());
+        }
+    };
+    let queue = lookup_queue_mut(device, queue_handle)?;
+    queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
+    queue.timeline.completed = queue.timeline.submitted;
+    queue.timeline.last_physical_serial = completion.serial;
+    Ok(SceneAabbResult {
+        point: TimelinePoint {
+            queue: queue_handle,
+            value: queue.timeline.submitted,
+            physical_serial: completion.serial,
+        },
+        hits: completion.hits,
+    })
+}
+
+fn validate_vvideo_slice(
+    device: &VirtualDevice,
+    slice: BufferSlice,
+    required_bytes: usize,
+    required_usage: u32,
+) -> Result<PhysicalBufferSlice, VgpuError> {
+    if slice.bytes < required_bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    let record = lookup_buffer(device, slice.buffer)?;
+    if record.epoch != device.epoch || record.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
+    if record.usage & required_usage != required_usage {
+        return Err(VgpuError::PermissionDenied);
+    }
+    if !matches!(&record.backing, BufferBacking::GuestPages { .. }) {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let end = slice
+        .offset
+        .checked_add(slice.bytes)
+        .ok_or(VgpuError::Unsupported)?;
+    if end > record.bytes {
+        return Err(VgpuError::Unsupported);
+    }
+    Ok(PhysicalBufferSlice {
+        gpu: record.gpu + slice.offset as u64,
+        bytes: slice.bytes,
     })
 }
 
@@ -1136,6 +1499,8 @@ fn ensure_kernel_device(
         gpuvm: GpuVmBinding::Borrowed { root_phys },
         next_gpu_va: CLIENT_GPU_VA_BASE,
         memory_used: 0,
+        copied_upload_bytes: 0,
+        flushed_vvideo_bytes: 0,
         buffers: Vec::new(),
         queues: Vec::new(),
         contexts: Vec::new(),
@@ -1212,8 +1577,8 @@ fn destroy_device_resources(
             let vm = vm.ok_or(VgpuError::Unsupported)?;
             physical.unmap_gpuvm(vm, record.gpu, record.bytes)?;
         }
-        if let Some(record) = slot.record.take() {
-            crate::dma::dealloc(record.virt, record.bytes);
+        if let Some(mut record) = slot.record.take() {
+            release_buffer_backing(&mut record);
         }
     }
     device.memory_used = 0;
@@ -1221,6 +1586,19 @@ fn destroy_device_resources(
         physical.destroy_gpuvm(vm)?;
     }
     Ok(())
+}
+
+fn release_buffer_backing(record: &mut BufferRecord) {
+    match &mut record.backing {
+        BufferBacking::Dma { virt, .. } => crate::dma::dealloc(*virt, record.bytes),
+        BufferBacking::GuestPages { pages, .. } => {
+            for phys in pages.iter().copied() {
+                let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
+                unsafe { core::ptr::write_bytes(virt, 0, PAGE_BYTES) };
+                crate::intel::dma_flush(virt, PAGE_BYTES);
+            }
+        }
+    }
 }
 
 fn insert_device(broker: &mut Broker, record: VirtualDevice) -> DeviceHandle {
@@ -1410,4 +1788,10 @@ fn align_up_u64(value: u64, align: u64) -> Option<u64> {
     value
         .checked_add(align - 1)
         .map(|value| value & !(align - 1))
+}
+
+fn ranges_overlap(a_start: u64, a_bytes: usize, b_start: u64, b_bytes: usize) -> bool {
+    let a_end = a_start.saturating_add(a_bytes as u64);
+    let b_end = b_start.saturating_add(b_bytes as u64);
+    a_start < b_end && b_start < a_end
 }

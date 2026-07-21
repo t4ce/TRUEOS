@@ -455,18 +455,15 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         ));
     }
 
-    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-        let Some(guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
-        else {
-            continue;
-        };
+    let vm_id = current_vm_id_for_log();
+    if let Some(guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id) {
         if guest_heap.initialized
             && guest_heap.phys_start != 0
             && guest_heap.heap_end > guest_heap.heap_start
         {
-            // Securit Risk and a Id to it: HVSR-0003
-            // This span should remain guest-owned and non-executable once EPT
-            // permissions are narrowed per label.
+            // HVSR-0003: only the active VM's private heap belongs in this
+            // EPT. vVideoMem maps pages from this exact span into the same
+            // VM's PPGTT; no other VM heap is reachable here.
             map_ept_identity_span(
                 pdpt,
                 &mut next_pd,
@@ -1596,6 +1593,29 @@ fn guest_va_to_pa_from_cr3(guest_cr3: u64, guest_va: u64) -> Option<u64> {
     Some(pde_addr(pte) + (guest_va & ((PAGE_SIZE_4K as u64) - 1)))
 }
 
+/// Resolve one page-aligned address from a VM's private heap and prove that
+/// the guest page-table leaf still targets the physical page assigned to that
+/// VM. vVideoMem uses this before admitting guest pages into PPGTT.
+pub(crate) fn guest_heap_page_phys_for_vm(vm_id: u8, guest_va: u64) -> Option<u64> {
+    if guest_va & ((PAGE_SIZE_4K as u64) - 1) != 0 {
+        return None;
+    }
+    let heap = crate::allocators::hv_guest_heap_stats_if_configured(vm_id)?;
+    if !heap.initialized || heap.heap_end <= heap.heap_start || heap.phys_start == 0 {
+        return None;
+    }
+    let heap_start = heap.heap_start as u64;
+    let heap_end = heap.heap_end as u64;
+    let page_end = guest_va.checked_add(PAGE_SIZE_4K as u64)?;
+    if guest_va < heap_start || page_end > heap_end {
+        return None;
+    }
+    let expected = (heap.phys_start as u64).checked_add(guest_va.checked_sub(heap_start)?)?;
+    let guest_cr3 = guest_cr3_pa_for_vm(vm_id).ok()?;
+    let translated = guest_va_to_pa_from_cr3(guest_cr3, guest_va)?;
+    (translated == expected).then_some(translated)
+}
+
 pub fn log_guest_code_bytes_from_cr3(label: &str, guest_cr3: u64, guest_va: u64) {
     let Some(pa) = guest_va_to_pa_from_cr3(guest_cr3, guest_va) else {
         hvlogf(format_args!(
@@ -2094,21 +2114,14 @@ fn map_guest_heap_span(
     image_start: u64,
     image_end: u64,
 ) -> Result<(), &'static str> {
-    let mut have_heap = false;
-    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
-        else {
-            continue;
-        };
-        if hv_guest_heap.initialized
-            && hv_guest_heap.heap_start != 0
-            && hv_guest_heap.heap_end > hv_guest_heap.heap_start
-        {
-            have_heap = true;
-            break;
-        }
-    }
-    if !have_heap {
+    let vm_id = current_vm_id_for_log();
+    let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id) else {
+        return Ok(());
+    };
+    if !hv_guest_heap.initialized
+        || hv_guest_heap.heap_start == 0
+        || hv_guest_heap.heap_end <= hv_guest_heap.heap_start
+    {
         return Ok(());
     }
 
@@ -2118,16 +2131,12 @@ fn map_guest_heap_span(
     let mut heap_pd_slots = [usize::MAX; 512];
     let mut heap_pd_count = 0usize;
 
-    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
-        else {
-            continue;
-        };
+    {
         if !hv_guest_heap.initialized
             || hv_guest_heap.heap_start == 0
             || hv_guest_heap.heap_end <= hv_guest_heap.heap_start
         {
-            continue;
+            return Ok(());
         }
         let start = hv_guest_heap.heap_start as u64;
         let end = hv_guest_heap.heap_end as u64;
@@ -2139,7 +2148,7 @@ fn map_guest_heap_span(
                 start,
                 end
             ));
-            continue;
+            return Ok(());
         }
         if pml4_index(start) != pml4_index(end.saturating_sub(1)) {
             return Err("guest heap pml4 range");
@@ -2150,21 +2159,17 @@ fn map_guest_heap_span(
         map_table_entry(pml4, pml4_index(start), heap_pdpt_pa);
     }
 
-    for vm_id in 0..crate::allcaps::hv::VM_ID_LIMIT {
-        let Some(hv_guest_heap) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id as u8)
-        else {
-            continue;
-        };
+    {
         if !hv_guest_heap.initialized
             || hv_guest_heap.heap_start == 0
             || hv_guest_heap.heap_end <= hv_guest_heap.heap_start
         {
-            continue;
+            return Ok(());
         }
         let start = hv_guest_heap.heap_start as u64;
         let end = hv_guest_heap.heap_end as u64;
         if range_covered_by(start, end, image_start, image_end) {
-            continue;
+            return Ok(());
         }
         let start_chunk_base = page_align_down_2m(start);
         let end_aligned = page_align_up_2m(end);

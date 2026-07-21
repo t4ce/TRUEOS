@@ -16,9 +16,7 @@ use super::{
     retain_published_frame, visible_windows_for_output,
 };
 
-// AP1 wake-rate diagnostic: normal broker rescans are intentionally slow;
-// in-flight work still uses the 1 ms pending cadence below.
-const COMPOSITION_PERIOD_MS: u64 = 160;
+const COMPOSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
 const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
