@@ -114,6 +114,9 @@ architecture rtl of top is
 
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	type call_data_arr_t is array (0 to 23) of std_logic_vector(31 downto 0);
+	constant RX_FIFO_DEPTH : integer := 4;
+	type rx_data_fifo_t is array (0 to RX_FIFO_DEPTH - 1) of std_logic_vector(255 downto 0);
+	type rx_valid_fifo_t is array (0 to RX_FIFO_DEPTH - 1) of std_logic_vector(7 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
 	constant PKT_MAX_WORDS : integer := 8;
 	constant BAR0_LED_DW : std_logic_vector(9 downto 0) := "0000000000";
@@ -235,6 +238,14 @@ architecture rtl of top is
 	signal tx_pending_sop : std_logic := '0';
 	signal tx_pending_eop : std_logic := '0';
 
+	-- The hard IP can present posted writes back-to-back. Keep that receive
+	-- boundary independent of the multi-cycle decode/execute path so asserting
+	-- RX_WAIT never creates a one-beat acceptance hole.
+	signal rx_fifo_data : rx_data_fifo_t := (others => (others => '0'));
+	signal rx_fifo_valid : rx_valid_fifo_t := (others => (others => '0'));
+	signal rx_fifo_write_ptr : unsigned(1 downto 0) := (others => '0');
+	signal rx_fifo_read_ptr : unsigned(1 downto 0) := (others => '0');
+	signal rx_fifo_count : unsigned(2 downto 0) := (others => '0');
 	signal capture_pending : std_logic := '0';
 	signal rx_snapshot_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal rx_snapshot_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -374,7 +385,12 @@ begin
 	tl_tx_valid <= tx_pending_valid when tx_pending = '1' else (others => '0');
 	tl_tx_sop <= tx_pending_sop when tx_pending = '1' else '0';
 	tl_tx_eop <= tx_pending_eop when tx_pending = '1' else '0';
-	tl_rx_backpressure <= capture_pending or decode_pending or transaction_pending;
+	-- Backpressure describes the ingress queue itself, not downstream decode
+	-- latency. This permits a burst to continue until every accepted beat has a
+	-- physical slot and then holds the controller while the queue drains.
+	tl_rx_backpressure <= '1'
+		when rx_fifo_count = to_unsigned(RX_FIFO_DEPTH, rx_fifo_count'length)
+		else '0';
 	-- A BAR read is a non-posted request: keep later non-posted requests out of
 	-- the controller until our completion has actually entered its TX buffer.
 	-- Include the live SOP cycle so the mask is visible when the first request
@@ -488,6 +504,8 @@ begin
 		variable req_tag : std_logic_vector(7 downto 0);
 		variable read_data_dw : std_logic_vector(31 downto 0);
 		variable addr_index : integer range 0 to 1023;
+		variable rx_fifo_push : boolean;
+		variable rx_fifo_pop : boolean;
 
 		procedure clear_words(variable words : inout word_arr_t) is
 		begin
@@ -659,16 +677,38 @@ begin
 				rx_nonposted_busy <= '0';
 					tx_pending <= '0';
 					tx_pending_data <= (others => '0');
-					tx_pending_valid <= (others => '0');
-					tx_pending_sop <= '0';
-					tx_pending_eop <= '0';
-					dbg_rx_bar0_eop <= '0';
+				tx_pending_valid <= (others => '0');
+				tx_pending_sop <= '0';
+				tx_pending_eop <= '0';
+				rx_fifo_data <= (others => (others => '0'));
+				rx_fifo_valid <= (others => (others => '0'));
+				rx_fifo_write_ptr <= (others => '0');
+				rx_fifo_read_ptr <= (others => '0');
+				rx_fifo_count <= (others => '0');
+				dbg_rx_bar0_eop <= '0';
 					dbg_hit_write <= '0';
 					dbg_hit_read <= '0';
 					dbg_magic_read <= '0';
 					dbg_queue_cpld <= '0';
-					dbg_tx_fire <= '0';
-					dbg_cpld_blocked <= '0';
+				dbg_tx_fire <= '0';
+				dbg_cpld_blocked <= '0';
+				rx_fifo_push := false;
+				rx_fifo_pop := false;
+
+				-- Capture is deliberately independent of the decoder state. The
+				-- controller is allowed to advance only while RX_WAIT is low, and
+				-- every such single-beat BAR0 TLP is committed to this FIFO here.
+				if (tl_rx_sop = '1') and (tl_rx_eop = '1')
+					and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
+					and (tl_rx_backpressure = '0') then
+					rx_fifo_data(to_integer(rx_fifo_write_ptr)) <= tl_rx_data;
+					rx_fifo_valid(to_integer(rx_fifo_write_ptr)) <= tl_rx_valid;
+					rx_fifo_write_ptr <= rx_fifo_write_ptr + 1;
+					rx_fifo_push := true;
+					rx_nonposted_busy <= '1';
+					dbg_rx_bar0_eop <= '1';
+					dbg_seen_rx_bar0_eop <= '1';
+				end if;
 
 					dbg_seen_rx_bar0_eop <= '0';
 					dbg_seen_hit_write <= '0';
@@ -1054,14 +1094,19 @@ begin
 						dbg_last_rx_rev_dw3 <= next_words_rev(3);
 						capture_pending <= '0';
 						decode_pending <= '1';
-					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
-						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1') then
-						rx_snapshot_data <= tl_rx_data;
-						rx_snapshot_valid <= tl_rx_valid;
+					elsif rx_fifo_count /= to_unsigned(0, rx_fifo_count'length) then
+						rx_snapshot_data <= rx_fifo_data(to_integer(rx_fifo_read_ptr));
+						rx_snapshot_valid <= rx_fifo_valid(to_integer(rx_fifo_read_ptr));
+						rx_fifo_read_ptr <= rx_fifo_read_ptr + 1;
+						rx_fifo_pop := true;
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
-						dbg_rx_bar0_eop <= '1';
-						dbg_seen_rx_bar0_eop <= '1';
+					end if;
+
+					if rx_fifo_push and not rx_fifo_pop then
+						rx_fifo_count <= rx_fifo_count + 1;
+					elsif rx_fifo_pop and not rx_fifo_push then
+						rx_fifo_count <= rx_fifo_count - 1;
 					end if;
 
 				pkt_cnt_fwd <= to_unsigned(next_cnt_fwd, pkt_cnt_fwd'length);
