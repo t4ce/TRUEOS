@@ -44,7 +44,7 @@ struct Tga {
     bar_phys: u64,
     bar_size: u64,
     bar_is_64: bool,
-    bar_assigned_by_os: bool,
+    bar_assignment: TgaBarAssignment,
     mmio_base: usize,
     led_reg: usize,
     magic_reg: usize,
@@ -61,8 +61,25 @@ struct TgaHotplugSnapshot {
     bar_phys: u64,
     bar_size: u64,
     bar_is_64: bool,
-    bar_assigned_by_os: bool,
+    bar_assignment: TgaBarAssignment,
     mmio_base: usize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum TgaBarAssignment {
+    Firmware,
+    Restored,
+    Allocated,
+}
+
+impl TgaBarAssignment {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Firmware => "firmware",
+            Self::Restored => "restored",
+            Self::Allocated => "allocated",
+        }
+    }
 }
 
 // Safety: `Tga` contains an MMIO pointer and is always accessed behind the `TGA` mutex.
@@ -98,11 +115,13 @@ impl Tga {
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
+static TGA_LAST_WORKING_LEASE: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
 
 // Heartbeat policy: write a visible changing pattern as a "driver alive" indicator.
 // We send 0..31 (wrap) so the FPGA can display the low 5 bits.
 static TGA_HEARTBEAT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static TGA_LIVENESS_LOGGED: AtomicBool = AtomicBool::new(false);
+static TGA_CONNECTION_GENERATION: AtomicU32 = AtomicU32::new(0);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -244,6 +263,7 @@ fn log_liveness_once() {
     };
     let magic = tga.protocol_magic();
     if magic == TGA_MAGIC_EXPECTED {
+        *TGA_LAST_WORKING_LEASE.lock() = Some(snapshot_from_tga(tga));
         crate::log!(
             "tga: liveness reply=yep-alive magic=0x{:08X} bdf={:02X}:{:02X}.{}\n",
             magic,
@@ -271,7 +291,7 @@ fn snapshot_from_tga(tga: &Tga) -> TgaHotplugSnapshot {
         bar_phys: tga.bar_phys,
         bar_size: tga.bar_size,
         bar_is_64: tga.bar_is_64,
-        bar_assigned_by_os: tga.bar_assigned_by_os,
+        bar_assignment: tga.bar_assignment,
         mmio_base: tga.mmio_base,
     }
 }
@@ -281,7 +301,7 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
     let bar_phys_changed = prev.bar_phys != now.bar_phys;
     let bar_size_changed = prev.bar_size != now.bar_size;
     let bar_mode_changed = prev.bar_is_64 != now.bar_is_64;
-    let assign_changed = prev.bar_assigned_by_os != now.bar_assigned_by_os;
+    let assign_changed = prev.bar_assignment != now.bar_assignment;
     let map_changed = prev.mmio_base != now.mmio_base;
 
     if !(bdf_changed
@@ -317,16 +337,8 @@ fn log_reconnect_delta(prev: TgaHotplugSnapshot, now: &Tga) {
         now.bar_size,
         if prev.bar_is_64 { "64b" } else { "32b" },
         if now.bar_is_64 { "64b" } else { "32b" },
-        if prev.bar_assigned_by_os {
-            "assigned"
-        } else {
-            "fw"
-        },
-        if now.bar_assigned_by_os {
-            "assigned"
-        } else {
-            "fw"
-        },
+        prev.bar_assignment.label(),
+        now.bar_assignment.label(),
         prev.mmio_base,
         now.mmio_base
     );
@@ -342,11 +354,7 @@ fn log_tga_state(prefix: &str, tga: &Tga) {
         tga.bar_phys,
         tga.bar_size,
         if tga.bar_is_64 { "64b" } else { "32b" },
-        if tga.bar_assigned_by_os {
-            "assigned"
-        } else {
-            "fw"
-        },
+        tga.bar_assignment.label(),
         tga.mmio_base
     );
 }
@@ -494,6 +502,7 @@ pub fn try_init() -> bool {
     }
 
     *TGA.lock() = Some(tga);
+    TGA_CONNECTION_GENERATION.fetch_add(1, Ordering::AcqRel);
     TGA_LIVENESS_LOGGED.store(false, Ordering::Relaxed);
     if TGA_BOOT_MMIO_TOUCH_ENABLED {
         // Keep contract explicit when MMIO touch is enabled: default to LED off.
@@ -515,6 +524,10 @@ fn is_present(tga: &Tga) -> bool {
 
 pub fn is_online() -> bool {
     TGA.lock().is_some()
+}
+
+pub(crate) fn connection_generation() -> u32 {
+    TGA_CONNECTION_GENERATION.load(Ordering::Acquire)
 }
 
 fn is_tga(dev: &PciDevice) -> bool {
@@ -582,7 +595,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         lo | (hi << 32)
     };
 
-    let mut bar_assigned_by_os = false;
+    let mut bar_assignment = TgaBarAssignment::Firmware;
 
     // Sanity check: if BAR is uninitialized (0) or at a suspiciously high address
     // (e.g. > 256 GiB), we force reassignment to our known-good 32-bit MMIO window.
@@ -592,16 +605,37 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     // and causes QEMU VFIO DMA map failures (error -22) when the guest enables
     // the BAR.
     if bar_phys == 0 || bar_phys >= 0x40_0000_0000 {
-        bar_assigned_by_os = true;
         // Hotplug path: firmware may not have assigned BARs for devices appearing later.
-        // Allocate a fixed 1 KiB window and program BAR0/BAR1.
+        // A transient SRAM reload is different: the same endpoint's firmware-routed
+        // resource lease remains valid even though the endpoint temporarily forgot
+        // its BAR registers. Restore that exact lease before considering allocation.
+        // Generic allocation is reserved for a genuinely new endpoint or BAR shape.
         let size = TGA_EXPECTED_BAR0_SIZE;
         // Keep BAR base at least 4KiB aligned.
         // The current FPGA-side write decode matches BAR0 + 0x00 via address low bits,
         // so non-page-aligned hotplug bases (e.g. ...FC00) can miss that match.
         let align = TGA_EXPECTED_BAR0_SIZE.max(0x1000);
 
-        let base = crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?;
+        let previous_lease = TGA_LAST_WORKING_LEASE
+            .lock()
+            .as_ref()
+            .copied()
+            .filter(|previous| {
+                previous.bus == dev.bus
+                    && previous.slot == dev.slot
+                    && previous.function == dev.function
+                    && previous.bar_size == bar_size
+                    && previous.bar_is_64 == bar_is_64
+                    && previous.bar_phys != 0
+                    && previous.bar_phys % align == 0
+            });
+        let base = if let Some(previous) = previous_lease {
+            bar_assignment = TgaBarAssignment::Restored;
+            previous.bar_phys
+        } else {
+            bar_assignment = TgaBarAssignment::Allocated;
+            crate::pci::alloc_hotplug_mmio_base(dev.bus, size, align)?
+        };
 
         // Preserve the low BAR attribute bits (IO/type/prefetch) reported by the device.
         let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
@@ -664,7 +698,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         bar_phys,
         bar_size,
         bar_is_64,
-        bar_assigned_by_os,
+        bar_assignment,
         mmio_base: base,
         led_reg,
         magic_reg,

@@ -261,7 +261,7 @@ mod tests {
             "tx_pending_data(255 downto 224) <= dw0;",
             "tx_pending_data(223 downto 192) <= dw1;",
             "tx_pending_data(191 downto 160) <= dw2;",
-            "tx_pending_data(159 downto 128) <= data_in;",
+            "tx_pending_data(159 downto 128) <= byte_swap32(data_in);",
             "tx_pending_valid <= \"11110000\";",
         ] {
             assert!(TOP_VHDL.contains(required), "missing Gowin TL layout: {required}");
@@ -304,5 +304,22 @@ mod tests {
             "if (tx_pending = '1') and (tl_tx_wait = '0') then"
         ));
         assert!(!TOP_VHDL.contains("next_tx_valid := tx_pending_valid;"));
+    }
+
+    #[test]
+    fn bar_payloads_are_swapped_at_the_gowin_tlp_boundary() {
+        assert!(TOP_VHDL.contains(
+            "payload_out := byte_swap32(payload);"
+        ));
+        assert!(TOP_VHDL.contains(
+            "tx_pending_data(159 downto 128) <= byte_swap32(data_in);"
+        ));
+    }
+
+    #[test]
+    fn final_image_gives_leds_to_the_fused_heartbeat_function() {
+        assert!(TOP_VHDL.contains("signal debug_led_mode : std_logic := '0';"));
+        assert!(TOP_VHDL.contains("debug_led_mode <= '0';"));
+        assert!(!TOP_VHDL.contains("signal debug_led_mode : std_logic := '1';"));
     }
 }

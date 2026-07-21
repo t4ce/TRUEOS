@@ -26,6 +26,7 @@ use trueos_fpga_abi::{
 const MAX_ACTIVE_CALLS: usize = 32;
 const DEVICE_RETRY_MS: u64 = 100;
 const COMPLETION_POLL_MS: u64 = 1;
+const COMPLETION_POLL_LIMIT: u32 = 2_000;
 const HEARTBEAT_PERIOD_MS: u64 = 250;
 
 static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(1);
@@ -443,6 +444,7 @@ pub async fn fpga_offload_service_task() {
             }
         }
 
+        let mut completion_polls = 0u32;
         loop {
             Timer::after(EmbassyDuration::from_millis(COMPLETION_POLL_MS)).await;
             match crate::tga::offload_work_state() {
@@ -454,7 +456,13 @@ pub async fn fpga_offload_service_task() {
                     finish_call(request.call_id, result);
                     break;
                 }
-                Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {}
+                Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
+                    completion_polls = completion_polls.saturating_add(1);
+                    if completion_polls >= COMPLETION_POLL_LIMIT {
+                        finish_call(request.call_id, Err(Error::Protocol));
+                        break;
+                    }
+                }
                 Err(crate::tga::OffloadTransportError::Offline) => {
                     finish_call(request.call_id, Err(Error::DeviceLost));
                     break;
@@ -468,28 +476,53 @@ pub async fn fpga_offload_service_task() {
     }
 }
 
+async fn wait_for_tga_reconnect(previous_generation: u32) {
+    // A live SRAM program invalidates the old endpoint, then the TGA task
+    // publishes a new connection generation. Keying the wait to that generation
+    // also covers a fast reconnect that completed before this client observed
+    // the intermediate offline state.
+    while !crate::tga::is_online() || crate::tga::connection_generation() == previous_generation {
+        Timer::after(EmbassyDuration::from_millis(DEVICE_RETRY_MS)).await;
+    }
+}
+
 /// Periodic client of slot 0. This is not another hardware worker: all calls still pass
 /// through `fpga_offload_service_task`, which permits exactly one in-flight work package.
 /// If that end-to-end path wedges, the visible LED sequence stops as intended.
 #[embassy_executor::task]
 pub async fn fpga_offload_heartbeat_task() {
     crate::log!("fpga-offload: LED function heartbeat client started\n");
+    let mut online_announced = false;
     loop {
         if crate::tga::is_online() {
+            let connection_generation = crate::tga::connection_generation();
             match led_step_heartbeat().await {
-                Ok(true) => {}
+                Ok(true) => {
+                    if !online_announced {
+                        crate::log!(
+                            "fpga-offload: LED heartbeat online via fused work-package function\n"
+                        );
+                        online_announced = true;
+                    }
+                }
                 Ok(false) => {
                     crate::log_warn!(
-                        "fpga-offload: heartbeat disabled after bad liveness magic; flash matching TRUEGA firmware\n"
+                        "fpga-offload: heartbeat paused after bad liveness magic; waiting for FPGA reconnect\n"
                     );
-                    return;
+                    wait_for_tga_reconnect(connection_generation).await;
+                    online_announced = false;
+                }
+                Err(Error::DeviceLost) => {
+                    wait_for_tga_reconnect(connection_generation).await;
+                    online_announced = false;
                 }
                 Err(error) => {
                     crate::log_warn!(
-                        "fpga-offload: heartbeat disabled after first failure: {:?}; flash matching TRUEGA firmware\n",
+                        "fpga-offload: heartbeat paused after first failure: {:?}; waiting for FPGA reconnect\n",
                         error
                     );
-                    return;
+                    wait_for_tga_reconnect(connection_generation).await;
+                    online_announced = false;
                 }
             }
         }

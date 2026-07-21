@@ -142,9 +142,10 @@ architecture rtl of top is
 	signal tl_cfg_busdev : std_logic_vector(12 downto 0);
 
 	signal led_reg : std_logic_vector(4 downto 0) := (others => '0');
-	-- Bring-up image: expose the five sticky PCIe milestones directly on the LEDs.
-	-- Restore this default to '0' after the read-completion path is proven.
-	signal debug_led_mode : std_logic := '1';
+	-- Normal image: the five LEDs belong to the fused heartbeat function. A
+	-- transport diagnostic can still enable the sticky PCIe milestones through
+	-- the explicit LED_DEBUG_ON BAR write.
+	signal debug_led_mode : std_logic := '0';
 	-- The complete 256-byte work-package address map remains visible to software, but
 	-- only words used by the three fused functions need physical storage. Unused and
 	-- reserved words read as zero. This is a fixed register file, not command memory.
@@ -257,6 +258,14 @@ architecture rtl of top is
 	attribute syn_keep of dbg_last_cpld_dw1    : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw2    : signal is true;
 	attribute syn_keep of dbg_last_cpld_data   : signal is true;
+
+	function byte_swap32(x : std_logic_vector(31 downto 0)) return std_logic_vector is
+	begin
+		-- Gowin's TLP user bus exposes header dwords in protocol bit order but
+		-- payload dwords in PCIe byte-lane order. Convert the payload boundary so
+		-- every BAR register remains a normal host-native little-endian u32.
+		return x(7 downto 0) & x(15 downto 8) & x(23 downto 16) & x(31 downto 24);
+	end function;
 
 	function payload_byte(x : std_logic_vector(31 downto 0)) return byte_t is
 	begin
@@ -443,7 +452,7 @@ begin
 						addr_low := words(addr_idx);
 						payload := words(payload_idx);
 						addr_out := addr_low(11 downto 2);
-						payload_out := payload;
+						payload_out := byte_swap32(payload);
 						found_write := true;
 					end if;
 				end if;
@@ -505,7 +514,7 @@ begin
 			tx_pending_data(255 downto 224) <= dw0;
 			tx_pending_data(223 downto 192) <= dw1;
 			tx_pending_data(191 downto 160) <= dw2;
-			tx_pending_data(159 downto 128) <= data_in;
+			tx_pending_data(159 downto 128) <= byte_swap32(data_in);
 			tx_pending_valid <= "11110000";
 			tx_pending_sop <= '1';
 			tx_pending_eop <= '1';
@@ -515,7 +524,7 @@ begin
 		if rising_edge(tlp_clk) then
 			if (pcie_perst_n = '0') or (pll_lock = '0') then
 				led_reg <= (others => '0');
-				debug_led_mode <= '1';
+				debug_led_mode <= '0';
 				call_magic <= WORK_PACKAGE_MAGIC;
 				call_abi_function <= x"0000" & WORK_ABI_VERSION;
 				call_id_low <= (others => '0');
