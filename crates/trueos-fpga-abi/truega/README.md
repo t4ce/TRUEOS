@@ -62,3 +62,31 @@ renamed into place. `artifacts/SHA256SUMS` is published last as the seal for the
 The current completion callback is delivered by the single kernel worker after polling
 the hardware state. The ABI reserves interrupt-on-complete and IRQ-ack fields, but actual
 MSI/MSI-X wiring is a later transport optimization and does not change the call interface.
+
+## LFM2.5 native model checkpoint
+
+`tools/lfm25-seal` is the host-only converter for the pinned LFM2.5-350M Q8_0 appliance.
+It validates the complete GGUF SHA-256, architecture metadata, exact 148 names, shapes,
+types, and hybrid layer schedule before publishing anything. It then copies every Q8_0
+block bit-for-bit, converts the 55 F32 vectors/kernels to little-endian BF16 using
+round-to-nearest-even, and starts every tensor on a zero-filled 256-byte boundary.
+
+Run the complete pack and verification step on Ubuntu with:
+
+```sh
+./tools/build_lfm25_image.sh
+```
+
+This produces the ignored, licensed weight image
+`../../../tools/lfm2.5-350m/LFM2.5-350M-Q8_0.truega.bin` plus three small checked-in
+views of one canonical contract:
+
+- `artifacts/lfm25_model.contract.bin`: 192-byte seal plus 148 24-byte descriptors.
+- `../src/lfm25_generated.rs`: ordinary `no_std` Rust constants for TRUEOS.
+- `src/generated/truega_lfm25_model.v`: a synthesizable 936-word synchronous ROM.
+
+The native image is exactly `376701952` bytes with SHA-256
+`051c60856786de2ac7089109354259fa29fcd57e83d585efc86afa0fb605bb86`.
+The source GGUF is not required to build the current heartbeat firmware. The model ROM is
+intentionally not instantiated in `top.vhd` or added to the Gowin project yet, so this
+checkpoint does not alter BAR0, the three slots, timing, the bitstream, or live hardware.

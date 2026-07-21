@@ -55,3 +55,14 @@ verify the same pinned artifacts again:
 ```sh
 ./tools/lfm2.5-350m/download.sh
 ```
+
+## Build the FPGA-native image
+
+From the repository root, seal the pinned GGUF into the deterministic TRUEGA model image:
+
+```sh
+./crates/trueos-fpga-abi/truega/tools/build_lfm25_image.sh
+```
+
+The generated `LFM2.5-350M-Q8_0.truega.bin` remains ignored beside the GGUF. This is an
+offline conversion only; the command does not invoke Gowin, PCIe, JTAG, or flashing.
