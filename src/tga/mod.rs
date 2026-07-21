@@ -103,6 +103,11 @@ unsafe impl Send for Tga {}
 pub(crate) enum OffloadTransportError {
     Offline,
     InvalidPackage,
+    WriteVerification {
+        word: u8,
+        observed: u32,
+        expected: u32,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -598,35 +603,47 @@ pub(crate) fn submit_offload_work_package(
     // that flushes ordering but cannot detect a dropped payload TLP.  A live
     // LFM2.5 run exposed exactly that case as one input dword left over from
     // the preceding call.
-    const VERIFY_PASSES: usize = 3;
+    const WRITE_REPAIR_ATTEMPTS: usize = 8;
     let input_end =
         core::mem::offset_of!(trueos_fpga_abi::WorkPackage, input) + package.input_len as usize;
     let request_word_count = input_end.div_ceil(core::mem::size_of::<u32>());
-    let mut verified = false;
-    for _ in 0..VERIFY_PASSES {
-        fence(Ordering::SeqCst);
-        let mut repaired = 0u64;
-        for index in 0..request_word_count {
-            let expected = unsafe { source.add(index).read() };
-            let register = tga.offload_work_package_reg + index * 4;
-            if Tga::read_reg(register) != expected {
-                Tga::write_reg(register, expected);
-                repaired += 1;
+    fence(Ordering::SeqCst);
+    let mut repaired_any = false;
+    for index in 0..request_word_count {
+        let expected = unsafe { source.add(index).read() };
+        let register = tga.offload_work_package_reg + index * 4;
+        let mut observed = Tga::read_reg(register);
+        if observed == expected {
+            continue;
+        }
+
+        // Serialize a rare repair at the exact failing address.  The previous
+        // implementation wrote the replacement and continued issuing reads for
+        // later words; on the physical endpoint that repeated the same RX timing
+        // collision three times.  An immediate non-posted read both drains the
+        // posted write and proves acceptance before another TLP is introduced.
+        for _ in 0..WRITE_REPAIR_ATTEMPTS {
+            Tga::write_reg(register, expected);
+            TGA_OFFLOAD_WRITE_REPAIR_COUNT.fetch_add(1, Ordering::Relaxed);
+            fence(Ordering::SeqCst);
+            observed = Tga::read_reg(register);
+            if observed == expected {
+                repaired_any = true;
+                break;
             }
         }
-        if repaired == 0 {
-            verified = true;
-            break;
-        }
-        TGA_OFFLOAD_WRITE_REPAIR_COUNT.fetch_add(repaired, Ordering::Relaxed);
-        if !TGA_OFFLOAD_WRITE_REPAIR_LOGGED.swap(true, Ordering::AcqRel) {
-            crate::log_warn!(
-                "tga: repaired stale BAR work-package word before doorbell; request integrity preserved\n"
-            );
+        if observed != expected {
+            return Err(OffloadTransportError::WriteVerification {
+                word: index as u8,
+                observed,
+                expected,
+            });
         }
     }
-    if !verified {
-        return Err(OffloadTransportError::InvalidPackage);
+    if repaired_any && !TGA_OFFLOAD_WRITE_REPAIR_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_warn!(
+            "tga: repaired stale BAR work-package word before doorbell; request integrity preserved\n"
+        );
     }
 
     fence(Ordering::Release);

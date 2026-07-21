@@ -13,8 +13,17 @@ fn queue_class(raw: u32) -> Result<QueueClass, i32> {
     }
 }
 
+/// Principal for a call that is already executing inside the kernel.
+///
+/// A Hull Blueprint normally reaches this file while running on its VMX
+/// guest stack and therefore takes the vmcall transport below. `pthread`
+/// jobs are different: the guest closure runs on a background service-lane
+/// stack, while `kernel_task_domain` retains the owning VM. Those calls must
+/// address the same tenant broker records, not fall through to HostRuntime.
 fn direct_principal() -> Principal {
-    Principal::HostRuntime
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(|vm_id| Principal::HullGuest(vm_id as u16))
+        .unwrap_or(Principal::HostRuntime)
 }
 
 pub(crate) fn broker_open(principal: Principal, requested: u64) -> Result<u64, i32> {
@@ -582,14 +591,18 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_vvideo_create(
     if out_buffer.is_null() {
         return -14;
     }
-    let Some(_vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
-        return -95;
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut request = [0u8; 12];
+        request[..8].copy_from_slice(&(bytes as u64).to_le_bytes());
+        request[8..].copy_from_slice(&usage.to_le_bytes());
+        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_CREATE, device, guest_va, &request)
+    } else {
+        let principal = direct_principal();
+        if !matches!(principal, Principal::HullGuest(_)) {
+            return -95;
+        }
+        broker_vvideo_create(principal, device, guest_va, bytes, usage)
     };
-    let mut request = [0u8; 12];
-    request[..8].copy_from_slice(&(bytes as u64).to_le_bytes());
-    request[8..].copy_from_slice(&usage.to_le_bytes());
-    let result =
-        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_CREATE, device, guest_va, &request);
     match result {
         Ok(handle) => {
             unsafe { out_buffer.write(handle) };
@@ -600,13 +613,24 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_vvideo_create(
 }
 
 fn guest_vvideo_range(op: u32, device: u64, buffer: u64, offset: usize, bytes: usize) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut request = [0u8; 16];
+        request[..8].copy_from_slice(&(offset as u64).to_le_bytes());
+        request[8..].copy_from_slice(&(bytes as u64).to_le_bytes());
+        return guest_rc(op, device, buffer, &request);
+    }
+
+    let principal = direct_principal();
+    if !matches!(principal, Principal::HullGuest(_)) {
         return -95;
     }
-    let mut request = [0u8; 16];
-    request[..8].copy_from_slice(&(offset as u64).to_le_bytes());
-    request[8..].copy_from_slice(&(bytes as u64).to_le_bytes());
-    guest_rc(op, device, buffer, &request)
+    if op == trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_FLUSH {
+        broker_vvideo_flush(principal, device, buffer, offset, bytes)
+    } else if op == trueos_vm::vmcall::OP_BP_VGPU_VVIDEO_INVALIDATE {
+        broker_vvideo_invalidate(principal, device, buffer, offset, bytes)
+    } else {
+        -95
+    }
 }
 
 #[unsafe(no_mangle)]

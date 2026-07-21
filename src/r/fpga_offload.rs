@@ -68,6 +68,11 @@ pub enum Error {
     OutputTooLarge,
     DeviceLost,
     Protocol,
+    TransportWriteVerification {
+        word: u8,
+        observed: u32,
+        expected: u32,
+    },
     Device(i32),
     UnknownCall,
 }
@@ -538,6 +543,21 @@ pub async fn fpga_offload_service_task() {
                 finish_call(request.call_id, Err(Error::Protocol));
                 continue;
             }
+            Err(crate::tga::OffloadTransportError::WriteVerification {
+                word,
+                observed,
+                expected,
+            }) => {
+                finish_call(
+                    request.call_id,
+                    Err(Error::TransportWriteVerification {
+                        word,
+                        observed,
+                        expected,
+                    }),
+                );
+                continue;
+            }
         };
 
         let package = package_for(request);
@@ -549,6 +569,21 @@ pub async fn fpga_offload_service_task() {
             }
             Err(crate::tga::OffloadTransportError::InvalidPackage) => {
                 finish_call(request.call_id, Err(Error::Protocol));
+                continue;
+            }
+            Err(crate::tga::OffloadTransportError::WriteVerification {
+                word,
+                observed,
+                expected,
+            }) => {
+                finish_call(
+                    request.call_id,
+                    Err(Error::TransportWriteVerification {
+                        word,
+                        observed,
+                        expected,
+                    }),
+                );
                 continue;
             }
         }
@@ -571,6 +606,17 @@ pub async fn fpga_offload_service_task() {
                         Err(crate::tga::OffloadTransportError::InvalidPackage) => {
                             return Err(Error::Protocol);
                         }
+                        Err(crate::tga::OffloadTransportError::WriteVerification {
+                            word,
+                            observed,
+                            expected,
+                        }) => {
+                            return Err(Error::TransportWriteVerification {
+                                word,
+                                observed,
+                                expected,
+                            });
+                        }
                     }
                 }
             })
@@ -590,6 +636,15 @@ pub async fn fpga_offload_service_task() {
                 }
                 Err(crate::tga::OffloadTransportError::Offline) => Err(Error::DeviceLost),
                 Err(crate::tga::OffloadTransportError::InvalidPackage) => Err(Error::Protocol),
+                Err(crate::tga::OffloadTransportError::WriteVerification {
+                    word,
+                    observed,
+                    expected,
+                }) => Err(Error::TransportWriteVerification {
+                    word,
+                    observed,
+                    expected,
+                }),
             },
         };
 
