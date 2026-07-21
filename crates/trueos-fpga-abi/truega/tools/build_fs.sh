@@ -176,6 +176,47 @@ if [[ ! -s "$BITSTREAM" || ! "$BITSTREAM" -nt "$BUILD_MARKER" ]]; then
   exit 1
 fi
 
+# A successful router invocation is not enough: this image must close the live
+# 100 MHz TLP clock and have no setup/hold violations.  Keep the check local to
+# the generated report so a marginal or unconstrained image cannot be published.
+TIMING_REPORT="$PROJECT_DIR/impl/pnr/min_pci_led_tr_content.html"
+if [[ ! -s "$TIMING_REPORT" ]]; then
+  echo "Gowin completed without a timing report: $TIMING_REPORT" >&2
+  exit 1
+fi
+TLP_FMAX="$({
+  sed -E 's/<[^>]+>//g' "$TIMING_REPORT" |
+    awk '
+      $0 == "tlp_clk" { saw_clock = 1; next }
+      saw_clock && /\(MHz\)/ {
+        gsub(/\(MHz\)/, "");
+        if ($0 ~ /^[0-9]+([.][0-9]+)?$/) values[++count] = $0;
+        if (count == 2) { print values[2]; exit }
+      }
+    '
+} || true)"
+VIOLATED_ENDPOINTS="$(
+  sed -E 's/<[^>]+>//g' "$TIMING_REPORT" |
+    awk '
+      /Numbers of Setup Violated Endpoints/ { getline; setup = $0 }
+      /Numbers of Hold Violated Endpoints/ { getline; hold = $0 }
+      END { if (setup != "" && hold != "") print setup + hold }
+    '
+)"
+if [[ -z "$TLP_FMAX" || -z "$VIOLATED_ENDPOINTS" ]]; then
+  echo "could not parse TLP Fmax/violations from $TIMING_REPORT" >&2
+  exit 1
+fi
+if ! awk -v actual="$TLP_FMAX" 'BEGIN { exit !(actual >= 100.0) }'; then
+  echo "timing failure: tlp_clk actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=100" >&2
+  exit 1
+fi
+if [[ "$VIOLATED_ENDPOINTS" != "0" ]]; then
+  echo "timing failure: violated_endpoints=$VIOLATED_ENDPOINTS" >&2
+  exit 1
+fi
+echo "timing=pass tlp_actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=100 violated_endpoints=0"
+
 # End the temporary Gowin input swap before publishing anything. Each destination is
 # prepared on its own filesystem and renamed into place; SHA256SUMS is the final seal.
 restore_rtl

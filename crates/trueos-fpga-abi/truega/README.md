@@ -15,7 +15,8 @@ requester, TLB, command language, or runtime compiler.
 The Ubuntu build has three inputs/outputs:
 
 1. `tools/tga-gen/src/firmware.rs` is the authoritative catalogue and RustHDL source
-   for exactly three physical circuits: `led_step_heartbeat`, `add_u32`, and `xor_u32`.
+   for exactly three physical circuits: `led_step_heartbeat`, `add_u32`, and
+   `lfm25_q8_block`.
 2. `tools/tga-gen` emits staged copies of `src/generated/truega_functions.v`, the
    128-byte `artifacts/truega_firmware.manifest.bin`, and the ordinary typed Rust
    interface at `../src/generated.rs`.
@@ -40,9 +41,11 @@ before it publishes the offload transport. The `TGAT` liveness word proves the c
 protocol; the manifest gate proves that slot IDs, signatures, ABI layout, and generated
 function RTL are the bundle the running kernel was compiled to call.
 
-The v1 physical function shell intentionally admits only `() -> u32` and
-`(u32, u32) -> u32` catalogue entries. The build rejects any other declared shape instead
-of emitting metadata the current two-input/one-output circuit ports cannot execute.
+The physical shell backs the complete ABI-reserved 96-byte input and 96-byte output
+envelopes. Every generated slot uses one clocked `start/busy/done/error` handoff; the shell
+validates the exact declared input length and output capacity before asserting `start`,
+then retires only after `done`. Slot 2 consumes two unchanged 34-byte Q8_0 blocks and
+returns a signed 32-bit integer dot plus a signed 64-bit Q30 term.
 
 Build on Ubuntu with:
 
@@ -87,9 +90,9 @@ views of one canonical contract:
 
 The native image is exactly `376701952` bytes with SHA-256
 `051c60856786de2ac7089109354259fa29fcd57e83d585efc86afa0fb605bb86`.
-The source GGUF is not required to build the current heartbeat firmware. The model ROM is
-intentionally not instantiated in `top.vhd` or added to the Gowin project yet, so this
-checkpoint does not alter BAR0, the three slots, timing, the bitstream, or live hardware.
+The source GGUF is not required to build the firmware. The model ROM remains uninstantiated:
+the first Q8_0 function receives native blocks through its fixed work-package input rather
+than reading the complete model image itself.
 
 ## Layer-0 FFN golden checkpoint and Q8_0 GEMV
 
@@ -125,9 +128,18 @@ The synthesizable implementation is under `src/compute`:
 
 - `truega_q8_0_dot32.v` is a six-stage, 32-lane signed 8x8 multiplier and exact 21-bit
   adder tree accepting one native Q8_0 block per cycle.
-- `truega_q8_0_scale_q30.v` decodes the two native FP16 scales and rounds each scaled
-  block term to signed Q30 with round-to-nearest, ties-to-even.
+- `truega_q8_0_scale_q30_seq.v` decodes the two native FP16 scales and performs the
+  variable shift over multiple cycles, rounding the scaled block term to signed Q30 with
+  round-to-nearest, ties-to-even.
+- `truega_q8_0_block_slot.v` latches one 68-byte call, sequences the dot and scale units,
+  and exposes the common reusable `start/busy/done/error` contract.
 - `truega_q8_0_gemv.v` streams blocks and retires one signed 64-bit Q30 row result.
+
+The checked-in `artifacts/lfm25_q8_block.golden.bin` is a separately sealed 336-byte
+runtime vector derived from gate row 0, block 0. Its 68-byte input is the activation block
+followed by the native-image weight block; its 12-byte expected output is dot `-14901` and
+Q30 term `-9429888`. The generator verifies the artifact provenance, payload hash, and
+self-seal before emitting the Rust constants used by `tga q8` and `tga test`.
 
 Run the reproducible checks with:
 
@@ -135,12 +147,19 @@ Run the reproducible checks with:
 ./tools/capture_lfm25_ffn_golden.sh
 ./tools/simulate_q8_0_gemv.sh
 ./tools/synthesize_q8_0_gemv.sh
+./tools/synthesize_q8_0_block_slot.sh
 ```
 
 The HDL simulation covers 208 unchanged native-image blocks (row 0 of gate, up, and down)
 plus two signed extremes. All 210 integer dots and scaled Q30 terms match bit-for-bit, and
-the row results satisfy the captured-F32 error bound. The isolated Gowin synthesis uses a
-temporary project containing only the standalone compute top. It used 2,453 LUTs, 658
-ALUs, 1,491 registers, and 34 DSP blocks in the current synthesis report. It does not run
-place-and-route or emit an `.fs`; pre/post hashes also guard the heartbeat project, top,
-generated function RTL, bitstream, and checksum files.
+the row results satisfy the captured-F32 error bound. The same simulation also calls the
+multi-cycle block slot for all 210 vectors and calls the generated 96-byte wrapper twice
+with the sealed runtime vector. The isolated block-slot synthesis reaches 142.908 MHz and
+uses 2,155 logic elements, 1,429 registers, 33 `MULT12X12` plus one `MULT27X36`, and no
+block RAM. It does not emit an `.fs`; pre/post hashes guard the integrated project inputs
+and published firmware files.
+
+The integrated image closes the 100 MHz TLP clock with zero setup/hold violations. The
+build refuses to publish if the timing report is missing, if TLP Fmax is below 100 MHz, or
+if any endpoint is violated. Current routed usage is 5,985/138,240 logic elements (5%),
+4,508/139,140 registers (4%), 18.5/298 DSP units (7%), and no SSRAM.

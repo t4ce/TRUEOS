@@ -68,15 +68,20 @@ architecture rtl of top is
 	-- This is three fixed circuits plus a slot mux, not a processor or interpreter.
 	component truega_functions is
 		port (
+			clk                  : in  std_logic;
+			reset_n              : in  std_logic;
+			start                : in  std_logic;
 			function_id          : in  std_logic_vector(15 downto 0);
-			arg0                 : in  std_logic_vector(31 downto 0);
-			arg1                 : in  std_logic_vector(31 downto 0);
+			input_data           : in  std_logic_vector(767 downto 0);
 			led_state            : in  std_logic_vector(4 downto 0);
 			next_led             : out std_logic_vector(4 downto 0);
-			result               : out std_logic_vector(31 downto 0);
+			output_data          : out std_logic_vector(767 downto 0);
 			required_input_bytes : out std_logic_vector(15 downto 0);
 			output_bytes         : out std_logic_vector(15 downto 0);
-			valid                : out std_logic
+			valid                : out std_logic;
+			busy                 : out std_logic;
+			done                 : out std_logic;
+			error                : out std_logic
 		);
 	end component;
 
@@ -90,6 +95,7 @@ architecture rtl of top is
 	end component;
 
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
+	type call_data_arr_t is array (0 to 23) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
 	constant PKT_MAX_WORDS : integer := 8;
 	constant BAR0_LED_DW : std_logic_vector(9 downto 0) := "0000000000";
@@ -131,6 +137,7 @@ architecture rtl of top is
 	constant CALL_ERROR_BAD_PACKAGE : std_logic_vector(31 downto 0) := x"BAD00001";
 	constant CALL_ERROR_BAD_LENGTH : std_logic_vector(31 downto 0) := x"BAD00002";
 	constant CALL_ERROR_BAD_FUNCTION : std_logic_vector(31 downto 0) := x"BAD00003";
+	constant CALL_ERROR_FUNCTION_FAILED : std_logic_vector(31 downto 0) := x"BAD00004";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
 
@@ -159,9 +166,9 @@ architecture rtl of top is
 	-- transport diagnostic can still enable the sticky PCIe milestones through
 	-- the explicit LED_DEBUG_ON BAR write.
 	signal debug_led_mode : std_logic := '0';
-	-- The complete 256-byte work-package address map remains visible to software, but
-	-- only words used by the three fused functions need physical storage. Unused and
-	-- reserved words read as zero. This is a fixed register file, not command memory.
+	-- The complete 256-byte work package is a fixed register file. The two 96-byte
+	-- envelopes are physically backed so compiled slots can consume and produce their
+	-- declared byte shapes without a device-side command processor or DMA requester.
 	signal call_magic : std_logic_vector(31 downto 0) := WORK_PACKAGE_MAGIC;
 	signal call_abi_function : std_logic_vector(31 downto 0) := x"00000001";
 	signal call_id_low : std_logic_vector(31 downto 0) := (others => '0');
@@ -172,16 +179,23 @@ architecture rtl of top is
 	signal call_output_cap : std_logic_vector(31 downto 0) := (others => '0');
 	signal call_output_len : std_logic_vector(31 downto 0) := (others => '0');
 	signal call_error : std_logic_vector(31 downto 0) := (others => '0');
-	signal call_input0 : std_logic_vector(31 downto 0) := (others => '0');
-	signal call_input1 : std_logic_vector(31 downto 0) := (others => '0');
-	signal call_output0 : std_logic_vector(31 downto 0) := (others => '0');
+	signal call_input_words : call_data_arr_t := (others => (others => '0'));
+	signal call_output_words : call_data_arr_t := (others => (others => '0'));
 	signal call_pending : std_logic := '0';
+	signal call_active : std_logic := '0';
+	signal call_active_function : std_logic_vector(15 downto 0) := (others => '0');
+	signal call_active_output_bytes : std_logic_vector(15 downto 0) := (others => '0');
 	signal call_retire_count : unsigned(31 downto 0) := (others => '0');
-	signal function_result : std_logic_vector(31 downto 0);
+	signal function_start : std_logic := '0';
+	signal function_input_data : std_logic_vector(767 downto 0);
+	signal function_output_data : std_logic_vector(767 downto 0);
 	signal function_required_input_bytes : std_logic_vector(15 downto 0);
 	signal function_output_bytes : std_logic_vector(15 downto 0);
 	signal function_next_led : std_logic_vector(4 downto 0);
 	signal function_valid : std_logic;
+	signal function_busy : std_logic;
+	signal function_done : std_logic;
+	signal function_error : std_logic;
 	signal firmware_manifest_word : std_logic_vector(31 downto 0);
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
@@ -343,17 +357,26 @@ begin
 			lock    => pll_lock
 		);
 
+	gen_function_input: for i in 0 to 23 generate
+		function_input_data((i + 1) * 32 - 1 downto i * 32) <= call_input_words(i);
+	end generate;
+
 	u_functions: truega_functions
 		port map(
+			clk                  => tlp_clk,
+			reset_n              => pcie_core_reset_n,
+			start                => function_start,
 			function_id          => call_abi_function(31 downto 16),
-			arg0                 => call_input0,
-			arg1                 => call_input1,
+			input_data           => function_input_data,
 			led_state            => led_reg,
 			next_led             => function_next_led,
-			result               => function_result,
+			output_data          => function_output_data,
 			required_input_bytes => function_required_input_bytes,
 			output_bytes         => function_output_bytes,
-			valid                => function_valid
+			valid                => function_valid,
+			busy                 => function_busy,
+			done                 => function_done,
+			error                => function_error
 		);
 
 	u_firmware_manifest: truega_firmware_manifest
@@ -555,10 +578,13 @@ begin
 				call_output_cap <= (others => '0');
 				call_output_len <= (others => '0');
 				call_error <= (others => '0');
-				call_input0 <= (others => '0');
-				call_input1 <= (others => '0');
-				call_output0 <= (others => '0');
+				call_input_words <= (others => (others => '0'));
+				call_output_words <= (others => (others => '0'));
 				call_pending <= '0';
+				call_active <= '0';
+				call_active_function <= (others => '0');
+				call_active_output_bytes <= (others => '0');
+				function_start <= '0';
 				call_retire_count <= (others => '0');
 				capture_pending <= '0';
 				rx_snapshot_data <= (others => '0');
@@ -612,7 +638,8 @@ begin
 					dbg_last_cpld_dw1 <= (others => '0');
 					dbg_last_cpld_dw2 <= (others => '0');
 					dbg_last_cpld_data <= (others => '0');
-				else
+			else
+				function_start <= '0';
 					dbg_rx_bar0_eop <= '0';
 					dbg_hit_write <= '0';
 					dbg_hit_read <= '0';
@@ -621,36 +648,60 @@ begin
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
 
-					-- A doorbell only selects one of three RustHDL-generated circuits already
-					-- present in this bitstream. There is no instruction fetch or interpreter.
+					-- The doorbell launches one already-fused slot through a common
+					-- start/busy/done contract. The shell waits for done; it does not fetch
+					-- instructions or interpret a device-side command stream.
 					if call_pending = '1' then
 						call_output_len <= (others => '0');
 						call_error <= (others => '0');
+						call_output_words <= (others => (others => '0'));
 						if (call_magic /= WORK_PACKAGE_MAGIC)
 							or (call_abi_function(15 downto 0) /= WORK_ABI_VERSION) then
 							call_error <= CALL_ERROR_BAD_PACKAGE;
 							call_state <= WORK_STATE_FAILED;
+							call_retire_count <= call_retire_count + 1;
 						elsif function_valid = '0' then
 							call_error <= CALL_ERROR_BAD_FUNCTION;
 							call_state <= WORK_STATE_FAILED;
+							call_retire_count <= call_retire_count + 1;
 						elsif unsigned(call_input_len)
-							< resize(unsigned(function_required_input_bytes), 32) then
+							/= resize(unsigned(function_required_input_bytes), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
+							call_retire_count <= call_retire_count + 1;
 						elsif unsigned(call_output_cap)
 							< resize(unsigned(function_output_bytes), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
+							call_retire_count <= call_retire_count + 1;
+						elsif function_busy = '1' then
+							call_error <= CALL_ERROR_BAD_PACKAGE;
+							call_state <= WORK_STATE_FAILED;
+							call_retire_count <= call_retire_count + 1;
 						else
-							call_output0 <= function_result;
-							call_output_len <= x"0000" & function_output_bytes;
+							function_start <= '1';
+							call_active <= '1';
+							call_active_function <= call_abi_function(31 downto 16);
+							call_active_output_bytes <= function_output_bytes;
+						end if;
+						call_pending <= '0';
+					elsif (call_active = '1') and (function_done = '1') then
+						call_active <= '0';
+						call_retire_count <= call_retire_count + 1;
+						if function_error = '1' then
+							call_output_len <= (others => '0');
+							call_error <= CALL_ERROR_FUNCTION_FAILED;
+							call_state <= WORK_STATE_FAILED;
+						else
+							for i in 0 to 23 loop
+								call_output_words(i) <= function_output_data((i + 1) * 32 - 1 downto i * 32);
+							end loop;
+							call_output_len <= x"0000" & call_active_output_bytes;
 							call_state <= WORK_STATE_COMPLETE;
-							if call_abi_function(31 downto 16) = x"0000" then
+							if call_active_function = x"0000" then
 								led_reg <= function_next_led;
 							end if;
 						end if;
-						call_pending <= '0';
-						call_retire_count <= call_retire_count + 1;
 					end if;
 
 					if (tx_pending = '1') and (tl_tx_wait = '0') then
@@ -683,29 +734,35 @@ begin
 								dbg_seen_hit_write <= '1';
 								if (addr_index >= BAR0_CALL_BASE_DW)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
-									case addr_index - BAR0_CALL_BASE_DW is
-									when CALL_MAGIC_WORD => call_magic <= payload_dw;
-									when CALL_ABI_FUNCTION_WORD => call_abi_function <= payload_dw;
-									when 2 => call_id_low <= payload_dw;
-									when 3 => call_id_high <= payload_dw;
-									when CALL_STATE_WORD => call_state <= payload_dw;
-									when 5 => call_flags <= payload_dw;
-									when CALL_INPUT_LEN_WORD => call_input_len <= payload_dw;
-									when CALL_OUTPUT_CAP_WORD => call_output_cap <= payload_dw;
-									when CALL_OUTPUT_LEN_WORD => call_output_len <= payload_dw;
-									when CALL_ERROR_WORD => call_error <= payload_dw;
-									when CALL_INPUT_WORD => call_input0 <= payload_dw;
-									when CALL_INPUT_WORD + 1 => call_input1 <= payload_dw;
-									when CALL_OUTPUT_WORD => call_output0 <= payload_dw;
-									when others => null;
-									end case;
+									if (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
+										and (addr_index < BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD) then
+										call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD) <= payload_dw;
+									elsif addr_index >= BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD then
+										call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD) <= payload_dw;
+									else
+										case addr_index - BAR0_CALL_BASE_DW is
+										when CALL_MAGIC_WORD => call_magic <= payload_dw;
+										when CALL_ABI_FUNCTION_WORD => call_abi_function <= payload_dw;
+										when 2 => call_id_low <= payload_dw;
+										when 3 => call_id_high <= payload_dw;
+										when CALL_STATE_WORD => call_state <= payload_dw;
+										when 5 => call_flags <= payload_dw;
+										when CALL_INPUT_LEN_WORD => call_input_len <= payload_dw;
+										when CALL_OUTPUT_CAP_WORD => call_output_cap <= payload_dw;
+										when CALL_OUTPUT_LEN_WORD => call_output_len <= payload_dw;
+										when CALL_ERROR_WORD => call_error <= payload_dw;
+										when others => null;
+										end case;
+									end if;
 								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
 									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
 									null;
 								elsif addr_index = BAR0_CALL_DOORBELL_DW then
 									if (payload_dw = CALL_DOORBELL_MAGIC)
 										and (call_state = WORK_STATE_HOST_READY)
-										and (call_pending = '0') then
+										and (call_pending = '0')
+										and (call_active = '0')
+										and (function_busy = '0') then
 										call_state <= WORK_STATE_FPGA_BUSY;
 										call_pending <= '1';
 									else
@@ -738,10 +795,12 @@ begin
 										call_output_cap <= (others => '0');
 										call_output_len <= (others => '0');
 										call_error <= (others => '0');
-										call_input0 <= (others => '0');
-										call_input1 <= (others => '0');
-										call_output0 <= (others => '0');
-										call_pending <= '0';
+									call_input_words <= (others => (others => '0'));
+									call_output_words <= (others => (others => '0'));
+									call_pending <= '0';
+									call_active <= '0';
+									call_active_function <= (others => '0');
+									call_active_output_bytes <= (others => '0');
 									when others =>
 										null;
 									end case;
@@ -753,22 +812,26 @@ begin
 								read_data_dw := (others => '0');
 								if (addr_index >= BAR0_CALL_BASE_DW)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
-									case addr_index - BAR0_CALL_BASE_DW is
-									when CALL_MAGIC_WORD => read_data_dw := call_magic;
-									when CALL_ABI_FUNCTION_WORD => read_data_dw := call_abi_function;
-									when 2 => read_data_dw := call_id_low;
-									when 3 => read_data_dw := call_id_high;
-									when CALL_STATE_WORD => read_data_dw := call_state;
-									when 5 => read_data_dw := call_flags;
-									when CALL_INPUT_LEN_WORD => read_data_dw := call_input_len;
-									when CALL_OUTPUT_CAP_WORD => read_data_dw := call_output_cap;
-									when CALL_OUTPUT_LEN_WORD => read_data_dw := call_output_len;
-									when CALL_ERROR_WORD => read_data_dw := call_error;
-									when CALL_INPUT_WORD => read_data_dw := call_input0;
-									when CALL_INPUT_WORD + 1 => read_data_dw := call_input1;
-									when CALL_OUTPUT_WORD => read_data_dw := call_output0;
-									when others => null;
-									end case;
+									if (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
+										and (addr_index < BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD) then
+										read_data_dw := call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD);
+									elsif addr_index >= BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD then
+										read_data_dw := call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD);
+									else
+										case addr_index - BAR0_CALL_BASE_DW is
+										when CALL_MAGIC_WORD => read_data_dw := call_magic;
+										when CALL_ABI_FUNCTION_WORD => read_data_dw := call_abi_function;
+										when 2 => read_data_dw := call_id_low;
+										when 3 => read_data_dw := call_id_high;
+										when CALL_STATE_WORD => read_data_dw := call_state;
+										when 5 => read_data_dw := call_flags;
+										when CALL_INPUT_LEN_WORD => read_data_dw := call_input_len;
+										when CALL_OUTPUT_CAP_WORD => read_data_dw := call_output_cap;
+										when CALL_OUTPUT_LEN_WORD => read_data_dw := call_output_len;
+										when CALL_ERROR_WORD => read_data_dw := call_error;
+										when others => null;
+										end case;
+									end if;
 								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
 									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
 									read_data_dw := firmware_manifest_word;

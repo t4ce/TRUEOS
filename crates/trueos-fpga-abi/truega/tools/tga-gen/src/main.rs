@@ -6,11 +6,27 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use trueos_fpga_abi::{
-    FirmwareManifest, FunctionDescriptor, WorkPackage, ABI_VERSION, FIRMWARE_MANIFEST_MAGIC,
-    FUNCTION_COUNT,
+    ABI_VERSION, FIRMWARE_MANIFEST_MAGIC, FUNCTION_COUNT, FirmwareManifest, FunctionDescriptor,
+    WorkPackage,
 };
 
-use firmware::{FunctionSpec, FUNCTIONS};
+use firmware::{BindingKind, FUNCTIONS, FunctionSpec};
+
+const Q8_DOT32_RTL: &str = include_str!("../../../src/compute/truega_q8_0_dot32.v");
+const Q8_SCALE_SEQ_RTL: &str = include_str!("../../../src/compute/truega_q8_0_scale_q30_seq.v");
+const Q8_BLOCK_SLOT_RTL: &str = include_str!("../../../src/compute/truega_q8_0_block_slot.v");
+const Q8_GOLDEN_ARTIFACT: &[u8] = include_bytes!("../../../artifacts/lfm25_q8_block.golden.bin");
+const LFM25_FFN_GOLDEN: &[u8] = include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin");
+const LFM25_FFN_VECTORS: &[u8] =
+    include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin.vectors");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GoldenQ8Block {
+    activation: [u8; 34],
+    weight: [u8; 34],
+    dot: i32,
+    term_q30: i64,
+}
 
 struct Config {
     rtl_out: PathBuf,
@@ -32,11 +48,15 @@ fn main() {
         std::process::exit(2);
     });
 
-    let function_rtl = rename_rust_hdl_top(firmware::generate());
+    let function_rtl = assembled_function_rtl();
     let firmware_hash: [u8; 32] = Sha256::digest(function_rtl.as_bytes()).into();
     let manifest = manifest_bytes(firmware_hash);
     let rtl = format!("{function_rtl}\n{}", emit_manifest_verilog(&manifest));
-    let rust_interface = emit_rust_interface(firmware_hash);
+    let golden = parse_golden_q8_block().unwrap_or_else(|error| {
+        eprintln!("invalid sealed Q8_0 runtime fixture: {error}");
+        std::process::exit(2);
+    });
+    let rust_interface = emit_rust_interface(firmware_hash, golden);
 
     write_if_changed(&cfg.rtl_out, rtl.as_bytes());
     write_if_changed(&cfg.manifest_out, &manifest);
@@ -57,10 +77,23 @@ fn validate_catalogue() -> Result<(), String> {
         if spec.id as usize != index {
             return Err(format!("slot {index} has non-contiguous wire id {}", spec.id));
         }
-        if spec.output_bytes != 4 || !matches!(spec.input_bytes, 0 | 8) {
+        if spec.input_bytes as usize > trueos_fpga_abi::INLINE_INPUT_BYTES
+            || spec.output_bytes as usize > trueos_fpga_abi::INLINE_OUTPUT_BYTES
+        {
             return Err(format!(
-                "slot {} uses input/output shape {}/{}; v1 hardware supports only () -> u32 or (u32, u32) -> u32",
+                "slot {} uses input/output shape {}/{} beyond the 96-byte envelopes",
                 spec.id, spec.input_bytes, spec.output_bytes
+            ));
+        }
+        let expected_shape = match spec.binding {
+            BindingKind::NoArgsU32 => (0, 4),
+            BindingKind::BinaryU32 => (8, 4),
+            BindingKind::Lfm25Q8Block => (68, 12),
+        };
+        if (spec.input_bytes, spec.output_bytes) != expected_shape {
+            return Err(format!(
+                "slot {} binding {:?} needs input/output shape {}/{}",
+                spec.id, spec.binding, expected_shape.0, expected_shape.1
             ));
         }
     }
@@ -94,12 +127,226 @@ fn parse_args() -> Result<Config, String> {
     })
 }
 
-fn rename_rust_hdl_top(verilog: String) -> String {
-    verilog.replace("top$", "truega_functions$").replacen(
-        "module top(",
-        "module truega_functions(",
-        1,
+fn rename_rust_hdl_scalar_top(verilog: String) -> String {
+    verilog
+        .replace("top$", "truega_scalar_functions$")
+        .replacen("module top(", "module truega_scalar_functions(", 1)
+}
+
+fn assembled_function_rtl() -> String {
+    let scalar = rename_rust_hdl_scalar_top(firmware::generate());
+    format!(
+        "{scalar}\n{}\n\n// Exact native Q8_0 compute sources fused into this generated bundle.\n{}\n{}\n{}\n",
+        emit_slot_wrapper_verilog(),
+        Q8_DOT32_RTL,
+        Q8_SCALE_SEQ_RTL,
+        Q8_BLOCK_SLOT_RTL,
     )
+}
+
+fn emit_slot_wrapper_verilog() -> &'static str {
+    r#"// Common clocked handoff for all three ahead-of-time function slots.
+module truega_functions(
+    input  wire         clk,
+    input  wire         reset_n,
+    input  wire         start,
+    input  wire [15:0]  function_id,
+    input  wire [767:0] input_data,
+    input  wire [4:0]   led_state,
+    output reg  [4:0]   next_led,
+    output reg  [767:0] output_data,
+    output reg  [15:0]  required_input_bytes,
+    output reg  [15:0]  output_bytes,
+    output reg          valid,
+    output reg          busy,
+    output reg          done,
+    output reg          error
+);
+    wire [4:0] scalar_next_led;
+    wire [31:0] scalar_result;
+    wire [15:0] scalar_required_input_bytes;
+    wire [15:0] scalar_output_bytes;
+    wire scalar_valid;
+    reg [15:0] active_function;
+    reg q8_start;
+    wire q8_busy;
+    wire q8_done;
+    wire signed [31:0] q8_dot;
+    wire signed [63:0] q8_term_q30;
+    wire q8_scale_error;
+
+    truega_scalar_functions scalar_functions(
+        .function_id(function_id),
+        .arg0(input_data[31:0]),
+        .arg1(input_data[63:32]),
+        .led_state(led_state),
+        .next_led(scalar_next_led),
+        .result(scalar_result),
+        .required_input_bytes(scalar_required_input_bytes),
+        .output_bytes(scalar_output_bytes),
+        .valid(scalar_valid)
+    );
+
+    truega_q8_0_block_slot q8_block_slot(
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(q8_start),
+        .activation_block_i(input_data[271:0]),
+        .weight_block_i(input_data[543:272]),
+        .busy_o(q8_busy),
+        .done_o(q8_done),
+        .dot_o(q8_dot),
+        .term_q30_o(q8_term_q30),
+        .scale_error_o(q8_scale_error)
+    );
+
+    always @* begin
+        required_input_bytes = 16'd0;
+        output_bytes = 16'd0;
+        valid = 1'b0;
+        case (function_id)
+            16'd0: begin
+                required_input_bytes = 16'd0;
+                output_bytes = 16'd4;
+                valid = 1'b1;
+            end
+            16'd1: begin
+                required_input_bytes = 16'd8;
+                output_bytes = 16'd4;
+                valid = 1'b1;
+            end
+            16'd2: begin
+                required_input_bytes = 16'd68;
+                output_bytes = 16'd12;
+                valid = 1'b1;
+            end
+            default: begin end
+        endcase
+    end
+
+    always @(posedge clk) begin
+        if (!reset_n) begin
+            active_function <= 16'd0;
+            q8_start <= 1'b0;
+            next_led <= 5'b00001;
+            output_data <= 768'd0;
+            busy <= 1'b0;
+            done <= 1'b0;
+            error <= 1'b0;
+        end else begin
+            q8_start <= 1'b0;
+            done <= 1'b0;
+            if (start && !busy) begin
+                active_function <= function_id;
+                output_data <= 768'd0;
+                next_led <= led_state;
+                error <= 1'b0;
+                busy <= 1'b1;
+                case (function_id)
+                    16'd0, 16'd1: begin
+                        output_data[31:0] <= scalar_result;
+                        next_led <= scalar_next_led;
+                        busy <= 1'b0;
+                        done <= 1'b1;
+                    end
+                    16'd2: begin
+                        q8_start <= 1'b1;
+                    end
+                    default: begin
+                        busy <= 1'b0;
+                        done <= 1'b1;
+                        error <= 1'b1;
+                    end
+                endcase
+            end else if (busy && active_function == 16'd2 && q8_done) begin
+                output_data <= 768'd0;
+                output_data[31:0] <= q8_dot;
+                output_data[95:32] <= q8_term_q30;
+                busy <= 1'b0;
+                done <= 1'b1;
+                error <= q8_scale_error;
+            end
+        end
+    end
+endmodule"#
+}
+
+fn parse_golden_q8_block() -> Result<GoldenQ8Block, String> {
+    const BYTES: usize = 336;
+    const SEAL_OFFSET: usize = 0xC0;
+    const INPUT_OFFSET: usize = 0x100;
+    const OUTPUT_OFFSET: usize = 0x144;
+
+    let bytes = Q8_GOLDEN_ARTIFACT;
+    if bytes.len() != BYTES
+        || bytes.get(..8) != Some(b"TGAQ8B01")
+        || artifact_u16(bytes, 0x08)? != 1
+        || artifact_u16(bytes, 0x0A)? != 256
+        || artifact_u16(bytes, 0x0C)? != 68
+        || artifact_u16(bytes, 0x0E)? != 12
+        || artifact_u32(bytes, 0x10)? != 1
+        || artifact_u16(bytes, 0x14)? != 4
+        || bytes[0x16] != 0
+        || bytes[0x17] != 3
+        || artifact_u32(bytes, 0x18)? != 0
+        || artifact_u32(bytes, 0x1C)? != 0
+        || artifact_u32(bytes, 0xE0)? != 0x048C_9000
+        || artifact_u32(bytes, 0xE4)? as usize != INPUT_OFFSET
+        || artifact_u32(bytes, 0xE8)? as usize != OUTPUT_OFFSET
+        || artifact_u16(bytes, 0xEC)? != 0
+        || artifact_u16(bytes, 0xEE)? != 1
+        || bytes[0xF0..0x100] != [0; 16]
+    {
+        return Err("header or canonical coordinate mismatch".into());
+    }
+
+    let ffn_hash: [u8; 32] = Sha256::digest(LFM25_FFN_GOLDEN).into();
+    let vector_hash: [u8; 32] = Sha256::digest(LFM25_FFN_VECTORS).into();
+    if bytes[0x20..0x40] != ffn_hash
+        || bytes[0x40..0x60] != trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256
+        || bytes[0x60..0x80] != trueos_fpga_abi::lfm25::generated::MODEL_CONTRACT_SHA256
+        || bytes[0x80..0xA0] != vector_hash
+    {
+        return Err("provenance hash mismatch".into());
+    }
+
+    let payload_hash: [u8; 32] = Sha256::digest(&bytes[INPUT_OFFSET..BYTES]).into();
+    if bytes[0xA0..0xC0] != payload_hash {
+        return Err("payload hash mismatch".into());
+    }
+    let mut seal_view = bytes.to_vec();
+    seal_view[SEAL_OFFSET..SEAL_OFFSET + 32].fill(0);
+    let seal: [u8; 32] = Sha256::digest(&seal_view).into();
+    if bytes[SEAL_OFFSET..SEAL_OFFSET + 32] != seal {
+        return Err("self-seal mismatch".into());
+    }
+
+    let input: [u8; 68] = bytes[INPUT_OFFSET..OUTPUT_OFFSET].try_into().unwrap();
+    let output: [u8; 12] = bytes[OUTPUT_OFFSET..BYTES].try_into().unwrap();
+    let activation = input[..34].try_into().unwrap();
+    let weight = input[34..].try_into().unwrap();
+    let dot = i32::from_le_bytes(output[..4].try_into().unwrap());
+    let term_q30 = i64::from_le_bytes(output[4..].try_into().unwrap());
+    Ok(GoldenQ8Block {
+        activation,
+        weight,
+        dot,
+        term_q30,
+    })
+}
+
+fn artifact_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
+    let value = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| format!("truncated u16 at {offset:#x}"))?;
+    Ok(u16::from_le_bytes(value.try_into().unwrap()))
+}
+
+fn artifact_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| format!("truncated u32 at {offset:#x}"))?;
+    Ok(u32::from_le_bytes(value.try_into().unwrap()))
 }
 
 fn descriptor(spec: FunctionSpec) -> FunctionDescriptor {
@@ -157,7 +404,7 @@ endmodule\n",
     verilog
 }
 
-fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
+fn emit_rust_interface(firmware_hash: [u8; 32], golden: GoldenQ8Block) -> String {
     let mut rust = String::new();
     rust.push_str("// @generated by TRUEGA tools/tga-gen; do not hand-edit.\n");
     rust.push_str(
@@ -211,21 +458,73 @@ fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
     rust.push_str("};\n\n");
     for spec in FUNCTIONS {
         writeln!(rust, "pub mod {} {{", spec.rust_module).unwrap();
-        rust.push_str("    use super::{FunctionId, result_u32};\n\n");
+        match spec.binding {
+            BindingKind::NoArgsU32 | BindingKind::BinaryU32 => {
+                rust.push_str("    use super::{FunctionId, result_u32};\n\n");
+            }
+            BindingKind::Lfm25Q8Block => {
+                rust.push_str("    use super::FunctionId;\n\n");
+            }
+        }
         writeln!(rust, "    pub const ID: FunctionId = super::{};", spec.rust_name).unwrap();
         writeln!(rust, "    pub const INPUT_BYTES: usize = {};", spec.input_bytes).unwrap();
         writeln!(rust, "    pub const OUTPUT_BYTES: usize = {};", spec.output_bytes).unwrap();
-        if spec.input_bytes == 0 {
-            rust.push_str("    pub const fn encode() -> [u8; 0] { [] }\n");
-        } else {
-            rust.push_str("    pub fn encode(a: u32, b: u32) -> [u8; 8] {\n");
-            rust.push_str("        let mut bytes = [0; 8];\n");
-            rust.push_str("        bytes[..4].copy_from_slice(&a.to_le_bytes());\n");
-            rust.push_str("        bytes[4..].copy_from_slice(&b.to_le_bytes());\n");
-            rust.push_str("        bytes\n");
-            rust.push_str("    }\n");
+        match spec.binding {
+            BindingKind::NoArgsU32 => {
+                rust.push_str("    pub const fn encode() -> [u8; 0] {\n        []\n    }\n");
+                rust.push_str(
+                    "    pub fn decode(bytes: &[u8]) -> Option<u32> {\n        result_u32(bytes)\n    }\n",
+                );
+            }
+            BindingKind::BinaryU32 => {
+                rust.push_str("    pub fn encode(a: u32, b: u32) -> [u8; 8] {\n");
+                rust.push_str("        let mut bytes = [0; 8];\n");
+                rust.push_str("        bytes[..4].copy_from_slice(&a.to_le_bytes());\n");
+                rust.push_str("        bytes[4..].copy_from_slice(&b.to_le_bytes());\n");
+                rust.push_str("        bytes\n");
+                rust.push_str("    }\n");
+                rust.push_str(
+                    "    pub fn decode(bytes: &[u8]) -> Option<u32> {\n        result_u32(bytes)\n    }\n",
+                );
+            }
+            BindingKind::Lfm25Q8Block => {
+                rust.push_str("    pub const Q8_0_BLOCK_BYTES: usize = 34;\n\n");
+                rust.push_str("    #[derive(Copy, Clone, Debug, Eq, PartialEq)]\n");
+                rust.push_str("    pub struct Q8BlockResult {\n");
+                rust.push_str("        pub dot: i32,\n");
+                rust.push_str("        pub term_q30: i64,\n");
+                rust.push_str("    }\n\n");
+                rust.push_str(
+                    "    pub fn encode(\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n",
+                );
+                rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
+                rust.push_str("        bytes[..Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n");
+                rust.push_str("        bytes[Q8_0_BLOCK_BYTES..].copy_from_slice(weight);\n");
+                rust.push_str("        bytes\n");
+                rust.push_str("    }\n\n");
+                rust.push_str("    pub fn decode(bytes: &[u8]) -> Option<Q8BlockResult> {\n");
+                rust.push_str(
+                    "        Some(Q8BlockResult {\n            dot: i32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),\n            term_q30: i64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?),\n        })\n",
+                );
+                rust.push_str("    }\n\n");
+                emit_rust_byte_array(
+                    &mut rust,
+                    "    pub const GOLDEN_ACTIVATION: [u8; Q8_0_BLOCK_BYTES] = ",
+                    &golden.activation,
+                );
+                emit_rust_byte_array(
+                    &mut rust,
+                    "    pub const GOLDEN_WEIGHT: [u8; Q8_0_BLOCK_BYTES] = ",
+                    &golden.weight,
+                );
+                writeln!(
+                    rust,
+                    "    pub const GOLDEN_RESULT: Q8BlockResult = Q8BlockResult {{\n        dot: {},\n        term_q30: {},\n    }};",
+                    golden.dot, golden.term_q30
+                )
+                .unwrap();
+            }
         }
-        rust.push_str("    pub fn decode(bytes: &[u8]) -> Option<u32> { result_u32(bytes) }\n");
         rust.push_str("}\n\n");
     }
     rust.push_str("pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n");
@@ -235,6 +534,23 @@ fn emit_rust_interface(firmware_hash: [u8; 32]) -> String {
     rust.push_str("    Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))\n");
     rust.push_str("}\n");
     rust
+}
+
+fn emit_rust_byte_array(rust: &mut String, declaration: &str, bytes: &[u8]) {
+    rust.push_str(declaration);
+    rust.push_str("[\n        ");
+    for (index, byte) in bytes.iter().enumerate() {
+        write!(rust, "0x{byte:02x},").unwrap();
+        if index % 15 == 14 || index + 1 == bytes.len() {
+            rust.push('\n');
+            if index + 1 != bytes.len() {
+                rust.push_str("        ");
+            }
+        } else {
+            rust.push(' ');
+        }
+    }
+    rust.push_str("    ];\n");
 }
 
 fn write_if_changed(path: &Path, contents: &[u8]) {
@@ -286,14 +602,17 @@ mod tests {
 
     #[test]
     fn generated_interface_has_exactly_three_slots() {
-        let interface = emit_rust_interface([0; 32]);
+        let golden = parse_golden_q8_block().unwrap();
+        let interface = emit_rust_interface([0; 32], golden);
         assert!(interface.contains("HEARTBEAT"));
         assert!(interface.contains("ADD_U32"));
-        assert!(interface.contains("XOR_U32"));
+        assert!(interface.contains("LFM25_Q8_BLOCK"));
         assert!(interface.contains("pub const FIRMWARE_MANIFEST: FirmwareManifest"));
         assert!(interface.contains("pub mod led_step_heartbeat"));
         assert!(interface.contains("pub mod add_u32"));
-        assert!(interface.contains("pub mod xor_u32"));
+        assert!(interface.contains("pub mod lfm25_q8_block"));
+        assert!(interface.contains("pub struct Q8BlockResult"));
+        assert!(interface.contains("pub const GOLDEN_ACTIVATION"));
         assert_eq!(FUNCTIONS.len(), 3);
     }
 
@@ -301,7 +620,29 @@ mod tests {
     fn v1_catalogue_is_contiguous_and_physically_supported() {
         validate_catalogue().unwrap();
         assert_eq!(FUNCTIONS.map(|function| function.id), [0, 1, 2]);
-        assert_eq!(FUNCTIONS.map(|function| function.output_bytes), [4, 4, 4]);
+        assert_eq!(FUNCTIONS.map(|function| function.input_bytes), [0, 8, 68]);
+        assert_eq!(FUNCTIONS.map(|function| function.output_bytes), [4, 4, 12]);
+    }
+
+    #[test]
+    fn sealed_q8_block_fixture_is_canonical() {
+        let golden = parse_golden_q8_block().unwrap();
+        assert_eq!(golden.activation[..4], [0x30, 0x18, 0x0d, 0xa8]);
+        assert_eq!(golden.weight[..4], [0xb9, 0x0c, 0x7a, 0x14]);
+        assert_eq!(golden.dot, -14_901);
+        assert_eq!(golden.term_q30, -9_429_888);
+    }
+
+    #[test]
+    fn generated_rtl_binds_compute_and_common_handoff() {
+        let rtl = assembled_function_rtl();
+        assert!(rtl.contains("module truega_functions("));
+        assert!(rtl.contains("input  wire [767:0] input_data"));
+        assert!(rtl.contains("module truega_q8_0_dot32"));
+        assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
+        assert!(rtl.contains("module truega_q8_0_block_slot"));
+        assert!(rtl.contains("output reg          busy"));
+        assert!(rtl.contains("output reg          done"));
     }
 
     #[test]
@@ -380,5 +721,18 @@ mod tests {
             TOP_VHDL.contains("constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;")
         );
         assert!(TOP_VHDL.contains("read_data_dw := firmware_manifest_word;"));
+    }
+
+    #[test]
+    fn final_image_physically_backs_both_96_byte_envelopes() {
+        assert!(TOP_VHDL.contains("type call_data_arr_t is array (0 to 23)"));
+        assert!(TOP_VHDL.contains(
+            "call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD) <= payload_dw;"
+        ));
+        assert!(TOP_VHDL.contains(
+            "call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD) <= payload_dw;"
+        ));
+        assert!(TOP_VHDL.contains("elsif (call_active = '1') and (function_done = '1') then"));
+        assert!(TOP_VHDL.contains("function_start <= '1';"));
     }
 }

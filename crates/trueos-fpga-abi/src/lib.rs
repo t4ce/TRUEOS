@@ -212,6 +212,19 @@ mod tests {
         assert_eq!(args, [0x44, 0x33, 0x22, 0x11, 0xDD, 0xCC, 0xBB, 0xAA]);
         assert_eq!(builtins::add_u32::decode(&args), Some(0x1122_3344));
         assert_eq!(builtins::led_step_heartbeat::encode(), []);
+
+        use builtins::lfm25_q8_block as q8;
+        let q8_input = q8::encode(&q8::GOLDEN_ACTIVATION, &q8::GOLDEN_WEIGHT);
+        assert_eq!(q8_input.len(), 68);
+        assert_eq!(&q8_input[..34], &q8::GOLDEN_ACTIVATION);
+        assert_eq!(&q8_input[34..], &q8::GOLDEN_WEIGHT);
+        assert_eq!(&q8_input[..4], &[0x30, 0x18, 0x0D, 0xA8]);
+        assert_eq!(
+            q8::decode(&[
+                0xCB, 0xC5, 0xFF, 0xFF, 0x80, 0x1C, 0x70, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            ]),
+            Some(q8::GOLDEN_RESULT),
+        );
     }
 
     #[test]

@@ -5,11 +5,11 @@ use super::{FirmwareManifest, FunctionDescriptor, FunctionId};
 
 pub const LED_STEP_HEARTBEAT: FunctionId = FunctionId::SLOT_0;
 pub const ADD_U32: FunctionId = FunctionId::SLOT_1;
-pub const XOR_U32: FunctionId = FunctionId::SLOT_2;
+pub const LFM25_Q8_BLOCK: FunctionId = FunctionId::SLOT_2;
 pub const HEARTBEAT_REPLY: u32 = 0x54534154; // "TGAT"
 pub const FIRMWARE_RTL_SHA256: [u8; 32] = [
-    0x34, 0x62, 0xaf, 0x5d, 0x08, 0x6f, 0x7d, 0xa4, 0x6f, 0x32, 0x4e, 0xb7, 0x76, 0x66, 0x0e, 0xbd,
-    0xd6, 0xc3, 0x73, 0x52, 0x9b, 0x86, 0xf9, 0xc4, 0x2e, 0x46, 0x6f, 0x03, 0x6f, 0xe5, 0x72, 0x47,
+    0x1e, 0xbc, 0xb1, 0x90, 0x5f, 0x38, 0xc2, 0x91, 0xc0, 0xdf, 0xcf, 0xf7, 0x33, 0x4f, 0x24, 0x92,
+    0x09, 0x17, 0x3e, 0x8b, 0x22, 0x57, 0x71, 0x75, 0x75, 0xbe, 0x39, 0xa7, 0x85, 0x3e, 0x8a, 0x7f,
 ];
 
 pub const FUNCTIONS: [FunctionDescriptor; 3] = [
@@ -28,11 +28,11 @@ pub const FUNCTIONS: [FunctionDescriptor; 3] = [
         symbol_hash: 0xe32d0cd1379e9cdf,
     },
     FunctionDescriptor {
-        id: XOR_U32.raw(),
-        input_bytes: 8,
-        output_bytes: 4,
+        id: LFM25_Q8_BLOCK.raw(),
+        input_bytes: 68,
+        output_bytes: 12,
         flags: 0,
-        symbol_hash: 0xafcad32a26d65e41,
+        symbol_hash: 0x7fcc04c85ebfdc00,
     },
 ];
 
@@ -53,8 +53,12 @@ pub mod led_step_heartbeat {
     pub const ID: FunctionId = super::LED_STEP_HEARTBEAT;
     pub const INPUT_BYTES: usize = 0;
     pub const OUTPUT_BYTES: usize = 4;
-    pub const fn encode() -> [u8; 0] { [] }
-    pub fn decode(bytes: &[u8]) -> Option<u32> { result_u32(bytes) }
+    pub const fn encode() -> [u8; 0] {
+        []
+    }
+    pub fn decode(bytes: &[u8]) -> Option<u32> {
+        result_u32(bytes)
+    }
 }
 
 pub mod add_u32 {
@@ -69,22 +73,56 @@ pub mod add_u32 {
         bytes[4..].copy_from_slice(&b.to_le_bytes());
         bytes
     }
-    pub fn decode(bytes: &[u8]) -> Option<u32> { result_u32(bytes) }
+    pub fn decode(bytes: &[u8]) -> Option<u32> {
+        result_u32(bytes)
+    }
 }
 
-pub mod xor_u32 {
-    use super::{FunctionId, result_u32};
+pub mod lfm25_q8_block {
+    use super::FunctionId;
 
-    pub const ID: FunctionId = super::XOR_U32;
-    pub const INPUT_BYTES: usize = 8;
-    pub const OUTPUT_BYTES: usize = 4;
-    pub fn encode(a: u32, b: u32) -> [u8; 8] {
-        let mut bytes = [0; 8];
-        bytes[..4].copy_from_slice(&a.to_le_bytes());
-        bytes[4..].copy_from_slice(&b.to_le_bytes());
+    pub const ID: FunctionId = super::LFM25_Q8_BLOCK;
+    pub const INPUT_BYTES: usize = 68;
+    pub const OUTPUT_BYTES: usize = 12;
+    pub const Q8_0_BLOCK_BYTES: usize = 34;
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    pub struct Q8BlockResult {
+        pub dot: i32,
+        pub term_q30: i64,
+    }
+
+    pub fn encode(
+        activation: &[u8; Q8_0_BLOCK_BYTES],
+        weight: &[u8; Q8_0_BLOCK_BYTES],
+    ) -> [u8; INPUT_BYTES] {
+        let mut bytes = [0; INPUT_BYTES];
+        bytes[..Q8_0_BLOCK_BYTES].copy_from_slice(activation);
+        bytes[Q8_0_BLOCK_BYTES..].copy_from_slice(weight);
         bytes
     }
-    pub fn decode(bytes: &[u8]) -> Option<u32> { result_u32(bytes) }
+
+    pub fn decode(bytes: &[u8]) -> Option<Q8BlockResult> {
+        Some(Q8BlockResult {
+            dot: i32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),
+            term_q30: i64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?),
+        })
+    }
+
+    pub const GOLDEN_ACTIVATION: [u8; Q8_0_BLOCK_BYTES] = [
+        0x30, 0x18, 0x0d, 0xa8, 0xd4, 0x4e, 0x1f, 0x49, 0x16, 0xb6, 0xb3, 0x3c, 0x25, 0xa8, 0xe7,
+        0xf6, 0x25, 0x89, 0x4a, 0xd2, 0xcf, 0xe7, 0x21, 0xb0, 0xda, 0x81, 0x2a, 0x08, 0x17, 0xd3,
+        0x56, 0xa7, 0x1d, 0x21,
+    ];
+    pub const GOLDEN_WEIGHT: [u8; Q8_0_BLOCK_BYTES] = [
+        0xb9, 0x0c, 0x7a, 0x14, 0x18, 0x2f, 0xb5, 0x2c, 0xf8, 0xe3, 0x13, 0xb1, 0xd2, 0x05, 0xe3,
+        0x01, 0x07, 0x36, 0x28, 0xf2, 0x03, 0xf8, 0xfc, 0xe4, 0x76, 0xf1, 0xfa, 0x7f, 0xf9, 0xc1,
+        0xe1, 0x27, 0xa2, 0x82,
+    ];
+    pub const GOLDEN_RESULT: Q8BlockResult = Q8BlockResult {
+        dot: -14901,
+        term_q30: -9429888,
+    };
 }
 
 pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {

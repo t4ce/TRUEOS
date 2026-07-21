@@ -4,13 +4,14 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use trueos_fpga_abi::lfm25::{
-    generated::{MODEL_CONTRACT_SHA256, TENSORS, TENSOR_NAMES},
     MODEL_GENERATION, PINNED_GGUF_BYTES, PINNED_GGUF_SHA256, PINNED_NATIVE_IMAGE_BYTES,
     PINNED_NATIVE_IMAGE_SHA256, Q8_0_BLOCK_BYTES, Q8_0_BLOCK_VALUES,
+    generated::{MODEL_CONTRACT_SHA256, TENSOR_NAMES, TENSORS},
 };
 
 const RAW_MAGIC: &[u8; 8] = b"TGALRAW1";
 const GOLDEN_MAGIC: &[u8; 8] = b"TGAGFFN1";
+const BLOCK_GOLDEN_MAGIC: &[u8; 8] = b"TGAQ8B01";
 const LLAMA_COMMIT: [u8; 20] = [
     0x76, 0xf4, 0x6a, 0xd2, 0x9d, 0x61, 0xfd, 0x8c, 0x14, 0x01, 0xe8, 0x22, 0x18, 0x42, 0x93, 0x4b,
     0xf6, 0x2a, 0x60, 0x64,
@@ -27,14 +28,64 @@ const HEADER_BYTES: usize = 256;
 const DESCRIPTOR_BYTES: usize = 48;
 const PAYLOAD_OFFSET: usize = 512;
 const SEAL_OFFSET: usize = 188;
+const BLOCK_HEADER_BYTES: usize = 256;
+const BLOCK_INPUT_BYTES: usize = 2 * Q8_0_BLOCK_BYTES;
+const BLOCK_OUTPUT_BYTES: usize = 12;
+const BLOCK_PAYLOAD_BYTES: usize = BLOCK_INPUT_BYTES + BLOCK_OUTPUT_BYTES;
+const BLOCK_SEAL_OFFSET: usize = 192;
+const BLOCK_INPUT_OFFSET: usize = BLOCK_HEADER_BYTES;
+const BLOCK_OUTPUT_OFFSET: usize = BLOCK_INPUT_OFFSET + BLOCK_INPUT_BYTES;
+const BLOCK_ARTIFACT_BYTES: usize = BLOCK_HEADER_BYTES + BLOCK_PAYLOAD_BYTES;
+const BLOCK_FLAG_NATIVE_VERIFIED: u16 = 1 << 0;
+const CANONICAL_TENSOR_NAME: &str = "blk.0.ffn_gate.weight";
+const CANONICAL_VECTOR_INDEX: usize = 0;
+const CANONICAL_ROW: u32 = 0;
+const CANONICAL_BLOCK: u32 = 0;
+const PINNED_FULL_GOLDEN_SHA256: [u8; 32] = [
+    0xeb, 0x12, 0x4c, 0x33, 0x3e, 0x7a, 0x70, 0x95, 0xa7, 0x8f, 0xc6, 0xc0, 0x00, 0x4f, 0x90, 0xa4,
+    0x3f, 0xa8, 0x25, 0xbd, 0xfd, 0x1a, 0x8f, 0x74, 0xac, 0x9d, 0x67, 0xc5, 0x38, 0x48, 0x41, 0x85,
+];
+const PINNED_VECTORS_SHA256: [u8; 32] = [
+    0x24, 0x7a, 0xf3, 0xe0, 0x6a, 0x7c, 0xb4, 0x0d, 0xdf, 0x87, 0x1d, 0x24, 0x43, 0x02, 0x38, 0x83,
+    0x44, 0x1c, 0xfc, 0x82, 0x24, 0x7c, 0x4d, 0xb7, 0xe3, 0xbd, 0x55, 0xe0, 0x91, 0x04, 0x8e, 0xfe,
+];
 const F32_PROJECTION_MAX_ABS_BOUND: f64 = 2.0e-6;
 const FIXED_Q30_MAX_ABS_BOUND: f64 = 2.0e-6;
 const SILU_PRODUCT_MAX_ABS_BOUND: f64 = 2.0e-6;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Q8Block {
     scale_bits: u16,
     quants: [i8; Q8_0_BLOCK_VALUES],
+}
+
+#[derive(Clone)]
+struct CanonicalBlock {
+    activation: Q8Block,
+    weight: Q8Block,
+    dot: i32,
+    term_q30: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BlockCoordinates {
+    tensor_id: u16,
+    layer: u8,
+    role: u8,
+    row: u32,
+    block: u32,
+    native_block_offset: u32,
+}
+
+#[derive(Debug)]
+struct VerifiedBlockArtifact {
+    full_golden_sha256: [u8; 32],
+    vectors_sha256: [u8; 32],
+    coordinates: BlockCoordinates,
+    input: [u8; BLOCK_INPUT_BYTES],
+    output: [u8; BLOCK_OUTPUT_BYTES],
+    payload_sha256: [u8; 32],
+    seal_sha256: [u8; 32],
 }
 
 #[derive(Default, Clone, Copy)]
@@ -81,18 +132,32 @@ fn run() -> Result<(), String> {
     if arguments.len() == 3 && arguments[1] == "verify" {
         return verify_artifact(Path::new(&arguments[2]));
     }
+    if arguments.len() == 6 && arguments[1] == "block" {
+        return seal_block_artifact(
+            Path::new(&arguments[2]),
+            Path::new(&arguments[3]),
+            Path::new(&arguments[4]),
+            Path::new(&arguments[5]),
+        );
+    }
+    if arguments.len() == 5 && arguments[1] == "verify-block" {
+        return verify_block_artifact(
+            Path::new(&arguments[2]),
+            Path::new(&arguments[3]),
+            Path::new(&arguments[4]),
+        );
+    }
     if arguments.len() != 6 || arguments[1] != "seal" {
+        let program = arguments
+            .first()
+            .map(String::as_str)
+            .unwrap_or("lfm25-golden");
         return Err(format!(
-            "usage:\n  {} seal TRACE.raw MODEL.gguf NATIVE.bin GOLDEN.bin\n  {} verify GOLDEN.bin\n\
+            "usage:\n  {program} seal TRACE.raw MODEL.gguf NATIVE.bin GOLDEN.bin\n  \
+             {program} verify GOLDEN.bin\n  \
+             {program} block GOLDEN.bin GOLDEN.bin.vectors NATIVE.bin BLOCK.bin\n  \
+             {program} verify-block BLOCK.bin GOLDEN.bin GOLDEN.bin.vectors\n\
              simulation vectors are written beside GOLDEN.bin as GOLDEN.bin.vectors",
-            arguments
-                .first()
-                .map(String::as_str)
-                .unwrap_or("lfm25-golden"),
-            arguments
-                .first()
-                .map(String::as_str)
-                .unwrap_or("lfm25-golden"),
         ));
     }
     let trace_path = Path::new(&arguments[2]);
@@ -187,6 +252,18 @@ fn run() -> Result<(), String> {
 
 fn verify_artifact(path: &Path) -> Result<(), String> {
     let artifact = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let (payload_hash, expected_seal) = validate_artifact(&artifact)?;
+    println!(
+        "verified={} bytes={} payload_sha256={} seal_sha256={}",
+        path.display(),
+        artifact.len(),
+        hex(&payload_hash),
+        hex(&expected_seal)
+    );
+    Ok(())
+}
+
+fn validate_artifact(artifact: &[u8]) -> Result<([u8; 32], [u8; 32]), String> {
     let expected_payload_bytes = VECTOR_LENGTHS.iter().sum::<usize>() * 4;
     if artifact.len() != PAYLOAD_OFFSET + expected_payload_bytes
         || artifact.get(0..8) != Some(GOLDEN_MAGIC)
@@ -218,7 +295,7 @@ fn verify_artifact(path: &Path) -> Result<(), String> {
         return Err("golden artifact payload hash mismatch".into());
     }
     let expected_seal: [u8; 32] = artifact[SEAL_OFFSET..SEAL_OFFSET + 32].try_into().unwrap();
-    let mut seal_view = artifact.clone();
+    let mut seal_view = artifact.to_vec();
     seal_view[SEAL_OFFSET..SEAL_OFFSET + 32].fill(0);
     if sha256(&seal_view) != expected_seal {
         return Err("golden artifact seal mismatch".into());
@@ -240,14 +317,415 @@ fn verify_artifact(path: &Path) -> Result<(), String> {
         }
         payload_cursor += VECTOR_LENGTHS[index] * 4;
     }
+    Ok((payload_hash, expected_seal))
+}
+
+fn seal_block_artifact(
+    full_golden_path: &Path,
+    vectors_path: &Path,
+    native_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    let full_golden = fs::read(full_golden_path)
+        .map_err(|e| format!("read {}: {e}", full_golden_path.display()))?;
+    validate_artifact(&full_golden)?;
+    let vectors =
+        fs::read(vectors_path).map_err(|e| format!("read {}: {e}", vectors_path.display()))?;
+    let canonical = derive_canonical_block(&full_golden, &vectors)?;
+    let coordinates = canonical_coordinates()?;
+
+    verify_file(
+        native_path,
+        PINNED_NATIVE_IMAGE_BYTES as u64,
+        PINNED_NATIVE_IMAGE_SHA256,
+        "native image",
+    )?;
+    let native_weight = read_native_q8_block(native_path, coordinates.native_block_offset)?;
+    if native_weight != canonical.weight {
+        return Err("canonical vector weight does not match the sealed native image".into());
+    }
+
+    let input = encode_block_input(&canonical);
+    let output = encode_block_output(&canonical);
+    let artifact =
+        build_block_artifact(sha256(&full_golden), sha256(&vectors), coordinates, input, output)?;
+    write_atomic(output_path, &artifact)?;
+    let checksum = sha256(&artifact);
+    let checksum_path = PathBuf::from(format!("{}.sha256", output_path.display()));
+    let output_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("invalid block artifact output name")?;
+    let checksum_line = format!("{}  {output_name}\n", hex(&checksum));
+    write_atomic(&checksum_path, checksum_line.as_bytes())?;
+
     println!(
-        "verified={} bytes={} payload_sha256={} seal_sha256={}",
-        path.display(),
+        "block={} bytes={} sha256={} input_bytes={} output_bytes={} tensor={} layer={} row={} block_index={} native_verified=true",
+        output_path.display(),
         artifact.len(),
-        hex(&payload_hash),
-        hex(&expected_seal)
+        hex(&checksum),
+        BLOCK_INPUT_BYTES,
+        BLOCK_OUTPUT_BYTES,
+        coordinates.tensor_id,
+        coordinates.layer,
+        coordinates.row,
+        coordinates.block,
+    );
+    println!("checksum={}", checksum_path.display());
+    Ok(())
+}
+
+fn verify_block_artifact(
+    block_path: &Path,
+    full_golden_path: &Path,
+    vectors_path: &Path,
+) -> Result<(), String> {
+    let full_golden = fs::read(full_golden_path)
+        .map_err(|e| format!("read {}: {e}", full_golden_path.display()))?;
+    validate_artifact(&full_golden)?;
+    let vectors =
+        fs::read(vectors_path).map_err(|e| format!("read {}: {e}", vectors_path.display()))?;
+    let canonical = derive_canonical_block(&full_golden, &vectors)?;
+    let expected_coordinates = canonical_coordinates()?;
+    let artifact =
+        fs::read(block_path).map_err(|e| format!("read {}: {e}", block_path.display()))?;
+    let verified = validate_block_artifact(&artifact)?;
+
+    if verified.full_golden_sha256 != sha256(&full_golden) {
+        return Err("block artifact full-FFN golden hash mismatch".into());
+    }
+    if verified.vectors_sha256 != sha256(&vectors) {
+        return Err("block artifact simulation-vector hash mismatch".into());
+    }
+    if verified.coordinates != expected_coordinates {
+        return Err("block artifact tensor coordinates mismatch".into());
+    }
+    if verified.input != encode_block_input(&canonical) {
+        return Err("block artifact input payload mismatch".into());
+    }
+    if verified.output != encode_block_output(&canonical) {
+        return Err("block artifact output payload mismatch".into());
+    }
+
+    println!(
+        "verified-block={} bytes={} artifact_sha256={} payload_sha256={} seal_sha256={} dot={} term_q30={}",
+        block_path.display(),
+        artifact.len(),
+        hex(&sha256(&artifact)),
+        hex(&verified.payload_sha256),
+        hex(&verified.seal_sha256),
+        canonical.dot,
+        canonical.term_q30,
     );
     Ok(())
+}
+
+fn canonical_coordinates() -> Result<BlockCoordinates, String> {
+    let descriptor_index = TENSOR_NAMES
+        .iter()
+        .position(|name| *name == CANONICAL_TENSOR_NAME)
+        .ok_or("canonical gate tensor is absent from the model contract")?;
+    let descriptor = TENSORS[descriptor_index];
+    let blocks_per_row = descriptor.ggml_ne0 as usize / Q8_0_BLOCK_VALUES;
+    if descriptor.format != 2
+        || descriptor.layer != 0
+        || descriptor.ggml_ne0 as usize % Q8_0_BLOCK_VALUES != 0
+        || CANONICAL_ROW >= descriptor.ggml_ne1
+        || CANONICAL_BLOCK as usize >= blocks_per_row
+    {
+        return Err("canonical gate tensor shape/format mismatch".into());
+    }
+    let linear_block = (CANONICAL_ROW as usize)
+        .checked_mul(blocks_per_row)
+        .and_then(|value| value.checked_add(CANONICAL_BLOCK as usize))
+        .ok_or("canonical native block index overflow")?;
+    let byte_offset = (descriptor.native_offset as usize)
+        .checked_add(
+            linear_block
+                .checked_mul(Q8_0_BLOCK_BYTES)
+                .ok_or("canonical native block byte offset overflow")?,
+        )
+        .ok_or("canonical native block byte offset overflow")?;
+    let native_block_offset = u32::try_from(byte_offset)
+        .map_err(|_| "canonical native block offset exceeds u32".to_string())?;
+    Ok(BlockCoordinates {
+        tensor_id: descriptor.tensor_id,
+        layer: descriptor.layer,
+        role: descriptor.role,
+        row: CANONICAL_ROW,
+        block: CANONICAL_BLOCK,
+        native_block_offset,
+    })
+}
+
+fn derive_canonical_block(full_golden: &[u8], vectors: &[u8]) -> Result<CanonicalBlock, String> {
+    validate_artifact(full_golden)?;
+    if sha256(full_golden) != PINNED_FULL_GOLDEN_SHA256 {
+        return Err("canonical block source is not the pinned full-FFN golden".into());
+    }
+    if sha256(vectors) != PINNED_VECTORS_SHA256 {
+        return Err("canonical block source is not the pinned simulation-vector file".into());
+    }
+    let normalized = golden_vector(full_golden, CANONICAL_VECTOR_INDEX)?;
+    let activation = quantize_q8_0(&normalized)
+        .into_iter()
+        .next()
+        .ok_or("normalized input did not produce a Q8_0 block")?;
+    let vector = parse_canonical_vector(vectors)?;
+    if vector.activation != activation {
+        return Err("canonical vector activation does not derive from the sealed FFN input".into());
+    }
+    let dot = integer_dot(&activation.quants, &vector.weight.quants);
+    if vector.dot != dot {
+        return Err(format!("canonical vector integer dot {} != recomputed {dot}", vector.dot));
+    }
+    let term_q30 = q30_term(dot, activation.scale_bits, vector.weight.scale_bits)?;
+    if vector.term_q30 != term_q30 {
+        return Err(format!(
+            "canonical vector Q30 term {} != recomputed {term_q30}",
+            vector.term_q30
+        ));
+    }
+    Ok(CanonicalBlock {
+        activation,
+        weight: vector.weight,
+        dot,
+        term_q30,
+    })
+}
+
+fn golden_vector(artifact: &[u8], index: usize) -> Result<Vec<f32>, String> {
+    if index >= VECTOR_LENGTHS.len() {
+        return Err(format!("golden vector index {index} is out of range"));
+    }
+    let descriptor = HEADER_BYTES + index * DESCRIPTOR_BYTES;
+    let elements = artifact_u32(artifact, descriptor + 4)? as usize;
+    let relative_offset = artifact_u32(artifact, descriptor + 8)? as usize;
+    let byte_count = artifact_u32(artifact, descriptor + 12)? as usize;
+    if elements != VECTOR_LENGTHS[index] || byte_count != elements * 4 {
+        return Err(format!("golden vector descriptor {index} has invalid dimensions"));
+    }
+    let start = PAYLOAD_OFFSET
+        .checked_add(relative_offset)
+        .ok_or("golden vector offset overflow")?;
+    let payload = artifact
+        .get(start..start + byte_count)
+        .ok_or("truncated golden vector payload")?;
+    let mut values = Vec::with_capacity(elements);
+    for bytes in payload.chunks_exact(4) {
+        let value = f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap()));
+        if !value.is_finite() {
+            return Err(format!("golden vector {index} contains non-finite data"));
+        }
+        values.push(value);
+    }
+    Ok(values)
+}
+
+fn parse_canonical_vector(bytes: &[u8]) -> Result<CanonicalBlock, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "simulation vectors are not UTF-8")?;
+    let mut found = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() != 12 {
+            return Err(format!("simulation vector has {} fields, expected 12", fields.len()));
+        }
+        let row = parse_u32_decimal(fields[0], "row")?;
+        let block = parse_u32_decimal(fields[1], "block")?;
+        if row != CANONICAL_ROW || block != CANONICAL_BLOCK {
+            continue;
+        }
+        if found.is_some() {
+            return Err("simulation vectors contain duplicate canonical block".into());
+        }
+        if fields[2] != "1" || fields[3] != "0" {
+            return Err("canonical vector first/last markers mismatch".into());
+        }
+        let activation = parse_q8_block(fields[4], fields[6], "activation")?;
+        let weight = parse_q8_block(fields[5], fields[7], "weight")?;
+        let dot = fields[8]
+            .parse::<i32>()
+            .map_err(|_| "canonical vector dot is not i32".to_string())?;
+        let term_q30 = i64::from_le_bytes(
+            u64::from_str_radix(fields[9], 16)
+                .map_err(|_| "canonical vector Q30 term is not 64-bit hex".to_string())?
+                .to_le_bytes(),
+        );
+        u64::from_str_radix(fields[10], 16)
+            .map_err(|_| "canonical vector row reference is not 64-bit hex".to_string())?;
+        fields[11]
+            .parse::<i64>()
+            .map_err(|_| "canonical vector bound is not i64".to_string())?;
+        found = Some(CanonicalBlock {
+            activation,
+            weight,
+            dot,
+            term_q30,
+        });
+    }
+    found.ok_or_else(|| "simulation vectors lack canonical gate row 0 block 0".into())
+}
+
+fn parse_u32_decimal(value: &str, label: &str) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .map_err(|_| format!("simulation vector {label} is not u32"))
+}
+
+fn parse_q8_block(scale: &str, packed_quants: &str, label: &str) -> Result<Q8Block, String> {
+    let scale_bits = u16::from_str_radix(scale, 16)
+        .map_err(|_| format!("canonical {label} scale is not u16 hex"))?;
+    if packed_quants.len() != Q8_0_BLOCK_VALUES * 2 {
+        return Err(format!("canonical {label} quant payload is not 32 bytes"));
+    }
+    let mut packed = Vec::with_capacity(Q8_0_BLOCK_VALUES);
+    for offset in (0..packed_quants.len()).step_by(2) {
+        packed.push(
+            u8::from_str_radix(&packed_quants[offset..offset + 2], 16)
+                .map_err(|_| format!("canonical {label} quants are not hex"))?,
+        );
+    }
+    packed.reverse();
+    let mut quants = [0i8; Q8_0_BLOCK_VALUES];
+    for (destination, source) in quants.iter_mut().zip(packed) {
+        *destination = source as i8;
+    }
+    Ok(Q8Block { scale_bits, quants })
+}
+
+fn read_native_q8_block(path: &Path, offset: u32) -> Result<Q8Block, String> {
+    let mut bytes = [0u8; Q8_0_BLOCK_BYTES];
+    let mut native = File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    native
+        .seek(SeekFrom::Start(offset as u64))
+        .map_err(|e| format!("seek canonical native block: {e}"))?;
+    native
+        .read_exact(&mut bytes)
+        .map_err(|e| format!("read canonical native block: {e}"))?;
+    decode_block(&bytes)
+}
+
+fn encode_q8_block(block: &Q8Block) -> [u8; Q8_0_BLOCK_BYTES] {
+    let mut output = [0u8; Q8_0_BLOCK_BYTES];
+    output[..2].copy_from_slice(&block.scale_bits.to_le_bytes());
+    for (destination, quant) in output[2..].iter_mut().zip(block.quants) {
+        *destination = quant as u8;
+    }
+    output
+}
+
+fn encode_block_input(block: &CanonicalBlock) -> [u8; BLOCK_INPUT_BYTES] {
+    let mut output = [0u8; BLOCK_INPUT_BYTES];
+    output[..Q8_0_BLOCK_BYTES].copy_from_slice(&encode_q8_block(&block.activation));
+    output[Q8_0_BLOCK_BYTES..].copy_from_slice(&encode_q8_block(&block.weight));
+    output
+}
+
+fn encode_block_output(block: &CanonicalBlock) -> [u8; BLOCK_OUTPUT_BYTES] {
+    let mut output = [0u8; BLOCK_OUTPUT_BYTES];
+    output[..4].copy_from_slice(&block.dot.to_le_bytes());
+    output[4..].copy_from_slice(&block.term_q30.to_le_bytes());
+    output
+}
+
+fn build_block_artifact(
+    full_golden_sha256: [u8; 32],
+    vectors_sha256: [u8; 32],
+    coordinates: BlockCoordinates,
+    input: [u8; BLOCK_INPUT_BYTES],
+    output: [u8; BLOCK_OUTPUT_BYTES],
+) -> Result<Vec<u8>, String> {
+    let mut artifact = vec![0u8; BLOCK_ARTIFACT_BYTES];
+    put(&mut artifact, 0, BLOCK_GOLDEN_MAGIC);
+    put_u16(&mut artifact, 8, 1);
+    put_u16(&mut artifact, 10, BLOCK_HEADER_BYTES as u16);
+    put_u16(&mut artifact, 12, BLOCK_INPUT_BYTES as u16);
+    put_u16(&mut artifact, 14, BLOCK_OUTPUT_BYTES as u16);
+    put_u32(&mut artifact, 16, MODEL_GENERATION);
+    put_u16(&mut artifact, 20, coordinates.tensor_id);
+    artifact[22] = coordinates.layer;
+    artifact[23] = coordinates.role;
+    put_u32(&mut artifact, 24, coordinates.row);
+    put_u32(&mut artifact, 28, coordinates.block);
+    put(&mut artifact, 32, &full_golden_sha256);
+    put(&mut artifact, 64, &PINNED_NATIVE_IMAGE_SHA256);
+    put(&mut artifact, 96, &MODEL_CONTRACT_SHA256);
+    put(&mut artifact, 128, &vectors_sha256);
+    put_u32(&mut artifact, 224, coordinates.native_block_offset);
+    put_u32(&mut artifact, 228, BLOCK_INPUT_OFFSET as u32);
+    put_u32(&mut artifact, 232, BLOCK_OUTPUT_OFFSET as u32);
+    put_u16(&mut artifact, 236, CANONICAL_VECTOR_INDEX as u16);
+    put_u16(&mut artifact, 238, BLOCK_FLAG_NATIVE_VERIFIED);
+    put(&mut artifact, BLOCK_INPUT_OFFSET, &input);
+    put(&mut artifact, BLOCK_OUTPUT_OFFSET, &output);
+    let payload_hash = sha256(&artifact[BLOCK_INPUT_OFFSET..]);
+    put(&mut artifact, 160, &payload_hash);
+    let mut seal_view = artifact.clone();
+    seal_view[BLOCK_SEAL_OFFSET..BLOCK_SEAL_OFFSET + 32].fill(0);
+    let seal = sha256(&seal_view);
+    put(&mut artifact, BLOCK_SEAL_OFFSET, &seal);
+    validate_block_artifact(&artifact)?;
+    Ok(artifact)
+}
+
+fn validate_block_artifact(artifact: &[u8]) -> Result<VerifiedBlockArtifact, String> {
+    if artifact.len() != BLOCK_ARTIFACT_BYTES
+        || artifact.get(..8) != Some(BLOCK_GOLDEN_MAGIC)
+        || artifact_u16(artifact, 8)? != 1
+        || artifact_u16(artifact, 10)? as usize != BLOCK_HEADER_BYTES
+        || artifact_u16(artifact, 12)? as usize != BLOCK_INPUT_BYTES
+        || artifact_u16(artifact, 14)? as usize != BLOCK_OUTPUT_BYTES
+        || artifact_u32(artifact, 16)? != MODEL_GENERATION
+        || artifact_u32(artifact, 228)? as usize != BLOCK_INPUT_OFFSET
+        || artifact_u32(artifact, 232)? as usize != BLOCK_OUTPUT_OFFSET
+        || artifact_u16(artifact, 236)? as usize != CANONICAL_VECTOR_INDEX
+        || artifact_u16(artifact, 238)? != BLOCK_FLAG_NATIVE_VERIFIED
+        || artifact[240..BLOCK_HEADER_BYTES]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err("block artifact header mismatch".into());
+    }
+    if artifact.get(64..96) != Some(PINNED_NATIVE_IMAGE_SHA256.as_slice()) {
+        return Err("block artifact native image hash mismatch".into());
+    }
+    if artifact.get(96..128) != Some(MODEL_CONTRACT_SHA256.as_slice()) {
+        return Err("block artifact model contract hash mismatch".into());
+    }
+    let payload_sha256 = sha256(&artifact[BLOCK_INPUT_OFFSET..]);
+    if artifact.get(160..192) != Some(payload_sha256.as_slice()) {
+        return Err("block artifact payload hash mismatch".into());
+    }
+    let seal_sha256: [u8; 32] = artifact[BLOCK_SEAL_OFFSET..BLOCK_SEAL_OFFSET + 32]
+        .try_into()
+        .unwrap();
+    let mut seal_view = artifact.to_vec();
+    seal_view[BLOCK_SEAL_OFFSET..BLOCK_SEAL_OFFSET + 32].fill(0);
+    if sha256(&seal_view) != seal_sha256 {
+        return Err("block artifact seal mismatch".into());
+    }
+    Ok(VerifiedBlockArtifact {
+        full_golden_sha256: artifact[32..64].try_into().unwrap(),
+        vectors_sha256: artifact[128..160].try_into().unwrap(),
+        coordinates: BlockCoordinates {
+            tensor_id: artifact_u16(artifact, 20)?,
+            layer: artifact[22],
+            role: artifact[23],
+            row: artifact_u32(artifact, 24)?,
+            block: artifact_u32(artifact, 28)?,
+            native_block_offset: artifact_u32(artifact, 224)?,
+        },
+        input: artifact[BLOCK_INPUT_OFFSET..BLOCK_OUTPUT_OFFSET]
+            .try_into()
+            .unwrap(),
+        output: artifact[BLOCK_OUTPUT_OFFSET..].try_into().unwrap(),
+        payload_sha256,
+        seal_sha256,
+    })
 }
 
 fn read_trace(path: &Path) -> Result<Vec<Vec<f32>>, String> {
@@ -753,6 +1231,13 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const CHECKED_FULL_GOLDEN: &[u8] =
+        include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin");
+    const CHECKED_VECTORS: &[u8] =
+        include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin.vectors");
+    const CHECKED_BLOCK_GOLDEN: &[u8] =
+        include_bytes!("../../../artifacts/lfm25_q8_block.golden.bin");
+
     #[test]
     fn exact_integer_dot_extremes() {
         assert_eq!(integer_dot(&[127; 32], &[-128; 32]), -520_192);
@@ -763,5 +1248,61 @@ mod tests {
     fn half_scale_to_q30_is_exact() {
         assert_eq!(q30_term(17, 0x3c00, 0x3c00).unwrap(), 17i64 << 30);
         assert_eq!(q30_term(-3, 0x3800, 0x3400).unwrap(), -402_653_184);
+    }
+
+    #[test]
+    fn checked_in_block_golden_is_canonical_and_reproducible() {
+        validate_artifact(CHECKED_FULL_GOLDEN).unwrap();
+        let canonical = derive_canonical_block(CHECKED_FULL_GOLDEN, CHECKED_VECTORS).unwrap();
+        assert_eq!(canonical.activation.scale_bits, 0x1830);
+        assert_eq!(canonical.weight.scale_bits, 0x0cb9);
+        assert_eq!(canonical.dot, -14_901);
+        assert_eq!(canonical.term_q30, -9_429_888);
+        assert_eq!(
+            hex(&sha256(
+                &[
+                    encode_block_input(&canonical).as_slice(),
+                    encode_block_output(&canonical).as_slice()
+                ]
+                .concat()
+            )),
+            "2faaf8b87bc3d121642d60b3c95019f61fc88b1bc17c7b264933d06fa3e8f1d1"
+        );
+
+        let coordinates = canonical_coordinates().unwrap();
+        assert_eq!(coordinates.tensor_id, 4);
+        assert_eq!(coordinates.native_block_offset, 0x048c_9000);
+        let rebuilt = build_block_artifact(
+            sha256(CHECKED_FULL_GOLDEN),
+            sha256(CHECKED_VECTORS),
+            coordinates,
+            encode_block_input(&canonical),
+            encode_block_output(&canonical),
+        )
+        .unwrap();
+        assert_eq!(rebuilt, CHECKED_BLOCK_GOLDEN);
+        assert_eq!(
+            hex(&sha256(&rebuilt)),
+            "d05cd8cd89f23dcdae758c7b8fe2a27a55d6ad8de60a33ade60c089da558eed2"
+        );
+    }
+
+    #[test]
+    fn block_golden_detects_payload_and_seal_tampering() {
+        let mut payload_tampered = CHECKED_BLOCK_GOLDEN.to_vec();
+        payload_tampered[BLOCK_INPUT_OFFSET + 7] ^= 1;
+        assert!(
+            validate_block_artifact(&payload_tampered)
+                .unwrap_err()
+                .contains("payload hash")
+        );
+
+        let mut seal_tampered = CHECKED_BLOCK_GOLDEN.to_vec();
+        seal_tampered[BLOCK_SEAL_OFFSET] ^= 1;
+        assert!(
+            validate_block_artifact(&seal_tampered)
+                .unwrap_err()
+                .contains("seal mismatch")
+        );
     }
 }

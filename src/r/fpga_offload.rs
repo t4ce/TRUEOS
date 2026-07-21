@@ -261,10 +261,17 @@ pub async fn add_u32(a: u32, b: u32) -> Result<u32, Error> {
     function::decode(completion.output()).ok_or(Error::Protocol)
 }
 
-pub async fn xor_u32(a: u32, b: u32) -> Result<u32, Error> {
-    use trueos_fpga_abi::builtins::xor_u32 as function;
+/// Execute one fused 32-lane Q8_0 dot and scale operation.
+///
+/// Both arguments retain the native model-image layout: a little-endian FP16
+/// scale followed by 32 signed quant bytes.
+pub async fn lfm25_q8_block(
+    activation: &[u8; 34],
+    weight: &[u8; 34],
+) -> Result<trueos_fpga_abi::builtins::lfm25_q8_block::Q8BlockResult, Error> {
+    use trueos_fpga_abi::builtins::lfm25_q8_block as function;
 
-    let input = function::encode(a, b);
+    let input = function::encode(activation, weight);
     let completion = call(function::ID, &input, function::OUTPUT_BYTES).await?;
     function::decode(completion.output()).ok_or(Error::Protocol)
 }

@@ -15,6 +15,7 @@ HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
 GGUF="${TRUEGA_LFM25_GGUF:-$MODEL_DIR/LFM2.5-350M-Q8_0.gguf}"
 NATIVE_IMAGE="${TRUEGA_LFM25_IMAGE:-$MODEL_DIR/LFM2.5-350M-Q8_0.truega.bin}"
 GOLDEN="${TRUEGA_LFM25_GOLDEN:-$PROJECT_DIR/artifacts/lfm25_layer0_ffn.golden.bin}"
+BLOCK_GOLDEN="${TRUEGA_LFM25_BLOCK_GOLDEN:-$PROJECT_DIR/artifacts/lfm25_q8_block.golden.bin}"
 STAGE_DIR="$(mktemp -d)"
 
 finish() {
@@ -64,6 +65,12 @@ RAW_TRACE="$STAGE_DIR/layer0.raw"
     seal "$RAW_TRACE" "$GGUF" "$NATIVE_IMAGE" "$GOLDEN"
   CARGO_TARGET_DIR="$RUST_TARGET" cargo "+$HOST_TOOLCHAIN" run --quiet --release \
     --manifest-path "$TRACE_TOOL/Cargo.toml" -- verify "$GOLDEN"
+  CARGO_TARGET_DIR="$RUST_TARGET" cargo "+$HOST_TOOLCHAIN" run --quiet --release \
+    --manifest-path "$TRACE_TOOL/Cargo.toml" -- \
+    block "$GOLDEN" "$GOLDEN.vectors" "$NATIVE_IMAGE" "$BLOCK_GOLDEN"
+  CARGO_TARGET_DIR="$RUST_TARGET" cargo "+$HOST_TOOLCHAIN" run --quiet --release \
+    --manifest-path "$TRACE_TOOL/Cargo.toml" -- \
+    verify-block "$BLOCK_GOLDEN" "$GOLDEN" "$GOLDEN.vectors"
 )
 
 (
@@ -71,4 +78,5 @@ RAW_TRACE="$STAGE_DIR/layer0.raw"
   sha256sum "$(basename "$GOLDEN")" > "$(basename "$GOLDEN").sha256"
 )
 echo "capture complete token=1 layer=0 llama_commit=$LLAMA_COMMIT"
+echo "block_golden=$BLOCK_GOLDEN"
 echo "heartbeat project and bitstream were not build inputs"

@@ -20,6 +20,14 @@ pub struct FunctionSpec {
     pub signature: &'static str,
     pub input_bytes: u16,
     pub output_bytes: u16,
+    pub binding: BindingKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindingKind {
+    NoArgsU32,
+    BinaryU32,
+    Lfm25Q8Block,
 }
 
 pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
@@ -30,6 +38,7 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
         signature: "led_step_heartbeat()->u32",
         input_bytes: 0,
         output_bytes: 4,
+        binding: BindingKind::NoArgsU32,
     },
     FunctionSpec {
         id: 1,
@@ -38,14 +47,16 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
         signature: "add_u32(u32,u32)->u32",
         input_bytes: 8,
         output_bytes: 4,
+        binding: BindingKind::BinaryU32,
     },
     FunctionSpec {
         id: 2,
-        rust_name: "XOR_U32",
-        rust_module: "xor_u32",
-        signature: "xor_u32(u32,u32)->u32",
-        input_bytes: 8,
-        output_bytes: 4,
+        rust_name: "LFM25_Q8_BLOCK",
+        rust_module: "lfm25_q8_block",
+        signature: "lfm25_q8_block(q8_0_block,q8_0_block)->(i32,i64_q30)",
+        input_bytes: 68,
+        output_bytes: 12,
+        binding: BindingKind::Lfm25Q8Block,
     },
 ];
 
@@ -93,28 +104,13 @@ impl Logic for AddU32 {
     }
 }
 
-/// Slot 2: one 32-bit XOR circuit.
-#[derive(LogicBlock, Default)]
-pub struct XorU32 {
-    pub a: Signal<In, Bits<32>>,
-    pub b: Signal<In, Bits<32>>,
-    pub result: Signal<Out, Bits<32>>,
-}
-
-impl Logic for XorU32 {
-    #[hdl_gen]
-    fn update(&mut self) {
-        self.result.next = self.a.val() ^ self.b.val();
-    }
-}
-
-/// Fixed slot selector around the three circuits.
+/// Scalar part of the fixed slot selector.
 ///
-/// This is a mux, not an instruction decoder: all three function circuits exist in the
-/// bitstream at once. `function_id` selects which already-wired result is retired into
-/// the work package by the surrounding VHDL handoff state machine.
+/// The generated Verilog wrapper adds the clocked Q8_0 slot and the common
+/// start/busy/done handoff. Keeping the two scalar kernels here preserves their
+/// RustHDL source while the native Q8_0 datapath remains ordinary synthesizable RTL.
 #[derive(LogicBlock, Default)]
-pub struct TruegaFunctions {
+pub struct TruegaScalarFunctions {
     pub function_id: Signal<In, Bits<16>>,
     pub arg0: Signal<In, Bits<32>>,
     pub arg1: Signal<In, Bits<32>>,
@@ -126,18 +122,14 @@ pub struct TruegaFunctions {
     pub valid: Signal<Out, Bit>,
     heartbeat: Heartbeat,
     add_u32: AddU32,
-    xor_u32: XorU32,
 }
 
-impl Logic for TruegaFunctions {
+impl Logic for TruegaScalarFunctions {
     #[hdl_gen]
     fn update(&mut self) {
         self.heartbeat.led_state.next = self.led_state.val();
         self.add_u32.a.next = self.arg0.val();
         self.add_u32.b.next = self.arg1.val();
-        self.xor_u32.a.next = self.arg0.val();
-        self.xor_u32.b.next = self.arg1.val();
-
         self.result.next = 0.into();
         self.next_led.next = self.led_state.val();
         self.required_input_bytes.next = 0.into();
@@ -154,17 +146,12 @@ impl Logic for TruegaFunctions {
             self.required_input_bytes.next = 8.into();
             self.output_bytes.next = 4.into();
             self.valid.next = true.into();
-        } else if self.function_id.val() == 2 {
-            self.result.next = self.xor_u32.result.val();
-            self.required_input_bytes.next = 8.into();
-            self.output_bytes.next = 4.into();
-            self.valid.next = true.into();
         }
     }
 }
 
 pub fn generate() -> String {
-    let mut firmware = TruegaFunctions::default();
+    let mut firmware = TruegaScalarFunctions::default();
     firmware.connect_all();
     generate_verilog(&firmware)
 }
@@ -188,10 +175,6 @@ pub mod reference {
     pub const fn add_u32(a: u32, b: u32) -> u32 {
         a.wrapping_add(b)
     }
-
-    pub const fn xor_u32(a: u32, b: u32) -> u32 {
-        a ^ b
-    }
 }
 
 #[cfg(test)]
@@ -204,6 +187,5 @@ mod tests {
         assert_eq!(reference::led_step_heartbeat(0x10), (0x01, 0x5453_4154));
         assert_eq!(reference::led_step_heartbeat(0x00), (0x01, 0x5453_4154));
         assert_eq!(reference::add_u32(u32::MAX, 2), 1);
-        assert_eq!(reference::xor_u32(0xAA55_AA55, 0xFFFF_0000), 0x55AA_AA55);
     }
 }
