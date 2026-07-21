@@ -66,3 +66,16 @@ From the repository root, seal the pinned GGUF into the deterministic TRUEGA mod
 
 The generated `LFM2.5-350M-Q8_0.truega.bin` remains ignored beside the GGUF. This is an
 offline conversion only; the command does not invoke Gowin, PCIe, JTAG, or flashing.
+
+## Capture the layer-0 FFN golden vectors
+
+After building the native image, capture and verify the fixed BOS-token layer-0 FFN
+checkpoint with:
+
+```sh
+./crates/trueos-fpga-abi/truega/tools/capture_lfm25_ffn_golden.sh
+```
+
+The trace source is rebuilt from the exact official llama.cpp `b10075` commit. The command
+publishes only the small sealed golden artifact and HDL vectors under `truega/artifacts`;
+the ignored GGUF, runtime, and native weight image remain in this directory.

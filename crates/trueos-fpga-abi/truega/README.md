@@ -90,3 +90,57 @@ The native image is exactly `376701952` bytes with SHA-256
 The source GGUF is not required to build the current heartbeat firmware. The model ROM is
 intentionally not instantiated in `top.vhd` or added to the Gowin project yet, so this
 checkpoint does not alter BAR0, the three slots, timing, the bitstream, or live hardware.
+
+## Layer-0 FFN golden checkpoint and Q8_0 GEMV
+
+`tools/capture_lfm25_ffn_golden.sh` instruments the exact official llama.cpp `b10075`
+commit `76f46ad29d61fd8c1401e8221842934bf62a6064`. Its two-line graph patch only exposes
+the post-down tensor and fixes LFM2's callback to name the actual FFN result; no model
+operation, weight, Q8_0 block, or arithmetic implementation is changed. The capture uses
+one CPU thread, token 1 (BOS), layer 0, and disables offload and warmup.
+
+The checked-in `artifacts/lfm25_layer0_ffn.golden.bin` is a 64,000-byte sealed artifact
+with five little-endian F32 vectors:
+
+| Vector | Elements |
+| --- | ---: |
+| normalized layer-0 FFN input | 1,024 |
+| gate projection | 4,608 |
+| up projection | 4,608 |
+| `SiLU(gate) * up` | 4,608 |
+| down projection | 1,024 |
+
+The header binds the llama.cpp commit, source GGUF SHA-256, unchanged native-image
+SHA-256, model-contract SHA-256, payload SHA-256, token, and layer into a final artifact
+seal. The complete-file SHA-256 is
+`eb124c333e7a7095a78fc6c0004f90a43fa825bdfd1a8f74ac9d67c538484185`.
+
+The host verifier quantizes both activation vectors as llama.cpp Q8_0, reads layer-0 gate,
+up, and down matrices directly from the unchanged native image, and checks all 10,240
+projection outputs. Measured maximum absolute errors against the captured tensors are
+`1.20e-7` (F32 block accumulation), `7.46e-8` (deterministic Q30 accumulation), and
+`1.87e-9` (SiLU product), against a frozen `2.0e-6` acceptance bound.
+
+The synthesizable implementation is under `src/compute`:
+
+- `truega_q8_0_dot32.v` is a six-stage, 32-lane signed 8x8 multiplier and exact 21-bit
+  adder tree accepting one native Q8_0 block per cycle.
+- `truega_q8_0_scale_q30.v` decodes the two native FP16 scales and rounds each scaled
+  block term to signed Q30 with round-to-nearest, ties-to-even.
+- `truega_q8_0_gemv.v` streams blocks and retires one signed 64-bit Q30 row result.
+
+Run the reproducible checks with:
+
+```sh
+./tools/capture_lfm25_ffn_golden.sh
+./tools/simulate_q8_0_gemv.sh
+./tools/synthesize_q8_0_gemv.sh
+```
+
+The HDL simulation covers 208 unchanged native-image blocks (row 0 of gate, up, and down)
+plus two signed extremes. All 210 integer dots and scaled Q30 terms match bit-for-bit, and
+the row results satisfy the captured-F32 error bound. The isolated Gowin synthesis uses a
+temporary project containing only the standalone compute top. It used 2,453 LUTs, 658
+ALUs, 1,491 registers, and 34 DSP blocks in the current synthesis report. It does not run
+place-and-route or emit an `.fs`; pre/post hashes also guard the heartbeat project, top,
+generated function RTL, bitstream, and checksum files.
