@@ -178,6 +178,15 @@ pub extern "Rust" fn trueos_tokio_platform_sleep_ms(ms: u64) {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_platform_wait_observe(key: u64) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // Hull waits are cooperative sleeps below, so they do not consume a
+        // host wait-queue sequence. Hull wake operations still VM-call into
+        // the host so they can wake service-lane workers.
+        return 0;
+    }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::wait::platform_wait_observe_for_vm(vm_id, key);
+    }
     crate::wait::platform_wait_observe(key)
 }
 
@@ -196,6 +205,10 @@ pub extern "Rust" fn trueos_tokio_platform_wait_after(
         return false;
     }
 
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::wait::platform_wait_after_for_vm(vm_id, key, observed, timeout_ms);
+    }
+
     crate::wait::platform_wait_after(key, observed, timeout_ms)
 }
 
@@ -207,10 +220,30 @@ pub extern "Rust" fn trueos_tokio_platform_wait(key: u64, timeout_ms: u64) -> bo
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_platform_wake_one(key: u64) -> bool {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, woke) =
+            crate::hv::vmcall::guest_call(crate::hv::vmcall::OP_BP_PLATFORM_WAKE_ONE, key, 0);
+        return status == crate::hv::vmcall::STATUS_OK && woke != 0;
+    }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::wait::platform_wake_one_for_vm(vm_id, key);
+    }
     crate::wait::platform_wake_one(key)
 }
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_platform_wake_all(key: u64) -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, count) =
+            crate::hv::vmcall::guest_call(crate::hv::vmcall::OP_BP_PLATFORM_WAKE_ALL, key, 0);
+        return if status == crate::hv::vmcall::STATUS_OK {
+            count as usize
+        } else {
+            0
+        };
+    }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::wait::platform_wake_all_for_vm(vm_id, key);
+    }
     crate::wait::platform_wake_all(key)
 }

@@ -1493,6 +1493,21 @@ fn find_command_session_indexes(
         .collect()
 }
 
+fn prune_finished_command_sessions(sessions: &mut alloc::vec::Vec<CommandSession>) {
+    sessions.retain(|session| {
+        let keep = match session.kind {
+            shell2_cmd::CommandSessionKind::RemoveSure(id) => {
+                crate::shell2::cmds::rm::session_exists(id)
+            }
+            shell2_cmd::CommandSessionKind::FormatSure(_) => true,
+        };
+        if !keep && session.kind.shows_session_activity() {
+            matrix::set_slot_activity(&session.slot_id, matrix::MatrixSlotActivity::Idle);
+        }
+        keep
+    });
+}
+
 fn handle_command_session_input(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -1740,6 +1755,11 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     }
 
     loop {
+        // Async command preparation can fail after the parser has established
+        // a confirmation session. Retire those completed sessions without
+        // consuming the user's next command as stale confirmation input.
+        prune_finished_command_sessions(&mut command_sessions);
+
         if (output_mask & OUTPUT_NET_TCP_MASK) != 0
             && crate::shell2::backends::net_tcp::net_shell_direct_active()
         {

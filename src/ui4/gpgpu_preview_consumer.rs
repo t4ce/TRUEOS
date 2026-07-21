@@ -23,6 +23,7 @@ use super::{
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
 const PREVIEW_WIDTH: u32 = super::DEFAULT_FRAME_WIDTH;
 const PREVIEW_HEIGHT: u32 = super::DEFAULT_FRAME_HEIGHT;
+const LAB256_PREVIEW_SIZE: u32 = 256;
 const PREVIEW_MARGIN: u32 = 64;
 const PREVIEW_GRID_GAP: u32 = 16;
 const PREVIEW_Z: i32 = 30;
@@ -49,6 +50,7 @@ pub(crate) enum GpgpuPreviewPreset {
     Mandelbrot,
     Chart,
     Plasma,
+    Lab256,
 }
 
 impl GpgpuPreviewPreset {
@@ -60,6 +62,7 @@ impl GpgpuPreviewPreset {
             Self::Mandelbrot => "mandelbrot",
             Self::Chart => "chart",
             Self::Plasma => "plasma",
+            Self::Lab256 => "lab256",
         }
     }
 
@@ -79,7 +82,15 @@ impl GpgpuPreviewPreset {
             Self::Mandelbrot => "slot1-direct",
             Self::Chart => "slot2-direct",
             Self::Plasma => "slot3-direct",
+            Self::Lab256 => "slot1-alpha-256x256",
         }
+    }
+}
+
+const fn preview_extent(preset: GpgpuPreviewPreset) -> (u32, u32) {
+    match preset {
+        GpgpuPreviewPreset::Lab256 => (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE),
+        _ => (PREVIEW_WIDTH, PREVIEW_HEIGHT),
     }
 }
 
@@ -241,6 +252,20 @@ struct DesiredPreview {
     serial: u64,
     running: bool,
     config: GpgpuPreviewConfig,
+    policy: PreviewRunPolicy,
+}
+
+#[derive(Copy, Clone)]
+struct PreviewRunPolicy {
+    frame_limit: u64,
+    target_hz: u64,
+}
+
+impl PreviewRunPolicy {
+    const SHELL: Self = Self {
+        frame_limit: 0,
+        target_hz: 0,
+    };
 }
 
 struct PreviewControl {
@@ -255,6 +280,7 @@ impl PreviewControl {
                 serial: 0,
                 running: false,
                 config: GpgpuPreviewConfig::DEFAULT,
+                policy: PreviewRunPolicy::SHELL,
             },
             status: GpgpuPreviewStatus::initial(),
         }
@@ -266,6 +292,8 @@ static PREVIEW_CONTROL: Mutex<PreviewControl> = Mutex::new(PreviewControl::new()
 struct ActivePreview {
     request_serial: u64,
     config: GpgpuPreviewConfig,
+    policy: PreviewRunPolicy,
+    cadence_phase: u64,
     session: WindowSessionId,
     frame: FrameHandle,
     window: WindowId,
@@ -286,6 +314,37 @@ struct StaticPreviewSurface {
 }
 
 pub(crate) fn request_gpgpu_preview_start(config: GpgpuPreviewConfig) -> Result<u64, &'static str> {
+    request_gpgpu_preview_start_with_policy(config, PreviewRunPolicy::SHELL)
+}
+
+pub(crate) fn request_gpgpu_lab256_startup(
+    frame_limit: u64,
+    target_hz: u64,
+) -> Result<u64, &'static str> {
+    if frame_limit == 0 {
+        return Err("frame-limit-must-be-nonzero");
+    }
+    if target_hz == 0 || target_hz > embassy_time::TICK_HZ {
+        return Err("target-hz-out-of-range");
+    }
+    request_gpgpu_preview_start_with_policy(
+        GpgpuPreviewConfig {
+            preset: GpgpuPreviewPreset::Lab256,
+            duration_ms: 0,
+            cadence_ms: 1_000u64.div_ceil(target_hz),
+            publish_every: 1,
+        },
+        PreviewRunPolicy {
+            frame_limit,
+            target_hz,
+        },
+    )
+}
+
+fn request_gpgpu_preview_start_with_policy(
+    config: GpgpuPreviewConfig,
+    policy: PreviewRunPolicy,
+) -> Result<u64, &'static str> {
     let config = config.validate()?;
     let mut control = PREVIEW_CONTROL.lock();
     let serial = next_serial(control.desired.serial);
@@ -293,6 +352,7 @@ pub(crate) fn request_gpgpu_preview_start(config: GpgpuPreviewConfig) -> Result<
         serial,
         running: true,
         config,
+        policy,
     };
     control.status.desired_running = true;
     control.status.request_serial = serial;
@@ -355,18 +415,22 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     Ok(previews) => {
                         crate::log_info!(
                             target: "ui4";
-                            "ui4 gpgpu-preview start request={} preset={} producer=guc-compute-trio owner={:?} frames={} windows={} extent={}x{} cadence_ms={} publish_every={} duration_ms={} buffering={} release=pipe-control+post-marker-exact-surface plane_layout={} slot_policy=fixed-per-window/no-round-robin broker_session={} plane_mutation=none\n",
+                            "ui4 gpgpu-preview start request={} preset={} producer={} owner={:?} frames={} windows={} extent={}x{} cadence_ms={} target_hz={} frame_limit={} publish_every={} duration_ms={} buffering={} release={} plane_layout={} slot_policy=fixed-per-window/no-round-robin broker_session={} plane_mutation=none\n",
                             desired.serial,
                             desired.config.preset.label(),
+                            preview_producer_label(desired.config.preset),
                             PREVIEW_OWNER,
                             previews.len(),
                             previews.iter().map(preview_surface_count).sum::<usize>(),
-                            PREVIEW_WIDTH,
-                            PREVIEW_HEIGHT,
+                            previews.first().map_or(0, |preview| preview.width),
+                            previews.first().map_or(0, |preview| preview.height),
                             desired.config.cadence_ms,
+                            desired.policy.target_hz,
+                            desired.policy.frame_limit,
                             desired.config.publish_every,
                             desired.config.duration_ms,
                             desired.config.preset.buffering_label(),
+                            preview_release_label(desired.config.preset),
                             desired.config.preset.plane_layout_label(),
                             previews.first().map_or(0, |preview| preview.session.raw()),
                         );
@@ -542,6 +606,8 @@ fn initialize_compute_preview_set(
         previews.push(ActivePreview {
             request_serial: desired.serial,
             config,
+            policy: desired.policy,
+            cadence_phase: 0,
             session,
             frame,
             window,
@@ -569,8 +635,9 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         return initialize_static30_preview(desired);
     }
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let frame = create_preview_frame(output, PREVIEW_WIDTH, PREVIEW_HEIGHT)
-        .map_err(preview_frame_create_error_label)?;
+    let (width, height) = preview_extent(desired.config.preset);
+    let frame =
+        create_preview_frame(output, width, height).map_err(preview_frame_create_error_label)?;
     let session = match begin_window_session(PREVIEW_OWNER) {
         Ok(session) => session,
         Err(_) => {
@@ -578,9 +645,8 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             return Err("window-session-create-failed");
         }
     };
-    let (scanout_width, _) =
-        crate::intel::active_scanout_dimensions().unwrap_or((PREVIEW_WIDTH, PREVIEW_HEIGHT));
-    let x = scanout_width.saturating_sub(PREVIEW_WIDTH.saturating_add(PREVIEW_MARGIN)) as i32;
+    let (scanout_width, _) = crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+    let x = scanout_width.saturating_sub(width.saturating_add(PREVIEW_MARGIN)) as i32;
     let window = match create_window(WindowCreate {
         owner: PREVIEW_OWNER,
         session,
@@ -593,8 +659,8 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         placement: WindowPlacement {
             x,
             y: PREVIEW_MARGIN as i32,
-            width: PREVIEW_WIDTH,
-            height: PREVIEW_HEIGHT,
+            width,
+            height,
             z: PREVIEW_Z,
             opacity: u8::MAX,
             visible: true,
@@ -615,11 +681,13 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
     Ok(ActivePreview {
         request_serial: desired.serial,
         config: desired.config,
+        policy: desired.policy,
+        cadence_phase: 0,
         session,
         frame,
         window,
-        width: PREVIEW_WIDTH,
-        height: PREVIEW_HEIGHT,
+        width,
+        height,
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -710,6 +778,8 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
     Ok(ActivePreview {
         request_serial: desired.serial,
         config: desired.config,
+        policy: desired.policy,
+        cadence_phase: 0,
         session,
         frame: first.frame,
         window: first.window,
@@ -889,7 +959,8 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         GpgpuPreviewPreset::All
         | GpgpuPreviewPreset::Mandelbrot
         | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma => match gpu_release {
+        | GpgpuPreviewPreset::Plasma
+        | GpgpuPreviewPreset::Lab256 => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
@@ -907,6 +978,15 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         return Err("window-publish-failed");
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
+    if preview.policy.frame_limit != 0 && preview.metrics.published == preview.policy.frame_limit {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 gpgpu-preview frame-limit reached request={} preset={} published={} action=hold-last-frame producer=unchanged display_release=surflive\n",
+            preview.request_serial,
+            preview.config.preset.label(),
+            preview.metrics.published,
+        );
+    }
     if !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
         && should_log_preview_checkpoint(preview.metrics.published)
     {
@@ -1171,6 +1251,18 @@ fn dispatch_preview_kernel(
                 error: "plasma-dispatch-failed",
             }
         }
+        GpgpuPreviewPreset::Lab256 => {
+            let result = crate::intel::gpgpu::lab256_preview_frame(surface);
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: 3,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                release: result.release,
+                error: "lab256-dispatch-failed",
+            }
+        }
     }
 }
 
@@ -1180,8 +1272,20 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::Mandelbrot
         | GpgpuPreviewPreset::Chart
         | GpgpuPreviewPreset::Plasma => "pipe-control+post-marker-exact-surface",
+        GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             "clflush-mfence-before-publish"
+        }
+    }
+}
+
+const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
+    match preset {
+        GpgpuPreviewPreset::All => "guc-compute-trio",
+        GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "cpu-static",
+        GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
+            "guc-compute-single"
         }
     }
 }
@@ -1194,6 +1298,7 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
             WindowPlane::Universal(preview_plane_slot(preset) as u8)
         }
+        GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
 
@@ -1203,6 +1308,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Mandelbrot => "ui4-direct-slot1",
         GpgpuPreviewPreset::Chart => "ui4-direct-slot2",
         GpgpuPreviewPreset::Plasma => "ui4-direct-slot3",
+        GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
 }
@@ -1216,12 +1322,26 @@ const fn should_log_preview_checkpoint(sequence: u64) -> bool {
 }
 
 fn preview_needs_render(preview: &ActivePreview) -> bool {
+    if preview.policy.frame_limit != 0 && preview.metrics.published >= preview.policy.frame_limit {
+        return false;
+    }
     !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
         || preview.static_needs_publish
 }
 
 fn schedule_next_render(preview: &mut ActivePreview) {
-    let period = Duration::from_millis(preview.config.cadence_ms);
+    let period = if preview.policy.target_hz == 0 {
+        Duration::from_millis(preview.config.cadence_ms)
+    } else {
+        let hz = preview.policy.target_hz;
+        let mut ticks = embassy_time::TICK_HZ / hz;
+        preview.cadence_phase += embassy_time::TICK_HZ % hz;
+        if preview.cadence_phase >= hz {
+            preview.cadence_phase -= hz;
+            ticks += 1;
+        }
+        Duration::from_ticks(ticks.max(1))
+    };
     let scheduled = preview.next_render + period;
     let now = Instant::now();
     if now > scheduled {
@@ -1337,8 +1457,9 @@ fn stop_active_previews(
     let metrics = aggregate_preview_metrics(&previews);
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview stopped request={} preset=compute-trio frames={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} teardown={} frame_retire=after-surflive-display-lease-drain source_buffer_mutation=none\n",
+        "ui4 gpgpu-preview stopped request={} preset={} frames={} windows={} attempted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} reason={} teardown={} frame_retire=after-surflive-display-lease-drain source_buffer_mutation=none\n",
         first.request_serial,
+        first.config.preset.label(),
         previews.len(),
         previews.iter().map(preview_surface_count).sum::<usize>(),
         metrics.attempted,
@@ -1575,7 +1696,10 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         GpgpuPreviewPreset::Mandelbrot => Some(0),
         GpgpuPreviewPreset::Chart => Some(1),
         GpgpuPreviewPreset::Plasma => Some(2),
-        GpgpuPreviewPreset::All | GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => None,
+        GpgpuPreviewPreset::All
+        | GpgpuPreviewPreset::Static
+        | GpgpuPreviewPreset::Static30
+        | GpgpuPreviewPreset::Lab256 => None,
     }
 }
 
@@ -1610,8 +1734,16 @@ const fn next_serial(serial: u64) -> u64 {
 mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
-        GpgpuPreviewPreset, preview_frame_create_error_label,
+        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, preview_extent, preview_frame_create_error_label,
     };
+
+    #[test]
+    fn lab256_preview_keeps_artifact_extent() {
+        assert_eq!(
+            preview_extent(GpgpuPreviewPreset::Lab256),
+            (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)
+        );
+    }
 
     #[test]
     fn preview_config_accepts_continuous_duration() {

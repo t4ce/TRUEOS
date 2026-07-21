@@ -81,20 +81,20 @@ fn dispatch_move(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::mv::try_parse(io, "move", rest)
 }
 
-fn dispatch_rm(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(io, "rm", rest)
+fn dispatch_rm(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(spawner, io, "rm", rest)
 }
 
-fn dispatch_remove(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(io, "remove", rest)
+fn dispatch_remove(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(spawner, io, "remove", rest)
 }
 
-fn dispatch_delete(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(io, "delete", rest)
+fn dispatch_delete(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(spawner, io, "delete", rest)
 }
 
-fn dispatch_del(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(io, "del", rest)
+fn dispatch_del(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rm::try_parse(spawner, io, "del", rest)
 }
 
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {

@@ -13,7 +13,7 @@
 use core::ops::BitOr;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 mod intel_cursor;
@@ -29,6 +29,8 @@ const SPIRIT_IDLE_POLL_MS: u64 = 16;
 const SPIRIT_FLIP_POLL_MS: u64 = 1;
 const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_LAB256_STARTUP_FRAMES: u32 = 10;
+const SPIRIT_LAB256_TARGET_HZ: u64 = 60;
+const SPIRIT_LAB256_FRAME_PERIOD_MS: u64 = 1_000u64.div_ceil(SPIRIT_LAB256_TARGET_HZ);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritFenceId(u8);
@@ -474,6 +476,85 @@ pub(crate) async fn spirit_worker_task(fence_index: u8) {
     let Some(id) = SpiritFenceId::new(fence_index).filter(|id| id.is_active()) else {
         return;
     };
+    let serial = match crate::ui4::request_gpgpu_lab256_startup(
+        u64::from(SPIRIT_LAB256_STARTUP_FRAMES),
+        SPIRIT_LAB256_TARGET_HZ,
+    ) {
+        Ok(serial) => serial,
+        Err(error) => {
+            crate::log_error!(
+                target: "gfx";
+                "trueos-spirit: lab256 ui4 startup rejected fence={} error={}\n",
+                fence_index,
+                error,
+            );
+            return;
+        }
+    };
+    crate::log_info!(
+        target: "gfx";
+        "trueos-spirit: worker start fence={} pipe={} pool-active={} route=ui4-gpgpu-preview request={} frames={} target_hz={} producer=guc-lab256-three-pass display_release=ui4-plane-surflive\n",
+        fence_index,
+        pipe_name(id),
+        SPIRIT_WORKER_POOL_LIMIT,
+        serial,
+        SPIRIT_LAB256_STARTUP_FRAMES,
+        SPIRIT_LAB256_TARGET_HZ,
+    );
+
+    let mut surflive_proven = false;
+    loop {
+        let status = crate::ui4::gpgpu_preview_status();
+        if status.request_serial != serial {
+            crate::log_warn!(
+                target: "gfx";
+                "trueos-spirit: lab256 ui4 startup replaced request={} replacement={} published={}\n",
+                serial,
+                status.request_serial,
+                status.metrics.published,
+            );
+            return;
+        }
+        if status.applied_serial == serial
+            && let Some(frame) = status.frame
+            && !surflive_proven
+            && let Some(publish_serial) =
+                crate::intel::ui4_direct_scanout_ready_for_frame(frame.raw())
+        {
+            surflive_proven = true;
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: lab256 ui4 SURFLIVE proven request={} frame={} publish_serial={} published={} boundary=display-live\n",
+                serial,
+                frame.raw(),
+                publish_serial,
+                status.metrics.published,
+            );
+        }
+        if surflive_proven
+            && status.applied_serial == serial
+            && status.metrics.published >= u64::from(SPIRIT_LAB256_STARTUP_FRAMES)
+        {
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: lab256 startup held request={} frames={} target_hz={} final=ui4-direct-plane-surflive\n",
+                serial,
+                status.metrics.published,
+                SPIRIT_LAB256_TARGET_HZ,
+            );
+            loop {
+                Timer::after(Duration::from_secs(1)).await;
+            }
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+}
+
+#[allow(dead_code)]
+async fn spirit_cursor_worker_loop(fence_index: u8) {
+    let Some(id) = SpiritFenceId::new(fence_index).filter(|id| id.is_active()) else {
+        return;
+    };
     crate::log_info!(
         target: "gfx";
         "trueos-spirit: worker start fence={} pipe={} pool-active={} pipe-cap={}\n",
@@ -497,6 +578,7 @@ pub(crate) async fn spirit_worker_task(fence_index: u8) {
     let mut inflight: Option<Inflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
     let mut startup_next_frame = 0u32;
+    let mut startup_next_deadline = Instant::now();
     let mut startup_aborted = false;
     loop {
         if let Some(active) = inflight {
@@ -552,15 +634,28 @@ pub(crate) async fn spirit_worker_task(fence_index: u8) {
 
         let Some((frame, completes_fence)) = candidate else {
             if !startup_aborted && startup_next_frame < SPIRIT_LAB256_STARTUP_FRAMES {
+                if Instant::now() < startup_next_deadline {
+                    Timer::at(startup_next_deadline).await;
+                    continue;
+                }
                 match submit_lab256_startup_frame(id, startup_next_frame) {
                     Ok(fence) => {
+                        let period = Duration::from_millis(SPIRIT_LAB256_FRAME_PERIOD_MS);
+                        let scheduled = startup_next_deadline + period;
+                        let now = Instant::now();
+                        startup_next_deadline = if now > scheduled {
+                            now + period
+                        } else {
+                            scheduled
+                        };
                         crate::log_info!(
                             target: "gfx";
-                            "trueos-spirit: lab256 startup queued frame={}/{} fence={} sequence={} gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive\n",
+                            "trueos-spirit: lab256 startup queued frame={}/{} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive\n",
                             startup_next_frame + 1,
                             SPIRIT_LAB256_STARTUP_FRAMES,
                             fence_index,
                             fence.sequence,
+                            SPIRIT_LAB256_TARGET_HZ,
                         );
                         startup_next_frame += 1;
                         continue;

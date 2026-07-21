@@ -14,10 +14,11 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "gpgpu preview start [all|static|static30|mandelbrot|chart|plasma] [duration_ms] [cadence_ms] [publish_every]",
+        "gpgpu preview start [all|static|static30|mandelbrot|chart|plasma|lab256] [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "gpgpu preview status");
     print_shell_line(io, "gpgpu preview stop");
+    print_shell_line(io, "gpgpu test lab256 [duration_ms] [cadence_ms] [publish_every]");
     print_shell_line(io, "gpgpu svg start [basic|curves|holes]");
     print_shell_line(io, "gpgpu svg status");
     print_shell_line(io, "gpgpu svg stop");
@@ -141,6 +142,8 @@ fn parse_preview_preset(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
         Some(crate::ui4::GpgpuPreviewPreset::Chart)
     } else if raw.eq_ignore_ascii_case("plasma") {
         Some(crate::ui4::GpgpuPreviewPreset::Plasma)
+    } else if raw.eq_ignore_ascii_case("lab256") {
+        Some(crate::ui4::GpgpuPreviewPreset::Lab256)
     } else {
         None
     }
@@ -153,7 +156,8 @@ const fn preview_surface_count(preset: crate::ui4::GpgpuPreviewPreset) -> usize 
         crate::ui4::GpgpuPreviewPreset::Static
         | crate::ui4::GpgpuPreviewPreset::Mandelbrot
         | crate::ui4::GpgpuPreviewPreset::Chart
-        | crate::ui4::GpgpuPreviewPreset::Plasma => 1,
+        | crate::ui4::GpgpuPreviewPreset::Plasma
+        | crate::ui4::GpgpuPreviewPreset::Lab256 => 1,
     }
 }
 
@@ -211,6 +215,80 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             )
             .as_str(),
         );
+    }
+}
+
+const GPGPU_LAB256_TEST_DEFAULT_DURATION_MS: u64 = 30_000;
+
+fn run_test(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(shader) = args.next() else {
+        usage(io);
+        return;
+    };
+    if !shader.eq_ignore_ascii_case("lab256") {
+        usage(io);
+        return;
+    }
+    let duration_ms = match args.next() {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(value) => value,
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => GPGPU_LAB256_TEST_DEFAULT_DURATION_MS,
+    };
+    let cadence_ms = match args.next() {
+        Some(raw) => match raw.parse::<u64>() {
+            Ok(value) => value,
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
+    };
+    let publish_every = match args.next() {
+        Some(raw) => match raw.parse::<u32>() {
+            Ok(value) => value,
+            Err(_) => {
+                usage(io);
+                return;
+            }
+        },
+        None => crate::ui4::GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
+    };
+    if !expect_no_more(io, args) {
+        return;
+    }
+
+    let config = crate::ui4::GpgpuPreviewConfig {
+        preset: crate::ui4::GpgpuPreviewPreset::Lab256,
+        duration_ms,
+        cadence_ms,
+        publish_every,
+    };
+    match crate::ui4::request_gpgpu_preview_start(config) {
+        Ok(serial) => {
+            let status = crate::ui4::gpgpu_preview_status();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "gpgpu test lab256: queued=1 request={} service_online={} extent=256x256 passes=3 alpha=premultiplied-native background_alpha=0.08 duration_ms={} cadence_ms={} publish_every={} buffering=double plane=slot1 stop=\"gpgpu preview stop\"",
+                    serial,
+                    status.online as u8,
+                    duration_ms,
+                    cadence_ms,
+                    publish_every,
+                )
+                .as_str(),
+            );
+        }
+        Err(reason) => print_shell_line(
+            io,
+            alloc::format!("gpgpu test lab256: queued=0 reason={reason}").as_str(),
+        ),
     }
 }
 
@@ -596,6 +674,8 @@ pub(crate) fn try_parse(
 
     if cmd.eq_ignore_ascii_case("preview") {
         run_preview(io, args);
+    } else if cmd.eq_ignore_ascii_case("test") {
+        run_test(io, args);
     } else if cmd.eq_ignore_ascii_case("svg") {
         run_svg(io, args);
     } else if cmd.eq_ignore_ascii_case("probe") {

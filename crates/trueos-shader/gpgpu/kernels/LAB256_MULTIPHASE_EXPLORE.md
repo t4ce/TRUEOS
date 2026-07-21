@@ -26,9 +26,9 @@ ideas instead of presenting three unrelated single-pass windows:
 - a 256-sample CPU-fed history supplies the scope line;
 - pointer injection changes simulation state rather than only changing color.
 
-This explore step bakes and validates the artifact but does **not** add it to
-the runtime artifact allowlist or the Shell2 command. The existing preview path
-continues to use its proven artifacts unchanged.
+The artifact is hash-allowlisted and wired into both TrueOS-Spirit's
+deterministic startup sequence and the live UI4 preview service. Shell2 can now
+exercise that exact runtime path as a fixed-size premultiplied-alpha window.
 
 ## Why 256x256 is an advantage
 
@@ -180,9 +180,23 @@ memory or MMIO. The useful privilege is a narrow, trusted Shell2 service:
 That boundary is substantially richer than an average one-shot shader while
 remaining smaller and easier to audit than a generic OpenCL command interface.
 
-## Suggested Shell2 surface
+## Live Shell2 test
 
-The narrow first integration can remain consistent with the existing command:
+The focused test command starts a 30-second run at the default 33 ms cadence:
+
+```text
+gpgpu test lab256
+```
+
+Its optional arguments are duration, cadence, and publish interval. A duration
+of zero runs continuously:
+
+```text
+gpgpu test lab256 [duration_ms] [cadence_ms] [publish_every]
+gpgpu test lab256 0 33 1
+```
+
+The same producer is also available through the configurable preview surface:
 
 ```text
 gpgpu preview start lab256 [duration_ms] [cadence_ms] [publish_every]

@@ -162,7 +162,26 @@ fn lab256_report_audit(report: Lab256Buffer, frame: u32) -> bool {
 /// present or touch cursor MMIO: it only submits the fixed three-walker batch
 /// through gpu::executor/vGPU/GuC and returns an exact producer-release proof.
 pub(crate) fn lab256_spirit_frame(dst: GpgpuRgba8Surface, frame: u32) -> GpgpuRgba8KernelResult {
+    lab256_frame(dst, Some(frame))
+}
+
+/// Produce the next persistent Lab256 frame for a live UI4 preview.
+///
+/// Spirit owns the deterministic startup frame numbers. A Shell2 preview may
+/// begin after any number of those frames, so it advances from the last
+/// retired state while holding the shared direct-RCS submit lock instead of
+/// guessing a frame number in the UI service.
+pub(crate) fn lab256_preview_frame(dst: GpgpuRgba8Surface) -> GpgpuRgba8KernelResult {
+    lab256_frame(dst, None)
+}
+
+fn lab256_frame(dst: GpgpuRgba8Surface, requested_frame: Option<u32>) -> GpgpuRgba8KernelResult {
     let started = direct_rcs_now_tick();
+    let producer_owner = if requested_frame.is_some() {
+        "spirit-worker"
+    } else {
+        "ui4-gpgpu-preview"
+    };
     if !dst.is_valid()
         || dst.width != LAB256_SIZE
         || dst.height != LAB256_SIZE
@@ -187,6 +206,11 @@ pub(crate) fn lab256_spirit_frame(dst: GpgpuRgba8Surface, frame: u32) -> GpgpuRg
     let Some(runtime_snapshot) = lab256_runtime_once() else {
         return GpgpuRgba8KernelResult::default();
     };
+    let frame = requested_frame.unwrap_or_else(|| {
+        runtime_snapshot
+            .last_complete_frame
+            .map_or(0, |last| last.saturating_add(1))
+    });
     if runtime_snapshot.quarantined || !runtime_snapshot.accepts_frame(frame) {
         return GpgpuRgba8KernelResult::default();
     }
@@ -255,7 +279,7 @@ pub(crate) fn lab256_spirit_frame(dst: GpgpuRgba8Surface, frame: u32) -> GpgpuRg
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner=spirit-worker admission=gpu-executor/vgpu/guc direct_elsp=0\n",
+        "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
         frame,
         ok as u8,
         submitted as u8,
@@ -266,6 +290,7 @@ pub(crate) fn lab256_spirit_frame(dst: GpgpuRgba8Surface, frame: u32) -> GpgpuRg
         state_out.gpu,
         dst.gpu,
         direct_rcs_elapsed_ms_since(started),
+        producer_owner,
     );
     GpgpuRgba8KernelResult {
         ok,

@@ -128,6 +128,8 @@ pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_da
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
+pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
+pub const OP_BP_PLATFORM_WAKE_ALL: u32 = 0x64; // arg0 VM-local wait key -> wake count
 pub const OP_BP_INPUT_CURSOR_POS: u32 = 0x68; // arg0 cursor id -> packed x/y
 pub const OP_BP_INPUT_CURSOR_BUTTONS: u32 = 0x69; // arg0 cursor id -> buttons
 pub const OP_BP_INPUT_CURSOR_EVENTS: u32 = 0x6A; // arg0 read seq, arg1 cap -> payload events
@@ -1391,6 +1393,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_PLATFORM_WAKE_ONE => {
+            let woke = crate::wait::platform_wake_one_for_vm(vm_id, arg0);
+            write_response(vm_id, seq, STATUS_OK, u64::from(woke), 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_PLATFORM_WAKE_ALL => {
+            let count = crate::wait::platform_wake_all_for_vm(vm_id, arg0);
+            write_response(vm_id, seq, STATUS_OK, count as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_INPUT_CURSOR_POS => {

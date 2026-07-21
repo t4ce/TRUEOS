@@ -300,6 +300,12 @@ architecture rtl of top is
 	signal dbg_last_cpld_data   : std_logic_vector(31 downto 0) := (others => '0');
 
 	attribute syn_keep : boolean;
+	-- Keep the explicit FIFO-read snapshot as a physical timing boundary.  If
+	-- these registers are folded into the lane compactor, a BSRAM read and the
+	-- variable valid-lane packing land on the same 100 MHz path.
+	attribute syn_keep of capture_pending   : signal is true;
+	attribute syn_keep of rx_snapshot_data  : signal is true;
+	attribute syn_keep of rx_snapshot_valid : signal is true;
 	attribute syn_keep of dbg_rx_bar0_eop      : signal is true;
 	attribute syn_keep of dbg_hit_write        : signal is true;
 	attribute syn_keep of dbg_hit_read         : signal is true;
@@ -651,6 +657,8 @@ begin
 	end procedure;
 	begin
 		if rising_edge(tlp_clk) then
+			rx_fifo_push := false;
+			rx_fifo_pop := false;
 			if (pcie_perst_n = '0') or (pll_lock = '0') then
 				led_reg <= "00001";
 				debug_led_mode <= '0';
@@ -711,23 +719,6 @@ begin
 					dbg_queue_cpld <= '0';
 				dbg_tx_fire <= '0';
 				dbg_cpld_blocked <= '0';
-				rx_fifo_push := false;
-				rx_fifo_pop := false;
-
-				-- Capture is deliberately independent of the decoder state. The
-				-- controller is allowed to advance only while RX_WAIT is low, and
-				-- every such single-beat BAR0 TLP is committed to this FIFO here.
-				if (tl_rx_sop = '1') and (tl_rx_eop = '1')
-					and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
-					and (tl_rx_backpressure = '0') then
-					rx_fifo_data(to_integer(rx_fifo_write_ptr)) <= tl_rx_data;
-					rx_fifo_valid(to_integer(rx_fifo_write_ptr)) <= tl_rx_valid;
-					rx_fifo_write_ptr <= rx_fifo_write_ptr + 1;
-					rx_fifo_push := true;
-					rx_nonposted_busy <= '1';
-					dbg_rx_bar0_eop <= '1';
-					dbg_seen_rx_bar0_eop <= '1';
-				end if;
 
 					dbg_seen_rx_bar0_eop <= '0';
 					dbg_seen_hit_write <= '0';
@@ -771,6 +762,21 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
+
+					-- Capture is deliberately independent of the decoder state. The
+					-- controller is allowed to advance only while RX_WAIT is low, and
+					-- every such single-beat BAR0 TLP is committed to this FIFO here.
+					if (tl_rx_sop = '1') and (tl_rx_eop = '1')
+						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
+						and (tl_rx_backpressure = '0') then
+						rx_fifo_data(to_integer(rx_fifo_write_ptr)) <= tl_rx_data;
+						rx_fifo_valid(to_integer(rx_fifo_write_ptr)) <= tl_rx_valid;
+						rx_fifo_write_ptr <= rx_fifo_write_ptr + 1;
+						rx_fifo_push := true;
+						rx_nonposted_busy <= '1';
+						dbg_rx_bar0_eop <= '1';
+						dbg_seen_rx_bar0_eop <= '1';
+					end if;
 
 					-- The doorbell launches one already-fused slot through a common
 					-- start/busy/done contract. The shell waits for done; it does not fetch

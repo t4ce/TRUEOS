@@ -326,6 +326,10 @@ pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
     self::display::ui4_rgba8_plane_stack_is_ready()
 }
 
+pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
+    self::display::ui4_direct_scanout_ready_for_frame(producer_frame)
+}
+
 pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
     self::display::physical_extent_pixels(width_mm, height_mm)
 }

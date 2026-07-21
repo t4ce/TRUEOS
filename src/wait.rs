@@ -369,36 +369,71 @@ type LocalJobFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
 static JOBS: Mutex<Vec<JobFuture>> = Mutex::new(Vec::new());
 static JOBS_WAIT: WaitQueue = WaitQueue::new();
-static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<u64, &'static WaitQueue>> = Mutex::new(BTreeMap::new());
+const PLATFORM_WAIT_HOST_SCOPE: u16 = 0;
 
-fn platform_wait_queue(key: u64) -> &'static WaitQueue {
-    if let Some(queue) = PLATFORM_WAIT_QUEUES.lock().get(&key).copied() {
+static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<(u16, u64), &'static WaitQueue>> =
+    Mutex::new(BTreeMap::new());
+
+fn platform_wait_queue(scope: u16, key: u64) -> &'static WaitQueue {
+    let scoped_key = (scope, key);
+    if let Some(queue) = PLATFORM_WAIT_QUEUES.lock().get(&scoped_key).copied() {
         return queue;
     }
 
     let queue = Box::leak(Box::new(WaitQueue::new()));
     let mut queues = PLATFORM_WAIT_QUEUES.lock();
-    *queues.entry(key).or_insert(queue)
+    *queues.entry(scoped_key).or_insert(queue)
+}
+
+#[inline]
+const fn platform_wait_vm_scope(vm_id: u8) -> u16 {
+    vm_id as u16 + 1
 }
 
 #[inline]
 pub fn platform_wait_observe(key: u64) -> u32 {
-    platform_wait_queue(key).seq.load(Ordering::Acquire)
+    platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key)
+        .seq
+        .load(Ordering::Acquire)
 }
 
 #[inline]
 pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
-    platform_wait_queue(key).wait_for_event_after_blocking_parked(observed, timeout_ms)
+    platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key)
+        .wait_for_event_after_blocking_parked(observed, timeout_ms)
 }
 
 #[inline]
 pub fn platform_wake_one(key: u64) -> bool {
-    platform_wait_queue(key).notify_one()
+    platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key).notify_one()
 }
 
 #[inline]
 pub fn platform_wake_all(key: u64) -> usize {
-    platform_wait_queue(key).notify_all()
+    platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key).notify_all()
+}
+
+#[inline]
+pub fn platform_wait_observe_for_vm(vm_id: u8, key: u64) -> u32 {
+    platform_wait_queue(platform_wait_vm_scope(vm_id), key)
+        .seq
+        .load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn platform_wait_after_for_vm(vm_id: u8, key: u64, observed: u32, timeout_ms: u64) -> bool {
+    platform_wait_queue(platform_wait_vm_scope(vm_id), key)
+        .wait_for_event_after_blocking_parked(observed, timeout_ms)
+}
+
+#[inline]
+pub fn platform_wake_one_for_vm(vm_id: u8, key: u64) -> bool {
+    platform_wait_queue(platform_wait_vm_scope(vm_id), key).notify_one()
+}
+
+#[inline]
+pub fn platform_wake_all_for_vm(vm_id: u8, key: u64) -> usize {
+    platform_wait_queue(platform_wait_vm_scope(vm_id), key).notify_all()
 }
 
 struct LocalJobQueue {

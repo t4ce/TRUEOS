@@ -7875,6 +7875,32 @@ static UI4_DIRECT_SCANOUT_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static UI4_DIRECT_PLANE_ALPHA_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[derive(Copy, Clone)]
+struct Ui4DirectScanoutProof {
+    producer_frame: u64,
+    publish_serial: u64,
+}
+
+const UI4_DIRECT_SCANOUT_PROOF_EMPTY: Ui4DirectScanoutProof = Ui4DirectScanoutProof {
+    producer_frame: 0,
+    publish_serial: 0,
+};
+static UI4_DIRECT_SCANOUT_PROOFS: Mutex<[Ui4DirectScanoutProof; 5]> =
+    Mutex::new([UI4_DIRECT_SCANOUT_PROOF_EMPTY; 5]);
+
+pub(crate) fn ui4_direct_scanout_ready_for_frame(producer_frame: u64) -> Option<u64> {
+    (producer_frame != 0)
+        .then(|| {
+            UI4_DIRECT_SCANOUT_PROOFS
+                .lock()
+                .iter()
+                .filter(|proof| proof.producer_frame == producer_frame)
+                .map(|proof| proof.publish_serial)
+                .max()
+        })
+        .flatten()
+}
+
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
     sequence <= 8 || sequence.is_multiple_of(120)
 }
@@ -8614,6 +8640,12 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         crate::chronos::monotonic_nanos().saturating_sub(composition.queued_ns) / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
+        if let Some(proof) = UI4_DIRECT_SCANOUT_PROOFS.lock().get_mut(surface.plane_slot) {
+            *proof = Ui4DirectScanoutProof {
+                producer_frame: surface.producer_frame,
+                publish_serial: surface.producer_publish_serial,
+            };
+        }
         let scanout_sequence = UI4_DIRECT_SCANOUT_LOG_SEQUENCE
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
