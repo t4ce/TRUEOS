@@ -215,6 +215,41 @@ module truega_q8_0_row_block_slot_tb;
                 fp_difference, expected_fp_bound);
             failures = failures + 1;
         end
+
+        // The down projection uses 4,608 inputs: 144 native Q8_0 blocks.
+        // Repeating the sealed 32-block fixture proves the wider sequence and
+        // accumulator without inventing a second block encoding.
+        expected_accumulator = 64'sd0;
+        for (vector_index = 0; vector_index < 144; vector_index = vector_index + 1) begin
+            @(negedge clk);
+            activation_block_i = {
+                vector_activation_quants[vector_index % BLOCKS_PER_ROW],
+                vector_activation_scale[vector_index % BLOCKS_PER_ROW]
+            };
+            weight_block_i = {
+                vector_weight_quants[vector_index % BLOCKS_PER_ROW],
+                vector_weight_scale[vector_index % BLOCKS_PER_ROW]
+            };
+            control_i = (vector_index << 8)
+                      | 4
+                      | ((vector_index == 0) ? 1 : 0)
+                      | ((vector_index == 143) ? 2 : 0);
+            start_i = 1'b1;
+            @(negedge clk);
+            start_i = 1'b0;
+            wait_cycles = 0;
+            while (!done_o && wait_cycles < 100) begin
+                @(negedge clk);
+                wait_cycles = wait_cycles + 1;
+            end
+            expected_accumulator = expected_accumulator
+                                 + vector_term[vector_index % BLOCKS_PER_ROW];
+            if (!done_o || error_o || row_q30_o !== expected_accumulator) begin
+                $display("FAIL wide block=%0d row=%h/%h done=%b error=%b",
+                    vector_index, row_q30_o, expected_accumulator, done_o, error_o);
+                failures = failures + 1;
+            end
+        end
         @(negedge clk);
         if (done_o) begin
             $display("FAIL done was not a one-cycle pulse");
@@ -222,7 +257,7 @@ module truega_q8_0_row_block_slot_tb;
         end
 
         if (failures == 0) begin
-            $display("PASS q8_0_row_block_slot calls=32 exact_dot exact_term exact_row_q30 bounded_fp compatibility default_disabled");
+            $display("PASS q8_0_row_block_slot calls=32+144 exact_dot exact_term exact_row_q30 bounded_fp compatibility default_disabled");
             $finish;
         end
         $display("FAIL q8_0_row_block_slot failures=%0d", failures);

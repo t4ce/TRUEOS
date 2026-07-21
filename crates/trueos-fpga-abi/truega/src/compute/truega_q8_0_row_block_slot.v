@@ -3,6 +3,7 @@
 // The caller supplies a four-byte little-endian control header followed by the
 // unchanged 34-byte activation and weight blocks:
 //   byte 0: bit 0 = first, bit 1 = last; all other bits must be zero
+//           bit 2 = wide row (144 blocks instead of 32)
 //   byte 1: block index, 0..31
 //   byte 2..3: reserved, must be zero
 //
@@ -32,15 +33,17 @@ module truega_q8_0_row_block_slot #(
 );
     wire first_i = control_i[0];
     wire last_i = control_i[1];
+    wire wide_i = control_i[2];
     wire [7:0] block_index_i = control_i[15:8];
     wire control_reserved = (control_i[31:16] != 16'd0)
-                         || (control_i[7:2] != 6'd0);
+                         || (control_i[7:3] != 5'd0);
     wire accept = ROW_DIAGNOSTIC_ENABLE && start_i && !busy_o;
     reg row_active;
-    reg [5:0] expected_index;
+    reg [7:0] expected_index;
     reg signed [63:0] accumulator;
     reg active_first;
     reg active_last;
+    reg active_wide;
     reg [271:0] activation_block_reg;
     reg [271:0] weight_block_reg;
     reg block_start;
@@ -50,16 +53,18 @@ module truega_q8_0_row_block_slot #(
     wire signed [63:0] block_term_q30;
     wire block_scale_error;
 
+    wire [7:0] final_index_i = wide_i ? 8'd143 : 8'd31;
     wire sequence_valid = !control_reserved
-                       && (block_index_i < 8'd32)
+                       && (block_index_i <= final_index_i)
                        && (first_i
                            ? (block_index_i == 8'd0)
                            : (row_active
+                              && (wide_i == active_wide)
                               && (block_index_i == expected_index)))
                        && (last_i
                            ? ((first_i && (block_index_i == 8'd0))
-                              || (block_index_i == 8'd31))
-                           : (block_index_i != 8'd31));
+                              || (block_index_i == final_index_i))
+                           : (block_index_i != final_index_i));
 
     truega_q8_0_block_slot block_slot (
         .clk(clk),
@@ -83,10 +88,11 @@ module truega_q8_0_row_block_slot #(
             term_q30_o <= 64'sd0;
             row_q30_o <= 64'sd0;
             row_active <= 1'b0;
-            expected_index <= 6'd0;
+            expected_index <= 8'd0;
             accumulator <= 64'sd0;
             active_first <= 1'b0;
             active_last <= 1'b0;
+            active_wide <= 1'b0;
             activation_block_reg <= 272'd0;
             weight_block_reg <= 272'd0;
             block_start <= 1'b0;
@@ -103,19 +109,20 @@ module truega_q8_0_row_block_slot #(
                     done_o <= 1'b1;
                     error_o <= 1'b1;
                     row_active <= 1'b0;
-                    expected_index <= 6'd0;
+                    expected_index <= 8'd0;
                     accumulator <= 64'sd0;
                 end else begin
                     busy_o <= 1'b1;
                     error_o <= 1'b0;
                     active_first <= first_i;
                     active_last <= last_i;
+                    active_wide <= wide_i;
                     activation_block_reg <= activation_block_i;
                     weight_block_reg <= weight_block_i;
                     block_start <= 1'b1;
                     if (first_i) begin
                         row_active <= 1'b0;
-                        expected_index <= 6'd0;
+                        expected_index <= 8'd0;
                         accumulator <= 64'sd0;
                     end
                 end
@@ -135,10 +142,10 @@ module truega_q8_0_row_block_slot #(
 
                 if (block_scale_error || active_last) begin
                     row_active <= 1'b0;
-                    expected_index <= 6'd0;
+                    expected_index <= 8'd0;
                 end else begin
                     row_active <= 1'b1;
-                    expected_index <= active_first ? 6'd1 : expected_index + 6'd1;
+                    expected_index <= active_first ? 8'd1 : expected_index + 8'd1;
                 end
             end
         end

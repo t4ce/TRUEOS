@@ -4,9 +4,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use trueos_fpga_abi::lfm25::{
+    generated::{MODEL_CONTRACT_SHA256, TENSORS, TENSOR_NAMES},
     MODEL_GENERATION, PINNED_GGUF_BYTES, PINNED_GGUF_SHA256, PINNED_NATIVE_IMAGE_BYTES,
     PINNED_NATIVE_IMAGE_SHA256, Q8_0_BLOCK_BYTES, Q8_0_BLOCK_VALUES,
-    generated::{MODEL_CONTRACT_SHA256, TENSOR_NAMES, TENSORS},
 };
 
 const RAW_MAGIC: &[u8; 8] = b"TGALRAW1";
@@ -116,6 +116,7 @@ impl ErrorStats {
 struct ProjectionResult {
     fp32: Vec<f32>,
     q30: Vec<f32>,
+    q30_raw: Vec<i64>,
     activation: Vec<Q8Block>,
     matrix: Vec<u8>,
 }
@@ -131,6 +132,9 @@ fn run() -> Result<(), String> {
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.len() == 3 && arguments[1] == "verify" {
         return verify_artifact(Path::new(&arguments[2]));
+    }
+    if arguments.len() == 4 && arguments[1] == "pipeline" {
+        return verify_fixed_pipeline(Path::new(&arguments[2]), Path::new(&arguments[3]));
     }
     if arguments.len() == 6 && arguments[1] == "block" {
         return seal_block_artifact(
@@ -155,6 +159,7 @@ fn run() -> Result<(), String> {
         return Err(format!(
             "usage:\n  {program} seal TRACE.raw MODEL.gguf NATIVE.bin GOLDEN.bin\n  \
              {program} verify GOLDEN.bin\n  \
+             {program} pipeline GOLDEN.bin NATIVE.bin\n  \
              {program} block GOLDEN.bin GOLDEN.bin.vectors NATIVE.bin BLOCK.bin\n  \
              {program} verify-block BLOCK.bin GOLDEN.bin GOLDEN.bin.vectors\n\
              simulation vectors are written beside GOLDEN.bin as GOLDEN.bin.vectors",
@@ -261,6 +266,118 @@ fn verify_artifact(path: &Path) -> Result<(), String> {
         hex(&expected_seal)
     );
     Ok(())
+}
+
+fn verify_fixed_pipeline(golden_path: &Path, native_path: &Path) -> Result<(), String> {
+    let artifact =
+        fs::read(golden_path).map_err(|e| format!("read {}: {e}", golden_path.display()))?;
+    validate_artifact(&artifact)?;
+    verify_file(
+        native_path,
+        PINNED_NATIVE_IMAGE_BYTES as u64,
+        PINNED_NATIVE_IMAGE_SHA256,
+        "native image",
+    )?;
+    let vectors = artifact_vectors(&artifact)?;
+    let gate = project(native_path, "blk.0.ffn_gate.weight", &vectors[0])?;
+    let up = project(native_path, "blk.0.ffn_up.weight", &vectors[0])?;
+    let silu_q30_raw: Vec<i64> = gate
+        .q30_raw
+        .iter()
+        .zip(&up.q30_raw)
+        .map(|(&gate, &up)| fixed_silu_mul_q30(gate, up))
+        .collect();
+    let silu_q30: Vec<f32> = silu_q30_raw
+        .iter()
+        .map(|&value| value as f32 / ((1u64 << 30) as f32))
+        .collect();
+    let down = project(native_path, "blk.0.ffn_down.weight", &silu_q30)?;
+
+    let gate_stats = compare(&gate.q30, &vectors[1]);
+    let up_stats = compare(&up.q30, &vectors[2]);
+    let silu_stats = compare(&silu_q30, &vectors[3]);
+    let down_stats = compare(&down.q30, &vectors[4]);
+    for (name, stats) in [
+        ("pipeline-gate", gate_stats),
+        ("pipeline-up", up_stats),
+        ("pipeline-silu", silu_stats),
+        ("pipeline-down", down_stats),
+    ] {
+        print_stats(name, stats);
+    }
+    println!(
+        "fixed-pipeline gate={} up={} silu={} down={} silu_max_abs={:.9e} down_max_abs={:.9e}",
+        gate.q30.len(),
+        up.q30.len(),
+        silu_q30.len(),
+        down.q30.len(),
+        silu_stats.max_abs,
+        down_stats.max_abs,
+    );
+    println!(
+        "fixed-pipeline sample0 gate_q30={} up_q30={} silu_q30={} down_q30={}",
+        gate.q30_raw[0], up.q30_raw[0], silu_q30_raw[0], down.q30_raw[0],
+    );
+    Ok(())
+}
+
+fn artifact_vectors(artifact: &[u8]) -> Result<Vec<Vec<f32>>, String> {
+    let mut vectors = Vec::with_capacity(VECTOR_LENGTHS.len());
+    let mut payload_offset = PAYLOAD_OFFSET;
+    for (&length, &name) in VECTOR_LENGTHS.iter().zip(&VECTOR_NAMES) {
+        let end = payload_offset
+            .checked_add(length * 4)
+            .ok_or("golden vector offset overflow")?;
+        let bytes = artifact
+            .get(payload_offset..end)
+            .ok_or_else(|| format!("golden vector {name} is truncated"))?;
+        let mut vector = Vec::with_capacity(length);
+        for word in bytes.chunks_exact(4) {
+            vector.push(f32::from_bits(u32::from_le_bytes(word.try_into().unwrap())));
+        }
+        vectors.push(vector);
+        payload_offset = end;
+    }
+    Ok(vectors)
+}
+
+fn fixed_silu_mul_q30(gate: i64, up: i64) -> i64 {
+    const ONE_Q30: i64 = 1i64 << 30;
+    const HALF_Q30: i64 = ONE_Q30 / 2;
+    const C1_Q30: i64 = 268_435_456;
+    const C3_Q30: i64 = -22_369_621;
+    const C5_Q30: i64 = 2_236_962;
+    const C7_Q30: i64 = -226_359;
+    const C9_Q30: i64 = 22_931;
+
+    // The captured layer-0 gate stays inside +/-1.01.  Keep one bit of guard
+    // range so the hardware does not introduce a discontinuity at exactly 1.0.
+    let x = gate.clamp(-2 * ONE_Q30, 2 * ONE_Q30);
+    let x2 = mul_q30_round_even(x, x);
+    let mut polynomial = C9_Q30;
+    polynomial = C7_Q30 + mul_q30_round_even(x2, polynomial);
+    polynomial = C5_Q30 + mul_q30_round_even(x2, polynomial);
+    polynomial = C3_Q30 + mul_q30_round_even(x2, polynomial);
+    polynomial = C1_Q30 + mul_q30_round_even(x2, polynomial);
+    let sigmoid = HALF_Q30 + mul_q30_round_even(x, polynomial);
+    let silu = mul_q30_round_even(gate, sigmoid);
+    mul_q30_round_even(silu, up)
+}
+
+fn mul_q30_round_even(left: i64, right: i64) -> i64 {
+    let product = i128::from(left) * i128::from(right);
+    let negative = product < 0;
+    let magnitude = product.unsigned_abs();
+    let quotient = magnitude >> 30;
+    let remainder = magnitude & ((1u128 << 30) - 1);
+    let halfway = 1u128 << 29;
+    let rounded =
+        quotient + u128::from(remainder > halfway || (remainder == halfway && quotient & 1 != 0));
+    if negative {
+        -(rounded as i64)
+    } else {
+        rounded as i64
+    }
 }
 
 fn validate_artifact(artifact: &[u8]) -> Result<([u8; 32], [u8; 32]), String> {
@@ -803,6 +920,7 @@ fn project(
     }
     let mut fp32 = Vec::with_capacity(descriptor.ggml_ne1 as usize);
     let mut q30 = Vec::with_capacity(descriptor.ggml_ne1 as usize);
+    let mut q30_raw = Vec::with_capacity(descriptor.ggml_ne1 as usize);
     for row in 0..descriptor.ggml_ne1 as usize {
         let mut fp32_sum = 0.0f32;
         let mut q30_sum = 0i64;
@@ -818,10 +936,12 @@ fn project(
         }
         fp32.push(fp32_sum);
         q30.push(q30_sum as f32 / ((1u64 << 30) as f32));
+        q30_raw.push(q30_sum);
     }
     Ok(ProjectionResult {
         fp32,
         q30,
+        q30_raw,
         activation,
         matrix,
     })
@@ -1291,18 +1411,14 @@ mod tests {
     fn block_golden_detects_payload_and_seal_tampering() {
         let mut payload_tampered = CHECKED_BLOCK_GOLDEN.to_vec();
         payload_tampered[BLOCK_INPUT_OFFSET + 7] ^= 1;
-        assert!(
-            validate_block_artifact(&payload_tampered)
-                .unwrap_err()
-                .contains("payload hash")
-        );
+        assert!(validate_block_artifact(&payload_tampered)
+            .unwrap_err()
+            .contains("payload hash"));
 
         let mut seal_tampered = CHECKED_BLOCK_GOLDEN.to_vec();
         seal_tampered[BLOCK_SEAL_OFFSET] ^= 1;
-        assert!(
-            validate_block_artifact(&seal_tampered)
-                .unwrap_err()
-                .contains("seal mismatch")
-        );
+        assert!(validate_block_artifact(&seal_tampered)
+            .unwrap_err()
+            .contains("seal mismatch"));
     }
 }

@@ -1906,3 +1906,16 @@ fn ranges_overlap(a_start: u64, a_bytes: usize, b_start: u64, b_bytes: usize) ->
     let b_end = b_start.saturating_add(b_bytes as u64);
     a_start < b_end && b_start < a_end
 }
+
+fn vvideo_mapping_digest(epoch: u64, gpu: u64, pages: &[u64]) -> u64 {
+    // A non-cryptographic diagnostic fingerprint. It proves that the broker
+    // compared the complete ordered PPGTT/HPA page list without publishing
+    // any physical address to the guest ABI.
+    let mut digest = 0xCBF2_9CE4_8422_2325u64 ^ epoch;
+    digest = (digest ^ gpu).wrapping_mul(0x0000_0100_0000_01B3);
+    for (index, phys) in pages.iter().copied().enumerate() {
+        digest ^= phys.rotate_left((index & 63) as u32);
+        digest = digest.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    digest
+}

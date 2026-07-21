@@ -170,6 +170,18 @@ pub struct VVideoMem {
     layout: Layout,
 }
 
+/// Types that may be viewed directly in zeroed vVideoMem storage.
+///
+/// # Safety
+///
+/// Every bit pattern must be valid and the type must have no drop glue.
+pub unsafe trait VVideoPod: Copy {}
+
+macro_rules! impl_vvideo_pod {
+    ($($ty:ty),* $(,)?) => { $(unsafe impl VVideoPod for $ty {})* };
+}
+impl_vvideo_pod!(u8, u16, u32, u64, i8, i16, i32, i64, f32, f64);
+
 impl Device {
     pub fn open(requested: Capabilities) -> Result<Self, i32> {
         let mut handle = 0u64;
@@ -331,6 +343,11 @@ impl VVideoMem {
         self.requested_bytes
     }
 
+    /// Page-rounded extent registered in the VM's PPGTT.
+    pub const fn mapped_len(&self) -> usize {
+        self.mapped_bytes
+    }
+
     pub const fn is_empty(&self) -> bool {
         self.requested_bytes == 0
     }
@@ -345,6 +362,36 @@ impl VVideoMem {
 
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.requested_bytes) }
+    }
+
+    pub fn as_slice<T: VVideoPod>(&self) -> Result<&[T], i32> {
+        if core::mem::size_of::<T>() == 0
+            || self.requested_bytes % core::mem::size_of::<T>() != 0
+            || !(self.ptr.as_ptr() as usize).is_multiple_of(core::mem::align_of::<T>())
+        {
+            return Err(ERR_UNSUPPORTED);
+        }
+        Ok(unsafe {
+            core::slice::from_raw_parts(
+                self.ptr.as_ptr() as *const T,
+                self.requested_bytes / core::mem::size_of::<T>(),
+            )
+        })
+    }
+
+    pub fn as_slice_mut<T: VVideoPod>(&mut self) -> Result<&mut [T], i32> {
+        if core::mem::size_of::<T>() == 0
+            || self.requested_bytes % core::mem::size_of::<T>() != 0
+            || !(self.ptr.as_ptr() as usize).is_multiple_of(core::mem::align_of::<T>())
+        {
+            return Err(ERR_UNSUPPORTED);
+        }
+        Ok(unsafe {
+            core::slice::from_raw_parts_mut(
+                self.ptr.as_ptr() as *mut T,
+                self.requested_bytes / core::mem::size_of::<T>(),
+            )
+        })
     }
 
     pub fn slice(&self, offset: usize, bytes: usize) -> Result<BufferSlice, i32> {
@@ -428,6 +475,9 @@ mod tests {
     fn abi_records_have_stable_sizes() {
         assert_eq!(core::mem::size_of::<DeviceInfo>(), 48);
         assert_eq!(core::mem::size_of::<BufferInfo>(), 16);
+        assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
+        assert_eq!(core::mem::size_of::<SceneAabbDispatch>(), 232);
+        assert_eq!(core::mem::size_of::<SceneAabbResult>(), 24);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }

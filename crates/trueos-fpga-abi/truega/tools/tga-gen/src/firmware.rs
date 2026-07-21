@@ -51,9 +51,9 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
     },
     FunctionSpec {
         id: 2,
-        rust_name: "LFM25_Q8_ROW_BLOCK",
-        rust_module: "lfm25_q8_row_block",
-        signature: "lfm25_q8_row_block(control,q8_0_block,q8_0_block)->(i32,i64_q30,i64_row_q30)",
+        rust_name: "LFM25_FFN_STEP",
+        rust_module: "lfm25_ffn_step",
+        signature: "lfm25_ffn_step(projection_block_or_silu_q30)->(i32,i64_q30,i64_result_q30)",
         input_bytes: 72,
         output_bytes: 20,
         binding: BindingKind::Lfm25Q8RowBlock,

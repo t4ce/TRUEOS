@@ -17,6 +17,7 @@ const Q8_SCALE_SEQ_RTL: &str = include_str!("../../../src/compute/truega_q8_0_sc
 const Q8_BLOCK_SLOT_RTL: &str = include_str!("../../../src/compute/truega_q8_0_block_slot.v");
 const Q8_ROW_BLOCK_SLOT_RTL: &str =
     include_str!("../../../src/compute/truega_q8_0_row_block_slot.v");
+const LFM25_SILU_SLOT_RTL: &str = include_str!("../../../src/compute/truega_lfm25_silu_q30_slot.v");
 const Q8_GOLDEN_ARTIFACT: &[u8] = include_bytes!("../../../artifacts/lfm25_q8_block.golden.bin");
 const LFM25_FFN_GOLDEN: &[u8] = include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin");
 const LFM25_FFN_VECTORS: &[u8] =
@@ -152,12 +153,13 @@ fn rename_rust_hdl_scalar_top(verilog: String) -> String {
 fn assembled_function_rtl() -> String {
     let scalar = rename_rust_hdl_scalar_top(firmware::generate());
     format!(
-        "{scalar}\n{}\n\n// Exact native Q8_0 compute sources fused into this generated bundle.\n{}\n{}\n{}\n{}\n",
+        "{scalar}\n{}\n\n// Exact native Q8_0/FFN compute sources fused into this generated bundle.\n{}\n{}\n{}\n{}\n{}\n",
         emit_slot_wrapper_verilog(),
         Q8_DOT32_RTL,
         Q8_SCALE_SEQ_RTL,
         Q8_BLOCK_SLOT_RTL,
         Q8_ROW_BLOCK_SLOT_RTL,
+        LFM25_SILU_SLOT_RTL,
     )
 }
 
@@ -192,6 +194,12 @@ module truega_functions(
     wire signed [63:0] q8_term_q30;
     wire signed [63:0] q8_row_q30;
     wire q8_scale_error;
+    reg silu_start;
+    wire silu_busy;
+    wire silu_done;
+    wire silu_error;
+    wire signed [63:0] silu_result_q30;
+    reg active_silu;
 
     truega_scalar_functions scalar_functions(
         .function_id(function_id),
@@ -222,6 +230,20 @@ module truega_functions(
         .error_o(q8_scale_error)
     );
 
+    truega_lfm25_silu_q30_slot #(
+        .SILU_ENABLE(1)
+    ) silu_slot(
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(silu_start),
+        .gate_q30_i(input_data[95:32]),
+        .up_q30_i(input_data[159:96]),
+        .busy_o(silu_busy),
+        .done_o(silu_done),
+        .error_o(silu_error),
+        .result_q30_o(silu_result_q30)
+    );
+
     always @* begin
         required_input_bytes = 16'd0;
         output_bytes = 16'd0;
@@ -250,6 +272,8 @@ module truega_functions(
         if (!reset_n) begin
             active_function <= 16'd0;
             q8_start <= 1'b0;
+            silu_start <= 1'b0;
+            active_silu <= 1'b0;
             next_led <= 5'b00001;
             output_data <= 768'd0;
             busy <= 1'b0;
@@ -257,6 +281,7 @@ module truega_functions(
             error <= 1'b0;
         end else begin
             q8_start <= 1'b0;
+            silu_start <= 1'b0;
             done <= 1'b0;
             if (start && !busy) begin
                 active_function <= function_id;
@@ -272,7 +297,11 @@ module truega_functions(
                         done <= 1'b1;
                     end
                     16'd2: begin
-                        q8_start <= 1'b1;
+                        active_silu <= input_data[3];
+                        if (input_data[3])
+                            silu_start <= 1'b1;
+                        else
+                            q8_start <= 1'b1;
                     end
                     default: begin
                         busy <= 1'b0;
@@ -280,7 +309,13 @@ module truega_functions(
                         error <= 1'b1;
                     end
                 endcase
-            end else if (busy && active_function == 16'd2 && q8_done) begin
+            end else if (busy && active_function == 16'd2 && active_silu && silu_done) begin
+                output_data <= 768'd0;
+                output_data[159:96] <= silu_result_q30;
+                busy <= 1'b0;
+                done <= 1'b1;
+                error <= silu_error;
+            end else if (busy && active_function == 16'd2 && !active_silu && q8_done) begin
                 output_data <= 768'd0;
                 output_data[31:0] <= q8_dot;
                 output_data[95:32] <= q8_term_q30;
@@ -291,6 +326,7 @@ module truega_functions(
             end
         end
     end
+    wire unused_silu_busy = silu_busy;
 endmodule"#
 }
 
@@ -614,6 +650,7 @@ fn emit_rust_interface(
             BindingKind::Lfm25Q8RowBlock => {
                 rust.push_str("    pub const Q8_0_BLOCK_BYTES: usize = 34;\n");
                 rust.push_str("    pub const GATE_ROW0_BLOCKS: usize = 32;\n");
+                rust.push_str("    pub const WIDE_ROW_BLOCKS: usize = 144;\n");
                 rust.push_str("    pub const GATE_ROW0_NATIVE_OFFSET: u64 = 0x048c9000;\n\n");
                 rust.push_str("    #[derive(Copy, Clone, Debug, Eq, PartialEq)]\n");
                 rust.push_str("    pub struct Q8RowBlockResult {\n");
@@ -622,10 +659,10 @@ fn emit_rust_interface(
                 rust.push_str("        pub row_q30: i64,\n");
                 rust.push_str("    }\n\n");
                 rust.push_str(
-                    "    pub fn encode(\n        first: bool,\n        last: bool,\n        block_index: u8,\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n",
+                    "    pub fn encode_projection(\n        first: bool,\n        last: bool,\n        wide: bool,\n        block_index: u8,\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n",
                 );
                 rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
-                rust.push_str("        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(block_index) << 8);\n");
+                rust.push_str("        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(wide) << 2) | (u32::from(block_index) << 8);\n");
                 rust.push_str("        bytes[..4].copy_from_slice(&control.to_le_bytes());\n");
                 rust.push_str(
                     "        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n",
@@ -633,8 +670,20 @@ fn emit_rust_interface(
                 rust.push_str("        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight);\n");
                 rust.push_str("        bytes\n");
                 rust.push_str("    }\n\n");
+                rust.push_str("    pub fn encode(\n        first: bool,\n        last: bool,\n        block_index: u8,\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n");
+                rust.push_str("        encode_projection(first, last, false, block_index, activation, weight)\n");
+                rust.push_str("    }\n\n");
                 rust.push_str("    pub fn encode_single(activation: &[u8; Q8_0_BLOCK_BYTES], weight: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
                 rust.push_str("        encode(true, true, 0, activation, weight)\n");
+                rust.push_str("    }\n\n");
+                rust.push_str(
+                    "    pub fn encode_silu(gate_q30: i64, up_q30: i64) -> [u8; INPUT_BYTES] {\n",
+                );
+                rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
+                rust.push_str("        bytes[..4].copy_from_slice(&8u32.to_le_bytes());\n");
+                rust.push_str("        bytes[4..12].copy_from_slice(&gate_q30.to_le_bytes());\n");
+                rust.push_str("        bytes[12..20].copy_from_slice(&up_q30.to_le_bytes());\n");
+                rust.push_str("        bytes\n");
                 rust.push_str("    }\n\n");
                 rust.push_str("    pub fn decode(bytes: &[u8]) -> Option<Q8RowBlockResult> {\n");
                 rust.push_str(
@@ -664,6 +713,7 @@ fn emit_rust_interface(
         }
         rust.push_str("}\n\n");
     }
+    rust.push_str("pub use lfm25_ffn_step as lfm25_q8_row_block;\n\n");
     rust.push_str("pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n");
     rust.push_str("    add_u32::encode(a, b)\n");
     rust.push_str("}\n\n");
@@ -794,11 +844,12 @@ mod tests {
         let interface = emit_rust_interface([0; 32], golden, golden_row);
         assert!(interface.contains("HEARTBEAT"));
         assert!(interface.contains("ADD_U32"));
-        assert!(interface.contains("LFM25_Q8_ROW_BLOCK"));
+        assert!(interface.contains("LFM25_FFN_STEP"));
         assert!(interface.contains("pub const FIRMWARE_MANIFEST: FirmwareManifest"));
         assert!(interface.contains("pub mod led_step_heartbeat"));
         assert!(interface.contains("pub mod add_u32"));
-        assert!(interface.contains("pub mod lfm25_q8_row_block"));
+        assert!(interface.contains("pub mod lfm25_ffn_step"));
+        assert!(interface.contains("pub use lfm25_ffn_step as lfm25_q8_row_block"));
         assert!(interface.contains("pub struct Q8RowBlockResult"));
         assert!(interface.contains("pub const GOLDEN_ACTIVATION"));
         assert!(interface.contains("pub const GOLDEN_GATE_ROW0_ACTIVATIONS"));
@@ -842,6 +893,7 @@ mod tests {
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
         assert!(rtl.contains("module truega_q8_0_row_block_slot"));
+        assert!(rtl.contains("module truega_lfm25_silu_q30_slot"));
         assert!(rtl.contains(".ROW_DIAGNOSTIC_ENABLE(1)"));
         assert!(rtl.contains("output reg          busy"));
         assert!(rtl.contains("output reg          done"));
