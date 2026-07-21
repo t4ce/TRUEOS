@@ -4,7 +4,7 @@
 // unchanged 34-byte activation and weight blocks:
 //   byte 0: bit 0 = first, bit 1 = last; all other bits must be zero
 //           bit 2 = wide row (144 blocks instead of 32)
-//   byte 1: block index, 0..31
+//   byte 1: block index, 0..31 normally or 0..143 in wide mode
 //   byte 2..3: reserved, must be zero
 //
 // Every accepted call returns the exact block dot, exact block Q30 term, and

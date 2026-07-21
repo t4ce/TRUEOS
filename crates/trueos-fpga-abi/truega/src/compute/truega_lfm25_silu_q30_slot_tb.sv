@@ -34,7 +34,7 @@ module truega_lfm25_silu_q30_slot_tb;
             @(negedge clk);
             start_i = 1'b0;
             cycles = 0;
-            while (!done_o && cycles < 20) begin
+            while (!done_o && cycles < 500) begin
                 @(negedge clk);
                 cycles = cycles + 1;
             end

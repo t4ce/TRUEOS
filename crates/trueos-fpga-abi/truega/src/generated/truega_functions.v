@@ -630,7 +630,7 @@ endmodule
 // unchanged 34-byte activation and weight blocks:
 //   byte 0: bit 0 = first, bit 1 = last; all other bits must be zero
 //           bit 2 = wide row (144 blocks instead of 32)
-//   byte 1: block index, 0..31
+//   byte 1: block index, 0..31 normally or 0..143 in wide mode
 //   byte 2..3: reserved, must be zero
 //
 // Every accepted call returns the exact block dot, exact block Q30 term, and
@@ -783,7 +783,7 @@ endmodule
 // Fixed layer-0 LFM2.5 SiLU(gate) * up datapath.
 //
 // Inputs and output are signed Q30.  The sigmoid is the odd ninth-order
-// expansion around zero, evaluated with one shared multiplier:
+// expansion around zero, evaluated with one shared sequential multiplier:
 //   1/2 + x*(1/4 - x^2/48 + x^4/480 - 17*x^6/80640
 //              + 31*x^8/1451520)
 // The sealed layer-0 gate is inside +/-1.01; +/-1.125 is enforced so this
@@ -830,29 +830,11 @@ module truega_lfm25_silu_q30_slot #(
 
     reg signed [39:0] multiply_left;
     reg signed [39:0] multiply_right;
-    wire signed [79:0] multiply_product = multiply_left * multiply_right;
-
-    function automatic signed [63:0] round_q30_even;
-        input signed [79:0] value;
-        reg negative;
-        reg [79:0] magnitude;
-        reg [79:0] quotient;
-        reg [29:0] remainder;
-        reg increment;
-        reg [79:0] rounded;
-        begin
-            negative = value[79];
-            magnitude = negative ? -value : value;
-            quotient = magnitude >> 30;
-            remainder = magnitude[29:0];
-            increment = (remainder > 30'h20000000)
-                     || ((remainder == 30'h20000000) && quotient[0]);
-            rounded = quotient + increment;
-            round_q30_even = negative ? -$signed(rounded[63:0]) : $signed(rounded[63:0]);
-        end
-    endfunction
-
-    wire signed [63:0] multiply_q30 = round_q30_even(multiply_product);
+    reg multiply_start;
+    reg multiply_waiting;
+    wire multiply_busy;
+    wire multiply_done;
+    wire signed [63:0] multiply_q30;
     wire input_range_valid = (gate_q30_i >= -GATE_LIMIT_Q30)
                           && (gate_q30_i <= GATE_LIMIT_Q30)
                           && (up_q30_i >= -UP_LIMIT_Q30)
@@ -886,6 +868,17 @@ module truega_lfm25_silu_q30_slot #(
         endcase
     end
 
+    truega_signed_mul_q30_seq multiply (
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(multiply_start),
+        .left_i(multiply_left),
+        .right_i(multiply_right),
+        .busy_o(multiply_busy),
+        .done_o(multiply_done),
+        .result_q30_o(multiply_q30)
+    );
+
     always @(posedge clk) begin
         if (!reset_n) begin
             state <= ST_IDLE;
@@ -899,8 +892,11 @@ module truega_lfm25_silu_q30_slot #(
             polynomial_q30 <= 64'sd0;
             sigmoid_q30 <= 64'sd0;
             silu_q30 <= 64'sd0;
+            multiply_start <= 1'b0;
+            multiply_waiting <= 1'b0;
         end else begin
             done_o <= 1'b0;
+            multiply_start <= 1'b0;
             if (SILU_ENABLE && start_i && !busy_o) begin
                 result_q30_o <= 64'sd0;
                 if (!input_range_valid) begin
@@ -908,55 +904,160 @@ module truega_lfm25_silu_q30_slot #(
                     busy_o <= 1'b0;
                     done_o <= 1'b1;
                     error_o <= 1'b1;
+                    multiply_waiting <= 1'b0;
                 end else begin
                     gate_q30 <= gate_q30_i;
                     up_q30 <= up_q30_i;
                     state <= ST_X2;
                     busy_o <= 1'b1;
                     error_o <= 1'b0;
+                    multiply_waiting <= 1'b0;
                 end
             end else if (busy_o) begin
-                case (state)
-                    ST_X2: begin
-                        x2_q30 <= multiply_q30;
-                        polynomial_q30 <= C9_Q30;
-                        state <= ST_P7;
+                if (!multiply_waiting) begin
+                    multiply_start <= 1'b1;
+                    multiply_waiting <= 1'b1;
+                end else if (multiply_done) begin
+                    multiply_waiting <= 1'b0;
+                    case (state)
+                        ST_X2: begin
+                            x2_q30 <= multiply_q30;
+                            polynomial_q30 <= C9_Q30;
+                            state <= ST_P7;
+                        end
+                        ST_P7: begin
+                            polynomial_q30 <= C7_Q30 + multiply_q30;
+                            state <= ST_P5;
+                        end
+                        ST_P5: begin
+                            polynomial_q30 <= C5_Q30 + multiply_q30;
+                            state <= ST_P3;
+                        end
+                        ST_P3: begin
+                            polynomial_q30 <= C3_Q30 + multiply_q30;
+                            state <= ST_P1;
+                        end
+                        ST_P1: begin
+                            polynomial_q30 <= C1_Q30 + multiply_q30;
+                            state <= ST_SIG;
+                        end
+                        ST_SIG: begin
+                            sigmoid_q30 <= HALF_Q30 + multiply_q30;
+                            state <= ST_SILU;
+                        end
+                        ST_SILU: begin
+                            silu_q30 <= multiply_q30;
+                            state <= ST_OUT;
+                        end
+                        ST_OUT: begin
+                            result_q30_o <= multiply_q30;
+                            busy_o <= 1'b0;
+                            done_o <= 1'b1;
+                            state <= ST_IDLE;
+                        end
+                        default: begin
+                            busy_o <= 1'b0;
+                            done_o <= 1'b1;
+                            error_o <= 1'b1;
+                            state <= ST_IDLE;
+                        end
+                    endcase
+                end
+            end
+        end
+    end
+
+    wire unused_multiply_busy = multiply_busy;
+endmodule
+
+// Exact signed 40x40 multiply followed by round-to-nearest-ties-even at Q30.
+// One multiplier bit is consumed per cycle; magnitude rounding and sign are
+// separately registered so no multiplier/round/add chain crosses one clock.
+module truega_signed_mul_q30_seq (
+    input  wire                clk,
+    input  wire                reset_n,
+    input  wire                start_i,
+    input  wire signed [39:0]  left_i,
+    input  wire signed [39:0]  right_i,
+    output reg                 busy_o,
+    output reg                 done_o,
+    output reg signed [63:0]   result_q30_o
+);
+    localparam [1:0] PHASE_MULTIPLY = 2'd0;
+    localparam [1:0] PHASE_ROUND    = 2'd1;
+    localparam [1:0] PHASE_SIGN     = 2'd2;
+
+    reg [1:0] phase;
+    reg [5:0] bit_index;
+    reg negative;
+    reg [79:0] multiplicand;
+    reg [39:0] multiplier;
+    reg [79:0] accumulator;
+    reg [79:0] product_magnitude;
+    reg [49:0] rounded_magnitude;
+
+    wire [39:0] left_magnitude = left_i[39] ? (~left_i[39:0] + 40'd1) : left_i[39:0];
+    wire [39:0] right_magnitude = right_i[39] ? (~right_i[39:0] + 40'd1) : right_i[39:0];
+    wire [79:0] addend = multiplier[0] ? multiplicand : 80'd0;
+    wire [79:0] accumulator_next = accumulator + addend;
+    wire [49:0] quotient = product_magnitude[79:30];
+    wire [29:0] remainder = product_magnitude[29:0];
+    wire round_increment = (remainder > 30'h20000000)
+                        || ((remainder == 30'h20000000) && quotient[0]);
+
+    always @(posedge clk) begin
+        if (!reset_n) begin
+            busy_o <= 1'b0;
+            done_o <= 1'b0;
+            result_q30_o <= 64'sd0;
+            phase <= PHASE_MULTIPLY;
+            bit_index <= 6'd0;
+            negative <= 1'b0;
+            multiplicand <= 80'd0;
+            multiplier <= 40'd0;
+            accumulator <= 80'd0;
+            product_magnitude <= 80'd0;
+            rounded_magnitude <= 50'd0;
+        end else begin
+            done_o <= 1'b0;
+            if (start_i && !busy_o) begin
+                busy_o <= 1'b1;
+                phase <= PHASE_MULTIPLY;
+                bit_index <= 6'd0;
+                negative <= left_i[39] ^ right_i[39];
+                multiplicand <= {40'd0, left_magnitude};
+                multiplier <= right_magnitude;
+                accumulator <= 80'd0;
+            end else if (busy_o) begin
+                case (phase)
+                    PHASE_MULTIPLY: begin
+                        accumulator <= accumulator_next;
+                        multiplicand <= multiplicand << 1;
+                        multiplier <= multiplier >> 1;
+                        if (bit_index == 6'd39) begin
+                            product_magnitude <= accumulator_next;
+                            phase <= PHASE_ROUND;
+                        end else begin
+                            bit_index <= bit_index + 6'd1;
+                        end
                     end
-                    ST_P7: begin
-                        polynomial_q30 <= C7_Q30 + multiply_q30;
-                        state <= ST_P5;
+                    PHASE_ROUND: begin
+                        rounded_magnitude <= quotient + round_increment;
+                        phase <= PHASE_SIGN;
                     end
-                    ST_P5: begin
-                        polynomial_q30 <= C5_Q30 + multiply_q30;
-                        state <= ST_P3;
-                    end
-                    ST_P3: begin
-                        polynomial_q30 <= C3_Q30 + multiply_q30;
-                        state <= ST_P1;
-                    end
-                    ST_P1: begin
-                        polynomial_q30 <= C1_Q30 + multiply_q30;
-                        state <= ST_SIG;
-                    end
-                    ST_SIG: begin
-                        sigmoid_q30 <= HALF_Q30 + multiply_q30;
-                        state <= ST_SILU;
-                    end
-                    ST_SILU: begin
-                        silu_q30 <= multiply_q30;
-                        state <= ST_OUT;
-                    end
-                    ST_OUT: begin
-                        result_q30_o <= multiply_q30;
+                    PHASE_SIGN: begin
+                        result_q30_o <= negative
+                            ? -$signed({14'd0, rounded_magnitude})
+                            :  $signed({14'd0, rounded_magnitude});
                         busy_o <= 1'b0;
                         done_o <= 1'b1;
-                        state <= ST_IDLE;
+                        phase <= PHASE_MULTIPLY;
                     end
                     default: begin
                         busy_o <= 1'b0;
                         done_o <= 1'b1;
-                        error_o <= 1'b1;
-                        state <= ST_IDLE;
+                        result_q30_o <= 64'sd0;
+                        phase <= PHASE_MULTIPLY;
                     end
                 endcase
             end
@@ -976,14 +1077,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'h6F619F7D;
-            5'd5: data = 32'h61679EE1;
-            5'd6: data = 32'h5D8534B3;
-            5'd7: data = 32'h0B3CD17B;
-            5'd8: data = 32'h59D50040;
-            5'd9: data = 32'h1FCBBF8E;
-            5'd10: data = 32'hCA6D9407;
-            5'd11: data = 32'h8CA5CA11;
+            5'd4: data = 32'hAE01392F;
+            5'd5: data = 32'h0159A51C;
+            5'd6: data = 32'hEEDB2E69;
+            5'd7: data = 32'hA46E6461;
+            5'd8: data = 32'h6DC7FDF2;
+            5'd9: data = 32'h01527D12;
+            5'd10: data = 32'hF0FA74CA;
+            5'd11: data = 32'h2123C116;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;

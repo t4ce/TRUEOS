@@ -16,7 +16,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::task::{Context, Poll, Waker};
 
-use embassy_sync::signal::Signal;
+use embassy_sync::{mutex::Mutex as AsyncMutex, signal::Signal};
 use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use spin::Mutex;
 use trueos_fpga_abi::{
@@ -33,6 +33,7 @@ static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(1);
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState::new());
+static LFM25_FFN_STEP_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
 
 pub type CompletionCallback = Box<dyn FnOnce(CallResult) + Send + 'static>;
 pub type CallResult = Result<Completion, Error>;
@@ -81,6 +82,7 @@ pub struct Stats {
     pub interrupts: u64,
     pub interrupt_wakes: u64,
     pub timeout_recoveries: u64,
+    pub lfm25_ffn_step_completed: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -121,6 +123,7 @@ struct ServiceState {
     failed: u64,
     interrupt_wakes: u64,
     timeout_recoveries: u64,
+    lfm25_ffn_step_completed: u64,
 }
 
 impl ServiceState {
@@ -133,6 +136,7 @@ impl ServiceState {
             failed: 0,
             interrupt_wakes: 0,
             timeout_recoveries: 0,
+            lfm25_ffn_step_completed: 0,
         }
     }
 }
@@ -310,6 +314,13 @@ pub async fn lfm25_silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error
     Ok(result.row_q30)
 }
 
+/// Exclusively owns the stateful slot-2 row accumulator across a complete
+/// multi-call projection/FFN transaction. Heartbeat and add use other slots.
+pub async fn acquire_lfm25_ffn_step_lane()
+-> embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()> {
+    LFM25_FFN_STEP_LANE.lock().await
+}
+
 async fn lfm25_ffn_step_with_callback(input: &[u8]) -> Result<Completion, Error> {
     use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
 
@@ -326,6 +337,7 @@ pub async fn lfm25_q8_block(
     activation: &[u8; 34],
     weight: &[u8; 34],
 ) -> Result<trueos_fpga_abi::builtins::lfm25_q8_row_block::Q8RowBlockResult, Error> {
+    let _lane = acquire_lfm25_ffn_step_lane().await;
     lfm25_q8_row_block(true, true, 0, activation, weight).await
 }
 
@@ -340,6 +352,7 @@ pub fn stats() -> Stats {
         interrupts: crate::tga::completion_interrupt_count(),
         interrupt_wakes: service.interrupt_wakes,
         timeout_recoveries: service.timeout_recoveries,
+        lfm25_ffn_step_completed: service.lfm25_ffn_step_completed,
     }
 }
 
@@ -419,8 +432,13 @@ fn finish_call(call_id: CallId, result: CallResult) {
             return;
         };
 
+        let completed_function = service.calls[index].request.function;
         if result.is_ok() {
             service.completed = service.completed.saturating_add(1);
+            if completed_function == trueos_fpga_abi::builtins::lfm25_ffn_step::ID {
+                service.lfm25_ffn_step_completed =
+                    service.lfm25_ffn_step_completed.saturating_add(1);
+            }
         } else {
             service.failed = service.failed.saturating_add(1);
         }

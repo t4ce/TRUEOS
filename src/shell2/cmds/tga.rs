@@ -17,12 +17,13 @@ enum TgaCall {
     Q8,
     ModelVerify,
     ModelRow0,
+    ModelFfn0,
 }
 
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "tga: usage `tga [status|test|add <u32> <u32>|q8|model verify|model row0]`",
+        "tga: usage `tga [status|test|add <u32> <u32>|q8|model verify|model row0|model ffn0]`",
     );
 }
 
@@ -92,6 +93,7 @@ pub(crate) fn try_parse(
         Some("model") => match (args.next(), args.next()) {
             (Some("verify"), None) => TgaCall::ModelVerify,
             (Some("row0"), None) => TgaCall::ModelRow0,
+            (Some("ffn0"), None) => TgaCall::ModelFfn0,
             _ => {
                 usage(io);
                 return ParseOutcome::Handled;
@@ -175,15 +177,103 @@ async fn tga_call_task(target: MatrixTarget, call: TgaCall) {
             Ok(())
         }
         TgaCall::ModelRow0 => run_model_gate_row0(&target).await,
+        TgaCall::ModelFfn0 => run_model_ffn0(&target).await,
     };
 
-    if let Err(error) = result {
+    if let Err(error) = result
+        && !matches!(call, TgaCall::ModelFfn0)
+    {
         print_matrix_target_line(
             &target,
             alloc::format!("tga: package failed: {error:?}").as_str(),
         );
     }
     set_matrix_target_active(&target, false);
+}
+
+async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offload::Error> {
+    use crate::r::lfm25_ffn;
+
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "tga: model ffn0=start path=trueosfs:/{} seal=checking expected_calls={}",
+            crate::r::lfm25_model::NATIVE_IMAGE_PATH,
+            lfm25_ffn::FPGA_CALLS_PER_FFN,
+        )
+        .as_str(),
+    );
+    let start_tick = embassy_time_driver::now();
+    let mut milestones = [0u8; 4];
+    let report = match lfm25_ffn::run(|progress| {
+        let stage_index = match progress.stage {
+            lfm25_ffn::Stage::Gate => 0,
+            lfm25_ffn::Stage::Up => 1,
+            lfm25_ffn::Stage::Silu => 2,
+            lfm25_ffn::Stage::Down => 3,
+        };
+        let quarter =
+            core::cmp::min(4, progress.completed.saturating_mul(4) / progress.total.max(1)) as u8;
+        if quarter > milestones[stage_index] {
+            milestones[stage_index] = quarter;
+            print_matrix_target_line(
+                target,
+                alloc::format!(
+                    "tga: model ffn0 stage={} progress={}%",
+                    progress.stage.name(),
+                    quarter * 25,
+                )
+                .as_str(),
+            );
+        }
+    })
+    .await
+    {
+        Ok(report) => report,
+        Err(lfm25_ffn::Error::Model(error)) => {
+            print_model_verify_error(target, error);
+            return Err(crate::r::fpga_offload::Error::Protocol);
+        }
+        Err(error) => {
+            print_matrix_target_line(
+                target,
+                alloc::format!("tga: model ffn0=fail reason={error:?}").as_str(),
+            );
+            return Err(crate::r::fpga_offload::Error::Protocol);
+        }
+    };
+
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "tga: model ffn0=pass sealed=true gate=4608 up=4608 silu=4608 down=1024 calls={} irq_global_delta={} timeout_recovery_delta={} elapsed_ms={}",
+            report.fpga_calls,
+            report.interrupt_delta,
+            report.timeout_recovery_delta,
+            elapsed_ms_since(start_tick),
+        )
+        .as_str(),
+    );
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "tga: model ffn0 error_max gate={:.9} up={:.9} silu={:.9} down={:.9}",
+            report.gate_max_abs,
+            report.up_max_abs,
+            report.silu_max_abs,
+            report.down_max_abs,
+        )
+        .as_str(),
+    );
+    print_matrix_target_line(
+        target,
+        alloc::format!(
+            "tga: model ffn0 down_q30_sha256={} completion=msi-worker-callback",
+            digest_hex(&report.down_sha256),
+        )
+        .as_str(),
+    );
+    Ok(())
 }
 
 const MODEL_VERIFY_PROGRESS_BYTES: u64 = 64 * 1024 * 1024;
@@ -301,6 +391,7 @@ async fn run_model_gate_row0(target: &MatrixTarget) -> Result<(), crate::r::fpga
     use crate::r::lfm25_model;
     use trueos_fpga_abi::builtins::lfm25_q8_row_block as function;
 
+    let _lane = crate::r::fpga_offload::acquire_lfm25_ffn_step_lane().await;
     let image = match lfm25_model::open().await {
         Ok(image) => image,
         Err(error) => {

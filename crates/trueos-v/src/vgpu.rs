@@ -173,8 +173,10 @@ pub struct Device(u64);
 pub struct Buffer(u64);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct Queue(u64);
+pub struct Queue {
+    device: Device,
+    handle: u64,
+}
 
 /// Page-granular VM memory that is simultaneously CPU mapped through VMX and
 /// GPU mapped through the owning device's PPGTT. The GPU address remains
@@ -187,6 +189,13 @@ pub struct VVideoMem {
     mapped_bytes: usize,
     layout: Layout,
 }
+
+// SAFETY: VVideoMem uniquely owns a page-aligned allocation until Drop, and
+// the broker keeps that allocation pinned while GPU work is in flight. Shared
+// methods expose only opaque slices/cache operations; forming a CPU reference
+// requires an exclusive `&mut VVideoMem` borrow.
+unsafe impl Send for VVideoMem {}
+unsafe impl Sync for VVideoMem {}
 
 /// Types that may be viewed directly in zeroed vVideoMem storage.
 ///
@@ -223,9 +232,7 @@ impl Device {
 
     pub fn diagnostics(self) -> Result<DeviceDiagnostics, i32> {
         let mut diagnostics = DeviceDiagnostics::default();
-        rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_device_diagnostics(self.0, &mut diagnostics)
-        })?;
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_device_diagnostics(self.0, &mut diagnostics) })?;
         Ok(diagnostics)
     }
 
@@ -277,7 +284,10 @@ impl Device {
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_queue_create(self.0, class as u32, &mut handle)
         })?;
-        Ok(Queue(handle))
+        Ok(Queue {
+            device: self,
+            handle,
+        })
     }
 
     pub fn buffer_info(self, buffer: Buffer) -> Result<BufferInfo, i32> {
@@ -315,9 +325,12 @@ impl Device {
     }
 
     pub fn submit_control_nop(self, queue: Queue) -> Result<TimelinePoint, i32> {
+        if queue.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_submit_control_nop(self.0, queue.0, &mut point)
+            vcabi::trueos_cabi_vgpu_submit_control_nop(self.0, queue.handle, &mut point)
         })?;
         Ok(point)
     }
@@ -327,30 +340,37 @@ impl Device {
         queue: Queue,
         dispatch: &SceneAabbDispatch,
     ) -> Result<SceneAabbResult, i32> {
+        if queue.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
         let mut result = SceneAabbResult::default();
         rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_submit_scene_aabb(
-                self.0,
-                queue.0,
-                dispatch,
-                &mut result,
-            )
+            vcabi::trueos_cabi_vgpu_submit_scene_aabb(self.0, queue.handle, dispatch, &mut result)
         })?;
         Ok(result)
     }
 
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
+        if queue.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
         let mut status = TimelineStatus::default();
-        rc_result(unsafe { vcabi::trueos_cabi_vgpu_timeline(self.0, queue.0, &mut status) })?;
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_timeline(self.0, queue.handle, &mut status) })?;
         Ok(status)
     }
 
     pub fn wait(self, queue: Queue, value: u64) -> Result<(), i32> {
-        rc_result(unsafe { vcabi::trueos_cabi_vgpu_wait(self.0, queue.0, value) })
+        if queue.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_wait(self.0, queue.handle, value) })
     }
 
     pub fn destroy_queue(self, queue: Queue) -> Result<(), i32> {
-        rc_result(unsafe { vcabi::trueos_cabi_vgpu_queue_destroy(self.0, queue.0) })
+        if queue.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_queue_destroy(self.0, queue.handle) })
     }
 
     pub fn close(self) -> Result<(), i32> {
@@ -382,7 +402,11 @@ impl VVideoMem {
         self.buffer
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
+    pub fn as_bytes(&mut self) -> &[u8] {
         unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.requested_bytes) }
     }
 
@@ -390,7 +414,7 @@ impl VVideoMem {
         unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.requested_bytes) }
     }
 
-    pub fn as_slice<T: VVideoPod>(&self) -> Result<&[T], i32> {
+    pub fn as_slice<T: VVideoPod>(&mut self) -> Result<&[T], i32> {
         if core::mem::size_of::<T>() == 0
             || self.requested_bytes % core::mem::size_of::<T>() != 0
             || !(self.ptr.as_ptr() as usize).is_multiple_of(core::mem::align_of::<T>())
@@ -434,23 +458,13 @@ impl VVideoMem {
 
     pub fn flush(&self, offset: usize, bytes: usize) -> Result<(), i32> {
         rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_vvideo_flush(
-                self.device.0,
-                self.buffer.0,
-                offset,
-                bytes,
-            )
+            vcabi::trueos_cabi_vgpu_vvideo_flush(self.device.0, self.buffer.0, offset, bytes)
         })
     }
 
     pub fn invalidate(&self, offset: usize, bytes: usize) -> Result<(), i32> {
         rc_result(unsafe {
-            vcabi::trueos_cabi_vgpu_vvideo_invalidate(
-                self.device.0,
-                self.buffer.0,
-                offset,
-                bytes,
-            )
+            vcabi::trueos_cabi_vgpu_vvideo_invalidate(self.device.0, self.buffer.0, offset, bytes)
         })
     }
 }
@@ -469,7 +483,11 @@ impl Drop for VVideoMem {
 
 impl Queue {
     pub const fn raw(self) -> u64 {
-        self.0
+        self.handle
+    }
+
+    pub fn submit_scene_aabb(self, dispatch: &SceneAabbDispatch) -> Result<SceneAabbResult, i32> {
+        self.device.submit_scene_aabb(self, dispatch)
     }
 }
 
@@ -507,5 +525,11 @@ mod tests {
         assert_eq!(core::mem::size_of::<SceneAabbResult>(), 24);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
+    }
+
+    #[test]
+    fn vvideo_ownership_wrapper_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VVideoMem>();
     }
 }

@@ -1,10 +1,8 @@
 fn submit_tenant_scene_aabb_rcs(
     tenant_root_phys: u64,
     request: crate::gpu::physical::PhysicalSceneAabbRequest,
-) -> Result<
-    crate::gpu::physical::PhysicalSceneAabbCompletion,
-    crate::gpu::physical::PhysicalGpuError,
-> {
+) -> Result<crate::gpu::physical::PhysicalSceneAabbCompletion, crate::gpu::physical::PhysicalGpuError>
+{
     use crate::gpu::physical::{EngineClass, PhysicalGpuError};
 
     if SCENE_AABB_QUARANTINED.load(Ordering::Acquire) {
@@ -80,9 +78,8 @@ fn submit_tenant_scene_aabb_rcs(
     };
 
     let started = direct_rcs_now_tick();
-    let deadline = started.saturating_add(direct_rcs_ticks_from_ms(
-        SCENE_AABB_COMPLETION_TIMEOUT_MS,
-    ));
+    let deadline =
+        started.saturating_add(direct_rcs_ticks_from_ms(SCENE_AABB_COMPLETION_TIMEOUT_MS));
     let observed = loop {
         let value = direct_rcs_read_result_slot(state, SCENE_AABB_POST_MARKER_SLOT);
         if value == SCENE_AABB_POST_MARKER || direct_rcs_now_tick() >= deadline {
@@ -176,12 +173,8 @@ fn encode_scene_aabb_batch(
     } else {
         (1u32 << remainder) - 1
     };
-    let mut ok = direct_rcs_push_gpgpu_dispatch_prologue(
-        batch,
-        &mut cursor,
-        upload,
-        state.gpu_va.batch,
-    );
+    let mut ok =
+        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, SCENE_AABB_IDD_BYTES as u32);
@@ -226,11 +219,8 @@ fn write_scene_aabb_surface_states(
         request.liveness,
         request.output,
     ];
-    let binding = unsafe {
-        state
-            .batch_virt
-            .add(SCENE_AABB_BINDING_TABLE_OFFSET_BYTES) as *mut u32
-    };
+    let binding =
+        unsafe { state.batch_virt.add(SCENE_AABB_BINDING_TABLE_OFFSET_BYTES) as *mut u32 };
     for (index, slice) in slices.into_iter().enumerate() {
         let surface_offset = SCENE_AABB_SURFACE_STATE_OFFSET_BYTES
             + index * COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>();

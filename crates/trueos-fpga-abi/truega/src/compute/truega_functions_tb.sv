@@ -77,7 +77,7 @@ module truega_functions_tb;
             end
 
             wait_cycles = 0;
-            while (!done && wait_cycles < 100) begin
+            while (!done && wait_cycles < 600) begin
                 @(negedge clk);
                 wait_cycles = wait_cycles + 1;
             end
@@ -120,7 +120,7 @@ module truega_functions_tb;
         @(negedge clk);
         start = 1'b0;
         wait_cycles = 0;
-        while (!done && wait_cycles < 100) begin
+        while (!done && wait_cycles < 600) begin
             @(negedge clk);
             wait_cycles = wait_cycles + 1;
         end

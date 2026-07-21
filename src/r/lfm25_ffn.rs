@@ -116,6 +116,7 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     validate_golden()?;
     let image = lfm25_model::open().await?;
     lfm25_model::verify_with_progress(&image, |_, _| {}).await?;
+    let _lane = fpga_offload::acquire_lfm25_ffn_step_lane().await;
     let before = fpga_offload::stats();
 
     let normalized = quantize_golden_vector(0)?;
@@ -143,7 +144,7 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
         let value = fpga_offload::lfm25_silu_mul_q30(gate_q30, up_q30).await?;
         silu.push(value);
         silu_max_abs = silu_max_abs.max(q30_error(value, golden_f32(3, index)?));
-        if index % 256 == 255 || index + 1 == gate.len() {
+        if index % 512 == 511 || index + 1 == gate.len() {
             progress(Progress {
                 stage: Stage::Silu,
                 completed: index + 1,
@@ -171,12 +172,14 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     require_hash(Stage::Down, down_sha256, DOWN_Q30_SHA256)?;
 
     let after = fpga_offload::stats();
-    let fpga_calls = after.completed.saturating_sub(before.completed);
+    let fpga_calls = after
+        .lfm25_ffn_step_completed
+        .saturating_sub(before.lfm25_ffn_step_completed);
     let interrupt_delta = after.interrupts.saturating_sub(before.interrupts);
     let timeout_recovery_delta = after
         .timeout_recoveries
         .saturating_sub(before.timeout_recoveries);
-    if fpga_calls < FPGA_CALLS_PER_FFN
+    if fpga_calls != FPGA_CALLS_PER_FFN
         || interrupt_delta < FPGA_CALLS_PER_FFN
         || timeout_recovery_delta != 0
     {
@@ -244,7 +247,7 @@ async fn project(
         }
         output.push(row_q30);
         max_abs = max_abs.max(q30_error(row_q30, golden_f32(golden_vector, row)?));
-        let interval = if rows > 2048 { 128 } else { 32 };
+        let interval = if rows > 2048 { 512 } else { 128 };
         if row % interval == interval - 1 || row + 1 == rows {
             progress(Progress {
                 stage,
@@ -327,7 +330,7 @@ fn quantize_f32_vector(values: &[f32]) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Erro
         let mut block = [0u8; Q8_BLOCK_BYTES];
         block[..2].copy_from_slice(&f16::from_f32(scale).to_bits().to_le_bytes());
         for (quant, value) in block[2..].iter_mut().zip(values) {
-            *quant = ((*value * inverse).round_ties_even() as i8) as u8;
+            *quant = (libm::rintf(*value * inverse) as i8) as u8;
         }
         output.push(block);
     }

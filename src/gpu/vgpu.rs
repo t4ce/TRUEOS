@@ -571,6 +571,41 @@ pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), Vg
     Ok(())
 }
 
+/// Tear down every vGPU device owned by a Hull VM at its VMX lifetime
+/// boundary. A subsequent occupant of the same VM slot receives fresh handle
+/// generations and a new broker epoch. Resources whose GPU ownership is
+/// uncertain remain installed, lost, and pinned rather than being reused.
+pub(crate) fn release_hull_guest(vm_id: u8) -> (usize, usize, u64) {
+    let Some(physical) = physical_device().filter(|device| device.ready()) else {
+        return (0, 0, 0);
+    };
+    let principal = Principal::HullGuest(vm_id as u16);
+    let mut broker = BROKER.lock();
+    broker.epoch = broker.epoch.wrapping_add(1).max(1);
+    let epoch = broker.epoch;
+    let mut released = 0usize;
+    let mut quarantined = 0usize;
+    for slot in &mut broker.devices {
+        let Some(mut device) = slot.record.take() else {
+            continue;
+        };
+        if device.principal != principal {
+            slot.record = Some(device);
+            continue;
+        }
+        match destroy_device_resources(physical, &mut device) {
+            Ok(()) => released = released.saturating_add(1),
+            Err(_) => {
+                device.epoch = epoch;
+                device.lost = true;
+                slot.record = Some(device);
+                quarantined = quarantined.saturating_add(1);
+            }
+        }
+    }
+    (released, quarantined, epoch)
+}
+
 pub(crate) fn device_info(
     principal: Principal,
     handle: DeviceHandle,
@@ -798,7 +833,7 @@ pub(crate) fn create_vvideo_mem(
             return Err(error.into());
         }
     }
-    let mapping_digest = vvideo_mapping_digest(device.epoch, gpu, &pages);
+    let mapping_digest = vvideo_mapping_digest(device.epoch, guest_va, gpu, pages.len());
     device.next_gpu_va = next;
     device.memory_used = device.memory_used.saturating_add(bytes);
     Ok(insert_buffer(
@@ -1985,15 +2020,12 @@ fn ranges_overlap(a_start: u64, a_bytes: usize, b_start: u64, b_bytes: usize) ->
     a_start < b_end && b_start < a_end
 }
 
-fn vvideo_mapping_digest(epoch: u64, gpu: u64, pages: &[u64]) -> u64 {
-    // A non-cryptographic diagnostic fingerprint. It proves that the broker
-    // compared the complete ordered PPGTT/HPA page list without publishing
-    // any physical address to the guest ABI.
+fn vvideo_mapping_digest(epoch: u64, guest_va: u64, gpu: u64, pages: usize) -> u64 {
+    // A non-cryptographic identifier for the opaque mapping configuration.
+    // Exact PPGTT/HPA identity is reported separately after a page-by-page
+    // broker verification; never mix an HPA into a guest-visible digest.
     let mut digest = 0xCBF2_9CE4_8422_2325u64 ^ epoch;
+    digest = (digest ^ guest_va).wrapping_mul(0x0000_0100_0000_01B3);
     digest = (digest ^ gpu).wrapping_mul(0x0000_0100_0000_01B3);
-    for (index, phys) in pages.iter().copied().enumerate() {
-        digest ^= phys.rotate_left((index & 63) as u32);
-        digest = digest.wrapping_mul(0x0000_0100_0000_01B3);
-    }
-    digest
+    (digest ^ pages as u64).wrapping_mul(0x0000_0100_0000_01B3)
 }

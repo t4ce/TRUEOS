@@ -120,10 +120,10 @@ seal. The complete-file SHA-256 is
 `eb124c333e7a7095a78fc6c0004f90a43fa825bdfd1a8f74ac9d67c538484185`.
 
 The host verifier quantizes both activation vectors as llama.cpp Q8_0, reads layer-0 gate,
-up, and down matrices directly from the unchanged native image, and checks all 10,240
-projection outputs. Measured maximum absolute errors against the captured tensors are
-`1.20e-7` (F32 block accumulation), `7.46e-8` (deterministic Q30 accumulation), and
-`1.87e-9` (SiLU product), against a frozen `2.0e-6` acceptance bound.
+up, and down matrices directly from the unchanged native image, and chains the complete
+layer-0 FFN. Maximum absolute errors against the captured tensors are `7.46e-8` (gate),
+`5.97e-8` (up), `1.073e-6` (fixed SiLU product), and `1.31e-8` (down), against a frozen
+`2.0e-6` acceptance bound.
 
 The synthesizable implementation is under `src/compute`:
 
@@ -141,9 +141,12 @@ The synthesizable implementation is under `src/compute`:
   and the slot is not instantiated by `top.vhd`, so heartbeat firmware is unchanged.
 - `truega_q8_0_row_block_slot.v` is the nearer inline-BAR boundary: a 4-byte
   first/last/index header plus the existing 68-byte native blocks per call. It retains
-  the signed-Q30 accumulator across calls 0..31 and returns dot, term, and partial/final
-  row result. Its enable parameter defaults to zero, and the generated slot-2 wrapper
-  explicitly enables it together with the paired 72-byte/20-byte Rust ABI.
+  the signed-Q30 accumulator across calls 0..31 or wide calls 0..143 and returns dot,
+  term, and partial/final row result.
+- `truega_lfm25_silu_q30_slot.v` evaluates the sealed layer-0 SiLU polynomial with an
+  exact 40-cycle shift-add multiplier and separately registered ties-even rounding/sign
+  phases. The generated slot-2 wrapper selects projection or SiLU through the same
+  72-byte input and 20-byte output ABI.
 
 The checked-in `artifacts/lfm25_q8_block.golden.bin` is a separately sealed 336-byte
 runtime vector derived from gate row 0, block 0. Its 68-byte input is the activation block
@@ -152,13 +155,17 @@ Q30 term `-9429888`. The generator verifies the artifact provenance, payload has
 self-seal before emitting the Rust constants used by `tga q8` and `tga test`; the active
 slot wraps that fixture with `first|last,index=0` and also returns row Q30 `-9429888`.
 
-TRUEOS exposes two fixed model checks. `tga model verify` streams
+TRUEOS exposes three fixed model checks. `tga model verify` streams
 `trueosfs:/models/lfm2.5/LFM2.5-350M-Q8_0.truega.bin` in 256 KiB chunks and checks the
 exact 376,701,952-byte size and pinned SHA-256 without parsing GGUF. `tga model row0`
 range-reads the 32 native layer-0 gate-row blocks, supplies the sealed activation blocks,
 and requires every callback's dot, term, and accumulated row result to match bit-for-bit.
 The final exact row is `29481209` Q30; its distance from captured F32 is 9 against the
-frozen bound of 2148.
+frozen bound of 2148. `tga model ffn0` executes all 4,608 gate rows, all 4,608 up rows,
+4,608 SiLU products, and all 1,024 wide down rows through 446,976 callback-completed
+slot calls. It requires the four full Q30-vector hashes, numerical bounds, exact
+slot-2 completion count, at least that many MSI interrupts, and zero timeout recovery.
+An async lane guard prevents another diagnostic from interrupting the stateful row.
 
 Run the reproducible checks with:
 
@@ -175,14 +182,16 @@ the row results satisfy the captured-F32 error bound. The same simulation also c
 multi-cycle block slot for all 210 vectors and calls the generated 96-byte wrapper twice
 with the sealed runtime vector. It also runs the fixed layer-0 gate row slot twice, with
 intentional feeder stalls, proves its default-disabled state, and runs the BAR-oriented
-32-call sequencer including one-block compatibility and malformed-order recovery. The
+32/144-call sequencer including one-block compatibility and malformed-order recovery,
+then proves the fixed SiLU result through the unified wrapper. The
 isolated block-slot synthesis reaches 142.908 MHz and
 uses 2,155 logic elements, 1,429 registers, 33 `MULT12X12` plus one `MULT27X36`, and no
 block RAM. It does not emit an `.fs`; pre/post hashes guard the integrated project inputs
-and published firmware files.
+and published firmware files. The enabled sequential SiLU slot reaches 136.857 MHz with
+1,177 logic elements, 692 registers, no DSP, and no block RAM.
 
 The integrated image closes the 100 MHz TLP clock with zero setup/hold violations. The
 build refuses to publish if the timing report is missing, if TLP Fmax is below 100 MHz, or
-if any endpoint is violated. The row-enabled image closes at 100.004 MHz and uses
-6,550/138,240 logic elements (5%), 4,902/139,140 registers (4%), 18.5/298 DSP units
+if any endpoint is violated. The complete FFN-step image closes at 100.043 MHz and uses
+7,797/138,240 logic elements (6%), 5,599/139,140 registers (5%), 18.5/298 DSP units
 (7%), and no SSRAM.
