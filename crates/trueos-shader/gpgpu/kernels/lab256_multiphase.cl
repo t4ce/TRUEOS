@@ -15,15 +15,13 @@
 #define LAB256_PIXELS (LAB256_SIZE * LAB256_SIZE)
 
 #define LAB256_CONTROL_MAGIC 0x4C414232u // "LAB2"
-#define LAB256_CONTROL_VERSION 2u
+#define LAB256_CONTROL_VERSION 3u
 #define LAB256_REPORT_MAGIC 0x4C325250u // "L2RP"
 
 #define LAB256_FLAG_WRAP        (1u << 0)
 #define LAB256_FLAG_INJECT      (1u << 1)
 #define LAB256_FLAG_RESET       (1u << 2)
-#define LAB256_FLAG_MANDELBROT  (1u << 3)
 #define LAB256_FLAG_POINTER_SHADE (1u << 4)
-#define LAB256_FLAG_FLOW_WARP   (1u << 5)
 
 // Control page, in dwords. Floats are stored as IEEE-754 bit patterns.
 #define LAB256_CTRL_MAGIC            0u
@@ -37,11 +35,11 @@
 #define LAB256_CTRL_FEED_F32         8u
 #define LAB256_CTRL_KILL_F32         9u
 #define LAB256_CTRL_DT_F32          10u
-#define LAB256_CTRL_MANDEL_X_F32    11u
-#define LAB256_CTRL_MANDEL_Y_F32    12u
-#define LAB256_CTRL_MANDEL_SCALE    13u
-#define LAB256_CTRL_MANDEL_ITERS    14u
-#define LAB256_CTRL_PALETTE_SEED    15u
+#define LAB256_CTRL_FLARE_RADIUS    11u // f32 normalized scene radius
+#define LAB256_CTRL_FLARE_TURBULENCE 12u // f32 radial distortion
+#define LAB256_CTRL_FLARE_RAY_GAIN  13u // f32 ray intensity
+#define LAB256_CTRL_FLARE_PULSE_SPEED 14u // f32 animation rate
+#define LAB256_CTRL_COLOR_SEED      15u
 #define LAB256_CTRL_RESERVED_16     16u
 #define LAB256_CTRL_BACKGROUND_ALPHA 17u // f32 [0, 1]
 #define LAB256_CTRL_PRESENT_FPS     18u // half-second CUR_SURFLIVE estimate
@@ -139,7 +137,7 @@ __kernel void lab256_step(
         || control[LAB256_CTRL_VERSION] != LAB256_CONTROL_VERSION;
 
     float2 center = reset
-        ? lab256_seed(x, y, control[LAB256_CTRL_PALETTE_SEED])
+        ? lab256_seed(x, y, control[LAB256_CTRL_COLOR_SEED])
         : lab256_load_state(state_in, (int)x, (int)y, flags);
     if (!reset) {
         float2 cardinal = lab256_load_state(state_in, (int)x - 1, (int)y, flags)
@@ -269,13 +267,6 @@ static inline uint lab256_pack_rgba8(float3 color, float alpha)
     return (ai << 24) | (b << 16) | (g << 8) | r;
 }
 
-static inline float3 lab256_palette(float value, float seed)
-{
-    const float tau = 6.28318530717958647692f;
-    float3 phase = (float3)(0.00f, 0.33f, 0.67f) + seed;
-    return 0.52f + 0.48f * native_cos(tau * (value + phase));
-}
-
 static inline float lab256_mean_v(__global const uint *report)
 {
     uint sum = 0u;
@@ -284,31 +275,6 @@ static inline float lab256_mean_v(__global const uint *report)
         sum += report[base];
     }
     return (float)sum * (1.0f / (255.0f * 65536.0f));
-}
-
-static inline float lab256_mandel(
-    float2 point,
-    float2 center,
-    float scale,
-    uint iteration_cap)
-{
-    float2 c = center + point * scale;
-    float2 z = (float2)(0.0f);
-    uint iteration = 0u;
-    for (; iteration < 96u; iteration++) {
-        if (iteration >= iteration_cap) {
-            break;
-        }
-        float xx = z.x * z.x;
-        float yy = z.y * z.y;
-        if (xx + yy > 16.0f) {
-            break;
-        }
-        z = (float2)(xx - yy + c.x, 2.0f * z.x * z.y + c.y);
-    }
-    return iteration >= iteration_cap
-        ? 0.0f
-        : (float)iteration / (float)iteration_cap;
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
@@ -331,61 +297,87 @@ __kernel void lab256_composite(
     float field = state_uv.y;
     float mean_v = report[0] == LAB256_REPORT_MAGIC ? lab256_mean_v(report) : 0.0f;
     float2 point = ((float2)((float)x + 0.5f, (float)y + 0.5f) / 256.0f - 0.5f) * 2.0f;
-    float2 shade_point = point;
+
+    // The flare stays near the avatar center while the physical cursor can
+    // lean its emitter by roughly 18 pixels in either direction. This keeps
+    // the hardware cursor surface spatially stable while making the scene
+    // visibly responsive to the kernel cursor snapshot.
+    float2 emitter = (float2)(0.0f);
     if ((flags & LAB256_FLAG_POINTER_SHADE) != 0u) {
         uint packed_xy = control[LAB256_CTRL_POINTER_XY];
         float2 pointer_point = (float2)(
             (float)(packed_xy & 0xFFFFu),
             (float)(packed_xy >> 16)) * (2.0f / 255.0f) - 1.0f;
-        float2 pointer_delta = point - pointer_point;
-        float pointer_falloff = clamp(
-            1.0f - dot(pointer_delta, pointer_delta) * 1.35f,
-            0.0f,
-            1.0f);
-        pointer_falloff *= pointer_falloff;
-        shade_point += (float2)(-pointer_delta.y, pointer_delta.x)
-            * (0.022f * pointer_falloff);
+        emitter = pointer_point * 0.14f;
     }
 
-    float flow = native_sin(shade_point.x * 8.1f + time * 0.73f + field * 5.0f)
-        + native_sin(shade_point.y * 9.7f - time * 0.51f - field * 3.0f)
-        + native_sin((shade_point.x + shade_point.y) * 6.3f + time * 0.29f);
-    flow = 0.5f + flow * (1.0f / 6.0f);
-    float palette_seed = (float)(control[LAB256_CTRL_PALETTE_SEED] & 255u) * (1.0f / 255.0f);
-    float color_value = lab256_clamp01(flow * 0.55f + field * 0.75f - mean_v * 0.20f);
-    float3 color = lab256_palette(color_value, palette_seed);
+    float flare_radius = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_RADIUS]), 0.52f),
+        0.22f,
+        0.82f);
+    float turbulence = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_TURBULENCE]), 0.12f),
+        0.0f,
+        0.30f);
+    float ray_gain = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_RAY_GAIN]), 0.82f),
+        0.0f,
+        1.5f);
+    float pulse_speed = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_PULSE_SPEED]), 1.0f),
+        0.1f,
+        4.0f);
 
+    float2 flare_point = point - emitter;
+    float radius2 = dot(flare_point, flare_point);
+    float radius = native_sqrt(max(radius2, 1.0e-8f));
     float edge = fabs(state_uv.x - state_uv.y);
-    color *= 0.42f + field * 1.05f + lab256_clamp01(edge * 2.5f) * 0.42f;
-    float fractal_presence = 0.0f;
+    float organic = clamp((field - mean_v) * 1.4f + edge * 0.65f, -1.0f, 1.0f);
+    float radial_wave = 0.5f + 0.5f * native_sin(
+        radius * 26.0f
+            - time * (1.65f * pulse_speed)
+            + field * 7.5f
+            + edge * 4.0f);
+    float distorted_radius = flare_radius
+        + organic * turbulence
+        + (radial_wave - 0.5f) * (turbulence * 0.55f);
 
-    if ((flags & LAB256_FLAG_MANDELBROT) != 0u) {
-        float center_x = lab256_finite_or(as_float(control[LAB256_CTRL_MANDEL_X_F32]), -0.62f);
-        float center_y = lab256_finite_or(as_float(control[LAB256_CTRL_MANDEL_Y_F32]), 0.0f);
-        float scale = clamp(
-            lab256_finite_or(as_float(control[LAB256_CTRL_MANDEL_SCALE]), 1.55f),
-            0.0002f,
-            2.5f);
-        uint iteration_cap = clamp(control[LAB256_CTRL_MANDEL_ITERS], 12u, 96u);
-        float2 fractal_point = shade_point;
-        if ((flags & LAB256_FLAG_FLOW_WARP) != 0u) {
-            fractal_point += (float2)(
-                native_sin(field * 12.0f + time),
-                native_cos(field * 9.0f - time * 0.7f)) * 0.018f;
-        }
-        float mandel = lab256_mandel(
-            fractal_point,
-            (float2)(center_x, center_y),
-            scale,
-            iteration_cap);
-        float3 fractal_color = lab256_palette(mandel * 1.4f + field * 0.22f, palette_seed + 0.18f);
-        float escaped = mandel > 0.0f ? 1.0f : 0.0f;
-        fractal_presence = escaped * (0.28f + mandel * 0.72f);
-        color = mix(color * (0.18f + field * 0.55f), fractal_color, escaped * 0.72f);
-    }
+    float body_t = lab256_clamp01(
+        (radius - (distorted_radius - 0.10f)) * 5.0f);
+    body_t = body_t * body_t * (3.0f - 2.0f * body_t);
+    float body = 1.0f - body_t;
 
-    float radius2 = dot(point, point);
-    color *= clamp(1.12f - radius2 * 0.34f, 0.42f, 1.0f);
+    float outer_t = lab256_clamp01(radius * (1.0f / 1.15f));
+    outer_t = outer_t * outer_t * (3.0f - 2.0f * outer_t);
+    float outer = 1.0f - outer_t;
+    float plume = outer
+        * (0.12f + radial_wave * 0.48f)
+        * (0.38f + lab256_clamp01(field + edge * 1.8f) * 0.62f);
+
+    // Four analytical flare axes replace the reference shader's texture
+    // feedback. They are cheap reciprocal distance fields whose brightness is
+    // modulated by the persistent reaction state and the same radial pulse.
+    float axis_x = 0.008f / (fabs(flare_point.y) + 0.008f);
+    float axis_y = 0.008f / (fabs(flare_point.x) + 0.008f);
+    float diagonal_a = 0.010f
+        / (fabs((flare_point.x - flare_point.y) * 0.70710678f) + 0.010f);
+    float diagonal_b = 0.010f
+        / (fabs((flare_point.x + flare_point.y) * 0.70710678f) + 0.010f);
+    float ray_shape = max(max(axis_x, axis_y), max(diagonal_a, diagonal_b) * 0.64f);
+    float ray_envelope = 1.0f / (1.0f + radius2 * 2.4f);
+    float rays = ray_shape
+        * ray_envelope
+        * ray_gain
+        * (0.52f + radial_wave * 0.48f)
+        * (0.72f + field * 0.28f);
+
+    float core = 0.010f / (radius2 + 0.010f);
+    float halo = 0.055f / (radius2 + 0.055f);
+    float3 color = (float3)(1.00f, 0.12f, 0.018f) * (body * 0.68f + plume * 0.54f)
+        + (float3)(1.00f, 0.62f, 0.10f) * (body * 0.44f + halo * 0.32f)
+        + (float3)(1.00f, 0.98f, 0.84f) * (core * 1.9f + rays * 1.05f)
+        + (float3)(0.16f, 0.30f, 1.00f) * (halo * 0.16f + plume * 0.07f);
+
     float background_alpha = clamp(
         lab256_finite_or(
             as_float(control[LAB256_CTRL_BACKGROUND_ALPHA]),
@@ -393,9 +385,11 @@ __kernel void lab256_composite(
         0.0f,
         1.0f);
     float content_alpha = lab256_clamp01(
-        field * 1.12f
-            + lab256_clamp01(edge * 2.4f) * 0.42f
-            + fractal_presence * 0.72f);
+        core * 1.8f
+            + body * 0.78f
+            + plume * 0.56f
+            + rays * 0.88f
+            + halo * 0.20f);
     float output_alpha = mix(background_alpha, 1.0f, content_alpha);
 
     if ((flags & LAB256_FLAG_INJECT) != 0u) {

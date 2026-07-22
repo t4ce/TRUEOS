@@ -21,7 +21,7 @@ use spin::Mutex;
 
 use super::{OutputId, WindowId, WindowOwner, WindowSessionId, WindowState};
 
-const MAX_TRACKED_FRAMES: usize = 64;
+const MAX_TRACKED_FRAMES: usize = super::window_broker::MAX_WINDOWS;
 const MAX_CURSOR_SOURCES: usize = 32;
 const MAX_GLOBAL_KEYBOARD_HOOKS: usize = 16;
 

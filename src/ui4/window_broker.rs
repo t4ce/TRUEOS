@@ -8,15 +8,18 @@ use alloc::vec::Vec;
 use embassy_sync::signal::Signal;
 use spin::Mutex;
 
-use super::{DamageRect, DamageRegion, FrameHandle, OutputId};
+use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
 
-const MAX_WINDOWS: usize = 256;
+pub(super) const MAX_WINDOWS: usize = 256;
 // Temporary static30 composition probe: one trusted app session owns all 30
 // test windows. Plane assignment is independent of session ownership, while
-// the global active-window cap remains the hard system bound.
+// MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = 64;
-pub(super) const MAX_ACTIVE_WINDOWS: usize = 64;
+/// Temporary direct-scanout admission boundary. Double- and triple-buffered
+/// windows each own one of the four application planes; single-buffered
+/// windows remain unrestricted by this soft cap and may share those planes.
+pub(super) const MAX_EXPENSIVE_WINDOWS: usize = super::INTERACTION_OVERLAY_PLANE_SLOT;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
@@ -98,6 +101,14 @@ impl WindowPlane {
             Self::Universal(slot) => {
                 slot > 0 && (slot as usize) < super::INTERACTION_OVERLAY_PLANE_SLOT
             }
+        }
+    }
+
+    const fn from_slot(slot: usize) -> Option<Self> {
+        match slot {
+            super::PRIMARY_PLANE_SLOT => Some(Self::Primary),
+            1..super::INTERACTION_OVERLAY_PLANE_SLOT => Some(Self::Universal(slot as u8)),
+            _ => None,
         }
     }
 }
@@ -249,6 +260,7 @@ pub(crate) struct WindowSnapshot {
     pub(crate) owner: WindowOwner,
     pub(crate) session: WindowSessionId,
     pub(crate) frame: FrameHandle,
+    pub(crate) buffering: FrameBuffering,
     pub(crate) output: OutputId,
     pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
@@ -286,6 +298,7 @@ struct WindowRecord {
     owner: WindowOwner,
     session: WindowSessionId,
     frame: FrameHandle,
+    buffering: FrameBuffering,
     output: OutputId,
     plane: WindowPlane,
     placement: WindowPlacement,
@@ -467,7 +480,57 @@ impl WindowBroker {
         Ok(())
     }
 
-    fn create(&mut self, request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
+    fn select_plane(
+        &self,
+        requested: WindowPlane,
+        buffering: FrameBuffering,
+        replacing_slot: Option<usize>,
+        owner: WindowOwner,
+        session: WindowSessionId,
+    ) -> Result<WindowPlane, WindowBrokerError> {
+        if buffering == FrameBuffering::Single {
+            return Ok(requested);
+        }
+
+        let mut occupied = [false; MAX_EXPENSIVE_WINDOWS];
+        let mut active = 0usize;
+        for (slot, window) in self.windows.iter().enumerate() {
+            if Some(slot) != replacing_slot
+                && window.state != WindowState::Closed
+                && window.buffering != FrameBuffering::Single
+            {
+                active = active.saturating_add(1);
+                occupied[window.plane.slot()] = true;
+            }
+        }
+        if active >= MAX_EXPENSIVE_WINDOWS {
+            crate::log_error!(
+                target: "ui4";
+                "ui4 expensive-window soft-cap reached requested={} cap={} buffering={:?} owner={:?} session={} policy=temporary-soft-cap action=reject-expensive-admission\n",
+                active.saturating_add(1),
+                MAX_EXPENSIVE_WINDOWS,
+                buffering,
+                owner,
+                session.raw(),
+            );
+            return Err(WindowBrokerError::Capacity);
+        }
+
+        let requested_slot = requested.slot();
+        for offset in 0..MAX_EXPENSIVE_WINDOWS {
+            let slot = (requested_slot + offset) % MAX_EXPENSIVE_WINDOWS;
+            if !occupied[slot] {
+                return WindowPlane::from_slot(slot).ok_or(WindowBrokerError::InvalidPlane);
+            }
+        }
+        Err(WindowBrokerError::Capacity)
+    }
+
+    fn create(
+        &mut self,
+        mut request: WindowCreate,
+        buffering: FrameBuffering,
+    ) -> Result<WindowId, WindowBrokerError> {
         self.checked_session(request.owner, request.session)?;
         if !request.placement.valid() {
             return Err(WindowBrokerError::EmptyExtent);
@@ -485,23 +548,20 @@ impl WindowBroker {
         if count >= MAX_WINDOWS_PER_SESSION {
             return Err(WindowBrokerError::Capacity);
         }
-        let active_count = self
-            .windows
-            .iter()
-            .filter(|window| window.state != WindowState::Closed)
-            .count();
-        if active_count >= MAX_ACTIVE_WINDOWS {
-            crate::log_warn!(
+        let requested_plane = request.plane;
+        request.plane =
+            self.select_plane(request.plane, buffering, None, request.owner, request.session)?;
+        if request.plane != requested_plane {
+            crate::log_info!(
                 target: "ui4";
-                "ui4 window admission soft-cap exceeded requested={} cap={} owner={:?} session={} action=reject-create\n",
-                active_count.saturating_add(1),
-                MAX_ACTIVE_WINDOWS,
+                "ui4 expensive-window plane isolated requested_slot={} assigned_slot={} buffering={:?} owner={:?} session={}\n",
+                requested_plane.slot(),
+                request.plane.slot(),
+                buffering,
                 request.owner,
                 request.session.raw(),
             );
-            return Err(WindowBrokerError::Capacity);
         }
-
         if let Some((slot, window)) = self
             .windows
             .iter_mut()
@@ -509,7 +569,7 @@ impl WindowBroker {
             .find(|(_, window)| window.state == WindowState::Closed)
         {
             let generation = next_generation(window.generation);
-            *window = WindowRecord::new(generation, request);
+            *window = WindowRecord::new(generation, request, buffering);
             let id = WindowId(pack_handle(slot, generation)?);
             self.mark_composition_changed();
             return Ok(id);
@@ -518,10 +578,64 @@ impl WindowBroker {
             return Err(WindowBrokerError::Capacity);
         }
         let slot = self.windows.len();
-        self.windows.push(WindowRecord::new(1, request));
+        self.windows.push(WindowRecord::new(1, request, buffering));
         let id = WindowId(pack_handle(slot, 1)?);
         self.mark_composition_changed();
         Ok(id)
+    }
+
+    fn replace_frame(
+        &mut self,
+        owner: WindowOwner,
+        id: WindowId,
+        frame: FrameHandle,
+        buffering: FrameBuffering,
+    ) -> Result<(), WindowBrokerError> {
+        let (slot, generation) = unpack_handle(id.0)?;
+        let current = self
+            .windows
+            .get(slot)
+            .ok_or(WindowBrokerError::InvalidHandle)?;
+        if current.generation != generation {
+            return Err(WindowBrokerError::InvalidHandle);
+        }
+        if current.owner != owner {
+            return Err(WindowBrokerError::OwnerMismatch);
+        }
+        match current.state {
+            WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+            WindowState::Closed => return Err(WindowBrokerError::Closed),
+            WindowState::Pending | WindowState::Ready => {}
+        }
+        let previous_plane = current.plane;
+        let plane = self.select_plane(
+            current.plane,
+            buffering,
+            Some(slot),
+            current.owner,
+            current.session,
+        )?;
+        if plane != previous_plane {
+            crate::log_info!(
+                target: "ui4";
+                "ui4 replacement-frame plane isolated previous_slot={} assigned_slot={} buffering={:?} owner={:?} window={}\n",
+                previous_plane.slot(),
+                plane.slot(),
+                buffering,
+                owner,
+                id.raw(),
+            );
+        }
+        let window = &mut self.windows[slot];
+        window.frame = frame;
+        window.buffering = buffering;
+        window.plane = plane;
+        window.state = WindowState::Pending;
+        window.publish_serial = 0;
+        window.damage = None;
+        window.revision = next_serial(window.revision);
+        self.mark_composition_changed();
+        Ok(())
     }
 
     fn checked_window_mut(
@@ -737,12 +851,13 @@ impl WindowBroker {
 }
 
 impl WindowRecord {
-    fn new(generation: u16, request: WindowCreate) -> Self {
+    fn new(generation: u16, request: WindowCreate, buffering: FrameBuffering) -> Self {
         Self {
             generation,
             owner: request.owner,
             session: request.session,
             frame: request.frame,
+            buffering,
             output: request.output,
             plane: request.plane,
             placement: request.placement,
@@ -762,6 +877,7 @@ impl WindowRecord {
             owner: self.owner,
             session: self.session,
             frame: self.frame,
+            buffering: self.buffering,
             output: self.output,
             plane: self.plane,
             placement: self.placement,
@@ -919,7 +1035,11 @@ fn reap_transition_retired_frames() {
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
-    let id = WINDOW_BROKER.lock().create(request)?;
+    let buffering = super::frame_snapshot(request.frame)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan
+        .buffering;
+    let id = WINDOW_BROKER.lock().create(request, buffering)?;
     if super::cursor_frame_inout::frame_opened(request.owner, request.session, id).is_err() {
         let _ = close_window(request.owner, id);
         return Err(WindowBrokerError::Capacity);
@@ -932,15 +1052,13 @@ pub(crate) fn replace_window_frame(
     id: WindowId,
     frame: FrameHandle,
 ) -> Result<(), WindowBrokerError> {
-    let mut broker = WINDOW_BROKER.lock();
-    let window = broker.checked_window_mut(owner, id)?;
-    window.frame = frame;
-    window.state = WindowState::Pending;
-    window.publish_serial = 0;
-    window.damage = None;
-    window.revision = next_serial(window.revision);
-    broker.mark_composition_changed();
-    drop(broker);
+    let buffering = super::frame_snapshot(frame)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan
+        .buffering;
+    WINDOW_BROKER
+        .lock()
+        .replace_frame(owner, id, frame, buffering)?;
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
 }

@@ -344,9 +344,8 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
 
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
-    PrimaryPlaneSourceFormat, RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError,
-    Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll,
-    Ui4PlaneSurfaceFlipPoll,
+    RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
+    Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
 };
 
 pub(crate) fn set_primary_plane_source(source: PrimaryPlaneSource, reason: &str) -> bool {
@@ -371,6 +370,10 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
 
 pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     self::display::poll_ui4_plane_surface_flip_batch()
+}
+
+pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
+    self::display::activate_ui4_application_rgba_planes()
 }
 
 pub(crate) fn cancel_ui4_plane_surface_flip_batch() {

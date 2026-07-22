@@ -167,7 +167,7 @@ fn lab256_write_fixed_control(
         core::ptr::write_volatile(dwords, LAB256_CONTROL_MAGIC);
         core::ptr::write_volatile(dwords.add(1), LAB256_CONTROL_VERSION);
         core::ptr::write_volatile(dwords.add(2), frame);
-        let mut flags = LAB256_FLAG_WRAP | LAB256_FLAG_MANDELBROT | LAB256_FLAG_FLOW_WARP;
+        let mut flags = LAB256_FLAG_WRAP;
         if pointer_xy.is_some() {
             flags |= LAB256_FLAG_POINTER_SHADE;
         }
@@ -186,11 +186,11 @@ fn lab256_write_fixed_control(
         core::ptr::write_volatile(dwords.add(8), 0.0367f32.to_bits());
         core::ptr::write_volatile(dwords.add(9), 0.0649f32.to_bits());
         core::ptr::write_volatile(dwords.add(10), 1.0f32.to_bits());
-        core::ptr::write_volatile(dwords.add(11), (-0.62f32).to_bits());
-        core::ptr::write_volatile(dwords.add(12), 0.0f32.to_bits());
-        core::ptr::write_volatile(dwords.add(13), 1.55f32.to_bits());
-        core::ptr::write_volatile(dwords.add(14), 48);
-        core::ptr::write_volatile(dwords.add(15), 0x53u32.wrapping_add(frame.wrapping_mul(7)));
+        core::ptr::write_volatile(dwords.add(11), 0.52f32.to_bits());
+        core::ptr::write_volatile(dwords.add(12), 0.12f32.to_bits());
+        core::ptr::write_volatile(dwords.add(13), 0.82f32.to_bits());
+        core::ptr::write_volatile(dwords.add(14), 1.0f32.to_bits());
+        core::ptr::write_volatile(dwords.add(15), 0x53);
         core::ptr::write_volatile(dwords.add(16), 0);
         core::ptr::write_volatile(dwords.add(17), LAB256_BACKGROUND_ALPHA.to_bits());
         core::ptr::write_volatile(dwords.add(18), present_fps.min(1_000));

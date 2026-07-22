@@ -132,6 +132,11 @@ const OVERLAY_PLANE_GPU_STRIDE: u64 = DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PI
 const OVERLAY_UNIVERSAL_PLANE_COUNT: usize = crate::ui4::UNIVERSAL_PLANE_COUNT - 1;
 const DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT: usize = 3;
 const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
+// After the boot logo retires, slot 0 joins the premultiplied-RGBA application
+// stack. Its compositor swap aliases occupy the gap between slot 4's
+// interaction surfaces and the direct-scanout alias arena.
+const UI4_SLOT0_OVERLAY_GPU_BASE: u64 =
+    INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE;
 // Published UI4 buffers keep producer-owned PPGTT addresses. Direct scanout
 // imports each producer surface into a display-owned GGTT alias. Keep enough
 // aliases for the deepest UI4 buffering contract so a triple-buffered scene
@@ -146,7 +151,7 @@ const UI4_DIRECT_SCANOUT_PIPE_STRIDE: u64 =
     UI4_DIRECT_SCANOUT_ALIAS_COUNT as u64 * UI4_DIRECT_SCANOUT_GPU_STRIDE;
 const UI4_DIRECT_SCANOUT_PLANE_STRIDE: u64 =
     DISPLAY_PIPELINE_COUNT as u64 * UI4_DIRECT_SCANOUT_PIPE_STRIDE;
-const UI4_DIRECT_SCANOUT_PLANE_COUNT: usize = 3;
+const UI4_DIRECT_SCANOUT_PLANE_COUNT: usize = crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT;
 const PRIMARY_SWAP_BUFFER_COUNT: usize = crate::ui4::FrameBuffering::Double.count();
 const PRIMARY_SWAP_GPU_BASE: u64 = 0x3100_0000;
 const PRIMARY_SWAP_GPU_STRIDE: u64 = 0x0100_0000;
@@ -182,6 +187,10 @@ const _: () = assert!(
 );
 const _: () = assert!(
     INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
+        <= UI4_SLOT0_OVERLAY_GPU_BASE
+);
+const _: () = assert!(
+    UI4_SLOT0_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
         <= UI4_DIRECT_SCANOUT_GPU_BASE
 );
 const _: () = assert!(
@@ -306,6 +315,12 @@ static OVERLAY_SURFACES_SLOT_1: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
 ];
+static OVERLAY_SURFACES_SLOT_0: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+    Mutex::new(OverlaySurfacePool::new()),
+];
 static OVERLAY_SURFACES_SLOT_2: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
@@ -325,6 +340,12 @@ static OVERLAY_SURFACES_SLOT_4: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
 ];
 static UI4_DIRECT_SCANOUT_SLOT_1: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+    Mutex::new(Ui4DirectScanoutPool::new()),
+];
+static UI4_DIRECT_SCANOUT_SLOT_0: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
@@ -6150,6 +6171,93 @@ fn ui4_rgba8_plane_stack_ready(pipe: PipeInfo) -> bool {
         && UI4_RGBA8_PLANE_STACK_PIPE_SLOT.load(Ordering::Acquire) == pipe.slot as u32
 }
 
+/// Hand the firmware-compatible XRGB boot primary to UI4 as the fourth native
+/// premultiplied-RGBA application plane. This is a one-time boundary after the
+/// logo producer is finished; normal runtime presentation changes only plane
+/// geometry, constant alpha and SURF.
+pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let Some(primary) = active_primary_surface() else {
+        return false;
+    };
+    let pipe = primary.pipe;
+    if overlay_plane_dynamic_flip_guard(
+        dev,
+        pipe,
+        crate::ui4::PRIMARY_PLANE_SLOT,
+        UI4_RGBA8_OVERLAY_CONTRACT,
+    )
+    .is_ok()
+    {
+        return true;
+    }
+    if !ui4_rgba8_plane_stack_ready(pipe) || primary.virt.is_null() {
+        return false;
+    }
+
+    // Boot scanout is XRGB bytes (B,G,R,X). Preserve the completed image while
+    // changing the storage convention to UI4's native R,G,B,A with opaque A.
+    for y in 0..primary.height as usize {
+        let row = unsafe {
+            primary
+                .virt
+                .add(y.saturating_mul(primary.pitch_bytes as usize))
+        };
+        for x in 0..primary.width as usize {
+            let pixel = unsafe { core::ptr::read_volatile(row.cast::<u32>().add(x)) };
+            let red = (pixel >> 16) & 0xFF;
+            let green = (pixel >> 8) & 0xFF;
+            let blue = pixel & 0xFF;
+            let rgba = red | (green << 8) | (blue << 16) | 0xFF00_0000;
+            unsafe { core::ptr::write_volatile(row.cast::<u32>().add(x), rgba) };
+        }
+    }
+    crate::intel::dma_flush(
+        primary.virt,
+        (primary.pitch_bytes as usize).saturating_mul(primary.height as usize),
+    );
+
+    let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
+    let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
+    let ctl = overlay_plane_ctl_enabled(ctl_before, UI4_RGBA8_OVERLAY_CONTRACT);
+    let color_ctl_off = plane.base() + UNI_PLANE_COLOR_CTL_OFF;
+    let color_ctl = plane_color_ctl_alpha(
+        crate::intel::mmio_read(dev, color_ctl_off),
+        UI4_RGBA8_OVERLAY_CONTRACT,
+    );
+    let surface = crate::intel::mmio_read(dev, plane.surf());
+    crate::intel::mmio_write(dev, plane.ctl(), ctl & !PLANE_CTL_ENABLE);
+    crate::intel::mmio_write(dev, color_ctl_off, color_ctl);
+    crate::intel::mmio_write(dev, plane.base() + UNI_PLANE_KEYVAL_OFF, 0);
+    program_overlay_plane_constant_alpha(dev, plane.base(), u8::MAX);
+    crate::intel::mmio_write(dev, plane.ctl(), ctl);
+    crate::intel::mmio_write(dev, plane.surf(), surface);
+    let (frame_before, frame_after, frame_wait) = wait_for_pipe_next_frame(dev, pipe);
+    let (live, live_iters) = wait_for_plane_live_for(dev, plane.base(), surface, 5_000_000);
+    let ready = live == surface
+        && overlay_plane_dynamic_flip_guard(
+            dev,
+            pipe,
+            crate::ui4::PRIMARY_PLANE_SLOT,
+            UI4_RGBA8_OVERLAY_CONTRACT,
+        )
+        .is_ok();
+    crate::log_info!(target: "ui4";
+        "ui4/application-plane-stack rgba_handoff={} pipe={} slots=0-3/premultiplied-rgba8 slot4=interaction-only boot_primary=xrgb-to-rgba-once cpu_blend=0 frame={}=>{} frame_wait={} surf=0x{:08X} live=0x{:08X} live_iters={}\n",
+        ready as u8,
+        pipe.name,
+        frame_before,
+        frame_after,
+        frame_wait,
+        surface,
+        live,
+        live_iters,
+    );
+    ready
+}
+
 pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
@@ -6834,6 +6942,7 @@ fn overlay_surface_pool(
     plane_slot: usize,
 ) -> Option<&'static Mutex<OverlaySurfacePool>> {
     match plane_slot {
+        0 => Some(&OVERLAY_SURFACES_SLOT_0[pipe.slot]),
         1 => Some(&OVERLAY_SURFACES_SLOT_1[pipe.slot]),
         2 => Some(&OVERLAY_SURFACES_SLOT_2[pipe.slot]),
         3 => Some(&OVERLAY_SURFACES_SLOT_3[pipe.slot]),
@@ -6847,6 +6956,7 @@ fn ui4_direct_scanout_pool(
     plane_slot: usize,
 ) -> Option<&'static Mutex<Ui4DirectScanoutPool>> {
     match plane_slot {
+        0 => Some(&UI4_DIRECT_SCANOUT_SLOT_0[pipe.slot]),
         1 => Some(&UI4_DIRECT_SCANOUT_SLOT_1[pipe.slot]),
         2 => Some(&UI4_DIRECT_SCANOUT_SLOT_2[pipe.slot]),
         3 => Some(&UI4_DIRECT_SCANOUT_SLOT_3[pipe.slot]),
@@ -6859,7 +6969,7 @@ fn ui4_direct_scanout_gpu_for_alias(
     plane_slot: usize,
     alias_index: usize,
 ) -> Option<u64> {
-    let plane_index = plane_slot.checked_sub(1)?;
+    let plane_index = plane_slot;
     if plane_index >= UI4_DIRECT_SCANOUT_PLANE_COUNT
         || alias_index >= UI4_DIRECT_SCANOUT_ALIAS_COUNT
     {
@@ -6876,6 +6986,14 @@ fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfac
 }
 
 fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize) -> Option<u64> {
+    if plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
+        if index >= OVERLAY_SWAP_BUFFER_COUNT {
+            return None;
+        }
+        return UI4_SLOT0_OVERLAY_GPU_BASE
+            .checked_add((pipe.slot as u64).checked_mul(OVERLAY_PIPE_GPU_STRIDE)?)?
+            .checked_add((index as u64).checked_mul(OVERLAY_SWAP_GPU_STRIDE)?);
+    }
     let plane_index = plane_slot.checked_sub(1)?;
     if plane_index >= OVERLAY_UNIVERSAL_PLANE_COUNT || index >= OVERLAY_SWAP_BUFFER_COUNT {
         return None;
@@ -6912,6 +7030,13 @@ fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u6
 }
 
 fn overlay_compose_rcs_gpu_for_surface(surface: OverlaySurface) -> Option<u64> {
+    if surface.plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
+        if surface.buffer_index >= OVERLAY_SWAP_BUFFER_COUNT {
+            return None;
+        }
+        return PRIMARY_COMPOSE_RCS_GPU_ALIAS_BASE
+            .checked_add((surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?);
+    }
     let plane_index = surface.plane_slot.checked_sub(1)?;
     if plane_index >= DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT
         || surface.buffer_index >= OVERLAY_SWAP_BUFFER_COUNT
@@ -8290,7 +8415,8 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         .pipeline
         .pipe()
         .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    if source.width == 0
+    if plane_slot >= crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT
+        || source.width == 0
         || source.height == 0
         || dest_width == 0
         || dest_height == 0
@@ -9748,7 +9874,7 @@ fn overlay_plane_dynamic_flip_guard(
     plane_slot: usize,
     alpha: OverlayAlphaMode,
 ) -> Result<(), &'static str> {
-    if !(1..=OVERLAY_UNIVERSAL_PLANE_COUNT).contains(&plane_slot) {
+    if plane_slot > OVERLAY_UNIVERSAL_PLANE_COUNT {
         return Err("surface-plane-slot");
     }
     if !ui4_rgba8_plane_stack_ready(pipe) {

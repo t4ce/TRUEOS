@@ -43,6 +43,7 @@ PLACE_OPTION="${TRUEGA_PLACE_OPTION:-4}"
 ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
 CLOCK_CONVERSION="${TRUEGA_CLOCK_CONVERSION:-1}"
 CLOCK_ROUTE_ORDER="${TRUEGA_CLOCK_ROUTE_ORDER:-1}"
+ROUTE_MAXFAN="${TRUEGA_ROUTE_MAXFAN:-23}"
 REQUIRED_TLP_FMAX_MHZ="${TRUEGA_REQUIRED_TLP_FMAX_MHZ:-100.5}"
 HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
 HOST_TARGET="${TRUEGA_HOST_TARGET:-x86_64-unknown-linux-gnu}"
@@ -162,7 +163,7 @@ set_option -place_option $PLACE_OPTION
 set_option -route_option $ROUTE_OPTION
 set_option -clock_route_order $CLOCK_ROUTE_ORDER
 set_option -correct_hold_violation 0
-set_option -route_maxfan 23
+set_option -route_maxfan $ROUTE_MAXFAN
 set_csr $PROJECT_DIR/src/serdes/serdes.csr
 run syn
 run pnr
