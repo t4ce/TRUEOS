@@ -134,6 +134,48 @@ architecture rtl of top is
 		);
 	end component;
 
+	-- Fixed ten-way LFM2.5 decode circuit selector.  The instance is deliberately
+	-- disabled until every resident engine and its model-feed data plane is joined.
+	-- With ENABLE=0 it publishes zero capability words, so host admission remains
+	-- fail-closed even though the final BAR/MSI envelope is already physical.
+	component truega_lfm25_decode_dispatch is
+		generic (
+			ENABLE : integer := 0
+		);
+		port (
+			clk                         : in  std_logic;
+			reset_n                     : in  std_logic;
+			command_i                   : in  std_logic_vector(31 downto 0);
+			position_i                  : in  std_logic_vector(31 downto 0);
+			session_epoch_i             : in  std_logic_vector(31 downto 0);
+			doorbell_i                  : in  std_logic;
+			doorbell_value_i            : in  std_logic_vector(31 downto 0);
+			capability_magic_o          : out std_logic_vector(31 downto 0);
+			capability_bits_o           : out std_logic_vector(31 downto 0);
+			state_o                     : out std_logic_vector(31 downto 0);
+			result0_o                   : out std_logic_vector(31 downto 0);
+			result1_o                   : out std_logic_vector(31 downto 0);
+			argmax_score_q30_o          : out std_logic_vector(63 downto 0);
+			execute_start_o             : out std_logic;
+			execute_operation_o         : out std_logic_vector(3 downto 0);
+			execute_layer_o             : out std_logic_vector(7 downto 0);
+			execute_position_o          : out std_logic_vector(31 downto 0);
+			execute_input_slot_o        : out std_logic_vector(7 downto 0);
+			execute_residual_slot_o     : out std_logic_vector(7 downto 0);
+			execute_session_epoch_o     : out std_logic_vector(31 downto 0);
+			execute_session_begin_o     : out std_logic;
+			engine_done_i               : in  std_logic;
+			engine_error_i              : in  std_logic;
+			engine_error_code_i         : in  std_logic_vector(31 downto 0);
+			engine_result_slot_i        : in  std_logic_vector(7 downto 0);
+			engine_result_position_i    : in  std_logic_vector(31 downto 0);
+			engine_argmax_token_i       : in  std_logic_vector(31 downto 0);
+			engine_argmax_rows_i        : in  std_logic_vector(31 downto 0);
+			engine_argmax_score_q30_i   : in  std_logic_vector(63 downto 0);
+			retire_o                    : out std_logic
+		);
+	end component;
+
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	type call_data_arr_t is array (0 to 23) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
@@ -180,6 +222,15 @@ architecture rtl of top is
 	constant BAR0_STREAM_RX_CAPTURE_COUNT_DW : integer := 16#0D0# / 4;
 	constant BAR0_STREAM_DECODED_WRITE_COUNT_DW : integer := 16#0D4# / 4;
 	constant BAR0_STREAM_RX_ERROR_COUNT_DW : integer := 16#0D8# / 4;
+	constant BAR0_DECODE_CAPABILITY_MAGIC_DW : integer := 16#0DC# / 4;
+	constant BAR0_DECODE_CAPABILITY_BITS_DW : integer := 16#0E0# / 4;
+	constant BAR0_DECODE_COMMAND_DW : integer := 16#0E4# / 4;
+	constant BAR0_DECODE_POSITION_DW : integer := 16#0E8# / 4;
+	constant BAR0_DECODE_SESSION_EPOCH_DW : integer := 16#0EC# / 4;
+	constant BAR0_DECODE_DOORBELL_DW : integer := 16#0F0# / 4;
+	constant BAR0_DECODE_STATE_DW : integer := 16#0F4# / 4;
+	constant BAR0_DECODE_RESULT0_DW : integer := 16#0F8# / 4;
+	constant BAR0_DECODE_RESULT1_DW : integer := 16#0FC# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
@@ -214,6 +265,9 @@ architecture rtl of top is
 	constant STREAM_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000002";
 	constant STREAM_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000003";
 	constant STREAM_ERROR_BAD_DOORBELL : std_logic_vector(31 downto 0) := x"BAD20001";
+	constant DECODE_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000002";
+	constant DECODE_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000003";
+	constant DECODE_OP_LM_HEAD_ARGMAX : std_logic_vector(7 downto 0) := x"09";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
 	constant BAR_READ_BANK_NONE : std_logic_vector(2 downto 0) := "000";
@@ -254,6 +308,8 @@ architecture rtl of top is
 	signal call_irq_request_count : unsigned(31 downto 0) := (others => '0');
 	signal call_irq_controller_ack_count : unsigned(31 downto 0) := (others => '0');
 	signal stream_irq_enable : std_logic := '0';
+	signal decode_irq_enable : std_logic := '0';
+	signal decode_irq_retire : std_logic;
 
 	-- Active-high logical state (the board outputs are inverted below).  Seed a
 	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
@@ -316,6 +372,17 @@ architecture rtl of top is
 	signal stream_engine_up_q30 : std_logic_vector(63 downto 0);
 	signal stream_engine_result_q30 : std_logic_vector(63 downto 0);
 	signal stream_accepted_write_count : std_logic_vector(31 downto 0);
+	signal lfm25_decode_capability_magic : std_logic_vector(31 downto 0);
+	signal lfm25_decode_capability_bits : std_logic_vector(31 downto 0);
+	signal lfm25_decode_command : std_logic_vector(31 downto 0) := (others => '0');
+	signal lfm25_decode_position : std_logic_vector(31 downto 0) := (others => '0');
+	signal lfm25_decode_session_epoch : std_logic_vector(31 downto 0) := (others => '0');
+	signal lfm25_decode_doorbell : std_logic := '0';
+	signal lfm25_decode_doorbell_value : std_logic_vector(31 downto 0) := (others => '0');
+	signal lfm25_decode_state : std_logic_vector(31 downto 0);
+	signal lfm25_decode_result0 : std_logic_vector(31 downto 0);
+	signal lfm25_decode_result1 : std_logic_vector(31 downto 0);
+	signal lfm25_decode_argmax_score_q30 : std_logic_vector(63 downto 0);
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal tx_pending_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -614,12 +681,49 @@ begin
 			accepted_write_count_o => stream_accepted_write_count
 		);
 
+	u_lfm25_decode_dispatch: truega_lfm25_decode_dispatch
+		generic map(
+			ENABLE => 0
+		)
+		port map(
+			clk                       => tlp_clk,
+			reset_n                   => pcie_core_reset_n,
+			command_i                 => lfm25_decode_command,
+			position_i                => lfm25_decode_position,
+			session_epoch_i           => lfm25_decode_session_epoch,
+			doorbell_i                => lfm25_decode_doorbell,
+			doorbell_value_i          => lfm25_decode_doorbell_value,
+			capability_magic_o        => lfm25_decode_capability_magic,
+			capability_bits_o         => lfm25_decode_capability_bits,
+			state_o                   => lfm25_decode_state,
+			result0_o                 => lfm25_decode_result0,
+			result1_o                 => lfm25_decode_result1,
+			argmax_score_q30_o        => lfm25_decode_argmax_score_q30,
+			execute_start_o           => open,
+			execute_operation_o       => open,
+			execute_layer_o           => open,
+			execute_position_o        => open,
+			execute_input_slot_o      => open,
+			execute_residual_slot_o   => open,
+			execute_session_epoch_o   => open,
+			execute_session_begin_o   => open,
+			engine_done_i             => '0',
+			engine_error_i            => '0',
+			engine_error_code_i       => (others => '0'),
+			engine_result_slot_i      => (others => '0'),
+			engine_result_position_i  => (others => '0'),
+			engine_argmax_token_i     => (others => '0'),
+			engine_argmax_rows_i      => (others => '0'),
+			engine_argmax_score_q30_i => (others => '0'),
+			retire_o                  => decode_irq_retire
+		);
+
 	u_completion_irq: truega_completion_irq
 		port map(
 			clk                => tlp_clk,
 			reset_n            => pcie_core_reset_n,
-			retire_i           => call_irq_retire,
-			interrupt_enable_i => call_flags(0) or stream_irq_enable,
+			retire_i           => call_irq_retire or decode_irq_retire,
+			interrupt_enable_i => call_flags(0) or stream_irq_enable or decode_irq_enable,
 			bar_ack_i          => call_irq_bar_ack,
 			controller_ack_i   => call_irq_controller_ack,
 			status_o           => call_irq_status,
@@ -855,6 +959,12 @@ begin
 					call_irq_request_count <= (others => '0');
 					call_irq_controller_ack_count <= (others => '0');
 					stream_irq_enable <= '0';
+					decode_irq_enable <= '0';
+					lfm25_decode_command <= (others => '0');
+					lfm25_decode_position <= (others => '0');
+					lfm25_decode_session_epoch <= (others => '0');
+					lfm25_decode_doorbell <= '0';
+					lfm25_decode_doorbell_value <= (others => '0');
 					stream_write <= '0';
 					stream_write_addr_dw <= (others => '0');
 					stream_write_data <= (others => '0');
@@ -959,6 +1069,10 @@ begin
 					call_irq_bar_ack <= '0';
 					stream_write <= '0';
 					stream_start <= '0';
+					lfm25_decode_doorbell <= '0';
+					if decode_irq_retire = '1' then
+						call_retire_count <= call_retire_count + 1;
+					end if;
 					if (call_irq_request = '1') and (call_irq_request_prev = '0') then
 						call_irq_request_count <= call_irq_request_count + 1;
 					end if;
@@ -1137,15 +1251,36 @@ begin
 							when 6 => read_data_dw := stream_gate_q30(63 downto 32);
 							when 7 => read_data_dw := stream_up_q30(31 downto 0);
 							when 8 => read_data_dw := stream_up_q30(63 downto 32);
-							when 9 => read_data_dw := stream_result_q30(31 downto 0);
-							when 10 => read_data_dw := stream_result_q30(63 downto 32);
-							when 11 => read_data_dw := stream_error_code;
+								when 9 =>
+									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
+										and (lfm25_decode_command(7 downto 0) = DECODE_OP_LM_HEAD_ARGMAX) then
+										read_data_dw := lfm25_decode_argmax_score_q30(31 downto 0);
+									else
+										read_data_dw := stream_result_q30(31 downto 0);
+									end if;
+								when 10 =>
+									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
+										and (lfm25_decode_command(7 downto 0) = DECODE_OP_LM_HEAD_ARGMAX) then
+										read_data_dw := lfm25_decode_argmax_score_q30(63 downto 32);
+									else
+										read_data_dw := stream_result_q30(63 downto 32);
+									end if;
+								when 11 => read_data_dw := stream_error_code;
 							when 12 => read_data_dw := std_logic_vector(stream_completion_count);
 							when 13 => read_data_dw := stream_accepted_write_count;
 							when 14 => read_data_dw := std_logic_vector(dbg_rx_capture_count);
 							when 15 => read_data_dw := std_logic_vector(dbg_write_count);
-							when 16 => read_data_dw := std_logic_vector(dbg_rx_error_count);
-							when others => null;
+								when 16 => read_data_dw := std_logic_vector(dbg_rx_error_count);
+								when 17 => read_data_dw := lfm25_decode_capability_magic;
+								when 18 => read_data_dw := lfm25_decode_capability_bits;
+								when 19 => read_data_dw := lfm25_decode_command;
+								when 20 => read_data_dw := lfm25_decode_position;
+								when 21 => read_data_dw := lfm25_decode_session_epoch;
+								when 22 => read_data_dw := (others => '0');
+								when 23 => read_data_dw := lfm25_decode_state;
+								when 24 => read_data_dw := lfm25_decode_result0;
+								when 25 => read_data_dw := lfm25_decode_result1;
+								when others => null;
 							end case;
 							bar_read_stream_data_dw <= read_data_dw;
 						when BAR_READ_BANK_DEBUG =>
@@ -1296,19 +1431,23 @@ begin
 										call_irq_retire <= '1';
 										call_retire_count <= call_retire_count + 1;
 									end if;
-								elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
-									if payload_dw(0) = '1' then
-										call_irq_bar_ack <= '1';
+							elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
+								if payload_dw(0) = '1' then
+									call_irq_bar_ack <= '1';
 										if (stream_state = STREAM_STATE_COMPLETE)
 											or (stream_state = STREAM_STATE_FAILED) then
-											stream_irq_enable <= '0';
-										end if;
+										stream_irq_enable <= '0';
 									end if;
+									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
+										or (lfm25_decode_state = DECODE_STATE_FAILED) then
+										decode_irq_enable <= '0';
+									end if;
+								end if;
 								elsif addr_index = BAR0_STREAM_CONTROL_DW then
 									stream_control <= payload_dw;
 								elsif addr_index = BAR0_STREAM_ROW_DW then
 									stream_row <= payload_dw;
-								elsif addr_index = BAR0_STREAM_DOORBELL_DW then
+							elsif addr_index = BAR0_STREAM_DOORBELL_DW then
 									stream_irq_enable <= stream_control(8);
 									if (payload_dw = STREAM_DOORBELL_MAGIC)
 										and (stream_state /= STREAM_STATE_BUSY)
@@ -1323,9 +1462,21 @@ begin
 										stream_error_code <= STREAM_ERROR_BAD_DOORBELL;
 										stream_completion_count <= stream_completion_count + 1;
 										call_irq_retire <= '1';
-										call_retire_count <= call_retire_count + 1;
-									end if;
-								else
+									call_retire_count <= call_retire_count + 1;
+								end if;
+							elsif addr_index = BAR0_DECODE_COMMAND_DW then
+								lfm25_decode_command <= payload_dw;
+							elsif addr_index = BAR0_DECODE_POSITION_DW then
+								lfm25_decode_position <= payload_dw;
+							elsif addr_index = BAR0_DECODE_SESSION_EPOCH_DW then
+								lfm25_decode_session_epoch <= payload_dw;
+							elsif addr_index = BAR0_DECODE_DOORBELL_DW then
+								-- TGD1 owns interrupt admission for exactly this doorbell;
+								-- it never depends on the legacy row stream's control bit.
+								decode_irq_enable <= '1';
+								lfm25_decode_doorbell_value <= payload_dw;
+								lfm25_decode_doorbell <= '1';
+							else
 									case addr_dw(9 downto 0) is
 									when BAR0_LED_DW =>
 										if payload_dw = LED_DEBUG_ON then
@@ -1382,8 +1533,8 @@ begin
 									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
 									bar_read_bank <= BAR_READ_BANK_MANIFEST;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
-								elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)
-									and (addr_index <= BAR0_STREAM_RX_ERROR_COUNT_DW) then
+							elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)
+								and (addr_index <= BAR0_DECODE_RESULT1_DW) then
 									bar_read_bank <= BAR_READ_BANK_STREAM;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_STREAM_CAPABILITY_DW, 6));
 								elsif (addr_index >= 16) and (addr_index <= 30) then

@@ -270,7 +270,7 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
         super::h264_encode_udp::broadcast_annex_b(proof.annex_b.as_slice(), stream_session_id)
             .await;
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-stream complete protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_send_errors={} network_waits={} destination=255.255.255.255:{} bounded_seconds={} surflive_payload=0\n",
+        "intel/media-encode: udp-stream complete protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} peer={}.{}.{}.{}:{} bounded_seconds={} surflive_payload=0\n",
         udp_report.session_id,
         udp_report.queued_access_units,
         udp_report.sent_access_units,
@@ -283,7 +283,12 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
         udp_report.submit_retries,
         udp_report.adapter_send_errors,
         udp_report.network_waits,
-        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+        udp_report.subscriber_wait_polls,
+        udp_report.peer_addr[0],
+        udp_report.peer_addr[1],
+        udp_report.peer_addr[2],
+        udp_report.peer_addr[3],
+        udp_report.peer_port,
         crate::allcaps::media_encode::STREAM_RING_SECONDS,
     );
 

@@ -8,9 +8,13 @@ use alloc::{collections::VecDeque, vec::Vec};
 
 use embassy_time::{Duration, Timer};
 
-use crate::r::net::{VNet, udp::VNetUdpEndpoint};
+use crate::r::net::{
+    VNet,
+    udp::{VNetUdpEndpoint, VNetUdpEvent, VNetUdpPacket},
+};
 
 const MAGIC: &[u8; 4] = b"TME1";
+const SUBSCRIBE: &[u8; 8] = b"TME1GET1";
 const VERSION: u8 = 1;
 const HEADER_BYTES: usize = 32;
 const DATAGRAM_BYTES: usize = 1200;
@@ -22,6 +26,7 @@ const FLAG_SESSION_END: u8 = 1 << 3;
 const UDP_OPEN_TIMEOUT_MS: u64 = 4_000;
 const UDP_RETRY_MS: u64 = 250;
 const UDP_PACKET_PACE_MS: u64 = 1;
+const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
 
 #[derive(Debug)]
@@ -101,6 +106,9 @@ pub(super) struct MediaUdpStreamReport {
     pub(super) submit_retries: usize,
     pub(super) adapter_send_errors: usize,
     pub(super) network_waits: usize,
+    pub(super) subscriber_wait_polls: usize,
+    pub(super) peer_addr: [u8; 4],
+    pub(super) peer_port: u16,
 }
 
 /// Broadcast one bounded test stream through the kernel VNet UDP path.
@@ -123,7 +131,7 @@ pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaU
     }
 
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-stream staged=1 protocol=tme1 version={} session={} payload=annexb-access-units queued_units={} queued_bytes={} ring_seconds={} ring_units_cap={} ring_bytes_cap={} overflow=drop-oldest transport=udp-broadcast destination=255.255.255.255:{} network=waiting\n",
+        "intel/media-encode: udp-stream staged=1 protocol=tme1 version={} session={} payload=annexb-access-units queued_units={} queued_bytes={} ring_seconds={} ring_units_cap={} ring_bytes_cap={} overflow=drop-oldest transport=udp-subscribe-unicast listen_port={} subscriber_token=TME1GET1 network=waiting\n",
         VERSION,
         session_id,
         report.queued_access_units,
@@ -163,9 +171,47 @@ pub(super) async fn broadcast_annex_b(annex_b: &[u8], session_id: u32) -> MediaU
         break udp;
     };
 
-    let remote = v::vnet::EndpointV4::new(
-        [255, 255, 255, 255],
-        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+    let remote = loop {
+        match udp.poll_event() {
+            Some(VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }))
+                if data.as_slice() == SUBSCRIBE =>
+            {
+                break from;
+            }
+            Some(VNetUdpEvent::Closed) => {
+                report.network_waits = report.network_waits.saturating_add(1);
+                udp = loop {
+                    let Some(reopened) = VNetUdpEndpoint::bind(
+                        &net,
+                        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+                        Duration::from_millis(UDP_OPEN_TIMEOUT_MS),
+                    )
+                    .await
+                    else {
+                        report.network_waits = report.network_waits.saturating_add(1);
+                        Timer::after(Duration::from_millis(UDP_RETRY_MS)).await;
+                        continue;
+                    };
+                    break reopened;
+                };
+            }
+            Some(_) | None => {
+                report.subscriber_wait_polls = report.subscriber_wait_polls.saturating_add(1);
+                Timer::after(Duration::from_millis(UDP_SUBSCRIBER_POLL_MS)).await;
+            }
+        }
+    };
+    report.peer_addr = remote.addr;
+    report.peer_port = remote.port;
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: udp-stream subscriber=accepted session={} peer={}.{}.{}.{}:{} wait_polls={} action=drain-ring\n",
+        session_id,
+        remote.addr[0],
+        remote.addr[1],
+        remote.addr[2],
+        remote.addr[3],
+        remote.port,
+        report.subscriber_wait_polls,
     );
     let final_sequence = ring.queue.back().map(|unit| unit.sequence);
     let mut datagram_sequence = 0u32;

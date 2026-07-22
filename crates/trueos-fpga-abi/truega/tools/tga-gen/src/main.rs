@@ -938,6 +938,8 @@ mod tests {
     const BOARD_SDC: &str = include_str!("../../../src/min_pci_led.sdc");
     const PCIE_PLL: &str = include_str!("../../../src/gowin_pll/gowin_pll.v");
     const ROW_STREAMER_RTL: &str = include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
+    const DECODE_DISPATCH_RTL: &str =
+        include_str!("../../../src/compute/truega_lfm25_decode_dispatch.v");
     const GOWIN_PROJECT: &str = include_str!("../../../min_pci_led.gprj");
     const PCIE_CONTROLLER_IPC: &str =
         include_str!("../../../src/serdes/pcie_controller/pcie_controller.ipc");
@@ -1220,6 +1222,37 @@ mod tests {
             assert!(ROW_STREAMER_RTL.contains(required), "missing row engine: {required}");
         }
         assert!(GOWIN_PROJECT.contains("truega_lfm25_row_streamer.v"));
+    }
+
+    #[test]
+    fn final_image_has_a_fail_closed_tgd1_bar_msi_envelope() {
+        for required in [
+            "component truega_lfm25_decode_dispatch is",
+            "u_lfm25_decode_dispatch: truega_lfm25_decode_dispatch",
+            "ENABLE => 0",
+            "BAR0_DECODE_CAPABILITY_MAGIC_DW",
+            "BAR0_DECODE_RESULT1_DW",
+            "decode_irq_enable <= '1';",
+            "call_flags(0) or stream_irq_enable or decode_irq_enable",
+            "call_irq_retire or decode_irq_retire",
+        ] {
+            assert!(
+                TOP_VHDL.contains(required),
+                "missing fail-closed TGD1 transport boundary: {required}"
+            );
+        }
+        for required in [
+            "parameter integer ENABLE = 0",
+            "assign capability_magic_o = ENABLE != 0",
+            "assign capability_bits_o = ENABLE != 0",
+            "output reg                  retire_o",
+        ] {
+            assert!(
+                DECODE_DISPATCH_RTL.contains(required),
+                "missing TGD1 dispatcher invariant: {required}"
+            );
+        }
+        assert!(GOWIN_PROJECT.contains("truega_lfm25_decode_dispatch.v"));
     }
 
     #[test]

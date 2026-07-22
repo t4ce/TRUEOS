@@ -129,6 +129,7 @@ module truega_lfm25_resident_tensor_store_tb;
         q8_tslot = 1;
         q8_tepoch = first_epoch;
         q8_tbegin = 1;
+        #1;
         if (!q30_tbegin_ready || !q8_tbegin_ready)
             failures = failures + 1;
         @(negedge clk);
@@ -155,6 +156,7 @@ module truega_lfm25_resident_tensor_store_tb;
             q30_windex = index[9:0];
             q30_wdata = index == 777 ? -64'sd123456789 : index;
             q30_wvalid = 1;
+            #1;
             if (!q30_wready)
                 failures = failures + 1;
         end
@@ -170,6 +172,7 @@ module truega_lfm25_resident_tensor_store_tb;
                 : index;
             q8_wepoch = first_epoch;
             q8_wvalid = 1;
+            #1;
             if (!q8_wready)
                 failures = failures + 1;
         end
@@ -256,7 +259,7 @@ module truega_lfm25_resident_tensor_store_tb;
         q30_wvalid = 0;
 
         if (failures == 0)
-            $display("PASS lfm25_resident_tensor_store typed=q30+q8 epoch=stale-reject payload_reset=logical");
+            $display("PASS lfm25_resident_tensor_store typed=q30+q8 epoch=stale-reject transaction=full-vector-commit partial=unreadable payload_reset=logical");
         else
             $display("FAIL lfm25_resident_tensor_store failures=%0d", failures);
         $finish;

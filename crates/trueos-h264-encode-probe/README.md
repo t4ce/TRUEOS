@@ -15,6 +15,17 @@ boot the kernel audits Intel media-encode readiness, runs this software
 fallback because hardware encode is not wired yet, and writes
 `trueosfs:/video_encode_<timestamp>.h264`.
 
+The same Annex-B access units enter a hard-bounded seven-second ring. The
+Ubuntu receiver broadcasts `TME1GET1` on UDP port 9650; TRUEOS pins that peer
+and drains 1200-byte CRC-protected `TME1` datagrams to it. Build and run the
+standalone receiver from the repository root:
+
+```sh
+rustc --edition=2024 -O tools/media_encode_udp_receiver.rs \
+  -o media_encode_udp_receiver
+./media_encode_udp_receiver --output trueos-media-encode.h264 --ffmpeg-check
+```
+
 The checked-in asset can be reproduced with the host-only generator:
 
 ```sh

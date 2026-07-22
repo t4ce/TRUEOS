@@ -1,0 +1,10 @@
+[package]
+name = "fpga-abi-feed-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+trueos-fpga-abi = { path = "../../crates/trueos-fpga-abi" }
+
+[workspace]

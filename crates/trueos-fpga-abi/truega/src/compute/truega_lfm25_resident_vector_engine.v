@@ -13,6 +13,7 @@ module truega_lfm25_resident_vector_engine #(
 ) (
     input  wire                 clk,
     input  wire                 reset_n,
+    input  wire                 abort_i,
 
     input  wire                 command_valid_i,
     output wire                 command_ready_o,
@@ -78,6 +79,12 @@ module truega_lfm25_resident_vector_engine #(
     localparam [4:0] ST_INSPECT_WAIT        = 5'd20;
     localparam [4:0] ST_INSPECT_RESULT      = 5'd21;
     localparam [4:0] ST_RESULT              = 5'd22;
+    localparam [4:0] ST_EMBED_TXN_BEGIN     = 5'd23;
+    localparam [4:0] ST_EMBED_COMMIT        = 5'd24;
+    localparam [4:0] ST_RMS_TXN_BEGIN       = 5'd25;
+    localparam [4:0] ST_RMS_COMMIT          = 5'd26;
+    localparam [4:0] ST_RES_TXN_BEGIN       = 5'd27;
+    localparam [4:0] ST_RES_COMMIT          = 5'd28;
 
     reg [4:0] state;
     reg [36:0] source0_handle;
@@ -143,7 +150,9 @@ module truega_lfm25_resident_vector_engine #(
         && command_destination_type == HANDLE_Q30
         && command_source0_slot < Q30_SLOTS
         && command_source1_slot < Q30_SLOTS
-        && command_destination_slot < Q30_SLOTS;
+        && command_destination_slot < Q30_SLOTS
+        && command_destination_slot != command_source0_slot
+        && command_destination_slot != command_source1_slot;
 
     assign command_ready_o = state == ST_IDLE && !inspect_valid_i;
     assign embedding_block_ready_o = state == ST_EMBED_BLOCK;
@@ -166,6 +175,16 @@ module truega_lfm25_resident_vector_engine #(
     wire store_q8_read_rsp;
     wire [271:0] store_q8_read_data;
     wire store_q8_read_error;
+    wire store_q30_transaction_begin_ready;
+    wire store_q30_transaction_commit_ready;
+    wire store_q8_transaction_begin_ready;
+    wire store_q8_transaction_commit_ready;
+    wire store_q30_transaction_begin = state == ST_EMBED_TXN_BEGIN
+        || state == ST_RES_TXN_BEGIN;
+    wire store_q30_transaction_commit = !abort_i
+        && (state == ST_EMBED_COMMIT || state == ST_RES_COMMIT);
+    wire store_q8_transaction_begin = state == ST_RMS_TXN_BEGIN;
+    wire store_q8_transaction_commit = !abort_i && state == ST_RMS_COMMIT;
 
     wire inspect_type = inspect_handle_i[4];
     wire [31:0] inspect_epoch = inspect_handle_i[36:5];
@@ -306,6 +325,20 @@ module truega_lfm25_resident_vector_engine #(
         .session_epoch_o(session_epoch_o),
         .session_begin_done_o(store_session_done),
         .session_begin_error_o(store_session_error),
+        .q30_transaction_begin_i(store_q30_transaction_begin),
+        .q30_transaction_commit_i(store_q30_transaction_commit),
+        .q30_transaction_slot_i(destination_slot),
+        .q30_transaction_epoch_i(destination_epoch),
+        .q30_transaction_begin_ready_o(
+            store_q30_transaction_begin_ready),
+        .q30_transaction_commit_ready_o(
+            store_q30_transaction_commit_ready),
+        .q8_transaction_begin_i(store_q8_transaction_begin),
+        .q8_transaction_commit_i(store_q8_transaction_commit),
+        .q8_transaction_slot_i(destination_slot),
+        .q8_transaction_epoch_i(destination_epoch),
+        .q8_transaction_begin_ready_o(store_q8_transaction_begin_ready),
+        .q8_transaction_commit_ready_o(store_q8_transaction_commit_ready),
         .q30_write_valid_i(store_q30_write_valid),
         .q30_write_slot_i(store_q30_write_slot),
         .q30_write_index_i(store_q30_write_index),
@@ -357,7 +390,17 @@ module truega_lfm25_resident_vector_engine #(
             inspect_rsp_data_o <= 272'd0;
         end else begin
             worker_reset <= 1'b0;
-            case (state)
+            if (abort_i && busy_o) begin
+                // Destination validity was cleared by transaction begin.
+                // Reset only worker state; payload RAM remains untouched and
+                // the uncommitted slot stays unreadable.
+                worker_reset <= 1'b1;
+                rms_input_valid <= 1'b0;
+                residual_input_valid <= 1'b0;
+                result_error_o <= 1'b1;
+                result_handle_o <= 37'd0;
+                state <= ST_RESULT;
+            end else case (state)
                 ST_IDLE: begin
                     rms_input_valid <= 1'b0;
                     residual_input_valid <= 1'b0;
@@ -366,7 +409,9 @@ module truega_lfm25_resident_vector_engine #(
                         source1_handle <= command_source1_handle_i;
                         destination_handle <= command_destination_handle_i;
                         result_error_o <= 1'b0;
-                        result_handle_o <= command_destination_handle_i;
+                        // A destination handle is not published until the
+                        // full-vector transaction has committed.
+                        result_handle_o <= 37'd0;
                         block_index <= 5'd0;
                         element_index <= 10'd0;
                         if (command_operation_i == OP_TOKEN_EMBEDDING
@@ -374,10 +419,10 @@ module truega_lfm25_resident_vector_engine #(
                             state <= ST_SESSION_BEGIN;
                         end else if (command_operation_i == OP_RMSNORM
                                 && rms_command_valid) begin
-                            state <= ST_RMS_START;
+                            state <= ST_RMS_TXN_BEGIN;
                         end else if (command_operation_i == OP_RESIDUAL_ADD
                                 && residual_command_valid) begin
-                            state <= ST_RES_START;
+                            state <= ST_RES_TXN_BEGIN;
                         end else begin
                             result_error_o <= 1'b1;
                             result_handle_o <= 37'd0;
@@ -407,9 +452,14 @@ module truega_lfm25_resident_vector_engine #(
                             state <= ST_RESULT;
                         end else begin
                             block_index <= 5'd0;
-                            state <= ST_EMBED_BLOCK;
+                            state <= ST_EMBED_TXN_BEGIN;
                         end
                     end
+                end
+
+                ST_EMBED_TXN_BEGIN: begin
+                    if (store_q30_transaction_begin_ready)
+                        state <= ST_EMBED_BLOCK;
                 end
 
                 ST_EMBED_BLOCK: begin
@@ -437,12 +487,24 @@ module truega_lfm25_resident_vector_engine #(
                             result_handle_o <= 37'd0;
                             state <= ST_RESULT;
                         end else if (block_index == 5'd31) begin
-                            state <= ST_RESULT;
+                            state <= ST_EMBED_COMMIT;
                         end else begin
                             block_index <= block_index + 5'd1;
                             state <= ST_EMBED_BLOCK;
                         end
                     end
+                end
+
+                ST_EMBED_COMMIT: begin
+                    if (store_q30_transaction_commit_ready) begin
+                        result_handle_o <= destination_handle;
+                        state <= ST_RESULT;
+                    end
+                end
+
+                ST_RMS_TXN_BEGIN: begin
+                    if (store_q8_transaction_begin_ready)
+                        state <= ST_RMS_START;
                 end
 
                 ST_RMS_START: begin
@@ -506,9 +568,23 @@ module truega_lfm25_resident_vector_engine #(
                                 || rms_blocks != 6'd32) begin
                             result_error_o <= 1'b1;
                             result_handle_o <= 37'd0;
+                            state <= ST_RESULT;
+                        end else begin
+                            state <= ST_RMS_COMMIT;
                         end
+                    end
+                end
+
+                ST_RMS_COMMIT: begin
+                    if (store_q8_transaction_commit_ready) begin
+                        result_handle_o <= destination_handle;
                         state <= ST_RESULT;
                     end
+                end
+
+                ST_RES_TXN_BEGIN: begin
+                    if (store_q30_transaction_begin_ready)
+                        state <= ST_RES_START;
                 end
 
                 ST_RES_START: begin
@@ -576,7 +652,16 @@ module truega_lfm25_resident_vector_engine #(
                         if (residual_error || residual_elements != 11'd1024) begin
                             result_error_o <= 1'b1;
                             result_handle_o <= 37'd0;
+                            state <= ST_RESULT;
+                        end else begin
+                            state <= ST_RES_COMMIT;
                         end
+                    end
+                end
+
+                ST_RES_COMMIT: begin
+                    if (store_q30_transaction_commit_ready) begin
+                        result_handle_o <= destination_handle;
                         state <= ST_RESULT;
                     end
                 end

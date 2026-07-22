@@ -1,9 +1,10 @@
 //! Bounded Ubuntu/Linux receiver for the TRUEOS media-encode UDP probe.
 //!
-//! The first probe is deliberately one-way and discovery-free: TRUEOS broadcasts
-//! encoded H.264 Annex-B access-unit fragments to `255.255.255.255:9650`; this
-//! tool binds `0.0.0.0:9650`, reassembles complete access units, and writes them
-//! in sequence to an `.h264` file. It does not receive decoded video frames.
+//! The first probe is one-way after a tiny subscription handshake: this tool
+//! broadcasts `TME1GET1` to `255.255.255.255:9650` until TRUEOS pins the source
+//! endpoint and unicasts encoded H.264 Annex-B access-unit fragments back. The
+//! receiver reassembles complete access units and writes them in sequence to an
+//! `.h264` file. It does not receive decoded video frames.
 //!
 //! TME1 wire format (all integer fields are big-endian):
 //!
@@ -57,6 +58,9 @@ const DEFAULT_MAX_AU_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_MAX_INFLIGHT_AUS: usize = 32;
 const DEFAULT_REORDER_MS: u64 = 750;
 const MAX_AU_SEQUENCE_AHEAD: u32 = 4096;
+const SUBSCRIBE_TOKEN: &[u8; 8] = b"TME1GET1";
+const SUBSCRIBE_TARGET: &str = "255.255.255.255:9650";
+const SUBSCRIBE_INTERVAL: Duration = Duration::from_millis(500);
 
 const FLAG_START: u8 = 1 << 0;
 const FLAG_END: u8 = 1 << 1;
@@ -74,6 +78,7 @@ struct Config {
     reorder_timeout: Duration,
     idle_exit: Option<Duration>,
     decoder: Option<DecoderKind>,
+    subscribe: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -93,6 +98,7 @@ impl Config {
             reorder_timeout: Duration::from_millis(DEFAULT_REORDER_MS),
             idle_exit: None,
             decoder: None,
+            subscribe: true,
         };
 
         let mut args = env::args().skip(1);
@@ -100,9 +106,7 @@ impl Config {
             match arg.as_str() {
                 "-h" | "--help" => return Ok(None),
                 "--bind" => config.bind = required_value(&mut args, "--bind")?,
-                "--output" => {
-                    config.output = PathBuf::from(required_value(&mut args, "--output")?)
-                }
+                "--output" => config.output = PathBuf::from(required_value(&mut args, "--output")?),
                 "--max-buffer-bytes" => {
                     config.max_buffer_bytes = parse_positive_usize(
                         &required_value(&mut args, "--max-buffer-bytes")?,
@@ -136,9 +140,8 @@ impl Config {
                     config.idle_exit = Some(Duration::from_secs(seconds));
                 }
                 "--ffplay" => set_decoder(&mut config.decoder, DecoderKind::Ffplay)?,
-                "--ffmpeg-check" => {
-                    set_decoder(&mut config.decoder, DecoderKind::FfmpegCheck)?
-                }
+                "--ffmpeg-check" => set_decoder(&mut config.decoder, DecoderKind::FfmpegCheck)?,
+                "--no-subscribe" => config.subscribe = false,
                 _ => return Err(format!("unknown argument: {arg}")),
             }
         }
@@ -200,11 +203,13 @@ Usage: {program} [OPTIONS]
   --idle-exit-secs N        exit after N seconds without a valid pinned-session packet
   --ffplay                  explicitly pipe completed AUs to ffplay as well as the file
   --ffmpeg-check            explicitly decode completed AUs to ffmpeg's null muxer
+  --no-subscribe            receive passively; do not broadcast TME1GET1 requests
   -h, --help                show this help
 
-Wire: one-way TRUEOS broadcast to UDP port {DEFAULT_PORT}; TME1 v1, 32-byte
-big-endian header, <=1168-byte fragment payload, <=1200-byte datagram. The
-payload is an already encoded H.264 Annex-B access unit, not a decoded frame."
+Wire: until media arrives, the bound socket broadcasts TME1GET1 to UDP port
+{DEFAULT_PORT} every 500 ms. TRUEOS then unicasts TME1 v1 data to that source:
+32-byte big-endian header, <=1168-byte payload, <=1200-byte datagram. The
+payload is an encoded H.264 Annex-B access unit, not a decoded frame."
     );
 }
 
@@ -387,17 +392,22 @@ impl DatagramSequence {
     fn observe(&mut self, sequence: u32, stats: &mut Stats) {
         let Some(highest) = self.highest else {
             self.highest = Some(sequence);
+            if sequence != 0 {
+                stats.datagram_gap_events += 1;
+                stats.datagrams_missing_observed += u64::from(sequence);
+                eprintln!("initial datagram gap expected=0 got={sequence} missing={sequence}");
+            }
             return;
         };
 
         if sequence > highest {
-            if sequence > highest + 1 {
+            if sequence > highest.saturating_add(1) {
                 let missing = u64::from(sequence - highest - 1);
                 stats.datagram_gap_events += 1;
                 stats.datagrams_missing_observed += missing;
                 eprintln!(
                     "datagram gap expected={} got={} missing={missing}",
-                    highest + 1,
+                    highest.saturating_add(1),
                     sequence
                 );
             }
@@ -455,15 +465,14 @@ impl AccessUnit {
                 break;
             }
         }
-        length >= 3
-            && (prefix[..3] == [0, 0, 1]
-                || (length >= 4 && prefix[..4] == [0, 0, 0, 1]))
+        length >= 3 && (prefix[..3] == [0, 0, 1] || (length >= 4 && prefix[..4] == [0, 0, 0, 1]))
     }
 }
 
 struct Reassembler {
     access_units: BTreeMap<u32, AccessUnit>,
     next_access_unit: u32,
+    session_end: Option<(u32, Instant)>,
     used_bytes: usize,
     max_buffer_bytes: usize,
     max_au_bytes: usize,
@@ -482,6 +491,7 @@ impl Reassembler {
         Self {
             access_units: BTreeMap::new(),
             next_access_unit: 0,
+            session_end: None,
             used_bytes: 0,
             max_buffer_bytes: config.max_buffer_bytes,
             max_au_bytes: config.max_au_bytes,
@@ -496,6 +506,15 @@ impl Reassembler {
         }
         if packet.access_unit_seq - self.next_access_unit > MAX_AU_SEQUENCE_AHEAD {
             return InsertResult::Rejected("access-unit sequence too far ahead");
+        }
+        if packet.flags & FLAG_SESSION_END != 0 {
+            if self
+                .session_end
+                .is_some_and(|(sequence, _)| sequence != packet.access_unit_seq)
+            {
+                return InsertResult::Rejected("session-end access unit changed");
+            }
+            self.session_end = Some((packet.access_unit_seq, now));
         }
 
         if let Some(existing) = self.access_units.get(&packet.access_unit_seq) {
@@ -559,9 +578,14 @@ impl Reassembler {
 
     fn skip_stalled(&mut self, now: Instant, stats: &mut Stats) -> bool {
         if let Some(access_unit) = self.access_units.get(&self.next_access_unit) {
+            let later_access_unit_exists = self
+                .access_units
+                .range((self.next_access_unit.saturating_add(1))..)
+                .next()
+                .is_some();
             if !access_unit.is_complete()
                 && now.duration_since(access_unit.last_seen) >= self.reorder_timeout
-                && self.access_units.range((self.next_access_unit + 1)..).next().is_some()
+                && (later_access_unit_exists || access_unit.session_end)
             {
                 let sequence = self.next_access_unit;
                 let access_unit = self.access_units.remove(&sequence).unwrap();
@@ -580,6 +604,21 @@ impl Reassembler {
         }
 
         let Some((&first_sequence, first_access_unit)) = self.access_units.first_key_value() else {
+            let Some((end_sequence, end_seen)) = self.session_end else {
+                return false;
+            };
+            if self.next_access_unit <= end_sequence
+                && now.duration_since(end_seen) >= self.reorder_timeout
+            {
+                let missing = end_sequence - self.next_access_unit + 1;
+                eprintln!(
+                    "dropping missing final AU range={}..{end_sequence} count={missing}",
+                    self.next_access_unit
+                );
+                stats.access_units_dropped += u64::from(missing);
+                self.next_access_unit = end_sequence.saturating_add(1);
+                return true;
+            }
             return false;
         };
         if first_sequence <= self.next_access_unit
@@ -597,6 +636,11 @@ impl Reassembler {
         stats.access_units_dropped += u64::from(missing);
         self.next_access_unit = first_sequence;
         true
+    }
+
+    fn ended(&self) -> Option<u32> {
+        self.session_end
+            .and_then(|(sequence, _)| (self.next_access_unit > sequence).then_some(sequence))
     }
 }
 
@@ -690,10 +734,14 @@ impl Output {
     fn write_access_unit(&mut self, access_unit: &AccessUnit) -> io::Result<()> {
         for fragment in access_unit.fragments.iter().flatten() {
             self.file.write_all(fragment)?;
-            if let Some(decoder) = &mut self.decoder {
-                if let Err(error) = decoder.write_fragment(fragment) {
-                    eprintln!("decoder pipe failed ({error}); capture will continue to the file");
-                    self.decoder = None;
+            let decoder_error = self
+                .decoder
+                .as_mut()
+                .and_then(|decoder| decoder.write_fragment(fragment).err());
+            if let Some(error) = decoder_error {
+                eprintln!("decoder pipe failed ({error}); capture will continue to the file");
+                if let Some(decoder) = self.decoder.take() {
+                    decoder.finish();
                 }
             }
         }
@@ -745,12 +793,15 @@ fn drain_ready(
         }
         break;
     }
-    Ok(finished_session)
+    Ok(finished_session.or_else(|| reassembler.ended()))
 }
 
 fn run(config: Config) -> io::Result<()> {
     let socket = UdpSocket::bind(&config.bind)?;
     socket.set_read_timeout(Some(Duration::from_millis(100)))?;
+    if config.subscribe {
+        socket.set_broadcast(true)?;
+    }
     let local = socket.local_addr()?;
     let mut output = Output::open(&config)?;
     let mut reassembler = Reassembler::new(&config);
@@ -761,6 +812,8 @@ fn run(config: Config) -> io::Result<()> {
     let started = Instant::now();
     let mut last_valid_packet = started;
     let mut last_report = started;
+    let mut subscription_sent = false;
+    let mut last_subscription = started;
 
     eprintln!(
         "listening on {local}; output={} max_buffer_bytes={} max_au_bytes={} max_inflight_aus={}",
@@ -772,8 +825,35 @@ fn run(config: Config) -> io::Result<()> {
 
     loop {
         let now = Instant::now();
+        if config.subscribe
+            && pinned.is_none()
+            && (!subscription_sent || now.duration_since(last_subscription) >= SUBSCRIBE_INTERVAL)
+        {
+            match socket.send_to(SUBSCRIBE_TOKEN, SUBSCRIBE_TARGET) {
+                Ok(length) if length == SUBSCRIBE_TOKEN.len() => {
+                    if !subscription_sent {
+                        eprintln!(
+                            "subscription broadcast target={SUBSCRIBE_TARGET} token=TME1GET1"
+                        );
+                    }
+                }
+                Ok(length) => eprintln!(
+                    "short subscription broadcast target={SUBSCRIBE_TARGET} sent={length}/{}",
+                    SUBSCRIBE_TOKEN.len()
+                ),
+                Err(error) => eprintln!(
+                    "subscription broadcast target={SUBSCRIBE_TARGET} failed: {error}; passive receive remains active"
+                ),
+            }
+            subscription_sent = true;
+            last_subscription = now;
+        }
+
         match socket.recv_from(&mut datagram) {
             Ok((length, peer)) => {
+                if datagram[..length] == *SUBSCRIBE_TOKEN {
+                    continue;
+                }
                 stats.datagrams_received += 1;
                 stats.datagram_bytes += length as u64;
                 let packet = match Packet::parse(&datagram[..length]) {
@@ -792,10 +872,7 @@ fn run(config: Config) -> io::Result<()> {
                 match pinned {
                     None => {
                         pinned = Some((peer, packet.session_id));
-                        eprintln!(
-                            "pinned source={peer} session_id=0x{:08x}",
-                            packet.session_id
-                        );
+                        eprintln!("pinned source={peer} session_id=0x{:08x}", packet.session_id);
                     }
                     Some((wanted_peer, wanted_session))
                         if peer != wanted_peer || packet.session_id != wanted_session =>
@@ -816,18 +893,13 @@ fn run(config: Config) -> io::Result<()> {
                         stats.capacity_drops += 1;
                         eprintln!(
                             "dropping AU fragment au={} fragment={}/{}: {reason}",
-                            packet.access_unit_seq,
-                            packet.fragment_index,
-                            packet.fragment_count
+                            packet.access_unit_seq, packet.fragment_index, packet.fragment_count
                         );
                     }
                 }
             }
             Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) => {}
+                if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
             Err(error) => return Err(error),
         }
 
@@ -922,7 +994,13 @@ mod tests {
             reorder_timeout: Duration::from_millis(10),
             idle_exit: None,
             decoder: None,
+            subscribe: false,
         }
+    }
+
+    #[test]
+    fn crc32_matches_ieee_test_vector() {
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
     }
 
     #[test]
@@ -942,14 +1020,14 @@ mod tests {
     fn rejects_payload_crc_corruption() {
         let mut bytes = datagram(1, 0, 0, 0, 1, 0, b"\0\0\x01e");
         *bytes.last_mut().unwrap() ^= 0x80;
-        assert_eq!(Packet::parse(&bytes), Err(PacketError::CrcMismatch));
+        assert!(matches!(Packet::parse(&bytes), Err(PacketError::CrcMismatch)));
     }
 
     #[test]
     fn rejects_inconsistent_fragment_boundary_flags() {
         let mut bytes = datagram(1, 0, 0, 0, 2, 0, b"\0\0");
         bytes[5] &= !FLAG_START;
-        assert_eq!(Packet::parse(&bytes), Err(PacketError::BadBoundaryFlags));
+        assert!(matches!(Packet::parse(&bytes), Err(PacketError::BadBoundaryFlags)));
     }
 
     #[test]
@@ -961,21 +1039,22 @@ mod tests {
         let second = Packet::parse(&second).unwrap();
         let mut reassembler = Reassembler::new(&test_config());
 
-        assert!(matches!(
-            reassembler.insert(&second, now),
-            InsertResult::Accepted
-        ));
+        assert!(matches!(reassembler.insert(&second, now), InsertResult::Accepted));
         assert!(reassembler.take_next_complete().is_none());
-        assert!(matches!(
-            reassembler.insert(&first, now),
-            InsertResult::Accepted
-        ));
+        assert!(matches!(reassembler.insert(&first, now), InsertResult::Accepted));
 
         let (sequence, access_unit) = reassembler.take_next_complete().unwrap();
         assert_eq!(sequence, 0);
         assert!(access_unit.is_complete());
         assert!(access_unit.has_annex_b_start_code());
         assert_eq!(access_unit.payload_bytes, 10);
+        let assembled: Vec<u8> = access_unit
+            .fragments
+            .iter()
+            .flatten()
+            .flat_map(|fragment| fragment.iter().copied())
+            .collect();
+        assert_eq!(assembled, b"\0\0\0\x01ehello");
         assert_eq!(reassembler.used_bytes, 0);
     }
 
@@ -992,6 +1071,20 @@ mod tests {
             reassembler.insert(&packet, now),
             InsertResult::Rejected("reassembly byte budget reached")
         ));
+        assert_eq!(reassembler.used_bytes, 0);
+    }
+
+    #[test]
+    fn times_out_an_incomplete_final_access_unit() {
+        let now = Instant::now();
+        let bytes = datagram(1, 1, 0, 1, 2, FLAG_SESSION_END, b"tail");
+        let packet = Packet::parse(&bytes).unwrap();
+        let mut reassembler = Reassembler::new(&test_config());
+        let mut stats = Stats::default();
+        assert!(matches!(reassembler.insert(&packet, now), InsertResult::Accepted));
+        assert!(reassembler.skip_stalled(now + Duration::from_millis(20), &mut stats));
+        assert_eq!(reassembler.ended(), Some(0));
+        assert_eq!(stats.access_units_dropped, 1);
         assert_eq!(reassembler.used_bytes, 0);
     }
 }

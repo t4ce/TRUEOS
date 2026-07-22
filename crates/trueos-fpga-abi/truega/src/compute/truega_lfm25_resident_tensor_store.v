@@ -1,11 +1,12 @@
 // Fixed FPGA-resident tensor storage for the LFM2.5 AOT decode path.
 //
 // The storage slots are selected by fixed operation wiring.  They are not host
-// addresses and this block does not parse commands.  A monotonically changing
-// session epoch makes every value from an earlier logical decode session
-// unusable without clearing the payload RAMs.  PCIe connection generation is
-// checked by the kernel worker; the epoch is checked again here at the circuit
-// boundary.
+// addresses and this block does not parse commands. A changing host-minted
+// nonzero session epoch makes every value from an earlier logical
+// decode session unusable without clearing the payload RAMs. PCIe connection
+// generation is checked by the kernel worker; the epoch is checked again here
+// at the circuit boundary. A slot becomes readable only after an explicit
+// begin, every sequential payload index, and a full-vector commit.
 //
 // Payload RAMs are intentionally unreset and have synchronous reads.  Only the
 // small validity/epoch metadata is reset.

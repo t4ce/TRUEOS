@@ -15,6 +15,7 @@ pub mod keyboard_control_service;
 pub mod lfm25_ffn;
 pub mod lfm25_decode;
 pub mod lfm25_model;
+pub mod truega_decode_backend;
 pub mod mouse_motion_service;
 pub mod net;
 pub mod pat;

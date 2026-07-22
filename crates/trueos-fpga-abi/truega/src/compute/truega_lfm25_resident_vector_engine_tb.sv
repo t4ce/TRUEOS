@@ -7,6 +7,7 @@ module truega_lfm25_resident_vector_engine_tb;
 
     reg clk = 1'b0;
     reg reset_n = 1'b0;
+    reg abort = 1'b0;
     always #5 clk = ~clk;
 
     reg command_valid = 1'b0;
@@ -61,7 +62,7 @@ module truega_lfm25_resident_vector_engine_tb;
     truega_lfm25_resident_vector_engine #(
         .Q30_SLOTS(2), .Q8_SLOTS(2)
     ) dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .reset_n(reset_n), .abort_i(abort),
         .command_valid_i(command_valid), .command_ready_o(command_ready),
         .command_operation_i(command_operation),
         .command_source0_handle_i(command_source0),
@@ -199,6 +200,15 @@ module truega_lfm25_resident_vector_engine_tb;
         end
     endtask
 
+    task automatic pulse_abort;
+        begin
+            @(negedge clk);
+            abort = 1'b1;
+            @(negedge clk);
+            abort = 1'b0;
+        end
+    endtask
+
     task automatic run_session;
         input [31:0] epoch;
         input [7:0] quant;
@@ -260,6 +270,20 @@ module truega_lfm25_resident_vector_engine_tb;
                     -64'sd1073741824, -64'sd2147483648,
                     1'b1, 4'd1, 4'd1);
 
+        // Begin overwriting the committed Q8 slot, allow five new blocks to
+        // land, then abort. The old value and partial replacement must both be
+        // unreadable because no full-vector commit occurred.
+        start_command(OP_RMSNORM,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd0), 37'd0,
+                      make_handle(32'h51a7_0002, 1'b1, 4'd1));
+        feed_zero_weights(1'b1);
+        while (dut.store.q8_transaction_count[1] < 6'd5)
+            @(negedge clk);
+        pulse_abort();
+        expect_result(1'b1, 37'd0);
+        inspect_value(make_handle(32'h51a7_0002, 1'b1, 4'd1),
+                      10'd0, 1'b1, 272'd0);
+
         // Session-one handles are stale after TokenEmbedding begins session two.
         inspect_value(make_handle(32'h51a7_0001, 1'b0, 4'd0),
                       10'd0, 1'b1, 272'd0);
@@ -289,7 +313,7 @@ module truega_lfm25_resident_vector_engine_tb;
         expect_result(1'b1, 37'd0);
 
         if (failures == 0)
-            $display("PASS lfm25_resident_vector_engine sessions=2 ops=embedding+rmsnorm+residual exact_q8_dequant typed_epoch_handles stable_ready_valid no_payload_reset");
+            $display("PASS lfm25_resident_vector_engine sessions=2 ops=embedding+rmsnorm+residual exact_q8_dequant typed_epoch_handles stable_ready_valid transactional_partial_abort=unpublished no_payload_reset");
         else begin
             $display("FAIL lfm25_resident_vector_engine failures=%0d", failures);
             $fatal(1);
