@@ -163,7 +163,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     }
 
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_for(
+    if !direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
@@ -330,7 +330,7 @@ fn queue_ui4_sprite_quad_runs(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_for(
+    if !direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
@@ -494,7 +494,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         );
     }
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_for(
+    if !direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,

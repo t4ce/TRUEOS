@@ -512,6 +512,14 @@ const _: () =
     assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
 const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 const DIRECT_RCS_GPU_VA_BATCH_BASE: u64 = 0x01C0_0000;
+// Continuously executing programs receive a distinct GGTT control window,
+// HWLRCA, PPGTT root, and vGPU timeline. Keeping this window separate from the
+// system-service direct-RCS window lets GuC schedule both contexts without one
+// producer rewriting another producer's ring, batch, result, or page tables.
+const EXECUTION_RCS_GPU_VA_RING_BASE: u64 = 0x0800_0000;
+const EXECUTION_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0801_0000;
+const EXECUTION_RCS_GPU_VA_RESULT_BASE: u64 = 0x0804_0000;
+const EXECUTION_RCS_GPU_VA_BATCH_BASE: u64 = 0x0810_0000;
 const SCENE_AABB_RCS_GPU_VA_RING_BASE: u64 = 0x01F0_0000;
 const SCENE_AABB_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01F1_0000;
 const SCENE_AABB_RCS_GPU_VA_RESULT_BASE: u64 = 0x01F4_0000;
@@ -550,13 +558,10 @@ const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
-    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
-        + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
+    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
         <= crate::r::ui_surface::UI_SURFACE_GPU_BASE
 );
-const _: () = assert!(
-    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT
-);
+const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;

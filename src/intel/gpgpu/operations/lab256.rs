@@ -206,14 +206,14 @@ fn lab256_report_audit(report: Lab256Buffer, frame: u32) -> bool {
 }
 
 /// Admit one Lab256 frame for Spirit and return immediately. The returned tag
-/// owns the shared direct-RCS state until `poll_lab256_spirit_submission`
+/// owns the execution direct-RCS lane until `poll_lab256_spirit_submission`
 /// observes the post-sync marker; admission never waits for GPU execution.
 pub(crate) fn submit_lab256_spirit_frame(
     dst: GpgpuRgba8Surface,
     present_fps: u32,
 ) -> Option<Lab256SpiritSubmission> {
-    let _submit_guard = DIRECT_RCS_SUBMIT_LOCK.try_lock()?;
-    if DIRECT_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
+    let _submit_guard = EXECUTION_RCS_SUBMIT_LOCK.try_lock()?;
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
         || LAB256_SPIRIT_PENDING.lock().is_some()
     {
         return None;
@@ -230,13 +230,13 @@ pub(crate) fn submit_lab256_spirit_frame(
 
     // Publish detached ownership before dropping the direct-submit lock. Any
     // later direct-RCS issuer will now defer before touching shared state.
-    DIRECT_RCS_DETACHED_TAG.store(tag, Ordering::Release);
+    EXECUTION_RCS_DETACHED_TAG.store(tag, Ordering::Release);
     *LAB256_SPIRIT_PENDING.lock() = Some(Lab256SpiritPending { handle, submitted });
 
     if lab256_trace_spirit_frame(submitted.frame) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} dst=0x{:X} owner=spirit-worker admission=gpu-executor/vgpu/guc wait=detached\n",
+            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} dst=0x{:X} owner=spirit-worker lane=execution admission=gpu-executor/vgpu/guc wait=detached\n",
             tag,
             submitted.frame,
             submitted.present_fps,
@@ -251,7 +251,7 @@ pub(crate) fn submit_lab256_spirit_frame(
 pub(crate) fn poll_lab256_spirit_submission(
     handle: Lab256SpiritSubmission,
 ) -> Lab256SpiritCompletion {
-    if DIRECT_RCS_DETACHED_TAG.load(Ordering::Acquire) != handle.tag {
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != handle.tag {
         return Lab256SpiritCompletion::InvalidSubmission;
     }
     let mut pending_slot = LAB256_SPIRIT_PENDING.lock();
@@ -275,12 +275,12 @@ pub(crate) fn poll_lab256_spirit_submission(
 
     let ok = marker == LAB256_POST_MARKER;
     let report_ok = ok && lab256_report_audit(pending.submitted.report, pending.submitted.frame);
-    complete_direct_rcs_submission(ok);
+    complete_execution_rcs_submission(ok);
     finish_lab256_runtime(pending.submitted.frame, ok);
     if !ok {
-        quarantine_direct_rcs_context("lab256-marker-timeout");
+        quarantine_execution_rcs_context("lab256-marker-timeout");
     }
-    DIRECT_RCS_DETACHED_TAG.store(0, Ordering::Release);
+    EXECUTION_RCS_DETACHED_TAG.store(0, Ordering::Release);
     log_lab256_completion(pending.submitted, marker, report_ok, "spirit-worker");
 
     if ok {
@@ -310,13 +310,13 @@ fn lab256_frame(dst: GpgpuRgba8Surface) -> GpgpuRgba8KernelResult {
         return GpgpuRgba8KernelResult::default();
     }
 
-    let Some(_submit_guard) = DIRECT_RCS_SUBMIT_LOCK.try_lock() else {
+    let Some(_submit_guard) = EXECUTION_RCS_SUBMIT_LOCK.try_lock() else {
         return GpgpuRgba8KernelResult::default();
     };
     let Some(submitted) = submit_lab256_batch(dst, None, 0) else {
         return GpgpuRgba8KernelResult::default();
     };
-    let marker = direct_rcs_poll_result_slot_timeout_ms(
+    let marker = execution_rcs_poll_result_slot_timeout_ms(
         submitted.state,
         LAB256_POST_MARKER_SLOT,
         LAB256_POST_MARKER,
@@ -326,7 +326,7 @@ fn lab256_frame(dst: GpgpuRgba8Surface) -> GpgpuRgba8KernelResult {
     let report_ok = ok && lab256_report_audit(submitted.report, submitted.frame);
     finish_lab256_runtime(submitted.frame, ok);
     if !ok {
-        quarantine_direct_rcs_context("lab256-marker-timeout");
+        quarantine_execution_rcs_context("lab256-marker-timeout");
     }
     log_lab256_completion(submitted, marker, report_ok, "ui4-gpgpu-preview");
     GpgpuRgba8KernelResult {
@@ -339,7 +339,7 @@ fn lab256_frame(dst: GpgpuRgba8Surface) -> GpgpuRgba8KernelResult {
 }
 
 /// Encode and admit the fixed three-walker batch without waiting for it. The
-/// caller must own `DIRECT_RCS_SUBMIT_LOCK` and either poll synchronously or
+/// caller must own `EXECUTION_RCS_SUBMIT_LOCK` and either poll synchronously or
 /// publish a detached tag before releasing that lock.
 fn submit_lab256_batch(
     dst: GpgpuRgba8Surface,
@@ -361,7 +361,7 @@ fn submit_lab256_batch(
     let Some(upload) = upload_lab256_multiphase_kernel() else {
         return None;
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
+    let Some(state) = execution_rcs_state_once(dev) else {
         return None;
     };
     let Some(runtime_snapshot) = lab256_runtime_once() else {
@@ -410,7 +410,7 @@ fn submit_lab256_batch(
             runtime_snapshot.report,
             dst,
         );
-    if !batch_ok || !direct_rcs_submit_batch(dev, state) {
+    if !batch_ok || !execution_rcs_submit_batch(dev, state) {
         return None;
     }
     Some(Lab256Submitted {

@@ -80,7 +80,7 @@ pub(crate) enum KernelClient {
     /// Persistent UI4 composition queue.  This is deliberately a separate
     /// virtual device/principal from general kernel GPGPU: UI4 may leave one
     /// frame in flight while video conversion, fonts, and application compute
-    /// continue to submit through `Gpgpu`.
+    /// continue to submit through `GpgpuSystem`.
     Ui4Compositor,
     /// Persistent GuC-owned BCS0 lane for UI4 copies and composition staging.
     /// Keeping it separate from the RCS compositor lane gives copy work its

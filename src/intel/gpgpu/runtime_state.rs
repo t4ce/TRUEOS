@@ -26,6 +26,7 @@ static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
 static FONT_COVERAGE_GPU_VA_FREE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 static DIRECT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
+static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static SCENE_AABB_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static SCENE_AABB_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
@@ -40,15 +41,19 @@ static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
-// Non-zero while a one-shot issuer has detached from an accepted direct-RCS
-// submission. New users must not rewrite the shared batch, result page, or
-// PPGTT until the owner of this exact tag observes retirement.
-static DIRECT_RCS_DETACHED_TAG: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
+// The execution lane permits one accepted program to outlive its issuer turn.
+// Its tag, lock, state, batch, result page, PPGTT, and quarantine state are all
+// independent from system-service direct-RCS work.
+static EXECUTION_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static EXECUTION_RCS_DETACHED_TAG: AtomicU64 = AtomicU64::new(0);
+static EXECUTION_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_PPGTT_POLICY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static UI4_VIDEO_FRAME_SUBMIT_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
+    Mutex::new(DirectRcsSubmitRuntime::new());
+static EXECUTION_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
     Mutex::new(Ui4CompositorRuntime::new());
@@ -73,3 +78,4 @@ static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
 
 static DIRECT_RCS_SUBMIT_COUNTER: AtomicU32 = AtomicU32::new(0);
 static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
+static EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);

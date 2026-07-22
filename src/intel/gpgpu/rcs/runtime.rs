@@ -34,6 +34,14 @@ const DIRECT_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: true,
 };
 
+const EXECUTION_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
+    ring: EXECUTION_RCS_GPU_VA_RING_BASE,
+    context: EXECUTION_RCS_GPU_VA_CONTEXT_BASE,
+    batch: EXECUTION_RCS_GPU_VA_BATCH_BASE,
+    result: EXECUTION_RCS_GPU_VA_RESULT_BASE,
+    map_general_auxiliary: false,
+};
+
 const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
     context: UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE,
@@ -105,15 +113,25 @@ unsafe impl Send for DirectRcsState {}
 unsafe impl Sync for DirectRcsState {}
 
 fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if DIRECT_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0 {
-        return None;
-    }
     if let Some(state) = *DIRECT_RCS_STATE.lock() {
         return Some(state);
     }
 
     let state = allocate_direct_rcs_state(DIRECT_RCS_GPU_VA)?;
     *DIRECT_RCS_STATE.lock() = Some(state);
+    Some(state)
+}
+
+fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    if let Some(state) = *EXECUTION_RCS_STATE.lock() {
+        return Some(state);
+    }
+
+    let state = allocate_direct_rcs_state(EXECUTION_RCS_GPU_VA)?;
+    *EXECUTION_RCS_STATE.lock() = Some(state);
     Some(state)
 }
 

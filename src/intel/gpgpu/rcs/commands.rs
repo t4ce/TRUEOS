@@ -225,33 +225,80 @@ fn direct_rcs_push_sba_size(
     direct_rcs_push(batch, cursor, (size_bytes & 0xFFFF_F000) | u32::from(enable))
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DirectRcsLane {
+    SystemService,
+    Execution,
+}
+
+impl DirectRcsLane {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::SystemService => "system-service",
+            Self::Execution => "execution",
+        }
+    }
+}
+
 fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    if DIRECT_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire) {
+    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::SystemService)
+}
+
+fn execution_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
+    direct_rcs_submit_batch_on_lane(dev, state, DirectRcsLane::Execution)
+}
+
+fn direct_rcs_submit_batch_on_lane(
+    dev: super::Dev,
+    state: DirectRcsState,
+    lane: DirectRcsLane,
+) -> bool {
+    let (quarantined, runtime, client) = match lane {
+        DirectRcsLane::SystemService => (
+            &DIRECT_RCS_CONTEXT_QUARANTINED,
+            &DIRECT_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::GpgpuSystem,
+        ),
+        DirectRcsLane::Execution => (
+            &EXECUTION_RCS_CONTEXT_QUARANTINED,
+            &EXECUTION_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::GpgpuExecution,
+        ),
+    };
+    if quarantined.load(Ordering::Acquire) {
         return false;
     }
-    let mut runtime = DIRECT_RCS_SUBMIT_RUNTIME.lock();
-    direct_rcs_submit_batch_for(
-        dev,
-        state,
-        &mut runtime,
-        crate::gpu::vgpu::KernelClient::GpgpuSystem,
-    )
+    let mut runtime = runtime.lock();
+    direct_rcs_submit_batch_with_runtime(dev, state, &mut runtime, client)
 }
 
 fn quarantine_direct_rcs_context(reason: &'static str) {
-    if DIRECT_RCS_CONTEXT_QUARANTINED
+    quarantine_direct_rcs_lane(DirectRcsLane::SystemService, reason);
+}
+
+fn quarantine_execution_rcs_context(reason: &'static str) {
+    quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
+}
+
+fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
+    let quarantined = match lane {
+        DirectRcsLane::SystemService => &DIRECT_RCS_CONTEXT_QUARANTINED,
+        DirectRcsLane::Execution => &EXECUTION_RCS_CONTEXT_QUARANTINED,
+    };
+    if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
         crate::log_error!(
             target: "gpgpu";
-            "intel/gpgpu: direct-rcs context quarantined reason={} action=reject-future-direct-submits-until-reboot late-batch-reuse=forbidden\n",
+            "intel/gpgpu: direct-rcs context quarantined lane={} reason={} action=reject-future-direct-submits-until-reboot late-batch-reuse=forbidden\n",
+            lane.name(),
             reason,
         );
     }
 }
 
-fn direct_rcs_submit_batch_for(
+fn direct_rcs_submit_batch_with_runtime(
     dev: super::Dev,
     state: DirectRcsState,
     runtime: &mut DirectRcsSubmitRuntime,
@@ -313,7 +360,19 @@ fn direct_rcs_submit_batch_for(
 }
 
 fn complete_direct_rcs_submission(completed: bool) {
-    let submission = DIRECT_RCS_SUBMIT_RUNTIME.lock().pending.take();
+    complete_direct_rcs_submission_on_lane(DirectRcsLane::SystemService, completed);
+}
+
+fn complete_execution_rcs_submission(completed: bool) {
+    complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution, completed);
+}
+
+fn complete_direct_rcs_submission_on_lane(lane: DirectRcsLane, completed: bool) {
+    let runtime = match lane {
+        DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
+        DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
+    };
+    let submission = runtime.lock().pending.take();
     if let Some(submission) = submission {
         let _ = crate::gpu::executor::complete_kernel_submission(submission, completed);
     }
@@ -365,15 +424,51 @@ fn direct_rcs_poll_result_slot_timeout_ms(
     expected: u32,
     timeout_ms: u64,
 ) -> u32 {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane(
+        state,
+        slot,
+        expected,
+        timeout_ms,
+        DirectRcsLane::SystemService,
+    )
+}
+
+fn execution_rcs_poll_result_slot_timeout_ms(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+) -> u32 {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane(
+        state,
+        slot,
+        expected,
+        timeout_ms,
+        DirectRcsLane::Execution,
+    )
+}
+
+fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+    lane: DirectRcsLane,
+) -> u32 {
     let started = direct_rcs_now_tick();
     let deadline = started.saturating_add(direct_rcs_ticks_from_ms(timeout_ms));
-    let log_probe = DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED
+    let probe_logged = match lane {
+        DirectRcsLane::SystemService => &DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+        DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+    };
+    let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok();
     if log_probe {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: marker-poll begin slot={} expected=0x{:08X} timeout_ms={} completion_limit=deadline cache_flush_bytes=4 pause_iters={} worker_slot={}\n",
+            "intel/gpgpu: marker-poll begin lane={} slot={} expected=0x{:08X} timeout_ms={} completion_limit=deadline cache_flush_bytes=4 pause_iters={} worker_slot={}\n",
+            lane.name(),
             slot,
             expected,
             timeout_ms,
@@ -398,7 +493,8 @@ fn direct_rcs_poll_result_slot_timeout_ms(
     if log_probe {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: marker-poll end slot={} observed=0x{:08X} expected=0x{:08X} matched={} iterations={} elapsed_ms={}\n",
+            "intel/gpgpu: marker-poll end lane={} slot={} observed=0x{:08X} expected=0x{:08X} matched={} iterations={} elapsed_ms={}\n",
+            lane.name(),
             slot,
             observed,
             expected,
@@ -407,7 +503,7 @@ fn direct_rcs_poll_result_slot_timeout_ms(
             direct_rcs_elapsed_ms_since(started),
         );
     }
-    complete_direct_rcs_submission(observed == expected);
+    complete_direct_rcs_submission_on_lane(lane, observed == expected);
     observed
 }
 

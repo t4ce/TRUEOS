@@ -506,9 +506,7 @@ struct ResidentSceneMsaaColorTarget {
 fn prepare_resident_scene_direct_ui4_target(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<u64, &'static str> {
-    if !destination.is_valid()
-        || destination.bytes as u64 > GPU_VA_DRAW3D_UI4_FRAME_STRIDE
-    {
+    if !destination.is_valid() || destination.bytes as u64 > GPU_VA_DRAW3D_UI4_FRAME_STRIDE {
         return Err("resident-scene-direct-ui4-shape");
     }
     let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
@@ -1066,9 +1064,9 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
     {
         return Err("resident-scene-final-release");
     }
-    result.coverage_us = result.coverage_us.saturating_add(
-        crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000,
-    );
+    result.coverage_us = result
+        .coverage_us
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000);
     result.release_fence = Some(resident_scene_release(destination));
     Ok(result)
 }
@@ -1158,13 +1156,8 @@ fn stage_resident_scene_secondary(
     // slice was SIMD16.  With SIMD16 as the only enabled width, variable pixel
     // dispatch selects this executable through KSP0.
     let pipeline = crate::intel::shader::triangle_pipeline_simd16();
-    let shader_layout = upload_triangle_shader_pipeline_at(
-        state_warm,
-        pipeline,
-        Some(rgba),
-        state_gpu,
-        false,
-    )?;
+    let shader_layout =
+        upload_triangle_shader_pipeline_at(state_warm, pipeline, Some(rgba), state_gpu, false)?;
     let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
@@ -1422,9 +1415,7 @@ fn submit_resident_scene_geometry_batched(
             target_height,
         );
     }
-    let prepare_us = crate::chronos::monotonic_nanos()
-        .saturating_sub(prepare_started_ns)
-        / 1_000;
+    let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let completed = submit_warm_render_batch(
         dev,
         warm,
@@ -1547,9 +1538,6 @@ fn submit_resident_triangle_scene_capture(
             return Err("no-device");
         };
         let warm = warm_once(dev);
-        if warm.streamout_virt.is_null() || warm.streamout_len < target_bytes {
-            return Err("warm-scratch");
-        }
         if !forcewake_render_acquire(warm) {
             return Err("forcewake");
         }
@@ -1678,15 +1666,26 @@ fn submit_resident_triangle_scene_capture(
         // revision on the next scene tick while the last complete frame stays
         // visible.
         let geometry_finished_ns = crate::chronos::monotonic_nanos();
-        let scratch_output = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-            warm.streamout_phys,
-            GPU_VA_STREAMOUT_BASE,
-            warm.streamout_len,
-            target_width as u32,
-            target_height as u32,
-            target_pitch as u32,
-        )
-        .ok_or("resident-scene-resolve-surface")?;
+        let needs_scratch_output = matches!(frame_output, ResidentSceneFrameOutput::Readback)
+            || (direct_output.is_none() && msaa_color.is_none());
+        let scratch_output = if needs_scratch_output {
+            if warm.streamout_virt.is_null() || warm.streamout_len < target_bytes {
+                return Err("warm-scratch");
+            }
+            Some(
+                crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                    warm.streamout_phys,
+                    GPU_VA_STREAMOUT_BASE,
+                    warm.streamout_len,
+                    target_width as u32,
+                    target_height as u32,
+                    target_pitch as u32,
+                )
+                .ok_or("resident-scene-resolve-surface")?,
+            )
+        } else {
+            None
+        };
         // On the native 4x path, resolve directly into the UI4 producer back
         // buffer. The scratch surface remains the compatibility target for
         // single-sample hardware and for CPU readback consumers.
@@ -1699,7 +1698,7 @@ fn submit_resident_triangle_scene_capture(
             (ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination), _) => {
                 destination
             }
-            _ => scratch_output,
+            _ => scratch_output.ok_or("resident-scene-resolve-surface")?,
         };
         let direct_scanout_output = match frame_output {
             ResidentSceneFrameOutput::GpuSurface(destination)
@@ -1739,32 +1738,6 @@ fn submit_resident_triangle_scene_capture(
             coverage_walkers = batch.active_walkers;
             if batch.ok && batch.requested_layers == coverage_draws.len() {
                 completed_coverage_draws = coverage_draws.len();
-            } else if !batch.submitted {
-                // Preparation/mapping failures have not touched the target and
-                // can safely use the established one-mask submission path.
-                // Once a batch was submitted, fail closed: the caller clears
-                // and rerenders the whole scene instead of double-blending a
-                // possibly partial result.
-                coverage_submits = 0;
-                coverage_walkers = 0;
-                for draw in coverage_draws {
-                    let completed = crate::intel::gpgpu::glyph_mask_rgba8_2d_mode(
-                        crate::intel::gpgpu::GpgpuGlyphMaskBlit {
-                            mask: draw.mask,
-                            mask_rect: draw.mask_rect,
-                            dst: output,
-                            dst_xy: draw.dst_xy,
-                            color_rgba: draw.color_rgba,
-                        },
-                        direct_scanout_output,
-                    );
-                    if !completed {
-                        break;
-                    }
-                    completed_coverage_draws += 1;
-                    coverage_submits += 1;
-                    coverage_walkers += 1;
-                }
             }
         }
         let coverage_finished_ns = crate::chronos::monotonic_nanos();
@@ -1776,7 +1749,8 @@ fn submit_resident_triangle_scene_capture(
             && let ResidentSceneFrameOutput::GpuSurface(destination)
             | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
             | ResidentSceneFrameOutput::DirectGpuSurface(destination)
-            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) = frame_output
+            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) =
+                frame_output
             && output.gpu != destination.gpu
         {
             present_copy_performed = true;
@@ -1858,8 +1832,7 @@ fn submit_resident_triangle_scene_capture(
                 Some(resident_scene_release(destination))
             }
             ResidentSceneFrameOutput::GpuSurface(destination) if frame_complete => {
-                let finalizer =
-                    crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
+                let finalizer = crate::intel::gpgpu::release_rgba8_surface_for_scanout(destination);
                 if finalizer.ok
                     && finalizer
                         .release
