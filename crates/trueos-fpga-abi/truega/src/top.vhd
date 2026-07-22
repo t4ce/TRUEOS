@@ -170,6 +170,12 @@ architecture rtl of top is
 	constant CALL_ERROR_FUNCTION_FAILED : std_logic_vector(31 downto 0) := x"BAD00004";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
+	constant BAR_READ_BANK_NONE : std_logic_vector(2 downto 0) := "000";
+	constant BAR_READ_BANK_CONTROL : std_logic_vector(2 downto 0) := "001";
+	constant BAR_READ_BANK_CALL_HEADER : std_logic_vector(2 downto 0) := "010";
+	constant BAR_READ_BANK_CALL_INPUT : std_logic_vector(2 downto 0) := "011";
+	constant BAR_READ_BANK_CALL_OUTPUT : std_logic_vector(2 downto 0) := "100";
+	constant BAR_READ_BANK_MANIFEST : std_logic_vector(2 downto 0) := "101";
 
 	signal pcie_linkup : std_logic;
 	signal tlp_clk : std_logic;
@@ -266,6 +272,26 @@ architecture rtl of top is
 	signal transaction_payload_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal transaction_req_id : std_logic_vector(15 downto 0) := (others => '0');
 	signal transaction_req_tag : std_logic_vector(7 downto 0) := (others => '0');
+	-- BAR reads cross two explicit timing boundaries before a completion is
+	-- presented to the PCIe core.  The first stage reduces the address to a
+	-- small bank and bank-local index.  The second stage selects only within
+	-- that bank.  This prevents the full BAR register file and debug surface
+	-- from becoming one address-to-TX priority chain.
+	signal bar_read_select_pending : std_logic := '0';
+	signal bar_read_data_select_pending : std_logic := '0';
+	signal bar_read_completion_pending : std_logic := '0';
+	signal bar_read_bank : std_logic_vector(2 downto 0) := BAR_READ_BANK_NONE;
+	signal bar_read_selected_bank : std_logic_vector(2 downto 0) := BAR_READ_BANK_NONE;
+	signal bar_read_word_index : std_logic_vector(5 downto 0) := (others => '0');
+	signal bar_read_addr_dw : std_logic_vector(9 downto 0) := (others => '0');
+	signal bar_read_req_id : std_logic_vector(15 downto 0) := (others => '0');
+	signal bar_read_req_tag : std_logic_vector(7 downto 0) := (others => '0');
+	signal bar_read_control_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_call_header_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_call_input_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_call_output_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_manifest_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_data_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal tl_rx_backpressure : std_logic;
 	signal rx_nonposted_busy : std_logic := '0';
 	signal tl_rx_masknp : std_logic;
@@ -461,7 +487,7 @@ begin
 
 	u_firmware_manifest: truega_firmware_manifest
 		port map(
-			word_index => transaction_addr_dw(4 downto 0),
+			word_index => bar_read_word_index(4 downto 0),
 			data       => firmware_manifest_word
 			);
 
@@ -707,6 +733,21 @@ begin
 				transaction_payload_dw <= (others => '0');
 				transaction_req_id <= (others => '0');
 				transaction_req_tag <= (others => '0');
+				bar_read_select_pending <= '0';
+				bar_read_data_select_pending <= '0';
+				bar_read_completion_pending <= '0';
+				bar_read_bank <= BAR_READ_BANK_NONE;
+				bar_read_selected_bank <= BAR_READ_BANK_NONE;
+				bar_read_word_index <= (others => '0');
+				bar_read_addr_dw <= (others => '0');
+				bar_read_req_id <= (others => '0');
+				bar_read_req_tag <= (others => '0');
+				bar_read_control_data_dw <= (others => '0');
+				bar_read_call_header_data_dw <= (others => '0');
+				bar_read_call_input_data_dw <= (others => '0');
+				bar_read_call_output_data_dw <= (others => '0');
+				bar_read_manifest_data_dw <= (others => '0');
+				bar_read_data_dw <= (others => '0');
 				rx_nonposted_busy <= '0';
 					tx_pending <= '0';
 					tx_pending_data <= (others => '0');
@@ -854,6 +895,132 @@ begin
 				next_words_fwd := pkt_words_fwd;
 				next_words_rev := pkt_words_rev;
 
+					-- Stage four of a BAR read: the completion fields now come only
+					-- from registers.  Keep the request pending if the controller still
+					-- owns the previous TX beat.
+					if bar_read_completion_pending = '1' then
+						if tx_pending = '0' then
+							dbg_queue_cpld <= '1';
+							dbg_seen_queue_cpld <= '1';
+							queue_cpld(bar_read_req_id, bar_read_req_tag, bar_read_addr_dw, bar_read_data_dw);
+							bar_read_completion_pending <= '0';
+						else
+							dbg_cpld_blocked <= '1';
+						end if;
+					end if;
+
+					-- Stage three selects one of the independently registered bank
+					-- results.  This is intentionally a separate boundary: otherwise
+					-- synthesis can flatten all bank-local muxes back into one tree.
+					if bar_read_data_select_pending = '1' then
+						case bar_read_selected_bank is
+						when BAR_READ_BANK_CONTROL => read_data_dw := bar_read_control_data_dw;
+						when BAR_READ_BANK_CALL_HEADER => read_data_dw := bar_read_call_header_data_dw;
+						when BAR_READ_BANK_CALL_INPUT => read_data_dw := bar_read_call_input_data_dw;
+						when BAR_READ_BANK_CALL_OUTPUT => read_data_dw := bar_read_call_output_data_dw;
+						when BAR_READ_BANK_MANIFEST => read_data_dw := bar_read_manifest_data_dw;
+						when others => read_data_dw := (others => '0');
+						end case;
+						bar_read_data_dw <= read_data_dw;
+						dbg_last_read_data <= read_data_dw;
+						bar_read_data_select_pending <= '0';
+						bar_read_completion_pending <= '1';
+					end if;
+
+					-- Stage two selects only within one predecoded bank.  Each bank has
+					-- its own destination register so the index cannot fan out through
+					-- a second, full-BAR priority mux in the same clock period.
+					if bar_read_select_pending = '1' then
+						read_data_dw := (others => '0');
+						case bar_read_bank is
+						when BAR_READ_BANK_CALL_HEADER =>
+							case to_integer(unsigned(bar_read_word_index)) is
+							when CALL_MAGIC_WORD => read_data_dw := call_magic;
+							when CALL_ABI_FUNCTION_WORD => read_data_dw := call_abi_function;
+							when 2 => read_data_dw := call_id_low;
+							when 3 => read_data_dw := call_id_high;
+							when CALL_STATE_WORD => read_data_dw := call_state;
+							when 5 => read_data_dw := call_flags;
+							when CALL_INPUT_LEN_WORD => read_data_dw := call_input_len;
+							when CALL_OUTPUT_CAP_WORD => read_data_dw := call_output_cap;
+							when CALL_OUTPUT_LEN_WORD => read_data_dw := call_output_len;
+							when CALL_ERROR_WORD => read_data_dw := call_error;
+							when others => null;
+							end case;
+							bar_read_call_header_data_dw <= read_data_dw;
+						when BAR_READ_BANK_CALL_INPUT =>
+							bar_read_call_input_data_dw <= call_input_words(to_integer(unsigned(bar_read_word_index)));
+						when BAR_READ_BANK_CALL_OUTPUT =>
+							bar_read_call_output_data_dw <= call_output_words(to_integer(unsigned(bar_read_word_index)));
+						when BAR_READ_BANK_MANIFEST =>
+							bar_read_manifest_data_dw <= firmware_manifest_word;
+						when BAR_READ_BANK_CONTROL =>
+							if to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_DOORBELL_DW then
+								read_data_dw := std_logic_vector(call_retire_count);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_RETIRE_COUNT_DW then
+								read_data_dw := std_logic_vector(call_retire_count);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_REQUEST_COUNT_DW then
+								read_data_dw := std_logic_vector(call_irq_request_count);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW then
+								read_data_dw := std_logic_vector(call_irq_controller_ack_count);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_STATE_DW then
+								read_data_dw(0) := call_irq_status;
+								read_data_dw(1) := call_irq_request;
+								read_data_dw(2) := call_irq_controller_ack;
+								read_data_dw(3) := call_flags(0);
+							else
+								case bar_read_word_index is
+								when "000000" =>
+									read_data_dw(4 downto 0) := led_reg;
+								when "000101" =>
+									read_data_dw := call_state;
+								when "001000" =>
+									read_data_dw := PROTOCOL_MAGIC;
+									dbg_magic_read <= '1';
+									dbg_seen_magic_read <= '1';
+								when "010000" =>
+									read_data_dw := make_seen_word(
+										dbg_seen_rx_bar0_eop,
+										dbg_seen_hit_write,
+										dbg_seen_hit_read,
+										dbg_seen_magic_read,
+										dbg_seen_queue_cpld,
+										dbg_seen_tx_fire,
+										dbg_cpld_blocked,
+										pcie_linkup
+									);
+								when "010001" => read_data_dw(9 downto 0) := dbg_last_addr_dw;
+								when "010010" => read_data_dw := dbg_last_read_data;
+								when "010011" =>
+									read_data_dw(31 downto 16) := dbg_last_req_id;
+									read_data_dw(15 downto 8) := dbg_last_req_tag;
+								when "010100" => read_data_dw := dbg_last_cpld_dw0;
+								when "010101" => read_data_dw := dbg_last_cpld_dw1;
+								when "010110" => read_data_dw := dbg_last_cpld_dw2;
+								when "010111" => read_data_dw := dbg_last_cpld_data;
+								when "011000" => read_data_dw := std_logic_vector(dbg_rx_capture_count);
+								when "011001" => read_data_dw := std_logic_vector(dbg_write_count);
+								when "011010" => read_data_dw := std_logic_vector(dbg_word30_write_count);
+								when "011011" => read_data_dw := dbg_word30_last_payload;
+								when "011100" => read_data_dw := call_input_words(DEBUG_TARGET_PACKAGE_WORD - CALL_INPUT_WORD);
+								when "011101" =>
+									read_data_dw(7) := capture_pending;
+									read_data_dw(8) := decode_pending;
+									read_data_dw(9) := transaction_pending;
+									read_data_dw(10) := tl_rx_backpressure;
+									read_data_dw(11) := rx_nonposted_busy;
+								when "011110" => read_data_dw := std_logic_vector(dbg_rx_error_count);
+								when others => null;
+								end case;
+							end if;
+							bar_read_control_data_dw <= read_data_dw;
+						when others => null;
+						end case;
+						bar_read_selected_bank <= bar_read_bank;
+						bar_read_select_pending <= '0';
+						bar_read_data_select_pending <= '1';
+					end if;
+
 					if transaction_pending = '1' then
 							hit_write := transaction_write = '1';
 							hit_read := transaction_read = '1';
@@ -951,113 +1118,33 @@ begin
 							elsif hit_read then
 								dbg_hit_read <= '1';
 								dbg_seen_hit_read <= '1';
-								read_data_dw := (others => '0');
+								bar_read_addr_dw <= addr_dw;
+								bar_read_req_id <= req_id;
+								bar_read_req_tag <= req_tag;
 								if (addr_index >= BAR0_CALL_BASE_DW)
+									and (addr_index < BAR0_CALL_BASE_DW + CALL_INPUT_WORD) then
+									bar_read_bank <= BAR_READ_BANK_CALL_HEADER;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_CALL_BASE_DW, 6));
+								elsif (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
+									and (addr_index < BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD) then
+									bar_read_bank <= BAR_READ_BANK_CALL_INPUT;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD, 6));
+								elsif (addr_index >= BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
-									if (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
-										and (addr_index < BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD) then
-										read_data_dw := call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD);
-									elsif addr_index >= BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD then
-										read_data_dw := call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD);
-									else
-										case addr_index - BAR0_CALL_BASE_DW is
-										when CALL_MAGIC_WORD => read_data_dw := call_magic;
-										when CALL_ABI_FUNCTION_WORD => read_data_dw := call_abi_function;
-										when 2 => read_data_dw := call_id_low;
-										when 3 => read_data_dw := call_id_high;
-										when CALL_STATE_WORD => read_data_dw := call_state;
-										when 5 => read_data_dw := call_flags;
-										when CALL_INPUT_LEN_WORD => read_data_dw := call_input_len;
-										when CALL_OUTPUT_CAP_WORD => read_data_dw := call_output_cap;
-										when CALL_OUTPUT_LEN_WORD => read_data_dw := call_output_len;
-										when CALL_ERROR_WORD => read_data_dw := call_error;
-										when others => null;
-										end case;
-									end if;
+									bar_read_bank <= BAR_READ_BANK_CALL_OUTPUT;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD, 6));
 								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
 									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
-									read_data_dw := firmware_manifest_word;
-								elsif addr_index = BAR0_CALL_DOORBELL_DW then
-									read_data_dw := std_logic_vector(call_retire_count);
-								elsif addr_index = BAR0_CALL_IRQ_RETIRE_COUNT_DW then
-									read_data_dw := std_logic_vector(call_retire_count);
-								elsif addr_index = BAR0_CALL_IRQ_REQUEST_COUNT_DW then
-									read_data_dw := std_logic_vector(call_irq_request_count);
-								elsif addr_index = BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW then
-									read_data_dw := std_logic_vector(call_irq_controller_ack_count);
-								elsif addr_index = BAR0_CALL_IRQ_STATE_DW then
-									read_data_dw(0) := call_irq_status;
-									read_data_dw(1) := call_irq_request;
-									read_data_dw(2) := call_irq_controller_ack;
-									read_data_dw(3) := call_flags(0);
+									bar_read_bank <= BAR_READ_BANK_MANIFEST;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
+								elsif addr_index < 64 then
+									bar_read_bank <= BAR_READ_BANK_CONTROL;
+									bar_read_word_index <= addr_dw(5 downto 0);
 								else
-									case addr_dw is
-									when BAR0_LED_DW =>
-										read_data_dw(4 downto 0) := led_reg;
-									when BAR0_STATUS_DW =>
-										read_data_dw := call_state;
-									when BAR0_MAGIC_DW =>
-										read_data_dw := PROTOCOL_MAGIC;
-										dbg_magic_read <= '1';
-										dbg_seen_magic_read <= '1';
-									when BAR0_DBG_SEEN_DW =>
-									read_data_dw := make_seen_word(
-										dbg_seen_rx_bar0_eop,
-										dbg_seen_hit_write,
-										dbg_seen_hit_read,
-										dbg_seen_magic_read,
-										dbg_seen_queue_cpld,
-										dbg_seen_tx_fire,
-										dbg_cpld_blocked,
-										pcie_linkup
-									);
-									when BAR0_DBG_LAST_ADDR_DW =>
-									read_data_dw(9 downto 0) := dbg_last_addr_dw;
-									when BAR0_DBG_LAST_READ_DATA_DW =>
-									read_data_dw := dbg_last_read_data;
-									when BAR0_DBG_LAST_REQ_DW =>
-									read_data_dw(31 downto 16) := dbg_last_req_id;
-									read_data_dw(15 downto 8) := dbg_last_req_tag;
-									when BAR0_DBG_LAST_CPLD0_DW =>
-									read_data_dw := dbg_last_cpld_dw0;
-									when BAR0_DBG_LAST_CPLD1_DW =>
-									read_data_dw := dbg_last_cpld_dw1;
-									when BAR0_DBG_LAST_CPLD2_DW =>
-									read_data_dw := dbg_last_cpld_dw2;
-									when BAR0_DBG_LAST_CPLD_DATA_DW =>
-									read_data_dw := dbg_last_cpld_data;
-									when BAR0_DBG_RX_CAPTURE_COUNT_DW =>
-									read_data_dw := std_logic_vector(dbg_rx_capture_count);
-									when BAR0_DBG_WRITE_COUNT_DW =>
-									read_data_dw := std_logic_vector(dbg_write_count);
-									when BAR0_DBG_WORD30_WRITE_COUNT_DW =>
-									read_data_dw := std_logic_vector(dbg_word30_write_count);
-									when BAR0_DBG_WORD30_LAST_PAYLOAD_DW =>
-									read_data_dw := dbg_word30_last_payload;
-									when BAR0_DBG_WORD30_STORAGE_DW =>
-									read_data_dw := call_input_words(DEBUG_TARGET_PACKAGE_WORD - CALL_INPUT_WORD);
-									when BAR0_DBG_RX_FIFO_STATE_DW =>
-									read_data_dw(7) := capture_pending;
-									read_data_dw(8) := decode_pending;
-									read_data_dw(9) := transaction_pending;
-									read_data_dw(10) := tl_rx_backpressure;
-									read_data_dw(11) := rx_nonposted_busy;
-									when BAR0_DBG_RX_ERROR_COUNT_DW =>
-									read_data_dw := std_logic_vector(dbg_rx_error_count);
-									when others =>
-									read_data_dw := (others => '0');
-									end case;
+									bar_read_bank <= BAR_READ_BANK_NONE;
+									bar_read_word_index <= (others => '0');
 								end if;
-								dbg_last_read_data <= read_data_dw;
-
-								if tx_pending = '0' then
-									dbg_queue_cpld <= '1';
-									dbg_seen_queue_cpld <= '1';
-									queue_cpld(req_id, req_tag, addr_dw, read_data_dw);
-								else
-									dbg_cpld_blocked <= '1';
-									rx_nonposted_busy <= '0';
-								end if;
+								bar_read_select_pending <= '1';
 							end if;
 
 							transaction_pending <= '0';

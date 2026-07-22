@@ -334,4 +334,3 @@ fn simd16_right_mask(lanes: u32) -> u32 {
         (1u32 << lanes) - 1
     }
 }
-

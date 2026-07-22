@@ -101,6 +101,14 @@ pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> ope
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
+pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_CHUNK: u32 = 0xDE; // arg0 window,arg1 sprite:offset,payload RGBA8 -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_FINISH: u32 = 0xDF; // arg0 window,arg1 sprite -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN: u32 = 0xE0; // arg0 window,arg1 clear RGBA -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_DRAW_BEGIN: u32 = 0xE1; // arg0 window,arg1 quad count -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK: u32 = 0xE2; // arg0 window,arg1 quad offset,payload records -> rc
+pub const OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH: u32 = 0xE3; // arg0 window -> rc
+pub const OP_BP_VRAM_SNAPSHOT_READ: u32 = 0xE4; // arg0 offset, arg1 cap -> cached vGPU memory snapshot text
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1225,6 +1233,94 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() != 8 {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let width = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            let height = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+            let rc = crate::ui4::blueprint_text::begin_sprite_rgba8_upload(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as u32,
+                width,
+                height,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_UPLOAD_CHUNK => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let sprite_id = (arg1 >> 32) as u32;
+            let offset = arg1 as u32 as usize;
+            let rc = crate::ui4::blueprint_text::write_sprite_rgba8_upload_chunk(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                sprite_id,
+                offset,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_UPLOAD_FINISH => {
+            let rc = crate::ui4::blueprint_text::finish_sprite_rgba8_upload(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN => {
+            let rc = crate::ui4::blueprint_text::begin_blueprint_frame(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as u32,
+                false,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_DRAW_BEGIN => {
+            let rc = crate::ui4::blueprint_text::begin_sprite_scene(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as usize,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_text::append_sprite_scene_bytes(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH => {
+            let rc = crate::ui4::blueprint_text::finish_sprite_scene(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_PAN_EVENT_TAKE => {
             let mut event = crate::ui4::blueprint_text::TrueosUi4PanEvent::default();
             let rc = unsafe {
@@ -1536,6 +1632,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1,
                 crate::r::net::vlayer::thermal_snapshot_len_host,
                 crate::r::net::vlayer::thermal_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_VRAM_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::vram_snapshot_len_host,
+                crate::r::net::vlayer::vram_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }

@@ -10,4 +10,7 @@
 # remain compatible. The vGPU vVideoMem create/cache-maintenance operations
 # and fixed SceneDB AABB dispatch are likewise strictly additive. The vGPU
 # diagnostics record reports zero-copy counters and opaque mapping proof data.
-7e12f8ae0b08ca44ae0f951f25bdac1ddad1060d0c4808402d93bc22964a06a4
+# The UI4 retained-sprite upload, GPU-cleared sprite-frame begin, and ordered
+# sprite-quad submission calls are strictly additive; existing v2 artifacts do
+# not import them and retain their previous frame-write behavior.
+ee16ce33ba4be928025d69a8cdde57da02e0fd28006f736c43b804ebf3557959

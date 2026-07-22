@@ -139,6 +139,26 @@ pub fn thermal_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
     n
 }
 
+pub fn vram_snapshot_len_host() -> usize {
+    crate::gpu::vram::latest_snapshot_text().len()
+}
+
+pub fn vram_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
+    if out.is_empty() {
+        return 0;
+    }
+
+    let text = crate::gpu::vram::latest_snapshot_text();
+    let bytes = text.as_bytes();
+    if offset >= bytes.len() {
+        return 0;
+    }
+
+    let n = core::cmp::min(out.len(), bytes.len() - offset);
+    out[..n].copy_from_slice(&bytes[offset..offset + n]);
+    n
+}
+
 pub fn system_services_snapshot_len_host() -> usize {
     crate::r::spawn_service::latest_system_service_snapshot_text().len()
 }
@@ -333,6 +353,21 @@ pub unsafe extern "C" fn trueos_vlayer_thermal_snapshot_read(
         trueos_vm::vmcall::OP_BP_THERMAL_SNAPSHOT_READ,
         thermal_snapshot_len_host,
         thermal_snapshot_read_host,
+        offset,
+        out_ptr,
+        out_cap,
+    )
+}
+
+pub unsafe extern "C" fn trueos_vlayer_vram_snapshot_read(
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    vlayer_read_runtime(
+        trueos_vm::vmcall::OP_BP_VRAM_SNAPSHOT_READ,
+        vram_snapshot_len_host,
+        vram_snapshot_read_host,
         offset,
         out_ptr,
         out_cap,

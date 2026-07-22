@@ -230,7 +230,12 @@ fn direct_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
         return false;
     }
     let mut runtime = DIRECT_RCS_SUBMIT_RUNTIME.lock();
-    direct_rcs_submit_batch_for(dev, state, &mut runtime, crate::gpu::vgpu::KernelClient::Gpgpu)
+    direct_rcs_submit_batch_for(
+        dev,
+        state,
+        &mut runtime,
+        crate::gpu::vgpu::KernelClient::GpgpuSystem,
+    )
 }
 
 fn quarantine_direct_rcs_context(reason: &'static str) {
@@ -452,4 +457,3 @@ fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
         elapsed.saturating_mul(1000) / hz
     }
 }
-

@@ -258,6 +258,7 @@ pub async fn thermal_service() {
 
     loop {
         let _ = refresh_snapshot_once();
+        let _ = crate::gpu::vram::refresh_snapshot_once();
         Timer::after(EmbassyDuration::from_millis(THERMAL_SERVICE_SAMPLE_PERIOD_MS)).await;
     }
 }

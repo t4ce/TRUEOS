@@ -101,7 +101,8 @@ fn print_status(io: &'static dyn ShellBackend2) {
         );
     }
     print_kernel_timeline(io, "render/font", KernelClient::Render);
-    print_kernel_timeline(io, "gpgpu", KernelClient::Gpgpu);
+    print_kernel_timeline(io, "gpgpu-system", KernelClient::GpgpuSystem);
+    print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
     print_kernel_timeline(io, "ui4-blitter", KernelClient::Ui4Blitter);
 }
@@ -219,9 +220,9 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
 }
 
 fn test_compute(io: &'static dyn ShellBackend2) -> bool {
-    let before = vgpu::kernel_timeline(KernelClient::Gpgpu).unwrap_or_default();
+    let before = vgpu::kernel_timeline(KernelClient::GpgpuSystem).unwrap_or_default();
     let dispatch = crate::intel::gpgpu::submit_fill_rect_worklist_rgba8_probe_now();
-    let after = vgpu::kernel_timeline(KernelClient::Gpgpu).unwrap_or_default();
+    let after = vgpu::kernel_timeline(KernelClient::GpgpuSystem).unwrap_or_default();
     let timeline = after.submitted > before.submitted && after.completed == after.submitted;
     print_shell_line(
         io,

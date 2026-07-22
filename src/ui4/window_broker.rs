@@ -413,6 +413,38 @@ impl WindowBroker {
         (pack_handle(slot, 1).map(WindowSessionId), retirements)
     }
 
+    /// Add an independent session for an owner which already has live
+    /// windows. This is reserved for multi-frame producers: closing one
+    /// session affects only its own windows, while ordinary `begin_session`
+    /// retains the replace-all behavior used by single-scene producers.
+    fn begin_additional_session(
+        &mut self,
+        owner: WindowOwner,
+    ) -> Result<WindowSessionId, WindowBrokerError> {
+        self.mark_composition_changed();
+        if let Some((slot, session)) = self
+            .sessions
+            .iter_mut()
+            .enumerate()
+            .find(|(_, session)| !session.active)
+        {
+            session.generation = next_generation(session.generation);
+            session.owner = owner;
+            session.active = true;
+            return pack_handle(slot, session.generation).map(WindowSessionId);
+        }
+        if self.sessions.len() >= MAX_SESSIONS {
+            return Err(WindowBrokerError::Capacity);
+        }
+        let slot = self.sessions.len();
+        self.sessions.push(SessionRecord {
+            generation: 1,
+            owner,
+            active: true,
+        });
+        pack_handle(slot, 1).map(WindowSessionId)
+    }
+
     fn checked_session(
         &self,
         owner: WindowOwner,
@@ -753,6 +785,12 @@ pub(crate) fn begin_window_session(
     let (result, retirements) = WINDOW_BROKER.lock().begin_session(owner);
     complete_transition_retirements(retirements);
     result
+}
+
+pub(crate) fn begin_additional_window_session(
+    owner: WindowOwner,
+) -> Result<WindowSessionId, WindowBrokerError> {
+    WINDOW_BROKER.lock().begin_additional_session(owner)
 }
 
 pub(crate) fn finish_window_session(

@@ -10,6 +10,9 @@ use spin::Mutex;
 
 const SLOT4_PRESENT_PERIOD_MS: u64 = 16;
 const SLOT4_RECT_CAPACITY: usize = 512;
+const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
+const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
+const SOFTWARE_CURSOR_HALO_PX: u32 = 9;
 
 type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
 
@@ -189,6 +192,7 @@ fn software_cursor_rects() -> Slot4Rects {
 
     let visuals = super::software_cursor_visuals();
     let mut rects = Slot4Rects::new();
+    let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
 
     for visual in &visuals {
         let Some(preview) = visual.maximize_preview else {
@@ -219,8 +223,6 @@ fn software_cursor_rects() -> Slot4Rects {
         let Some((x, y)) = visual.context_menu else {
             continue;
         };
-        let (screen_w, screen_h) =
-            crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
         let menu_w = 196u32;
         let menu_h = 116u32;
         let menu_x = x.saturating_add(14).min(screen_w.saturating_sub(menu_w));
@@ -252,20 +254,101 @@ fn software_cursor_rects() -> Slot4Rects {
         let x = visual.x;
         let y = visual.y;
         let color = visual.color;
-        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(13), 5, 27, color);
-        push_overlay_rect(&mut rects, x.saturating_sub(13), y.saturating_sub(2), 27, 5, color);
-        push_overlay_rect(
-            &mut rects,
-            x.saturating_sub(4),
-            y.saturating_sub(4),
-            9,
-            9,
-            Rgba8::new(255, 255, 255, 240),
-        );
-        push_overlay_rect(&mut rects, x.saturating_sub(2), y.saturating_sub(2), 5, 5, color);
+        push_software_cursor(&mut rects, x, y, screen_w, screen_h, color);
     }
 
     rects
+}
+
+/// Draw a centered cross in the interior and deliberately morph it into an
+/// inward-facing T at every display edge. Each component is clamped separately
+/// so the top/left saturation effect is mirrored at the bottom/right, while no
+/// cursor rectangle or its damage can extend beyond the scanout.
+fn push_software_cursor(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        2,
+        13,
+        SOFTWARE_CURSOR_STROKE_PX,
+        SOFTWARE_CURSOR_LONG_PX,
+        screen_w,
+        screen_h,
+        color,
+    );
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        13,
+        2,
+        SOFTWARE_CURSOR_LONG_PX,
+        SOFTWARE_CURSOR_STROKE_PX,
+        screen_w,
+        screen_h,
+        color,
+    );
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        4,
+        4,
+        SOFTWARE_CURSOR_HALO_PX,
+        SOFTWARE_CURSOR_HALO_PX,
+        screen_w,
+        screen_h,
+        Rgba8::new(255, 255, 255, 240),
+    );
+    push_cursor_rect(
+        rects,
+        x,
+        y,
+        2,
+        2,
+        SOFTWARE_CURSOR_STROKE_PX,
+        SOFTWARE_CURSOR_STROKE_PX,
+        screen_w,
+        screen_h,
+        color,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_cursor_rect(
+    rects: &mut Slot4Rects,
+    center_x: u32,
+    center_y: u32,
+    pixels_before_x: u32,
+    pixels_before_y: u32,
+    width: u32,
+    height: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    let width = width.min(screen_w);
+    let height = height.min(screen_h);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let x = center_x
+        .saturating_sub(pixels_before_x)
+        .min(screen_w - width);
+    let y = center_y
+        .saturating_sub(pixels_before_y)
+        .min(screen_h - height);
+    push_overlay_rect(rects, x, y, width, height, color);
 }
 
 fn overlay_rect_signature(rects: &[crate::intel::LiveOverlayRect]) -> u64 {
@@ -331,6 +414,22 @@ mod tests {
     use super::*;
     use crate::graphics::primitives::Rgba8;
 
+    const TEST_SCREEN_W: u32 = 100;
+    const TEST_SCREEN_H: u32 = 80;
+
+    fn test_cursor_rects(x: u32, y: u32) -> Slot4Rects {
+        let mut rects = Slot4Rects::new();
+        push_software_cursor(
+            &mut rects,
+            x,
+            y,
+            TEST_SCREEN_W,
+            TEST_SCREEN_H,
+            Rgba8::new(255, 0, 0, 255),
+        );
+        rects
+    }
+
     #[test]
     fn distant_cursor_damage_stays_disjoint() {
         let white = Rgba8::new(255, 255, 255, 255);
@@ -348,5 +447,63 @@ mod tests {
                 .rects()
                 .contains(&crate::intel::CompositionDamageRect::new(2_000, 900, 5, 27))
         );
+    }
+
+    #[test]
+    fn software_cursor_shape_is_mirrored_at_opposite_edges() {
+        let left = test_cursor_rects(0, TEST_SCREEN_H / 2);
+        let right = test_cursor_rects(TEST_SCREEN_W - 1, TEST_SCREEN_H / 2);
+        let top = test_cursor_rects(TEST_SCREEN_W / 2, 0);
+        let bottom = test_cursor_rects(TEST_SCREEN_W / 2, TEST_SCREEN_H - 1);
+
+        assert_eq!(left.len(), 4);
+        assert_eq!(right.len(), left.len());
+        assert_eq!(top.len(), 4);
+        assert_eq!(bottom.len(), top.len());
+        for (left, right) in left.iter().zip(&right) {
+            assert_eq!(right.x, TEST_SCREEN_W - left.x - left.width);
+            assert_eq!(right.y, left.y);
+            assert_eq!(right.width, left.width);
+            assert_eq!(right.height, left.height);
+        }
+        for (top, bottom) in top.iter().zip(&bottom) {
+            assert_eq!(bottom.x, top.x);
+            assert_eq!(bottom.y, TEST_SCREEN_H - top.y - top.height);
+            assert_eq!(bottom.width, top.width);
+            assert_eq!(bottom.height, top.height);
+        }
+    }
+
+    #[test]
+    fn software_cursor_remains_centered_away_from_edges() {
+        let rects = test_cursor_rects(50, 40);
+        let expected = [
+            (48, 27, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_LONG_PX),
+            (37, 38, SOFTWARE_CURSOR_LONG_PX, SOFTWARE_CURSOR_STROKE_PX),
+            (46, 36, SOFTWARE_CURSOR_HALO_PX, SOFTWARE_CURSOR_HALO_PX),
+            (48, 38, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_STROKE_PX),
+        ];
+
+        assert_eq!(rects.len(), expected.len());
+        for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
+        }
+    }
+
+    #[test]
+    fn software_cursor_rects_stay_inside_every_corner() {
+        for (x, y) in [
+            (0, 0),
+            (TEST_SCREEN_W - 1, 0),
+            (0, TEST_SCREEN_H - 1),
+            (TEST_SCREEN_W - 1, TEST_SCREEN_H - 1),
+        ] {
+            let rects = test_cursor_rects(x, y);
+            assert_eq!(rects.len(), 4);
+            for rect in rects {
+                assert!(rect.x.saturating_add(rect.width) <= TEST_SCREEN_W);
+                assert!(rect.y.saturating_add(rect.height) <= TEST_SCREEN_H);
+            }
+        }
     }
 }

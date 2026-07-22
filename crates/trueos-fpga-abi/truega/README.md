@@ -67,6 +67,12 @@ The FPGA raises MSI on retirement. Vector `0x42` wakes the single kernel worker,
 acknowledges the slot and delivers the result to the registered Rust callback. Polling is
 retained only as timeout recovery and is expected to remain at zero during normal calls.
 
+BAR0 read completions cross explicit address-bank, bank-data, and final-select registers
+before the shell constructs the completion TLP. The added latency is three 100 MHz clocks;
+the PCIe request remains masked/backpressured until the registered completion enters the
+controller. This keeps the generic ABI unchanged while removing the full BAR register-file
+mux from the address-to-TX timing path ahead of the streaming-aperture work.
+
 ## LFM2.5 native model checkpoint
 
 `tools/lfm25-seal` is the host-only converter for the pinned LFM2.5-350M Q8_0 appliance.
@@ -198,7 +204,8 @@ and published firmware files. The enabled sequential SiLU slot reaches 136.857 M
 
 The integrated image closes the 100 MHz TLP clock with zero setup/hold violations. The
 build refuses to publish if the timing report is missing, if TLP Fmax is below 100 MHz, or
-if any endpoint is violated. With timing-driven placement/routing, the complete FFN-step
-image closes at 104.030 MHz and uses
-7,797/138,240 logic elements (6%), 5,599/139,140 registers (5%), 18.5/298 DSP units
-(7%), and no SSRAM.
+if any endpoint is violated. With the banked BAR-read pipeline, the complete FFN-step image
+closes at 100.553 MHz and uses 7,539/138,240 logic elements (6%), 6,738/139,140 registers
+(5%), 16/340 BSRAM blocks (5%), 18.5/298 DSP units (7%), and no SSRAM. The former
+0.013 ns `transaction_addr_dw` to completion-data path is absent from the 25 worst setup
+paths; the current 0.055 ns worst path is inside the generic Q8 row-block slot.

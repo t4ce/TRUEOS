@@ -11,6 +11,10 @@ use core::ptr::NonNull;
 
 use crate::vcabi;
 
+unsafe extern "C" {
+    fn trueos_vlayer_vram_snapshot_read(offset: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
+}
+
 pub const ERR_IO: i32 = -5;
 pub const ERR_BAD_HANDLE: i32 = -9;
 pub const ERR_OUT_OF_MEMORY: i32 = -12;
@@ -26,6 +30,19 @@ pub const BUFFER_USAGE_COPY_SRC: u32 = 1 << 3;
 pub const BUFFER_USAGE_COPY_DST: u32 = 1 << 4;
 pub const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
 const VVIDEO_PAGE_BYTES: usize = 4096;
+
+/// Return the byte length of the latest cached, best-effort vGPU memory snapshot.
+pub fn memory_snapshot_len() -> Result<usize, i32> {
+    count_result(unsafe { trueos_vlayer_vram_snapshot_read(0, core::ptr::null_mut(), 0) })
+}
+
+/// Read bytes from the latest cached, best-effort vGPU memory snapshot.
+pub fn read_memory_snapshot(offset: usize, out: &mut [u8]) -> Result<usize, i32> {
+    if out.is_empty() {
+        return Ok(0);
+    }
+    count_result(unsafe { trueos_vlayer_vram_snapshot_read(offset, out.as_mut_ptr(), out.len()) })
+}
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(transparent)]

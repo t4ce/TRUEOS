@@ -91,6 +91,30 @@ pub struct TrueosUi4SkyboxRenderParams {
     pub rect_height: u32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4SpriteQuad {
+    pub sprite_id: u32,
+    pub c0_x: f32,
+    pub c0_y: f32,
+    pub c0_u: f32,
+    pub c0_v: f32,
+    pub c1_x: f32,
+    pub c1_y: f32,
+    pub c1_u: f32,
+    pub c1_v: f32,
+    pub c2_x: f32,
+    pub c2_y: f32,
+    pub c2_u: f32,
+    pub c2_v: f32,
+    pub c3_x: f32,
+    pub c3_y: f32,
+    pub c3_u: f32,
+    pub c3_v: f32,
+    pub color_rgba: u32,
+    pub flags: u32,
+}
+
 unsafe extern "C" {
     pub fn trueos_cabi_gridpaper_snapshot_submit(
         generation: u64,
@@ -174,6 +198,20 @@ unsafe extern "C" {
         window_id: u32,
         rgba_ptr: *const u8,
         rgba_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_sprite_upload_rgba8(
+        window_id: u32,
+        sprite_id: u32,
+        width: u32,
+        height: u32,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_sprite_quads(
+        window_id: u32,
+        quads: *const TrueosUi4SpriteQuad,
+        quad_count: usize,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_skybox_upload_rgb565(
         window_id: u32,

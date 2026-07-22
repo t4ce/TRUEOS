@@ -71,7 +71,12 @@ impl Capabilities {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KernelClient {
     Render,
-    Gpgpu,
+    /// Ordered compute lane for kernel system services such as fonts, retained
+    /// UI producers, and general-purpose synchronous operations.
+    GpgpuSystem,
+    /// Independent compute lane for continuously executing GPU programs. Its
+    /// context may remain in flight without blocking system-service compute.
+    GpgpuExecution,
     /// Persistent UI4 composition queue.  This is deliberately a separate
     /// virtual device/principal from general kernel GPGPU: UI4 may leave one
     /// frame in flight while video conversion, fonts, and application compute
@@ -87,7 +92,8 @@ impl KernelClient {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Render => "kernel-render",
-            Self::Gpgpu => "kernel-gpgpu",
+            Self::GpgpuSystem => "kernel-gpgpu-system",
+            Self::GpgpuExecution => "kernel-gpgpu-execution",
             Self::Ui4Compositor => "kernel-ui4-compositor",
             Self::Ui4Blitter => "kernel-ui4-blitter",
         }
@@ -96,7 +102,8 @@ impl KernelClient {
     const fn principal(self) -> Principal {
         match self {
             Self::Render => Principal::KernelRender,
-            Self::Gpgpu => Principal::KernelGpgpu,
+            Self::GpgpuSystem => Principal::KernelGpgpuSystem,
+            Self::GpgpuExecution => Principal::KernelGpgpuExecution,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
             Self::Ui4Blitter => Principal::KernelUi4Blitter,
         }
@@ -105,7 +112,7 @@ impl KernelClient {
     const fn queue_class(self) -> QueueClass {
         match self {
             Self::Render => QueueClass::Render,
-            Self::Gpgpu => QueueClass::Compute,
+            Self::GpgpuSystem | Self::GpgpuExecution => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
             Self::Ui4Blitter => QueueClass::Copy,
         }
@@ -115,7 +122,8 @@ impl KernelClient {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Principal {
     KernelRender,
-    KernelGpgpu,
+    KernelGpgpuSystem,
+    KernelGpgpuExecution,
     KernelUi4Compositor,
     KernelUi4Blitter,
     HostRuntime,
@@ -127,7 +135,8 @@ impl Principal {
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::KernelRender => "kernel-render",
-            Self::KernelGpgpu => "kernel-gpgpu",
+            Self::KernelGpgpuSystem => "kernel-gpgpu-system",
+            Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::KernelUi4Blitter => "kernel-ui4-blitter",
             Self::HostRuntime => "host-runtime",
@@ -454,6 +463,31 @@ static BROKER: Mutex<Broker> = Mutex::new(Broker {
     epoch: 1,
     devices: Vec::new(),
 });
+
+/// Accounting-only view of one broker device.
+///
+/// Unlike [`broker_status`], producing this record never asks the physical GPU
+/// to verify mappings or reads scheduler/adapter state.  It is intended for
+/// cheap, best-effort observability of the allocations the vGPU broker itself
+/// currently owns.
+#[derive(Clone, Debug)]
+pub(crate) struct DeviceMemoryAccounting {
+    pub(crate) handle: DeviceHandle,
+    pub(crate) principal: Principal,
+    pub(crate) epoch: u64,
+    pub(crate) lost: bool,
+    pub(crate) mapped_bytes: usize,
+    pub(crate) memory_quota: usize,
+    pub(crate) buffer_count: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BrokerMemoryAccounting {
+    pub(crate) epoch: u64,
+    pub(crate) total_mapped_bytes: usize,
+    pub(crate) total_buffer_count: usize,
+    pub(crate) devices: Vec<DeviceMemoryAccounting>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct DeviceStatusSnapshot {
@@ -1478,6 +1512,48 @@ pub(crate) fn notify_physical_device_lost() -> u64 {
     epoch
 }
 
+/// Copy the broker's allocation counters without probing or validating the
+/// physical GPU.
+///
+/// `mapped_bytes` is the broker's charged allocation size.  It describes bytes
+/// mapped into mediated GPU address spaces, not physical dedicated-VRAM
+/// residency.  The broker lock is held only while these counters are copied.
+pub(crate) fn broker_memory_accounting() -> BrokerMemoryAccounting {
+    let broker = BROKER.lock();
+    let mut total_mapped_bytes = 0usize;
+    let mut total_buffer_count = 0usize;
+    let mut devices = Vec::new();
+
+    for (slot, entry) in broker.devices.iter().enumerate() {
+        let Some(device) = entry.record.as_ref() else {
+            continue;
+        };
+        let buffer_count = device
+            .buffers
+            .iter()
+            .filter(|slot| slot.record.is_some())
+            .count();
+        total_mapped_bytes = total_mapped_bytes.saturating_add(device.memory_used);
+        total_buffer_count = total_buffer_count.saturating_add(buffer_count);
+        devices.push(DeviceMemoryAccounting {
+            handle: DeviceHandle(encode_handle(slot, entry.generation)),
+            principal: device.principal,
+            epoch: device.epoch,
+            lost: device.lost,
+            mapped_bytes: device.memory_used,
+            memory_quota: device.quota.memory_bytes,
+            buffer_count,
+        });
+    }
+
+    BrokerMemoryAccounting {
+        epoch: broker.epoch,
+        total_mapped_bytes,
+        total_buffer_count,
+        devices,
+    }
+}
+
 pub(crate) fn broker_status() -> BrokerStatus {
     let physical = physical_device();
     let info = physical.map(|device| device.adapter_info());
@@ -1644,7 +1720,8 @@ fn allowed_capabilities(
     }
     match principal {
         Principal::KernelRender
-        | Principal::KernelGpgpu
+        | Principal::KernelGpgpuSystem
+        | Principal::KernelGpgpuExecution
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => caps
             .union(Capabilities::PRESENT)
@@ -1656,7 +1733,8 @@ fn allowed_capabilities(
 const fn quota_for(principal: Principal) -> Quota {
     match principal {
         Principal::KernelRender
-        | Principal::KernelGpgpu
+        | Principal::KernelGpgpuSystem
+        | Principal::KernelGpgpuExecution
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => Quota::KERNEL,
         Principal::HostRuntime => Quota::HOST,

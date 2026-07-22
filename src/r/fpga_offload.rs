@@ -24,7 +24,12 @@ use trueos_fpga_abi::{
     WORK_PACKAGE_MAGIC, WorkPackage, WorkState,
 };
 
-const MAX_ACTIVE_CALLS: usize = 32;
+// One 4,608-element projection row contains 72 cached-pair calls. Keeping the
+// whole row queued lets the single worker submit the next hardware operation
+// immediately after MSI retirement instead of waiting for the Lumen caller to
+// wake, verify, and enqueue again. There is still exactly one FPGA call in
+// flight; this is host-side sequencing, not a hardware worker pool.
+const MAX_ACTIVE_CALLS: usize = 128;
 const DEVICE_RETRY_MS: u64 = 100;
 const COMPLETION_INTERRUPT_TIMEOUT_MS: u64 = 2_000;
 const HEARTBEAT_PERIOD_MS: u64 = 250;
@@ -343,12 +348,41 @@ pub async fn lfm25_q8_cached_pair(
     weight0: &[u8; 34],
     weight1: &[u8; 34],
 ) -> Result<trueos_fpga_abi::builtins::lfm25_ffn_step::Q8RowBlockResult, Error> {
+    submit_lfm25_q8_cached_pair(wide, first, last, block_index, weight0, weight1)?
+        .complete()
+        .await
+}
+
+/// Typed handle for one already-queued cached-pair operation. Queueing all
+/// pairs in a row removes caller round trips while preserving FIFO execution,
+/// one work package in flight, one MSI per operation, and exact per-pair
+/// verification.
+pub struct Lfm25CachedPairCall(FpgaCall);
+
+impl Lfm25CachedPairCall {
+    pub async fn complete(
+        self,
+    ) -> Result<trueos_fpga_abi::builtins::lfm25_ffn_step::Q8RowBlockResult, Error> {
+        use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+        let completion = self.0.await?;
+        function::decode(completion.output()).ok_or(Error::Protocol)
+    }
+}
+
+pub fn submit_lfm25_q8_cached_pair(
+    wide: bool,
+    first: bool,
+    last: bool,
+    block_index: u8,
+    weight0: &[u8; 34],
+    weight1: &[u8; 34],
+) -> Result<Lfm25CachedPairCall, Error> {
     use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
 
-    let input =
-        function::encode_cached_pair(first, last, wide, block_index, weight0, weight1);
-    let completion = lfm25_ffn_step_with_callback(&input).await?;
-    function::decode(completion.output()).ok_or(Error::Protocol)
+    let input = function::encode_cached_pair(first, last, wide, block_index, weight0, weight1);
+    let call = submit(function::ID, &input, function::OUTPUT_BYTES)?;
+    Ok(Lfm25CachedPairCall(call))
 }
 
 /// Fixed hardware vector operation used between the gate/up projections and

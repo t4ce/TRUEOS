@@ -211,6 +211,30 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    queue_ui4_sprite_quad_runs(dst, runs, false, "sprite-quad-runs")
+}
+
+/// Queue an arbitrary-quad Blueprint scene into its exact UI4 write lease.
+///
+/// This is deliberately a UI4 producer entry point rather than a mode on the
+/// shared direct-RCS helper. It keeps the sprite ABI while giving the request
+/// the compositor-private context, descriptor page, PPGTT, timeline, and
+/// asynchronous retirement contract. The destination is mapped with UI4's
+/// scanout cache policy because a successful final marker is published
+/// directly as the producer release for this exact allocation.
+pub(crate) fn queue_ui4_blueprint_sprite_scene(
+    dst: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    queue_ui4_sprite_quad_runs(dst, runs, true, "blueprint-sprite-scene")
+}
+
+fn queue_ui4_sprite_quad_runs(
+    dst: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+    direct_scanout: bool,
+    kernel: &'static str,
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     // Do not call `sprite_quad_worklist_ready()` here. That helper runs the
     // legacy synchronous smoke probe and polls its marker on the caller's CPU.
     // UI4 calls this entry point from an Embassy task and owns an asynchronous
@@ -269,8 +293,12 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
     }
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
+    let dst_ppgtt_ok = kernel_ppgtt_ok
+        && if direct_scanout {
+            direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes)
+        } else {
+            direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes)
+        };
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let mut src_ppgtt_ok = desc_ppgtt_ok;
@@ -286,12 +314,14 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
         && direct_rcs_encode_sprite_quad_worklist_runs_batch(state, upload, dst, desc, runs);
     if !batch_ok {
         crate::log_error!(target: "ui4";
-            "ui4/guc-compositor: queue rejected stage=prepare forcewake={} mapped={} ppgtt={} kernel={} dst={} desc={} src={} batch={} descs={}\n",
+            "ui4/guc-compositor: queue rejected stage=prepare request={} forcewake={} mapped={} ppgtt={} kernel={} dst={} dst_cache={} desc={} src={} batch={} descs={}\n",
+            kernel,
             forcewake_ok as u8,
             mapped_ok as u8,
             ppgtt_ok as u8,
             kernel_ppgtt_ok as u8,
             dst_ppgtt_ok as u8,
+            if direct_scanout { "pat3-uc" } else { "pat0-wb" },
             desc_ppgtt_ok as u8,
             src_ppgtt_ok as u8,
             batch_ok as u8,
@@ -321,7 +351,7 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
         started_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
-        kernel: "sprite-quad-runs",
+        kernel,
         stats: GpgpuWorklistSubmitStats {
             descs: total_descs,
             walkers: total_descs,
@@ -331,10 +361,12 @@ pub(crate) fn queue_ui4_compositor_sprite_quad_runs(
         overdue_logged: false,
     });
     crate::log_trace!(target: "ui4";
-        "ui4/guc-compositor: queued serial={} descs={} dst_gpu=0x{:X} context=isolated persistent=1 wait=none\n",
+        "ui4/guc-compositor: queued serial={} kernel={} descs={} dst_gpu=0x{:X} dst_cache={} context=isolated persistent=1 wait=none\n",
         serial,
+        kernel,
         total_descs,
         dst.gpu,
+        if direct_scanout { "pat3-uc" } else { "pat0-wb" },
     );
     Ok(submission)
 }
@@ -611,6 +643,26 @@ pub(crate) fn poll_ui4_video_frame_submission(
         },
         Ui4CompositorCompletion::Failed | Ui4CompositorCompletion::InvalidSubmission => {
             Ui4VideoFrameCompletion::Failed
+        }
+    }
+}
+
+/// Retire the final arbitrary-quad Blueprint batch and mint the producer
+/// release for the exact UI4 write lease. Intermediate batches use
+/// `poll_ui4_compositor_submission()` and therefore cannot manufacture a
+/// publishable fence before the complete ordered scene has retired.
+pub(crate) fn poll_ui4_blueprint_sprite_scene(
+    submission: Ui4CompositorSubmission,
+    dst: GpgpuRgba8Surface,
+) -> Ui4SpriteSceneCompletion {
+    match poll_ui4_compositor_submission(submission) {
+        Ui4CompositorCompletion::Pending => Ui4SpriteSceneCompletion::Pending,
+        Ui4CompositorCompletion::Complete(stats) => Ui4SpriteSceneCompletion::Complete {
+            stats,
+            release: gpgpu_rgba8_release(dst),
+        },
+        Ui4CompositorCompletion::Failed | Ui4CompositorCompletion::InvalidSubmission => {
+            Ui4SpriteSceneCompletion::Failed
         }
     }
 }

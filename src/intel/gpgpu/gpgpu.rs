@@ -3,7 +3,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
-use spin::{Mutex, Once};
+use spin::Mutex;
 
 // These fragments intentionally share this module namespace. Keeping the
 // implementation in one namespace preserves all existing crate-visible paths,

@@ -56,11 +56,12 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "tga: irq={} wakes={} timeout_recoveries={} bar_repairs={} hw_retire={} hw_req={} hw_ack={} hw_state={:#04x}",
+            "tga: irq={} wakes={} timeout_recoveries={} bar_repairs={} bar_batch_fallbacks={} hw_retire={} hw_req={} hw_ack={} hw_state={:#04x}",
             stats.interrupts,
             stats.interrupt_wakes,
             stats.timeout_recoveries,
             crate::tga::offload_write_repair_count(),
+            crate::tga::offload_batch_fallback_count(),
             hardware.retirements,
             hardware.requests,
             hardware.controller_acks,

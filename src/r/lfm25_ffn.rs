@@ -127,6 +127,15 @@ pub enum Error {
     CompletionPath,
 }
 
+struct PendingPair {
+    block: usize,
+    weight: [u8; Q8_BLOCK_BYTES],
+    expected_dot: i32,
+    expected_term_q30: i64,
+    expected_row_q30: i64,
+    call: fpga_offload::Lfm25CachedPairCall,
+}
+
 impl From<lfm25_model::Error> for Error {
     fn from(value: lfm25_model::Error) -> Self {
         Self::Model(value)
@@ -332,6 +341,10 @@ async fn project(
     for row in 0..rows {
         let mut row_q30 = 0i64;
         let mut expected_row_q30 = 0i64;
+        let mut pending: Vec<PendingPair> = Vec::new();
+        pending
+            .try_reserve_exact(blocks_per_row / 2)
+            .map_err(|_| Error::BufferUnavailable)?;
         for block in (0..blocks_per_row).step_by(2) {
             let activation0 = &activation[block];
             let activation1 = &activation[block + 1];
@@ -368,27 +381,68 @@ async fn project(
                 .checked_add(expected_term1)
                 .ok_or(Error::Arithmetic)?;
 
-            let result = fpga_offload::lfm25_q8_cached_pair(
+            let call = match fpga_offload::submit_lfm25_q8_cached_pair(
                 wide,
                 block == 0,
                 block + 2 == blocks_per_row,
                 block as u8,
                 weight0,
                 weight1,
-            )
-            .await?;
-            require_hardware_result(
-                stage,
-                row,
-                block + 1,
-                activation1,
-                weight1,
-                result,
-                expected_dot1,
-                expected_term1,
+            ) {
+                Ok(call) => call,
+                Err(error) => {
+                    // Calls already queued for this stateful row must retire
+                    // before the lane guard can be released.
+                    for pending_pair in pending {
+                        let _ = pending_pair.call.complete().await;
+                    }
+                    return Err(Error::Fpga(error));
+                }
+            };
+            pending.push(PendingPair {
+                block,
+                weight: *weight1,
+                expected_dot: expected_dot1,
+                expected_term_q30: expected_term1,
                 expected_row_q30,
-            )?;
-            row_q30 = result.row_q30;
+                call,
+            });
+        }
+
+        // The worker consumes these FIFO with exactly one package in flight.
+        // Keep draining after the first error so no stateful slot-2 operation
+        // can outlive the FFN lane guard.
+        let mut row_error = None;
+        for pending_pair in pending {
+            match pending_pair.call.complete().await {
+                Ok(result) => {
+                    if row_error.is_none() {
+                        let block = pending_pair.block + 1;
+                        if let Err(error) = require_hardware_result(
+                            stage,
+                            row,
+                            block,
+                            &activation[block],
+                            &pending_pair.weight,
+                            result,
+                            pending_pair.expected_dot,
+                            pending_pair.expected_term_q30,
+                            pending_pair.expected_row_q30,
+                        ) {
+                            row_error = Some(error);
+                        }
+                    }
+                    row_q30 = result.row_q30;
+                }
+                Err(error) => {
+                    if row_error.is_none() {
+                        row_error = Some(Error::Fpga(error));
+                    }
+                }
+            }
+        }
+        if let Some(error) = row_error {
+            return Err(error);
         }
         output.push(row_q30);
         let expected = golden_f32(golden_vector, row)?;

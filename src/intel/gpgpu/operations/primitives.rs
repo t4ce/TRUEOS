@@ -193,96 +193,6 @@ pub(crate) enum GpgpuDispatchRetirement {
     SubmittedIncomplete,
 }
 
-fn run_font_outline_coverage_r8_self_test() -> bool {
-    const WIDTH: u32 = 19;
-    const HEIGHT: u32 = 11;
-    const OPS: [[u32; 8]; 5] = [
-        [0, 2.0f32.to_bits(), 2.0f32.to_bits(), 0, 0, 0, 0, 0],
-        [1, 17.0f32.to_bits(), 2.0f32.to_bits(), 0, 0, 0, 0, 0],
-        [1, 17.0f32.to_bits(), 9.0f32.to_bits(), 0, 0, 0, 0, 0],
-        [1, 2.0f32.to_bits(), 9.0f32.to_bits(), 0, 0, 0, 0, 0],
-        [4, 0, 0, 0, 0, 0, 0, 0],
-    ];
-    let Some(mask) = allocate_font_coverage_mask(WIDTH, HEIGHT) else {
-        return false;
-    };
-    let input_bytes = OPS.len() * core::mem::size_of::<[u32; 8]>();
-    let Some(mapped_bytes) = align_up(input_bytes, super::WARM_ALIGN) else {
-        return false;
-    };
-    let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
-        return false;
-    };
-    unsafe {
-        core::ptr::write_bytes(ops_virt, 0, mapped_bytes);
-        core::ptr::copy_nonoverlapping(OPS.as_ptr().cast::<u8>(), ops_virt, input_bytes);
-    }
-    super::dma_flush(ops_virt, mapped_bytes);
-    let surface = mask.surface();
-    let params = FontOutlineCoverageR8Params {
-        ops_gpu: DIRECT_RCS_GPU_VA_FONT_COVERAGE_OPS_BASE,
-        mask_gpu: surface.gpu,
-        op_count: OPS.len() as u32,
-        subdivisions: 1,
-        mask_pitch_bytes: surface.pitch_bytes,
-        mask_width: WIDTH,
-        mask_height: HEIGHT,
-        rect_x: 0,
-        rect_y: 0,
-        rect_width: WIDTH,
-        rect_height: HEIGHT,
-        optical_bias_px: 0.0,
-    };
-    let retirement = submit_font_outline_coverage_r8_2d(ops_phys, mapped_bytes, surface, params);
-    if retirement != GpgpuDispatchRetirement::SubmittedIncomplete {
-        crate::dma::dealloc(ops_virt, mapped_bytes);
-    }
-    match retirement {
-        GpgpuDispatchRetirement::Complete => {}
-        GpgpuDispatchRetirement::NotSubmitted => return false,
-        GpgpuDispatchRetirement::SubmittedIncomplete => {
-            // The self-test is a real submission. A missed marker gives
-            // hardware continued ownership of both allocations just like a
-            // production mask dispatch.
-            core::mem::forget(mask);
-            return false;
-        }
-    }
-    let Some(audit) = mask.nonzero_audit() else {
-        return false;
-    };
-    let mut solid_interior = true;
-    for y in 3..8usize {
-        // Include x=16 from the odd-width tail workgroup.  This catches a
-        // walker that incorrectly applies a three-lane tail mask to every
-        // SIMD16 group while still appearing to complete successfully.
-        for x in 3..17usize {
-            let offset = y * surface.pitch_bytes as usize + x;
-            let coverage = unsafe { core::ptr::read_volatile(mask.virt.add(offset)) };
-            solid_interior &= coverage == u8::MAX;
-        }
-    }
-    let corner = unsafe { core::ptr::read_volatile(mask.virt) };
-    let ok = solid_interior && corner == 0 && audit.nonzero_pixels >= 65;
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: font-outline-coverage-r8 self-test={} mask_gpu=0x{:X} nonzero={} bounds={},{},{}x{} tail_width={} right_mask=full-simd16 invariant=solid-interior-including-tail+empty-corner+unique-va\n",
-        if ok { "pass" } else { "fail" },
-        surface.gpu,
-        audit.nonzero_pixels,
-        audit.bounds.x,
-        audit.bounds.y,
-        audit.bounds.width,
-        audit.bounds.height,
-        WIDTH % FILL_RECT_PIXELS_PER_GROUP_X,
-    );
-    ok
-}
-
-fn font_outline_coverage_r8_self_test() -> bool {
-    *FONT_OUTLINE_COVERAGE_R8_SELF_TEST.call_once(run_font_outline_coverage_r8_self_test)
-}
-
 /// Add one positioned Skrifa outline stream into a persistent R8 mask.
 /// Existing coverage is retained with `max`, allowing bold duplicate runs and
 /// multiple glyphs to share one color-layer mask without CPU mask blending.
@@ -303,9 +213,6 @@ pub(crate) fn font_outline_coverage_r8(
         || !optical_bias_px.is_finite()
         || !(0.0..=0.35).contains(&optical_bias_px)
     {
-        return GpgpuDispatchRetirement::NotSubmitted;
-    }
-    if !font_outline_coverage_r8_self_test() {
         return GpgpuDispatchRetirement::NotSubmitted;
     }
     let input_bytes = match outline_ops

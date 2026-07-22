@@ -91,8 +91,6 @@ const ERROR_INVALID_ANIMATION: i32 = -5;
 const ERROR_INVALID_INSTANCE: i32 = -6;
 const ERROR_POOL_FULL: i32 = -7;
 
-static COVERAGE_COMPOSITE_FALLBACK_LOGGED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
 static GPU_DIRECT_PRESENT_LOGGED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
@@ -1685,7 +1683,7 @@ fn publish_page(
     if !GPU_DIRECT_PRESENT_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel) {
         crate::log_info!(
             target: "gridpaper";
-            "gridpaper: live frame path=gpu-direct-msaa-resolve-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback={} cpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={} final_release=pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership\n",
+            "gridpaper: live frame path=gpu-direct-single-sample-to-ui4-triple size={}x{} pitch={} target_gpu=0x{:X} buffers=3 plane_slot={} cpu_readback={} cpu_frame_copy=0 gpu_frame_copy=0 cursor_overlay=gpgpu-worklist retained_scene=1 coverage_submits={} coverage_walkers={} final_release=pat3-uc+pipe-control-post-sync publish=exact-surface surflive=display-ownership\n",
             destination.width,
             destination.height,
             destination.pitch_bytes,
@@ -1754,7 +1752,7 @@ fn capture_resident_page_frame(
         })
         .collect::<Vec<_>>();
     let captured = if let Some(destination) = destination {
-        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_coverage_and_rects_direct_to_surface(
             &triangle_draws,
             &coverage_draws,
             final_rects,
@@ -1772,64 +1770,17 @@ fn capture_resident_page_frame(
             false,
         )
     };
-    match captured {
-        Ok(result)
-            if result.completed_draws == result.requested_draws
-                && (destination.is_some() || result.rgba.is_some()) =>
-        {
-            Ok(result)
-        }
-        Ok(_) if coverage_draws.is_empty() => Err("incomplete-frame"),
-        Err(reason) if coverage_draws.is_empty() => Err(reason),
-        failed => {
-            if !COVERAGE_COMPOSITE_FALLBACK_LOGGED.swap(true, core::sync::atomic::Ordering::AcqRel)
-            {
-                let reason = match failed {
-                    Ok(_) => "incomplete-coverage-frame",
-                    Err(reason) => reason,
-                };
-                crate::log_warn!(
-                    target: "gridpaper";
-                    "gridpaper: analytical coverage composite failed reason={} masks={} action=rerender-resident-triangle-fallback\n",
-                    reason,
-                    coverage_draws.len(),
-                );
-            }
-            let fallback_draws = page
-                .layers
-                .iter()
-                .map(|layer| crate::intel::render::ResidentSceneDraw {
-                    mesh: &layer.mesh,
-                    rgba: resident_layer_color(layer, text_animations, animation_elapsed_ms),
-                    viewport_translation_px,
-                })
-                .collect::<Vec<_>>();
-            let fallback = if let Some(destination) = destination {
-                crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
-                    &fallback_draws,
-                    &[],
-                    final_rects,
-                    Some([0, 0, 0, 0]),
-                    destination,
-                    false,
-                )
-            } else {
-                crate::intel::render::capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa4(
-                    &fallback_draws,
-                    Some([0, 0, 0, 0]),
-                    width,
-                    height,
-                    false,
-                )
-            }?;
-            if fallback.completed_draws != fallback.requested_draws
-                || (destination.is_none() && fallback.rgba.is_none())
-            {
-                return Err("incomplete-fallback-frame");
-            }
-            Ok(fallback)
-        }
+    let result = captured?;
+    if let Some(error) = result.completion_error() {
+        return Err(error);
     }
+    if result.completed_draws != result.requested_draws {
+        return Err("resident-scene-draw-count-incomplete");
+    }
+    if destination.is_none() && result.rgba.is_none() {
+        return Err("resident-scene-readback-missing");
+    }
+    Ok(result)
 }
 
 fn resident_layer_color(
@@ -2594,6 +2545,11 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     if !animation_changed && !hot_pan_frame && !selection_frame {
         return;
     }
+    // TODO(perf, late-stage only): A color-only animation tick can eventually
+    // coalesce to its latest sample and recolor retained text coverage through
+    // a palette/mask fast path instead of rerasterizing the complete page.
+    // Keep the retained 3D scene canonical; this must not become a separate
+    // correctness, admission, or feature-semantics path.
     match publish_page(
         &runtime.surface,
         page,

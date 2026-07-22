@@ -473,6 +473,16 @@ pub(crate) enum Ui4VideoFrameCompletion {
     Failed,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum Ui4SpriteSceneCompletion {
+    Pending,
+    Complete {
+        stats: GpgpuWorklistSubmitStats,
+        release: GpgpuRgba8ReleaseFence,
+    },
+    Failed,
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct GpgpuShellMandel64WorklistResult {
     pub(crate) ok: bool,

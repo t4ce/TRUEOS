@@ -189,6 +189,9 @@ static TGA_COMPLETION_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 static TGA_COMPLETION_IRQ_WAKER: AtomicWaker = AtomicWaker::new();
 static TGA_OFFLOAD_WRITE_REPAIR_COUNT: AtomicU64 = AtomicU64::new(0);
 static TGA_OFFLOAD_WRITE_REPAIR_LOGGED: AtomicBool = AtomicBool::new(false);
+static TGA_OFFLOAD_BATCH_FALLBACK_COUNT: AtomicU64 = AtomicU64::new(0);
+static TGA_OFFLOAD_BATCH_DISABLED: AtomicBool = AtomicBool::new(false);
+static TGA_OFFLOAD_BATCH_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const TGA_HEARTBEAT_PERIOD_MS: u64 = 100;
 const TGA_HEARTBEAT_LOG_EVERY_WRITES: u32 = 50;
@@ -217,6 +220,10 @@ pub(crate) fn completion_interrupt_count() -> u64 {
 
 pub(crate) fn offload_write_repair_count() -> u64 {
     TGA_OFFLOAD_WRITE_REPAIR_COUNT.load(Ordering::Acquire)
+}
+
+pub(crate) fn offload_batch_fallback_count() -> u64 {
+    TGA_OFFLOAD_BATCH_FALLBACK_COUNT.load(Ordering::Acquire)
 }
 
 pub(crate) fn completion_interrupt_configured() -> bool {
@@ -608,23 +615,74 @@ pub(crate) fn submit_offload_work_package(
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
     };
+    let source = package as *const trueos_fpga_abi::WorkPackage as *const u32;
+    // Only header words 0..9 and the declared input are meaningful requests.
+    // Reserved header words 10..15 are deliberately not transported.
+    const REQUEST_HEADER_WORDS: usize =
+        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, reserved_header) / 4;
+    const REQUEST_INPUT_WORD: usize =
+        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, input) / 4;
+    let input_word_count = (package.input_len as usize).div_ceil(4);
+    let request_word_count = REQUEST_HEADER_WORDS + input_word_count;
+    let request_word_index = |sequence: usize| {
+        if sequence < REQUEST_HEADER_WORDS {
+            sequence
+        } else {
+            REQUEST_INPUT_WORD + sequence - REQUEST_HEADER_WORDS
+        }
+    };
+
+    // A non-posted read of the endpoint's decoded-write counter is both an
+    // ordering barrier for preceding posted writes and proof that every TLP in
+    // the small batch reached the BAR decoder. PCIe protects the address and
+    // payload themselves. If the endpoint cannot absorb even this bounded
+    // burst, restart the complete request through the proven per-word
+    // write/read repair path and disable batching for the rest of this boot.
+    const POSTED_WRITE_BATCH_WORDS: usize = 4;
+    let mut batch_ok = !TGA_OFFLOAD_BATCH_DISABLED.load(Ordering::Acquire);
+    if batch_ok {
+        let mut decoded_expected = Tga::read_reg(tga.mmio_base + TGA_DBG_WRITE_COUNT_OFF);
+        let mut batch_start = 0;
+        while batch_start < request_word_count {
+            let batch_end = (batch_start + POSTED_WRITE_BATCH_WORDS).min(request_word_count);
+            for sequence in batch_start..batch_end {
+                let index = request_word_index(sequence);
+                let expected = unsafe { source.add(index).read() };
+                Tga::write_reg(tga.offload_work_package_reg + index * 4, expected);
+            }
+            fence(Ordering::SeqCst);
+            decoded_expected = decoded_expected.wrapping_add((batch_end - batch_start) as u32);
+            let decoded_observed = Tga::read_reg(tga.mmio_base + TGA_DBG_WRITE_COUNT_OFF);
+            if decoded_observed != decoded_expected {
+                batch_ok = false;
+                TGA_OFFLOAD_BATCH_DISABLED.store(true, Ordering::Release);
+                TGA_OFFLOAD_BATCH_FALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+                if !TGA_OFFLOAD_BATCH_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
+                    crate::log_warn!(
+                        "tga: posted BAR batch was not fully decoded; using per-word verified submission for this boot\n"
+                    );
+                }
+                break;
+            }
+            batch_start = batch_end;
+        }
+    }
+
+    if batch_ok {
+        fence(Ordering::Release);
+        Tga::write_reg(tga.offload_doorbell_reg, TGA_OFFLOAD_DOORBELL_MAGIC);
+        return Ok(());
+    }
+
+    // Conservative recovery path. A new word-0 write starts the request again;
+    // every meaningful word is acknowledged before the next one is presented.
+    const WRITE_REPAIR_ATTEMPTS: usize = 8;
     let rx_captures_before = Tga::read_reg(tga.mmio_base + TGA_DBG_RX_CAPTURE_COUNT_OFF);
     let decoded_writes_before = Tga::read_reg(tga.mmio_base + TGA_DBG_WRITE_COUNT_OFF);
     let word30_writes_before = Tga::read_reg(tga.mmio_base + TGA_DBG_WORD30_WRITE_COUNT_OFF);
-    let source = package as *const trueos_fpga_abi::WorkPackage as *const u32;
-    // The endpoint accepts one-dword posted writes.  Commit only the request
-    // prefix, and acknowledge each word with an immediate non-posted read
-    // before presenting the next write.  Bulk-writing all 64 package words and
-    // verifying them afterwards allowed the physical endpoint to occasionally
-    // lose one payload while its RX path was saturated.  This ordering keeps at
-    // most one unacknowledged request word at that boundary without changing
-    // the BAR ABI or increasing the number of verification reads.
-    const WRITE_REPAIR_ATTEMPTS: usize = 8;
-    let input_end =
-        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, input) + package.input_len as usize;
-    let request_word_count = input_end.div_ceil(core::mem::size_of::<u32>());
     let mut repaired_any = false;
-    for index in 0..request_word_count {
+    for sequence in 0..request_word_count {
+        let index = request_word_index(sequence);
         let expected = unsafe { source.add(index).read() };
         let register = tga.offload_work_package_reg + index * 4;
         let mut observed = 0;
@@ -711,8 +769,7 @@ pub(crate) fn read_offload_work_package()
     let destination = &mut package as *mut trueos_fpga_abi::WorkPackage as *mut u32;
     const HEADER_WORDS: usize =
         core::mem::offset_of!(trueos_fpga_abi::WorkPackage, reserved_header) / 4;
-    const OUTPUT_WORD: usize =
-        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, output) / 4;
+    const OUTPUT_WORD: usize = core::mem::offset_of!(trueos_fpga_abi::WorkPackage, output) / 4;
     fence(Ordering::Acquire);
     for index in 0..HEADER_WORDS {
         let value = Tga::read_reg(tga.offload_work_package_reg + index * 4);

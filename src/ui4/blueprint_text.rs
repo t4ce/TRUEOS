@@ -10,8 +10,12 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
-    GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, SkyboxSampleRgb565Params,
-    skybox_sample_rgb565_to_rgba8,
+    GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
+    GpgpuSpriteQuadWorklistRun, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params,
+    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
+    Ui4SpriteSceneCompletion, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    queue_ui4_blueprint_sprite_scene, skybox_sample_rgb565_to_rgba8,
+    sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
@@ -23,11 +27,12 @@ use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
     WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
-    WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
-    create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
-    focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
-    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
-    replace_window_frame, set_window_placement, take_owner_input_events, writable_rgba_view,
+    WindowSessionId, acquire_frame_buffer, begin_additional_window_session, cancel_frame_buffer,
+    create_frame, create_window, destroy_frame, finish_window_session,
+    finish_window_session_with_request, focused_keyboard_state, gpgpu_rgba_surface,
+    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_window_frame, replace_window_frame, set_window_placement, take_owner_input_events,
+    writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -43,10 +48,18 @@ const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
 const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
 const UI4_SCENE_SOURCE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const UI4_SCENE_SPRITE_GPU: u64 = UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64;
+const UI4_SCENE_SPRITE_MAX_BYTES: usize = 128 * 1024 * 1024;
+const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
+const MAX_SPRITE_QUADS: usize = 8_192;
+const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
+const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
+const SPRITE_QUAD_VALID_FLAGS: u32 = SPRITE_QUAD_FLAG_SRC_OVER;
 const _: () = {
     assert!(UI4_SCENE_SOURCE_GPU.is_multiple_of(4096));
+    assert!(UI4_SCENE_SPRITE_GPU.is_multiple_of(4096));
     assert!(
-        UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64
+        UI4_SCENE_SPRITE_GPU + UI4_SCENE_SPRITE_MAX_BYTES as u64
             <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES
     );
 };
@@ -149,6 +162,35 @@ pub struct TrueosUi4SkyboxRenderParams {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4SkyboxRenderParams>() == 15 * 4);
 
+/// One ordered, straight-alpha RGBA sprite operation. Sprite id zero selects
+/// the frame-owned one-pixel white source and therefore represents a solid
+/// rectangle when every UV is zero.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4SpriteQuad {
+    pub sprite_id: u32,
+    pub c0_x: f32,
+    pub c0_y: f32,
+    pub c0_u: f32,
+    pub c0_v: f32,
+    pub c1_x: f32,
+    pub c1_y: f32,
+    pub c1_u: f32,
+    pub c1_v: f32,
+    pub c2_x: f32,
+    pub c2_y: f32,
+    pub c2_u: f32,
+    pub c2_v: f32,
+    pub c3_x: f32,
+    pub c3_y: f32,
+    pub c3_u: f32,
+    pub c3_v: f32,
+    pub color_rgba: u32,
+    pub flags: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4SpriteQuad>() == 19 * 4);
+
 struct BlueprintSceneSurface {
     owner: WindowOwner,
     session: WindowSessionId,
@@ -163,6 +205,11 @@ struct BlueprintSceneSurface {
     placement: WindowPlacement,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
+    sprites: Vec<(u32, OwnedRgba8Surface)>,
+    sprite_upload: Option<Rgba8Upload>,
+    solid_source: Option<OwnedRgba8Surface>,
+    sprite_clear_rgba: Option<u32>,
+    sprite_scene_upload: Option<SpriteSceneUpload>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
 }
 
@@ -186,6 +233,28 @@ struct Rgb565Upload {
     owned: OwnedRgb565Surface,
     packed_len: usize,
     written: usize,
+}
+
+#[derive(Copy, Clone)]
+struct OwnedRgba8Surface {
+    surface: GpgpuRgba8Surface,
+    virt: *mut u8,
+    bytes: usize,
+}
+
+unsafe impl Send for OwnedRgba8Surface {}
+unsafe impl Sync for OwnedRgba8Surface {}
+
+struct Rgba8Upload {
+    sprite_id: u32,
+    owned: OwnedRgba8Surface,
+    packed_len: usize,
+    written: usize,
+}
+
+struct SpriteSceneUpload {
+    expected: usize,
+    quads: Vec<TrueosUi4SpriteQuad>,
 }
 
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
@@ -338,17 +407,6 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         return 0;
     };
 
-    let old = {
-        let mut surfaces = SURFACES.lock();
-        surfaces
-            .iter()
-            .position(|surface| surface.owner == owner)
-            .map(|slot| surfaces.remove(slot))
-    };
-    if let Some(old) = old {
-        release_surface(old, BlueprintSurfaceRelease::Animated);
-    }
-
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let frame = match create_frame(FrameSpec {
         output,
@@ -370,7 +428,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
             return 0;
         }
     };
-    let session = match begin_window_session(owner) {
+    let session = match begin_additional_window_session(owner) {
         Ok(session) => session,
         Err(error) => {
             let _ = destroy_frame(frame);
@@ -428,6 +486,11 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 placement,
                 skybox: None,
                 skybox_upload: None,
+                sprites: Vec::new(),
+                sprite_upload: None,
+                solid_source: None,
+                sprite_clear_rgba: None,
+                sprite_scene_upload: None,
                 pending_pan_events: VecDeque::new(),
             },
             BlueprintSurfaceRelease::Animated,
@@ -448,6 +511,11 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         placement,
         skybox: None,
         skybox_upload: None,
+        sprites: Vec::new(),
+        sprite_upload: None,
+        solid_source: None,
+        sprite_clear_rgba: None,
+        sprite_scene_upload: None,
         pending_pan_events: VecDeque::new(),
     });
     let (cadence_name, buffer_count) = match cadence {
@@ -473,6 +541,33 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
+    begin_blueprint_frame(owner, window_id, clear_rgba, true)
+}
+
+/// Acquire a UI4 write lease whose full clear is emitted by the first sprite
+/// worklist submission rather than painted and flushed by the calling CPU.
+pub extern "C" fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN,
+            window_id as u64,
+            clear_rgba as u64,
+            &[],
+        );
+    }
+    reap_retired_frames();
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    begin_blueprint_frame(owner, window_id, clear_rgba, false)
+}
+
+pub(crate) fn begin_blueprint_frame(
+    owner: WindowOwner,
+    window_id: u32,
+    clear_rgba: u32,
+    cpu_clear: bool,
+) -> i32 {
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -534,7 +629,8 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
     // A retained streaming skybox is required to shade the complete target,
     // so clearing and flushing every CPU-visible cache line first is redundant.
     // Dirty/text frames retain the ordinary clear contract.
-    let gpu_full_frame = surface.cadence == FrameCadence::Streaming && surface.skybox.is_some();
+    let gpu_full_frame =
+        !cpu_clear || (surface.cadence == FrameCadence::Streaming && surface.skybox.is_some());
     if !gpu_full_frame {
         let [r, g, b, a] = clear_rgba.to_le_bytes();
         let pixel = PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes();
@@ -546,6 +642,8 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba:
         crate::intel::dma_flush(view.virt, view.byte_len);
     }
     surface.pending_gpu_release = None;
+    surface.sprite_clear_rgba = (!cpu_clear).then_some(clear_rgba);
+    surface.sprite_scene_upload = None;
     surface.write_lease = Some(lease);
     0
 }
@@ -831,6 +929,148 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
     };
     let bytes = unsafe { core::slice::from_raw_parts(rgba_ptr, rgba_len) };
     write_opaque_rgba8_chunk(owner, window_id, 0, bytes)
+}
+
+/// Retain one tightly packed, straight-alpha RGBA8 sprite source for this
+/// frame. The allocation remains warm across publishes and is released with
+/// the owning UI4 window session.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_upload_rgba8(
+    window_id: u32,
+    sprite_id: u32,
+    width: u32,
+    height: u32,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> i32 {
+    let Some(expected) = expected_rgba8_len(width, height) else {
+        return ERROR_INVALID;
+    };
+    if sprite_id == 0 || data_ptr.is_null() || data_len != expected {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut extent = [0u8; 8];
+        extent[..4].copy_from_slice(&width.to_le_bytes());
+        extent[4..].copy_from_slice(&height.to_le_bytes());
+        let begin = guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN,
+            window_id as u64,
+            sprite_id as u64,
+            &extent,
+        );
+        if begin != 0 {
+            return begin;
+        }
+        let bytes = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+        let chunk_cap = trueos_vm::vmcall::PAYLOAD_CAP & !3;
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let end = core::cmp::min(offset.saturating_add(chunk_cap), bytes.len());
+            let sprite_and_offset = ((sprite_id as u64) << 32) | offset as u64;
+            let rc = guest_status(
+                trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_UPLOAD_CHUNK,
+                window_id as u64,
+                sprite_and_offset,
+                &bytes[offset..end],
+            );
+            if rc != 0 {
+                return rc;
+            }
+            offset = end;
+        }
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_UPLOAD_FINISH,
+            window_id as u64,
+            sprite_id as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let begin = begin_sprite_rgba8_upload(owner, window_id, sprite_id, width, height);
+    if begin != 0 {
+        return begin;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, expected) };
+    let write = write_sprite_rgba8_upload_chunk(owner, window_id, sprite_id, 0, bytes);
+    if write != 0 {
+        return write;
+    }
+    finish_sprite_rgba8_upload(owner, window_id, sprite_id)
+}
+
+/// Submit one ordered sprite/solid scene into the active sprite-frame lease.
+/// Large scenes are transported in bounded chunks and rendered as consecutive
+/// hardware worklists without exposing GPU addresses to the Blueprint. GuC
+/// admission and completion use UI4's isolated asynchronous timeline; this
+/// legacy one-call ABI returns success only after the final exact-allocation
+/// producer release exists.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_quads(
+    window_id: u32,
+    quads: *const TrueosUi4SpriteQuad,
+    quad_count: usize,
+) -> i32 {
+    if quad_count > MAX_SPRITE_QUADS || (quads.is_null() && quad_count != 0) {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let begin = guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_DRAW_BEGIN,
+            window_id as u64,
+            quad_count as u64,
+            &[],
+        );
+        if begin != 0 {
+            return begin;
+        }
+        let record_bytes = core::mem::size_of::<TrueosUi4SpriteQuad>();
+        let records_per_chunk = (trueos_vm::vmcall::PAYLOAD_CAP / record_bytes).max(1);
+        let input: &[TrueosUi4SpriteQuad] = if quad_count == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(quads, quad_count) }
+        };
+        let mut offset = 0usize;
+        while offset < input.len() {
+            let end = core::cmp::min(offset.saturating_add(records_per_chunk), input.len());
+            let byte_len = (end - offset) * record_bytes;
+            let bytes = unsafe {
+                core::slice::from_raw_parts(input.as_ptr().add(offset).cast::<u8>(), byte_len)
+            };
+            let rc = guest_status(
+                trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK,
+                window_id as u64,
+                offset as u64,
+                bytes,
+            );
+            if rc != 0 {
+                return rc;
+            }
+            offset = end;
+        }
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let begin = begin_sprite_scene(owner, window_id, quad_count);
+    if begin != 0 {
+        return begin;
+    }
+    if quad_count != 0 {
+        let input = unsafe { core::slice::from_raw_parts(quads, quad_count) };
+        let append = append_sprite_scene(owner, window_id, 0, input);
+        if append != 0 {
+            return append;
+        }
+    }
+    finish_sprite_scene(owner, window_id)
 }
 
 /// Upload one tightly packed RGB565 equirectangular source owned by this UI4
@@ -1608,6 +1848,639 @@ fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     }
 }
 
+fn expected_rgba8_len(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(core::mem::size_of::<u32>())
+}
+
+pub(crate) fn begin_sprite_rgba8_upload(
+    owner: WindowOwner,
+    window_id: u32,
+    sprite_id: u32,
+    width: u32,
+    height: u32,
+) -> i32 {
+    let Some(packed_len) = expected_rgba8_len(width, height) else {
+        return ERROR_INVALID;
+    };
+    if sprite_id == 0 || packed_len == 0 {
+        return ERROR_INVALID;
+    }
+    let Some(row_bytes) = (width as usize).checked_mul(core::mem::size_of::<u32>()) else {
+        return ERROR_INVALID;
+    };
+    let Some(pitch) =
+        crate::intel::align_up(row_bytes, 64).and_then(|pitch| u32::try_from(pitch).ok())
+    else {
+        return ERROR_INVALID;
+    };
+    let Some(raw_bytes) = (pitch as usize).checked_mul(height as usize) else {
+        return ERROR_INVALID;
+    };
+    let Some(bytes) = crate::intel::align_up(raw_bytes, crate::intel::WARM_ALIGN) else {
+        return ERROR_INVALID;
+    };
+    if bytes > UI4_SCENE_SPRITE_MAX_BYTES.saturating_sub(UI4_SCENE_SOLID_SOURCE_BYTES) {
+        return ERROR_INVALID;
+    }
+
+    let gpu = {
+        let surfaces = SURFACES.lock();
+        let Some(surface) = surfaces
+            .iter()
+            .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
+        else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.gpu_submission_unretired {
+            return ERROR_BUSY;
+        }
+        let Some(gpu) = allocate_sprite_gpu_va(surface, sprite_id, bytes) else {
+            return ERROR_UI4;
+        };
+        gpu
+    };
+    let Some((phys, virt)) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN) else {
+        return ERROR_UI4;
+    };
+    unsafe { core::ptr::write_bytes(virt, 0, bytes) };
+    let Some(gpu_surface) = GpgpuRgba8Surface::new(phys, gpu, bytes, width, height, pitch) else {
+        crate::dma::dealloc(virt, bytes);
+        return ERROR_UI4;
+    };
+    let upload = Rgba8Upload {
+        sprite_id,
+        owned: OwnedRgba8Surface {
+            surface: gpu_surface,
+            virt,
+            bytes,
+        },
+        packed_len,
+        written: 0,
+    };
+    let old = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            drop(surfaces);
+            destroy_rgba8_surface(upload.owned);
+            return ERROR_NOT_FOUND;
+        };
+        surface.sprite_upload.replace(upload)
+    };
+    if let Some(old) = old {
+        destroy_rgba8_surface(old.owned);
+    }
+    0
+}
+
+fn allocate_sprite_gpu_va(
+    surface: &BlueprintSceneSurface,
+    replacing_sprite_id: u32,
+    bytes: usize,
+) -> Option<u64> {
+    let base = UI4_SCENE_SPRITE_GPU.checked_add(UI4_SCENE_SOLID_SOURCE_BYTES as u64)?;
+    let limit = UI4_SCENE_SPRITE_GPU.checked_add(UI4_SCENE_SPRITE_MAX_BYTES as u64)?;
+    let mut spans = surface
+        .sprites
+        .iter()
+        .filter(|(sprite_id, _)| *sprite_id != replacing_sprite_id)
+        .map(|(_, owned)| (owned.surface.gpu, owned.surface.gpu.saturating_add(owned.bytes as u64)))
+        .collect::<Vec<_>>();
+    spans.sort_unstable_by_key(|span| span.0);
+    let mut candidate = base;
+    for (start, end) in spans {
+        let candidate_end = candidate.checked_add(bytes as u64)?;
+        if candidate_end <= start {
+            return Some(candidate);
+        }
+        candidate = candidate.max(end);
+    }
+    (candidate.checked_add(bytes as u64)? <= limit).then_some(candidate)
+}
+
+pub(crate) fn write_sprite_rgba8_upload_chunk(
+    owner: WindowOwner,
+    window_id: u32,
+    sprite_id: u32,
+    offset: usize,
+    bytes: &[u8],
+) -> i32 {
+    if bytes.is_empty() || offset & 3 != 0 || bytes.len() & 3 != 0 {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(upload) = surface.sprite_upload.as_mut() else {
+        return ERROR_STATE;
+    };
+    if upload.sprite_id != sprite_id || offset != upload.written {
+        return ERROR_INVALID;
+    }
+    let Some(end) = offset.checked_add(bytes.len()) else {
+        return ERROR_INVALID;
+    };
+    if end > upload.packed_len {
+        return ERROR_INVALID;
+    }
+    let row_bytes = upload.owned.surface.width as usize * core::mem::size_of::<u32>();
+    let pitch = upload.owned.surface.pitch_bytes as usize;
+    let mut source_offset = 0usize;
+    let mut packed_offset = offset;
+    while source_offset < bytes.len() {
+        let row = packed_offset / row_bytes;
+        let column = packed_offset % row_bytes;
+        let count = core::cmp::min(row_bytes - column, bytes.len() - source_offset);
+        let destination_offset = row * pitch + column;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr().add(source_offset),
+                upload.owned.virt.add(destination_offset),
+                count,
+            );
+        }
+        source_offset += count;
+        packed_offset += count;
+    }
+    upload.written = end;
+    0
+}
+
+pub(crate) fn finish_sprite_rgba8_upload(
+    owner: WindowOwner,
+    window_id: u32,
+    sprite_id: u32,
+) -> i32 {
+    let upload = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.sprite_upload.take()
+    };
+    let Some(upload) = upload else {
+        return ERROR_STATE;
+    };
+    if upload.sprite_id != sprite_id || upload.written != upload.packed_len {
+        destroy_rgba8_surface(upload.owned);
+        return ERROR_INVALID;
+    }
+    crate::intel::dma_flush(upload.owned.virt, upload.owned.bytes);
+    let old = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            drop(surfaces);
+            destroy_rgba8_surface(upload.owned);
+            return ERROR_NOT_FOUND;
+        };
+        if let Some(slot) = surface
+            .sprites
+            .iter()
+            .position(|(current_id, _)| *current_id == sprite_id)
+        {
+            Some(core::mem::replace(&mut surface.sprites[slot].1, upload.owned))
+        } else {
+            surface.sprites.push((sprite_id, upload.owned));
+            None
+        }
+    };
+    if let Some(old) = old {
+        destroy_rgba8_surface(old);
+    }
+    crate::log_trace!(target: "ui4/blueprint-frame";
+        "sprite source ready owner={:?} window={} sprite={} extent={}x{} bytes={} gpu=0x{:X}\n",
+        owner,
+        window_id,
+        sprite_id,
+        upload.owned.surface.width,
+        upload.owned.surface.height,
+        upload.owned.bytes,
+        upload.owned.surface.gpu,
+    );
+    0
+}
+
+pub(crate) fn begin_sprite_scene(owner: WindowOwner, window_id: u32, expected: usize) -> i32 {
+    if expected > MAX_SPRITE_QUADS {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.write_lease.is_none() || surface.sprite_clear_rgba.is_none() {
+        return ERROR_STATE;
+    }
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    surface.sprite_scene_upload = Some(SpriteSceneUpload {
+        expected,
+        quads: Vec::with_capacity(expected),
+    });
+    0
+}
+
+pub(crate) fn append_sprite_scene(
+    owner: WindowOwner,
+    window_id: u32,
+    offset: usize,
+    quads: &[TrueosUi4SpriteQuad],
+) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(upload) = surface.sprite_scene_upload.as_mut() else {
+        return ERROR_STATE;
+    };
+    if offset != upload.quads.len()
+        || offset.saturating_add(quads.len()) > upload.expected
+        || quads.iter().any(|quad| !valid_sprite_quad(*quad))
+    {
+        return ERROR_INVALID;
+    }
+    upload.quads.extend_from_slice(quads);
+    0
+}
+
+pub(crate) fn append_sprite_scene_bytes(
+    owner: WindowOwner,
+    window_id: u32,
+    offset: usize,
+    bytes: &[u8],
+) -> i32 {
+    let record_bytes = core::mem::size_of::<TrueosUi4SpriteQuad>();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(record_bytes) {
+        return ERROR_INVALID;
+    }
+    let mut quads = Vec::with_capacity(bytes.len() / record_bytes);
+    for record in bytes.chunks_exact(record_bytes) {
+        let mut words = [0u32; 19];
+        for (word, raw) in words.iter_mut().zip(record.chunks_exact(4)) {
+            *word = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+        }
+        quads.push(sprite_quad_from_words(words));
+    }
+    append_sprite_scene(owner, window_id, offset, &quads)
+}
+
+fn sprite_quad_from_words(words: [u32; 19]) -> TrueosUi4SpriteQuad {
+    TrueosUi4SpriteQuad {
+        sprite_id: words[0],
+        c0_x: f32::from_bits(words[1]),
+        c0_y: f32::from_bits(words[2]),
+        c0_u: f32::from_bits(words[3]),
+        c0_v: f32::from_bits(words[4]),
+        c1_x: f32::from_bits(words[5]),
+        c1_y: f32::from_bits(words[6]),
+        c1_u: f32::from_bits(words[7]),
+        c1_v: f32::from_bits(words[8]),
+        c2_x: f32::from_bits(words[9]),
+        c2_y: f32::from_bits(words[10]),
+        c2_u: f32::from_bits(words[11]),
+        c2_v: f32::from_bits(words[12]),
+        c3_x: f32::from_bits(words[13]),
+        c3_y: f32::from_bits(words[14]),
+        c3_u: f32::from_bits(words[15]),
+        c3_v: f32::from_bits(words[16]),
+        color_rgba: words[17],
+        flags: words[18],
+    }
+}
+
+fn valid_sprite_quad(quad: TrueosUi4SpriteQuad) -> bool {
+    let values = [
+        quad.c0_x, quad.c0_y, quad.c0_u, quad.c0_v, quad.c1_x, quad.c1_y, quad.c1_u, quad.c1_v,
+        quad.c2_x, quad.c2_y, quad.c2_u, quad.c2_v, quad.c3_x, quad.c3_y, quad.c3_u, quad.c3_v,
+    ];
+    values.iter().all(|value| value.is_finite()) && quad.flags & !SPRITE_QUAD_VALID_FLAGS == 0
+}
+
+pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
+    struct OwnedRun {
+        sprite_id: u32,
+        source: GpgpuRgba8Surface,
+        descriptors: Vec<GpgpuSpriteQuadWorklistDesc>,
+    }
+
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(upload) = surface.sprite_scene_upload.take() else {
+        return ERROR_STATE;
+    };
+    if upload.quads.len() != upload.expected {
+        return ERROR_INVALID;
+    }
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let Some(clear_rgba) = surface.sprite_clear_rgba else {
+        return ERROR_STATE;
+    };
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    let solid = match ensure_solid_source(surface) {
+        Ok(source) => source,
+        Err(code) => return code,
+    };
+    let Ok(destination) = gpgpu_rgba_surface(lease) else {
+        return ERROR_UI4;
+    };
+
+    let mut ordered = Vec::with_capacity(upload.quads.len().saturating_add(1));
+    ordered.push(TrueosUi4SpriteQuad {
+        sprite_id: 0,
+        c0_x: 0.0,
+        c0_y: 0.0,
+        c1_x: surface.width as f32,
+        c1_y: 0.0,
+        c2_x: surface.width as f32,
+        c2_y: surface.height as f32,
+        c3_x: 0.0,
+        c3_y: surface.height as f32,
+        color_rgba: clear_rgba,
+        ..TrueosUi4SpriteQuad::default()
+    });
+    ordered.extend(upload.quads);
+
+    let batch_capacity = sprite_quad_worklist_max_descs();
+    let batch_count = ordered.len().div_ceil(batch_capacity);
+    let mut final_release = None;
+    for (batch_index, batch) in ordered.chunks(batch_capacity).enumerate() {
+        let mut groups = Vec::<OwnedRun>::new();
+        for quad in batch.iter().copied() {
+            let source = if quad.sprite_id == 0 {
+                solid.surface
+            } else {
+                let Some((_, source)) = surface
+                    .sprites
+                    .iter()
+                    .find(|(sprite_id, _)| *sprite_id == quad.sprite_id)
+                else {
+                    return ERROR_NOT_FOUND;
+                };
+                source.surface
+            };
+            let descriptor = GpgpuSpriteQuadWorklistDesc {
+                c0_x: quad.c0_x,
+                c0_y: quad.c0_y,
+                c0_u: quad.c0_u,
+                c0_v: quad.c0_v,
+                c1_x: quad.c1_x,
+                c1_y: quad.c1_y,
+                c1_u: quad.c1_u,
+                c1_v: quad.c1_v,
+                c2_x: quad.c2_x,
+                c2_y: quad.c2_y,
+                c2_u: quad.c2_u,
+                c2_v: quad.c2_v,
+                c3_x: quad.c3_x,
+                c3_y: quad.c3_y,
+                c3_u: quad.c3_u,
+                c3_v: quad.c3_v,
+                color_rgba: quad.color_rgba,
+                flags: if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+                    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+                } else {
+                    0
+                },
+            };
+            if let Some(group) = groups.last_mut()
+                && group.sprite_id == quad.sprite_id
+            {
+                group.descriptors.push(descriptor);
+            } else {
+                groups.push(OwnedRun {
+                    sprite_id: quad.sprite_id,
+                    source,
+                    descriptors: alloc::vec![descriptor],
+                });
+            }
+        }
+        let runs = groups
+            .iter()
+            .map(|group| GpgpuSpriteQuadWorklistRun {
+                src: group.source,
+                descs: &group.descriptors,
+            })
+            .collect::<Vec<_>>();
+        let submission = match queue_blueprint_sprite_batch(destination, &runs) {
+            Ok(submission) => submission,
+            Err(Ui4CompositorSubmitError::Busy)
+            | Err(Ui4CompositorSubmitError::SubmissionRejected) => {
+                surface.sprite_scene_upload = Some(SpriteSceneUpload {
+                    expected: ordered.len().saturating_sub(1),
+                    quads: ordered[1..].to_vec(),
+                });
+                crate::log_warn!(target: "ui4/blueprint-frame";
+                    "sprite scene deferred owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-upload+retry-finish\n",
+                    owner,
+                    window_id,
+                    lease.frame.raw(),
+                    lease.buffer_index,
+                    batch_index.saturating_add(1),
+                    batch_count,
+                    batch.len(),
+                );
+                return ERROR_BUSY;
+            }
+            Err(Ui4CompositorSubmitError::Unavailable) => {
+                crate::log_warn!(target: "ui4/blueprint-frame";
+                    "sprite scene rejected owner={:?} window={} batch={}/{} reason=ui4-compositor-unavailable hardware_accepted=0\n",
+                    owner,
+                    window_id,
+                    batch_index.saturating_add(1),
+                    batch_count,
+                );
+                return ERROR_UI4;
+            }
+            Err(Ui4CompositorSubmitError::InvalidWorklist) => {
+                crate::log_error!(target: "ui4/blueprint-frame";
+                    "sprite scene rejected owner={:?} window={} batch={}/{} descriptors={} reason=invalid-private-ui4-worklist hardware_accepted=0\n",
+                    owner,
+                    window_id,
+                    batch_index.saturating_add(1),
+                    batch_count,
+                    batch.len(),
+                );
+                return ERROR_UI4;
+            }
+        };
+
+        let final_batch = batch_index.saturating_add(1) == batch_count;
+        let retire_started = crate::chronos::monotonic_nanos();
+        loop {
+            let completed = if final_batch {
+                match poll_ui4_blueprint_sprite_scene(submission, destination) {
+                    Ui4SpriteSceneCompletion::Pending => false,
+                    Ui4SpriteSceneCompletion::Complete { stats, release } => {
+                        if stats.descs != batch.len() || stats.submits != 1 {
+                            crate::log_error!(target: "ui4/blueprint-frame";
+                                "sprite scene retirement contract mismatch owner={:?} window={} batch={}/{} expected_descs={} retired_descs={} retired_submits={} action=reject-release\n",
+                                owner,
+                                window_id,
+                                batch_index.saturating_add(1),
+                                batch_count,
+                                batch.len(),
+                                stats.descs,
+                                stats.submits,
+                            );
+                            return ERROR_UI4;
+                        }
+                        final_release = Some(release);
+                        true
+                    }
+                    Ui4SpriteSceneCompletion::Failed => {
+                        quarantine_blueprint_sprite_submission(
+                            surface,
+                            owner,
+                            window_id,
+                            lease,
+                            batch_index,
+                            batch_count,
+                            "ui4-compositor-retirement-failed",
+                        );
+                        return ERROR_BUSY;
+                    }
+                }
+            } else {
+                match poll_ui4_compositor_submission(submission) {
+                    Ui4CompositorCompletion::Pending => false,
+                    Ui4CompositorCompletion::Complete(stats) => {
+                        if stats.descs != batch.len() || stats.submits != 1 {
+                            crate::log_error!(target: "ui4/blueprint-frame";
+                                "sprite scene retirement contract mismatch owner={:?} window={} batch={}/{} expected_descs={} retired_descs={} retired_submits={} action=abort-before-release\n",
+                                owner,
+                                window_id,
+                                batch_index.saturating_add(1),
+                                batch_count,
+                                batch.len(),
+                                stats.descs,
+                                stats.submits,
+                            );
+                            return ERROR_UI4;
+                        }
+                        true
+                    }
+                    Ui4CompositorCompletion::Failed
+                    | Ui4CompositorCompletion::InvalidSubmission => {
+                        quarantine_blueprint_sprite_submission(
+                            surface,
+                            owner,
+                            window_id,
+                            lease,
+                            batch_index,
+                            batch_count,
+                            "ui4-compositor-retirement-failed",
+                        );
+                        return ERROR_BUSY;
+                    }
+                }
+            };
+            if completed {
+                break;
+            }
+            if crate::chronos::monotonic_nanos().saturating_sub(retire_started)
+                >= UI4_SPRITE_BATCH_TIMEOUT_NS
+            {
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    batch_index,
+                    batch_count,
+                    "accepted-submission-not-retired",
+                );
+                return ERROR_BUSY;
+            }
+            core::hint::spin_loop();
+        }
+    }
+    let Some(final_release) = final_release else {
+        return ERROR_UI4;
+    };
+    surface.pending_gpu_release = Some(final_release);
+    surface.sprite_clear_rgba = None;
+    0
+}
+
+fn queue_blueprint_sprite_batch(
+    destination: GpgpuRgba8Surface,
+    runs: &[GpgpuSpriteQuadWorklistRun<'_>],
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    let started = crate::chronos::monotonic_nanos();
+    loop {
+        match queue_ui4_blueprint_sprite_scene(destination, runs) {
+            Err(Ui4CompositorSubmitError::Busy)
+            | Err(Ui4CompositorSubmitError::SubmissionRejected)
+                if crate::chronos::monotonic_nanos().saturating_sub(started)
+                    < UI4_SPRITE_BATCH_TIMEOUT_NS =>
+            {
+                core::hint::spin_loop();
+            }
+            result => return result,
+        }
+    }
+}
+
+fn quarantine_blueprint_sprite_submission(
+    surface: &mut BlueprintSceneSurface,
+    owner: WindowOwner,
+    window_id: u32,
+    lease: FrameWriteLease,
+    batch_index: usize,
+    batch_count: usize,
+    reason: &'static str,
+) {
+    surface.gpu_submission_unretired = true;
+    crate::log_error!(target: "ui4/blueprint-frame";
+        "sprite producer quarantined owner={:?} window={} frame={} buffer={} batch={}/{} reason={} action=no-replay+no-publish+retain-sources+retain-ring-until-engine-reset\n",
+        owner,
+        window_id,
+        lease.frame.raw(),
+        lease.buffer_index,
+        batch_index.saturating_add(1),
+        batch_count,
+        reason,
+    );
+}
+
+fn ensure_solid_source(surface: &mut BlueprintSceneSurface) -> Result<OwnedRgba8Surface, i32> {
+    if let Some(source) = surface.solid_source {
+        return Ok(source);
+    }
+    let Some((phys, virt)) =
+        crate::dma::alloc(UI4_SCENE_SOLID_SOURCE_BYTES, crate::intel::WARM_ALIGN)
+    else {
+        return Err(ERROR_UI4);
+    };
+    unsafe {
+        core::ptr::write_bytes(virt, 0, UI4_SCENE_SOLID_SOURCE_BYTES);
+        virt.cast::<u32>().write_unaligned(u32::MAX);
+    }
+    crate::intel::dma_flush(virt, UI4_SCENE_SOLID_SOURCE_BYTES);
+    let Some(gpu_surface) =
+        GpgpuRgba8Surface::new(phys, UI4_SCENE_SPRITE_GPU, UI4_SCENE_SOLID_SOURCE_BYTES, 1, 1, 64)
+    else {
+        crate::dma::dealloc(virt, UI4_SCENE_SOLID_SOURCE_BYTES);
+        return Err(ERROR_UI4);
+    };
+    let owned = OwnedRgba8Surface {
+        surface: gpu_surface,
+        virt,
+        bytes: UI4_SCENE_SOLID_SOURCE_BYTES,
+    };
+    surface.solid_source = Some(owned);
+    Ok(owned)
+}
+
 fn expected_rgb565_len(width: u32, height: u32) -> Option<usize> {
     (width as usize)
         .checked_mul(height as usize)?
@@ -1802,6 +2675,8 @@ pub(crate) fn write_opaque_rgba8_chunk(
         return ERROR_UI4;
     }
     surface.pending_gpu_release = None;
+    surface.sprite_clear_rgba = None;
+    surface.sprite_scene_upload = None;
     let row_bytes = surface.width as usize * 4;
     let pitch = view.pitch as usize;
     let mut source_offset = 0usize;
@@ -1847,6 +2722,10 @@ fn destroy_rgb565_surface(surface: OwnedRgb565Surface) {
     crate::dma::dealloc(surface.virt, surface.bytes);
 }
 
+fn destroy_rgba8_surface(surface: OwnedRgba8Surface) {
+    crate::dma::dealloc(surface.virt, surface.bytes);
+}
+
 const fn pack_i32_pair(first: i32, second: i32) -> u64 {
     ((first as u32 as u64) << 32) | second as u32 as u64
 }
@@ -1873,7 +2752,7 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
     if surface.gpu_submission_unretired {
         let _ = finish_window_session(surface.owner, surface.session);
         crate::log_error!(target: "ui4/blueprint-frame";
-            "frame quarantine retained owner={:?} window={} frame={} action=close-window+retain-frame-ring+retain-skybox-until-engine-reset\n",
+            "frame quarantine retained owner={:?} window={} frame={} action=close-window+retain-frame-ring+retain-scene-sources-until-engine-reset\n",
             surface.owner,
             surface.window.raw(),
             surface.frame.raw(),
@@ -1909,6 +2788,15 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
     }
     if let Some(skybox) = surface.skybox.take() {
         destroy_rgb565_surface(skybox);
+    }
+    if let Some(upload) = surface.sprite_upload.take() {
+        destroy_rgba8_surface(upload.owned);
+    }
+    for (_, sprite) in surface.sprites.drain(..) {
+        destroy_rgba8_surface(sprite);
+    }
+    if let Some(solid) = surface.solid_source.take() {
+        destroy_rgba8_surface(solid);
     }
     let transfer_frame = request.transfers_frame_ownership();
     let close = finish_window_session_with_request(surface.owner, surface.session, request);

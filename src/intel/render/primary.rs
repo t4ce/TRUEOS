@@ -359,6 +359,27 @@ enum ResidentSceneRasterQuality {
     Multisample4x,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ResidentSceneIncompleteStage {
+    Geometry,
+    Resolve,
+    Coverage,
+    PresentCopy,
+    Unknown,
+}
+
+impl ResidentSceneIncompleteStage {
+    const fn error(self) -> &'static str {
+        match self {
+            Self::Geometry => "resident-scene-geometry-incomplete",
+            Self::Resolve => "resident-scene-resolve-incomplete",
+            Self::Coverage => "resident-scene-coverage-incomplete",
+            Self::PresentCopy => "resident-scene-present-copy-incomplete",
+            Self::Unknown => "resident-scene-incomplete-unknown-stage",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ResidentSceneFrameResult {
     pub(crate) completed_draws: usize,
@@ -387,9 +408,20 @@ pub(crate) struct ResidentSceneFrameResult {
     /// completed. This remains separate from `release_fence`: a caller that
     /// appends one final GPU writer may deliberately defer the release proof.
     pub(crate) frame_complete: bool,
+    incomplete_stage: Option<ResidentSceneIncompleteStage>,
     /// Present only after the final GPU writer's cache release plus ordered
     /// post-sync retirement marker completed for the returned UI4 allocation.
     pub(crate) release_fence: Option<ResidentSceneReleaseFence>,
+}
+
+impl ResidentSceneFrameResult {
+    pub(crate) const fn completion_error(&self) -> Option<&'static str> {
+        match self.incomplete_stage {
+            Some(stage) => Some(stage.error()),
+            None if !self.frame_complete => Some(ResidentSceneIncompleteStage::Unknown.error()),
+            None => None,
+        }
+    }
 }
 
 /// Proof that the resident-scene pipeline completed the producer-release
@@ -437,6 +469,7 @@ enum ResidentSceneFrameOutput {
     GpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
     GpuSurfaceDeferredRelease(crate::intel::gpgpu::GpgpuRgba8Surface),
     DirectGpuSurface(crate::intel::gpgpu::GpgpuRgba8Surface),
+    DirectGpuSurfaceDeferredRelease(crate::intel::gpgpu::GpgpuRgba8Surface),
 }
 
 #[derive(Copy, Clone)]
@@ -993,10 +1026,10 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_cove
     )
 }
 
-/// GridPaper's complete direct-render operation. The cursor rectangles are
-/// submitted after MSAA resolve and analytical coverage, so the returned
-/// release proof is reminted only after that actual final writer retires.
-pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_and_rects_to_surface(
+/// GridPaper's complete direct-render operation. Geometry targets the leased
+/// UI4 allocation directly; analytical coverage and cursor rectangles append
+/// their writes before one final scanout release is minted.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_and_rects_direct_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     coverage_draws: &[ResidentSceneCoverageDraw],
     final_rects: &[crate::intel::gpgpu::GpgpuSolidRect],
@@ -1011,13 +1044,13 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_cove
         diagnostic_logs,
         false,
         false,
-        ResidentSceneRasterQuality::Multisample4x,
+        ResidentSceneRasterQuality::SingleSample,
         destination.width as usize,
         destination.height as usize,
-        ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination),
+        ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination),
     )?;
-    if !result.frame_complete {
-        return Err("resident-scene-incomplete-before-final-writer");
+    if let Some(error) = result.completion_error() {
+        return Err(error);
     }
     let started_ns = crate::chronos::monotonic_nanos();
     if !final_rects.is_empty() {
@@ -1432,7 +1465,8 @@ fn submit_resident_triangle_scene_capture(
     }
     if let ResidentSceneFrameOutput::GpuSurface(destination)
     | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
-    | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
+    | ResidentSceneFrameOutput::DirectGpuSurface(destination)
+    | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) = frame_output
         && (!destination.is_valid()
             || destination.width as usize != target_width
             || destination.height as usize != target_height)
@@ -1542,7 +1576,10 @@ fn submit_resident_triangle_scene_capture(
             None
         };
         let direct_output = match frame_output {
-            ResidentSceneFrameOutput::DirectGpuSurface(destination) => Some(destination),
+            ResidentSceneFrameOutput::DirectGpuSurface(destination)
+            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) => {
+                Some(destination)
+            }
             _ => None,
         };
         let render_target_surface_format = if msaa_color.is_some() {
@@ -1659,12 +1696,16 @@ fn submit_resident_triangle_scene_capture(
                 destination
             }
             (ResidentSceneFrameOutput::DirectGpuSurface(destination), _) => destination,
+            (ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination), _) => {
+                destination
+            }
             _ => scratch_output,
         };
         let direct_scanout_output = match frame_output {
             ResidentSceneFrameOutput::GpuSurface(destination)
             | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
-            | ResidentSceneFrameOutput::DirectGpuSurface(destination) => {
+            | ResidentSceneFrameOutput::DirectGpuSurface(destination)
+            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) => {
                 output.gpu == destination.gpu
             }
             ResidentSceneFrameOutput::Readback => false,
@@ -1734,7 +1775,8 @@ fn submit_resident_triangle_scene_capture(
         if frame_complete
             && let ResidentSceneFrameOutput::GpuSurface(destination)
             | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
-            | ResidentSceneFrameOutput::DirectGpuSurface(destination) = frame_output
+            | ResidentSceneFrameOutput::DirectGpuSurface(destination)
+            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) = frame_output
             && output.gpu != destination.gpu
         {
             present_copy_performed = true;
@@ -1752,6 +1794,19 @@ fn submit_resident_triangle_scene_capture(
             );
         }
         let present_copy_finished_ns = crate::chronos::monotonic_nanos();
+        let incomplete_stage = if !geometry_complete {
+            Some(ResidentSceneIncompleteStage::Geometry)
+        } else if !resolved {
+            Some(ResidentSceneIncompleteStage::Resolve)
+        } else if completed_coverage_draws != coverage_draws.len() {
+            Some(ResidentSceneIncompleteStage::Coverage)
+        } else if present_copy_performed && !frame_complete {
+            Some(ResidentSceneIncompleteStage::PresentCopy)
+        } else if !frame_complete {
+            Some(ResidentSceneIncompleteStage::Unknown)
+        } else {
+            None
+        };
         let mut changed_pixels = 0usize;
         let mut rgba = None;
         if frame_complete && matches!(frame_output, ResidentSceneFrameOutput::Readback) {
@@ -1857,6 +1912,7 @@ fn submit_resident_triangle_scene_capture(
             coverage_walkers,
             rgba,
             frame_complete,
+            incomplete_stage,
             release_fence,
         })
     })();

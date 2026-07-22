@@ -995,7 +995,7 @@ mod tests {
         assert!(
             TOP_VHDL.contains("constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;")
         );
-        assert!(TOP_VHDL.contains("read_data_dw := firmware_manifest_word;"));
+        assert!(TOP_VHDL.contains("bar_read_manifest_data_dw <= firmware_manifest_word;"));
     }
 
     #[test]
@@ -1005,7 +1005,7 @@ mod tests {
             "call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD) <= payload_dw;"
         ));
         assert!(TOP_VHDL.contains(
-            "read_data_dw := call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD);"
+            "bar_read_call_output_data_dw <= call_output_words(to_integer(unsigned(bar_read_word_index)));"
         ));
         assert!(TOP_VHDL.contains(
             "call_output_words(i) <= function_output_data((i + 1) * 32 - 1 downto i * 32);"
@@ -1015,5 +1015,24 @@ mod tests {
         ));
         assert!(TOP_VHDL.contains("elsif (call_active = '1') and (function_done = '1') then"));
         assert!(TOP_VHDL.contains("function_start <= '1';"));
+    }
+
+    #[test]
+    fn bar_read_mux_is_banked_and_registered_before_tx() {
+        for required in [
+            "signal bar_read_select_pending : std_logic := '0';",
+            "signal bar_read_data_select_pending : std_logic := '0';",
+            "signal bar_read_completion_pending : std_logic := '0';",
+            "bar_read_bank <= BAR_READ_BANK_CALL_HEADER;",
+            "bar_read_bank <= BAR_READ_BANK_CALL_INPUT;",
+            "bar_read_bank <= BAR_READ_BANK_CALL_OUTPUT;",
+            "bar_read_bank <= BAR_READ_BANK_MANIFEST;",
+            "bar_read_selected_bank <= bar_read_bank;",
+            "bar_read_data_dw <= read_data_dw;",
+            "queue_cpld(bar_read_req_id, bar_read_req_tag, bar_read_addr_dw, bar_read_data_dw);",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing BAR read pipeline boundary: {required}");
+        }
+        assert!(!TOP_VHDL.contains("queue_cpld(req_id, req_tag, addr_dw, read_data_dw);"));
     }
 }
