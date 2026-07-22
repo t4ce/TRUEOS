@@ -20,7 +20,7 @@ const GUC_CONTEXT_DISABLE: u32 = 0;
 const GUC_CONTEXT_ENABLE: u32 = 1;
 const CONTEXT_REGISTRATION_FLAG_KMD: u32 = 1;
 const GUC_RENDER_CLASS: u32 = 0;
-const GUC_VIDEO_DECODE_CLASS: u32 = 1;
+const GUC_VIDEO_CLASS: u32 = 1;
 const GUC_BLITTER_CLASS: u32 = 3;
 const ENGINE_INSTANCE_0_SUBMIT_MASK: u32 = 1;
 const MAX_GUC_CONTEXTS: usize = 32;
@@ -40,7 +40,7 @@ const fn guc_engine_abi(engine: crate::gpu::physical::EngineClass) -> GucEngineA
             name: "rcs0",
         },
         crate::gpu::physical::EngineClass::VideoDecode => GucEngineAbi {
-            class: GUC_VIDEO_DECODE_CLASS,
+            class: GUC_VIDEO_CLASS,
             submit_mask: ENGINE_INSTANCE_0_SUBMIT_MASK,
             name: "vcs0",
         },

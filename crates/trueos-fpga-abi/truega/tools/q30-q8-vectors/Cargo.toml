@@ -1,0 +1,7 @@
+[package]
+name = "truega-q30-q8-vectors"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+half = { path = "../../../../../vendor/half-2.7.1", default-features = false }

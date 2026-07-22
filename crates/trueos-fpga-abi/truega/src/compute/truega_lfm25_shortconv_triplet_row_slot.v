@@ -35,6 +35,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
     reg b_error;
     reg c_error;
     reg x_error;
+    reg block_in_flight;
 
     wire feed_accept = feeder_valid_i && feeder_ready_o;
     wire row_first = feed_accept && (blocks_accepted_o == 6'd0);
@@ -44,6 +45,9 @@ module truega_lfm25_shortconv_triplet_row_slot (
     wire b_row_valid;
     wire c_row_valid;
     wire x_row_valid;
+    wire b_block_valid;
+    wire c_block_valid;
+    wire x_block_valid;
     wire signed [63:0] b_row;
     wire signed [63:0] c_row;
     wire signed [63:0] x_row;
@@ -51,7 +55,10 @@ module truega_lfm25_shortconv_triplet_row_slot (
     wire c_scale_error;
     wire x_scale_error;
 
-    assign feeder_ready_o = state == ST_FEED;
+    // truega_q8_0_gemv is intentionally serialized.  Hold the feeder until all
+    // three lanes retire the current block so no accepted native block can be
+    // overwritten or silently dropped.
+    assign feeder_ready_o = (state == ST_FEED) && !block_in_flight;
     assign feeder_block_index_o = blocks_accepted_o[4:0];
 
     truega_q8_0_gemv b_gemv (
@@ -61,7 +68,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
         .weight_scale_f16_i(feeder_b_weight_block_i[15:0]),
         .activation_quants_i(feeder_activation_block_i[271:16]),
         .weight_quants_i(feeder_b_weight_block_i[271:16]),
-        .block_valid_o(), .block_dot_o(), .block_term_q30_o(),
+        .block_valid_o(b_block_valid), .block_dot_o(), .block_term_q30_o(),
         .row_valid_o(b_row_valid), .row_q30_o(b_row),
         .scale_error_o(b_scale_error)
     );
@@ -73,7 +80,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
         .weight_scale_f16_i(feeder_c_weight_block_i[15:0]),
         .activation_quants_i(feeder_activation_block_i[271:16]),
         .weight_quants_i(feeder_c_weight_block_i[271:16]),
-        .block_valid_o(), .block_dot_o(), .block_term_q30_o(),
+        .block_valid_o(c_block_valid), .block_dot_o(), .block_term_q30_o(),
         .row_valid_o(c_row_valid), .row_q30_o(c_row),
         .scale_error_o(c_scale_error)
     );
@@ -85,7 +92,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
         .weight_scale_f16_i(feeder_x_weight_block_i[15:0]),
         .activation_quants_i(feeder_activation_block_i[271:16]),
         .weight_quants_i(feeder_x_weight_block_i[271:16]),
-        .block_valid_o(), .block_dot_o(), .block_term_q30_o(),
+        .block_valid_o(x_block_valid), .block_dot_o(), .block_term_q30_o(),
         .row_valid_o(x_row_valid), .row_q30_o(x_row),
         .scale_error_o(x_scale_error)
     );
@@ -106,8 +113,11 @@ module truega_lfm25_shortconv_triplet_row_slot (
             b_error <= 1'b0;
             c_error <= 1'b0;
             x_error <= 1'b0;
+            block_in_flight <= 1'b0;
         end else begin
             done_o <= 1'b0;
+            if (b_block_valid && c_block_valid && x_block_valid)
+                block_in_flight <= 1'b0;
             case (state)
                 ST_IDLE: begin
                     busy_o <= 1'b0;
@@ -125,11 +135,13 @@ module truega_lfm25_shortconv_triplet_row_slot (
                         b_error <= 1'b0;
                         c_error <= 1'b0;
                         x_error <= 1'b0;
+                        block_in_flight <= 1'b0;
                     end
                 end
 
                 ST_FEED: begin
                     if (feed_accept) begin
+                        block_in_flight <= 1'b1;
                         blocks_accepted_o <= blocks_accepted_o + 6'd1;
                         if (blocks_accepted_o == 6'd31)
                             state <= ST_DRAIN;

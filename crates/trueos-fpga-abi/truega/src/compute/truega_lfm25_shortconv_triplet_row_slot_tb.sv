@@ -54,7 +54,7 @@ module truega_lfm25_shortconv_triplet_row_slot_tb;
 
         sent = 0;
         cycles = 0;
-        while (!done_o && cycles < 200) begin
+        while (!done_o && cycles < 2000) begin
             @(negedge clk);
             feeder_valid = feeder_ready && sent < 32;
             if (feeder_valid) begin

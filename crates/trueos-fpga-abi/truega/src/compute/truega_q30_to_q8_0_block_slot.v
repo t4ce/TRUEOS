@@ -128,9 +128,9 @@ module truega_q30_to_q8_0_block_slot (
                 end
                 if (scale_significand == 12'd2048) begin
                     scale_exponent = scale_exponent + 6'd1;
-                    scale_f16 = {(scale_exponent + 6'd1), 10'd0};
+                    scale_f16 = {1'b0, scale_exponent[4:0], 10'd0};
                 end else begin
-                    scale_f16 = {scale_exponent[4:0], scale_significand[9:0]};
+                    scale_f16 = {1'b0, scale_exponent[4:0], scale_significand[9:0]};
                 end
             end
         end
@@ -191,8 +191,8 @@ module truega_q30_to_q8_0_block_slot (
                         done_o <= 1'b1;
                     end else begin
                         numerator <= (samples[quant_index][63]
-                            ? (~samples[quant_index][63:0] + 64'd1)
-                            : samples[quant_index][63:0]) * 7'd127;
+                            ? {7'd0, (~samples[quant_index][63:0] + 64'd1)}
+                            : {7'd0, samples[quant_index][63:0]}) * 7'd127;
                         remainder <= 65'd0;
                         quotient <= 71'd0;
                         divide_bit <= 7'd70;

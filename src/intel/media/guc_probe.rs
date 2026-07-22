@@ -185,9 +185,15 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
     let lane = match media::try_acquire_vcs0_lane() {
         Ok(lane) => lane,
         Err(media::MediaVcs0LaneAcquireError::Busy) => {
+            if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
+                return snapshot();
+            }
             return deferred(GucVcs0ProbeFailure::LaneBusy);
         }
         Err(media::MediaVcs0LaneAcquireError::Quarantined) => {
+            if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
+                return snapshot();
+            }
             return deferred(GucVcs0ProbeFailure::LaneQuarantined);
         }
     };
