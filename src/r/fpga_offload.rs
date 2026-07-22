@@ -126,6 +126,58 @@ type Lfm25StreamCallResult = Result<crate::tga::Lfm25StreamResult, Error>;
 pub type Lfm25DecodeCallResult =
     Result<trueos_fpga_abi::lfm25_decode_transport::Completion, Error>;
 type Lfm25DecodeCompletionCallback = Box<dyn FnOnce(Lfm25DecodeCallResult) + Send + 'static>;
+pub type Lfm25FeedCallResult =
+    Result<trueos_fpga_abi::lfm25_decode_feed::FeedRetirementStatus, Error>;
+type Lfm25FeedCompletionCallback = Box<dyn FnOnce(Lfm25FeedCallResult) + Send + 'static>;
+
+pub const LFM25_FEED_MAX_PAYLOAD_BYTES: usize = 64;
+
+/// One exact validator-issued payload owned by a queued TGF2 job. Keeping the
+/// bytes with the descriptor prevents caller mutation while the single worker
+/// sleeps behind earlier jobs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Lfm25FeedStage {
+    descriptor: trueos_fpga_abi::lfm25_decode_feed::StagedPayload,
+    payload_len: u8,
+    payload: [u8; LFM25_FEED_MAX_PAYLOAD_BYTES],
+}
+
+impl Lfm25FeedStage {
+    pub fn new(
+        descriptor: trueos_fpga_abi::lfm25_decode_feed::StagedPayload,
+        payload: &[u8],
+    ) -> Result<Self, Error> {
+        use trueos_fpga_abi::lfm25_decode_feed::FeedPayloadFormat;
+
+        let expected_len = descriptor.payload_bytes as usize;
+        let shape_is_exact = descriptor.generation != 0
+            && descriptor.bar2_offset().is_some()
+            && expected_len == payload.len()
+            && match descriptor.payload_format {
+                FeedPayloadFormat::GgmlQ8_0Block => expected_len == 34,
+                FeedPayloadFormat::Bf16 | FeedPayloadFormat::Bf16x3 => expected_len == 64,
+                FeedPayloadFormat::None => false,
+            };
+        if !shape_is_exact || payload.len() > LFM25_FEED_MAX_PAYLOAD_BYTES {
+            return Err(Error::Protocol);
+        }
+        let mut owned = [0u8; LFM25_FEED_MAX_PAYLOAD_BYTES];
+        owned[..payload.len()].copy_from_slice(payload);
+        Ok(Self {
+            descriptor,
+            payload_len: payload.len() as u8,
+            payload: owned,
+        })
+    }
+
+    pub const fn descriptor(&self) -> trueos_fpga_abi::lfm25_decode_feed::StagedPayload {
+        self.descriptor
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.payload[..self.payload_len as usize]
+    }
+}
 
 struct Lfm25StreamRequest {
     mode: u32,
@@ -148,6 +200,22 @@ impl Lfm25DecodeRequest {
     }
 }
 
+struct Lfm25FeedRequest {
+    record: trueos_fpga_abi::lfm25_decode_feed::FeedCommitRecord,
+    stages: Vec<Lfm25FeedStage>,
+    connection_generation: u32,
+    previous_completion_count: Option<u32>,
+    callback: Option<Lfm25FeedCompletionCallback>,
+}
+
+impl Lfm25FeedRequest {
+    fn deliver(mut self, result: Lfm25FeedCallResult) {
+        if let Some(callback) = self.callback.take() {
+            callback(result);
+        }
+    }
+}
+
 /// One operation accepted by the sole FPGA transport worker. The variants
 /// differ only in how their fixed circuit is started, inspected, and decoded;
 /// interrupt arming, MSI sleeping, timeout recovery, acknowledgement, and
@@ -156,12 +224,14 @@ enum TransportJob {
     Inline(CallId),
     Lfm25Stream(Lfm25StreamRequest),
     Lfm25Decode(Lfm25DecodeRequest),
+    Lfm25Feed(Lfm25FeedRequest),
 }
 
 enum ActiveTransportJob {
     Inline(Request),
     Lfm25Stream(Lfm25StreamRequest),
     Lfm25Decode(Lfm25DecodeRequest),
+    Lfm25Feed(Lfm25FeedRequest),
 }
 
 enum Delivery {
@@ -537,6 +607,33 @@ impl Lfm25DecodeTransportSession {
 
 pub fn lfm25_decode_transport_available() -> bool {
     crate::tga::lfm25_decode_transport_available()
+}
+
+/// Completion/status registers still absent from the finalized TGF2 feed ABI.
+/// Their names are intentionally exposed without invented offsets so callers
+/// can distinguish an exact staging capability from a usable async job path.
+pub const LFM25_FEED_MISSING_COMPLETION_REGISTERS: [&str; 8] =
+    crate::tga::LFM25_FEED_MISSING_COMPLETION_REGISTERS;
+
+/// Read the exact five-dword TGF2 publication at BAR0 0x280..0x293. This is a
+/// diagnostic read; callers must use `capability_is_exact` before interpreting
+/// the endpoint as a matching staging implementation.
+pub fn lfm25_feed_capability() -> Result<trueos_fpga_abi::lfm25_decode_feed::FeedCapability, Error>
+{
+    crate::tga::lfm25_feed_capability().map_err(map_transport_error)
+}
+
+/// True when BAR2 exists and all five TGF2 capability fields match exactly.
+/// Staging availability alone does not authorize a worker job.
+pub fn lfm25_feed_staging_available() -> bool {
+    crate::tga::lfm25_feed_staging_available()
+}
+
+/// Deliberately false until TGF2 defines completion state, retired
+/// mode/session/sequence/item identity, an error code, and IRQ pending/acknowledgement.
+/// Consequently no TGF2 `TransportJob` variant can be queued yet.
+pub fn lfm25_feed_transport_available() -> bool {
+    crate::tga::lfm25_feed_transport_available()
 }
 
 /// Acquire the same BAR2 session lane used by the proven FFN row streamer. Firmware

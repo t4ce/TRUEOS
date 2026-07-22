@@ -1,17 +1,20 @@
 //! Concrete TRUEGA mapping for the fixed LFM2.5 AOT decode scheduler.
 //!
 //! Numerical work never occurs here. This module validates scheduler order and
-//! opaque resident handles, stages the token embedding row through an explicit
-//! data-plane contract, and maps exactly one fixed request onto one TGD1 command.
-//! A resident output handle is minted only after the transport's MSI-driven
-//! completion future resolves.
+//! opaque resident handles, requires an exact TGF2 data-plane receipt for every
+//! operation, and maps exactly one fixed request onto one TGD1 command. A resident
+//! output handle is minted only after the transport's MSI-driven completion future
+//! resolves.
 
 use core::future::Future;
 
 use trueos_fpga_abi::lfm25;
 use trueos_fpga_abi::lfm25_decode::{
-    DecodeCapabilities, DecodeOpKind, DecodePlan, EmbeddingRowPlan, LayerStateSlot,
-    OPS_PER_TOKEN, TiedLmHeadPlan,
+    DecodeCapabilities, DecodeOpKind, DecodePlan, EmbeddingRowPlan, LayerStateSlot, OPS_PER_TOKEN,
+    TiedLmHeadPlan,
+};
+use trueos_fpga_abi::lfm25_decode_feed::{
+    FeedCapability, FeedMode, FeedRequest, capability_is_exact,
 };
 use trueos_fpga_abi::lfm25_decode_transport::{Command, Completion, NO_RESIDENT_SLOT};
 
@@ -27,19 +30,147 @@ pub struct DecodeTensorDomain {
     pub session_epoch: u32,
 }
 
-/// Typed proof that the complete native embedding row was staged where the fixed
-/// TokenEmbedding circuit expects it. Returning success without performing that transfer
-/// violates the data-plane implementation contract; the backend additionally verifies
-/// that the receipt exactly matches the request and acquired tensor domain.
+pub const MAX_FEED_SEQUENCES_PER_OPERATION: usize = 6;
+
+/// Exact data-plane work which must retire before one TGD1 command may be rung.
+///
+/// The command binds operation/layer/position/input slots/session epoch. `domain` adds
+/// the connection generation, `ordinal` binds scheduler order, and `feeds` names every
+/// TGF2 sequence needed by that fixed circuit. TokenEmbedding's dynamic native row is
+/// retained explicitly as well as in its TGF2 token field.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct EmbeddingStageReceipt {
+pub struct DecodeDataPlaneRequest {
     pub domain: DecodeTensorDomain,
-    pub row: EmbeddingRowPlan,
+    pub ordinal: u8,
+    pub command: Command,
+    pub embedding_row: Option<EmbeddingRowPlan>,
+    pub feeds: [Option<FeedRequest>; MAX_FEED_SEQUENCES_PER_OPERATION],
 }
 
-impl EmbeddingStageReceipt {
-    pub const fn new(domain: DecodeTensorDomain, row: EmbeddingRowPlan) -> Self {
-        Self { domain, row }
+impl DecodeDataPlaneRequest {
+    fn new(
+        domain: DecodeTensorDomain,
+        ordinal: u8,
+        command: Command,
+        embedding_row: Option<EmbeddingRowPlan>,
+    ) -> Result<Self, ()> {
+        let feed = |mode, layer, token| {
+            Some(FeedRequest {
+                mode,
+                layer,
+                position: command.position,
+                token,
+                session_epoch: command.session_epoch,
+            })
+        };
+        let feeds = match command.operation {
+            DecodeOpKind::TokenEmbedding => [
+                feed(FeedMode::EmbeddingQ8Row, None, Some(embedding_row.ok_or(())?.token)),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::OperatorRmsNorm => [
+                feed(FeedMode::OperatorRmsNormWeights, command.layer, None),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::ShortConv => [
+                feed(FeedMode::ShortConvCoefficients, command.layer, None),
+                feed(FeedMode::ShortConvInputTripletRows, command.layer, None),
+                feed(FeedMode::ShortConvOutputRows, command.layer, None),
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::Attention => [
+                feed(FeedMode::AttentionQkNormWeights, command.layer, None),
+                feed(FeedMode::AttentionQueryRows, command.layer, None),
+                feed(FeedMode::AttentionKeyRows, command.layer, None),
+                feed(FeedMode::AttentionValueRows, command.layer, None),
+                feed(FeedMode::AttentionFirstTokenCore, command.layer, None),
+                feed(FeedMode::AttentionOutputRows, command.layer, None),
+            ],
+            DecodeOpKind::OperatorResidual | DecodeOpKind::FfnResidual => {
+                [None; MAX_FEED_SEQUENCES_PER_OPERATION]
+            }
+            DecodeOpKind::FfnRmsNorm => [
+                feed(FeedMode::FfnRmsNormWeights, command.layer, None),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::Ffn => [
+                feed(FeedMode::FfnGateUpRows, command.layer, None),
+                feed(FeedMode::FfnDownRows, command.layer, None),
+                None,
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::FinalRmsNorm => [
+                feed(FeedMode::FinalRmsNormWeights, None, None),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            DecodeOpKind::TiedLmHeadArgmax => [
+                feed(FeedMode::TiedLmHeadRows, None, None),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+        };
+        if command.operation != DecodeOpKind::TokenEmbedding && embedding_row.is_some() {
+            return Err(());
+        }
+        for request in feeds.iter().flatten() {
+            request.validate().map_err(|_| ())?;
+        }
+        Ok(Self {
+            domain,
+            ordinal,
+            command,
+            embedding_row,
+            feeds,
+        })
+    }
+}
+
+/// Typed proof that every TGF2 sequence in [`DecodeDataPlaneRequest`] completed. The
+/// fixed commit counts prevent a partial row/model stream from being acknowledged as
+/// ready. The backend compares the complete receipt before touching the TGD1 doorbell.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DecodeDataPlaneReceipt {
+    pub request: DecodeDataPlaneRequest,
+    pub committed_units: [u32; MAX_FEED_SEQUENCES_PER_OPERATION],
+}
+
+impl DecodeDataPlaneReceipt {
+    pub fn complete(request: DecodeDataPlaneRequest) -> Self {
+        let mut committed_units = [0; MAX_FEED_SEQUENCES_PER_OPERATION];
+        let mut index = 0;
+        while index < request.feeds.len() {
+            if let Some(feed) = request.feeds[index] {
+                committed_units[index] = feed.mode.shape().commits();
+            }
+            index += 1;
+        }
+        Self {
+            request,
+            committed_units,
+        }
     }
 }
 
@@ -66,19 +197,25 @@ pub trait DecodeCommandTransport {
 /// Required model data-plane boundary.
 ///
 /// TGD1's command word deliberately has no token or native-image address field. A
-/// production backend therefore remains unavailable until this hook can stage the exact
-/// [`EmbeddingRowPlan`] while the matching BAR2 session lane is owned.
+/// production backend therefore remains unavailable until this hook has observed the
+/// exact TGF2 capability, has the sealed model payloads ready, and can complete the
+/// tagged TGF2 stage/commit sequences for every operation while the matching BAR2
+/// session lane is owned.
 pub trait DecodeModelDataPlane {
     type Error;
 
-    fn available(&self) -> bool;
+    /// The capability read from the TGF2 publication registers. The backend performs
+    /// exact equality itself; absence, unknown bits, or a different shape tag fail closed.
+    fn published_feed_capability(&self) -> Option<FeedCapability>;
+
+    /// TGF2 support alone is not proof that model payloads have been made available.
+    fn sealed_model_payloads_ready(&self) -> bool;
     fn max_context_positions(&self) -> u32;
 
-    fn stage_embedding_row(
+    fn prepare_operation(
         &mut self,
-        domain: DecodeTensorDomain,
-        row: EmbeddingRowPlan,
-    ) -> impl Future<Output = Result<EmbeddingStageReceipt, Self::Error>> + '_;
+        request: DecodeDataPlaneRequest,
+    ) -> impl Future<Output = Result<DecodeDataPlaneReceipt, Self::Error>> + '_;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -93,7 +230,7 @@ pub enum TruegaDecodeBackendError<TransportError, DataPlaneError> {
         observed: DecodeOpKind,
     },
     RequestShape(DecodeOpKind),
-    EmbeddingStageReceipt,
+    DataPlaneReceipt,
     ResidentDomain {
         expected: DecodeTensorDomain,
         observed: DecodeTensorDomain,
@@ -227,13 +364,11 @@ where
                         observed,
                     });
                 }
-                Ok(AotDecodeOutput::HiddenQ30(HiddenQ30::from_resident(
-                    ResidentTensorHandle::new(
-                        domain.connection_generation,
-                        domain.session_epoch,
-                        storage_slot as u16,
-                    ),
-                )))
+                Ok(AotDecodeOutput::HiddenQ30(HiddenQ30::from_resident(ResidentTensorHandle::new(
+                    domain.connection_generation,
+                    domain.session_epoch,
+                    storage_slot as u16,
+                ))))
             }
             (
                 OutputContract::HiddenQ8,
@@ -248,13 +383,11 @@ where
                         observed,
                     });
                 }
-                Ok(AotDecodeOutput::HiddenQ8(HiddenQ8::from_resident(
-                    ResidentTensorHandle::new(
-                        domain.connection_generation,
-                        domain.session_epoch,
-                        storage_slot as u16,
-                    ),
-                )))
+                Ok(AotDecodeOutput::HiddenQ8(HiddenQ8::from_resident(ResidentTensorHandle::new(
+                    domain.connection_generation,
+                    domain.session_epoch,
+                    storage_slot as u16,
+                ))))
             }
             (
                 OutputContract::StatefulQ30(state),
@@ -286,9 +419,7 @@ where
                     score_q30,
                     rows,
                 },
-            ) if token < lfm25::MODEL_VOCABULARY_SIZE
-                && rows == lfm25::MODEL_VOCABULARY_SIZE =>
-            {
+            ) if token < lfm25::MODEL_VOCABULARY_SIZE && rows == lfm25::MODEL_VOCABULARY_SIZE => {
                 Ok(AotDecodeOutput::Argmax {
                     token,
                     score_q30,
@@ -308,9 +439,14 @@ where
     type Error = TruegaDecodeBackendError<Transport::Error, DataPlane::Error>;
 
     fn capabilities(&self) -> DecodeCapabilities {
+        let exact_feed = match self.data_plane.published_feed_capability() {
+            Some(capability) => capability_is_exact(capability),
+            None => false,
+        };
         if !self.poisoned
             && self.transport.exact_capability_available()
-            && self.data_plane.available()
+            && exact_feed
+            && self.data_plane.sealed_model_payloads_ready()
         {
             DecodeCapabilities::ALL
         } else {
@@ -323,6 +459,9 @@ where
             self.data_plane
                 .max_context_positions()
                 .min(lfm25::MODEL_INITIAL_CONTEXT)
+                // TGF2 publishes CAP_ATTENTION_FIRST_TOKEN, not a later-position
+                // attention/KV feed contract.
+                .min(1)
         } else {
             0
         }
@@ -368,24 +507,10 @@ where
             return Err(TruegaDecodeBackendError::Unavailable);
         }
 
-        let (command, contract) = match request {
+        let (command, contract, embedding_row) = match request {
             AotDecodeRequest::TokenEmbedding { row } => {
-                if expected.layer.is_some()
-                    || EmbeddingRowPlan::new(row.token).ok() != Some(row)
-                {
+                if expected.layer.is_some() || EmbeddingRowPlan::new(row.token).ok() != Some(row) {
                     return Err(Self::request_shape_error(operation));
-                }
-                let receipt = self
-                    .data_plane
-                    .stage_embedding_row(domain, row)
-                    .await
-                    .map_err(|error| {
-                        self.poisoned = true;
-                        TruegaDecodeBackendError::DataPlane(error)
-                    })?;
-                if receipt != EmbeddingStageReceipt::new(domain, row) {
-                    self.poisoned = true;
-                    return Err(TruegaDecodeBackendError::EmbeddingStageReceipt);
                 }
                 (
                     Command {
@@ -397,6 +522,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ30,
+                    Some(row),
                 )
             }
             AotDecodeRequest::OperatorRmsNorm { layer, input } => {
@@ -413,6 +539,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ8,
+                    None,
                 )
             }
             AotDecodeRequest::ShortConv {
@@ -437,6 +564,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::StatefulQ30(state),
+                    None,
                 )
             }
             AotDecodeRequest::Attention {
@@ -461,6 +589,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::StatefulQ30(state),
+                    None,
                 )
             }
             AotDecodeRequest::OperatorResidual {
@@ -481,6 +610,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ30,
+                    None,
                 )
             }
             AotDecodeRequest::FfnRmsNorm { layer, input } => {
@@ -497,6 +627,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ8,
+                    None,
                 )
             }
             AotDecodeRequest::Ffn { layer, input } => {
@@ -513,6 +644,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ30,
+                    None,
                 )
             }
             AotDecodeRequest::FfnResidual {
@@ -533,6 +665,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ30,
+                    None,
                 )
             }
             AotDecodeRequest::FinalRmsNorm { input } => {
@@ -549,6 +682,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::HiddenQ8,
+                    None,
                 )
             }
             AotDecodeRequest::TiedLmHeadArgmax { head, input } => {
@@ -565,6 +699,7 @@ where
                         session_epoch: domain.session_epoch,
                     },
                     OutputContract::Argmax,
+                    None,
                 )
             }
         };
@@ -572,6 +707,22 @@ where
         command
             .validate()
             .map_err(|_| Self::request_shape_error(operation))?;
+        let data_plane_request =
+            DecodeDataPlaneRequest::new(domain, self.next_ordinal, command, embedding_row)
+                .map_err(|_| Self::request_shape_error(operation))?;
+        let expected_receipt = DecodeDataPlaneReceipt::complete(data_plane_request);
+        let receipt = self
+            .data_plane
+            .prepare_operation(data_plane_request)
+            .await
+            .map_err(|error| {
+                self.poisoned = true;
+                TruegaDecodeBackendError::DataPlane(error)
+            })?;
+        if receipt != expected_receipt {
+            self.poisoned = true;
+            return Err(TruegaDecodeBackendError::DataPlaneReceipt);
+        }
         let completion = match self
             .transport
             .execute(
@@ -588,19 +739,14 @@ where
                 return Err(TruegaDecodeBackendError::Transport(error));
             }
         };
-        let output = match Self::completion_output(
-            operation,
-            contract,
-            completion,
-            domain,
-            self.position,
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                self.poisoned = true;
-                return Err(error);
-            }
-        };
+        let output =
+            match Self::completion_output(operation, contract, completion, domain, self.position) {
+                Ok(output) => output,
+                Err(error) => {
+                    self.poisoned = true;
+                    return Err(error);
+                }
+            };
 
         self.callback_sequence = self
             .callback_sequence
@@ -625,7 +771,7 @@ where
 }
 
 /// Explicit placeholder until the native model-image/BAR2 staging implementation lands.
-/// Keeping `available()` false prevents even transport-session acquisition.
+/// Its absent TGF2 publication prevents even transport-session acquisition.
 pub struct UnavailableDecodeDataPlane;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -634,7 +780,11 @@ pub struct DecodeDataPlaneUnavailable;
 impl DecodeModelDataPlane for UnavailableDecodeDataPlane {
     type Error = DecodeDataPlaneUnavailable;
 
-    fn available(&self) -> bool {
+    fn published_feed_capability(&self) -> Option<FeedCapability> {
+        None
+    }
+
+    fn sealed_model_payloads_ready(&self) -> bool {
         false
     }
 
@@ -642,11 +792,10 @@ impl DecodeModelDataPlane for UnavailableDecodeDataPlane {
         0
     }
 
-    async fn stage_embedding_row(
+    async fn prepare_operation(
         &mut self,
-        _domain: DecodeTensorDomain,
-        _row: EmbeddingRowPlan,
-    ) -> Result<EmbeddingStageReceipt, Self::Error> {
+        _request: DecodeDataPlaneRequest,
+    ) -> Result<DecodeDataPlaneReceipt, Self::Error> {
         Err(DecodeDataPlaneUnavailable)
     }
 }
@@ -683,8 +832,9 @@ impl DecodeCommandTransport for KernelDecodeCommandTransport {
     }
 }
 
-/// Concrete kernel backend today. TGD1 alone is insufficient: its typed model data plane
-/// is deliberately unavailable, so this alias reports no decode capabilities.
+/// Concrete kernel backend today. TGD1 alone is insufficient: exact TGF2 publication and
+/// its typed model data plane are deliberately unavailable, so this alias reports no
+/// decode capabilities.
 #[cfg(target_os = "trueos")]
 pub type KernelTruegaAotDecodeBackend =
     TruegaAotDecodeBackend<KernelDecodeCommandTransport, UnavailableDecodeDataPlane>;
@@ -703,8 +853,9 @@ mod tests {
     use core::pin::pin;
     use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
+    use super::super::lfm25_decode::{DecodeSession, HiddenQ30};
     use super::*;
-    use crate::lfm25_decode::{DecodeSession, HiddenQ30};
+    use trueos_fpga_abi::lfm25_decode_feed::{FeedSequenceValidator, REQUIRED_CAPABILITY};
 
     const DOMAIN: DecodeTensorDomain = DecodeTensorDomain {
         connection_generation: 7,
@@ -770,50 +921,72 @@ mod tests {
     }
 
     struct FakeDataPlane {
-        ready: bool,
+        feed_capability: Option<FeedCapability>,
+        model_ready: bool,
         fail: bool,
-        staged: Vec<(DecodeTensorDomain, EmbeddingRowPlan)>,
+        bad_receipt: bool,
+        prepared: Vec<DecodeDataPlaneRequest>,
     }
 
     impl DecodeModelDataPlane for FakeDataPlane {
         type Error = &'static str;
 
-        fn available(&self) -> bool {
-            self.ready
+        fn published_feed_capability(&self) -> Option<FeedCapability> {
+            self.feed_capability
+        }
+
+        fn sealed_model_payloads_ready(&self) -> bool {
+            self.model_ready
         }
 
         fn max_context_positions(&self) -> u32 {
             2
         }
 
-        async fn stage_embedding_row(
+        async fn prepare_operation(
             &mut self,
-            domain: DecodeTensorDomain,
-            row: EmbeddingRowPlan,
-        ) -> Result<EmbeddingStageReceipt, Self::Error> {
-            self.staged.push((domain, row));
+            request: DecodeDataPlaneRequest,
+        ) -> Result<DecodeDataPlaneReceipt, Self::Error> {
+            self.prepared.push(request);
             if self.fail {
-                Err("stage")
-            } else {
-                Ok(EmbeddingStageReceipt::new(domain, row))
+                return Err("prepare");
             }
+            for feed in request.feeds.iter().flatten() {
+                FeedSequenceValidator::begin(REQUIRED_CAPABILITY, *feed)
+                    .map_err(|_| "feed-begin")?;
+            }
+            let mut receipt = DecodeDataPlaneReceipt::complete(request);
+            if self.bad_receipt {
+                receipt.committed_units[0] ^= 1;
+            }
+            Ok(receipt)
         }
     }
 
     fn backend(
-        exact: bool,
-        data_ready: bool,
+        exact_tgd1: bool,
+        exact_tgf2: bool,
+        model_ready: bool,
     ) -> TruegaAotDecodeBackend<FakeTransport, FakeDataPlane> {
+        let feed_capability = if exact_tgf2 {
+            Some(REQUIRED_CAPABILITY)
+        } else {
+            let mut mismatched = REQUIRED_CAPABILITY;
+            mismatched.capability_bits ^= 1 << 31;
+            Some(mismatched)
+        };
         TruegaAotDecodeBackend::new(
             FakeTransport {
-                exact,
+                exact: exact_tgd1,
                 acquisitions: 0,
                 execute_error: false,
             },
             FakeDataPlane {
-                ready: data_ready,
+                feed_capability,
+                model_ready,
                 fail: false,
-                staged: Vec::new(),
+                bad_receipt: false,
+                prepared: Vec::new(),
             },
         )
     }
@@ -842,56 +1015,94 @@ mod tests {
     }
 
     #[test]
-    fn two_positions_map_all_ten_variants_and_preserve_i64_argmax() {
-        let mut backend = backend(true, true);
+    fn one_position_prepares_and_maps_all_99_ops_and_preserves_i64_argmax() {
+        let mut backend = backend(true, true, true);
         let mut scheduler = DecodeSession::new();
         let first = ready(scheduler.decode_token(&mut backend, 1)).unwrap();
-        let second = ready(scheduler.decode_token(&mut backend, first.token)).unwrap();
         assert_eq!(first.score_q30, FULL_SCORE);
-        assert_eq!(second.score_q30, FULL_SCORE);
         assert_eq!(first.callback_sequence, OPS_PER_TOKEN as u64);
-        assert_eq!(second.callback_sequence, (OPS_PER_TOKEN * 2) as u64);
-        assert_eq!((backend.position(), backend.next_ordinal()), (2, 0));
+        assert_eq!((backend.position(), backend.next_ordinal()), (1, 0));
+        assert_eq!(backend.max_context_positions(), 1);
 
         let (transport, data_plane, session) = backend.into_parts();
         assert_eq!(transport.acquisitions, 1);
-        assert_eq!(data_plane.staged.len(), 2);
-        assert_eq!(data_plane.staged[0].0, DOMAIN);
-        assert_eq!(data_plane.staged[0].1, EmbeddingRowPlan::new(1).unwrap());
-        assert_eq!(data_plane.staged[1].1, EmbeddingRowPlan::new(9).unwrap());
+        assert_eq!(data_plane.prepared.len(), OPS_PER_TOKEN);
 
         let commands = session.unwrap().commands;
-        assert_eq!(commands.len(), OPS_PER_TOKEN * 2);
+        assert_eq!(commands.len(), OPS_PER_TOKEN);
         let expected: Vec<_> = DecodePlan::new().map(|step| step.kind).collect();
-        for token_position in 0..2 {
-            let range = token_position * OPS_PER_TOKEN..(token_position + 1) * OPS_PER_TOKEN;
-            let token_commands = &commands[range];
-            assert_eq!(
-                token_commands
+        assert_eq!(
+            commands
+                .iter()
+                .map(|command| command.operation)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for (ordinal, (prepared, command)) in
+            data_plane.prepared.iter().zip(commands.iter()).enumerate()
+        {
+            assert_eq!(prepared.domain, DOMAIN);
+            assert_eq!(prepared.ordinal, ordinal as u8);
+            assert_eq!(prepared.command, *command);
+            assert_eq!(command.position, 0);
+            assert_eq!(command.session_epoch, DOMAIN.session_epoch);
+            assert!(command.validate().is_ok());
+
+            let modes: Vec<_> = prepared
+                .feeds
+                .iter()
+                .flatten()
+                .map(|feed| feed.mode)
+                .collect();
+            let expected_modes: &[FeedMode] = match command.operation {
+                DecodeOpKind::TokenEmbedding => &[FeedMode::EmbeddingQ8Row],
+                DecodeOpKind::OperatorRmsNorm => &[FeedMode::OperatorRmsNormWeights],
+                DecodeOpKind::ShortConv => &[
+                    FeedMode::ShortConvCoefficients,
+                    FeedMode::ShortConvInputTripletRows,
+                    FeedMode::ShortConvOutputRows,
+                ],
+                DecodeOpKind::Attention => &[
+                    FeedMode::AttentionQkNormWeights,
+                    FeedMode::AttentionQueryRows,
+                    FeedMode::AttentionKeyRows,
+                    FeedMode::AttentionValueRows,
+                    FeedMode::AttentionFirstTokenCore,
+                    FeedMode::AttentionOutputRows,
+                ],
+                DecodeOpKind::OperatorResidual | DecodeOpKind::FfnResidual => &[],
+                DecodeOpKind::FfnRmsNorm => &[FeedMode::FfnRmsNormWeights],
+                DecodeOpKind::Ffn => &[FeedMode::FfnGateUpRows, FeedMode::FfnDownRows],
+                DecodeOpKind::FinalRmsNorm => &[FeedMode::FinalRmsNormWeights],
+                DecodeOpKind::TiedLmHeadArgmax => &[FeedMode::TiedLmHeadRows],
+            };
+            assert_eq!(modes, expected_modes);
+            assert!(
+                prepared
+                    .feeds
                     .iter()
-                    .map(|command| command.operation)
-                    .collect::<Vec<_>>(),
-                expected
+                    .flatten()
+                    .all(|feed| feed.validate().is_ok())
             );
-            assert!(token_commands.iter().all(|command| {
-                command.position == token_position as u32
-                    && command.session_epoch == DOMAIN.session_epoch
-                    && command.validate().is_ok()
-            }));
-            assert!(token_commands.iter().any(|command| {
-                matches!(
-                    command.operation,
-                    DecodeOpKind::OperatorResidual | DecodeOpKind::FfnResidual
-                ) && command.input_slot.is_some()
-                    && command.residual_slot.is_some()
-            }));
         }
+        assert_eq!(data_plane.prepared[0].embedding_row, Some(EmbeddingRowPlan::new(1).unwrap()));
+        assert_eq!(data_plane.prepared[0].feeds[0].unwrap().token, Some(1));
+        assert!(commands.iter().any(|command| {
+            matches!(command.operation, DecodeOpKind::OperatorResidual | DecodeOpKind::FfnResidual)
+                && command.input_slot.is_some()
+                && command.residual_slot.is_some()
+        }));
     }
 
     #[test]
-    fn exact_tgd1_and_data_plane_are_both_required_before_lazy_acquire() {
-        for (exact, data_ready) in [(false, true), (true, false), (false, false)] {
-            let mut backend = backend(exact, data_ready);
+    fn exact_tgd1_tgf2_and_model_ready_are_required_before_lazy_acquire() {
+        for (exact_tgd1, exact_tgf2, model_ready) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+        ] {
+            let mut backend = backend(exact_tgd1, exact_tgf2, model_ready);
             assert_eq!(backend.capabilities(), DecodeCapabilities::NONE);
             let request = AotDecodeRequest::TokenEmbedding {
                 row: EmbeddingRowPlan::new(1).unwrap(),
@@ -899,13 +1110,13 @@ mod tests {
             let error = take_error(ready(backend.submit(request)));
             assert_eq!(error, TruegaDecodeBackendError::Unavailable);
             assert_eq!(backend.transport.acquisitions, 0);
-            assert!(backend.data_plane.staged.is_empty());
+            assert!(backend.data_plane.prepared.is_empty());
         }
     }
 
     #[test]
     fn stale_generation_epoch_or_wide_slot_never_reaches_transport() {
-        let mut backend = backend(true, true);
+        let mut backend = backend(true, true, true);
         let embedding = ready(backend.submit(AotDecodeRequest::TokenEmbedding {
             row: EmbeddingRowPlan::new(1).unwrap(),
         }))
@@ -919,6 +1130,7 @@ mod tests {
         })));
         assert!(matches!(error, TruegaDecodeBackendError::ResidentDomain { .. }));
         assert_eq!(backend.session.as_ref().unwrap().commands.len(), 1);
+        assert_eq!(backend.data_plane.prepared.len(), 1);
 
         let wide = HiddenQ30::from_resident(ResidentTensorHandle::new(7, 11, 255));
         let error = take_error(ready(backend.submit(AotDecodeRequest::OperatorRmsNorm {
@@ -927,18 +1139,32 @@ mod tests {
         })));
         assert_eq!(error, TruegaDecodeBackendError::ResidentSlot(255));
         assert_eq!(backend.session.as_ref().unwrap().commands.len(), 1);
+        assert_eq!(backend.data_plane.prepared.len(), 1);
     }
 
     #[test]
-    fn embedding_stage_failure_poisoned_without_issuing_a_command() {
-        let mut backend = backend(true, true);
+    fn missing_data_plane_receipt_poisoned_without_issuing_a_command() {
+        let mut backend = backend(true, true, true);
         backend.data_plane.fail = true;
         let error = take_error(ready(backend.submit(AotDecodeRequest::TokenEmbedding {
             row: EmbeddingRowPlan::new(1).unwrap(),
         })));
-        assert_eq!(error, TruegaDecodeBackendError::DataPlane("stage"));
+        assert_eq!(error, TruegaDecodeBackendError::DataPlane("prepare"));
         assert!(backend.is_poisoned());
         assert!(backend.session.as_ref().unwrap().commands.is_empty());
         assert_eq!(backend.capabilities(), DecodeCapabilities::NONE);
+    }
+
+    #[test]
+    fn mismatched_data_plane_receipt_poisoned_without_issuing_a_command() {
+        let mut backend = backend(true, true, true);
+        backend.data_plane.bad_receipt = true;
+        let error = take_error(ready(backend.submit(AotDecodeRequest::TokenEmbedding {
+            row: EmbeddingRowPlan::new(1).unwrap(),
+        })));
+        assert_eq!(error, TruegaDecodeBackendError::DataPlaneReceipt);
+        assert!(backend.is_poisoned());
+        assert!(backend.session.as_ref().unwrap().commands.is_empty());
+        assert_eq!(backend.data_plane.prepared.len(), 1);
     }
 }

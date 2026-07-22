@@ -233,7 +233,12 @@ architecture rtl of top is
 	constant BAR0_DECODE_RESULT1_DW : integer := 16#0FC# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
+	-- TGF2's read-only publication follows the generated manifest.  Keep the
+	-- words physically decoded but fail closed until the complete fixed decode
+	-- engine and feed frontend are joined into this image.
+	constant BAR0_FEED_CAPABILITY_BASE_DW : integer := 16#280# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
+	constant FEED_CAPABILITY_WORD_COUNT : integer := 5;
 	constant CALL_WORD_COUNT : integer := 64;
 	constant CALL_MAGIC_WORD : integer := 0;
 	constant CALL_ABI_FUNCTION_WORD : integer := 1;
@@ -1240,7 +1245,11 @@ begin
 						when BAR_READ_BANK_CALL_OUTPUT =>
 							bar_read_call_output_data_dw <= call_output_words(to_integer(unsigned(bar_read_word_index)));
 						when BAR_READ_BANK_MANIFEST =>
-							bar_read_manifest_data_dw <= firmware_manifest_word;
+							read_data_dw := (others => '0');
+							if to_integer(unsigned(bar_read_word_index)) < FIRMWARE_MANIFEST_WORD_COUNT then
+								read_data_dw := firmware_manifest_word;
+							end if;
+							bar_read_manifest_data_dw <= read_data_dw;
 						when BAR_READ_BANK_STREAM =>
 							case to_integer(unsigned(bar_read_word_index)) is
 							when 0 => read_data_dw := STREAM_CAPABILITY_MAGIC;
@@ -1530,7 +1539,7 @@ begin
 									bar_read_bank <= BAR_READ_BANK_CALL_OUTPUT;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD, 6));
 								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
-									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
+									and (addr_index < BAR0_FEED_CAPABILITY_BASE_DW + FEED_CAPABILITY_WORD_COUNT) then
 									bar_read_bank <= BAR_READ_BANK_MANIFEST;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
 							elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)

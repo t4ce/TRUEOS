@@ -668,6 +668,236 @@ fn lfm25_decode_capability_valid(tga: &Tga) -> bool {
     decode::capability_is_exact(magic, bits)
 }
 
+fn read_lfm25_feed_capability(tga: &Tga) -> trueos_fpga_abi::lfm25_decode_feed::FeedCapability {
+    use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+    fence(Ordering::Acquire);
+    let observed = feed::FeedCapability::from_bar0_words([
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_CAPABILITY_MAGIC_OFFSET),
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_VERSION_RECORD_BYTES_OFFSET),
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_CAPABILITY_BITS_OFFSET),
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_MODEL_GENERATION_OFFSET),
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_SHAPE_SET_TAG_OFFSET),
+    ]);
+    fence(Ordering::Acquire);
+    observed
+}
+
+fn lfm25_feed_capability_valid(tga: &Tga) -> bool {
+    trueos_fpga_abi::lfm25_decode_feed::capability_is_exact(read_lfm25_feed_capability(tga))
+}
+
+/// Read all five TGF2 capability dwords at BAR0 0x280..0x293. A mismatched
+/// publication is returned for diagnostics, never normalized into support.
+pub(crate) fn lfm25_feed_capability()
+-> Result<trueos_fpga_abi::lfm25_decode_feed::FeedCapability, OffloadTransportError> {
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    Ok(read_lfm25_feed_capability(tga))
+}
+
+/// The physical TGF2 staging plane exists only when BAR2 and every capability
+/// field match exactly.
+pub(crate) fn lfm25_feed_staging_available() -> bool {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return false;
+    };
+    tga.stream_bar_phys.is_some()
+        && tga.stream_mmio_base.is_some()
+        && lfm25_feed_capability_valid(tga)
+}
+
+/// TGF2 uses the already-installed single completion ISR and shared IRQ bridge.
+/// Exact capability equality includes the shared-MSI retirement bit.
+pub(crate) fn lfm25_feed_transport_available() -> bool {
+    lfm25_feed_staging_available() && completion_interrupt_configured()
+}
+
+fn validate_lfm25_feed_connection(
+    tga: &Tga,
+    connection_generation: u32,
+) -> Result<usize, OffloadTransportError> {
+    if connection_generation == 0
+        || TGA_CONNECTION_GENERATION.load(Ordering::Acquire) != connection_generation
+        || !lfm25_feed_capability_valid(tga)
+    {
+        return Err(OffloadTransportError::Offline);
+    }
+    tga.stream_mmio_base.ok_or(OffloadTransportError::Offline)
+}
+
+fn read_lfm25_feed_status_locked(
+    tga: &Tga,
+) -> Result<trueos_fpga_abi::lfm25_decode_feed::FeedRetirementStatus, OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+    // The endpoint publishes identity/error/count before terminal state and IRQ.
+    // Read state and count on both sides of the payload to reject a torn sample.
+    fence(Ordering::Acquire);
+    let state_before = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_STATE_OFFSET);
+    let count_before = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_COMPLETION_COUNT_OFFSET);
+    let mode_layer = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_MODE_LAYER_OFFSET);
+    let session_epoch =
+        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET);
+    let sequence = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_SEQUENCE_OFFSET);
+    let item = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_ITEM_OFFSET);
+    let error = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_ERROR_CODE_OFFSET);
+    let count_after = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_COMPLETION_COUNT_OFFSET);
+    let state_after = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_STATE_OFFSET);
+    fence(Ordering::Acquire);
+    if state_before != state_after || count_before != count_after {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    feed::FeedRetirementStatus::from_bar0_words([
+        state_after,
+        mode_layer,
+        session_epoch,
+        sequence,
+        item,
+        error,
+        count_after,
+    ])
+    .map_err(|_| OffloadTransportError::InvalidPackage)
+}
+
+pub(crate) fn lfm25_feed_status(
+    connection_generation: u32,
+) -> Result<trueos_fpga_abi::lfm25_decode_feed::FeedRetirementStatus, OffloadTransportError> {
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    validate_lfm25_feed_connection(tga, connection_generation)?;
+    read_lfm25_feed_status_locked(tga)
+}
+
+pub(crate) fn lfm25_feed_shared_irq_pending(
+    connection_generation: u32,
+) -> Result<bool, OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    validate_lfm25_feed_connection(tga, connection_generation)?;
+    let irq_state = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_SHARED_IRQ_STATE_OFFSET);
+    Ok(irq_state & feed::FEED_SHARED_IRQ_PENDING_BIT != 0)
+}
+
+/// Reset only the TGF2 feed sequencer/status plane. The write is accepted as a
+/// recovery attempt only if a flushed status read observes exact IDLE with no
+/// error; callers still fail the request which required recovery.
+pub(crate) fn reset_lfm25_feed(
+    connection_generation: u32,
+) -> Result<(), OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    validate_lfm25_feed_connection(tga, connection_generation)?;
+    Tga::write_reg(tga.mmio_base + feed::BAR0_FEED_CONTROL_OFFSET, feed::FEED_RESET_MAGIC);
+    fence(Ordering::SeqCst);
+    if !lfm25_feed_capability_valid(tga) {
+        return Err(OffloadTransportError::Offline);
+    }
+    let status = read_lfm25_feed_status_locked(tga)?;
+    if status.state != feed::FeedState::Idle || status.error_code != 0 {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    Ok(())
+}
+
+fn lfm25_feed_stage_shape_valid(
+    staged: trueos_fpga_abi::lfm25_decode_feed::StagedPayload,
+    payload_len: usize,
+) -> bool {
+    use trueos_fpga_abi::lfm25_decode_feed::FeedPayloadFormat;
+
+    staged.generation != 0
+        && staged.payload_bytes as usize == payload_len
+        && staged.bar2_offset().is_some()
+        && match staged.payload_format {
+            FeedPayloadFormat::GgmlQ8_0Block => payload_len == 34,
+            FeedPayloadFormat::Bf16 | FeedPayloadFormat::Bf16x3 => payload_len == 64,
+            FeedPayloadFormat::None => false,
+        }
+}
+
+/// Stage one validator-issued TGF2 payload into its fixed BAR2 bank/slot. The
+/// endpoint generation and exact five-word capability are rechecked for every
+/// primitive so a hotplug cannot redirect a partially prepared feed.
+pub(crate) fn lfm25_feed_write_stage(
+    connection_generation: u32,
+    staged: trueos_fpga_abi::lfm25_decode_feed::StagedPayload,
+    payload: &[u8],
+) -> Result<(), OffloadTransportError> {
+    if !lfm25_feed_stage_shape_valid(staged, payload.len()) {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    let stream_base = validate_lfm25_feed_connection(tga, connection_generation)?;
+    let destination = stream_base
+        + staged
+            .bar2_offset()
+            .ok_or(OffloadTransportError::InvalidPackage)?;
+
+    let mut byte_index = 0usize;
+    while byte_index + 8 <= payload.len() {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&payload[byte_index..byte_index + 8]);
+        Tga::write_reg64(destination + byte_index, u64::from_le_bytes(bytes));
+        byte_index += 8;
+    }
+    if byte_index < payload.len() {
+        let available = (payload.len() - byte_index).min(4);
+        let mut bytes = [0u8; 4];
+        bytes[..available].copy_from_slice(&payload[byte_index..byte_index + available]);
+        Tga::write_reg(destination + byte_index, u32::from_le_bytes(bytes));
+    }
+    fence(Ordering::Release);
+    Ok(())
+}
+
+/// Publish one complete validator-issued TGF2 item. Words 0..14 are written
+/// first. A non-posted exact-capability read flushes that prefix before word 15
+/// writes FCM2 as the final publication event.
+pub(crate) fn lfm25_feed_publish_commit(
+    connection_generation: u32,
+    record: trueos_fpga_abi::lfm25_decode_feed::FeedCommitRecord,
+) -> Result<(), OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+    if record.validate_for_publish().is_err() {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    let bytes = record.encode_le();
+    let guard = TGA.lock();
+    let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
+    let stream_base = validate_lfm25_feed_connection(tga, connection_generation)?;
+    let commit_base = stream_base + feed::FEED_COMMIT_BAR2_OFFSET;
+
+    for word_index in 0..15usize {
+        let offset = word_index * 4;
+        let word = u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        Tga::write_reg(commit_base + offset, word);
+    }
+    fence(Ordering::SeqCst);
+    if !lfm25_feed_capability_valid(tga)
+        || TGA_CONNECTION_GENERATION.load(Ordering::Acquire) != connection_generation
+    {
+        return Err(OffloadTransportError::Offline);
+    }
+    fence(Ordering::Release);
+    Tga::write_reg(commit_base + 60, feed::FEED_COMMIT_MAGIC);
+    fence(Ordering::SeqCst);
+    Ok(())
+}
+
 /// Report the decode lane only after matching firmware publishes both exact v1 words.
 /// Current row-only firmware therefore fails closed here instead of being mistaken for
 /// a partially compatible decode implementation.

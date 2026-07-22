@@ -940,6 +940,8 @@ mod tests {
     const ROW_STREAMER_RTL: &str = include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
     const DECODE_DISPATCH_RTL: &str =
         include_str!("../../../src/compute/truega_lfm25_decode_dispatch.v");
+    const FEED_FRONTEND_RTL: &str =
+        include_str!("../../../src/compute/truega_lfm25_feed_frontend.v");
     const GOWIN_PROJECT: &str = include_str!("../../../min_pci_led.gprj");
     const PCIE_CONTROLLER_IPC: &str =
         include_str!("../../../src/serdes/pcie_controller/pcie_controller.ipc");
@@ -1151,7 +1153,66 @@ mod tests {
         assert!(
             TOP_VHDL.contains("constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;")
         );
-        assert!(TOP_VHDL.contains("bar_read_manifest_data_dw <= firmware_manifest_word;"));
+        assert!(TOP_VHDL.contains("read_data_dw := firmware_manifest_word;"));
+        assert!(TOP_VHDL.contains("bar_read_manifest_data_dw <= read_data_dw;"));
+    }
+
+    #[test]
+    fn final_image_reserves_tgf2_publication_but_fails_closed_until_joined() {
+        assert!(TOP_VHDL.contains(
+            "constant BAR0_FEED_CAPABILITY_BASE_DW : integer := 16#280# / 4;"
+        ));
+        assert!(TOP_VHDL.contains("constant FEED_CAPABILITY_WORD_COUNT : integer := 5;"));
+        assert!(TOP_VHDL.contains(
+            "addr_index < BAR0_FEED_CAPABILITY_BASE_DW + FEED_CAPABILITY_WORD_COUNT"
+        ));
+        assert!(TOP_VHDL.contains(
+            "if to_integer(unsigned(bar_read_word_index)) < FIRMWARE_MANIFEST_WORD_COUNT then"
+        ));
+        assert!(!TOP_VHDL.contains("constant FEED_CAPABILITY_MAGIC : std_logic_vector"));
+    }
+
+    #[test]
+    fn tgf2_frontend_literals_match_the_shared_rust_abi() {
+        use trueos_fpga_abi::lfm25_decode_feed as feed;
+
+        let normalized = FEED_FRONTEND_RTL
+            .replace('_', "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let words = feed::REQUIRED_CAPABILITY.bar0_words();
+        for (name, word) in [
+            ("FEEDCAPABILITYMAGIC", words[0]),
+            ("FEEDVERSIONRECORDBYTES", words[1]),
+            ("FEEDCAPABILITYBITS", words[2]),
+            ("FEEDSHAPESETTAG", words[4]),
+            ("FEEDRECORDMAGIC", feed::FEED_RECORD_MAGIC),
+            ("FEEDCOMMITMAGIC", feed::FEED_COMMIT_MAGIC),
+        ] {
+            let expected = format!("localparam [31:0] {name} = 32'h{word:08x};");
+            assert!(normalized.contains(&expected), "missing exact RTL literal: {expected}");
+        }
+        let model_generation = format!(
+            "localparam [31:0] FEEDMODELGENERATION = 32'd{};",
+            words[3]
+        );
+        assert!(normalized.contains(&model_generation));
+
+        for mode in feed::ALL_FEED_MODES {
+            let shape = mode.shape();
+            let expected = format!(
+                "8'd{}: begin modeitems={}; modestages={}; modelanes={}; modeformat={}; modepayloadbytes={}; modeshapetag=32'h{:08x}; end",
+                mode as u8,
+                shape.items,
+                shape.stages_per_item,
+                shape.lanes,
+                shape.payload_format as u8,
+                shape.payload_bytes_per_stage,
+                shape.shape_tag(),
+            );
+            assert!(normalized.contains(&expected), "TGF2 RTL shape drift: {mode:?}");
+        }
     }
 
     #[test]

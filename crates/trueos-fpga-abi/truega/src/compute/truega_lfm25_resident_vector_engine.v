@@ -2,11 +2,12 @@
 //
 // A handle is internal circuit metadata, not a host address:
 //   [36:5] session epoch, [4] type (0=Q30, 1=Q8_0), [3:0] slot.
-// Only three typed operations exist. TokenEmbedding installs a new nonzero
-// session epoch while accepting 32 streamed Q8_0 blocks. RMSNorm reads a
-// resident Q30 vector and accepts 1024 raw F32/BF16 weight words. ResidualAdd
-// reads two resident Q30 vectors. No parser, DMA, TLB, or runtime machinery is
-// present here.
+// Four typed operations exist. TokenEmbedding installs a new nonzero session
+// epoch while accepting 32 streamed Q8_0 blocks. RMSNorm reads a resident Q30
+// vector and accepts 1024 raw F32/BF16 weight words. ResidualAdd reads two
+// resident Q30 vectors. The internal Import operation transactionally joins an
+// externally computed ordered Q30[1024] vector back into a resident Q30 slot.
+// No parser, DMA, TLB, or runtime machinery is present here.
 module truega_lfm25_resident_vector_engine #(
     parameter integer Q30_SLOTS = 4,
     parameter integer Q8_SLOTS = 4
@@ -33,6 +34,11 @@ module truega_lfm25_resident_vector_engine #(
     input  wire                 weight_format_bf16_i,
     input  wire [31:0]          weight_bits_i,
 
+    input  wire                 import_valid_i,
+    output wire                 import_ready_o,
+    input  wire [9:0]           import_index_i,
+    input  wire signed [63:0]   import_q30_i,
+
     output wire                 result_valid_o,
     input  wire                 result_ready_i,
     output reg                  result_error_o,
@@ -53,6 +59,8 @@ module truega_lfm25_resident_vector_engine #(
     localparam [1:0] OP_TOKEN_EMBEDDING = 2'd0;
     localparam [1:0] OP_RMSNORM         = 2'd1;
     localparam [1:0] OP_RESIDUAL_ADD    = 2'd2;
+    // Internal fixed-circuit join only; not a public decode opcode.
+    localparam [1:0] OP_IMPORT_Q30      = 2'd3;
     localparam       HANDLE_Q30         = 1'b0;
     localparam       HANDLE_Q8          = 1'b1;
 
@@ -85,6 +93,9 @@ module truega_lfm25_resident_vector_engine #(
     localparam [4:0] ST_RMS_COMMIT          = 5'd26;
     localparam [4:0] ST_RES_TXN_BEGIN       = 5'd27;
     localparam [4:0] ST_RES_COMMIT          = 5'd28;
+    localparam [4:0] ST_IMPORT_TXN_BEGIN    = 5'd29;
+    localparam [4:0] ST_IMPORT_STREAM       = 5'd30;
+    localparam [4:0] ST_IMPORT_COMMIT       = 5'd31;
 
     reg [4:0] state;
     reg [36:0] source0_handle;
@@ -102,6 +113,7 @@ module truega_lfm25_resident_vector_engine #(
     wire embedding_accept = embedding_block_valid_i
         && embedding_block_ready_o;
     wire weight_accept = weight_valid_i && weight_ready_o;
+    wire import_accept = import_valid_i && import_ready_o;
     wire result_accept = result_valid_o && result_ready_i;
     wire inspect_accept = inspect_valid_i && inspect_ready_o;
     wire inspect_rsp_accept = inspect_rsp_valid_o && inspect_rsp_ready_i;
@@ -153,10 +165,18 @@ module truega_lfm25_resident_vector_engine #(
         && command_destination_slot < Q30_SLOTS
         && command_destination_slot != command_source0_slot
         && command_destination_slot != command_source1_slot;
+    wire import_command_valid =
+        command_source0_handle_i == 37'd0
+        && command_source1_handle_i == 37'd0
+        && command_destination_epoch != 32'd0
+        && command_destination_epoch == session_epoch_o
+        && command_destination_type == HANDLE_Q30
+        && command_destination_slot < Q30_SLOTS;
 
     assign command_ready_o = state == ST_IDLE && !inspect_valid_i;
     assign embedding_block_ready_o = state == ST_EMBED_BLOCK;
     assign weight_ready_o = state == ST_RMS_WEIGHT;
+    assign import_ready_o = state == ST_IMPORT_STREAM;
     assign result_valid_o = state == ST_RESULT;
     assign inspect_ready_o = state == ST_IDLE && !command_valid_i;
     assign inspect_rsp_valid_o = state == ST_INSPECT_RESULT;
@@ -180,9 +200,10 @@ module truega_lfm25_resident_vector_engine #(
     wire store_q8_transaction_begin_ready;
     wire store_q8_transaction_commit_ready;
     wire store_q30_transaction_begin = state == ST_EMBED_TXN_BEGIN
-        || state == ST_RES_TXN_BEGIN;
+        || state == ST_RES_TXN_BEGIN || state == ST_IMPORT_TXN_BEGIN;
     wire store_q30_transaction_commit = !abort_i
-        && (state == ST_EMBED_COMMIT || state == ST_RES_COMMIT);
+        && (state == ST_EMBED_COMMIT || state == ST_RES_COMMIT
+            || state == ST_IMPORT_COMMIT);
     wire store_q8_transaction_begin = state == ST_RMS_TXN_BEGIN;
     wire store_q8_transaction_commit = !abort_i && state == ST_RMS_COMMIT;
 
@@ -196,6 +217,7 @@ module truega_lfm25_resident_vector_engine #(
     wire inspect_shape_ok = inspect_q30_shape_ok || inspect_q8_shape_ok;
 
     wire rms_weight_index_ok = weight_index_i == element_index;
+    wire import_index_ok = import_index_i == element_index;
     wire store_q30_read_valid =
         ((state == ST_RMS_WEIGHT) && weight_accept && rms_weight_index_ok)
         || state == ST_RES_READ_A
@@ -307,13 +329,16 @@ module truega_lfm25_resident_vector_engine #(
 
     wire store_q30_write_valid =
         (state == ST_EMBED_RUN && dequant_output_valid)
-        || (state == ST_RES_OUTPUT && residual_output_valid);
+        || (state == ST_RES_OUTPUT && residual_output_valid)
+        || (state == ST_IMPORT_STREAM && import_valid_i
+            && import_index_ok);
     wire [3:0] store_q30_write_slot = destination_slot;
     wire [9:0] store_q30_write_index = state == ST_EMBED_RUN
         ? {block_index, dequant_output_index}
-        : residual_output_index;
+        : state == ST_RES_OUTPUT ? residual_output_index : import_index_i;
     wire signed [63:0] store_q30_write_data = state == ST_EMBED_RUN
-        ? dequant_output_q30 : residual_output_q30;
+        ? dequant_output_q30
+        : state == ST_RES_OUTPUT ? residual_output_q30 : import_q30_i;
     wire store_q8_write_valid = state == ST_RMS_OUTPUT && rms_output_valid;
 
     truega_lfm25_resident_tensor_store #(
@@ -423,6 +448,9 @@ module truega_lfm25_resident_vector_engine #(
                         end else if (command_operation_i == OP_RESIDUAL_ADD
                                 && residual_command_valid) begin
                             state <= ST_RES_TXN_BEGIN;
+                        end else if (command_operation_i == OP_IMPORT_Q30
+                                && import_command_valid) begin
+                            state <= ST_IMPORT_TXN_BEGIN;
                         end else begin
                             result_error_o <= 1'b1;
                             result_handle_o <= 37'd0;
@@ -660,6 +688,33 @@ module truega_lfm25_resident_vector_engine #(
                 end
 
                 ST_RES_COMMIT: begin
+                    if (store_q30_transaction_commit_ready) begin
+                        result_handle_o <= destination_handle;
+                        state <= ST_RESULT;
+                    end
+                end
+
+                ST_IMPORT_TXN_BEGIN: begin
+                    // Begin invalidates any older value in the destination.
+                    if (store_q30_transaction_begin_ready)
+                        state <= ST_IMPORT_STREAM;
+                end
+
+                ST_IMPORT_STREAM: begin
+                    if (import_accept) begin
+                        if (!import_index_ok || !store_q30_write_ready) begin
+                            result_error_o <= 1'b1;
+                            result_handle_o <= 37'd0;
+                            state <= ST_RESULT;
+                        end else if (element_index == 10'd1023) begin
+                            state <= ST_IMPORT_COMMIT;
+                        end else begin
+                            element_index <= element_index + 10'd1;
+                        end
+                    end
+                end
+
+                ST_IMPORT_COMMIT: begin
                     if (store_q30_transaction_commit_ready) begin
                         result_handle_o <= destination_handle;
                         state <= ST_RESULT;

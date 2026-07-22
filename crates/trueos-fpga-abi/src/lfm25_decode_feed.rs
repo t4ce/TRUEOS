@@ -7,7 +7,7 @@
 //!
 //! Every [`FeedMode`] names one ahead-of-time circuit and has immutable model shapes.
 //! Payload bytes are written to one or more fixed BAR2 banks first; the final dword of a
-//! [`FeedCommitRecord`] publishes that staged unit. This is not bytecode, a graph, a
+//! [`FeedCommitRecord`] publishes one complete row/vector/item. This is not bytecode, a graph, a
 //! dynamic-shape protocol, or evidence that the current `TGD1` endpoint implements it.
 
 use core::mem::{align_of, size_of};
@@ -21,9 +21,37 @@ pub const FEED_COMMIT_MAGIC: u32 = 0x324D_4346; // "FCM2"
 pub const FEED_COMMIT_RECORD_BYTES: u16 = 64;
 pub const FEED_COMMIT_BAR2_OFFSET: usize = 0x7_F000;
 pub const FEED_STAGING_SLOTS: u16 = 144;
+/// Read-only TGF2 publication starts immediately after the existing 0x200..0x27f
+/// firmware manifest. BAR2 remains a write-only staging/commit aperture.
+pub const BAR0_FEED_CAPABILITY_MAGIC_OFFSET: usize = 0x280;
+pub const BAR0_FEED_VERSION_RECORD_BYTES_OFFSET: usize = 0x284;
+pub const BAR0_FEED_CAPABILITY_BITS_OFFSET: usize = 0x288;
+pub const BAR0_FEED_MODEL_GENERATION_OFFSET: usize = 0x28C;
+pub const BAR0_FEED_SHAPE_SET_TAG_OFFSET: usize = 0x290;
+pub const BAR0_FEED_CAPABILITY_BYTES: usize = 5 * 4;
+pub const BAR0_FEED_CAPABILITY_REQUIRED_BYTES: usize =
+    BAR0_FEED_CAPABILITY_MAGIC_OFFSET + BAR0_FEED_CAPABILITY_BYTES;
+pub const BAR0_FEED_STATE_OFFSET: usize = 0x294;
+pub const BAR0_FEED_RETIRED_MODE_LAYER_OFFSET: usize = 0x298;
+pub const BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET: usize = 0x29C;
+pub const BAR0_FEED_RETIRED_SEQUENCE_OFFSET: usize = 0x2A0;
+pub const BAR0_FEED_RETIRED_ITEM_OFFSET: usize = 0x2A4;
+pub const BAR0_FEED_ERROR_CODE_OFFSET: usize = 0x2A8;
+pub const BAR0_FEED_COMPLETION_COUNT_OFFSET: usize = 0x2AC;
+pub const BAR0_FEED_CONTROL_OFFSET: usize = 0x2B0;
+pub const BAR0_FEED_REQUIRED_BYTES: usize = BAR0_FEED_CONTROL_OFFSET + 4;
+pub const FEED_RESET_MAGIC: u32 = 0x3254_5352; // "RST2"
+pub const FEED_ERROR_NONE: u32 = 0;
+/// The fixed frontend rejected staging/commit ordering and requires an explicit reset.
+pub const FEED_ERROR_FRONTEND_POISON: u32 = 0xBAD4_0001;
+/// TGF2 shares the one physical completion bridge with inline, row-stream, and
+/// TGD1 jobs. There is deliberately no second interrupt fabric.
+pub const BAR0_FEED_SHARED_IRQ_ACK_OFFSET: usize = super::BAR0_CALL_IRQ_ACK_OFFSET;
+pub const BAR0_FEED_SHARED_IRQ_STATE_OFFSET: usize = super::BAR0_CALL_IRQ_STATE_OFFSET;
+pub const FEED_SHARED_IRQ_PENDING_BIT: u32 = 1 << 0;
+pub const TGA_BAR0_APERTURE_BYTES: usize = 0x400;
 pub const FEED_NO_LAYER: u8 = u8::MAX;
 pub const FEED_NO_TOKEN: u32 = u32::MAX;
-pub const FEED_NO_BLOCK: u16 = u16::MAX;
 pub const FEED_NO_STAGE_SLOT: u16 = u16::MAX;
 
 pub const CAP_EXPLICIT_STAGE_COMMIT: u32 = 1 << 0;
@@ -34,6 +62,7 @@ pub const CAP_SHORTCONV: u32 = 1 << 4;
 pub const CAP_ATTENTION_FIRST_TOKEN: u32 = 1 << 5;
 pub const CAP_FFN: u32 = 1 << 6;
 pub const CAP_TIED_LM_HEAD: u32 = 1 << 7;
+pub const CAP_SHARED_MSI_RETIREMENT: u32 = 1 << 8;
 pub const REQUIRED_CAPABILITY_BITS: u32 = CAP_EXPLICIT_STAGE_COMMIT
     | CAP_TAGGED_SEQUENCE
     | CAP_EMBEDDING
@@ -41,7 +70,35 @@ pub const REQUIRED_CAPABILITY_BITS: u32 = CAP_EXPLICIT_STAGE_COMMIT
     | CAP_SHORTCONV
     | CAP_ATTENTION_FIRST_TOKEN
     | CAP_FFN
-    | CAP_TIED_LM_HEAD;
+    | CAP_TIED_LM_HEAD
+    | CAP_SHARED_MSI_RETIREMENT;
+
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum FeedState {
+    Idle = 0,
+    Busy = 1,
+    Complete = 2,
+    Failed = 3,
+    Poisoned = 4,
+}
+
+impl FeedState {
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Idle),
+            1 => Some(Self::Busy),
+            2 => Some(Self::Complete),
+            3 => Some(Self::Failed),
+            4 => Some(Self::Poisoned),
+            _ => None,
+        }
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(self, Self::Complete | Self::Failed | Self::Poisoned)
+    }
+}
 
 /// Exact v2 publication. Equality is intentional: unknown bits or shape tags fail closed.
 #[repr(C)]
@@ -71,6 +128,31 @@ pub const fn capability_is_exact(observed: FeedCapability) -> bool {
         && observed.capability_bits == REQUIRED_CAPABILITY.capability_bits
         && observed.model_generation == REQUIRED_CAPABILITY.model_generation
         && observed.shape_set_tag == REQUIRED_CAPABILITY.shape_set_tag
+}
+
+impl FeedCapability {
+    /// Five dwords published read-only through BAR0. Version occupies bits 15:0 and
+    /// commit-record bytes occupy bits 31:16 of the second word.
+    pub const fn bar0_words(self) -> [u32; 5] {
+        [
+            self.magic,
+            self.abi_version as u32 | ((self.commit_record_bytes as u32) << 16),
+            self.capability_bits,
+            self.model_generation,
+            self.shape_set_tag,
+        ]
+    }
+
+    pub const fn from_bar0_words(words: [u32; 5]) -> Self {
+        Self {
+            magic: words[0],
+            abi_version: words[1] as u16,
+            commit_record_bytes: (words[1] >> 16) as u16,
+            capability_bits: words[2],
+            model_generation: words[3],
+            shape_set_tag: words[4],
+        }
+    }
 }
 
 /// The existing BAR2 offsets retain their v1 meaning. v2 treats them as three generic
@@ -191,20 +273,16 @@ impl FeedMode {
         match self {
             Self::EmbeddingQ8Row => FixedFeedShape::new(self, 1, 32, 1, GgmlQ8_0Block, 34),
             Self::OperatorRmsNormWeights | Self::FfnRmsNormWeights | Self::FinalRmsNormWeights => {
-                FixedFeedShape::new(self, lfm25::MODEL_HIDDEN_SIZE, 1, 1, Bf16, 2)
+                FixedFeedShape::new(self, 1, 32, 1, Bf16, 64)
             }
-            Self::ShortConvCoefficients => {
-                FixedFeedShape::new(self, lfm25::MODEL_HIDDEN_SIZE, 1, 1, Bf16x3, 6)
-            }
+            Self::ShortConvCoefficients => FixedFeedShape::new(self, 1, 96, 1, Bf16x3, 64),
             Self::ShortConvInputTripletRows => {
                 FixedFeedShape::new(self, lfm25::MODEL_HIDDEN_SIZE, 32, 3, GgmlQ8_0Block, 34)
             }
             Self::ShortConvOutputRows => {
                 FixedFeedShape::new(self, lfm25::MODEL_HIDDEN_SIZE, 32, 1, GgmlQ8_0Block, 34)
             }
-            Self::AttentionQkNormWeights => {
-                FixedFeedShape::new(self, lfm25::MODEL_HEAD_DIMENSION as u32, 1, 2, Bf16, 2)
-            }
+            Self::AttentionQkNormWeights => FixedFeedShape::new(self, 1, 2, 2, Bf16, 64),
             Self::AttentionQueryRows => FixedFeedShape::new(self, 1024, 32, 1, GgmlQ8_0Block, 34),
             Self::AttentionKeyRows | Self::AttentionValueRows => {
                 FixedFeedShape::new(self, 512, 32, 1, GgmlQ8_0Block, 34)
@@ -342,6 +420,96 @@ impl FeedMode {
             ggml_ne1: ne1,
         })
     }
+
+    /// Map one fixed feed item/lane to the corresponding sealed tensor item. For the
+    /// shortconv input matrix, B/C/X lanes are the three consecutive 1,024-row regions.
+    pub const fn tensor_item(self, item: u32, lane: u8, token: Option<u32>) -> Option<u32> {
+        let shape = self.shape();
+        if item >= shape.items || lane >= shape.lanes {
+            return None;
+        }
+        match self {
+            Self::EmbeddingQ8Row => match token {
+                Some(token) if token < lfm25::MODEL_VOCABULARY_SIZE => Some(token),
+                _ => None,
+            },
+            Self::ShortConvInputTripletRows => Some(lane as u32 * lfm25::MODEL_HIDDEN_SIZE + item),
+            Self::AttentionFirstTokenCore => None,
+            _ => Some(item),
+        }
+    }
+}
+
+/// Exact packed value published at [`BAR0_FEED_RETIRED_MODE_LAYER_OFFSET`].
+/// The upper half remains zero so future widening fails closed in old hosts.
+pub const fn retired_mode_layer_word(mode: FeedMode, layer: Option<u8>) -> u32 {
+    let encoded_layer = match layer {
+        Some(layer) => layer,
+        None => FEED_NO_LAYER,
+    };
+    mode as u32 | ((encoded_layer as u32) << 8)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FeedRetirementStatus {
+    pub state: FeedState,
+    pub retired_mode: FeedMode,
+    pub retired_layer: Option<u8>,
+    pub retired_session_epoch: u32,
+    pub retired_sequence: u32,
+    pub retired_item: u32,
+    pub error_code: i32,
+    pub completion_count: u32,
+}
+
+impl FeedRetirementStatus {
+    /// Decode the seven read-only TGF2 status dwords in BAR0 offset order.
+    pub fn from_bar0_words(words: [u32; 7]) -> Result<Self, FeedError> {
+        let state = FeedState::from_raw(words[0]).ok_or(FeedError::InvalidRetirement)?;
+        if words[1] & 0xFFFF_0000 != 0 {
+            return Err(FeedError::InvalidRetirement);
+        }
+        let retired_mode =
+            FeedMode::from_raw(words[1] as u8).ok_or(FeedError::InvalidRetirement)?;
+        let raw_layer = (words[1] >> 8) as u8;
+        let retired_layer = if raw_layer == FEED_NO_LAYER {
+            None
+        } else if raw_layer as usize >= lfm25::MODEL_LAYER_COUNT {
+            return Err(FeedError::InvalidRetirement);
+        } else {
+            Some(raw_layer)
+        };
+        Ok(Self {
+            state,
+            retired_mode,
+            retired_layer,
+            retired_session_epoch: words[2],
+            retired_sequence: words[3],
+            retired_item: words[4],
+            error_code: words[5] as i32,
+            completion_count: words[6],
+        })
+    }
+
+    pub fn identity_matches(self, record: FeedCommitRecord) -> bool {
+        self.retired_mode as u8 == record.mode
+            && self.retired_layer
+                == if record.layer == FEED_NO_LAYER {
+                    None
+                } else {
+                    Some(record.layer)
+                }
+            && self.retired_session_epoch == record.session_epoch
+            && self.retired_sequence == record.sequence
+            && self.retired_item == record.item
+    }
+
+    pub fn completion_matches(self, record: FeedCommitRecord, previous_count: u32) -> bool {
+        self.state == FeedState::Complete
+            && self.error_code == 0
+            && self.completion_count == previous_count.wrapping_add(1)
+            && self.identity_matches(record)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -355,40 +523,36 @@ enum LayerDomain {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct FixedFeedShape {
     pub mode: FeedMode,
+    /// Number of row/vector retirements. One commit publishes one complete item.
     pub items: u32,
-    /// Zero is reserved for the single control-only attention-core commit.
-    pub blocks_per_item: u16,
+    /// Number of BAR2 staging slots per lane and item. Zero is the control-only core.
+    pub stages_per_item: u16,
     pub lanes: u8,
     pub payload_format: FeedPayloadFormat,
-    pub payload_bytes_per_lane: u16,
+    pub payload_bytes_per_stage: u16,
 }
 
 impl FixedFeedShape {
     const fn new(
         mode: FeedMode,
         items: u32,
-        blocks_per_item: u16,
+        stages_per_item: u16,
         lanes: u8,
         payload_format: FeedPayloadFormat,
-        payload_bytes_per_lane: u16,
+        payload_bytes_per_stage: u16,
     ) -> Self {
         Self {
             mode,
             items,
-            blocks_per_item,
+            stages_per_item,
             lanes,
             payload_format,
-            payload_bytes_per_lane,
+            payload_bytes_per_stage,
         }
     }
 
     pub const fn commits(self) -> u32 {
         self.items
-            * if self.blocks_per_item == 0 {
-                1
-            } else {
-                self.blocks_per_item as u32
-            }
     }
 
     pub const fn lane_mask(self) -> u8 {
@@ -403,10 +567,10 @@ impl FixedFeedShape {
         let mut tag = 0x811C_9DC5u32;
         tag = fnv_word(tag, self.mode as u32);
         tag = fnv_word(tag, self.items);
-        tag = fnv_word(tag, self.blocks_per_item as u32);
+        tag = fnv_word(tag, self.stages_per_item as u32);
         tag = fnv_word(tag, self.lanes as u32);
         tag = fnv_word(tag, self.payload_format as u32);
-        fnv_word(tag, self.payload_bytes_per_lane as u32)
+        fnv_word(tag, self.payload_bytes_per_stage as u32)
     }
 }
 
@@ -416,6 +580,18 @@ pub struct TensorExpectation {
     pub format: TensorFormat,
     pub ggml_ne0: u32,
     pub ggml_ne1: u32,
+}
+
+/// Exact sealed tensor byte range for the next staged payload. Q8_0 ranges name their
+/// source row and native block. Packed BF16 ranges may cross logical scalar/triple
+/// boundaries, so their byte offset is authoritative.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FeedSourceRange {
+    pub tensor: TensorExpectation,
+    pub row: Option<u32>,
+    pub block: Option<u16>,
+    pub relative_byte_offset: u32,
+    pub payload_bytes: u16,
 }
 
 impl TensorExpectation {
@@ -560,9 +736,11 @@ pub struct FeedCommitRecord {
     pub position: u32,
     pub token: u32,
     pub item: u32,
-    pub block: u16,
-    pub stage_slot: u16,
-    pub payload_bytes_per_lane: u16,
+    /// Number of staged payloads in each active lane for this complete item.
+    pub stages_per_lane: u16,
+    /// Final physical staging slot, or [`FEED_NO_STAGE_SLOT`] for a control-only item.
+    pub last_stage_slot: u16,
+    pub payload_bytes_per_stage: u16,
     pub reserved0: u16,
     pub stage_generation: u32,
     pub shape_tag: u32,
@@ -587,9 +765,9 @@ impl FeedCommitRecord {
         put_u32(&mut bytes, 24, self.position);
         put_u32(&mut bytes, 28, self.token);
         put_u32(&mut bytes, 32, self.item);
-        put_u16(&mut bytes, 36, self.block);
-        put_u16(&mut bytes, 38, self.stage_slot);
-        put_u16(&mut bytes, 40, self.payload_bytes_per_lane);
+        put_u16(&mut bytes, 36, self.stages_per_lane);
+        put_u16(&mut bytes, 38, self.last_stage_slot);
+        put_u16(&mut bytes, 40, self.payload_bytes_per_stage);
         put_u16(&mut bytes, 42, self.reserved0);
         put_u32(&mut bytes, 44, self.stage_generation);
         put_u32(&mut bytes, 48, self.shape_tag);
@@ -617,9 +795,9 @@ impl FeedCommitRecord {
             position: get_u32(bytes, 24),
             token: get_u32(bytes, 28),
             item: get_u32(bytes, 32),
-            block: get_u16(bytes, 36),
-            stage_slot: get_u16(bytes, 38),
-            payload_bytes_per_lane: get_u16(bytes, 40),
+            stages_per_lane: get_u16(bytes, 36),
+            last_stage_slot: get_u16(bytes, 38),
+            payload_bytes_per_stage: get_u16(bytes, 40),
             reserved0: get_u16(bytes, 42),
             stage_generation: get_u32(bytes, 44),
             shape_tag: get_u32(bytes, 48),
@@ -648,6 +826,88 @@ impl FeedCommitRecord {
             && FeedMode::from_raw(self.mode).is_some()
             && FeedPayloadFormat::from_raw(self.payload_format).is_some()
     }
+
+    /// Validate every fixed-shape field before the kernel may publish this
+    /// record to BAR2. Sequence and item advance together because one commit
+    /// retires exactly one complete item in TGF2.
+    pub fn validate_for_publish(self) -> Result<(), FeedError> {
+        if !self.header_is_exact() {
+            return Err(FeedError::InvalidCommit);
+        }
+        let mode = FeedMode::from_raw(self.mode).ok_or(FeedError::InvalidCommit)?;
+        let shape = mode.shape();
+        let layer = if self.layer == FEED_NO_LAYER {
+            None
+        } else {
+            Some(self.layer)
+        };
+        let token = if self.token == FEED_NO_TOKEN {
+            None
+        } else {
+            Some(self.token)
+        };
+        FeedRequest {
+            mode,
+            layer,
+            position: self.position,
+            token,
+            session_epoch: self.session_epoch,
+        }
+        .validate()?;
+        let expected_last_stage = if shape.stages_per_item == 0 {
+            FEED_NO_STAGE_SLOT
+        } else {
+            shape.stages_per_item - 1
+        };
+        let expected_generation = if shape.stages_per_item == 0 {
+            0
+        } else {
+            (self.sequence + 1)
+                * shape.stages_per_item as u32
+                * shape.lanes as u32
+        };
+        if self.item >= shape.items
+            || self.sequence != self.item
+            || self.lane_mask != shape.lane_mask()
+            || self.payload_format != shape.payload_format as u8
+            || self.stages_per_lane != shape.stages_per_item
+            || self.last_stage_slot != expected_last_stage
+            || self.payload_bytes_per_stage != shape.payload_bytes_per_stage
+            || self.stage_generation != expected_generation
+            || self.shape_tag != shape.shape_tag()
+        {
+            return Err(FeedError::InvalidCommit);
+        }
+        Ok(())
+    }
+
+    pub fn staged_payload_count(self) -> Result<usize, FeedError> {
+        self.validate_for_publish()?;
+        let mode = FeedMode::from_raw(self.mode).ok_or(FeedError::InvalidCommit)?;
+        Ok(mode.shape().stages_per_item as usize * mode.shape().lanes as usize)
+    }
+
+    /// Descriptor for one stage-major, lane-minor payload belonging to this
+    /// item. This is the same order the endpoint consumes paired/triplet lanes.
+    pub fn expected_staged_payload(self, ordinal: usize) -> Result<StagedPayload, FeedError> {
+        self.validate_for_publish()?;
+        let mode = FeedMode::from_raw(self.mode).ok_or(FeedError::InvalidCommit)?;
+        let shape = mode.shape();
+        let count = shape.stages_per_item as usize * shape.lanes as usize;
+        if ordinal >= count || shape.lanes == 0 {
+            return Err(FeedError::UnexpectedStage);
+        }
+        let stage = ordinal / shape.lanes as usize;
+        let lane = ordinal % shape.lanes as usize;
+        Ok(StagedPayload {
+            sequence: self.sequence,
+            generation: self.sequence * count as u32 + ordinal as u32 + 1,
+            bank: stage_bank(lane as u8),
+            slot: stage as u16,
+            payload_format: shape.payload_format,
+            payload_bytes: shape.payload_bytes_per_stage,
+        })
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -659,8 +919,8 @@ pub enum FeedError {
     InvalidToken,
     InvalidTensorShape,
     InvalidEncoding,
+    InvalidRetirement,
     UnexpectedStage,
-    DuplicateStage,
     MissingStage,
     InvalidCommit,
     Complete,
@@ -673,9 +933,9 @@ pub enum FeedError {
 pub struct FeedSequenceValidator {
     request: FeedRequest,
     item: u32,
-    block: u16,
     sequence: u32,
-    staged_mask: u8,
+    next_stage: u16,
+    next_lane: u8,
     poisoned: bool,
     complete: bool,
 }
@@ -689,9 +949,9 @@ impl FeedSequenceValidator {
         Ok(Self {
             request,
             item: 0,
-            block: 0,
             sequence: 0,
-            staged_mask: 0,
+            next_stage: 0,
+            next_lane: 0,
             poisoned: false,
             complete: false,
         })
@@ -717,28 +977,66 @@ impl FeedSequenceValidator {
         self.item
     }
 
-    pub const fn expected_block(&self) -> u16 {
-        if self.request.mode.shape().blocks_per_item == 0 {
-            FEED_NO_BLOCK
-        } else {
-            self.block
-        }
+    /// True only after every lane of every fixed stage for the current item has been
+    /// written. Control-only modes are immediately ready to commit.
+    pub const fn staging_complete(&self) -> bool {
+        self.next_stage == self.request.mode.shape().stages_per_item
     }
 
-    pub fn expected_stage(&self, lane: u8) -> Result<StagedPayload, FeedError> {
+    /// The only staged write accepted next. Ordering is stage-major, lane-minor so
+    /// paired/triplet feeds remain lock-step while a whole row is assembled.
+    pub fn expected_stage(&self) -> Result<StagedPayload, FeedError> {
         self.require_active()?;
         let shape = self.request.mode.shape();
-        if lane >= shape.lanes {
+        if self.staging_complete() || shape.lanes == 0 {
             return Err(FeedError::UnexpectedStage);
         }
         Ok(StagedPayload {
             sequence: self.sequence,
-            generation: self.sequence + 1,
-            bank: stage_bank(lane),
-            slot: self.expected_stage_slot(),
+            generation: self.expected_stage_generation(),
+            bank: stage_bank(self.next_lane),
+            slot: self.next_stage,
             payload_format: shape.payload_format,
-            payload_bytes: shape.payload_bytes_per_lane,
+            payload_bytes: shape.payload_bytes_per_stage,
         })
+    }
+
+    pub fn expected_source(&self) -> Result<FeedSourceRange, FeedError> {
+        self.require_active()?;
+        if self.staging_complete() {
+            return Err(FeedError::UnexpectedStage);
+        }
+        let mode = self.request.mode;
+        let shape = mode.shape();
+        if shape.lanes == 0 {
+            return Err(FeedError::UnexpectedStage);
+        }
+        let tensor = mode
+            .tensor_expectation(self.next_lane)
+            .ok_or(FeedError::InvalidTensorShape)?;
+        let (row, block, relative_byte_offset) =
+            if shape.payload_format == FeedPayloadFormat::GgmlQ8_0Block {
+                let row = mode
+                    .tensor_item(self.item, self.next_lane, self.request.token)
+                    .ok_or(FeedError::InvalidTensorShape)?;
+                let blocks_per_row = tensor.ggml_ne0 / 32;
+                let row_bytes = blocks_per_row * 34;
+                (Some(row), Some(self.next_stage), row * row_bytes + self.next_stage as u32 * 34)
+            } else {
+                (None, None, self.next_stage as u32 * shape.payload_bytes_per_stage as u32)
+            };
+        let source = FeedSourceRange {
+            tensor,
+            row,
+            block,
+            relative_byte_offset,
+            payload_bytes: shape.payload_bytes_per_stage,
+        };
+        if source.relative_byte_offset + source.payload_bytes as u32 > tensor_encoded_bytes(tensor)
+        {
+            return Err(FeedError::InvalidTensorShape);
+        }
+        Ok(source)
     }
 
     pub fn stage(&mut self, staged: StagedPayload) -> Result<(), FeedError> {
@@ -752,7 +1050,7 @@ impl FeedSequenceValidator {
     pub fn expected_commit(&self) -> Result<FeedCommitRecord, FeedError> {
         self.require_active()?;
         let shape = self.request.mode.shape();
-        if self.staged_mask != shape.lane_mask() {
+        if !self.staging_complete() {
             return Err(FeedError::MissingStage);
         }
         Ok(FeedCommitRecord {
@@ -769,18 +1067,18 @@ impl FeedSequenceValidator {
             position: self.request.position,
             token: self.request.encoded_token(),
             item: self.item,
-            block: self.expected_block(),
-            stage_slot: if shape.lanes == 0 {
+            stages_per_lane: shape.stages_per_item,
+            last_stage_slot: if shape.stages_per_item == 0 {
                 FEED_NO_STAGE_SLOT
             } else {
-                self.expected_stage_slot()
+                shape.stages_per_item - 1
             },
-            payload_bytes_per_lane: shape.payload_bytes_per_lane,
+            payload_bytes_per_stage: shape.payload_bytes_per_stage,
             reserved0: 0,
-            stage_generation: if shape.lanes == 0 {
+            stage_generation: if shape.stages_per_item == 0 {
                 0
             } else {
-                self.sequence + 1
+                self.final_stage_generation()
             },
             shape_tag: shape.shape_tag(),
             model_generation: lfm25::MODEL_GENERATION,
@@ -805,18 +1103,17 @@ impl FeedSequenceValidator {
         if shape.lanes == 0 {
             return Err(FeedError::UnexpectedStage);
         }
-        let lane = staged.bank as u8;
-        if lane >= shape.lanes || staged != self.expected_stage(lane)? {
+        if staged != self.expected_stage()? {
             return Err(FeedError::UnexpectedStage);
-        }
-        let lane_bit = 1u8 << lane;
-        if self.staged_mask & lane_bit != 0 {
-            return Err(FeedError::DuplicateStage);
         }
         if staged.bar2_offset().is_none() {
             return Err(FeedError::UnexpectedStage);
         }
-        self.staged_mask |= lane_bit;
+        self.next_lane += 1;
+        if self.next_lane == shape.lanes {
+            self.next_lane = 0;
+            self.next_stage += 1;
+        }
         Ok(())
     }
 
@@ -838,28 +1135,38 @@ impl FeedSequenceValidator {
         }
     }
 
-    const fn expected_stage_slot(&self) -> u16 {
+    const fn stages_per_item_all_lanes(&self) -> u32 {
         let shape = self.request.mode.shape();
-        if shape.blocks_per_item > 1 {
-            self.block
-        } else {
-            (self.item % FEED_STAGING_SLOTS as u32) as u16
-        }
+        shape.stages_per_item as u32 * shape.lanes as u32
+    }
+
+    const fn expected_stage_generation(&self) -> u32 {
+        self.sequence * self.stages_per_item_all_lanes()
+            + self.next_stage as u32 * self.request.mode.shape().lanes as u32
+            + self.next_lane as u32
+            + 1
+    }
+
+    const fn final_stage_generation(&self) -> u32 {
+        (self.sequence + 1) * self.stages_per_item_all_lanes()
     }
 
     fn advance(&mut self) {
         let shape = self.request.mode.shape();
-        self.staged_mask = 0;
         self.sequence += 1;
-        if shape.blocks_per_item > 0 && self.block + 1 < shape.blocks_per_item {
-            self.block += 1;
-            return;
-        }
-        self.block = 0;
         self.item += 1;
+        self.next_stage = 0;
+        self.next_lane = 0;
         if self.item == shape.items {
             self.complete = true;
         }
+    }
+}
+
+const fn tensor_encoded_bytes(tensor: TensorExpectation) -> u32 {
+    match tensor.format {
+        TensorFormat::Bf16Le => tensor.ggml_ne0 * tensor.ggml_ne1 * 2,
+        TensorFormat::Q8_0 => tensor.ggml_ne0 / 32 * 34 * tensor.ggml_ne1,
     }
 }
 
@@ -915,9 +1222,8 @@ mod tests {
     }
 
     fn stage_and_commit_one(validator: &mut FeedSequenceValidator) {
-        let lanes = validator.request().mode.shape().lanes;
-        for lane in 0..lanes {
-            let staged = validator.expected_stage(lane).unwrap();
+        while !validator.staging_complete() {
+            let staged = validator.expected_stage().unwrap();
             assert!(staged.bar2_offset().is_some());
             validator.stage(staged).unwrap();
         }
@@ -949,6 +1255,31 @@ mod tests {
     #[test]
     fn capability_match_is_exact_and_fail_closed() {
         assert!(capability_is_exact(REQUIRED_CAPABILITY));
+        assert_eq!(
+            FeedCapability::from_bar0_words(REQUIRED_CAPABILITY.bar0_words()),
+            REQUIRED_CAPABILITY
+        );
+        assert_eq!(BAR0_FEED_CAPABILITY_MAGIC_OFFSET, crate::BAR0_REQUIRED_BYTES);
+        assert_eq!(BAR0_FEED_VERSION_RECORD_BYTES_OFFSET, 0x284);
+        assert_eq!(BAR0_FEED_CAPABILITY_BITS_OFFSET, 0x288);
+        assert_eq!(BAR0_FEED_MODEL_GENERATION_OFFSET, 0x28c);
+        assert_eq!(BAR0_FEED_SHAPE_SET_TAG_OFFSET, 0x290);
+        assert_eq!(BAR0_FEED_CAPABILITY_REQUIRED_BYTES, 0x294);
+        assert_eq!(BAR0_FEED_STATE_OFFSET, 0x294);
+        assert_eq!(BAR0_FEED_RETIRED_MODE_LAYER_OFFSET, 0x298);
+        assert_eq!(BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET, 0x29c);
+        assert_eq!(BAR0_FEED_RETIRED_SEQUENCE_OFFSET, 0x2a0);
+        assert_eq!(BAR0_FEED_RETIRED_ITEM_OFFSET, 0x2a4);
+        assert_eq!(BAR0_FEED_ERROR_CODE_OFFSET, 0x2a8);
+        assert_eq!(BAR0_FEED_COMPLETION_COUNT_OFFSET, 0x2ac);
+        assert_eq!(BAR0_FEED_CONTROL_OFFSET, 0x2b0);
+        assert_eq!(BAR0_FEED_REQUIRED_BYTES, 0x2b4);
+        assert_eq!(BAR0_FEED_SHARED_IRQ_ACK_OFFSET, crate::BAR0_CALL_IRQ_ACK_OFFSET);
+        assert_eq!(BAR0_FEED_SHARED_IRQ_STATE_OFFSET, crate::BAR0_CALL_IRQ_STATE_OFFSET);
+        assert_eq!(FEED_SHARED_IRQ_PENDING_BIT, 1);
+        assert_eq!(FEED_ERROR_NONE, 0);
+        assert_eq!(FEED_ERROR_FRONTEND_POISON, 0xbad4_0001);
+        assert!(BAR0_FEED_REQUIRED_BYTES <= TGA_BAR0_APERTURE_BYTES);
         for mutate in 0..6 {
             let mut observed = REQUIRED_CAPABILITY;
             match mutate {
@@ -964,6 +1295,50 @@ mod tests {
     }
 
     #[test]
+    fn retirement_status_decodes_and_matches_exact_identity() {
+        let mut validator = FeedSequenceValidator::begin(
+            REQUIRED_CAPABILITY,
+            request(FeedMode::FfnGateUpRows, Some(0)),
+        )
+        .unwrap();
+        while !validator.staging_complete() {
+            let staged = validator.expected_stage().unwrap();
+            validator.stage(staged).unwrap();
+        }
+        let record = validator.expected_commit().unwrap();
+        let words = [
+            FeedState::Complete as u32,
+            retired_mode_layer_word(FeedMode::FfnGateUpRows, Some(0)),
+            record.session_epoch,
+            record.sequence,
+            record.item,
+            FEED_ERROR_NONE,
+            41,
+        ];
+        let status = FeedRetirementStatus::from_bar0_words(words).unwrap();
+        assert!(status.identity_matches(record));
+        assert!(status.completion_matches(record, 40));
+        assert!(FeedState::Complete.is_terminal());
+        assert!(FeedState::Failed.is_terminal());
+        assert!(FeedState::Poisoned.is_terminal());
+        assert!(!FeedState::Idle.is_terminal());
+        assert!(!FeedState::Busy.is_terminal());
+
+        let mut stale = words;
+        stale[3] = stale[3].wrapping_add(1);
+        assert!(!FeedRetirementStatus::from_bar0_words(stale)
+            .unwrap()
+            .identity_matches(record));
+        let mut widened = words;
+        widened[1] |= 1 << 31;
+        assert_eq!(
+            FeedRetirementStatus::from_bar0_words(widened),
+            Err(FeedError::InvalidRetirement)
+        );
+        assert_eq!(FeedState::from_raw(5), None);
+    }
+
+    #[test]
     fn every_mode_has_a_unique_fixed_shape() {
         let mut tags = [0u32; ALL_FEED_MODES.len()];
         for (index, mode) in ALL_FEED_MODES.iter().copied().enumerate() {
@@ -971,7 +1346,8 @@ mod tests {
             assert_eq!(shape.mode, mode);
             assert!(shape.items > 0);
             assert!(shape.lanes <= 3);
-            assert!(shape.payload_bytes_per_lane <= 34);
+            assert!(shape.stages_per_item <= FEED_STAGING_SLOTS);
+            assert!(shape.payload_bytes_per_stage <= 64);
             assert!(shape.commits() > 0);
             tags[index] = shape.shape_tag();
             assert_eq!(FeedMode::from_raw(mode as u8), Some(mode));
@@ -982,8 +1358,14 @@ mod tests {
             }
         }
         assert_eq!(FeedMode::TiedLmHeadRows.shape().items, 65_536);
-        assert_eq!(FeedMode::TiedLmHeadRows.shape().commits(), 2_097_152);
-        assert_eq!(FeedMode::FfnDownRows.shape().blocks_per_item, 144);
+        assert_eq!(FeedMode::TiedLmHeadRows.shape().commits(), 65_536);
+        assert_eq!(FeedMode::TiedLmHeadRows.shape().stages_per_item, 32);
+        assert_eq!(FeedMode::FfnGateUpRows.shape().commits(), 4_608);
+        assert_eq!(FeedMode::FfnDownRows.shape().commits(), 1_024);
+        assert_eq!(FeedMode::FfnDownRows.shape().stages_per_item, 144);
+        assert_eq!(FeedMode::EmbeddingQ8Row.shape().commits(), 1);
+        assert_eq!(FeedMode::OperatorRmsNormWeights.shape().commits(), 1);
+        assert_eq!(FeedMode::AttentionFirstTokenCore.shape().commits(), 1);
         assert_eq!(FeedMode::FfnGateUpRows.shape().lanes, 2);
         assert_eq!(FeedMode::ShortConvInputTripletRows.shape().lanes, 3);
         assert_eq!(FeedMode::AttentionFirstTokenCore.shape().lanes, 0);
@@ -1003,6 +1385,70 @@ mod tests {
                 assert_eq!(expectation.validate(tensor, layer), Ok(()), "{mode:?}/{lane}");
             }
         }
+    }
+
+    #[test]
+    fn every_mode_can_stage_and_retire_exactly_one_complete_item() {
+        for mode in ALL_FEED_MODES {
+            let layer = match mode.domain() {
+                LayerDomain::Global => None,
+                LayerDomain::Attention => Some(2),
+                LayerDomain::ShortConv | LayerDomain::Any => Some(0),
+            };
+            let mut validator =
+                FeedSequenceValidator::begin(REQUIRED_CAPABILITY, request(mode, layer)).unwrap();
+            let shape = mode.shape();
+            let mut staged = 0u32;
+            while !validator.staging_complete() {
+                let expected = validator.expected_stage().unwrap();
+                assert!(expected.bar2_offset().is_some(), "{mode:?}");
+                validator.stage(expected).unwrap();
+                staged += 1;
+            }
+            assert_eq!(staged, shape.stages_per_item as u32 * shape.lanes as u32);
+            let record = validator.expected_commit().unwrap();
+            assert_eq!(record.item, 0);
+            assert_eq!(record.stages_per_lane, shape.stages_per_item);
+            validator.commit(record).unwrap();
+            assert_eq!(validator.committed_units(), 1);
+        }
+    }
+
+    #[test]
+    fn fixed_source_indices_cover_embedding_and_shortconv_triplet_layout() {
+        let embedding = FeedSequenceValidator::begin(
+            REQUIRED_CAPABILITY,
+            request(FeedMode::EmbeddingQ8Row, None),
+        )
+        .unwrap();
+        let source = embedding.expected_source().unwrap();
+        assert_eq!(source.row, Some(1));
+        assert_eq!(source.block, Some(0));
+        assert_eq!(source.relative_byte_offset, 32 * 34);
+
+        let mut shortconv = FeedSequenceValidator::begin(
+            REQUIRED_CAPABILITY,
+            request(FeedMode::ShortConvInputTripletRows, Some(0)),
+        )
+        .unwrap();
+        assert_eq!(shortconv.expected_source().unwrap().row, Some(0));
+        shortconv
+            .stage(shortconv.expected_stage().unwrap())
+            .unwrap();
+        assert_eq!(shortconv.expected_source().unwrap().row, Some(1024));
+        shortconv
+            .stage(shortconv.expected_stage().unwrap())
+            .unwrap();
+        assert_eq!(shortconv.expected_source().unwrap().row, Some(2048));
+
+        let mut packed = FeedSequenceValidator::begin(
+            REQUIRED_CAPABILITY,
+            request(FeedMode::ShortConvCoefficients, Some(0)),
+        )
+        .unwrap();
+        assert_eq!(packed.expected_source().unwrap().relative_byte_offset, 0);
+        packed.stage(packed.expected_stage().unwrap()).unwrap();
+        assert_eq!(packed.expected_source().unwrap().relative_byte_offset, 64);
     }
 
     #[test]
@@ -1032,11 +1478,11 @@ mod tests {
         .unwrap();
         assert_eq!(validator.expected_commit(), Err(FeedError::MissingStage));
 
-        let gate = validator.expected_stage(0).unwrap();
-        let up = validator.expected_stage(1).unwrap();
-        assert_eq!((gate.bank, up.bank), (StageBank::Bank0, StageBank::Bank1));
+        let gate = validator.expected_stage().unwrap();
         validator.stage(gate).unwrap();
-        assert_eq!(validator.stage(gate), Err(FeedError::DuplicateStage));
+        let up = validator.expected_stage().unwrap();
+        assert_eq!((gate.bank, up.bank), (StageBank::Bank0, StageBank::Bank1));
+        assert_eq!(validator.stage(gate), Err(FeedError::UnexpectedStage));
         assert!(validator.is_poisoned());
 
         let mut clean = FeedSequenceValidator::begin(
@@ -1044,15 +1490,23 @@ mod tests {
             request(FeedMode::FfnGateUpRows, Some(0)),
         )
         .unwrap();
-        clean.stage(clean.expected_stage(0).unwrap()).unwrap();
-        clean.stage(clean.expected_stage(1).unwrap()).unwrap();
+        while !clean.staging_complete() {
+            clean.stage(clean.expected_stage().unwrap()).unwrap();
+        }
         let record = clean.expected_commit().unwrap();
+        assert_eq!(record.stages_per_lane, 32);
+        assert_eq!(record.last_stage_slot, 31);
+        assert_eq!(record.stage_generation, 64);
         assert_eq!(size_of::<FeedCommitRecord>(), 64);
         assert_eq!(align_of::<FeedCommitRecord>(), 64);
+        assert_eq!(core::mem::offset_of!(FeedCommitRecord, stages_per_lane), 36);
+        assert_eq!(core::mem::offset_of!(FeedCommitRecord, last_stage_slot), 38);
+        assert_eq!(core::mem::offset_of!(FeedCommitRecord, payload_bytes_per_stage), 40);
         assert_eq!(core::mem::offset_of!(FeedCommitRecord, commit_magic), 60);
         assert_eq!(FeedCommitRecord::decode_le(&record.encode_le()), Ok(record));
         clean.commit(record).unwrap();
-        assert_eq!((clean.expected_item(), clean.expected_block()), (0, 1));
+        assert_eq!(clean.expected_item(), 1);
+        assert!(!clean.staging_complete());
     }
 
     #[test]
@@ -1062,14 +1516,16 @@ mod tests {
             request(FeedMode::EmbeddingQ8Row, None),
         )
         .unwrap();
-        validator
-            .stage(validator.expected_stage(0).unwrap())
-            .unwrap();
+        while !validator.staging_complete() {
+            validator
+                .stage(validator.expected_stage().unwrap())
+                .unwrap();
+        }
         let mut record = validator.expected_commit().unwrap();
         record.shape_tag ^= 1;
         assert_eq!(validator.commit(record), Err(FeedError::InvalidCommit));
         assert!(validator.is_poisoned());
-        assert_eq!(validator.expected_stage(0), Err(FeedError::Poisoned));
+        assert_eq!(validator.expected_stage(), Err(FeedError::Poisoned));
     }
 
     #[test]
@@ -1079,11 +1535,11 @@ mod tests {
             request(FeedMode::AttentionFirstTokenCore, Some(2)),
         )
         .unwrap();
-        assert_eq!(validator.expected_stage(0), Err(FeedError::UnexpectedStage));
+        assert_eq!(validator.expected_stage(), Err(FeedError::UnexpectedStage));
         let record = validator.expected_commit().unwrap();
         assert_eq!(record.lane_mask, 0);
-        assert_eq!(record.block, FEED_NO_BLOCK);
-        assert_eq!(record.stage_slot, FEED_NO_STAGE_SLOT);
+        assert_eq!(record.stages_per_lane, 0);
+        assert_eq!(record.last_stage_slot, FEED_NO_STAGE_SLOT);
         assert_eq!(record.stage_generation, 0);
         validator.commit(record).unwrap();
         assert!(validator.is_complete());
@@ -1099,8 +1555,8 @@ mod tests {
         while !validator.is_complete() {
             stage_and_commit_one(&mut validator);
         }
-        assert_eq!(validator.committed_units(), 65_536 * 32);
-        assert_eq!(validator.expected_stage(0), Err(FeedError::Complete));
+        assert_eq!(validator.committed_units(), 65_536);
+        assert_eq!(validator.expected_stage(), Err(FeedError::Complete));
         assert_eq!(validator.expected_commit(), Err(FeedError::Complete));
     }
 }

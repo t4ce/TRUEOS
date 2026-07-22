@@ -4,6 +4,7 @@ module truega_lfm25_resident_vector_engine_tb;
     localparam [1:0] OP_TOKEN_EMBEDDING = 2'd0;
     localparam [1:0] OP_RMSNORM = 2'd1;
     localparam [1:0] OP_RESIDUAL_ADD = 2'd2;
+    localparam [1:0] OP_IMPORT_Q30 = 2'd3;
 
     reg clk = 1'b0;
     reg reset_n = 1'b0;
@@ -26,6 +27,10 @@ module truega_lfm25_resident_vector_engine_tb;
     reg [9:0] weight_index = 10'd0;
     reg weight_bf16 = 1'b0;
     reg [31:0] weight_bits = 32'd0;
+    reg import_valid = 1'b0;
+    wire import_ready;
+    reg [9:0] import_index = 10'd0;
+    reg signed [63:0] import_q30 = 64'sd0;
 
     wire result_valid;
     reg result_ready = 1'b0;
@@ -59,6 +64,25 @@ module truega_lfm25_resident_vector_engine_tb;
         end
     endfunction
 
+    function automatic signed [63:0] imported_value;
+        input integer requested_index;
+        begin
+            if (requested_index[0])
+                imported_value = -64'sd4000000000 - requested_index;
+            else
+                imported_value = 64'sd5000000000 + requested_index;
+        end
+    endfunction
+
+    function automatic [271:0] imported_inspect_value;
+        input integer requested_index;
+        reg signed [63:0] value;
+        begin
+            value = imported_value(requested_index);
+            imported_inspect_value = {{208{value[63]}}, value};
+        end
+    endfunction
+
     truega_lfm25_resident_vector_engine #(
         .Q30_SLOTS(2), .Q8_SLOTS(2)
     ) dut (
@@ -75,6 +99,8 @@ module truega_lfm25_resident_vector_engine_tb;
         .weight_valid_i(weight_valid), .weight_ready_o(weight_ready),
         .weight_index_i(weight_index),
         .weight_format_bf16_i(weight_bf16), .weight_bits_i(weight_bits),
+        .import_valid_i(import_valid), .import_ready_o(import_ready),
+        .import_index_i(import_index), .import_q30_i(import_q30),
         .result_valid_o(result_valid), .result_ready_i(result_ready),
         .result_error_o(result_error), .result_handle_o(result_handle),
         .inspect_valid_i(inspect_valid), .inspect_ready_o(inspect_ready),
@@ -135,6 +161,27 @@ module truega_lfm25_resident_vector_engine_tb;
                     @(negedge clk);
                 @(negedge clk);
                 weight_valid = 1'b0;
+            end
+        end
+    endtask
+
+    task automatic feed_import_elements;
+        input integer count;
+        integer import_element;
+        begin
+            for (import_element = 0; import_element < count;
+                 import_element = import_element + 1) begin
+                while (!import_ready)
+                    @(negedge clk);
+                import_index = import_element[9:0];
+                import_q30 = imported_value(import_element);
+                import_valid = 1'b1;
+                @(negedge clk);
+                import_valid = 1'b0;
+                // The internal handle is unpublished until the transaction's
+                // full-vector commit has completed.
+                if (result_handle !== 37'd0)
+                    failures = failures + 1;
             end
         end
     endtask
@@ -284,6 +331,61 @@ module truega_lfm25_resident_vector_engine_tb;
         inspect_value(make_handle(32'h51a7_0002, 1'b1, 4'd1),
                       10'd0, 1'b1, 272'd0);
 
+        // Import is a destination-only internal join. Stale destinations,
+        // out-of-range slots, and nonzero (aliasing) sources are rejected
+        // before the store transaction can invalidate anything.
+        start_command(OP_IMPORT_Q30, 37'd0, 37'd0,
+                      make_handle(32'h51a7_0001, 1'b0, 4'd1));
+        expect_result(1'b1, 37'd0);
+        start_command(OP_IMPORT_Q30, 37'd0, 37'd0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd15));
+        expect_result(1'b1, 37'd0);
+        start_command(OP_IMPORT_Q30,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd1), 37'd0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd1));
+        expect_result(1'b1, 37'd0);
+
+        // A complete ordered signed-i64 stream becomes readable atomically.
+        start_command(OP_IMPORT_Q30, 37'd0, 37'd0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd1));
+        feed_import_elements(1024);
+        expect_result(1'b0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd1));
+        inspect_value(make_handle(32'h51a7_0002, 1'b0, 4'd1),
+                      10'd0, 1'b0,
+                      imported_inspect_value(0));
+        inspect_value(make_handle(32'h51a7_0002, 1'b0, 4'd1),
+                      10'd511, 1'b0,
+                      imported_inspect_value(511));
+        inspect_value(make_handle(32'h51a7_0002, 1'b0, 4'd1),
+                      10'd1023, 1'b0,
+                      imported_inspect_value(1023));
+
+        // An out-of-order element is accepted as a protocol error but never
+        // written; begin already invalidated the old committed destination.
+        start_command(OP_IMPORT_Q30, 37'd0, 37'd0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd1));
+        while (!import_ready)
+            @(negedge clk);
+        import_index = 10'd1;
+        import_q30 = 64'sd99;
+        import_valid = 1'b1;
+        @(negedge clk);
+        import_valid = 1'b0;
+        expect_result(1'b1, 37'd0);
+        inspect_value(make_handle(32'h51a7_0002, 1'b0, 4'd1),
+                      10'd0, 1'b1, 272'd0);
+
+        // A mid-vector abort leaves the partial destination unpublished and
+        // unreadable even though payload writes have physically occurred.
+        start_command(OP_IMPORT_Q30, 37'd0, 37'd0,
+                      make_handle(32'h51a7_0002, 1'b0, 4'd0));
+        feed_import_elements(17);
+        pulse_abort();
+        expect_result(1'b1, 37'd0);
+        inspect_value(make_handle(32'h51a7_0002, 1'b0, 4'd0),
+                      10'd0, 1'b1, 272'd0);
+
         // Session-one handles are stale after TokenEmbedding begins session two.
         inspect_value(make_handle(32'h51a7_0001, 1'b0, 4'd0),
                       10'd0, 1'b1, 272'd0);
@@ -313,7 +415,7 @@ module truega_lfm25_resident_vector_engine_tb;
         expect_result(1'b1, 37'd0);
 
         if (failures == 0)
-            $display("PASS lfm25_resident_vector_engine sessions=2 ops=embedding+rmsnorm+residual exact_q8_dequant typed_epoch_handles stable_ready_valid transactional_partial_abort=unpublished no_payload_reset");
+            $display("PASS lfm25_resident_vector_engine sessions=2 ops=embedding+rmsnorm+residual+import_q30 exact_q8_dequant typed_epoch_handles stable_ready_valid transactional_full_import=1024 order_error=unpublished partial_abort=unpublished no_payload_reset");
         else begin
             $display("FAIL lfm25_resident_vector_engine failures=%0d", failures);
             $fatal(1);
