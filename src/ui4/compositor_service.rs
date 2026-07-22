@@ -13,14 +13,16 @@ use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, OutputId, WindowId, WindowPlacement, WindowSnapshot, acknowledge_window_frame,
     acquire_published_frame, frame_snapshot, published_rgba_view, release_published_frame,
-    retain_published_frame, visible_windows_for_output,
+    retain_published_frame, visible_windows_for_output_with_revision, window_composition_revision,
 };
 
-const COMPOSITION_PERIOD_MS: u64 = 16;
+const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
 const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_ACTIVE_WINDOWS;
 const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
+const PROFILE_INITIAL_REPORT_TURNS: u64 = 16;
+const PROFILE_REPORT_INTERVAL_TURNS: u64 = 1_024;
 static RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static COMPUTE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static STATIC_SINGLE_OVERLAP_WARNED: AtomicBool = AtomicBool::new(false);
@@ -45,9 +47,132 @@ struct Runtime {
     pending: Option<PendingFrame>,
     immediate_rescan: bool,
     retired_frames: u64,
+    observed_broker_revision: Option<u64>,
+    next_wake_deadline_ns: Option<u64>,
+    profile: CompositorCpuProfile,
     /// Exact producer buffers currently owned by overlay scanout. A lease is
     /// replaced only after the corresponding new SURFLIVE value is observed.
     live_direct: [Option<FrameReadLease>; 4],
+}
+
+#[derive(Default)]
+struct CompositorCpuProfile {
+    total_turns: u64,
+    reported_turns: u64,
+    window_turns: u64,
+    prepare_turns: u64,
+    no_change_turns: u64,
+    fast_unchanged_turns: u64,
+    prepared_frames: u64,
+    pending_entry_turns: u64,
+    failed_turns: u64,
+    guc_polls: u64,
+    surflive_polls: u64,
+    submit_steps: u64,
+    wake_samples: u64,
+    total_ns: u64,
+    max_turn_ns: u64,
+    wake_late_ns: u64,
+    max_wake_late_ns: u64,
+    close_ns: u64,
+    snapshot_ns: u64,
+    lease_ns: u64,
+    plan_ns: u64,
+    guc_poll_ns: u64,
+    surflive_poll_ns: u64,
+    submit_ns: u64,
+}
+
+impl CompositorCpuProfile {
+    fn record_wake(&mut self, started_ns: u64, deadline_ns: Option<u64>) {
+        let Some(deadline_ns) = deadline_ns else {
+            return;
+        };
+        let late_ns = started_ns.saturating_sub(deadline_ns);
+        self.wake_samples = self.wake_samples.saturating_add(1);
+        self.wake_late_ns = self.wake_late_ns.saturating_add(late_ns);
+        self.max_wake_late_ns = self.max_wake_late_ns.max(late_ns);
+    }
+
+    fn finish_turn(&mut self, elapsed_ns: u64, pending_at_entry: bool, failed: bool) {
+        self.total_turns = self.total_turns.saturating_add(1);
+        self.window_turns = self.window_turns.saturating_add(1);
+        self.total_ns = self.total_ns.saturating_add(elapsed_ns);
+        self.max_turn_ns = self.max_turn_ns.max(elapsed_ns);
+        self.pending_entry_turns = self
+            .pending_entry_turns
+            .saturating_add(u64::from(pending_at_entry));
+        self.failed_turns = self.failed_turns.saturating_add(u64::from(failed));
+    }
+
+    fn maybe_report(&mut self) {
+        let initial = self.reported_turns == 0 && self.total_turns >= PROFILE_INITIAL_REPORT_TURNS;
+        let periodic = self.reported_turns != 0
+            && self.total_turns.saturating_sub(self.reported_turns)
+                >= PROFILE_REPORT_INTERVAL_TURNS;
+        if !initial && !periodic {
+            return;
+        }
+
+        crate::log_info!(target: "ui4";
+            "ui4/compositor-profile turns={} samples={} prepare={} unchanged={} fast_unchanged={} prepared={} pending_entry={} failed={} sync_avg_us={} sync_max_us={} wake_late_avg_us={} wake_late_max_us={} phase_avg_us=close:{}/snapshot:{}/lease:{}/plan:{} drive_avg_us=submit:{}/guc_poll:{}/surflive_poll:{} drive_calls=submit:{}/guc_poll:{}/surflive_poll:{} idle_wake=broker-signal poll_model=one-shot-no-spin close_animation_ms={} pending_ms={}\n",
+            self.total_turns,
+            self.window_turns,
+            self.prepare_turns,
+            self.no_change_turns,
+            self.fast_unchanged_turns,
+            self.prepared_frames,
+            self.pending_entry_turns,
+            self.failed_turns,
+            average_us(self.total_ns, self.window_turns),
+            self.max_turn_ns / 1_000,
+            average_us(self.wake_late_ns, self.wake_samples),
+            self.max_wake_late_ns / 1_000,
+            average_us(self.close_ns, self.prepare_turns),
+            average_us(self.snapshot_ns, self.prepare_turns),
+            average_us(self.lease_ns, self.prepare_turns),
+            average_us(self.plan_ns, self.prepare_turns),
+            average_us(self.submit_ns, self.submit_steps),
+            average_us(self.guc_poll_ns, self.guc_polls),
+            average_us(self.surflive_poll_ns, self.surflive_polls),
+            self.submit_steps,
+            self.guc_polls,
+            self.surflive_polls,
+            CLOSE_TRANSITION_PERIOD_MS,
+            PENDING_POLL_PERIOD_MS,
+        );
+        self.reported_turns = self.total_turns;
+        self.window_turns = 0;
+        self.prepare_turns = 0;
+        self.no_change_turns = 0;
+        self.fast_unchanged_turns = 0;
+        self.prepared_frames = 0;
+        self.pending_entry_turns = 0;
+        self.failed_turns = 0;
+        self.guc_polls = 0;
+        self.surflive_polls = 0;
+        self.submit_steps = 0;
+        self.wake_samples = 0;
+        self.total_ns = 0;
+        self.max_turn_ns = 0;
+        self.wake_late_ns = 0;
+        self.max_wake_late_ns = 0;
+        self.close_ns = 0;
+        self.snapshot_ns = 0;
+        self.lease_ns = 0;
+        self.plan_ns = 0;
+        self.guc_poll_ns = 0;
+        self.surflive_poll_ns = 0;
+        self.submit_ns = 0;
+    }
+}
+
+const fn average_us(total_ns: u64, samples: u64) -> u64 {
+    if samples == 0 {
+        0
+    } else {
+        total_ns / samples / 1_000
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -98,6 +223,7 @@ struct PendingFrame {
     completed: Vec<crate::intel::Ui4AsyncComposition>,
     direct_leases: [Option<FrameReadLease>; 4],
     flip_submitted: bool,
+    broker_revision: u64,
     started_ns: u64,
 }
 
@@ -127,8 +253,9 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live composition_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=slot1-double-rgba8-direct-or-guc-compose linked_nv12_planes=off\n",
-        COMPOSITION_PERIOD_MS,
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0+slot1+slot2+slot3/on-demand compute=slots1+2+3-direct-import resident_scenes=gridpaper:slot2+draw3d:slot3-triple-direct-import per_frame_scene_guc_composition=off per_frame_display_flip=on slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked previews=Shell2/on-demand-trio video=slot1-double-rgba8-direct-or-guc-compose linked_nv12_planes=off\n",
+        CLOSE_TRANSITION_PERIOD_MS,
+        PENDING_POLL_PERIOD_MS,
     );
 
     let mut consecutive_failures = 0u32;
@@ -162,14 +289,23 @@ pub(crate) async fn ui4_compositor_service_task() {
 
         let immediate_rescan = runtime.immediate_rescan;
         runtime.immediate_rescan = false;
-        Timer::after(EmbassyDuration::from_millis(
-            if runtime.pending.is_some() || immediate_rescan {
-                PENDING_POLL_PERIOD_MS
-            } else {
-                COMPOSITION_PERIOD_MS
-            },
-        ))
-        .await;
+        let timed_wait_ms = if runtime.pending.is_some() || immediate_rescan {
+            Some(PENDING_POLL_PERIOD_MS)
+        } else if consecutive_failures != 0 || super::window_close_transitions_active() {
+            Some(CLOSE_TRANSITION_PERIOD_MS)
+        } else {
+            None
+        };
+        if let Some(sleep_ms) = timed_wait_ms {
+            runtime.next_wake_deadline_ns = Some(
+                crate::chronos::monotonic_nanos()
+                    .saturating_add(sleep_ms.saturating_mul(1_000_000)),
+            );
+            Timer::after(EmbassyDuration::from_millis(sleep_ms)).await;
+        } else {
+            runtime.next_wake_deadline_ns = None;
+            super::wait_for_window_composition_change().await;
+        }
     }
 }
 
@@ -196,11 +332,29 @@ fn initialize() -> Runtime {
         pending: None,
         immediate_rescan: false,
         retired_frames: 0,
+        observed_broker_revision: None,
+        next_wake_deadline_ns: None,
+        profile: CompositorCpuProfile::default(),
         live_direct: [None; 4],
     }
 }
 
 fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
+    let started_ns = crate::chronos::monotonic_nanos();
+    runtime
+        .profile
+        .record_wake(started_ns, runtime.next_wake_deadline_ns.take());
+    let pending_at_entry = runtime.pending.is_some();
+    let result = advance_async_composition_inner(runtime);
+    let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(started_ns);
+    runtime
+        .profile
+        .finish_turn(elapsed_ns, pending_at_entry, result.is_err());
+    runtime.profile.maybe_report();
+    result
+}
+
+fn advance_async_composition_inner(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
     if runtime.pending.is_none() {
         runtime.pending = prepare_async_frame(runtime)?;
     }
@@ -215,8 +369,7 @@ fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorE
         Ok(DriveResult::Complete) => {
             // A streaming producer may already have published while this
             // frame waited for GPU completion and SURFLIVE. Re-snapshot on
-            // the next executor turn instead of inserting another 16 ms
-            // composition interval after every successful retirement.
+            // the next executor turn before returning to broker-signal sleep.
             runtime.immediate_rescan = true;
             Ok(())
         }
@@ -229,12 +382,37 @@ fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorE
     }
 }
 
-fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4CompositorError> {
+fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui4CompositorError> {
+    runtime.profile.prepare_turns = runtime.profile.prepare_turns.saturating_add(1);
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
+    let phase_started_ns = crate::chronos::monotonic_nanos();
     super::advance_window_close_transitions();
-    let windows = visible_windows_for_output(output);
-    validate_window_snapshot(output, &windows)?;
+    runtime.profile.close_ns = runtime
+        .profile
+        .close_ns
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
 
+    // This epoch is both a safety gate for coalesced broker signals and the
+    // cheap path after a close-animation timer tick which changed no pixels.
+    // It avoids allocating a snapshot, acquiring every frame lease, rereading
+    // display topology, or constructing four plane plans.
+    let broker_revision = window_composition_revision();
+    if runtime.observed_broker_revision == Some(broker_revision) {
+        runtime.profile.no_change_turns = runtime.profile.no_change_turns.saturating_add(1);
+        runtime.profile.fast_unchanged_turns =
+            runtime.profile.fast_unchanged_turns.saturating_add(1);
+        return Ok(None);
+    }
+
+    let phase_started_ns = crate::chronos::monotonic_nanos();
+    let (broker_revision, windows) = visible_windows_for_output_with_revision(output);
+    validate_window_snapshot(output, &windows)?;
+    runtime.profile.snapshot_ns = runtime
+        .profile
+        .snapshot_ns
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+
+    let phase_started_ns = crate::chronos::monotonic_nanos();
     let mut leases = Vec::with_capacity(windows.len());
     for window in &windows {
         match acquire_published_frame(window.frame) {
@@ -257,32 +435,54 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
             return Err(error.into());
         }
     };
+    runtime.profile.lease_ns = runtime
+        .profile
+        .lease_ns
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+
+    let phase_started_ns = crate::chronos::monotonic_nanos();
+    // Resolve the display topology once for this broker snapshot. Calling the
+    // compatibility resolver independently for all four plane plans rereads
+    // every pipe's MMIO state four times on every unchanged compositor scan.
+    let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
     let mut plans = [
         build_plane_plan(
             &runtime.composition.primary,
             &windows,
             &views,
             CompositionTarget::Primary,
+            output_width,
+            output_height,
         ),
         build_plane_plan(
             &runtime.composition.alpha,
             &windows,
             &views,
             CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT),
+            output_width,
+            output_height,
         ),
         build_plane_plan(
             &runtime.composition.solara,
             &windows,
             &views,
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
+            output_width,
+            output_height,
         ),
         build_plane_plan(
             &runtime.composition.draw3d,
             &windows,
             &views,
             CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
+            output_width,
+            output_height,
         ),
     ];
+    runtime.profile.plan_ns = runtime
+        .profile
+        .plan_ns
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
     // During restore, a resize-capable direct producer replaces its complete
     // Frame ring after receiving the broker callback. Keep the old exact
     // scanout live during that short handoff. Maximize takes the other path:
@@ -294,9 +494,12 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
         }
     }
     if !plans.iter().any(|plan| plan.changed) {
+        runtime.profile.no_change_turns = runtime.profile.no_change_turns.saturating_add(1);
+        runtime.observed_broker_revision = Some(broker_revision);
         release_leases(&leases);
         return Ok(None);
     }
+    runtime.profile.prepared_frames = runtime.profile.prepared_frames.saturating_add(1);
 
     Ok(Some(PendingFrame {
         windows,
@@ -307,6 +510,7 @@ fn prepare_async_frame(runtime: &Runtime) -> Result<Option<PendingFrame>, Ui4Com
         completed: Vec::new(),
         direct_leases: [None; 4],
         flip_submitted: false,
+        broker_revision,
         started_ns: crate::chronos::monotonic_nanos(),
     }))
 }
@@ -341,6 +545,8 @@ fn build_plane_plan(
     all_windows: &[WindowSnapshot],
     views: &[FrameRgbaView],
     target: CompositionTarget,
+    output_width: u32,
+    output_height: u32,
 ) -> PlanePlan {
     let plane_slot = target_plane_slot(target);
     let mut plan = PlanePlan::empty(target);
@@ -354,7 +560,6 @@ fn build_plane_plan(
         return plan;
     }
 
-    let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
     let mut composition_changed = !state.initialized;
     for (local_slot, (global_slot, window)) in plane_windows.iter().copied().enumerate() {
         let placement = presentation_placement(window, views[global_slot]);
@@ -444,7 +649,14 @@ fn drive_async_frame(
     pending: &mut PendingFrame,
 ) -> Result<DriveResult, Ui4CompositorError> {
     if pending.flip_submitted {
-        return match crate::intel::poll_ui4_plane_surface_flip_batch() {
+        let phase_started_ns = crate::chronos::monotonic_nanos();
+        let poll = crate::intel::poll_ui4_plane_surface_flip_batch();
+        runtime.profile.surflive_polls = runtime.profile.surflive_polls.saturating_add(1);
+        runtime.profile.surflive_poll_ns = runtime
+            .profile
+            .surflive_poll_ns
+            .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+        return match poll {
             crate::intel::Ui4PlaneSurfaceFlipPoll::Pending => Ok(DriveResult::Pending),
             crate::intel::Ui4PlaneSurfaceFlipPoll::Complete => {
                 for composition in pending.completed.iter().copied() {
@@ -458,7 +670,14 @@ fn drive_async_frame(
     }
 
     if let Some(active) = pending.active {
-        match crate::intel::poll_ui4_composition(active) {
+        let phase_started_ns = crate::chronos::monotonic_nanos();
+        let poll = crate::intel::poll_ui4_composition(active);
+        runtime.profile.guc_polls = runtime.profile.guc_polls.saturating_add(1);
+        runtime.profile.guc_poll_ns = runtime
+            .profile
+            .guc_poll_ns
+            .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+        match poll {
             crate::intel::Ui4AsyncCompositionPoll::Pending => return Ok(DriveResult::Pending),
             crate::intel::Ui4AsyncCompositionPoll::Ready => {
                 pending.completed.push(active);
@@ -470,27 +689,46 @@ fn drive_async_frame(
         }
     }
 
+    let phase_started_ns = crate::chronos::monotonic_nanos();
     while pending.next_plane < pending.plans.len() {
         let plan = pending.plans[pending.next_plane];
         pending.next_plane += 1;
         if !plan.changed {
             continue;
         }
-        pending.active = Some(queue_async_plane(pending, plan)?);
+        let queued = queue_async_plane(pending, plan);
+        runtime.profile.submit_steps = runtime.profile.submit_steps.saturating_add(1);
+        runtime.profile.submit_ns = runtime
+            .profile
+            .submit_ns
+            .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+        pending.active = Some(queued?);
         return Ok(DriveResult::Pending);
     }
 
-    if pending.completed.is_empty() || !crate::intel::begin_ui4_plane_surface_flip_batch() {
-        return Err(Ui4CompositorError::PresentFailed);
-    }
-    for composition in pending.completed.iter().copied() {
-        if !crate::intel::stage_ui4_composition_flip(composition) {
-            return Err(Ui4CompositorError::PresentFailed);
-        }
-    }
-    if !crate::intel::submit_ui4_plane_surface_flip_batch() {
-        return Err(Ui4CompositorError::PresentFailed);
-    }
+    let submit_result =
+        if pending.completed.is_empty() || !crate::intel::begin_ui4_plane_surface_flip_batch() {
+            Err(Ui4CompositorError::PresentFailed)
+        } else {
+            let mut staged = true;
+            for composition in pending.completed.iter().copied() {
+                staged &= crate::intel::stage_ui4_composition_flip(composition);
+                if !staged {
+                    break;
+                }
+            }
+            if staged && crate::intel::submit_ui4_plane_surface_flip_batch() {
+                Ok(())
+            } else {
+                Err(Ui4CompositorError::PresentFailed)
+            }
+        };
+    runtime.profile.submit_steps = runtime.profile.submit_steps.saturating_add(1);
+    runtime.profile.submit_ns = runtime
+        .profile
+        .submit_ns
+        .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
+    submit_result?;
     pending.flip_submitted = true;
     Ok(DriveResult::Pending)
 }
@@ -883,6 +1121,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
     // Compositor-rewire has no screenshot consumer. Keeping capture entirely
     // out of the only supported present path also makes the no-CPU-pixel-read
     // contract structural rather than dependent on an empty request queue.
+    runtime.observed_broker_revision = Some(pending.broker_revision);
     commit_direct_leases(runtime, pending);
     release_leases(&pending.leases);
     let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;

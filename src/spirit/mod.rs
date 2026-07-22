@@ -32,6 +32,7 @@ const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_LAB256_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_LAB256_PERIODIC_TRACE_FRAMES: u64 = 60;
 const SPIRIT_LAB256_TARGET_HZ: u64 = 60;
+const SPIRIT_PRESENT_FPS_WINDOW_MS: u64 = 500;
 const SPIRIT_CPU_PREFLIGHT_HOLD_MS: u64 = 1_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -420,7 +421,10 @@ fn release_gpgpu(
     Ok(())
 }
 
-fn submit_lab256_frame(id: SpiritFenceId) -> Result<GpuInflight, SpiritSubmitError> {
+fn submit_lab256_frame(
+    id: SpiritFenceId,
+    present_fps: u32,
+) -> Result<GpuInflight, SpiritSubmitError> {
     let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::GPU)?;
     let target = match gpgpu_target(lease) {
         Ok(target) => target,
@@ -429,7 +433,8 @@ fn submit_lab256_frame(id: SpiritFenceId) -> Result<GpuInflight, SpiritSubmitErr
             return Err(error);
         }
     };
-    let Some(submission) = crate::intel::gpgpu::submit_lab256_spirit_frame(target) else {
+    let Some(submission) = crate::intel::gpgpu::submit_lab256_spirit_frame(target, present_fps)
+    else {
         cancel_pending(lease);
         return Err(SpiritSubmitError::HardwareNotReady);
     };
@@ -482,6 +487,51 @@ struct GpuInflight {
     lease: SpiritFrameLease,
     submission: crate::intel::gpgpu::Lab256SpiritSubmission,
     polls: u32,
+}
+
+/// Low-cost display-rate feedback for the shader status dot. Only completed
+/// cursor-plane SURFLIVE transitions count; GuC admission and producer-marker
+/// retirement do not. Fixed half-second windows are intentional here: this is
+/// a presentation health hint, not frame-time instrumentation.
+struct SpiritPresentationRate {
+    window_started: Option<Instant>,
+    visible_frames: u32,
+    estimate_fps: u32,
+}
+
+impl SpiritPresentationRate {
+    const fn new() -> Self {
+        Self {
+            window_started: None,
+            visible_frames: 0,
+            estimate_fps: SPIRIT_LAB256_TARGET_HZ as u32,
+        }
+    }
+
+    fn begin(&mut self, now: Instant) {
+        self.window_started = Some(now);
+        self.visible_frames = 0;
+    }
+
+    const fn estimate_fps(&self) -> u32 {
+        self.estimate_fps
+    }
+
+    fn observe_surflive(&mut self, now: Instant) {
+        let Some(started) = self.window_started else {
+            self.begin(now);
+            return;
+        };
+        self.visible_frames = self.visible_frames.saturating_add(1);
+        let elapsed_ms = now.saturating_duration_since(started).as_millis();
+        if elapsed_ms < SPIRIT_PRESENT_FPS_WINDOW_MS {
+            return;
+        }
+        let rounded_fps = (u64::from(self.visible_frames) * 1_000 + elapsed_ms / 2) / elapsed_ms;
+        self.estimate_fps = u32::try_from(rounded_fps).unwrap_or(u32::MAX);
+        self.window_started = Some(now);
+        self.visible_frames = 0;
+    }
 }
 
 /// The macro pool is intentionally one today. Fence/pipe capacity remains
@@ -570,6 +620,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut stream_queued_frames = 0u64;
     let mut stream_next_deadline = Instant::now();
     let mut stream_cadence_phase = 0u64;
+    let mut presentation_rate = SpiritPresentationRate::new();
     let mut stream_aborted = false;
     let mut preflight_hold_until: Option<Instant> = None;
     let mut arm_deferred_polls = 0u32;
@@ -657,27 +708,34 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 live,
                                 SPIRIT_CPU_PREFLIGHT_HOLD_MS,
                             );
-                        } else if spirit_should_trace_frame(stream_queued_frames) {
-                            crate::log_info!(
-                                target: "gfx";
-                                "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
-                                stream_queued_frames,
-                                fence_index,
-                                active.frame.lease.fence.sequence,
-                                pipe_name(id),
-                                active.frame.lease.surface.surface,
-                                ctl,
-                                base,
-                                live,
-                            );
-                            if stream_queued_frames == SPIRIT_LAB256_INITIAL_TRACE_FRAMES {
-                                crate::log!(
-                                    "trueos-spirit: lab256 initial window complete frames={} target_hz={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
+                        } else {
+                            presentation_rate.observe_surflive(Instant::now());
+                            if spirit_should_trace_frame(stream_queued_frames) {
+                                crate::log_info!(
+                                    target: "gfx";
+                                    "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} present_fps={} sample_window_ms={} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
                                     stream_queued_frames,
-                                    SPIRIT_LAB256_TARGET_HZ,
+                                    fence_index,
+                                    active.frame.lease.fence.sequence,
                                     pipe_name(id),
                                     active.frame.lease.surface.surface,
+                                    ctl,
+                                    base,
+                                    live,
+                                    presentation_rate.estimate_fps(),
+                                    SPIRIT_PRESENT_FPS_WINDOW_MS,
                                 );
+                                if stream_queued_frames == SPIRIT_LAB256_INITIAL_TRACE_FRAMES {
+                                    crate::log!(
+                                        "trueos-spirit: lab256 initial window complete frames={} target_hz={} present_fps={} sample_window_ms={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
+                                        stream_queued_frames,
+                                        SPIRIT_LAB256_TARGET_HZ,
+                                        presentation_rate.estimate_fps(),
+                                        SPIRIT_PRESENT_FPS_WINDOW_MS,
+                                        pipe_name(id),
+                                        active.frame.lease.surface.surface,
+                                    );
+                                }
                             }
                         }
                     } else {
@@ -764,14 +822,16 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     continue;
                 }
                 preflight_hold_until = None;
-                stream_next_deadline = Instant::now();
+                let now = Instant::now();
+                stream_next_deadline = now;
+                presentation_rate.begin(now);
             }
             if !stream_aborted {
                 if Instant::now() < stream_next_deadline {
                     Timer::at(stream_next_deadline).await;
                     continue;
                 }
-                match submit_lab256_frame(id) {
+                match submit_lab256_frame(id, presentation_rate.estimate_fps()) {
                     Ok(producing) => {
                         let period = spirit_lab256_frame_period(&mut stream_cadence_phase);
                         let scheduled = stream_next_deadline + period;
@@ -785,13 +845,15 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
-                                "trueos-spirit: lab256 stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous\n",
+                                "trueos-spirit: lab256 stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous\n",
                                 stream_queued_frames,
                                 producing.submission.frame(),
                                 producing.submission.tag(),
                                 fence_index,
                                 producing.lease.fence.sequence,
                                 SPIRIT_LAB256_TARGET_HZ,
+                                presentation_rate.estimate_fps(),
+                                SPIRIT_PRESENT_FPS_WINDOW_MS,
                             );
                         }
                         gpu_inflight = Some(producing);

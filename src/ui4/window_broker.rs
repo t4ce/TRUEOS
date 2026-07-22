@@ -5,6 +5,7 @@
 //! from its trusted execution context rather than accepting it from a client.
 
 use alloc::vec::Vec;
+use embassy_sync::signal::Signal;
 use spin::Mutex;
 
 use super::{DamageRect, DamageRegion, FrameHandle, OutputId};
@@ -343,6 +344,9 @@ struct SessionRecord {
 struct WindowBroker {
     windows: Vec<WindowRecord>,
     sessions: Vec<SessionRecord>,
+    /// Monotonic epoch for state which can change the compositor's plane plan.
+    /// Damage acknowledgement deliberately does not advance this value.
+    composition_revision: u64,
 }
 
 impl WindowBroker {
@@ -350,13 +354,20 @@ impl WindowBroker {
         Self {
             windows: Vec::new(),
             sessions: Vec::new(),
+            composition_revision: 0,
         }
+    }
+
+    fn mark_composition_changed(&mut self) {
+        self.composition_revision = next_serial(self.composition_revision);
+        WINDOW_COMPOSITION_CHANGED.signal(());
     }
 
     fn begin_session(
         &mut self,
         owner: WindowOwner,
     ) -> (Result<WindowSessionId, WindowBrokerError>, Vec<WindowTransitionRetirement>) {
+        self.mark_composition_changed();
         let mut retirements = Vec::new();
         for session in &mut self.sessions {
             if session.active && session.owner == owner {
@@ -467,14 +478,18 @@ impl WindowBroker {
         {
             let generation = next_generation(window.generation);
             *window = WindowRecord::new(generation, request);
-            return Ok(WindowId(pack_handle(slot, generation)?));
+            let id = WindowId(pack_handle(slot, generation)?);
+            self.mark_composition_changed();
+            return Ok(id);
         }
         if self.windows.len() >= MAX_WINDOWS {
             return Err(WindowBrokerError::Capacity);
         }
         let slot = self.windows.len();
         self.windows.push(WindowRecord::new(1, request));
-        Ok(WindowId(pack_handle(slot, 1)?))
+        let id = WindowId(pack_handle(slot, 1)?);
+        self.mark_composition_changed();
+        Ok(id)
     }
 
     fn checked_window_mut(
@@ -598,6 +613,9 @@ impl WindowBroker {
         }
         final_frames
             .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
+        if closed != 0 {
+            self.mark_composition_changed();
+        }
         Ok(WindowSessionFinish {
             closed,
             animated,
@@ -611,6 +629,7 @@ impl WindowBroker {
 
     fn advance_close_transitions(&mut self, now_ms: u64) -> Vec<WindowTransitionRetirement> {
         let mut retirements = Vec::new();
+        let mut composition_changed = false;
         for window in &mut self.windows {
             let Some(transition) = window.close_transition else {
                 continue;
@@ -622,6 +641,7 @@ impl WindowBroker {
                 window.state = WindowState::Closed;
                 window.damage = None;
                 window.revision = next_serial(window.revision);
+                composition_changed = true;
                 retirements.push(WindowTransitionRetirement {
                     lease: transition.lease,
                     frame: window.frame,
@@ -641,7 +661,11 @@ impl WindowBroker {
                 window.placement = placement;
                 window.damage = Some(DamageRegion::FULL);
                 window.revision = next_serial(window.revision);
+                composition_changed = true;
             }
+        }
+        if composition_changed {
+            self.mark_composition_changed();
         }
         retirements
     }
@@ -721,6 +745,7 @@ impl WindowRecord {
 
 static WINDOW_BROKER: Mutex<WindowBroker> = Mutex::new(WindowBroker::new());
 static TRANSITION_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
+static WINDOW_COMPOSITION_CHANGED: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 pub(crate) fn begin_window_session(
     owner: WindowOwner,
@@ -867,6 +892,7 @@ pub(crate) fn replace_window_frame(
     window.publish_serial = 0;
     window.damage = None;
     window.revision = next_serial(window.revision);
+    broker.mark_composition_changed();
     Ok(())
 }
 
@@ -883,9 +909,13 @@ pub(crate) fn set_window_placement(
     let previous = window.placement;
     let notify_resize = window.interaction.receives_input
         && (previous.width != placement.width || previous.height != placement.height);
-    if window.placement != placement {
+    let changed = window.placement != placement;
+    if changed {
         window.placement = placement;
         window.revision = next_serial(window.revision);
+    }
+    if changed {
+        broker.mark_composition_changed();
     }
     drop(broker);
     if notify_resize {
@@ -924,6 +954,7 @@ pub(crate) fn move_window(
     if window.placement != placement {
         window.placement = placement;
         window.revision = next_serial(window.revision);
+        broker.mark_composition_changed();
     }
     Ok(())
 }
@@ -986,13 +1017,17 @@ pub(crate) fn toggle_window_maximized(
             true,
         )
     };
-    if previous != placement {
+    let changed = previous != placement;
+    if changed {
         window.placement = placement;
         window.revision = next_serial(window.revision);
     }
     let notify_resize = window.interaction.receives_input
         && window.interaction.resize_on_maximize
         && (previous.width != placement.width || previous.height != placement.height);
+    if changed {
+        broker.mark_composition_changed();
+    }
     drop(broker);
     if notify_resize {
         super::input_broker::enqueue_window_resize(
@@ -1026,7 +1061,9 @@ pub(crate) fn publish_window_frame(
     window.revision = next_serial(window.revision);
     let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
     pending.add(damage);
-    Ok(window.publish_serial)
+    let publish_serial = window.publish_serial;
+    broker.mark_composition_changed();
+    Ok(publish_serial)
 }
 
 /// Publish a coherent set of already-complete producer frames as one broker
@@ -1075,6 +1112,9 @@ pub(crate) fn publish_window_frames(
         let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
         pending.add(damage);
     }
+    if !publications.is_empty() {
+        broker.mark_composition_changed();
+    }
     Ok(())
 }
 
@@ -1084,7 +1124,34 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
     window.state = WindowState::Closed;
     window.damage = None;
     window.revision = next_serial(window.revision);
+    broker.mark_composition_changed();
     Ok(())
+}
+
+/// Cheap change detector for the compositor's idle path. The subsequent
+/// snapshot API returns its epoch under the same broker lock, closing the race
+/// between this optimistic check and a producer publication.
+pub(crate) fn window_composition_revision() -> u64 {
+    WINDOW_BROKER.lock().composition_revision
+}
+
+pub(crate) fn window_close_transitions_active() -> bool {
+    WINDOW_BROKER
+        .lock()
+        .windows
+        .iter()
+        .any(|window| window.close_transition.is_some())
+}
+
+pub(crate) async fn wait_for_window_composition_change() {
+    WINDOW_COMPOSITION_CHANGED.wait().await;
+}
+
+pub(crate) fn visible_windows_for_output_with_revision(
+    output: OutputId,
+) -> (u64, Vec<WindowSnapshot>) {
+    let broker = WINDOW_BROKER.lock();
+    (broker.composition_revision, broker.snapshots(output))
 }
 
 pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {

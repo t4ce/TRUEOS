@@ -234,6 +234,9 @@ architecture rtl of top is
 	signal function_output_bytes : std_logic_vector(15 downto 0);
 	signal function_next_led : std_logic_vector(4 downto 0);
 	signal function_valid : std_logic;
+	signal function_required_input_bytes_q : std_logic_vector(15 downto 0) := (others => '0');
+	signal function_output_bytes_q : std_logic_vector(15 downto 0) := (others => '0');
+	signal function_valid_q : std_logic := '0';
 	signal function_busy : std_logic;
 	signal function_done : std_logic;
 	signal function_error : std_logic;
@@ -678,6 +681,9 @@ begin
 				call_active <= '0';
 					call_active_function <= (others => '0');
 					call_active_output_bytes <= (others => '0');
+					function_required_input_bytes_q <= (others => '0');
+					function_output_bytes_q <= (others => '0');
+					function_valid_q <= '0';
 					function_start <= '0';
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
@@ -744,6 +750,13 @@ begin
 					dbg_word30_last_payload <= (others => '0');
 					dbg_rx_error_count <= (others => '0');
 				else
+					-- Slot metadata is registered before package validation. The function
+					-- selector is stable for many clocks between its BAR write and the
+					-- doorbell, so this removes a long selector-to-error path without
+					-- changing the accepted call or adding another protocol phase.
+					function_required_input_bytes_q <= function_required_input_bytes;
+					function_output_bytes_q <= function_output_bytes;
+					function_valid_q <= function_valid;
 					function_start <= '0';
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
@@ -776,19 +789,19 @@ begin
 							call_state <= WORK_STATE_FAILED;
 							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
-						elsif function_valid = '0' then
+					elsif function_valid_q = '0' then
 							call_error <= CALL_ERROR_BAD_FUNCTION;
 							call_state <= WORK_STATE_FAILED;
 							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
-						elsif unsigned(call_input_len)
-							/= resize(unsigned(function_required_input_bytes), 32) then
+					elsif unsigned(call_input_len)
+						/= resize(unsigned(function_required_input_bytes_q), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
 							call_irq_retire <= '1';
 							call_retire_count <= call_retire_count + 1;
-						elsif unsigned(call_output_cap)
-							< resize(unsigned(function_output_bytes), 32) then
+					elsif unsigned(call_output_cap)
+						< resize(unsigned(function_output_bytes_q), 32) then
 							call_error <= CALL_ERROR_BAD_LENGTH;
 							call_state <= WORK_STATE_FAILED;
 							call_irq_retire <= '1';
@@ -802,7 +815,7 @@ begin
 							function_start <= '1';
 							call_active <= '1';
 							call_active_function <= call_abi_function(31 downto 16);
-							call_active_output_bytes <= function_output_bytes;
+						call_active_output_bytes <= function_output_bytes_q;
 						end if;
 						call_pending <= '0';
 					elsif (call_active = '1') and (function_done = '1') then
@@ -863,9 +876,7 @@ begin
 									if (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
 										and (addr_index < BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD) then
 										call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD) <= payload_dw;
-									elsif addr_index >= BAR0_CALL_BASE_DW + CALL_OUTPUT_WORD then
-										call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD) <= payload_dw;
-									else
+									elsif addr_index < BAR0_CALL_BASE_DW + CALL_INPUT_WORD then
 										case addr_index - BAR0_CALL_BASE_DW is
 										when CALL_MAGIC_WORD => call_magic <= payload_dw;
 										when CALL_ABI_FUNCTION_WORD => call_abi_function <= payload_dw;

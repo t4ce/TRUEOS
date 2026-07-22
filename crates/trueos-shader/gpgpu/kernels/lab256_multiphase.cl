@@ -5,7 +5,7 @@
 //
 //   1. lab256_step       packed Gray-Scott state A -> B
 //   2. lab256_reduce     B -> compact per-lane telemetry report
-//   3. lab256_composite  B + report + CPU control/history -> RGBA8
+//   3. lab256_composite  B + report + CPU control -> RGBA8
 //
 // The fixed extent makes the bounds, memory cost, and maximum shader work
 // auditable. The host owns all buffers, validates the control page, and places
@@ -15,14 +15,13 @@
 #define LAB256_PIXELS (LAB256_SIZE * LAB256_SIZE)
 
 #define LAB256_CONTROL_MAGIC 0x4C414232u // "LAB2"
-#define LAB256_CONTROL_VERSION 1u
+#define LAB256_CONTROL_VERSION 2u
 #define LAB256_REPORT_MAGIC 0x4C325250u // "L2RP"
 
 #define LAB256_FLAG_WRAP        (1u << 0)
 #define LAB256_FLAG_INJECT      (1u << 1)
 #define LAB256_FLAG_RESET       (1u << 2)
 #define LAB256_FLAG_MANDELBROT  (1u << 3)
-#define LAB256_FLAG_CHART       (1u << 4)
 #define LAB256_FLAG_FLOW_WARP   (1u << 5)
 
 // Control page, in dwords. Floats are stored as IEEE-754 bit patterns.
@@ -42,19 +41,18 @@
 #define LAB256_CTRL_MANDEL_SCALE    13u
 #define LAB256_CTRL_MANDEL_ITERS    14u
 #define LAB256_CTRL_PALETTE_SEED    15u
-#define LAB256_CTRL_HISTORY_HEAD    16u
+#define LAB256_CTRL_RESERVED_16     16u
 #define LAB256_CTRL_BACKGROUND_ALPHA 17u // f32 [0, 1]
-#define LAB256_CTRL_HISTORY_BASE    32u // 256 unsigned Q0.16 samples
-#define LAB256_CONTROL_DWORDS      288u
+#define LAB256_CTRL_PRESENT_FPS     18u // half-second CUR_SURFLIVE estimate
+#define LAB256_CONTROL_DWORDS       19u
 
-// Report layout: 16 header words followed by one 24-dword stripe per SIMD
+// Report layout: 16 header words followed by one 8-dword stripe per SIMD
 // lane. Each lane scans 4096 pixels, avoiding contended global atomics.
 #define LAB256_REPORT_HEADER_DWORDS 16u
 #define LAB256_REPORT_LANES         16u
-#define LAB256_REPORT_STRIDE        24u
+#define LAB256_REPORT_STRIDE         8u
 #define LAB256_REPORT_DWORDS \
     (LAB256_REPORT_HEADER_DWORDS + LAB256_REPORT_LANES * LAB256_REPORT_STRIDE)
-#define LAB256_REPORT_HIST_BASE      7u
 
 static inline float lab256_finite_or(float value, float fallback)
 {
@@ -249,20 +247,7 @@ __kernel void lab256_reduce(
     report[base + 4u] = weighted_y;
     report[base + 5u] = active;
     report[base + 6u] = checksum;
-    // A private uint[16] histogram makes this IGC build request a stateless
-    // private-scratch base. The current direct-RCS lane deliberately has no
-    // such implicit allocation. Fixed 256x256 work makes repeated scans a
-    // clean trade: 16 lanes perform 16 bounded 4096-byte classification
-    // passes and the host contract remains five explicit host-owned buffers.
-    for (uint bin = 0u; bin < 16u; bin++) {
-        uint count = 0u;
-        for (uint index = lane; index < LAB256_PIXELS; index += LAB256_REPORT_LANES) {
-            uint value = state[index] >> 24;
-            count += (value >> 4) == bin;
-        }
-        report[base + LAB256_REPORT_HIST_BASE + bin] = count;
-    }
-    report[base + 23u] = 0xD06E0000u | lane;
+    report[base + 7u] = 0xD06E0000u | lane;
 }
 
 static inline float lab256_clamp01(float value)
@@ -288,16 +273,6 @@ static inline float3 lab256_palette(float value, float seed)
     const float tau = 6.28318530717958647692f;
     float3 phase = (float3)(0.00f, 0.33f, 0.67f) + seed;
     return 0.52f + 0.48f * native_cos(tau * (value + phase));
-}
-
-static inline uint lab256_histogram_count(__global const uint *report, uint bin)
-{
-    uint count = 0u;
-    for (uint lane = 0u; lane < LAB256_REPORT_LANES; lane++) {
-        uint base = LAB256_REPORT_HEADER_DWORDS + lane * LAB256_REPORT_STRIDE;
-        count += report[base + LAB256_REPORT_HIST_BASE + bin];
-    }
-    return count;
 }
 
 static inline float lab256_mean_v(__global const uint *report)
@@ -407,40 +382,6 @@ __kernel void lab256_composite(
             + fractal_presence * 0.72f);
     float output_alpha = mix(background_alpha, 1.0f, content_alpha);
 
-    if ((flags & LAB256_FLAG_CHART) != 0u && y >= 192u) {
-        output_alpha = max(output_alpha, 0.82f);
-        float3 panel = (float3)(0.018f, 0.026f, 0.055f);
-        color = mix(color, panel, 0.82f);
-        if ((x & 31u) == 0u || ((y - 192u) & 15u) == 0u) {
-            color = mix(color, (float3)(0.12f, 0.24f, 0.32f), 0.62f);
-        }
-
-        if (report[0] == LAB256_REPORT_MAGIC) {
-            uint bin = x >> 4;
-            uint count = lab256_histogram_count(report, bin);
-            uint bar_height = min(52u, (count * 52u + 32767u) / 65536u);
-            if (y + bar_height >= 250u) {
-                float3 bar = lab256_palette((float)bin * (1.0f / 15.0f), palette_seed);
-                color = mix(color, bar, 0.64f);
-                output_alpha = max(output_alpha, 0.90f);
-            }
-        }
-
-        uint history_head = control[LAB256_CTRL_HISTORY_HEAD] & 255u;
-        uint history_index = (history_head + x) & 255u;
-        float sample = (float)(control[LAB256_CTRL_HISTORY_BASE + history_index] & 0xFFFFu)
-            * (1.0f / 65535.0f);
-        float curve_y = 247.0f - sample * 48.0f;
-        float curve_distance = fabs(((float)y + 0.5f) - curve_y);
-        float glow = lab256_clamp01(1.0f - curve_distance / 5.0f);
-        color = mix(color, (float3)(0.05f, 0.78f, 1.0f), glow * 0.48f);
-        output_alpha = max(output_alpha, 0.82f + glow * 0.18f);
-        if (curve_distance < 1.25f) {
-            color = (float3)(0.82f, 0.98f, 1.0f);
-            output_alpha = 1.0f;
-        }
-    }
-
     if ((flags & LAB256_FLAG_INJECT) != 0u) {
         uint packed_xy = control[LAB256_CTRL_POINTER_XY];
         int pointer_x = (int)(packed_xy & 0xFFFFu);
@@ -453,19 +394,19 @@ __kernel void lab256_composite(
         }
     }
 
-    // Three pixels-as-LEDs make pass liveness visible without CPU text.
-    if (y >= 7u && y < 13u && x >= 7u && x < 37u) {
-        uint led = (x - 7u) / 10u;
-        uint local_x = (x - 7u) % 10u;
-        if (led < 3u && local_x < 6u) {
-            float3 led_color = led == 0u
-                ? (float3)(0.18f, 0.95f, 0.48f)
-                : led == 1u
-                    ? (float3)(0.18f, 0.72f, 1.0f)
-                    : (float3)(0.95f, 0.34f, 0.78f);
-            color = led_color;
-            output_alpha = 1.0f;
-        }
+    // One fully opaque status dot reports Spirit's half-second average of
+    // cursor-plane CUR_SURFLIVE completions. The host seeds it at the 60 Hz
+    // target until the first complete sampling window is available.
+    int fps_dot_x = (int)x - 10;
+    int fps_dot_y = (int)y - 10;
+    if (fps_dot_x * fps_dot_x + fps_dot_y * fps_dot_y <= 9) {
+        uint present_fps = control[LAB256_CTRL_PRESENT_FPS];
+        color = present_fps > 50u
+            ? (float3)(0.12f, 0.95f, 0.30f)
+            : present_fps >= 30u
+                ? (float3)(1.00f, 0.88f, 0.08f)
+                : (float3)(1.00f, 0.40f, 0.05f);
+        output_alpha = 1.0f;
     }
 
     uint dst_pitch_pixels = dst_pitch_bytes >> 2;

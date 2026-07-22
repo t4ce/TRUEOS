@@ -141,6 +141,10 @@ module truega_q8_0_cached_pair_slot #(
                 // slot boundary, this prevents BAR input fanout from reaching the
                 // block-RAM address/write-enable path in one 100 MHz cycle.
                 STATE_DECODE: begin
+                        // Select the registered index independently of validation;
+                        // invalid operations never consume the RAM output. This
+                        // keeps cache-valid reduction logic off the BRAM address CE.
+                        cache_read_index <= active_block_index;
                         if (active_cache_load) begin
                             busy_o <= 1'b0;
                             done_o <= 1'b1;
@@ -159,7 +163,6 @@ module truega_q8_0_cached_pair_slot #(
                                 error_o <= 1'b1;
                                 state <= STATE_IDLE;
                             end else begin
-                                cache_read_index <= active_block_index;
                                 state <= STATE_PAIR_READ0;
                             end
                         end else if (!active_control_valid) begin

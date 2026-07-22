@@ -8,8 +8,8 @@ pub const ADD_U32: FunctionId = FunctionId::SLOT_1;
 pub const LFM25_FFN_STEP: FunctionId = FunctionId::SLOT_2;
 pub const HEARTBEAT_REPLY: u32 = 0x54534154; // "TGAT"
 pub const FIRMWARE_RTL_SHA256: [u8; 32] = [
-    0x2f, 0x39, 0x01, 0xae, 0x1c, 0xa5, 0x59, 0x01, 0x69, 0x2e, 0xdb, 0xee, 0x61, 0x64, 0x6e, 0xa4,
-    0xf2, 0xfd, 0xc7, 0x6d, 0x12, 0x7d, 0x52, 0x01, 0xca, 0x74, 0xfa, 0xf0, 0x16, 0xc1, 0x23, 0x21,
+    0xa7, 0x3c, 0x73, 0x8f, 0xd0, 0xb0, 0x72, 0x41, 0x7f, 0xa6, 0x90, 0x23, 0x07, 0xa9, 0x18, 0xcf,
+    0x02, 0x66, 0x04, 0x8c, 0x1c, 0xb5, 0xca, 0x2e, 0xfa, 0x77, 0xc0, 0xfb, 0xea, 0x10, 0xd2, 0xc2,
 ];
 
 pub const FUNCTIONS: [FunctionDescriptor; 3] = [
@@ -32,7 +32,7 @@ pub const FUNCTIONS: [FunctionDescriptor; 3] = [
         input_bytes: 72,
         output_bytes: 20,
         flags: 0,
-        symbol_hash: 0x61ba3158bf717a14,
+        symbol_hash: 0x308beada59401db0,
     },
 ];
 
@@ -120,6 +120,23 @@ pub mod lfm25_ffn_step {
         weight: &[u8; Q8_0_BLOCK_BYTES],
     ) -> [u8; INPUT_BYTES] {
         encode_projection(first, last, false, block_index, activation, weight)
+    }
+
+    pub fn encode_activation_cache(wide: bool, block_index: u8, activation: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {
+        let mut bytes = [0; INPUT_BYTES];
+        let control = (u32::from(wide) << 2) | (1 << 4) | (u32::from(block_index) << 8);
+        bytes[..4].copy_from_slice(&control.to_le_bytes());
+        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);
+        bytes
+    }
+
+    pub fn encode_cached_pair(first: bool, last: bool, wide: bool, block_index: u8, weight0: &[u8; Q8_0_BLOCK_BYTES], weight1: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {
+        let mut bytes = [0; INPUT_BYTES];
+        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(wide) << 2) | (1 << 5) | (u32::from(block_index) << 8);
+        bytes[..4].copy_from_slice(&control.to_le_bytes());
+        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(weight0);
+        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight1);
+        bytes
     }
 
     pub fn encode_single(activation: &[u8; Q8_0_BLOCK_BYTES], weight: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {

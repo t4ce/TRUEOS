@@ -923,6 +923,10 @@ module truega_q8_0_cached_pair_slot #(
                 // slot boundary, this prevents BAR input fanout from reaching the
                 // block-RAM address/write-enable path in one 100 MHz cycle.
                 STATE_DECODE: begin
+                        // Select the registered index independently of validation;
+                        // invalid operations never consume the RAM output. This
+                        // keeps cache-valid reduction logic off the BRAM address CE.
+                        cache_read_index <= active_block_index;
                         if (active_cache_load) begin
                             busy_o <= 1'b0;
                             done_o <= 1'b1;
@@ -941,7 +945,6 @@ module truega_q8_0_cached_pair_slot #(
                                 error_o <= 1'b1;
                                 state <= STATE_IDLE;
                             end else begin
-                                cache_read_index <= active_block_index;
                                 state <= STATE_PAIR_READ0;
                             end
                         end else if (!active_control_valid) begin
@@ -1334,14 +1337,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'h98C511C6;
-            5'd5: data = 32'h3572A49F;
-            5'd6: data = 32'h70C01978;
-            5'd7: data = 32'h3FC636FC;
-            5'd8: data = 32'h8EA526F0;
-            5'd9: data = 32'h9D938E63;
-            5'd10: data = 32'hDB9DF0F3;
-            5'd11: data = 32'hC0838DF8;
+            5'd4: data = 32'h8F733CA7;
+            5'd5: data = 32'h4172B0D0;
+            5'd6: data = 32'h2390A67F;
+            5'd7: data = 32'hCF18A907;
+            5'd8: data = 32'h8C046602;
+            5'd9: data = 32'h2ECAB51C;
+            5'd10: data = 32'hFBC077FA;
+            5'd11: data = 32'hC2D210EA;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;

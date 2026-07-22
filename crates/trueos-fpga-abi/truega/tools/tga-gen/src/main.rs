@@ -1005,6 +1005,12 @@ mod tests {
             "call_input_words(addr_index - BAR0_CALL_BASE_DW - CALL_INPUT_WORD) <= payload_dw;"
         ));
         assert!(TOP_VHDL.contains(
+            "read_data_dw := call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD);"
+        ));
+        assert!(TOP_VHDL.contains(
+            "call_output_words(i) <= function_output_data((i + 1) * 32 - 1 downto i * 32);"
+        ));
+        assert!(!TOP_VHDL.contains(
             "call_output_words(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD) <= payload_dw;"
         ));
         assert!(TOP_VHDL.contains("elsif (call_active = '1') and (function_done = '1') then"));
