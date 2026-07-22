@@ -117,13 +117,63 @@ module truega_lfm25_decode_endpoint #(
     wire dispatch_execute_session_begin;
     wire dispatch_retire;
 
+    // A feed window is open only while the controller's exact schedule expects
+    // another TGF2 item.  In particular, it closes after the last feed item of
+    // an operation and reopens only after the matching TGD1 command retires (or
+    // remains closed across the two no-feed residual operations).  This keeps a
+    // premature next feed from filling the frontend while the controller waits
+    // for its mandatory TGD1 handoff.
+    function automatic feed_item_finishes_operation;
+        input [7:0] mode;
+        input [31:0] item;
+        begin
+            case (mode)
+                8'd0, 8'd1, 8'd2, 8'd3:
+                    feed_item_finishes_operation = item == 0;
+                8'd6, 8'd12, 8'd14:
+                    feed_item_finishes_operation = item == 1023;
+                8'd15:
+                    feed_item_finishes_operation = item == 65535;
+                default:
+                    feed_item_finishes_operation = 1'b0;
+            endcase
+        end
+    endfunction
+
+    function automatic ordinal_expects_feed;
+        input [6:0] ordinal;
+        reg [6:0] phase;
+        begin
+            ordinal_expects_feed = 1'b1;
+            if (ordinal >= 1 && ordinal <= 96) begin
+                phase = (ordinal - 1'b1) % 6;
+                // OperatorResidual and FfnResidual are the two TGD1-only
+                // operations in every layer's fixed six-operation schedule.
+                if (phase == 2 || phase == 5)
+                    ordinal_expects_feed = 1'b0;
+            end
+        end
+    endfunction
+
+    reg controller_feed_window;
+    always @(posedge clk) begin
+        if (!reset_n || frontend_reset)
+            controller_feed_window <= 1'b1;
+        else if (controller_feed_item_ready && frontend_item_valid
+                && feed_item_finishes_operation(item_mode, item_index))
+            controller_feed_window <= 1'b0;
+        else if (dispatch_retire && decode_state_o == 32'd2)
+            controller_feed_window <= ordinal_expects_feed(
+                operation_ordinal_o);
+    end
+
     // Feed status owns BAR2 until software has consumed and acknowledged its
     // terminal envelope.  A pending TGD1 completion owns the same physical IRQ
     // lane.  The frontend itself supplies the one-entry publication buffer; a
     // poisoned controller is never allowed to accumulate another BAR package.
     wire feed_admission = feed_state_o == FEED_STATE_IDLE
         && !decode_irq_owned_o && decode_state_o != 32'd1
-        && !controller_poisoned_o;
+        && controller_feed_window && !controller_poisoned_o;
     wire frontend_bar_valid = bar2_write_valid_i && feed_admission;
     assign bar2_write_ready_o = frontend_bar_ready && feed_admission;
 
@@ -242,7 +292,7 @@ module truega_lfm25_decode_endpoint #(
     wire dispatch_reset_n = reset_n && !frontend_reset;
     wire admitted_decode_doorbell = decode_doorbell_i
         && feed_state_o == FEED_STATE_IDLE && !decode_irq_owned_o
-        && !controller_poisoned_o;
+        && !controller_feed_window && !controller_poisoned_o;
     truega_lfm25_decode_dispatch #(.ENABLE(1)) dispatch (
         .clk(clk), .reset_n(dispatch_reset_n),
         .command_i(decode_command_i), .position_i(decode_position_i),
@@ -285,6 +335,8 @@ module truega_lfm25_decode_endpoint #(
     end
 
     assign decode_irq_retire_o = dispatch_retire;
-    assign decode_irq_owned_o = decode_irq_owned;
+    // Include the retirement cycle itself so BAR2/doorbell admission closes in
+    // the same cycle that the shared bridge observes the new owner.
+    assign decode_irq_owned_o = decode_irq_owned || dispatch_retire;
     assign irq_retire_o = feed_irq_retire_o || decode_irq_retire_o;
 endmodule

@@ -819,14 +819,7 @@ pub fn fused_qkv_f32(
     _q_n: usize,
     _k_n: usize,
     _k_dim: usize,
-) -> Result<
-    (
-        (CudaBuffer, Vec<f32>),
-        (CudaBuffer, Vec<f32>),
-        (CudaBuffer, Vec<f32>),
-    ),
-    String,
-> {
+) -> Result<((CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>)), String> {
     Err("CUDA feature is disabled".to_string())
 }
 
@@ -960,16 +953,7 @@ pub fn conv2d_backward_f32(
     _pad_w: usize,
     _stride_h: usize,
     _stride_w: usize,
-) -> Result<
-    (
-        CudaBuffer,
-        Vec<f32>,
-        CudaBuffer,
-        Vec<f32>,
-        Option<(CudaBuffer, Vec<f32>)>,
-    ),
-    String,
-> {
+) -> Result<(CudaBuffer, Vec<f32>, CudaBuffer, Vec<f32>, Option<(CudaBuffer, Vec<f32>)>), String> {
     Err("CUDA feature is disabled".to_string())
 }
 

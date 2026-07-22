@@ -164,12 +164,7 @@ impl VKeyboard {
         if rc == 0 { Ok(()) } else { Err(rc) }
     }
 
-    pub fn type_text(
-        &self,
-        text: &str,
-        interval_ms: u32,
-        clear_queue: bool,
-    ) -> Result<usize, i32> {
+    pub fn type_text(&self, text: &str, interval_ms: u32, clear_queue: bool) -> Result<usize, i32> {
         if !self.open || text.is_empty() {
             return Err(-1);
         }
@@ -302,9 +297,8 @@ impl VGamepad {
             return Err(-3);
         }
         let mut snapshot = GamepadControlSnapshot::default();
-        let rc = unsafe {
-            vcabi::trueos_cabi_gamepad_control_snapshot(self.info.handle, &mut snapshot)
-        };
+        let rc =
+            unsafe { vcabi::trueos_cabi_gamepad_control_snapshot(self.info.handle, &mut snapshot) };
         if rc == 0 { Ok(snapshot) } else { Err(rc) }
     }
 

@@ -50,19 +50,19 @@ pub trait Module {
 
         #[cfg(feature = "std")]
         {
-        let params = self.parameters();
-        let mut data_list = Vec::new();
-        for p in params {
-            let (shape, dtype, raw) = p.export_raw();
-            data_list.push(CheckpointTensor { shape, dtype, raw });
-        }
-        let checkpoint = ModelCheckpoint { params: data_list };
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, &checkpoint)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        println!("Model saved to {} (Binary format)", path);
-        Ok(())
+            let params = self.parameters();
+            let mut data_list = Vec::new();
+            for p in params {
+                let (shape, dtype, raw) = p.export_raw();
+                data_list.push(CheckpointTensor { shape, dtype, raw });
+            }
+            let checkpoint = ModelCheckpoint { params: data_list };
+            let file = File::create(path)?;
+            let writer = BufWriter::new(file);
+            bincode::serialize_into(writer, &checkpoint)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            println!("Model saved to {} (Binary format)", path);
+            Ok(())
         }
     }
 
@@ -78,31 +78,31 @@ pub trait Module {
 
         #[cfg(feature = "std")]
         {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        let checkpoint: ModelCheckpoint = bincode::deserialize_from(reader)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let file = File::open(path)?;
+            let reader = BufReader::new(file);
+            let checkpoint: ModelCheckpoint = bincode::deserialize_from(reader)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        let my_params = self.parameters();
-        if checkpoint.params.len() != my_params.len() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Load failed: parameter count mismatch (checkpoint={}, module={})",
-                    checkpoint.params.len(),
-                    my_params.len()
-                ),
-            ));
-        }
+            let my_params = self.parameters();
+            if checkpoint.params.len() != my_params.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Load failed: parameter count mismatch (checkpoint={}, module={})",
+                        checkpoint.params.len(),
+                        my_params.len()
+                    ),
+                ));
+            }
 
-        for (param, tensor_blob) in my_params.iter().zip(checkpoint.params.into_iter()) {
-            param
-                .import_raw(tensor_blob.shape, tensor_blob.dtype, tensor_blob.raw)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        }
+            for (param, tensor_blob) in my_params.iter().zip(checkpoint.params.into_iter()) {
+                param
+                    .import_raw(tensor_blob.shape, tensor_blob.dtype, tensor_blob.raw)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            }
 
-        println!("Model loaded from {} (Binary format)", path);
-        Ok(())
+            println!("Model loaded from {} (Binary format)", path);
+            Ok(())
         }
     }
 
@@ -224,16 +224,16 @@ mod tests {
         DType, ParameterQuantization, PrecisionConfig, with_parameter_quantization,
         with_precision_config,
     };
+    use hostlib::time::{SystemTime, UNIX_EPOCH};
     use ndarray::{Array, ArrayD, IxDyn};
     use ndarray_rand::{
         RandomExt,
         rand::{SeedableRng, rngs::StdRng},
         rand_distr::Uniform,
     };
+    use std as hostlib;
     use std::fs;
     use std::path::PathBuf;
-    use std as hostlib;
-use hostlib::time::{SystemTime, UNIX_EPOCH};
 
     struct DummyModule {
         params: Vec<Tensor>,
@@ -478,10 +478,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
                 .first()
                 .copied()
                 .expect("loss should be scalar");
-            assert!(
-                loss_value.is_finite(),
-                "loss should be finite for seed {seed}"
-            );
+            assert!(loss_value.is_finite(), "loss should be finite for seed {seed}");
             loss.backward();
 
             let analytic_w = linear
@@ -639,10 +636,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
             .iter()
             .zip(input_cpu.grad().expect("cpu input grad").iter())
         {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "input grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "input grad got {got}, expect {expect}");
         }
         for (got, expect) in linear_cuda
             .weight
@@ -651,10 +645,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
             .iter()
             .zip(linear_cpu.weight.grad().expect("cpu weight grad").iter())
         {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "weight grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "weight grad got {got}, expect {expect}");
         }
         for (got, expect) in linear_cuda
             .bias
@@ -673,10 +664,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
                     .iter(),
             )
         {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "bias grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "bias grad got {got}, expect {expect}");
         }
     }
 
@@ -784,10 +772,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
             .load(&path_str)
             .expect_err("parameter count mismatch should return an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(
-            err.to_string().contains("parameter count mismatch"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("parameter count mismatch"), "unexpected error: {err}");
 
         let _ = fs::remove_file(path);
     }
@@ -818,10 +803,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
             .load(&path_str)
             .expect_err("dtype payload mismatch should return an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(
-            err.to_string().contains("dtype BF16 with f32 data"),
-            "unexpected error: {err}"
-        );
+        assert!(err.to_string().contains("dtype BF16 with f32 data"), "unexpected error: {err}");
 
         let _ = fs::remove_file(path);
     }

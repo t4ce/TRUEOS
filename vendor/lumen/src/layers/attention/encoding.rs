@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     Device, StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -801,10 +801,7 @@ impl RotaryEmbedding {
         assert_eq!(src.len(), self.dim, "RoPE src len mismatch");
         assert_eq!(dst.len(), self.dim, "RoPE dst len mismatch");
         if pos >= self.max_seq_len {
-            panic!(
-                "RoPE index out of range: pos {} >= max {}",
-                pos, self.max_seq_len
-            );
+            panic!("RoPE index out of range: pos {} >= max {}", pos, self.max_seq_len);
         }
 
         self.cos_cache
@@ -859,10 +856,7 @@ impl RotaryEmbedding {
     // This is useful to pass into rayon-parallel decode kernels without capturing Tensor/Rc.
     pub fn cos_sin_row_vec(&self, pos: usize) -> (Vec<f32>, Vec<f32>) {
         if pos >= self.max_seq_len {
-            panic!(
-                "RoPE index out of range: pos {} >= max {}",
-                pos, self.max_seq_len
-            );
+            panic!("RoPE index out of range: pos {} >= max {}", pos, self.max_seq_len);
         }
         self.cos_cache
             .with_storage_view_preferring(StoragePreference::F32Compute, |cos_view| {
@@ -927,16 +921,10 @@ mod tests {
     #[test]
     fn rope_no_grad_preserves_bf16_input_dtype() {
         let rope = RotaryEmbedding::new(4, 8, 10000.0);
-        let input_f32 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::F32,
-        );
-        let input_bf16 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::BF16,
-        );
+        let input_f32 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::F32);
+        let input_bf16 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::BF16);
 
         let ref_out = no_grad(|| rope.forward(&input_f32, 0));
         let bf16_out = no_grad(|| rope.forward(&input_bf16, 0));
@@ -994,11 +982,8 @@ mod tests {
     #[test]
     fn rope_no_grad_preserves_i8_input_dtype() {
         let rope = RotaryEmbedding::new(4, 8, 10000.0);
-        let input_i8 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::I8,
-        );
+        let input_i8 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::I8);
 
         let out = no_grad(|| rope.forward(&input_i8, 0));
         assert_eq!(out.dtype(), DType::I8);
@@ -1125,12 +1110,9 @@ mod tests {
 
         let rope = RotaryEmbedding::new_with_dtype(4, 8, 10000.0, DType::BF16);
         rope.to_cuda();
-        let input = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::I8,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::I8)
+                .to_cuda();
 
         crate::ops::cuda::set_enabled(true);
         set_strict_device_execution(true);

@@ -326,10 +326,12 @@ module truega_lfm25_fixed_decode_controller #(
     end
 
     wire datapath_start_ready;
-    reg datapath_start;
+    wire datapath_start = state == ST_DP_START
+        || state == ST_EXEC_DP_START;
     wire datapath_stage_ready;
-    reg datapath_stage_valid;
-    reg datapath_item_finish;
+    wire datapath_stage_valid = state == ST_SEND_STAGE
+        || state == ST_SEND_CONTROL;
+    wire datapath_item_finish = state == ST_ITEM_FINISH;
     wire datapath_item_effect_done;
     wire datapath_result_valid;
     reg datapath_result_ready;
@@ -446,18 +448,12 @@ module truega_lfm25_fixed_decode_controller #(
             operation_ordinal_o <= 0;
             feed_items_retired_o <= 0;
             poisoned_o <= 0;
-            datapath_start <= 0;
-            datapath_stage_valid <= 0;
-            datapath_item_finish <= 0;
             datapath_result_ready <= 0;
         end else begin
             feed_item_ready_o <= 0;
             feed_item_error_o <= 0;
             engine_done_o <= 0;
             engine_error_o <= 0;
-            datapath_start <= 0;
-            datapath_stage_valid <= 0;
-            datapath_item_finish <= 0;
             datapath_result_ready <= 0;
 
             if (abort_i && !poisoned_o)
@@ -490,7 +486,6 @@ module truega_lfm25_fixed_decode_controller #(
                 end
 
                 ST_DP_START: begin
-                    datapath_start <= 1;
                     if (datapath_start_ready) begin
                         operation_active <= 1;
                         if (FAST_SCHEDULE_SIM != 0)
@@ -524,7 +519,6 @@ module truega_lfm25_fixed_decode_controller #(
                     end
                 end
                 ST_SEND_STAGE: begin
-                    datapath_stage_valid <= 1;
                     if (datapath_stage_ready) begin
                         payload_buffer <= 0;
                         read_word <= 0;
@@ -555,12 +549,10 @@ module truega_lfm25_fixed_decode_controller #(
                     end
                 end
                 ST_SEND_CONTROL: begin
-                    datapath_stage_valid <= 1;
                     if (datapath_stage_ready)
                         state <= ST_ITEM_FINISH;
                 end
                 ST_ITEM_FINISH: begin
-                    datapath_item_finish <= 1;
                     state <= ST_ITEM_EFFECT;
                 end
                 ST_ITEM_EFFECT: begin
@@ -597,10 +589,13 @@ module truega_lfm25_fixed_decode_controller #(
                 ST_WAIT_EXEC: begin
                     if (execute_start_i) begin
                         if (!execute_shape_valid)
-                            poison(execute_operation_i != expected_operation
-                                || execute_layer_i != expected_layer
-                                || execute_session_epoch_i != active_epoch
-                                ? ERROR_EXEC_ORDER : ERROR_EXEC_SLOTS);
+                            begin
+                                poison(execute_operation_i != expected_operation
+                                    || execute_layer_i != expected_layer
+                                    || execute_session_epoch_i != active_epoch
+                                    ? ERROR_EXEC_ORDER : ERROR_EXEC_SLOTS);
+                                engine_done_o <= 1;
+                            end
                         else if (expected_operation == 4'd4
                                 || expected_operation == 4'd7) begin
                             state <= ST_EXEC_DP_START;
@@ -629,7 +624,6 @@ module truega_lfm25_fixed_decode_controller #(
                     end
                 end
                 ST_EXEC_DP_START: begin
-                    datapath_start <= 1;
                     if (datapath_start_ready) begin
                         operation_active <= 1;
                         state <= ST_EXEC_DP_RESULT;

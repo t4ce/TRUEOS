@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::Tensor;
 use crate::ops::cuda;
@@ -383,10 +383,7 @@ mod tests {
                 opt.step();
 
                 assert_eq!(opt.state_dtype(), DType::F32);
-                assert_eq!(
-                    opt.velocities[0].as_ref().expect("velocity state").dtype(),
-                    DType::F32
-                );
+                assert_eq!(opt.velocities[0].as_ref().expect("velocity state").dtype(), DType::F32);
             },
         );
     }
@@ -407,14 +404,8 @@ mod tests {
                 opt.step();
 
                 assert_eq!(opt.state_dtype(), DType::BF16);
-                assert_eq!(
-                    opt.exp_avg[0].as_ref().expect("exp_avg").dtype(),
-                    DType::BF16
-                );
-                assert_eq!(
-                    opt.exp_avg_sq[0].as_ref().expect("exp_avg_sq").dtype(),
-                    DType::BF16
-                );
+                assert_eq!(opt.exp_avg[0].as_ref().expect("exp_avg").dtype(), DType::BF16);
+                assert_eq!(opt.exp_avg_sq[0].as_ref().expect("exp_avg_sq").dtype(), DType::BF16);
             },
         );
     }
@@ -447,10 +438,7 @@ mod tests {
         let values = param.data_ref().iter().copied().collect::<Vec<_>>();
         let expected = [0.95, -1.9, 0.3, 2.975];
         for (got, expect) in values.iter().zip(expected.iter()) {
-            assert!(
-                (got - expect).abs() <= 1e-6,
-                "SGD CUDA update got {got}, expected {expect}"
-            );
+            assert!((got - expect).abs() <= 1e-6, "SGD CUDA update got {got}, expected {expect}");
         }
     }
 
@@ -582,10 +570,7 @@ mod tests {
 
         let cuda_values = cuda_param.data_ref().iter().copied().collect::<Vec<_>>();
         for (got, expect) in cuda_values.iter().zip(cpu_values.iter()) {
-            assert!(
-                (got - expect).abs() <= 1e-6,
-                "Adam CUDA update got {got}, expected {expect}"
-            );
+            assert!((got - expect).abs() <= 1e-6, "Adam CUDA update got {got}, expected {expect}");
         }
     }
 

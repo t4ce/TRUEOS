@@ -259,8 +259,43 @@ module truega_lfm25_fixed_decode_controller_tb;
             failures = failures + 1;
         item_valid = 0;
 
+        // Clear really resets the installed epoch/ordinal. Reach operation 1,
+        // then prove a malformed TGD1 resident slot retires as an engine error
+        // and sticks the same fail-closed poison state.
+        @(negedge clk); clear = 1;
+        @(negedge clk); clear = 0;
+        commands = 0;
+        item_epoch = 7;
+        execute_epoch = 7;
+        send_feed(0, 8'hff);
+        execute(0, 8'hff, 8'hff, 8'hff, 0);
+        send_feed(1, 0);
+        @(negedge clk);
+        execute_operation = 1;
+        execute_layer = 0;
+        execute_input = 1; // exact schedule requires Q30 slot h=0
+        execute_residual = 8'hff;
+        execute_session_begin = 0;
+        execute_start = 1;
+        @(negedge clk);
+        execute_start = 0;
+        while (!engine_done) @(negedge clk);
+        if (!engine_error || !poisoned
+                || engine_error_code != 32'hbad4_3102)
+            failures = failures + 1;
+
+        // A second explicit clear admits a different nonzero epoch at ordinal
+        // zero, demonstrating that poison/domain state is not resurrected.
+        @(negedge clk); clear = 1;
+        @(negedge clk); clear = 0;
+        item_epoch = 9;
+        execute_epoch = 9;
+        send_feed(0, 8'hff);
+        if (poisoned || ordinal != 0 || feed_items != 1)
+            failures = failures + 1;
+
         if (failures == 0)
-            $display("PASS fixed_decode_controller ops=99 feeds=194616 schedule=0x5524 slots=mod3 split_tail=strict poison=sticky");
+            $display("PASS fixed_decode_controller ops=99 feeds=194616 schedule=0x5524 slots=mod3 split_tail=strict feed+tgd1_poison=sticky clear=domain-reset");
         else
             $display("FAIL fixed_decode_controller failures=%0d", failures);
         $finish;

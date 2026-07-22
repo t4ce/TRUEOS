@@ -163,10 +163,14 @@ const _: () = assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_DRAW3D_UI4_FRAME_STR
 // target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
 const GPU_VA_COMPUTE_FONT_MESH_BASE: u64 = 0x0170_0000;
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
-const GPU_VA_PERSISTENT_FONT_BASE: u64 = 0x2000_0000;
-const GPU_VA_PERSISTENT_FONT_LIMIT: u64 = 0x2800_0000;
-static PERSISTENT_FONT_GPU_VA_CURSOR: AtomicU64 = AtomicU64::new(GPU_VA_PERSISTENT_FONT_BASE);
-static PERSISTENT_TRIANGLE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
+// Long-lived render resources share one collision-free VA allocator. Fonts
+// were its first client; Spirit's decoded visual assets use the same lifetime
+// and mapping contract without borrowing a fixed address from another owner.
+const GPU_VA_PERSISTENT_RESOURCE_BASE: u64 = 0x2000_0000;
+const GPU_VA_PERSISTENT_RESOURCE_LIMIT: u64 = 0x2800_0000;
+static PERSISTENT_RESOURCE_GPU_VA_CURSOR: AtomicU64 =
+    AtomicU64::new(GPU_VA_PERSISTENT_RESOURCE_BASE);
+static PERSISTENT_RESOURCE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =
     spin::Mutex::new(alloc::vec::Vec::new());
 const GPGPU_EU_KERNEL_OFFSET_BYTES: usize = 0x3000;
 const GPGPU_WALKER_SCRATCH_OFFSET_BYTES: usize = 0x3800;

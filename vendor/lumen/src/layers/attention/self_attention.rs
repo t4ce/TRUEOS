@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     Device, StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -21,9 +21,9 @@ use crate::ops::matmul::{batch_matmul, dot_unrolled};
 use crate::ops::shape::{permute, reshape, slice_last_dim};
 use crate::precision::{DType, default_activation_dtype, default_kv_cache_dtype};
 
+use crate::parallel::*;
 use ndarray::linalg::general_mat_mul;
 use ndarray::{Array, Array4, IxDyn};
-use crate::parallel::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -256,20 +256,8 @@ impl KVCacheInner {
         let expected_shape = vec![expected_b, expected_h_kv, expected_max_seq, expected_d];
         let k_shape = self.k.shape_vec();
         let v_shape = self.v.shape_vec();
-        assert_eq!(
-            k_shape.len(),
-            4,
-            "{} must store K as [B,H,S,D], got {:?}",
-            context,
-            k_shape
-        );
-        assert_eq!(
-            v_shape.len(),
-            4,
-            "{} must store V as [B,H,S,D], got {:?}",
-            context,
-            v_shape
-        );
+        assert_eq!(k_shape.len(), 4, "{} must store K as [B,H,S,D], got {:?}", context, k_shape);
+        assert_eq!(v_shape.len(), 4, "{} must store V as [B,H,S,D], got {:?}", context, v_shape);
         assert_eq!(
             k_shape, expected_shape,
             "{} shape mismatch: expected {:?}, got {:?}",
@@ -370,16 +358,8 @@ impl SelfAttention {
         assert!(n_head > 0, "n_head must be > 0");
         assert!(n_kv_head > 0, "n_kv_head must be > 0");
         assert!(max_seq_len > 0, "max_seq_len must be > 0");
-        assert_eq!(
-            embed_dim % n_head,
-            0,
-            "Embed dim must be divisible by n_head"
-        );
-        assert_eq!(
-            n_head % n_kv_head,
-            0,
-            "n_head must be divisible by n_kv_head"
-        );
+        assert_eq!(embed_dim % n_head, 0, "Embed dim must be divisible by n_head");
+        assert_eq!(n_head % n_kv_head, 0, "n_head must be divisible by n_kv_head");
         assert!(
             kv_cache_dtype.is_float(),
             "SelfAttention KV cache dtype currently only supports floating types, got {:?}",
@@ -468,16 +448,8 @@ impl SelfAttention {
         assert!(n_head > 0, "n_head must be > 0");
         assert!(n_kv_head > 0, "n_kv_head must be > 0");
         assert!(max_seq_len > 0, "max_seq_len must be > 0");
-        assert_eq!(
-            embed_dim % n_head,
-            0,
-            "Embed dim must be divisible by n_head"
-        );
-        assert_eq!(
-            n_head % n_kv_head,
-            0,
-            "n_head must be divisible by n_kv_head"
-        );
+        assert_eq!(embed_dim % n_head, 0, "Embed dim must be divisible by n_head");
+        assert_eq!(n_head % n_kv_head, 0, "n_head must be divisible by n_kv_head");
 
         let activation_dtype = default_activation_dtype();
         let kv_cache_dtype = default_kv_cache_dtype();
@@ -560,10 +532,7 @@ impl SelfAttention {
         let h_kv = self.n_kv_head;
         let d = self.head_dim;
         assert_eq!(h % h_kv, 0, "n_head must be divisible by n_kv_head");
-        assert_eq!(
-            x_shape[2], self.w_q.in_features,
-            "attention input hidden size mismatch"
-        );
+        assert_eq!(x_shape[2], self.w_q.in_features, "attention input hidden size mismatch");
         let n_rep = h / h_kv;
         let x_is_cuda = x.is_cuda();
 
@@ -1479,10 +1448,8 @@ impl SelfAttention {
         let v = { self.w_v.forward(x) };
 
         // train 路径：走原来的逻辑（可导）
-        let q = permute(
-            &reshape(&q, vec![b as i32, s as i32, h as i32, d as i32]),
-            vec![0, 2, 1, 3],
-        );
+        let q =
+            permute(&reshape(&q, vec![b as i32, s as i32, h as i32, d as i32]), vec![0, 2, 1, 3]);
         let k = permute(
             &reshape(&k, vec![b as i32, s as i32, h_kv as i32, d as i32]),
             vec![0, 2, 1, 3],
@@ -2054,11 +2021,8 @@ mod tests {
     #[test]
     fn no_grad_forward_keeps_bf16_input_storage() {
         let attn = SelfAttention::new(8, 2, 1, 8, 10000.0, true);
-        let input = make_tensor(
-            &[1, 2, 8],
-            (0..16).map(|i| i as f32 * 0.1 - 0.5).collect(),
-            DType::BF16,
-        );
+        let input =
+            make_tensor(&[1, 2, 8], (0..16).map(|i| i as f32 * 0.1 - 0.5).collect(), DType::BF16);
 
         no_grad(|| {
             let _ = attn.forward(input.clone(), None);
@@ -2458,26 +2422,10 @@ mod tests {
         let attn_ref = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::F32);
 
         for ((dst, src), shape, scale) in [
-            (
-                (&attn.w_q.weight, &attn_ref.w_q.weight),
-                vec![8, 8],
-                0.03125f32,
-            ),
-            (
-                (&attn.w_k.weight, &attn_ref.w_k.weight),
-                vec![4, 8],
-                0.0275f32,
-            ),
-            (
-                (&attn.w_v.weight, &attn_ref.w_v.weight),
-                vec![4, 8],
-                -0.021f32,
-            ),
-            (
-                (&attn.w_o.weight, &attn_ref.w_o.weight),
-                vec![8, 8],
-                0.01875f32,
-            ),
+            ((&attn.w_q.weight, &attn_ref.w_q.weight), vec![8, 8], 0.03125f32),
+            ((&attn.w_k.weight, &attn_ref.w_k.weight), vec![4, 8], 0.0275f32),
+            ((&attn.w_v.weight, &attn_ref.w_v.weight), vec![4, 8], -0.021f32),
+            ((&attn.w_o.weight, &attn_ref.w_o.weight), vec![8, 8], 0.01875f32),
         ] {
             let data = (0..shape.iter().product::<usize>())
                 .map(|i| (i as f32 * scale) - 0.25)
@@ -2488,10 +2436,8 @@ mod tests {
         }
 
         attn.to_cuda();
-        let input_cpu = make_grad_tensor(
-            &[1, 3, 8],
-            (0..24).map(|i| (i as f32 * 0.0625) - 0.4).collect(),
-        );
+        let input_cpu =
+            make_grad_tensor(&[1, 3, 8], (0..24).map(|i| (i as f32 * 0.0625) - 0.4).collect());
         let coeff_cpu = Tensor::from_data_with_grad_flag(
             Array::from_shape_vec(
                 IxDyn(&[1, 3, 8]),
@@ -2553,26 +2499,10 @@ mod tests {
         let attn_ref = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::BF16);
 
         for ((dst, src), shape, scale) in [
-            (
-                (&attn.w_q.weight, &attn_ref.w_q.weight),
-                vec![8, 8],
-                0.03125f32,
-            ),
-            (
-                (&attn.w_k.weight, &attn_ref.w_k.weight),
-                vec![4, 8],
-                0.0275f32,
-            ),
-            (
-                (&attn.w_v.weight, &attn_ref.w_v.weight),
-                vec![4, 8],
-                -0.021f32,
-            ),
-            (
-                (&attn.w_o.weight, &attn_ref.w_o.weight),
-                vec![8, 8],
-                0.01875f32,
-            ),
+            ((&attn.w_q.weight, &attn_ref.w_q.weight), vec![8, 8], 0.03125f32),
+            ((&attn.w_k.weight, &attn_ref.w_k.weight), vec![4, 8], 0.0275f32),
+            ((&attn.w_v.weight, &attn_ref.w_v.weight), vec![4, 8], -0.021f32),
+            ((&attn.w_o.weight, &attn_ref.w_o.weight), vec![8, 8], 0.01875f32),
         ] {
             let data = (0..shape.iter().product::<usize>())
                 .map(|i| (i as f32 * scale) - 0.25)
@@ -2613,26 +2543,10 @@ mod tests {
         let attn_ref = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::BF16);
 
         for ((dst, src), shape, scale) in [
-            (
-                (&attn.w_q.weight, &attn_ref.w_q.weight),
-                vec![8, 8],
-                0.03125f32,
-            ),
-            (
-                (&attn.w_k.weight, &attn_ref.w_k.weight),
-                vec![4, 8],
-                0.0275f32,
-            ),
-            (
-                (&attn.w_v.weight, &attn_ref.w_v.weight),
-                vec![4, 8],
-                -0.021f32,
-            ),
-            (
-                (&attn.w_o.weight, &attn_ref.w_o.weight),
-                vec![8, 8],
-                0.01875f32,
-            ),
+            ((&attn.w_q.weight, &attn_ref.w_q.weight), vec![8, 8], 0.03125f32),
+            ((&attn.w_k.weight, &attn_ref.w_k.weight), vec![4, 8], 0.0275f32),
+            ((&attn.w_v.weight, &attn_ref.w_v.weight), vec![4, 8], -0.021f32),
+            ((&attn.w_o.weight, &attn_ref.w_o.weight), vec![8, 8], 0.01875f32),
         ] {
             let data = (0..shape.iter().product::<usize>())
                 .map(|i| (i as f32 * scale) - 0.25)
@@ -2643,21 +2557,11 @@ mod tests {
         }
 
         attn.to_cuda();
-        let cuda_cache: KVCache = Rc::new(RefCell::new(KVCacheInner::new_with_dtype(
-            1,
-            1,
-            8,
-            4,
-            DType::BF16,
-        )));
+        let cuda_cache: KVCache =
+            Rc::new(RefCell::new(KVCacheInner::new_with_dtype(1, 1, 8, 4, DType::BF16)));
         cuda_cache.borrow_mut().to_device_inplace(Device::Cuda);
-        let cpu_cache: KVCache = Rc::new(RefCell::new(KVCacheInner::new_with_dtype(
-            1,
-            1,
-            8,
-            4,
-            DType::BF16,
-        )));
+        let cpu_cache: KVCache =
+            Rc::new(RefCell::new(KVCacheInner::new_with_dtype(1, 1, 8, 4, DType::BF16)));
 
         let step1 = make_tensor(
             &[1, 1, 8],
@@ -2702,26 +2606,10 @@ mod tests {
         let attn_ref = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::BF16);
 
         for ((dst, src), shape, scale) in [
-            (
-                (&attn.w_q.weight, &attn_ref.w_q.weight),
-                vec![8, 8],
-                0.03125f32,
-            ),
-            (
-                (&attn.w_k.weight, &attn_ref.w_k.weight),
-                vec![4, 8],
-                0.0275f32,
-            ),
-            (
-                (&attn.w_v.weight, &attn_ref.w_v.weight),
-                vec![4, 8],
-                -0.021f32,
-            ),
-            (
-                (&attn.w_o.weight, &attn_ref.w_o.weight),
-                vec![8, 8],
-                0.01875f32,
-            ),
+            ((&attn.w_q.weight, &attn_ref.w_q.weight), vec![8, 8], 0.03125f32),
+            ((&attn.w_k.weight, &attn_ref.w_k.weight), vec![4, 8], 0.0275f32),
+            ((&attn.w_v.weight, &attn_ref.w_v.weight), vec![4, 8], -0.021f32),
+            ((&attn.w_o.weight, &attn_ref.w_o.weight), vec![8, 8], 0.01875f32),
         ] {
             let data = (0..shape.iter().product::<usize>())
                 .map(|i| (i as f32 * scale) - 0.25)
@@ -2766,26 +2654,10 @@ mod tests {
         let attn_ref = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::BF16);
 
         for ((dst, src), shape, scale) in [
-            (
-                (&attn.w_q.weight, &attn_ref.w_q.weight),
-                vec![8, 8],
-                0.03125f32,
-            ),
-            (
-                (&attn.w_k.weight, &attn_ref.w_k.weight),
-                vec![4, 8],
-                0.0275f32,
-            ),
-            (
-                (&attn.w_v.weight, &attn_ref.w_v.weight),
-                vec![4, 8],
-                -0.021f32,
-            ),
-            (
-                (&attn.w_o.weight, &attn_ref.w_o.weight),
-                vec![8, 8],
-                0.01875f32,
-            ),
+            ((&attn.w_q.weight, &attn_ref.w_q.weight), vec![8, 8], 0.03125f32),
+            ((&attn.w_k.weight, &attn_ref.w_k.weight), vec![4, 8], 0.0275f32),
+            ((&attn.w_v.weight, &attn_ref.w_v.weight), vec![4, 8], -0.021f32),
+            ((&attn.w_o.weight, &attn_ref.w_o.weight), vec![8, 8], 0.01875f32),
         ] {
             let data = (0..shape.iter().product::<usize>())
                 .map(|i| (i as f32 * scale) - 0.25)
@@ -2838,13 +2710,8 @@ mod tests {
 
         let attn = SelfAttention::new_with_dtype(8, 2, 1, 8, 10000.0, true, DType::BF16);
         attn.to_cuda();
-        let cache: KVCache = Rc::new(RefCell::new(KVCacheInner::new_with_dtype(
-            1,
-            1,
-            8,
-            4,
-            DType::BF16,
-        )));
+        let cache: KVCache =
+            Rc::new(RefCell::new(KVCacheInner::new_with_dtype(1, 1, 8, 4, DType::BF16)));
         cache.borrow().k.to_cuda_inplace();
         cache.borrow().v.to_cuda_inplace();
 

@@ -554,10 +554,13 @@ module truega_lfm25_resident_attention_join_tb;
             end
         join_any
         disable aborted_output;
+        $display("resident_attention_join abort issued imports=%0d", imports);
         consume_result(1'b1, 8'd9, 37'd0);
+        $display("resident_attention_join abort result consumed poison=%b", poisoned);
         if (!poisoned || start_ready)
             failures = failures + 1;
         inspect_output(10'd0, 1'b1, 64'sd0);
+        $display("resident_attention_join aborted destination unpublished");
 
         // Clear is the only cache-safe poison recovery.  Re-establish the
         // source, then prove a wrong projection mode is rejected immediately.
@@ -566,6 +569,7 @@ module truega_lfm25_resident_attention_join_tb;
         clear = 1'b0;
         repeat (2) @(negedge clk);
         establish_resident_q8();
+        $display("resident_attention_join poison clear and source reload complete");
         pulse_start(4'd8, 17'd0, DESTINATION_ONE);
         feed_norm_weights();
         while (!projection_weight_ready) @(negedge clk);

@@ -221,7 +221,7 @@ impl ModelLoader {
             }
             other => {
                 return Err(
-                    format!("Unsupported scale dtype {:?} for {}", other, scale_name).into(),
+                    format!("Unsupported scale dtype {:?} for {}", other, scale_name).into()
                 );
             }
         };
@@ -492,7 +492,7 @@ impl ModelLoader {
                 }
                 _ => {
                     return Err(
-                        format!("Unsupported dtype: {:?} for {}", source_dtype, name).into(),
+                        format!("Unsupported dtype: {:?} for {}", source_dtype, name).into()
                     );
                 }
             }
@@ -627,7 +627,7 @@ impl ModelLoader {
 
                     _ => {
                         return Err(
-                            format!("Unsupported dtype: {:?} for {}", source_dtype, name).into(),
+                            format!("Unsupported dtype: {:?} for {}", source_dtype, name).into()
                         );
                     }
                 }
@@ -648,12 +648,12 @@ mod tests {
     use super::*;
     use crate::autograd::Tensor;
     use crate::precision::with_parameter_quantization;
+    use hostlib::time::{SystemTime, UNIX_EPOCH};
     use ndarray::{ArrayD, IxDyn};
     use safetensors::tensor::{TensorView, serialize_to_file};
+    use std as hostlib;
     use std::collections::HashMap;
     use std::fs;
-    use std as hostlib;
-use hostlib::time::{SystemTime, UNIX_EPOCH};
 
     fn bytes_from_f32(data: &[f32]) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(data.len() * 4);
@@ -834,12 +834,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
         let expected = vec![2.0f32, -4.0, 3.5, 4.5];
         let scale = 0.5f32;
         let path = write_safetensors(vec![
-            (
-                "weight".to_string(),
-                safetensors::Dtype::I8,
-                vec![2, 2],
-                bytes_from_i8(&quantized),
-            ),
+            ("weight".to_string(), safetensors::Dtype::I8, vec![2, 2], bytes_from_i8(&quantized)),
             (
                 "weight.scale".to_string(),
                 safetensors::Dtype::F32,
@@ -870,12 +865,7 @@ use hostlib::time::{SystemTime, UNIX_EPOCH};
         let expected = vec![2.0f32, -4.0, 3.5, 4.5];
         let scale = 0.5f32;
         let path = write_safetensors(vec![
-            (
-                "weight".to_string(),
-                safetensors::Dtype::I8,
-                vec![2, 2],
-                bytes_from_i8(&quantized),
-            ),
+            ("weight".to_string(), safetensors::Dtype::I8, vec![2, 2], bytes_from_i8(&quantized)),
             (
                 "weight.scale".to_string(),
                 safetensors::Dtype::F32,

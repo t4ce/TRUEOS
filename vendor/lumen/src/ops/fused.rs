@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -626,10 +626,7 @@ pub fn fused_softmax(input: &Tensor, scale: f32, is_causal: bool) -> Tensor {
             DType::BF16 => DType::BF16,
             DType::F32 | DType::I8 => DType::F32,
         };
-        assert!(
-            shape[3] > 0,
-            "Fused Softmax key dimension must be greater than zero"
-        );
+        assert!(shape[3] > 0, "Fused Softmax key dimension must be greater than zero");
         if output_device == crate::autograd::Device::Cuda && input.len() > 0 {
             let batch_heads = shape[0]
                 .checked_mul(shape[1])
@@ -862,10 +859,7 @@ pub fn fused_softmax(input: &Tensor, scale: f32, is_causal: bool) -> Tensor {
         if shape.len() != 4 {
             panic!("Fused Softmax expects 4D input [B, H, Q, K]");
         }
-        assert!(
-            shape[3] > 0,
-            "Fused Softmax key dimension must be greater than zero"
-        );
+        assert!(shape[3] > 0, "Fused Softmax key dimension must be greater than zero");
         let batch_heads = shape[0]
             .checked_mul(shape[1])
             .expect("fused_softmax batch_heads overflow");
@@ -957,10 +951,7 @@ pub fn fused_softmax(input: &Tensor, scale: f32, is_causal: bool) -> Tensor {
         if shape.len() != 4 {
             panic!("Fused Softmax expects 4D input [B, H, Q, K]");
         }
-        assert!(
-            shape[3] > 0,
-            "Fused Softmax key dimension must be greater than zero"
-        );
+        assert!(shape[3] > 0, "Fused Softmax key dimension must be greater than zero");
 
         let q_len = shape[2];
         let k_len = shape[3];
@@ -1048,10 +1039,7 @@ pub(crate) fn fused_softmax_with_past_infer(
     is_causal: bool,
     past_len: usize,
 ) -> Tensor {
-    assert!(
-        is_no_grad(),
-        "fused_softmax_with_past_infer is inference-only"
-    );
+    assert!(is_no_grad(), "fused_softmax_with_past_infer is inference-only");
     if past_len == 0 {
         return fused_softmax(input, scale, is_causal);
     }
@@ -1066,10 +1054,7 @@ pub(crate) fn fused_softmax_with_past_infer(
         .expect("fused_softmax_with_past batch_heads overflow");
     let q_len = shape[2];
     let k_len = shape[3];
-    assert!(
-        k_len > 0,
-        "Fused Softmax key dimension must be greater than zero"
-    );
+    assert!(k_len > 0, "Fused Softmax key dimension must be greater than zero");
     let output_dtype = match input.dtype() {
         DType::F16 => DType::F16,
         DType::BF16 => DType::BF16,
@@ -1448,11 +1433,7 @@ pub fn fused_gate_up_silu_infer(
                         let gate_slice = storage_view_2d_as_slice_ref(gate_view, "gate");
                         let up_slice = storage_view_2d_as_slice_ref(up_view, "up");
                         assert_eq!(gate_slice.cols(), k_dim, "gate weight K mismatch");
-                        assert_eq!(
-                            up_slice.rows(),
-                            gate_slice.rows(),
-                            "gate/up out dim mismatch"
-                        );
+                        assert_eq!(up_slice.rows(), gate_slice.rows(), "gate/up out dim mismatch");
                         assert_eq!(up_slice.cols(), k_dim, "up weight K mismatch");
                         run_gate_up!(
                             gate_slice.as_slice_ref(),
@@ -1481,10 +1462,7 @@ pub fn fused_gate_up_silu_infer_into(
     up_weight: &Tensor,
     out: &mut [f32],
 ) {
-    assert!(
-        is_no_grad(),
-        "fused_gate_up_silu_infer_into is inference-only"
-    );
+    assert!(is_no_grad(), "fused_gate_up_silu_infer_into is inference-only");
     let compute_device = input.device();
     assert_native_device_support(
         compute_device,
@@ -1548,10 +1526,7 @@ pub fn fused_gate_up_silu_infer_into(
                         gate_2d.as_slice().expect("gate weight must be contiguous"),
                         gate_scale,
                     ),
-                    SliceRef::I8(
-                        up_2d.as_slice().expect("up weight must be contiguous"),
-                        up_scale,
-                    ),
+                    SliceRef::I8(up_2d.as_slice().expect("up weight must be contiguous"), up_scale),
                     n_dim,
                     k_dim,
                     out,
@@ -1661,10 +1636,7 @@ pub fn fused_qkv_decode_infer_into(
     k_out: &mut [f32],
     v_out: &mut [f32],
 ) {
-    assert!(
-        is_no_grad(),
-        "fused_qkv_decode_infer_into is inference-only"
-    );
+    assert!(is_no_grad(), "fused_qkv_decode_infer_into is inference-only");
     let compute_device = input.device();
     assert_native_device_support(
         compute_device,
@@ -2212,10 +2184,7 @@ pub fn fused_qkv_decode_infer_tensors(
     n_head: usize,
     n_kv_head: usize,
 ) -> (Tensor, Tensor, Tensor) {
-    assert!(
-        is_no_grad(),
-        "fused_qkv_decode_infer_tensors is inference-only"
-    );
+    assert!(is_no_grad(), "fused_qkv_decode_infer_tensors is inference-only");
     let compute_device = input.device();
     assert_eq!(
         q_weight.device(),
@@ -2236,10 +2205,7 @@ pub fn fused_qkv_decode_infer_tensors(
     let x_shape = input.shape_vec();
     assert_eq!(x_shape.len(), 3, "decode input must be [B, S, K]");
     let (b, s, k_dim) = (x_shape[0], x_shape[1], x_shape[2]);
-    assert_eq!(
-        s, 1,
-        "fused_qkv_decode_infer_tensors only supports S=1 decode"
-    );
+    assert_eq!(s, 1, "fused_qkv_decode_infer_tensors only supports S=1 decode");
     let (q_n, k_n, v_n) = validate_qkv_shapes(k_dim, q_weight, k_weight, v_weight);
     assert_eq!(q_n % n_head, 0, "Q dim must be divisible by n_head");
     assert_eq!(k_n % n_kv_head, 0, "K dim must be divisible by n_kv_head");
@@ -2317,10 +2283,7 @@ pub fn fused_qkv_prefill_infer_tensors(
     n_head: usize,
     n_kv_head: usize,
 ) -> Option<(Tensor, Tensor, Tensor)> {
-    assert!(
-        is_no_grad(),
-        "fused_qkv_prefill_infer_tensors is inference-only"
-    );
+    assert!(is_no_grad(), "fused_qkv_prefill_infer_tensors is inference-only");
     let compute_device = input.device();
     if compute_device != crate::autograd::Device::Cuda {
         return None;
@@ -2446,10 +2409,7 @@ mod tests {
     fn assert_close(lhs: &[f32], rhs: &[f32], tol: f32) {
         assert_eq!(lhs.len(), rhs.len());
         for (idx, (&a, &b)) in lhs.iter().zip(rhs.iter()).enumerate() {
-            assert!(
-                (a - b).abs() <= tol,
-                "idx={idx}, lhs={a}, rhs={b}, tol={tol}"
-            );
+            assert!((a - b).abs() <= tol, "idx={idx}, lhs={a}, rhs={b}, tol={tol}");
         }
     }
 
@@ -3457,12 +3417,9 @@ mod tests {
         let batch = 2usize;
         let seq = 3usize;
         let hidden = 8usize;
-        let input = make_tensor(
-            &[batch, seq, hidden],
-            sample_f32(batch * seq * hidden),
-            DType::F16,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[batch, seq, hidden], sample_f32(batch * seq * hidden), DType::F16)
+                .to_cuda();
         let q_w = make_tensor(&[hidden, hidden], sample_f32(hidden * hidden), DType::F16).to_cuda();
         let k_w = make_tensor(
             &[hidden, hidden],
@@ -3571,21 +3528,9 @@ mod tests {
         assert_eq!(q_cuda.shape_vec(), vec![batch, 2, seq, 4]);
         assert_eq!(k_cuda.shape_vec(), vec![batch, 1, seq, 4]);
         assert_eq!(v_cuda.shape_vec(), vec![batch, 1, seq, 4]);
-        assert_close(
-            &q_cuda.data_ref().iter().copied().collect::<Vec<_>>(),
-            &q_cpu,
-            2e-2,
-        );
-        assert_close(
-            &k_cuda.data_ref().iter().copied().collect::<Vec<_>>(),
-            &k_cpu,
-            2e-2,
-        );
-        assert_close(
-            &v_cuda.data_ref().iter().copied().collect::<Vec<_>>(),
-            &v_cpu,
-            2e-2,
-        );
+        assert_close(&q_cuda.data_ref().iter().copied().collect::<Vec<_>>(), &q_cpu, 2e-2);
+        assert_close(&k_cuda.data_ref().iter().copied().collect::<Vec<_>>(), &k_cpu, 2e-2);
+        assert_close(&v_cuda.data_ref().iter().copied().collect::<Vec<_>>(), &v_cpu, 2e-2);
     }
 
     #[cfg(feature = "cuda")]
@@ -3699,16 +3644,10 @@ mod tests {
 
     #[test]
     fn fused_softmax_no_grad_preserves_bf16_dtype() {
-        let input_f32 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::F32,
-        );
-        let input_bf16 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::BF16,
-        );
+        let input_f32 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::F32);
+        let input_bf16 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::BF16);
 
         let ref_out = no_grad(|| fused_softmax(&input_f32, 1.0, false));
         let out = no_grad(|| fused_softmax(&input_bf16, 1.0, false));
@@ -3737,16 +3676,10 @@ mod tests {
 
     #[test]
     fn fused_softmax_bf16_matches_quantized_reference() {
-        let input_f32 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::F32,
-        );
-        let input_bf16 = make_tensor(
-            &[1, 1, 2, 4],
-            vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0],
-            DType::BF16,
-        );
+        let input_f32 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::F32);
+        let input_bf16 =
+            make_tensor(&[1, 1, 2, 4], vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5, 2.5, -3.0], DType::BF16);
 
         let ref_out = no_grad(|| fused_softmax(&input_f32, 0.75, true));
         let out = no_grad(|| fused_softmax(&input_bf16, 0.75, true));

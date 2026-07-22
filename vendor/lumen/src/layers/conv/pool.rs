@@ -21,11 +21,7 @@ impl MaxPool2D {
 }
 impl Module for MaxPool2D {
     fn forward(&self, input: Tensor) -> Tensor {
-        max_pool2d(
-            &input,
-            (self.kernel_size, self.kernel_size),
-            (self.stride, self.stride),
-        )
+        max_pool2d(&input, (self.kernel_size, self.kernel_size), (self.stride, self.stride))
     }
     fn parameters(&self) -> Vec<Tensor> {
         vec![]

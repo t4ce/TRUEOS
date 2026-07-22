@@ -281,10 +281,7 @@ fn parse_args() -> Result<Args, String> {
     }
     if let Some(dtype) = quantize_dtype {
         if !dtype.is_integer() {
-            return Err(format!(
-                "--quantize 当前只支持整数存储 dtype，收到 {:?}",
-                dtype
-            ));
+            return Err(format!("--quantize 当前只支持整数存储 dtype，收到 {:?}", dtype));
         }
         if parameter_dtype != DType::F32 && parameter_dtype != dtype {
             return Err(format!(
@@ -332,10 +329,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn build_first_turn_prompt(system: &str, user: &str) -> String {
-    format!(
-        "<|system|>\n{}\n</s>\n<|user|>\n{}\n</s>\n<|assistant|>\n",
-        system, user
-    )
+    format!("<|system|>\n{}\n</s>\n<|user|>\n{}\n</s>\n<|assistant|>\n", system, user)
 }
 
 fn build_next_turn_prompt(user: &str) -> String {
@@ -486,10 +480,7 @@ fn last_step_logits_vec(logits: &Tensor) -> Vec<f32> {
 
 fn env_flag_enabled(name: &str) -> bool {
     match env::var(name) {
-        Ok(value) => matches!(
-            value.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
+        Ok(value) => matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         Err(_) => false,
     }
 }
@@ -569,7 +560,7 @@ fn main() -> Result<(), Box<dyn core::error::Error>> {
     if args.device == Device::Cuda {
         if !lumen::ops::cuda::is_available() {
             return Err(
-                "CUDA 不可用；请确认使用 --features cuda 构建并安装 NVIDIA/CUDA 运行环境".into(),
+                "CUDA 不可用；请确认使用 --features cuda 构建并安装 NVIDIA/CUDA 运行环境".into()
             );
         }
         model.to_cuda();

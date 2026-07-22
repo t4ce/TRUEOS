@@ -1,15 +1,16 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 // src/autograd.rs
 use crate::precision::{
     DType, ParameterQuantization, allow_parameter_dtype_copies, default_parameter_dtype,
     default_parameter_quantization,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use ndarray::prelude::*;
 pub use ndarray::{ArcArray, IxDyn};
@@ -18,7 +19,6 @@ use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::OnceLock;
-use core::sync::atomic::{AtomicBool, Ordering};
 thread_local! {
     static INFERENCE_MODE: Cell<bool> = const { Cell::new(false) };
     static NO_GRAD_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -70,10 +70,7 @@ fn env_strict_device_execution() -> bool {
     std::env::var("LUMEN_STRICT_DEVICE")
         .ok()
         .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
+            matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
         })
         .unwrap_or(false)
 }
@@ -962,10 +959,7 @@ impl Tensor {
     }
 
     fn ensure_cuda_f32_data(&self) {
-        assert!(
-            self.device() == Device::Cuda,
-            "ensure_cuda_f32_data expects a CUDA tensor"
-        );
+        assert!(self.device() == Device::Cuda, "ensure_cuda_f32_data expects a CUDA tensor");
         if self.0.borrow().cuda_f32_data.is_some() {
             return;
         }
@@ -2169,19 +2163,12 @@ impl Tensor {
     // - 否则：requires_grad=true（更适合训练时手工造张量）
     pub fn new(data: ArrayD<f32>) -> Self {
         let req = !is_no_grad();
-        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(
-            DType::F32,
-            data,
-            req,
-            false,
-        ))))
+        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(DType::F32, data, req, false))))
     }
 
     pub fn new_with_dtype(data: ArrayD<f32>, dtype: DType) -> Self {
         let req = !is_no_grad();
-        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(
-            dtype, data, req, false,
-        ))))
+        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(dtype, data, req, false))))
     }
 
     // 获取数据的只读引用（零拷贝）
@@ -2763,9 +2750,7 @@ impl Tensor {
 
     // 训练参数：显式指定 dtype，优先级高于全局默认参数 dtype
     pub fn parameter_with_dtype(data: ArrayD<f32>, dtype: DType) -> Tensor {
-        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(
-            dtype, data, true, true,
-        ))))
+        Tensor(Rc::new(RefCell::new(Self::build_tensor_data(dtype, data, true, true))))
     }
 
     pub fn parameter_placeholder_with_dtype(shape: &[usize], dtype: DType) -> Tensor {
@@ -2963,11 +2948,7 @@ impl Tensor {
     #[allow(dead_code)]
     pub(crate) fn add_cuda_grad_buffer_only(&self, cuda_grad: crate::ops::cuda::CudaBuffer) {
         let mut inner = self.0.borrow_mut();
-        assert_eq!(
-            inner.device,
-            Device::Cuda,
-            "add_cuda_grad_buffer_only expects a CUDA tensor"
-        );
+        assert_eq!(inner.device, Device::Cuda, "add_cuda_grad_buffer_only expects a CUDA tensor");
         let grad_len = Self::logical_shape(&inner).iter().product::<usize>();
         assert_eq!(
             cuda_grad.len(),
@@ -3214,18 +3195,12 @@ mod tests {
             rx.recv().expect("receive spawned thread state"),
             "spawned thread should observe its own no_grad guard"
         );
-        assert!(
-            !is_no_grad(),
-            "main thread should not inherit spawned thread's no_grad guard"
-        );
+        assert!(!is_no_grad(), "main thread should not inherit spawned thread's no_grad guard");
         assert!(
             rx.recv().expect("receive spawned thread state"),
             "spawned thread should remain in no_grad until its guard drops"
         );
-        assert!(
-            !is_no_grad(),
-            "main thread should still remain outside no_grad"
-        );
+        assert!(!is_no_grad(), "main thread should still remain outside no_grad");
 
         handle.join().expect("join no_grad thread");
         set_inference_mode(false);
@@ -3258,10 +3233,7 @@ mod tests {
             rx.recv().expect("receive spawned thread state"),
             "spawned thread should remain in inference mode until it resets"
         );
-        assert!(
-            !is_inference_mode(),
-            "main thread should still remain outside inference mode"
-        );
+        assert!(!is_inference_mode(), "main thread should still remain outside inference mode");
 
         handle.join().expect("join inference thread");
         set_inference_mode(false);
@@ -3605,11 +3577,7 @@ mod tests {
                         TensorStorageView::BF16(_) => panic!("i8 compute view should expose f32"),
                     },
                 );
-                assert_eq!(
-                    param.dtype(),
-                    DType::I8,
-                    "compute view should not mutate i8 storage"
-                );
+                assert_eq!(param.dtype(), DType::I8, "compute view should not mutate i8 storage");
             },
         );
     }
@@ -3752,10 +3720,7 @@ mod tests {
         let err = dst
             .import_raw(vec![2], DType::BF16, TensorRawData::F32(vec![1.0, -2.0]))
             .expect_err("dtype mismatch should return an error");
-        assert!(
-            err.contains("dtype BF16 with f32 data"),
-            "unexpected error: {err}"
-        );
+        assert!(err.contains("dtype BF16 with f32 data"), "unexpected error: {err}");
     }
 
     #[cfg(feature = "cuda")]

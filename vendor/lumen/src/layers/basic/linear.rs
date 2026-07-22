@@ -33,11 +33,8 @@ impl Linear {
 
     pub fn new_with_dtype(in_features: usize, out_features: usize, dtype: DType) -> Self {
         // 注意：为了对齐 PyTorch/HF nn.Linear.weight 的布局，weight 存成 [out, in]
-        let weight = tensor_init_with_dtype(
-            vec![out_features, in_features],
-            InitType::KaimingNormal,
-            dtype,
-        );
+        let weight =
+            tensor_init_with_dtype(vec![out_features, in_features], InitType::KaimingNormal, dtype);
 
         let bias = tensor_init_with_dtype(vec![out_features], InitType::Zeros, dtype);
 
@@ -61,11 +58,8 @@ impl Linear {
     }
 
     pub fn new_no_bias_with_dtype(in_features: usize, out_features: usize, dtype: DType) -> Self {
-        let weight = tensor_init_with_dtype(
-            vec![out_features, in_features],
-            InitType::KaimingNormal,
-            dtype,
-        );
+        let weight =
+            tensor_init_with_dtype(vec![out_features, in_features], InitType::KaimingNormal, dtype);
 
         Linear {
             weight,
@@ -77,14 +71,8 @@ impl Linear {
 
     #[inline]
     pub fn forward_decode_slice_no_bias_into(&self, input: &[f32], out: &mut [f32]) {
-        assert!(
-            is_no_grad(),
-            "forward_decode_slice_no_bias_into is inference-only"
-        );
-        assert!(
-            self.bias.is_none(),
-            "forward_decode_slice_no_bias_into currently expects no bias"
-        );
+        assert!(is_no_grad(), "forward_decode_slice_no_bias_into is inference-only");
+        assert!(self.bias.is_none(), "forward_decode_slice_no_bias_into currently expects no bias");
         assert_eq!(input.len(), self.in_features, "input width mismatch");
         assert_eq!(out.len(), self.out_features, "output width mismatch");
 
@@ -210,14 +198,8 @@ impl Linear {
     }
 
     pub fn forward_decode_slice_no_bias(&self, input: &[f32]) -> Tensor {
-        assert!(
-            is_no_grad(),
-            "forward_decode_slice_no_bias is inference-only"
-        );
-        assert!(
-            self.bias.is_none(),
-            "forward_decode_slice_no_bias currently expects no bias"
-        );
+        assert!(is_no_grad(), "forward_decode_slice_no_bias is inference-only");
+        assert!(self.bias.is_none(), "forward_decode_slice_no_bias currently expects no bias");
         assert_eq!(input.len(), self.in_features, "input width mismatch");
 
         let mut data = ArrayD::<f32>::zeros(IxDyn(&[1, 1, self.out_features])).into_shared();
@@ -229,14 +211,8 @@ impl Linear {
     }
 
     pub fn forward_decode_rows_no_bias(&self, input: &[f32], rows: usize) -> Tensor {
-        assert!(
-            is_no_grad(),
-            "forward_decode_rows_no_bias is inference-only"
-        );
-        assert!(
-            self.bias.is_none(),
-            "forward_decode_rows_no_bias currently expects no bias"
-        );
+        assert!(is_no_grad(), "forward_decode_rows_no_bias is inference-only");
+        assert!(self.bias.is_none(), "forward_decode_rows_no_bias currently expects no bias");
         assert_eq!(input.len(), rows * self.in_features, "input width mismatch");
 
         let mut data = ArrayD::<f32>::zeros(IxDyn(&[rows, 1, self.out_features])).into_shared();
@@ -275,10 +251,7 @@ mod tests {
             || {
                 let linear = Linear::new_with_dtype(4, 3, DType::F32);
                 assert_eq!(linear.weight.dtype(), DType::F32);
-                assert_eq!(
-                    linear.bias.as_ref().expect("linear bias").dtype(),
-                    DType::F32
-                );
+                assert_eq!(linear.bias.as_ref().expect("linear bias").dtype(), DType::F32);
             },
         );
     }
@@ -305,10 +278,7 @@ mod tests {
                 {
                     let inner = linear.weight.0.borrow();
                     assert_eq!(inner.storage_dtype, DType::I8);
-                    assert!(
-                        !inner.has_f32_data,
-                        "i8 weight should start without f32 cache"
-                    );
+                    assert!(!inner.has_f32_data, "i8 weight should start without f32 cache");
                 }
 
                 let input = [1.0f32, -2.0, 0.5, 3.0];
@@ -374,10 +344,7 @@ mod tests {
                 with_parameter_quantization(ParameterQuantization::Int8, || {
                     let linear = Linear::new(4, 3);
                     assert_eq!(linear.weight.dtype(), DType::I8);
-                    assert_eq!(
-                        linear.bias.as_ref().expect("linear bias").dtype(),
-                        DType::I8
-                    );
+                    assert_eq!(linear.bias.as_ref().expect("linear bias").dtype(), DType::I8);
                 });
             },
         );

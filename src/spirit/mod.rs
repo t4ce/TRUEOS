@@ -17,6 +17,7 @@ use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 mod intel_cursor;
+mod lilly;
 
 /// Architectural pipe/fence capacity kept for later activation.
 pub(crate) const SPIRIT_FENCE_COUNT: usize = 4;
@@ -614,14 +615,16 @@ pub(crate) async fn spirit_worker_task(worker_index: u8) {
         );
         return;
     }
+    let lilly_ready = worker_index != 0 || lilly::prepare_resident_once();
     crate::log!(
-        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} route=guc-lab256->spirit-cursor-backbuffer->cur-base producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
+        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-lab256->spirit-cursor-backbuffer->cur-base producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
         worker_index,
         id.index(),
         pipe_name(id),
         crate::percpu::current_slot(),
         crate::workers::AP1_UI_SERVICE_SLOT,
         SPIRIT_WORKER_POOL_LIMIT,
+        lilly_ready as u8,
         SPIRIT_LAB256_INITIAL_TRACE_FRAMES,
         SPIRIT_LAB256_TARGET_HZ,
     );

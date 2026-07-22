@@ -185,11 +185,7 @@ fn reduce_gradient(grad: ArrayViewD<'_, f32>, target_shape: &[usize]) -> ArrayD<
             let summed = res.sum_axis(ndarray::Axis(i));
             res = summed.insert_axis(ndarray::Axis(i));
         } else if target_shape[i] != res.shape()[i] {
-            panic!(
-                "Gradient shape mismatch. Grad: {:?}, Target: {:?}",
-                grad.shape(),
-                target_shape
-            );
+            panic!("Gradient shape mismatch. Grad: {:?}, Target: {:?}", grad.shape(), target_shape);
         }
     }
 
@@ -255,23 +251,14 @@ fn add_cpu_binary_grads(lhs: &Tensor, rhs: &Tensor, grad: ArrayViewD<'_, f32>, o
 
                 let (g_lhs, g_rhs) =
                     if grad.shape() == lhs_data.shape() && grad.shape() == rhs_data.shape() {
-                        let gl = Zip::from(&grad)
-                            .and(&*rhs_data)
-                            .map_collect(|&g, &b| g * b);
-                        let gr = Zip::from(&grad)
-                            .and(&*lhs_data)
-                            .map_collect(|&g, &a| g * a);
+                        let gl = Zip::from(&grad).and(&*rhs_data).map_collect(|&g, &b| g * b);
+                        let gr = Zip::from(&grad).and(&*lhs_data).map_collect(|&g, &a| g * a);
                         (gl, gr)
                     } else {
                         (grad.to_owned() * &*rhs_data, grad.to_owned() * &*lhs_data)
                     };
 
-                (
-                    g_lhs,
-                    g_rhs,
-                    lhs_data.shape().to_vec(),
-                    rhs_data.shape().to_vec(),
-                )
+                (g_lhs, g_rhs, lhs_data.shape().to_vec(), rhs_data.shape().to_vec())
             };
             lhs.add_grad(reduce_gradient(g_lhs.view(), &lhs_shape));
             rhs.add_grad(reduce_gradient(g_rhs.view(), &rhs_shape));
@@ -874,18 +861,11 @@ mod tests {
         }
 
         crate::ops::cuda::set_enabled(true);
-        let lhs = make_tensor(
-            &[16384],
-            (0..16384).map(|i| i as f32 * 0.25).collect(),
-            DType::F32,
-        )
-        .to_cuda();
-        let rhs = make_tensor(
-            &[16384],
-            (0..16384).map(|i| -(i as f32) * 0.5).collect(),
-            DType::F32,
-        )
-        .to_cuda();
+        let lhs = make_tensor(&[16384], (0..16384).map(|i| i as f32 * 0.25).collect(), DType::F32)
+            .to_cuda();
+        let rhs =
+            make_tensor(&[16384], (0..16384).map(|i| -(i as f32) * 0.5).collect(), DType::F32)
+                .to_cuda();
 
         let out = no_grad(|| lhs.clone() + rhs.clone());
         assert!(out.is_cuda());
@@ -1169,10 +1149,7 @@ mod tests {
         let input = make_training_tensor(&shape, values).to_cuda();
         let out = sum(&input);
         assert!(out.is_cuda());
-        assert!(
-            out.has_host_f32_data(),
-            "sum currently keeps a host scalar result"
-        );
+        assert!(out.has_host_f32_data(), "sum currently keeps a host scalar result");
 
         let grad_buffer =
             crate::ops::cuda::upload_f32(&[3.0]).expect("test should upload CUDA-only grad");
@@ -1213,10 +1190,7 @@ mod tests {
         out.backward();
 
         let grad = input.grad().expect("input grad");
-        assert_eq!(
-            grad.iter().copied().collect::<Vec<_>>(),
-            vec![6.0, 6.0, 6.0]
-        );
+        assert_eq!(grad.iter().copied().collect::<Vec<_>>(), vec![6.0, 6.0, 6.0]);
         assert!(input.cloned_cuda_f32_grad().is_some());
         crate::autograd::set_strict_device_execution(false);
         crate::ops::cuda::set_enabled(false);

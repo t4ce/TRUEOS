@@ -1,16 +1,16 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::Tensor;
 use crate::precision::{DType, default_parameter_dtype, default_parameter_quantization};
+use core::sync::atomic::{AtomicU8, Ordering};
 use ndarray::{Array, ArrayD, IxDyn};
 use ndarray_rand::RandomExt;
 use ndarray_rand::rand_distr::{Normal, Uniform};
-use core::sync::atomic::{AtomicU8, Ordering};
 
 pub enum InitType {
     XavierUniform, // For Tanh/Sigmoid (Glorot)

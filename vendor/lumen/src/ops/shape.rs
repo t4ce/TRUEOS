@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     ArcArray, IxDyn, Tensor, TensorData, TensorStorageOwned, assert_native_device_support,
@@ -43,12 +43,7 @@ fn validate_permute_axes(ndim: usize, axes: &[usize]) {
     );
     let mut seen = vec![false; ndim];
     for (i, &axis) in axes.iter().enumerate() {
-        assert!(
-            axis < ndim,
-            "Permute axis {} out of bounds for ndim {}",
-            axis,
-            ndim
-        );
+        assert!(axis < ndim, "Permute axis {} out of bounds for ndim {}", axis, ndim);
         assert!(
             !seen[axis],
             "Permute axes must be unique, duplicate axis {} at position {}",
@@ -61,12 +56,7 @@ fn validate_permute_axes(ndim: usize, axes: &[usize]) {
 fn validate_cat_inputs(tensors: &[Tensor], axis: usize) -> Vec<Vec<usize>> {
     let shapes = tensors.iter().map(Tensor::shape_vec).collect::<Vec<_>>();
     let ndim = shapes[0].len();
-    assert!(
-        axis < ndim,
-        "Concat axis {} out of bounds for ndim {}",
-        axis,
-        ndim
-    );
+    assert!(axis < ndim, "Concat axis {} out of bounds for ndim {}", axis, ndim);
     for shape in shapes.iter().skip(1) {
         assert_eq!(
             shape.len(),
@@ -230,10 +220,7 @@ pub fn reshape(input: &Tensor, shape: Vec<i32>) -> Tensor {
     for (axis, &dim) in shape.iter().enumerate() {
         match dim {
             -1 => {
-                assert!(
-                    infer_axis.is_none(),
-                    "Reshape only supports one inferred dimension (-1)"
-                );
+                assert!(infer_axis.is_none(), "Reshape only supports one inferred dimension (-1)");
                 infer_axis = Some(axis);
                 new_shape.push(0);
             }
@@ -245,19 +232,13 @@ pub fn reshape(input: &Tensor, shape: Vec<i32>) -> Tensor {
                 new_shape.push(dim_usize);
             }
             _ => {
-                panic!(
-                    "Reshape dimension at axis {} must be >= -1, got {}",
-                    axis, dim
-                );
+                panic!("Reshape dimension at axis {} must be >= -1, got {}", axis, dim);
             }
         }
     }
 
     if let Some(axis) = infer_axis {
-        assert!(
-            known_product > 0,
-            "Reshape cannot infer dimension when known product is zero"
-        );
+        assert!(known_product > 0, "Reshape cannot infer dimension when known product is zero");
         assert!(
             input_len % known_product == 0,
             "Reshape inferred dimension mismatch: input elements {} not divisible by known product {}",
@@ -577,11 +558,7 @@ pub fn cat(tensors: &[Tensor], axis: usize) -> Tensor {
         output_device == crate::autograd::Device::Cuda,
     );
     for tensor in tensors.iter().skip(1) {
-        assert_eq!(
-            tensor.device(),
-            output_device,
-            "cat expects all tensors on the same device"
-        );
+        assert_eq!(tensor.device(), output_device, "cat expects all tensors on the same device");
     }
     let shapes = validate_cat_inputs(tensors, axis);
 
@@ -1111,19 +1088,11 @@ pub fn cat(tensors: &[Tensor], axis: usize) -> Tensor {
 pub fn slice_last_dim(input: &Tensor, start: usize, end: usize) -> Tensor {
     let output_device = input.device();
     let input_shape = input.shape_vec();
-    assert!(
-        !input_shape.is_empty(),
-        "slice_last_dim expects at least 1D input"
-    );
+    assert!(!input_shape.is_empty(), "slice_last_dim expects at least 1D input");
     let last_dim = input_shape.len() - 1;
     let last_len = input_shape[last_dim];
     assert!(start <= end, "slice_last_dim expects start <= end");
-    assert!(
-        end <= last_len,
-        "slice_last_dim end out of bounds: {} > {}",
-        end,
-        last_len
-    );
+    assert!(end <= last_len, "slice_last_dim end out of bounds: {} > {}", end, last_len);
     let axis = ndarray::Axis(last_dim);
     let build_graph = !is_no_grad() && input.requires_grad();
     assert_native_device_support(
@@ -1411,11 +1380,8 @@ mod tests {
 
     #[test]
     fn bf16_shape_ops_preserve_native_dtype_in_no_grad() {
-        let input = make_tensor(
-            &[2, 3, 4],
-            (0..24).map(|v| v as f32 * 0.25).collect(),
-            DType::BF16,
-        );
+        let input =
+            make_tensor(&[2, 3, 4], (0..24).map(|v| v as f32 * 0.25).collect(), DType::BF16);
 
         let reshaped = no_grad(|| reshape(&input, vec![2, -1]));
         let permuted = no_grad(|| permute(&input, vec![2, 0, 1]));
@@ -1438,11 +1404,8 @@ mod tests {
 
     #[test]
     fn i8_shape_ops_preserve_native_dtype_in_no_grad() {
-        let input = make_tensor(
-            &[2, 3, 4],
-            (0..24).map(|v| v as f32 * 0.125 - 1.0).collect(),
-            DType::I8,
-        );
+        let input =
+            make_tensor(&[2, 3, 4], (0..24).map(|v| v as f32 * 0.125 - 1.0).collect(), DType::I8);
 
         let reshaped = no_grad(|| reshape(&input, vec![2, -1]));
         let permuted = no_grad(|| permute(&input, vec![2, 0, 1]));
@@ -1553,12 +1516,8 @@ mod tests {
             return;
         }
 
-        let input = make_tensor(
-            &[2, 3, 4],
-            (0..24).map(|v| v as f32 * 0.5).collect(),
-            DType::BF16,
-        )
-        .to_cuda();
+        let input = make_tensor(&[2, 3, 4], (0..24).map(|v| v as f32 * 0.5).collect(), DType::BF16)
+            .to_cuda();
         crate::autograd::set_strict_device_execution(true);
         let cuda_out = no_grad(|| permute(&input, vec![2, 0, 1]));
         crate::autograd::set_strict_device_execution(false);
@@ -1628,12 +1587,9 @@ mod tests {
             return;
         }
 
-        let input = make_tensor(
-            &[2, 3, 5],
-            (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(),
-            DType::BF16,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[2, 3, 5], (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(), DType::BF16)
+                .to_cuda();
         crate::autograd::set_strict_device_execution(true);
         let cuda_out = no_grad(|| slice_last_dim(&input, 1, 4));
         crate::autograd::set_strict_device_execution(false);
@@ -1654,12 +1610,9 @@ mod tests {
             return;
         }
 
-        let input = make_tensor(
-            &[2, 3, 5],
-            (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(),
-            DType::BF16,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[2, 3, 5], (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(), DType::BF16)
+                .to_cuda();
 
         crate::autograd::set_strict_device_execution(true);
         let out = no_grad(|| slice_last_dim(&input, 2, 2));
@@ -1679,12 +1632,9 @@ mod tests {
             return;
         }
 
-        let lhs = make_tensor(
-            &[2, 3, 5],
-            (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(),
-            DType::BF16,
-        )
-        .to_cuda();
+        let lhs =
+            make_tensor(&[2, 3, 5], (0..30).map(|v| v as f32 * 0.25 - 1.0).collect(), DType::BF16)
+                .to_cuda();
         let rhs = make_tensor(
             &[2, 3, 5],
             (0..30).map(|v| v as f32 * -0.125 + 0.5).collect(),
@@ -1766,12 +1716,8 @@ mod tests {
             return;
         }
 
-        let lhs = make_tensor(
-            &[2, 1, 3],
-            vec![0.0, 1.0, 2.0, -1.0, -2.0, -3.0],
-            DType::BF16,
-        )
-        .to_cuda();
+        let lhs =
+            make_tensor(&[2, 1, 3], vec![0.0, 1.0, 2.0, -1.0, -2.0, -3.0], DType::BF16).to_cuda();
         let rhs = make_tensor(
             &[2, 2, 3],
             vec![
@@ -1852,16 +1798,10 @@ mod tests {
         let rhs_cuda_grad = rhs_cuda.grad().expect("cuda rhs cat grad");
         let rhs_cpu_grad = rhs_cpu.grad().expect("cpu rhs cat grad");
         for (got, expect) in lhs_cuda_grad.iter().zip(lhs_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "lhs got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "lhs got {got}, expect {expect}");
         }
         for (got, expect) in rhs_cuda_grad.iter().zip(rhs_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "rhs got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "rhs got {got}, expect {expect}");
         }
     }
 

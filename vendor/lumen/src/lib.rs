@@ -217,9 +217,9 @@ pub mod std {
 
 #[cfg(feature = "host-runtime")]
 pub mod arch;
+pub mod async_module;
 #[cfg(feature = "host-runtime")]
 pub mod autograd;
-pub mod async_module;
 pub mod backend;
 #[cfg(feature = "host-runtime")]
 pub mod parallel;

@@ -3,9 +3,9 @@ use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
 
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -638,18 +638,12 @@ mod tests {
         let _quantization_guard = parameter_quantization_guard(ParameterQuantization::Disabled);
 
         with_parameter_quantization(ParameterQuantization::Int8, || {
-            assert_eq!(
-                default_parameter_quantization(),
-                ParameterQuantization::Int8
-            );
+            assert_eq!(default_parameter_quantization(), ParameterQuantization::Int8);
             assert!(parameter_quantization_enabled());
             assert_eq!(default_parameter_storage_dtype(), DType::I8);
         });
 
-        assert_eq!(
-            default_parameter_quantization(),
-            ParameterQuantization::Disabled
-        );
+        assert_eq!(default_parameter_quantization(), ParameterQuantization::Disabled);
         assert_eq!(default_parameter_storage_dtype(), DType::F32);
     }
 

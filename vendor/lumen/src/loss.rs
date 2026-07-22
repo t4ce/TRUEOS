@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     StoragePreference, Tensor, TensorData, TensorStorageView, assert_native_device_support,
@@ -197,11 +197,7 @@ impl CrossEntropyLoss {
         let cuda_native_supported = output_device == crate::autograd::Device::Cuda;
         assert_native_device_support(output_device, "cross_entropy", cuda_native_supported);
         let shape = input_logits.shape_vec();
-        assert_eq!(
-            shape.len(),
-            2,
-            "cross_entropy currently expects [B, C] logits"
-        );
+        assert_eq!(shape.len(), 2, "cross_entropy currently expects [B, C] logits");
         assert_eq!(
             target_onehot.shape_vec(),
             shape,
@@ -209,14 +205,8 @@ impl CrossEntropyLoss {
         );
         let batch_size = shape[0];
         let dim = shape[1];
-        assert!(
-            batch_size > 0,
-            "cross_entropy batch size must be greater than zero"
-        );
-        assert!(
-            dim > 0,
-            "cross_entropy class dimension must be greater than zero"
-        );
+        assert!(batch_size > 0, "cross_entropy batch size must be greater than zero");
+        assert!(dim > 0, "cross_entropy class dimension must be greater than zero");
         if output_device == crate::autograd::Device::Cuda {
             let cuda_forward = input_logits.with_cuda_f32_buffer(|logits_buf| {
                 let softmax_buf = cuda::softmax_lastdim_f32_no_host(logits_buf, batch_size, dim)?;
@@ -516,16 +506,10 @@ mod tests {
         let tar_cuda_grad = target_cuda.grad().expect("cuda target grad");
         let tar_cpu_grad = target_cpu.grad().expect("cpu target grad");
         for (got, expect) in out_cuda_grad.iter().zip(out_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "output grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "output grad got {got}, expect {expect}");
         }
         for (got, expect) in tar_cuda_grad.iter().zip(tar_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "target grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "target grad got {got}, expect {expect}");
         }
     }
 
@@ -566,10 +550,7 @@ mod tests {
         let logits_cuda_grad = logits_cuda.grad().expect("cuda logits grad");
         let logits_cpu_grad = logits_cpu.grad().expect("cpu logits grad");
         for (got, expect) in logits_cuda_grad.iter().zip(logits_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "logits grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "logits grad got {got}, expect {expect}");
         }
     }
 
@@ -608,9 +589,6 @@ mod tests {
         let loss_cpu = CrossEntropyLoss::apply(&logits_cpu, &targets_cpu);
         let got = loss_cuda.data_ref().first().copied().unwrap_or_default();
         let expect = loss_cpu.data_ref().first().copied().unwrap_or_default();
-        assert!(
-            (got - expect).abs() < 1e-5,
-            "loss got {got}, expect {expect}"
-        );
+        assert!((got - expect).abs() < 1e-5, "loss got {got}, expect {expect}");
     }
 }

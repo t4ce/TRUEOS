@@ -280,7 +280,9 @@ module truega_lfm25_fixed_decode_datapath (
                 && attn_projection_ready;
             11: feed_stage_ready_o = owner == OWNER_ATTN && attn_core_ready;
             13: feed_stage_ready_o = owner == OWNER_FFN
-                && (feed_bank_i == 0 || (ffn_row_started && ffn_weight_ready));
+                && (feed_bank_i == 0
+                    ? (feed_stage_i != 0 || ffn_row_started || ffn_row_ready)
+                    : (ffn_row_started && ffn_weight_ready));
             14: feed_stage_ready_o = owner == OWNER_FFN
                 && ffn_row_started && ffn_weight_ready;
             15: feed_stage_ready_o = owner == OWNER_TAIL && tail_lm_ready;
@@ -680,16 +682,20 @@ module truega_lfm25_fixed_decode_datapath (
             3: feed_item_effect_done_o = tail_norm_result_valid;
             4: feed_item_effect_done_o = 1'b1;
             5: feed_item_effect_done_o = short_channels > finished_item;
-            6: feed_item_effect_done_o = short_rows > finished_item;
+            6: feed_item_effect_done_o = finished_item == 1023
+                ? short_join_result_valid : short_rows > finished_item;
             7: feed_item_effect_done_o = scalar_busy == 0;
             8: feed_item_effect_done_o = attn_q_rows > finished_item;
             9: feed_item_effect_done_o = attn_k_rows > finished_item;
             10: feed_item_effect_done_o = attn_v_rows > finished_item;
             11: feed_item_effect_done_o = attn_core_seen;
-            12: feed_item_effect_done_o = attn_out_rows > finished_item;
+            12: feed_item_effect_done_o = finished_item == 1023
+                ? attn_join_result_valid : attn_out_rows > finished_item;
             13: feed_item_effect_done_o = ffn_gate_rows > finished_item;
-            14: feed_item_effect_done_o = ffn_down_rows > finished_item;
-            15: feed_item_effect_done_o = tail_rows > finished_item;
+            14: feed_item_effect_done_o = finished_item == 1023
+                ? ffn_join_result_valid : ffn_down_rows > finished_item;
+            15: feed_item_effect_done_o = finished_item == 65535
+                ? tail_join_result_valid : tail_rows > finished_item;
             default: feed_item_effect_done_o = 1'b0;
         endcase
     end

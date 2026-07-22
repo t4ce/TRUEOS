@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     KernelRouteClass, StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -15,11 +15,11 @@ use crate::ops::fp_kernels::{
     dot2_f32_f16_arch, dot3_f32_arch, dot3_f32_bf16_arch, dot3_f32_f16_arch,
 };
 use crate::ops::int8_kernels::{dot_f32_i8_arch, dot2_f32_i8_arch, dot3_f32_i8_arch};
+use crate::parallel::*;
 use crate::precision::DType;
 use half::{bf16, f16, slice::HalfFloatSliceExt};
 use ndarray::linalg::general_mat_mul;
 use ndarray::{Array2, Array4, Ix2, Ix4, Zip};
-use crate::parallel::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -586,10 +586,7 @@ fn dot2_unrolled_i8_i8(
         sum1 += row1[kk] as i32 * xv;
         kk += 1;
     }
-    (
-        (sum0 as f32) * x_scale * scale0,
-        (sum1 as f32) * x_scale * scale1,
-    )
+    ((sum0 as f32) * x_scale * scale0, (sum1 as f32) * x_scale * scale1)
 }
 
 #[inline]
@@ -3780,16 +3777,8 @@ pub fn dual_matvec_silu_mul_rowmajor_parallel(
     out: &mut [f32],
 ) {
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
-    assert_eq!(
-        gate_w_rowmajor.len(),
-        n_rows * k_dim,
-        "gate weight size mismatch"
-    );
-    assert_eq!(
-        up_w_rowmajor.len(),
-        n_rows * k_dim,
-        "up weight size mismatch"
-    );
+    assert_eq!(gate_w_rowmajor.len(), n_rows * k_dim, "gate weight size mismatch");
+    assert_eq!(up_w_rowmajor.len(), n_rows * k_dim, "up weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
 
     if n_rows < MATVEC_PAR_THRESHOLD {
@@ -3821,16 +3810,8 @@ pub(crate) fn dual_matvec_silu_mul_rowmajor_parallel_f32_bf16(
     out: &mut [f32],
 ) {
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
-    assert_eq!(
-        gate_w_rowmajor.len(),
-        n_rows * k_dim,
-        "gate weight size mismatch"
-    );
-    assert_eq!(
-        up_w_rowmajor.len(),
-        n_rows * k_dim,
-        "up weight size mismatch"
-    );
+    assert_eq!(gate_w_rowmajor.len(), n_rows * k_dim, "gate weight size mismatch");
+    assert_eq!(up_w_rowmajor.len(), n_rows * k_dim, "up weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
 
     if n_rows < MATVEC_PAR_THRESHOLD {
@@ -3868,16 +3849,8 @@ pub(crate) fn dual_matvec_silu_mul_rowmajor_parallel_f32_f16(
     out: &mut [f32],
 ) {
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
-    assert_eq!(
-        gate_w_rowmajor.len(),
-        n_rows * k_dim,
-        "gate weight size mismatch"
-    );
-    assert_eq!(
-        up_w_rowmajor.len(),
-        n_rows * k_dim,
-        "up weight size mismatch"
-    );
+    assert_eq!(gate_w_rowmajor.len(), n_rows * k_dim, "gate weight size mismatch");
+    assert_eq!(up_w_rowmajor.len(), n_rows * k_dim, "up weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
 
     if n_rows < MATVEC_PAR_THRESHOLD {
@@ -3917,16 +3890,8 @@ pub(crate) fn dual_matvec_silu_mul_rowmajor_parallel_f32_i8(
     out: &mut [f32],
 ) {
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
-    assert_eq!(
-        gate_w_rowmajor.len(),
-        n_rows * k_dim,
-        "gate weight size mismatch"
-    );
-    assert_eq!(
-        up_w_rowmajor.len(),
-        n_rows * k_dim,
-        "up weight size mismatch"
-    );
+    assert_eq!(gate_w_rowmajor.len(), n_rows * k_dim, "gate weight size mismatch");
+    assert_eq!(up_w_rowmajor.len(), n_rows * k_dim, "up weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
 
     if n_rows < MATVEC_PAR_THRESHOLD {
@@ -3978,16 +3943,8 @@ pub(crate) fn dual_matvec_silu_mul_rowmajor_parallel_i8_i8(
     out: &mut [f32],
 ) {
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
-    assert_eq!(
-        gate_w_rowmajor.len(),
-        n_rows * k_dim,
-        "gate weight size mismatch"
-    );
-    assert_eq!(
-        up_w_rowmajor.len(),
-        n_rows * k_dim,
-        "up weight size mismatch"
-    );
+    assert_eq!(gate_w_rowmajor.len(), n_rows * k_dim, "gate weight size mismatch");
+    assert_eq!(up_w_rowmajor.len(), n_rows * k_dim, "up weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
 
     if n_rows < MATVEC_PAR_THRESHOLD {
@@ -4438,10 +4395,7 @@ pub fn matvec_argmax_rowmajor_parallel(
                 }
                 best
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0;
     }
 
@@ -4462,10 +4416,7 @@ pub fn matvec_argmax_rowmajor_parallel(
                 let row = &w_rowmajor[i * k_dim..(i + 1) * k_dim];
                 (i, dot_unrolled(x, row))
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0
     }
 }
@@ -4497,10 +4448,7 @@ fn matvec_argmax_rowmajor_parallel_f32_bf16(
                 let row = &w_rowmajor[i * k_dim..(i + 1) * k_dim];
                 (i, dot_unrolled_f32_bf16(x, row))
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0
     }
 }
@@ -4532,10 +4480,7 @@ fn matvec_argmax_rowmajor_parallel_f32_f16(
                 let row = &w_rowmajor[i * k_dim..(i + 1) * k_dim];
                 (i, dot_unrolled_f32_f16(x, row))
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0
     }
 }
@@ -4602,10 +4547,7 @@ fn matvec_argmax_rowmajor_parallel_f32_i8(
                 }
                 best
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0;
     }
 
@@ -4626,10 +4568,7 @@ fn matvec_argmax_rowmajor_parallel_f32_i8(
                 let row = &w_rowmajor[i * k_dim..(i + 1) * k_dim];
                 (i, dot_unrolled_f32_i8(x, row, scale))
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0
     }
 }
@@ -4730,10 +4669,7 @@ fn matvec_argmax_rowmajor_parallel_i8_i8(
                 let row = &w_rowmajor[i * k_dim..(i + 1) * k_dim];
                 (i, dot_unrolled_i8_i8(x, x_scale, row, w_scale))
             })
-            .reduce(
-                || (0usize, f32::NEG_INFINITY),
-                |a, b| if a.1 >= b.1 { a } else { b },
-            )
+            .reduce(|| (0usize, f32::NEG_INFINITY), |a, b| if a.1 >= b.1 { a } else { b })
             .0
     }
 }
@@ -5655,11 +5591,7 @@ fn try_cuda_matmul(
     out_shape[last_idx] = n_dim;
 
     if output_dtype == DType::F32 {
-        return Some(Tensor::from_cuda_f32_buffer_no_host(
-            &out_shape,
-            buffer,
-            a.device(),
-        ));
+        return Some(Tensor::from_cuda_f32_buffer_no_host(&out_shape, buffer, a.device()));
     }
 
     if matches!(output_dtype, DType::F16 | DType::BF16) {
@@ -5672,18 +5604,16 @@ fn try_cuda_matmul(
     }
 
     let out = cuda::download_f32(&buffer).ok()?;
-    Some(
-        Tensor::from_f32_data_no_grad_with_device_dtype_and_cuda_buffer(
-            Array2::from_shape_vec((m_dim, n_dim), out)
-                .expect("CUDA matmul output shape build failed")
-                .into_shape(out_shape)
-                .expect("CUDA matmul output reshape failed")
-                .into_dyn(),
-            output_dtype,
-            a.device(),
-            Some(buffer),
-        ),
-    )
+    Some(Tensor::from_f32_data_no_grad_with_device_dtype_and_cuda_buffer(
+        Array2::from_shape_vec((m_dim, n_dim), out)
+            .expect("CUDA matmul output shape build failed")
+            .into_shape(out_shape)
+            .expect("CUDA matmul output reshape failed")
+            .into_dyn(),
+        output_dtype,
+        a.device(),
+        Some(buffer),
+    ))
 }
 
 fn try_cuda_batch_matmul_buffer(
@@ -5734,11 +5664,7 @@ fn try_cuda_batch_matmul(
     let buffer = try_cuda_batch_matmul_buffer(lhs, rhs, b, h, m, k, n)?;
     let out_shape = vec![b, h, m, n];
     if output_dtype == DType::F32 {
-        return Some(Tensor::from_cuda_f32_buffer_no_host(
-            &out_shape,
-            buffer,
-            lhs.device(),
-        ));
+        return Some(Tensor::from_cuda_f32_buffer_no_host(&out_shape, buffer, lhs.device()));
     }
 
     if matches!(output_dtype, DType::F16 | DType::BF16) {
@@ -5751,16 +5677,14 @@ fn try_cuda_batch_matmul(
     }
 
     let out = cuda::download_f32(&buffer).ok()?;
-    Some(
-        Tensor::from_f32_data_no_grad_with_device_dtype_and_cuda_buffer(
-            Array4::from_shape_vec((b, h, m, n), out)
-                .expect("CUDA batch_matmul output shape build failed")
-                .into_dyn(),
-            output_dtype,
-            lhs.device(),
-            Some(buffer),
-        ),
-    )
+    Some(Tensor::from_f32_data_no_grad_with_device_dtype_and_cuda_buffer(
+        Array4::from_shape_vec((b, h, m, n), out)
+            .expect("CUDA batch_matmul output shape build failed")
+            .into_dyn(),
+        output_dtype,
+        lhs.device(),
+        Some(buffer),
+    ))
 }
 
 fn try_cuda_training_matmul_backward(
@@ -5772,10 +5696,7 @@ fn try_cuda_training_matmul_backward(
     k_dim: usize,
     n_dim: usize,
 ) -> Result<
-    (
-        (ndarray::ArrayD<f32>, cuda::CudaBuffer),
-        (ndarray::ArrayD<f32>, cuda::CudaBuffer),
-    ),
+    ((ndarray::ArrayD<f32>, cuda::CudaBuffer), (ndarray::ArrayD<f32>, cuda::CudaBuffer)),
     String,
 > {
     let (da_buf, db_buf) =
@@ -5834,10 +5755,7 @@ fn try_cuda_training_batch_matmul_backward(
     k: usize,
     n: usize,
 ) -> Result<
-    (
-        (ndarray::ArrayD<f32>, cuda::CudaBuffer),
-        (ndarray::ArrayD<f32>, cuda::CudaBuffer),
-    ),
+    ((ndarray::ArrayD<f32>, cuda::CudaBuffer), (ndarray::ArrayD<f32>, cuda::CudaBuffer)),
     String,
 > {
     let (d_lhs_buf, d_rhs_buf) =
@@ -6724,11 +6642,9 @@ mod tests {
     fn i8_storage(src: &[f32]) -> (Vec<f32>, Vec<i8>, f32) {
         let tensor = make_tensor(&[src.len()], src.to_vec(), DType::I8);
         match tensor.native_storage_owned() {
-            TensorStorageOwned::I8(data, scale) => (
-                tensor.data_ref().iter().copied().collect(),
-                data.iter().copied().collect(),
-                scale,
-            ),
+            TensorStorageOwned::I8(data, scale) => {
+                (tensor.data_ref().iter().copied().collect(), data.iter().copied().collect(), scale)
+            }
             TensorStorageOwned::F32(_)
             | TensorStorageOwned::F16(_)
             | TensorStorageOwned::BF16(_) => {
@@ -6740,10 +6656,7 @@ mod tests {
     fn assert_close(lhs: &[f32], rhs: &[f32], tol: f32) {
         assert_eq!(lhs.len(), rhs.len());
         for (idx, (&a, &b)) in lhs.iter().zip(rhs.iter()).enumerate() {
-            assert!(
-                (a - b).abs() <= tol,
-                "mismatch at {idx}: lhs={a}, rhs={b}, tol={tol}"
-            );
+            assert!((a - b).abs() <= tol, "mismatch at {idx}: lhs={a}, rhs={b}, tol={tol}");
         }
     }
 
@@ -7316,29 +7229,13 @@ mod tests {
 
     #[test]
     fn batch_matmul_no_grad_preserves_bf16_output_dtype() {
-        let lhs = make_tensor(
-            &[1, 1, 2, 3],
-            vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0],
-            DType::BF16,
-        );
-        let rhs = make_tensor(
-            &[1, 1, 3, 2],
-            vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75],
-            DType::BF16,
-        );
+        let lhs = make_tensor(&[1, 1, 2, 3], vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0], DType::BF16);
+        let rhs = make_tensor(&[1, 1, 3, 2], vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75], DType::BF16);
 
         let ref_out = no_grad(|| {
             batch_matmul(
-                &make_tensor(
-                    &[1, 1, 2, 3],
-                    vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0],
-                    DType::F32,
-                ),
-                &make_tensor(
-                    &[1, 1, 3, 2],
-                    vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75],
-                    DType::F32,
-                ),
+                &make_tensor(&[1, 1, 2, 3], vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0], DType::F32),
+                &make_tensor(&[1, 1, 3, 2], vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75], DType::F32),
             )
         });
         let out = no_grad(|| batch_matmul(&lhs, &rhs));
@@ -7432,20 +7329,14 @@ mod tests {
         let a_q = ref_a_q.data_ref().iter().copied().collect::<Vec<_>>();
         let b_q = ref_b_q.data_ref().iter().copied().collect::<Vec<_>>();
         let ref_out = no_grad(|| {
-            matmul(
-                &make_tensor(&[1, 4], a_q, DType::F32),
-                &make_tensor(&[3, 4], b_q, DType::F32),
-            )
+            matmul(&make_tensor(&[1, 4], a_q, DType::F32), &make_tensor(&[3, 4], b_q, DType::F32))
         });
         let out = no_grad(|| matmul(&a, &b));
 
         assert_eq!(out.dtype(), DType::I8);
 
-        let expected = make_tensor(
-            &[1, 3],
-            ref_out.data_ref().iter().copied().collect(),
-            DType::I8,
-        );
+        let expected =
+            make_tensor(&[1, 3], ref_out.data_ref().iter().copied().collect(), DType::I8);
         let ref_vals = expected.data_ref().iter().copied().collect::<Vec<_>>();
         let out_vals = out.data_ref().iter().copied().collect::<Vec<_>>();
         assert_eq!(out_vals.len(), ref_vals.len());
@@ -7618,18 +7509,10 @@ mod tests {
             return;
         }
 
-        let lhs = make_tensor(
-            &[1, 1, 2, 3],
-            vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0],
-            DType::BF16,
-        )
-        .to_cuda();
-        let rhs = make_tensor(
-            &[1, 1, 3, 2],
-            vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75],
-            DType::BF16,
-        )
-        .to_cuda();
+        let lhs =
+            make_tensor(&[1, 1, 2, 3], vec![1.0, -2.0, 0.5, 3.0, -1.0, 2.0], DType::BF16).to_cuda();
+        let rhs = make_tensor(&[1, 1, 3, 2], vec![0.5, 1.0, -1.5, 2.0, 0.25, -0.75], DType::BF16)
+            .to_cuda();
 
         crate::ops::cuda::set_enabled(true);
         crate::autograd::set_strict_device_execution(true);
@@ -7682,16 +7565,10 @@ mod tests {
         let a_cpu_grad = a_cpu.grad().expect("cpu lhs grad");
         let b_cpu_grad = b_cpu.grad().expect("cpu rhs grad");
         for (got, expect) in a_cuda_grad.iter().zip(a_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "lhs grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "lhs grad got {got}, expect {expect}");
         }
         for (got, expect) in b_cuda_grad.iter().zip(b_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "rhs grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "rhs grad got {got}, expect {expect}");
         }
     }
 
@@ -7728,16 +7605,10 @@ mod tests {
         let lhs_cpu_grad = lhs_cpu.grad().expect("cpu lhs grad");
         let rhs_cpu_grad = rhs_cpu.grad().expect("cpu rhs grad");
         for (got, expect) in lhs_cuda_grad.iter().zip(lhs_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "lhs grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "lhs grad got {got}, expect {expect}");
         }
         for (got, expect) in rhs_cuda_grad.iter().zip(rhs_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "rhs grad got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "rhs grad got {got}, expect {expect}");
         }
     }
 }

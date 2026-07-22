@@ -232,20 +232,10 @@ impl LlamaConfig {
         assert!(self.vocab_size > 0, "vocab_size must be > 0");
         assert!(self.hidden_size > 0, "hidden_size must be > 0");
         assert!(self.intermediate_size > 0, "intermediate_size must be > 0");
-        assert!(
-            self.num_attention_heads > 0,
-            "num_attention_heads must be > 0"
-        );
-        assert!(
-            self.num_key_value_heads > 0,
-            "num_key_value_heads must be > 0"
-        );
+        assert!(self.num_attention_heads > 0, "num_attention_heads must be > 0");
+        assert!(self.num_key_value_heads > 0, "num_key_value_heads must be > 0");
         assert!(self.max_seq_len > 0, "max_seq_len must be > 0");
-        assert!(
-            self.rms_norm_eps > 0.0,
-            "rms_norm_eps must be > 0, got {}",
-            self.rms_norm_eps
-        );
+        assert!(self.rms_norm_eps > 0.0, "rms_norm_eps must be > 0, got {}", self.rms_norm_eps);
         assert_eq!(
             self.hidden_size % self.num_attention_heads,
             0,
@@ -710,10 +700,9 @@ impl LlamaModel {
             let (vocab, in_features) = (weight_shape[0], weight_shape[1]);
             assert_eq!(in_features, h, "lm_head in_features mismatch");
             let last_hidden = last_hidden_token_tensor(hidden.clone());
-            if let (Some(hidden_buf), Some(weight_buf)) = (
-                last_hidden.cloned_cuda_f32_buffer(),
-                self.lm_head.weight.cloned_cuda_f32_buffer(),
-            ) {
+            if let (Some(hidden_buf), Some(weight_buf)) =
+                (last_hidden.cloned_cuda_f32_buffer(), self.lm_head.weight.cloned_cuda_f32_buffer())
+            {
                 match cuda::matvec_argmax_f32(&hidden_buf, &weight_buf, b, vocab, h) {
                     Ok(out) => return out,
                     Err(err) if is_strict_device_execution() => {
@@ -904,10 +893,7 @@ impl LlamaModel {
         let mut params = HashMap::new();
 
         // Embedding
-        params.insert(
-            "model.embed_tokens.weight".to_string(),
-            self.embed_tokens.weight.clone(),
-        );
+        params.insert("model.embed_tokens.weight".to_string(), self.embed_tokens.weight.clone());
 
         // Layers
         for (i, layer) in self.layers.iter().enumerate() {
@@ -936,10 +922,8 @@ impl LlamaModel {
                 format!("{}.mlp.gate_proj.weight", prefix),
                 layer.mlp.gate_proj.weight.clone(),
             );
-            params.insert(
-                format!("{}.mlp.up_proj.weight", prefix),
-                layer.mlp.up_proj.weight.clone(),
-            );
+            params
+                .insert(format!("{}.mlp.up_proj.weight", prefix), layer.mlp.up_proj.weight.clone());
             params.insert(
                 format!("{}.mlp.down_proj.weight", prefix),
                 layer.mlp.down_proj.weight.clone(),
@@ -1362,14 +1346,8 @@ mod tests {
         assert!(decode_logits.is_cuda());
         assert_eq!(prefill_logits.dtype(), dtype);
         assert_eq!(decode_logits.dtype(), dtype);
-        assert_eq!(
-            prefill_logits.shape_vec(),
-            vec![1, 1, test_config().vocab_size]
-        );
-        assert_eq!(
-            decode_logits.shape_vec(),
-            vec![1, 1, test_config().vocab_size]
-        );
+        assert_eq!(prefill_logits.shape_vec(), vec![1, 1, test_config().vocab_size]);
+        assert_eq!(decode_logits.shape_vec(), vec![1, 1, test_config().vocab_size]);
         assert!(prefill_logits.cloned_cuda_f32_buffer().is_some());
         assert!(decode_logits.cloned_cuda_f32_buffer().is_some());
         assert!(caches[0].borrow().k.is_cuda());

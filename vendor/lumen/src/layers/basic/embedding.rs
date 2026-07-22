@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -33,12 +33,7 @@ fn parse_embedding_index(value: f32, position: usize, vocab_size: usize) -> usiz
         position,
         value
     );
-    assert!(
-        value >= 0.0,
-        "Embedding index at position {} must be >= 0, got {}",
-        position,
-        value
-    );
+    assert!(value >= 0.0, "Embedding index at position {} must be >= 0, got {}", position, value);
     assert!(
         value.fract() == 0.0,
         "Embedding index at position {} must be an integer, got {}",

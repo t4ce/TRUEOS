@@ -93,18 +93,39 @@ module truega_lfm25_fixed_decode_datapath_tb;
         end
     endtask
 
+    task automatic finish_item_before_result;
+        begin
+            item_finish = 1;
+            @(negedge clk);
+            item_finish = 0;
+            if (item_effect_done || result_valid) begin
+                $display("final item retired before the held numerical result");
+                failures = failures + 1;
+            end
+        end
+    endtask
+
     reg [511:0] bf16_ones;
+    reg [511:0] nonzero_q8;
     initial begin
         bf16_ones = 0;
+        nonzero_q8 = 0;
         for (i = 0; i < 32; i = i + 1)
             bf16_ones[i * 16 +: 16] = 16'h3f80;
+        // fp16 scale=1, first signed sample=1. This catches payload clearing
+        // or next-index skew at the controller/datapath handshake boundary.
+        nonzero_q8[15:0] = 16'h3c00;
+        nonzero_q8[23:16] = 8'h01;
         repeat (4) @(posedge clk);
         reset_n = 1;
 
         // Install epoch 7 through the one shared resident engine.
         launch(0, 8'hff, 0);
         for (i = 0; i < 32; i = i + 1)
-            send_stage(0, i, 512'd0);
+            send_stage(0, i, nonzero_q8);
+        mode = 0;
+        item = 0;
+        finish_item_before_result();
         consume_result(0);
 
         // Route the same shared resident Q30 slot through the RMS join and
@@ -113,6 +134,9 @@ module truega_lfm25_fixed_decode_datapath_tb;
         launch(1, 0, 0);
         for (i = 0; i < 32; i = i + 1)
             send_stage(1, i, bf16_ones);
+        mode = 1;
+        item = 0;
+        finish_item_before_result();
         consume_result(0);
 
         if (failures == 0)

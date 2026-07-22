@@ -15,10 +15,7 @@ pub struct Dropout {
 }
 impl Dropout {
     pub fn new(p: f32) -> Self {
-        assert!(
-            (0.0..1.0).contains(&p),
-            "Dropout probability must be in [0, 1), got {p}"
-        );
+        assert!((0.0..1.0).contains(&p), "Dropout probability must be in [0, 1), got {p}");
         Dropout { p, training: true }
     }
 }

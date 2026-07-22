@@ -147,6 +147,52 @@ unsafe impl Sync for ResidentTriangleMesh {}
 /// The font service is the first consumer of the generic resident resource.
 pub(crate) type ResidentFontMesh = ResidentTriangleMesh;
 
+/// Page-backed bytes retained in the render engine's PPGTT.
+///
+/// The allocation remains CPU-addressable for cold-path population and GPU-
+/// addressable for the entire lifetime of this owner. Callers may divide it
+/// into page-aligned textures or other immutable render resources.
+pub(crate) struct ResidentRenderBuffer {
+    storage_phys: u64,
+    storage_virt: *mut u8,
+    storage_bytes: usize,
+    gpu_base: u64,
+}
+
+unsafe impl Send for ResidentRenderBuffer {}
+unsafe impl Sync for ResidentRenderBuffer {}
+
+impl ResidentRenderBuffer {
+    pub(crate) const fn storage_phys(&self) -> u64 {
+        self.storage_phys
+    }
+
+    pub(crate) const fn storage_bytes(&self) -> usize {
+        self.storage_bytes
+    }
+
+    pub(crate) const fn gpu_base(&self) -> u64 {
+        self.gpu_base
+    }
+
+    pub(crate) fn write(&self, offset: usize, bytes: &[u8]) -> bool {
+        let Some(end) = offset.checked_add(bytes.len()) else {
+            return false;
+        };
+        if end > self.storage_bytes {
+            return false;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.storage_virt.add(offset), bytes.len());
+        }
+        true
+    }
+
+    pub(crate) fn flush(&self) {
+        crate::intel::dma_flush(self.storage_virt, self.storage_bytes);
+    }
+}
+
 #[derive(Copy, Clone)]
 struct TriangleShaderStageLayout {
     code_offset_bytes: u32,

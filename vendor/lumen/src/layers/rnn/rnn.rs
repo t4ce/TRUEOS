@@ -84,12 +84,9 @@ mod tests {
         let h_prev =
             grad_tensor(&[2, 4], (0..8).map(|i| i as f32 * 0.05 - 0.1).collect()).to_cuda();
         let coeff = Tensor::from_data_with_grad_flag(
-            Array::from_shape_vec(
-                IxDyn(&[2, 4]),
-                (0..8).map(|i| i as f32 * 0.03 - 0.2).collect(),
-            )
-            .expect("coeff shape mismatch")
-            .into_dyn(),
+            Array::from_shape_vec(IxDyn(&[2, 4]), (0..8).map(|i| i as f32 * 0.03 - 0.2).collect())
+                .expect("coeff shape mismatch")
+                .into_dyn(),
             false,
         )
         .to_cuda();

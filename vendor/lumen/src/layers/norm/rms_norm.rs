@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     StoragePreference, Tensor, TensorData, TensorStorageOwned, TensorStorageView,
@@ -11,10 +11,10 @@ use crate::autograd::{
 };
 use crate::module::Module;
 use crate::ops::cuda;
+use crate::parallel::*;
 use crate::precision::DType;
 use half::{bf16, f16};
 use ndarray::{Array1, Array2, Zip};
-use crate::parallel::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -58,10 +58,7 @@ impl Module for RMSNorm {
         let input_shape = input.shape_vec();
         assert!(!input_shape.is_empty(), "RMSNorm expects at least 1D input");
         let last_dim = *input_shape.last().expect("checked non-empty shape");
-        assert!(
-            last_dim > 0,
-            "RMSNorm last dimension must be greater than zero"
-        );
+        assert!(last_dim > 0, "RMSNorm last dimension must be greater than zero");
         assert_eq!(
             self.weight.len(),
             last_dim,
@@ -910,12 +907,9 @@ mod tests {
             DType::BF16,
         );
 
-        let input = make_tensor(
-            &[1, 2, 4],
-            vec![1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 4.0],
-            DType::BF16,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[1, 2, 4], vec![1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 4.0], DType::BF16)
+                .to_cuda();
 
         crate::ops::cuda::set_enabled(true);
         crate::autograd::set_strict_device_execution(true);
@@ -1023,16 +1017,10 @@ mod tests {
         let weight_cuda_grad = norm_cuda.weight.grad().expect("cuda RMSNorm weight grad");
         let weight_cpu_grad = norm_cpu.weight.grad().expect("cpu RMSNorm weight grad");
         for (got, expect) in input_cuda_grad.iter().zip(input_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "input got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "input got {got}, expect {expect}");
         }
         for (got, expect) in weight_cuda_grad.iter().zip(weight_cpu_grad.iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "weight got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "weight got {got}, expect {expect}");
         }
     }
 
@@ -1060,12 +1048,9 @@ mod tests {
             DType::BF16,
         );
 
-        let input = make_tensor(
-            &[1, 2, 4],
-            vec![1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 4.0],
-            DType::I8,
-        )
-        .to_cuda();
+        let input =
+            make_tensor(&[1, 2, 4], vec![1.0, -2.0, 3.0, -4.0, 0.5, 1.5, -2.5, 4.0], DType::I8)
+                .to_cuda();
 
         crate::ops::cuda::set_enabled(true);
         crate::autograd::set_strict_device_execution(true);

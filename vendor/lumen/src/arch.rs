@@ -35,18 +35,12 @@ pub const fn arm64_fp_kernels_compiled() -> bool {
 
 #[inline]
 pub const fn x86_int8_kernels_compiled() -> bool {
-    cfg!(all(
-        feature = "x86-int8-kernels",
-        any(target_arch = "x86_64", target_arch = "x86")
-    ))
+    cfg!(all(feature = "x86-int8-kernels", any(target_arch = "x86_64", target_arch = "x86")))
 }
 
 #[inline]
 pub const fn x86_fp_kernels_compiled() -> bool {
-    cfg!(all(
-        feature = "x86-fp-kernels",
-        any(target_arch = "x86_64", target_arch = "x86")
-    ))
+    cfg!(all(feature = "x86-fp-kernels", any(target_arch = "x86_64", target_arch = "x86")))
 }
 
 #[inline]

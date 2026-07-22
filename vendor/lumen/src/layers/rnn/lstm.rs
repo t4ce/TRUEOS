@@ -155,22 +155,16 @@ mod tests {
         let c_prev =
             grad_tensor(&[2, 4], (0..8).map(|i| i as f32 * -0.04 + 0.15).collect()).to_cuda();
         let h_coeff = Tensor::from_data_with_grad_flag(
-            Array::from_shape_vec(
-                IxDyn(&[2, 4]),
-                (0..8).map(|i| i as f32 * 0.03 - 0.2).collect(),
-            )
-            .expect("h coeff shape mismatch")
-            .into_dyn(),
+            Array::from_shape_vec(IxDyn(&[2, 4]), (0..8).map(|i| i as f32 * 0.03 - 0.2).collect())
+                .expect("h coeff shape mismatch")
+                .into_dyn(),
             false,
         )
         .to_cuda();
         let c_coeff = Tensor::from_data_with_grad_flag(
-            Array::from_shape_vec(
-                IxDyn(&[2, 4]),
-                (0..8).map(|i| i as f32 * -0.02 + 0.1).collect(),
-            )
-            .expect("c coeff shape mismatch")
-            .into_dyn(),
+            Array::from_shape_vec(IxDyn(&[2, 4]), (0..8).map(|i| i as f32 * -0.02 + 0.1).collect())
+                .expect("c coeff shape mismatch")
+                .into_dyn(),
             false,
         )
         .to_cuda();

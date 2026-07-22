@@ -1,9 +1,9 @@
 #[cfg(not(feature = "std"))]
-use ndarray_rand::rand_distr::num_traits::Float;
-#[cfg(not(feature = "std"))]
 use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
+#[cfg(not(feature = "std"))]
+use ndarray_rand::rand_distr::num_traits::Float;
 
 use crate::autograd::{
     Device, StoragePreference, Tensor, TensorData, TensorStorageView, assert_native_device_support,
@@ -93,10 +93,7 @@ fn softmax_no_grad(input: &Tensor, axis: usize) -> Tensor {
             "Softmax currently only supports the last dimension in this implementation"
         );
         let last_dim = shape[axis];
-        assert!(
-            last_dim > 0,
-            "Softmax last dimension must be greater than zero"
-        );
+        assert!(last_dim > 0, "Softmax last dimension must be greater than zero");
         let outer_dim = shape.iter().product::<usize>() / last_dim;
 
         if output_device == crate::autograd::Device::Cuda
@@ -513,10 +510,7 @@ impl Module for Softmax {
         );
         let axis_idx = self.axis;
         let last_dim = shape[axis_idx];
-        assert!(
-            last_dim > 0,
-            "Softmax last dimension must be greater than zero"
-        );
+        assert!(last_dim > 0, "Softmax last dimension must be greater than zero");
         let outer_dim = input.len() / last_dim;
         let cuda_native_supported = output_device == Device::Cuda;
         assert_native_device_support(output_device, "softmax", cuda_native_supported);
@@ -938,20 +932,14 @@ mod tests {
         let softmax_ref = no_grad(|| Softmax::new(1).forward(input.to_cpu()));
 
         for (got, expect) in relu_out.data_ref().iter().zip(relu_ref.data_ref().iter()) {
-            assert!(
-                (got - expect).abs() < 1e-5,
-                "relu got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-5, "relu got {got}, expect {expect}");
         }
         for (got, expect) in softmax_out
             .data_ref()
             .iter()
             .zip(softmax_ref.data_ref().iter())
         {
-            assert!(
-                (got - expect).abs() < 1e-4,
-                "softmax got {got}, expect {expect}"
-            );
+            assert!((got - expect).abs() < 1e-4, "softmax got {got}, expect {expect}");
         }
     }
 

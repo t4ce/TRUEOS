@@ -58,15 +58,11 @@ fn parse_args() -> Result<Args, String> {
             }
             "--input" => {
                 i += 1;
-                input = Some(PathBuf::from(
-                    argv.get(i).ok_or("--input 缺少路径")?.as_str(),
-                ));
+                input = Some(PathBuf::from(argv.get(i).ok_or("--input 缺少路径")?.as_str()));
             }
             "--output" => {
                 i += 1;
-                output = Some(PathBuf::from(
-                    argv.get(i).ok_or("--output 缺少路径")?.as_str(),
-                ));
+                output = Some(PathBuf::from(argv.get(i).ok_or("--output 缺少路径")?.as_str()));
             }
             "--dtype" => {
                 i += 1;

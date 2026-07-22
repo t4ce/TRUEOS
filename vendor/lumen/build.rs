@@ -706,10 +706,7 @@ fn main() {
         "nvcc"
     });
     if !nvcc.exists() {
-        panic!(
-            "CUDA feature is enabled but nvcc was not found at {}",
-            nvcc.display()
-        );
+        panic!("CUDA feature is enabled but nvcc was not found at {}", nvcc.display());
     }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing"));
@@ -719,10 +716,7 @@ fn main() {
 
     let cudnn_install = resolve_cudnn_install(&cuda_root, &out_dir);
     if let Some(install) = cudnn_install.as_ref() {
-        println!(
-            "cargo:rerun-if-changed={}",
-            install.include_dir.join("cudnn.h").display()
-        );
+        println!("cargo:rerun-if-changed={}", install.include_dir.join("cudnn.h").display());
         println!("cargo:rerun-if-changed={}", install.library.display());
         if let Some(bin_dir) = install.runtime_bin_dir.as_ref() {
             println!("cargo:rerun-if-changed={}", bin_dir.display());
@@ -742,10 +736,7 @@ fn main() {
         .current_dir(&out_dir)
         .arg("--lib")
         .arg("-std=c++17")
-        .arg(format!(
-            "-DLUMEN_HAS_CUDNN={}",
-            if cudnn_install.is_some() { 1 } else { 0 }
-        ))
+        .arg(format!("-DLUMEN_HAS_CUDNN={}", if cudnn_install.is_some() { 1 } else { 0 }))
         .arg("lumen_cuda.cu")
         .arg("-o")
         .arg(&lib_path);
@@ -790,10 +781,7 @@ fn main() {
             .parent()
             .expect("cuDNN library must have a parent directory");
         println!("cargo:rustc-link-search=native={}", cudnn_lib_dir.display());
-        println!(
-            "cargo:rustc-link-lib=dylib={}",
-            link_name_from_library(&install.library)
-        );
+        println!("cargo:rustc-link-lib=dylib={}", link_name_from_library(&install.library));
         stage_cudnn_runtime_dlls(&install, &out_dir);
         println!(
             "cargo:warning=cuDNN detected from {} at {}",

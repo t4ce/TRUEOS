@@ -872,9 +872,7 @@ impl FeedCommitRecord {
         let expected_generation = if shape.stages_per_item == 0 {
             0
         } else {
-            (self.sequence + 1)
-                * shape.stages_per_item as u32
-                * shape.lanes as u32
+            (self.sequence + 1) * shape.stages_per_item as u32 * shape.lanes as u32
         };
         if self.item >= shape.items
             || self.sequence != self.item
@@ -1336,9 +1334,11 @@ mod tests {
 
         let mut stale = words;
         stale[3] = stale[3].wrapping_add(1);
-        assert!(!FeedRetirementStatus::from_bar0_words(stale)
-            .unwrap()
-            .identity_matches(record));
+        assert!(
+            !FeedRetirementStatus::from_bar0_words(stale)
+                .unwrap()
+                .identity_matches(record)
+        );
         let mut widened = words;
         widened[1] |= 1 << 31;
         assert_eq!(

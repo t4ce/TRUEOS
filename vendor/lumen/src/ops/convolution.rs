@@ -160,11 +160,7 @@ pub fn conv2d(
     let cuda_native_supported = output_device == crate::autograd::Device::Cuda;
     assert_native_device_support(output_device, "conv2d", cuda_native_supported);
     if let Some(bias) = bias {
-        assert_eq!(
-            bias.device(),
-            output_device,
-            "conv2d expects bias on the same device"
-        );
+        assert_eq!(bias.device(), output_device, "conv2d expects bias on the same device");
     }
 
     let x_shape = input.shape_vec();
@@ -178,20 +174,11 @@ pub fn conv2d(
         in_channels > 0 && out_channels > 0,
         "conv2d input and output channels must be greater than zero"
     );
-    assert!(
-        k_h > 0 && k_w > 0,
-        "conv2d kernel dimensions must be greater than zero"
-    );
-    assert_eq!(
-        weight_in_channels, in_channels,
-        "conv2d input/weight channel mismatch"
-    );
+    assert!(k_h > 0 && k_w > 0, "conv2d kernel dimensions must be greater than zero");
+    assert_eq!(weight_in_channels, in_channels, "conv2d input/weight channel mismatch");
     let (pad_h, pad_w) = padding;
     let (stride_h, stride_w) = stride;
-    assert!(
-        stride_h > 0 && stride_w > 0,
-        "conv2d stride must be greater than zero"
-    );
+    assert!(stride_h > 0 && stride_w > 0, "conv2d stride must be greater than zero");
     assert!(
         in_h + 2 * pad_h >= k_h && in_w + 2 * pad_w >= k_w,
         "conv2d kernel is larger than the padded input"
@@ -674,14 +661,8 @@ pub fn max_pool2d(input: &Tensor, kernel_size: (usize, usize), stride: (usize, u
     let (b, c, h, w) = (shape[0], shape[1], shape[2], shape[3]);
     let (kh, kw) = kernel_size;
     let (sh, sw) = stride;
-    assert!(
-        kh > 0 && kw > 0,
-        "max_pool2d kernel must be greater than zero"
-    );
-    assert!(
-        sh > 0 && sw > 0,
-        "max_pool2d stride must be greater than zero"
-    );
+    assert!(kh > 0 && kw > 0, "max_pool2d kernel must be greater than zero");
+    assert!(sh > 0 && sw > 0, "max_pool2d stride must be greater than zero");
     assert!(h >= kh && w >= kw, "max_pool2d kernel is larger than input");
     let out_h = (h - kh) / sh + 1;
     let out_w = (w - kw) / sw + 1;
@@ -1007,13 +988,7 @@ mod tests {
         crate::ops::cuda::set_enabled(true);
         crate::autograd::set_strict_device_execution(true);
         let cuda_out = no_grad(|| {
-            conv2d(
-                &input.to_cuda(),
-                &weight.to_cuda(),
-                Some(&bias.to_cuda()),
-                (1, 1),
-                (1, 1),
-            )
+            conv2d(&input.to_cuda(), &weight.to_cuda(), Some(&bias.to_cuda()), (1, 1), (1, 1))
         });
         crate::autograd::set_strict_device_execution(false);
         crate::ops::cuda::set_enabled(false);
@@ -1036,10 +1011,8 @@ mod tests {
         }
 
         let input_cpu = make_grad_tensor(&[1, 2, 4, 4], sample_f32(32));
-        let weight_cpu = make_grad_tensor(
-            &[3, 2, 3, 3],
-            sample_f32(54).into_iter().map(|v| v * 0.5).collect(),
-        );
+        let weight_cpu =
+            make_grad_tensor(&[3, 2, 3, 3], sample_f32(54).into_iter().map(|v| v * 0.5).collect());
         let bias_cpu = make_grad_tensor(&[3], vec![0.1, -0.2, 0.3]);
         let coeff_cpu = Tensor::from_data_with_grad_flag(
             Array::from_shape_vec(
@@ -1194,13 +1167,7 @@ mod tests {
         crate::ops::cuda::set_enabled(true);
         crate::autograd::set_strict_device_execution(true);
         let cuda_out = no_grad(|| {
-            conv2d(
-                &input.to_cuda(),
-                &weight.to_cuda(),
-                Some(&bias.to_cuda()),
-                (1, 1),
-                (1, 1),
-            )
+            conv2d(&input.to_cuda(), &weight.to_cuda(), Some(&bias.to_cuda()), (1, 1), (1, 1))
         });
         crate::autograd::set_strict_device_execution(false);
         crate::ops::cuda::set_enabled(false);

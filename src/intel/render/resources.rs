@@ -808,7 +808,8 @@ pub(crate) fn create_resident_triangle_mesh(
         .ok_or("resident-triangle-bytes")?;
     let storage_bytes =
         crate::intel::align_up(used_bytes, 4096).ok_or("resident-triangle-align")?;
-    let gpu_base = reserve_persistent_font_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
+    let gpu_base =
+        reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
     let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-triangle-count")?;
     let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-triangle-count")?;
     let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-triangle-count")?;
@@ -922,14 +923,67 @@ pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> boo
         return false;
     }
     crate::dma::dealloc(mesh.storage_virt, mesh.storage_bytes);
-    recycle_persistent_triangle_gpu_va(mesh.gpu_base, mesh.storage_bytes);
+    recycle_persistent_render_gpu_va(mesh.gpu_base, mesh.storage_bytes);
     true
 }
 
-fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
+/// Allocate zeroed, page-backed storage and map it once into the persistent
+/// render PPGTT resource window. The caller owns the returned mapping until it
+/// explicitly releases it; ordinary frame submission never remaps these VAs.
+pub(crate) fn allocate_resident_render_buffer(
+    bytes: usize,
+) -> Result<ResidentRenderBuffer, &'static str> {
+    if bytes == 0 {
+        return Err("resident-resource-empty");
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return Err("no-device");
+    };
+    let warm = warm_once(dev);
+    if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
+        return Err("render-ppgtt");
+    }
+    let storage_bytes =
+        crate::intel::align_up(bytes, 4096).ok_or("resident-resource-align")?;
+    let gpu_base = reserve_persistent_render_gpu_va(storage_bytes)
+        .ok_or("resident-resource-va")?;
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+        recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
+        return Err("resident-resource-alloc");
+    };
+    unsafe {
+        core::ptr::write_bytes(storage_virt, 0, storage_bytes);
+    }
+    crate::intel::dma_flush(storage_virt, storage_bytes);
+    if !map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes) {
+        crate::dma::dealloc(storage_virt, storage_bytes);
+        recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
+        return Err("resident-resource-map");
+    }
+    Ok(ResidentRenderBuffer {
+        storage_phys,
+        storage_virt,
+        storage_bytes,
+        gpu_base,
+    })
+}
+
+/// Tear down a resident render resource. Spirit intentionally never calls
+/// this after publishing its runtime catalog, but failed cold-path loads use
+/// it to avoid leaving a partial allocation behind.
+pub(crate) fn release_resident_render_buffer(buffer: &ResidentRenderBuffer) -> bool {
+    if !unmap_render_ppgtt_range(buffer.gpu_base, buffer.storage_bytes) {
+        return false;
+    }
+    crate::dma::dealloc(buffer.storage_virt, buffer.storage_bytes);
+    recycle_persistent_render_gpu_va(buffer.gpu_base, buffer.storage_bytes);
+    true
+}
+
+fn reserve_persistent_render_gpu_va(bytes: usize) -> Option<u64> {
     let bytes = crate::intel::align_up(bytes, 4096)? as u64;
     {
-        let mut free = PERSISTENT_TRIANGLE_GPU_VA_FREE.lock();
+        let mut free = PERSISTENT_RESOURCE_GPU_VA_FREE.lock();
         if let Some(index) = free
             .iter()
             .position(|(start, end)| end.saturating_sub(*start) >= bytes)
@@ -945,13 +999,13 @@ fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
         }
     }
     loop {
-        let current = PERSISTENT_FONT_GPU_VA_CURSOR.load(Ordering::Acquire);
+        let current = PERSISTENT_RESOURCE_GPU_VA_CURSOR.load(Ordering::Acquire);
         let aligned = (current.checked_add(4095)?) & !4095;
         let next = aligned.checked_add(bytes)?;
-        if next > GPU_VA_PERSISTENT_FONT_LIMIT {
+        if next > GPU_VA_PERSISTENT_RESOURCE_LIMIT {
             return None;
         }
-        if PERSISTENT_FONT_GPU_VA_CURSOR
+        if PERSISTENT_RESOURCE_GPU_VA_CURSOR
             .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
@@ -960,14 +1014,14 @@ fn reserve_persistent_font_gpu_va(bytes: usize) -> Option<u64> {
     }
 }
 
-fn recycle_persistent_triangle_gpu_va(gpu_base: u64, bytes: usize) {
+fn recycle_persistent_render_gpu_va(gpu_base: u64, bytes: usize) {
     let Some(bytes) = crate::intel::align_up(bytes, 4096).map(|value| value as u64) else {
         return;
     };
     let Some(end) = gpu_base.checked_add(bytes) else {
         return;
     };
-    let mut free = PERSISTENT_TRIANGLE_GPU_VA_FREE.lock();
+    let mut free = PERSISTENT_RESOURCE_GPU_VA_FREE.lock();
     free.push((gpu_base, end));
     free.sort_unstable_by_key(|range| range.0);
     let mut write = 0usize;

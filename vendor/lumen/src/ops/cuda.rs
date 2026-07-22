@@ -3,9 +3,9 @@ use crate::std;
 #[cfg(not(feature = "std"))]
 use crate::std::prelude::v1::*;
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use core::sync::atomic::{AtomicBool, Ordering};
 
 const CUDA_MATMUL_MIN_WORK: usize = 1 << 18;
 const CUDA_BATCH_MATMUL_MIN_WORK: usize = 1 << 18;
@@ -65,10 +65,7 @@ fn env_enabled() -> bool {
     std::env::var("LUMEN_CUDA")
         .ok()
         .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
+            matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
         })
         .unwrap_or(false)
 }
@@ -711,13 +708,7 @@ mod imp {
             .zip(rhs_raw_strides.iter())
             .map(|(&dim, &stride)| if dim == 1 { 0 } else { stride })
             .collect::<Vec<_>>();
-        Ok((
-            lhs_aligned,
-            rhs_aligned,
-            out_strides,
-            lhs_strides,
-            rhs_strides,
-        ))
+        Ok((lhs_aligned, rhs_aligned, out_strides, lhs_strides, rhs_strides))
     }
 
     pub fn is_available() -> bool {
@@ -1091,10 +1082,7 @@ mod imp {
             return Err("CUDA decode RoPE dimensions must be greater than zero".to_string());
         }
         if dim % 2 != 0 {
-            return Err(format!(
-                "CUDA decode RoPE expects a positive even dimension, got {}",
-                dim
-            ));
+            return Err(format!("CUDA decode RoPE expects a positive even dimension, got {}", dim));
         }
         if offset >= dst_seq_len || offset >= cache_seq_len {
             return Err(format!(
@@ -1623,10 +1611,7 @@ mod imp {
         let (grad_output, grad_target) = mse_backward_f32_buffers(diff, factor)?;
         let grad_output_host = download_f32(&grad_output)?;
         let grad_target_host = download_f32(&grad_target)?;
-        Ok((
-            (grad_output, grad_output_host),
-            (grad_target, grad_target_host),
-        ))
+        Ok(((grad_output, grad_output_host), (grad_target, grad_target_host)))
     }
 
     pub fn mse_backward_f32_buffers(
@@ -1818,11 +1803,7 @@ mod imp {
             bias_correction2,
             eps,
         )?;
-        Ok((
-            download_f32(param)?,
-            download_f32(exp_avg)?,
-            download_f32(exp_avg_sq)?,
-        ))
+        Ok((download_f32(param)?, download_f32(exp_avg)?, download_f32(exp_avg_sq)?))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2084,7 +2065,7 @@ mod imp {
         }
         if batch_heads == 0 || q_len == 0 || k_len == 0 {
             return Err(
-                "CUDA fused_softmax_with_past dimensions must be greater than zero".to_string(),
+                "CUDA fused_softmax_with_past dimensions must be greater than zero".to_string()
             );
         }
         let causal_window_end = past_len
@@ -2257,10 +2238,7 @@ mod imp {
             rms_norm_backward_f32_buffers(input, weight, grad, rows, dim, eps)?;
         let grad_input_host = download_f32(&grad_input)?;
         let grad_weight_host = download_f32(&grad_weight)?;
-        Ok((
-            (grad_input, grad_input_host),
-            (grad_weight, grad_weight_host),
-        ))
+        Ok(((grad_input, grad_input_host), (grad_weight, grad_weight_host)))
     }
 
     pub fn rms_norm_backward_f32_buffers(
@@ -2624,10 +2602,7 @@ mod imp {
             return Err("CUDA cat expects at least 1 dimension".to_string());
         }
         if axis >= ndim {
-            return Err(format!(
-                "CUDA cat axis out of bounds: axis={}, ndim={}",
-                axis, ndim
-            ));
+            return Err(format!("CUDA cat axis out of bounds: axis={}, ndim={}", axis, ndim));
         }
         let len = out_shape
             .iter()
@@ -2719,10 +2694,7 @@ mod imp {
             return Err("CUDA cat expects at least 1 dimension".to_string());
         }
         if axis >= ndim {
-            return Err(format!(
-                "CUDA cat axis out of bounds: axis={}, ndim={}",
-                axis, ndim
-            ));
+            return Err(format!("CUDA cat axis out of bounds: axis={}, ndim={}", axis, ndim));
         }
         let len = out_shape
             .iter()
@@ -3388,14 +3360,8 @@ mod imp {
         q_n: usize,
         k_n: usize,
         k_dim: usize,
-    ) -> Result<
-        (
-            (CudaBuffer, Vec<f32>),
-            (CudaBuffer, Vec<f32>),
-            (CudaBuffer, Vec<f32>),
-        ),
-        String,
-    > {
+    ) -> Result<((CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>)), String>
+    {
         let input_len = rows
             .checked_mul(k_dim)
             .ok_or_else(|| "CUDA fused qkv input length overflow".to_string())?;
@@ -3557,10 +3523,7 @@ mod imp {
             ));
         }
         if dim == 0 || dim % 2 != 0 {
-            return Err(format!(
-                "CUDA RoPE expects a positive even dimension, got {}",
-                dim
-            ));
+            return Err(format!("CUDA RoPE expects a positive even dimension, got {}", dim));
         }
         if offset + seq_len > cache_seq_len {
             return Err(format!(
@@ -3625,10 +3588,7 @@ mod imp {
             ));
         }
         if dim == 0 || dim % 2 != 0 {
-            return Err(format!(
-                "CUDA RoPE expects a positive even dimension, got {}",
-                dim
-            ));
+            return Err(format!("CUDA RoPE expects a positive even dimension, got {}", dim));
         }
         if offset + seq_len > cache_seq_len {
             return Err(format!(
@@ -3891,16 +3851,8 @@ mod imp {
         pad_w: usize,
         stride_h: usize,
         stride_w: usize,
-    ) -> Result<
-        (
-            CudaBuffer,
-            Vec<f32>,
-            CudaBuffer,
-            Vec<f32>,
-            Option<(CudaBuffer, Vec<f32>)>,
-        ),
-        String,
-    > {
+    ) -> Result<(CudaBuffer, Vec<f32>, CudaBuffer, Vec<f32>, Option<(CudaBuffer, Vec<f32>)>), String>
+    {
         let (grad_input, grad_weight, grad_bias) = conv2d_backward_f32_buffers(
             input,
             weight,
@@ -3924,13 +3876,7 @@ mod imp {
             Some(buffer) => Some((buffer.clone(), download_f32(&buffer)?)),
             None => None,
         };
-        Ok((
-            grad_input,
-            grad_input_host,
-            grad_weight,
-            grad_weight_host,
-            grad_bias_host,
-        ))
+        Ok((grad_input, grad_input_host, grad_weight, grad_weight_host, grad_bias_host))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4121,7 +4067,7 @@ mod imp {
     ) -> Result<CudaBuffer, String> {
         if kernel_h == 0 || kernel_w == 0 || stride_h == 0 || stride_w == 0 {
             return Err(
-                "CUDA max_pool2d backward kernel and stride must be greater than zero".to_string(),
+                "CUDA max_pool2d backward kernel and stride must be greater than zero".to_string()
             );
         }
         if in_h < kernel_h || in_w < kernel_w {
@@ -4916,14 +4862,8 @@ mod imp {
         _q_n: usize,
         _k_n: usize,
         _k_dim: usize,
-    ) -> Result<
-        (
-            (CudaBuffer, Vec<f32>),
-            (CudaBuffer, Vec<f32>),
-            (CudaBuffer, Vec<f32>),
-        ),
-        String,
-    > {
+    ) -> Result<((CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>)), String>
+    {
         Err("CUDA feature is disabled".to_string())
     }
 
@@ -5057,16 +4997,8 @@ mod imp {
         _pad_w: usize,
         _stride_h: usize,
         _stride_w: usize,
-    ) -> Result<
-        (
-            CudaBuffer,
-            Vec<f32>,
-            CudaBuffer,
-            Vec<f32>,
-            Option<(CudaBuffer, Vec<f32>)>,
-        ),
-        String,
-    > {
+    ) -> Result<(CudaBuffer, Vec<f32>, CudaBuffer, Vec<f32>, Option<(CudaBuffer, Vec<f32>)>), String>
+    {
         Err("CUDA feature is disabled".to_string())
     }
 
@@ -5976,14 +5908,7 @@ pub fn fused_qkv_f32(
     q_n: usize,
     k_n: usize,
     k_dim: usize,
-) -> Result<
-    (
-        (CudaBuffer, Vec<f32>),
-        (CudaBuffer, Vec<f32>),
-        (CudaBuffer, Vec<f32>),
-    ),
-    String,
-> {
+) -> Result<((CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>), (CudaBuffer, Vec<f32>)), String> {
     imp::fused_qkv_f32(input, q, k, v, rows, q_n, k_n, k_dim)
 }
 
@@ -6012,17 +5937,7 @@ pub fn rope_f32(
     offset: usize,
     cache_seq_len: usize,
 ) -> Result<(CudaBuffer, Vec<f32>), String> {
-    imp::rope_f32(
-        input,
-        cos,
-        sin,
-        batch_size,
-        num_heads,
-        seq_len,
-        dim,
-        offset,
-        cache_seq_len,
-    )
+    imp::rope_f32(input, cos, sin, batch_size, num_heads, seq_len, dim, offset, cache_seq_len)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6187,16 +6102,7 @@ pub fn conv2d_backward_f32(
     pad_w: usize,
     stride_h: usize,
     stride_w: usize,
-) -> Result<
-    (
-        CudaBuffer,
-        Vec<f32>,
-        CudaBuffer,
-        Vec<f32>,
-        Option<(CudaBuffer, Vec<f32>)>,
-    ),
-    String,
-> {
+) -> Result<(CudaBuffer, Vec<f32>, CudaBuffer, Vec<f32>, Option<(CudaBuffer, Vec<f32>)>), String> {
     imp::conv2d_backward_f32(
         input,
         weight,
