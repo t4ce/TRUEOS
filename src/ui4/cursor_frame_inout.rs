@@ -16,7 +16,6 @@
 //! for individual sources, and the selected frame remembers every cursor which
 //! selected it so slot 4 can paint their colored ownership segments.
 
-use embassy_sync::signal::Signal;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -25,8 +24,6 @@ use super::{OutputId, WindowId, WindowOwner, WindowSessionId, WindowState};
 const MAX_TRACKED_FRAMES: usize = 64;
 const MAX_CURSOR_SOURCES: usize = 32;
 const MAX_GLOBAL_KEYBOARD_HOOKS: usize = 16;
-
-static CURSOR_FRAME_CHANGED: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4CursorSource {
@@ -177,9 +174,9 @@ impl CursorFrameRig {
 
     fn session_closed(&mut self, owner: WindowOwner, session: WindowSessionId) -> bool {
         let selected_was_closed = self.selected.is_some_and(|selected| {
-            self.frames
-                .iter()
-                .any(|frame| frame.key == selected && frame.key.owner == owner && frame.session == session)
+            self.frames.iter().any(|frame| {
+                frame.key == selected && frame.key.owner == owner && frame.session == session
+            })
         });
         let previous_len = self.frames.len();
         self.frames
@@ -197,7 +194,10 @@ impl CursorFrameRig {
         let previous_len = self.frames.len();
         self.frames.retain(|frame| frame.key.owner != owner);
         let mut changed = self.frames.len() != previous_len;
-        if self.selected.is_some_and(|selected| selected.owner == owner) {
+        if self
+            .selected
+            .is_some_and(|selected| selected.owner == owner)
+        {
             self.selected = None;
             self.selecting_cursors.clear();
             changed = true;
@@ -294,6 +294,13 @@ impl CursorFrameRig {
             .iter()
             .any(|cursor| cursor.source == source)
     }
+
+    fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
+        let previous_len = self.selecting_cursors.len();
+        self.selecting_cursors
+            .retain(|cursor| cursor.source != source);
+        self.selecting_cursors.len() != previous_len
+    }
 }
 
 static CURSOR_FRAME_RIG: Mutex<CursorFrameRig> = Mutex::new(CursorFrameRig::new());
@@ -349,10 +356,13 @@ pub(crate) fn source_selected(source: Ui4CursorSource) -> bool {
     CURSOR_FRAME_RIG.lock().source_selected(source)
 }
 
-pub(crate) fn cursor_icon_for(
-    key: CursorFrameKey,
-    source: Ui4CursorSource,
-) -> Ui4CursorIcon {
+pub(super) fn cursor_retired(source: Ui4CursorSource) {
+    if CURSOR_FRAME_RIG.lock().cursor_retired(source) {
+        signal_visual_change();
+    }
+}
+
+pub(crate) fn cursor_icon_for(key: CursorFrameKey, source: Ui4CursorSource) -> Ui4CursorIcon {
     CURSOR_FRAME_RIG.lock().cursor_icon(key, source)
 }
 
@@ -379,11 +389,10 @@ pub(crate) fn set_window_cursor_icon(
     source: Option<Ui4CursorSource>,
     icon: Ui4CursorIcon,
 ) -> Result<(), CursorFrameError> {
-    let selected_visual_changed = CURSOR_FRAME_RIG.lock().set_cursor(
-        CursorFrameKey::new(owner, window),
-        source,
-        icon,
-    )?;
+    let selected_visual_changed =
+        CURSOR_FRAME_RIG
+            .lock()
+            .set_cursor(CursorFrameKey::new(owner, window), source, icon)?;
     if selected_visual_changed {
         signal_visual_change();
     }
@@ -441,17 +450,10 @@ pub(super) fn frame_visual_changed(owner: WindowOwner, window: WindowId) {
 }
 
 fn signal_visual_change() {
-    CURSOR_FRAME_CHANGED.signal(());
     super::input_broker::notify_slot4_visual_change();
 }
 
-pub(crate) async fn wait_cursor_frame_change() {
-    CURSOR_FRAME_CHANGED.wait().await;
-}
-
-pub(crate) fn cursor_color(
-    source: Ui4CursorSource,
-) -> crate::graphics::primitives::Rgba8 {
+pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
     use crate::graphics::primitives::Rgba8;
 
     const COLORS: [Rgba8; 16] = [
@@ -494,9 +496,7 @@ pub(crate) struct GlobalKeyboardHookId(u32);
 struct GlobalKeyboardHook {
     id: GlobalKeyboardHookId,
     priority: u8,
-    callback: fn(
-        &crate::r::keyboard::TrueosKeyboardOutputEvent,
-    ) -> GlobalKeyboardDisposition,
+    callback: fn(&crate::r::keyboard::TrueosKeyboardOutputEvent) -> GlobalKeyboardDisposition,
 }
 
 struct GlobalKeyboardRegistry {
@@ -519,9 +519,7 @@ static GLOBAL_KEYBOARD_REGISTRY: Mutex<GlobalKeyboardRegistry> =
 #[allow(dead_code)]
 pub(crate) fn register_global_keyboard_hook(
     priority: u8,
-    callback: fn(
-        &crate::r::keyboard::TrueosKeyboardOutputEvent,
-    ) -> GlobalKeyboardDisposition,
+    callback: fn(&crate::r::keyboard::TrueosKeyboardOutputEvent) -> GlobalKeyboardDisposition,
 ) -> Result<GlobalKeyboardHookId, CursorFrameError> {
     let mut registry = GLOBAL_KEYBOARD_REGISTRY.lock();
     registry.next_id = registry.next_id.wrapping_add(1).max(1);
@@ -556,12 +554,9 @@ pub(crate) fn global_keyboard_passes(
     event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> bool {
     let hooks = GLOBAL_KEYBOARD_REGISTRY.lock().hooks.clone();
-    hooks.iter().all(|hook| {
-        matches!(
-            (hook.callback)(event),
-            GlobalKeyboardDisposition::PassThrough
-        )
-    })
+    hooks
+        .iter()
+        .all(|hook| matches!((hook.callback)(event), GlobalKeyboardDisposition::PassThrough))
 }
 
 #[cfg(test)]
@@ -611,9 +606,6 @@ mod tests {
         rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
 
         assert_eq!(rig.cursor_icon(frame, source(1)), Ui4CursorIcon::Loading);
-        assert_eq!(
-            rig.cursor_icon(frame, source(2)),
-            Ui4CursorIcon::ResizeHorizontal
-        );
+        assert_eq!(rig.cursor_icon(frame, source(2)), Ui4CursorIcon::ResizeHorizontal);
     }
 }

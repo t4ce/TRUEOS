@@ -28,15 +28,15 @@ use crate::intel::gpu_font::{
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4InputEvent, WindowCreate,
-    WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
-    WindowSessionId, acquire_frame_buffer, begin_additional_window_session, cancel_frame_buffer,
-    create_frame, create_window, destroy_frame, finish_window_session,
-    finish_window_session_with_request, focused_keyboard_state, gpgpu_rgba_surface,
-    mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_window_frame, replace_window_frame, set_window_cursor_icon, set_window_custom_cursor,
-    set_window_placement, take_owner_input_events, window_placement, writable_rgba_view,
-    Ui4CursorIcon, Ui4CursorSource,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
+    Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
+    begin_additional_window_session, cancel_frame_buffer, create_frame, create_window,
+    destroy_frame, finish_window_session, finish_window_session_with_request,
+    focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
+    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_window_frame,
+    replace_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
+    take_owner_input_events, window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -45,6 +45,7 @@ const MAX_FRAME_HEIGHT: u32 = 1_440;
 const MAX_TEXT_ROWS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
+const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
@@ -150,6 +151,30 @@ pub struct TrueosUi4CursorSource {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
+/// One selected-frame pointer event after UI4 hit testing and capture.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4PointerEvent {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+    pub x: u32,
+    pub y: u32,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub wheel: i32,
+    pub buttons_down: u32,
+    pub buttons_pressed: u32,
+    pub buttons_released: u32,
+    pub combo_id: u32,
+    pub vcursor: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4PointerEvent>() == 16 * 4);
+
 /// Held-key snapshot for the keyboard assigned to this window's focused
 /// cursor/HUT route. HID usages index `key_down_bits` directly.
 #[repr(C)]
@@ -240,6 +265,7 @@ struct BlueprintSceneSurface {
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
     sprite_scene_upload: Option<SpriteSceneUpload>,
+    pending_pointer_events: VecDeque<TrueosUi4PointerEvent>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
     pending_resize_events: VecDeque<TrueosUi4ResizeEvent>,
 }
@@ -522,6 +548,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 solid_source: None,
                 sprite_clear_rgba: None,
                 sprite_scene_upload: None,
+                pending_pointer_events: VecDeque::new(),
                 pending_pan_events: VecDeque::new(),
                 pending_resize_events: VecDeque::new(),
             },
@@ -548,6 +575,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         solid_source: None,
         sprite_clear_rgba: None,
         sprite_scene_upload: None,
+        pending_pointer_events: VecDeque::new(),
         pending_pan_events: VecDeque::new(),
         pending_resize_events: VecDeque::new(),
     });
@@ -681,6 +709,42 @@ pub(crate) fn begin_blueprint_frame(
     0
 }
 
+/// Take one pointer event scoped to the globally selected Blueprint frame.
+/// A return value of one means the queue is currently empty; zero writes one
+/// event. The absorb-select gesture never enters this queue.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_pointer_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4PointerEvent,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_pointer_event_take(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+
+    route_owner_input_events(owner);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(event) = surface.pending_pointer_events.pop_front() else {
+        return 1;
+    };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
+    0
+}
+
 /// Take one middle-button pan gesture event scoped to this Blueprint window.
 ///
 /// UI4 owns hit testing and pointer capture. The Blueprint owns the resulting
@@ -801,10 +865,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
     0
 }
 
-/// Drain one VM owner's broker queue once and preserve every pan and resize
-/// event for its exact surface. Keyboard held state remains in the input
+/// Drain one VM owner's broker queue once and preserve every pointer, pan, and
+/// resize event for its exact surface. Keyboard held state remains in the input
 /// broker; draining its cooked events here prevents an interactive Blueprint
-/// from filling the owner queue while it polls the focused state contract.
+/// from filling the owner queue while it polls the selected-frame contracts.
 fn route_owner_input_events(owner: WindowOwner) {
     let input_events = take_owner_input_events(owner);
     if input_events.is_empty() {
@@ -813,6 +877,34 @@ fn route_owner_input_events(owner: WindowOwner) {
     let mut surfaces = SURFACES.lock();
     for input in input_events {
         match input {
+            Ui4InputEvent::Pointer(event) => {
+                let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
+                    continue;
+                };
+                if surface.pending_pointer_events.len() >= MAX_PENDING_POINTER_EVENTS {
+                    continue;
+                }
+                surface
+                    .pending_pointer_events
+                    .push_back(TrueosUi4PointerEvent {
+                        controller_id: event.source.controller_id,
+                        slot_id: event.source.slot_id,
+                        ep_target: event.source.ep_target,
+                        hid_kind: u32::from(event.source.hid_kind),
+                        x: event.x,
+                        y: event.y,
+                        local_x: event.local_x,
+                        local_y: event.local_y,
+                        dx: event.dx,
+                        dy: event.dy,
+                        wheel: i32::from(event.wheel),
+                        buttons_down: event.buttons_down,
+                        buttons_pressed: event.buttons_pressed,
+                        buttons_released: event.buttons_released,
+                        combo_id: event.combo_id,
+                        vcursor: u32::from(event.vcursor),
+                    });
+            }
             Ui4InputEvent::Pan(event) => {
                 let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
                     continue;
@@ -895,10 +987,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
 /// Compatibility shorthand for a frame-wide `AppOwned` cursor override.
 /// Overrides are retained per frame but activate only for the one globally
 /// selected frame while the cursor is inside that frame.
-pub extern "C" fn trueos_cabi_ui4_scene_set_custom_cursor(
-    window_id: u32,
-    enabled: u32,
-) -> i32 {
+pub extern "C" fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32 {
     if enabled > 1 {
         return ERROR_INVALID;
     }
@@ -1881,6 +1970,27 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
         }
     }
     count as isize
+}
+
+unsafe fn guest_pointer_event_take(window_id: u32, out: *mut TrueosUi4PointerEvent) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4PointerEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_POINTER_EVENT_TAKE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
 }
 
 unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i32 {

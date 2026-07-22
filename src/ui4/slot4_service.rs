@@ -181,9 +181,11 @@ fn changed_rect_damage(
 
     // Identical retained rectangles change no pixels at all.
     for (previous_index, previous_rect) in previous.iter().enumerate() {
-        if let Some((current_index, _)) = current.iter().enumerate().find(|(index, current_rect)| {
-            !current_matched[*index] && overlay_rect_eq(previous_rect, current_rect)
-        }) {
+        if let Some((current_index, _)) =
+            current.iter().enumerate().find(|(index, current_rect)| {
+                !current_matched[*index] && overlay_rect_eq(previous_rect, current_rect)
+            })
+        {
             previous_matched[previous_index] = true;
             current_matched[current_index] = true;
         }
@@ -296,12 +298,7 @@ fn add_overlay_rect_damage(
     damage: &mut crate::intel::CompositionDamageRegion,
     rect: &crate::intel::LiveOverlayRect,
 ) {
-    damage.add(crate::intel::CompositionDamageRect::new(
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-    ));
+    damage.add(crate::intel::CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height));
 }
 
 pub(super) fn presented_rects() -> Slot4Rects {
@@ -517,18 +514,7 @@ fn push_loading_cursor(
         (-6, 5),
         (4, 5),
     ] {
-        push_cursor_offset_rect(
-            rects,
-            x,
-            y,
-            offset_x,
-            offset_y,
-            3,
-            3,
-            screen_w,
-            screen_h,
-            color,
-        );
+        push_cursor_offset_rect(rects, x, y, offset_x, offset_y, 3, 3, screen_w, screen_h, color);
     }
     push_cursor_offset_rect(
         rects,
@@ -609,32 +595,10 @@ fn push_resize_diagonal_cursor(
     use crate::graphics::primitives::Rgba8;
 
     for offset in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10] {
-        push_cursor_offset_rect(
-            rects,
-            x,
-            y,
-            offset,
-            offset,
-            3,
-            3,
-            screen_w,
-            screen_h,
-            color,
-        );
+        push_cursor_offset_rect(rects, x, y, offset, offset, 3, 3, screen_w, screen_h, color);
     }
     for (offset_x, offset_y) in [(-10, -6), (-6, -10), (10, 6), (6, 10)] {
-        push_cursor_offset_rect(
-            rects,
-            x,
-            y,
-            offset_x,
-            offset_y,
-            3,
-            3,
-            screen_w,
-            screen_h,
-            color,
-        );
+        push_cursor_offset_rect(rects, x, y, offset_x, offset_y, 3, 3, screen_w, screen_h, color);
     }
     push_cursor_offset_rect(
         rects,

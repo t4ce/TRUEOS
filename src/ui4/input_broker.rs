@@ -294,6 +294,7 @@ impl InputBroker {
             .min_by_key(|(_, route)| route.focus_serial)
             .map(|(index, _)| index)
             .unwrap_or(0);
+        super::cursor_frame_inout::cursor_retired(self.cursors[index].source);
         self.cursors[index] = CursorRoute::new(source, x, y, 0);
         index
     }
@@ -919,8 +920,7 @@ impl InputBroker {
             }
             let icon = topmost_window_at(route.x, route.y)
                 .filter(|window| {
-                    super::selected_frame()
-                        == Some(WindowTarget::from(*window).cursor_frame_key())
+                    super::selected_frame() == Some(WindowTarget::from(*window).cursor_frame_key())
                 })
                 .map(|window| {
                     super::cursor_icon_for(

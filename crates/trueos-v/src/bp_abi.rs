@@ -75,6 +75,27 @@ pub struct TrueosUi4CursorSource {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4PointerEvent {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+    pub x: u32,
+    pub y: u32,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub dx: i32,
+    pub dy: i32,
+    pub wheel: i32,
+    pub buttons_down: u32,
+    pub buttons_pressed: u32,
+    pub buttons_released: u32,
+    pub combo_id: u32,
+    pub vcursor: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4KeyboardState {
     pub controller_id: u32,
     pub slot_id: u32,
@@ -220,6 +241,10 @@ unsafe extern "C" {
         window_id: u32,
         source: *const TrueosUi4CursorSource,
         icon: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_pointer_event_take(
+        window_id: u32,
+        out: *mut TrueosUi4PointerEvent,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(

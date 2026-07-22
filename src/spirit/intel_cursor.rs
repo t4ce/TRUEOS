@@ -272,14 +272,6 @@ pub(super) fn spirit_cursor_draw_solid_circle(
     Ok(())
 }
 
-pub(super) fn spirit_cursor_draw_red_cross(
-    access: SpiritCursorSurfaceAccess,
-) -> Result<(), SpiritCursorError> {
-    let surface = registered_surface(access)?;
-    draw_red_cross(surface);
-    Ok(())
-}
-
 pub(super) fn spirit_cursor_flush_cpu(
     access: SpiritCursorSurfaceAccess,
 ) -> Result<(), SpiritCursorError> {
@@ -626,40 +618,6 @@ fn draw_solid_circle(surface: SpiritCursorSurface, color: u32) {
             if dx * dx + dy * dy <= radius_squared {
                 unsafe {
                     core::ptr::write_volatile(row.add(x as usize), color);
-                }
-            }
-        }
-    }
-}
-
-fn draw_red_cross(surface: SpiritCursorSurface) {
-    const RED_BGRA_PREMULTIPLIED: u32 = 0xFFFF_0000;
-    const MARGIN: i32 = 16;
-    const HALF_THICKNESS: i32 = 4;
-
-    fill_surface_color(
-        surface.virt,
-        surface.pitch_bytes as usize,
-        surface.width,
-        surface.height,
-        0,
-    );
-    let width = surface.width as i32;
-    let height = surface.height as i32;
-    let drawable_width = width.saturating_sub(MARGIN * 2).max(1);
-    let drawable_height = height.saturating_sub(MARGIN * 2).max(1);
-    let pitch_pixels = surface.pitch_bytes as usize / core::mem::size_of::<u32>();
-    for y in MARGIN..height.saturating_sub(MARGIN) {
-        let relative_y = y - MARGIN;
-        let down_x = MARGIN + relative_y * drawable_width / drawable_height;
-        let up_x = width - 1 - down_x;
-        let row = unsafe { (surface.virt as *mut u32).add(y as usize * pitch_pixels) };
-        for center_x in [down_x, up_x] {
-            for x in (center_x - HALF_THICKNESS)..=(center_x + HALF_THICKNESS) {
-                if (0..width).contains(&x) {
-                    unsafe {
-                        core::ptr::write_volatile(row.add(x as usize), RED_BGRA_PREMULTIPLIED);
-                    }
                 }
             }
         }

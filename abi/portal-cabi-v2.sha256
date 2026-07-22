@@ -17,5 +17,8 @@
 # Blueprints the existing resize-on-maximize notification while older v2
 # artifacts continue to retain their fixed backing extent.
 # The UI4 custom-cursor declaration is strictly additive and lets a Blueprint
-# suppress the default cursor only over its own declared window.
-6353f62a405a046f707748eba712e26d9333245e30ab440ce8ecc148a1122207
+# suppress the default cursor over its selected frame. The cursor-icon call is
+# likewise additive and selects built-in defaults per frame or cursor source.
+# The pointer-event take call additively exposes only broker-routed events for
+# the selected frame; it does not alter older consumers of the raw HID ABI.
+694f359e98a31bd6bd44abcafd09d71374dc10054f62d3673a1bc99e4184d396

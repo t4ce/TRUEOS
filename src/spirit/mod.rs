@@ -33,7 +33,6 @@ const SPIRIT_LAB256_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_LAB256_PERIODIC_TRACE_FRAMES: u64 = 60;
 const SPIRIT_LAB256_TARGET_HZ: u64 = 60;
 const SPIRIT_PRESENT_FPS_WINDOW_MS: u64 = 500;
-const SPIRIT_CPU_PREFLIGHT_HOLD_MS: u64 = 1_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritFenceId(u8);
@@ -462,18 +461,6 @@ pub(crate) fn submit(
     Ok(lease.fence)
 }
 
-fn submit_cpu_preflight_red_cross(id: SpiritFenceId) -> Result<SpiritFence, SpiritSubmitError> {
-    let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::CPU)?;
-    if let Err(error) = intel_cursor::spirit_cursor_draw_red_cross(lease.surface)
-        .map_err(map_cursor_error)
-        .and_then(|_| release_cpu(lease))
-    {
-        cancel_pending(lease);
-        return Err(error);
-    }
-    Ok(lease.fence)
-}
-
 #[derive(Copy, Clone)]
 struct Inflight {
     flip: intel_cursor::SpiritCursorFlip,
@@ -591,28 +578,6 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
 
-    let preflight_fence = loop {
-        match submit_cpu_preflight_red_cross(id) {
-            Ok(fence) => break fence,
-            Err(error) => {
-                crate::log_warn!(
-                    target: "gfx";
-                    "trueos-spirit: cpu red-cross preflight deferred fence={} error={:?}\n",
-                    fence_index,
-                    error,
-                );
-                Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
-            }
-        }
-    };
-    crate::log!(
-        "trueos-spirit: cpu red-cross preflight queued fence={} sequence={} pipe={} gate=cpu-only display_release=cursor-surflive hold_ms={}\n",
-        fence_index,
-        preflight_fence.sequence,
-        pipe_name(id),
-        SPIRIT_CPU_PREFLIGHT_HOLD_MS,
-    );
-
     let mut retained: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
     let mut gpu_inflight: Option<GpuInflight> = None;
@@ -622,7 +587,6 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut stream_cadence_phase = 0u64;
     let mut presentation_rate = SpiritPresentationRate::new();
     let mut stream_aborted = false;
-    let mut preflight_hold_until: Option<Instant> = None;
     let mut arm_deferred_polls = 0u32;
     loop {
         if let Some(mut producing) = gpu_inflight {
@@ -692,13 +656,12 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
-                        if active.frame.lease.fence == preflight_fence {
-                            preflight_hold_until = Some(
-                                Instant::now()
-                                    + Duration::from_millis(SPIRIT_CPU_PREFLIGHT_HOLD_MS),
-                            );
-                            crate::log!(
-                                "trueos-spirit: cpu red-cross CUR_SURFLIVE proven fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} hold_ms={} next=guc-lab256\n",
+                        presentation_rate.observe_surflive(Instant::now());
+                        if spirit_should_trace_frame(stream_queued_frames) {
+                            crate::log_info!(
+                                target: "gfx";
+                                "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} present_fps={} sample_window_ms={} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
+                                stream_queued_frames,
                                 fence_index,
                                 active.frame.lease.fence.sequence,
                                 pipe_name(id),
@@ -706,36 +669,19 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 ctl,
                                 base,
                                 live,
-                                SPIRIT_CPU_PREFLIGHT_HOLD_MS,
+                                presentation_rate.estimate_fps(),
+                                SPIRIT_PRESENT_FPS_WINDOW_MS,
                             );
-                        } else {
-                            presentation_rate.observe_surflive(Instant::now());
-                            if spirit_should_trace_frame(stream_queued_frames) {
-                                crate::log_info!(
-                                    target: "gfx";
-                                    "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} present_fps={} sample_window_ms={} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
+                            if stream_queued_frames == SPIRIT_LAB256_INITIAL_TRACE_FRAMES {
+                                crate::log!(
+                                    "trueos-spirit: lab256 initial window complete frames={} target_hz={} present_fps={} sample_window_ms={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
                                     stream_queued_frames,
-                                    fence_index,
-                                    active.frame.lease.fence.sequence,
-                                    pipe_name(id),
-                                    active.frame.lease.surface.surface,
-                                    ctl,
-                                    base,
-                                    live,
+                                    SPIRIT_LAB256_TARGET_HZ,
                                     presentation_rate.estimate_fps(),
                                     SPIRIT_PRESENT_FPS_WINDOW_MS,
+                                    pipe_name(id),
+                                    active.frame.lease.surface.surface,
                                 );
-                                if stream_queued_frames == SPIRIT_LAB256_INITIAL_TRACE_FRAMES {
-                                    crate::log!(
-                                        "trueos-spirit: lab256 initial window complete frames={} target_hz={} present_fps={} sample_window_ms={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
-                                        stream_queued_frames,
-                                        SPIRIT_LAB256_TARGET_HZ,
-                                        presentation_rate.estimate_fps(),
-                                        SPIRIT_PRESENT_FPS_WINDOW_MS,
-                                        pipe_name(id),
-                                        active.frame.lease.surface.surface,
-                                    );
-                                }
                             }
                         }
                     } else {
@@ -747,8 +693,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 }
                 Ok(intel_cursor::SpiritCursorFlipState::Waiting { ctl, base, live }) => {
                     active.polls = active.polls.saturating_add(1);
-                    if (active.frame.lease.fence == preflight_fence
-                        || spirit_should_trace_frame(stream_queued_frames))
+                    if spirit_should_trace_frame(stream_queued_frames)
                         && (active.polls == 1 || active.polls.is_multiple_of(1_000))
                     {
                         crate::log_warn!(
@@ -816,16 +761,6 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         };
 
         let Some((frame, completes_fence)) = candidate else {
-            if let Some(deadline) = preflight_hold_until {
-                if Instant::now() < deadline {
-                    Timer::at(deadline).await;
-                    continue;
-                }
-                preflight_hold_until = None;
-                let now = Instant::now();
-                stream_next_deadline = now;
-                presentation_rate.begin(now);
-            }
             if !stream_aborted {
                 if Instant::now() < stream_next_deadline {
                     Timer::at(stream_next_deadline).await;
