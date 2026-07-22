@@ -712,7 +712,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     if spirit_should_trace_frame(stream_queued_frames)
                         && (active.polls == 1 || active.polls.is_multiple_of(1_000))
                     {
-                        crate::log_warn!(
+                        crate::log_trace!(
                             target: "gfx";
                             "trueos-spirit: cursor SURFLIVE waiting fence={} sequence={} pipe={} buffer={} polls={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X}\n",
                             fence_index,

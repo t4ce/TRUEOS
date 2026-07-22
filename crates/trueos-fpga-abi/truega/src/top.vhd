@@ -338,6 +338,9 @@ architecture rtl of top is
 	signal pkt_cnt_rev   : unsigned(4 downto 0) := (others => '0');
 	signal pkt_words_rev : word_arr_t := (others => (others => '0'));
 	signal continuation_pending : std_logic := '0';
+	signal continuation_data : std_logic_vector(255 downto 0) := (others => '0');
+	signal continuation_valid : std_logic_vector(7 downto 0) := (others => '0');
+	signal continuation_eop : std_logic := '0';
 	signal continuation_lane : unsigned(2 downto 0) := (others => '0');
 	signal decode_pending : std_logic := '0';
 	signal transaction_pending : std_logic := '0';
@@ -399,6 +402,10 @@ architecture rtl of top is
 	signal dbg_last_req_id      : std_logic_vector(15 downto 0) := (others => '0');
 	signal dbg_last_req_tag     : std_logic_vector(7 downto 0) := (others => '0');
 	signal dbg_last_read_data   : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_last_rx_rev_dw0  : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_last_rx_rev_dw1  : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_last_rx_rev_dw2  : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_last_rx_rev_dw3  : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw0    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw1    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw2    : std_logic_vector(31 downto 0) := (others => '0');
@@ -433,6 +440,10 @@ architecture rtl of top is
 	attribute syn_keep of dbg_last_req_id      : signal is true;
 	attribute syn_keep of dbg_last_req_tag     : signal is true;
 	attribute syn_keep of dbg_last_read_data   : signal is true;
+	attribute syn_keep of dbg_last_rx_rev_dw0  : signal is true;
+	attribute syn_keep of dbg_last_rx_rev_dw1  : signal is true;
+	attribute syn_keep of dbg_last_rx_rev_dw2  : signal is true;
+	attribute syn_keep of dbg_last_rx_rev_dw3  : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw0    : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw1    : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw2    : signal is true;
@@ -862,6 +873,9 @@ begin
 				pkt_cnt_rev <= (others => '0');
 				pkt_words_rev <= (others => (others => '0'));
 				continuation_pending <= '0';
+				continuation_data <= (others => '0');
+				continuation_valid <= (others => '0');
+				continuation_eop <= '0';
 				continuation_lane <= (others => '0');
 				decode_pending <= '0';
 				transaction_pending <= '0';
@@ -919,6 +933,10 @@ begin
 					dbg_last_req_id <= (others => '0');
 					dbg_last_req_tag <= (others => '0');
 					dbg_last_read_data <= (others => '0');
+					dbg_last_rx_rev_dw0 <= (others => '0');
+					dbg_last_rx_rev_dw1 <= (others => '0');
+					dbg_last_rx_rev_dw2 <= (others => '0');
+					dbg_last_rx_rev_dw3 <= (others => '0');
 					dbg_last_cpld_dw0 <= (others => '0');
 					dbg_last_cpld_dw1 <= (others => '0');
 					dbg_last_cpld_dw2 <= (others => '0');
@@ -1437,34 +1455,33 @@ begin
 						rx_nonposted_busy <= '0';
 					elsif continuation_pending = '1' then
 						-- Continuation beats are deliberately serialized one protocol
-						-- dword per clock. RX_WAIT keeps the hard-IP beat stable while the
-						-- snapshot is rescanned, keeping the accumulated-count barrel mux
-						-- off the 100 MHz receive path.
+						-- dword per clock. Multi-beat TLPs are rare, and this keeps the
+						-- accumulated-count barrel mux off the 100 MHz receive path.
 						case to_integer(continuation_lane) is
 						when 0 =>
-							payload_dw := rx_snapshot_data(31 downto 0);
-							hit_write := rx_snapshot_valid(0) = '1';
+							payload_dw := continuation_data(31 downto 0);
+							hit_write := continuation_valid(0) = '1';
 						when 1 =>
-							payload_dw := rx_snapshot_data(63 downto 32);
-							hit_write := rx_snapshot_valid(1) = '1';
+							payload_dw := continuation_data(63 downto 32);
+							hit_write := continuation_valid(1) = '1';
 						when 2 =>
-							payload_dw := rx_snapshot_data(95 downto 64);
-							hit_write := rx_snapshot_valid(2) = '1';
+							payload_dw := continuation_data(95 downto 64);
+							hit_write := continuation_valid(2) = '1';
 						when 3 =>
-							payload_dw := rx_snapshot_data(127 downto 96);
-							hit_write := rx_snapshot_valid(3) = '1';
+							payload_dw := continuation_data(127 downto 96);
+							hit_write := continuation_valid(3) = '1';
 						when 4 =>
-							payload_dw := rx_snapshot_data(159 downto 128);
-							hit_write := rx_snapshot_valid(4) = '1';
+							payload_dw := continuation_data(159 downto 128);
+							hit_write := continuation_valid(4) = '1';
 						when 5 =>
-							payload_dw := rx_snapshot_data(191 downto 160);
-							hit_write := rx_snapshot_valid(5) = '1';
+							payload_dw := continuation_data(191 downto 160);
+							hit_write := continuation_valid(5) = '1';
 						when 6 =>
-							payload_dw := rx_snapshot_data(223 downto 192);
-							hit_write := rx_snapshot_valid(6) = '1';
+							payload_dw := continuation_data(223 downto 192);
+							hit_write := continuation_valid(6) = '1';
 						when others =>
-							payload_dw := rx_snapshot_data(255 downto 224);
-							hit_write := rx_snapshot_valid(7) = '1';
+							payload_dw := continuation_data(255 downto 224);
+							hit_write := continuation_valid(7) = '1';
 						end case;
 
 						if hit_write and (next_cnt_rev < PKT_MAX_WORDS) then
@@ -1483,7 +1500,11 @@ begin
 
 						if continuation_lane = 0 then
 							continuation_pending <= '0';
-							if rx_snapshot_eop = '1' then
+							if continuation_eop = '1' then
+								dbg_last_rx_rev_dw0 <= next_words_rev(0);
+								dbg_last_rx_rev_dw1 <= next_words_rev(1);
+								dbg_last_rx_rev_dw2 <= next_words_rev(2);
+								dbg_last_rx_rev_dw3 <= next_words_rev(3);
 								rx_packet_active <= '0';
 								decode_pending <= '1';
 							else
@@ -1495,7 +1516,7 @@ begin
 						end if;
 					elsif capture_pending = '1' then
 						-- A SOP beat takes the original zero-based compactor path. A
-						-- continuation enters the serialized lane scanner so packet
+						-- continuation is copied into a registered lane scanner so packet
 						-- accumulation never becomes a single-cycle barrel shift.
 						dw(0) := rx_snapshot_data(31 downto 0);
 						dw(1) := rx_snapshot_data(63 downto 32);
@@ -1518,6 +1539,10 @@ begin
 							rx_packet_bardec <= rx_snapshot_bardec;
 							dbg_rx_capture_count <= dbg_rx_capture_count + 1;
 							if rx_snapshot_eop = '1' then
+								dbg_last_rx_rev_dw0 <= next_words_rev(0);
+								dbg_last_rx_rev_dw1 <= next_words_rev(1);
+								dbg_last_rx_rev_dw2 <= next_words_rev(2);
+								dbg_last_rx_rev_dw3 <= next_words_rev(3);
 								rx_packet_active <= '0';
 								decode_pending <= '1';
 							else
@@ -1525,6 +1550,9 @@ begin
 								rx_nonposted_busy <= '0';
 							end if;
 						else
+							continuation_data <= rx_snapshot_data;
+							continuation_valid <= rx_snapshot_valid;
+							continuation_eop <= rx_snapshot_eop;
 							continuation_lane <= to_unsigned(7, continuation_lane'length);
 							continuation_pending <= '1';
 						end if;

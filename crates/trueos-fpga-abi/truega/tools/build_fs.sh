@@ -42,6 +42,7 @@ PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
 PLACE_OPTION="${TRUEGA_PLACE_OPTION:-4}"
 ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
 CLOCK_CONVERSION="${TRUEGA_CLOCK_CONVERSION:-1}"
+CLOCK_ROUTE_ORDER="${TRUEGA_CLOCK_ROUTE_ORDER:-1}"
 REQUIRED_TLP_FMAX_MHZ="${TRUEGA_REQUIRED_TLP_FMAX_MHZ:-100.5}"
 HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
 HOST_TARGET="${TRUEGA_HOST_TARGET:-x86_64-unknown-linux-gnu}"
@@ -159,7 +160,7 @@ set_option -output_base_name min_pci_led
 set_option -fix_gated_and_generated_clocks $CLOCK_CONVERSION
 set_option -place_option $PLACE_OPTION
 set_option -route_option $ROUTE_OPTION
-set_option -clock_route_order 1
+set_option -clock_route_order $CLOCK_ROUTE_ORDER
 set_option -correct_hold_violation 0
 set_option -route_maxfan 23
 set_csr $PROJECT_DIR/src/serdes/serdes.csr

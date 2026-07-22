@@ -24,6 +24,7 @@ instead of presenting unrelated single-pass windows:
   while field/fractal features become progressively more opaque;
 - compact GPU telemetry supplies a frame audit and field mean;
 - one CUR_SURFLIVE-rate dot supplies a coarse presentation-health hint;
+- Spirit's preferred physical cursor subtly warps the color and fractal coordinates;
 - pointer injection changes simulation state rather than only changing color.
 
 The artifact is hash-allowlisted and wired into both TrueOS-Spirit's
@@ -55,14 +56,14 @@ repository bake script and an available `ocloc` reporting driver version
 
 ```text
 artifact: artifacts/adls/lab256_multiphase.bin
-size:     61,360 bytes
-sha256:   373c39713f0f89f98d66773d319f8e1591cdeee07d06bfe429449e4955fc212d
+size:     63,120 bytes
+sha256:   b7768c1b53b195ff4cd3886ac4f9e0415d92527f089a1cbc76d2a0cb4701c4d6
 
 spir-v:   artifacts/adls/lab256_multiphase.spv
-sha256:   041b6e8acbb30b4455e4e58a1a9c6c5b063ea6f752bb75c42453175b29c6f8bc
+sha256:   42b1b2c735db2a73a3fdab4e918d01859754f74d65080f0275002bdea068a8f3
 
 source sha256:
-ece8f31f19c91f18e7ba5a222dd10557df55aa1f98328d5f802544722b5fa75d
+4fb3cc282c274ff36caedd61e701f41c62303bcc3c7b04f87f0ee3dc6b9f0f04
 ```
 
 `ocloc validate` reports the binary as valid and finds exactly three kernels.
@@ -77,10 +78,10 @@ text section:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `lab256_step` | `0x0040` | 6,272 | 3 | 96 | 96 |
 | `lab256_reduce` | `0x18C0` | 1,664 | 3 | 96 | 96 |
-| `lab256_composite` | `0x1F40` | 7,616 | 4 | 96 | 96 |
+| `lab256_composite` | `0x1F40` | 8,192 | 4 | 96 | 96 |
 
 The symbol payloads within those padded text sections are 6,144, 1,536, and
-7,488 bytes respectively. Production wiring can hard-code these offsets only
+8,048 bytes respectively. Production wiring can hard-code these offsets only
 under the matching artifact hash, as the existing one-kernel path does with
 its `0x40` text offset.
 
@@ -118,7 +119,10 @@ audit. Pixel state and the RGBA frame remain GPU-resident.
 `16 x 256` SIMD16 groups. It produces one complete premultiplied
 AABBGGRR/RGBA8 pixel per work item. It combines scientific plasma color, the
 reaction field, optional field-warped Mandelbrot, and one presentation-rate
-status dot.
+status dot. When Spirit supplies a physical cursor snapshot, a squared radial
+falloff applies a small tangential offset to the two shader coordinates before
+the existing flow and Mandelbrot math. It adds no additional transcendental
+operation and does not inject or mutate reaction state.
 
 Alpha is the only output path. Control dword 17 supplies a finite f32 background
 alpha clamped to `[0, 1]` (fallback `0.08`). Field concentration, reaction
@@ -143,8 +147,8 @@ three walkers, not three separately polled submissions:
 2. Allocate persistent page-aligned A, B, control, and report storage; map the
    current Spirit 256x256 cursor backbuffer lease as the destination.
 3. Validate and clamp the CPU control page before flushing it for GPU use,
-   including background alpha in dword 17 and the rounded presentation-rate
-   estimate in dword 18.
+   including the normalized physical-cursor coordinate in dword 5, background
+   alpha in dword 17, and the rounded presentation-rate estimate in dword 18.
 4. Dispatch step with groups `16 x 256`, all SIMD16 lanes enabled.
 5. Emit `MEDIA_STATE_FLUSH`, then the existing stalling HDC/L3 producer flush
    and consumer invalidation before reduce reads state B.
@@ -170,6 +174,8 @@ memory or MMIO. The useful privilege is a narrow, trusted Shell2 service:
 - five exact buffers with separately validated sizes and stable PPGTT VAs;
 - hash-allowlisted instruction image and compile-time entry offsets;
 - CPU writes only the control page and reads only the report page;
+- Spirit snapshots at most the kernel cursor store's bounded 32 records once
+  per submitted frame and exposes only one clamped 2D coordinate to the shader;
 - alpha changes only per-pixel coverage inside Spirit's existing premultiplied
   cursor backbuffer; it grants no additional MMIO or plane ownership;
 - the shader cannot select addresses, pitches other than the validated RGBA8
