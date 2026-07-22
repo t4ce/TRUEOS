@@ -1,16 +1,22 @@
 // src/lib.rs
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "truega", feature = "host-runtime"))]
+compile_error!("features `truega` and `host-runtime` are mutually exclusive: TRUEGA is async-only");
+
+#[cfg(not(any(feature = "truega", feature = "host-runtime")))]
+compile_error!("enable exactly one Lumen execution contract: `truega` or `host-runtime`");
+
+#[cfg(all(feature = "host-runtime", not(feature = "std")))]
 extern crate alloc;
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "host-runtime", not(feature = "std")))]
 #[macro_export]
 macro_rules! println {
     ($($arg:tt)*) => {{}};
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "host-runtime", not(feature = "std")))]
 #[macro_export]
 macro_rules! thread_local {
     ($(static $name:ident: $ty:ty = $init:expr;)*) => {
@@ -21,7 +27,7 @@ macro_rules! thread_local {
     };
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "host-runtime", not(feature = "std")))]
 pub mod std {
     pub use alloc::{boxed, format, rc, string, vec};
     pub use core::{arch, cell, cmp, fmt, mem, ops, ptr};
@@ -209,20 +215,31 @@ pub mod std {
     }
 }
 
+#[cfg(feature = "host-runtime")]
 pub mod arch;
+#[cfg(feature = "host-runtime")]
 pub mod autograd;
 pub mod backend;
+#[cfg(feature = "host-runtime")]
 pub mod parallel;
+#[cfg(feature = "host-runtime")]
 pub mod precision;
+#[cfg(feature = "host-runtime")]
 #[macro_use]
 pub mod module;
+#[cfg(feature = "host-runtime")]
 pub mod init;
+#[cfg(feature = "host-runtime")]
 pub mod layers;
-#[cfg(feature = "model-io")]
+#[cfg(all(feature = "host-runtime", feature = "model-io"))]
 pub mod loader;
+#[cfg(feature = "host-runtime")]
 pub mod loss;
+#[cfg(feature = "host-runtime")]
 pub mod models;
+#[cfg(feature = "host-runtime")]
 pub mod ops;
+#[cfg(feature = "host-runtime")]
 pub mod optim;
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "host-runtime", feature = "cli"))]
 pub mod tokenizer;

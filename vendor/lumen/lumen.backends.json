@@ -10,6 +10,9 @@
         "zkvm"
       ],
       "cargo_feature": "truega",
+      "exclusive_with": [
+        "host-runtime"
+      ],
       "parallelism": "single_fpga_offload_worker",
       "threading_contract": "async_msi_wake",
       "function_contract": "typed_ahead_of_time_fpga_function",
@@ -21,6 +24,7 @@
     {
       "name": "cpu",
       "kind": "cpu",
+      "cargo_feature": "host-runtime",
       "targets": [
         "*"
       ],

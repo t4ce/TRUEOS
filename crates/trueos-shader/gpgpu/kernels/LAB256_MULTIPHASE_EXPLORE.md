@@ -18,19 +18,20 @@ The visible composition is now a compact radial flare inspired by
 `https://webgl-shaders.com/flare-example.html`, while preserving the original
 three-pass persistent architecture:
 
-- persistent Gray-Scott state supplies real frame-to-frame computation;
-- the reaction field replaces a separate classic-noise implementation and
-  texture-feedback allocation as the animated corona source;
+- persistent Gray-Scott state supplies real frame-to-frame computation for a
+  small mouse-authored trail layer;
+- the centered flare is procedural and consumes neither pointer coordinates nor
+  reaction state;
 - one radial wave, an irregular hot body, a rational halo, and four analytical
   ray axes produce the flare silhouette;
 - native premultiplied alpha makes inactive background pixels translucent
   while the flare body, rays, and hot core become progressively more opaque;
 - compact GPU telemetry supplies a frame audit and field mean;
 - one CUR_SURFLIVE-rate dot supplies a coarse presentation-health hint;
-- Spirit's preferred physical cursor leans the emitter within the stable avatar
-  and injects the same latched coordinate into the persistent reaction state;
-- pointer motion therefore leaves a field disturbance that continues evolving
-  after the immediate presentation response.
+- Spirit's preferred physical cursor injects only the independent reaction
+  layer at its latched coordinate;
+- a quiet initial state, six-pixel brush, and explicit decay keep that wake
+  restrained instead of growing autonomous reaction colonies.
 
 The artifact is hash-allowlisted and wired into both TrueOS-Spirit's
 continuous cursor-plane stream and the live UI4 preview service. Shell2 can
@@ -61,14 +62,14 @@ repository bake script and an available `ocloc` reporting driver version
 
 ```text
 artifact: artifacts/adls/lab256_multiphase.bin
-size:     60,680 bytes
-sha256:   90c7c86113f55721d37b67dc69b86d1afad096cc9ec68e94680df055c32d763f
+size:     57,496 bytes
+sha256:   aa7a557ec6e8834195d7a3ebb8484fc5bbc0c85755f9d8496a3a70d1f1cac7cf
 
 spir-v:   artifacts/adls/lab256_multiphase.spv
-sha256:   43f1f81e061166b84f4ff00e4df4105bf3047f7b23576309848eebe5ce7e2666
+sha256:   cf85bc467ab3317a260a938a3593d98c4861ef09fd13815ac643e607ef73ef31
 
 source sha256:
-001bad745cf278b8614981688021aa7397c5d7646e2bd1d470bd93a2e6b7a031
+ee5e3aabd305b2137934f3a50c86d315fae9fe235a73df712e9b6368411f3318
 ```
 
 `ocloc validate` reports the binary as valid and finds exactly three kernels.
@@ -81,12 +82,12 @@ text section:
 
 | Entry point | ELF file/text offset | Text bytes | BTIs | Cross-thread | Per-thread |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `lab256_step` | `0x0040` | 6,272 | 3 | 96 | 96 |
-| `lab256_reduce` | `0x18C0` | 1,664 | 3 | 96 | 96 |
-| `lab256_composite` | `0x1F40` | 8,768 | 4 | 96 | 96 |
+| `lab256_step` | `0x0040` | 5,376 | 3 | 96 | 96 |
+| `lab256_reduce` | `0x1540` | 1,664 | 3 | 96 | 96 |
+| `lab256_composite` | `0x1BC0` | 8,192 | 4 | 96 | 96 |
 
-The symbol payloads within those padded text sections are 6,144, 1,536, and
-8,632 bytes respectively. Production wiring can hard-code these offsets only
+The symbol payloads within those padded text sections are 5,232, 1,536, and
+8,024 bytes respectively. Production wiring can hard-code these offsets only
 under the matching artifact hash, as the existing one-kernel path does with
 its `0x40` text offset.
 
@@ -100,8 +101,10 @@ bounded scan per lane with no implicit scratch allocation.
 
 `lab256_step(state_in, state_out, control)` dispatches `16 x 256` SIMD16
 groups. Every work item owns one pixel. It applies a nine-tap Gray-Scott update,
-optional wraparound, a bounded pointer injection, and deterministic low-bit
-dither. State is packed as two UNORM16 values in one dword.
+optional wraparound, a bounded six-pixel pointer injection, explicit trail
+decay, and deterministic low-bit dither. Reset begins from an almost chemically
+quiet field, so cursor input is the only strong chemical-B source. State is
+packed as two UNORM16 values in one dword.
 
 The host swaps A/B only after the complete three-pass batch retires. A submitted
 batch that times out quarantines both the direct-RCS context and Lab256 state;
@@ -123,23 +126,20 @@ audit. Pixel state and the RGBA frame remain GPU-resident.
 `lab256_composite(state, report, control, dst_rgba, dst_pitch_bytes)` dispatches
 `16 x 256` SIMD16 groups. It produces one complete premultiplied
 AABBGGRR/RGBA8 pixel per work item. It combines the persistent reaction field,
-radial flare composition, and one presentation-rate status dot.
-The hot body boundary and outgoing pulse are distorted by persistent field and
-edge values. Four reciprocal-distance axes provide horizontal, vertical, and
-diagonal rays without a feedback texture. A rational core and halo complete the
-reference-inspired silhouette.
+centered radial flare composition, and one presentation-rate status dot as
+separate layers. The flare uses one radial wave, a small algebraic lobe, four
+reciprocal-distance ray axes, a rational core, and a halo. No pointer coordinate
+or reaction value enters its position, body, plume, or ray math.
 
-When Spirit supplies a physical cursor snapshot, its normalized coordinate
-leans the flare emitter by at most `0.14` scene units, roughly 18 pixels. The
-same control snapshot enables a smooth 12-pixel reaction injector in pass 1,
-raising chemical B and suppressing chemical A around the pointer. The avatar
-remains centered, while the injected field persists through later frames and
-distorts the corona and radial pulse.
+The reaction layer is composited in actual surface coordinates. A mean-relative
+floor rejects the quiet seed, hot chemical-B values appear mint, and the fading
+wake cools toward blue. It contributes its own color and alpha without moving or
+warping the centered flare. The former direct pointer cross was removed.
 
 Alpha is the only output path. Control dword 17 supplies a finite f32 background
-alpha clamped to `[0, 1]` (fallback `0.08`). Field concentration, reaction
-edges, core, corona, and rays raise opacity toward one. The pointer and FPS dot
-are fully opaque. RGB is multiplied by alpha before packing, matching UI4's
+alpha clamped to `[0, 1]` (fallback `0.08`). Reaction trail concentration, core,
+corona, and rays raise opacity toward one. The FPS dot is fully opaque. RGB is
+multiplied by alpha before packing, matching UI4's
 `Rgba8888Premultiplied` contract rather than relying on straight-alpha blending.
 Setting background alpha to `1.0` remains available when an opaque presentation
 is wanted, but it does not select a separate shader branch or format.
@@ -223,8 +223,8 @@ gpgpu preview status
 gpgpu preview stop
 ```
 
-Physical-pointer snapshots map to both emitter and reaction-injection
-coordinates. A small follow-up command may set
+Physical-pointer snapshots map only to reaction-injection coordinates. A small
+follow-up command may set
 only named, clamped values such as `feed`, `kill`, `flare-radius`,
 `flare-turbulence`, `flare-ray-gain`, and `flare-pulse-speed`; raw addresses and
 dispatch sizes should never be user-facing.

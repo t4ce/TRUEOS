@@ -15,13 +15,12 @@
 #define LAB256_PIXELS (LAB256_SIZE * LAB256_SIZE)
 
 #define LAB256_CONTROL_MAGIC 0x4C414232u // "LAB2"
-#define LAB256_CONTROL_VERSION 3u
+#define LAB256_CONTROL_VERSION 4u
 #define LAB256_REPORT_MAGIC 0x4C325250u // "L2RP"
 
 #define LAB256_FLAG_WRAP        (1u << 0)
 #define LAB256_FLAG_INJECT      (1u << 1)
 #define LAB256_FLAG_RESET       (1u << 2)
-#define LAB256_FLAG_POINTER_SHADE (1u << 4)
 
 // Control page, in dwords. Floats are stored as IEEE-754 bit patterns.
 #define LAB256_CTRL_MAGIC            0u
@@ -103,19 +102,12 @@ static inline float2 lab256_load_state(
 
 static inline float2 lab256_seed(uint x, uint y, uint seed)
 {
-    int dx0 = (int)x - 128;
-    int dy0 = (int)y - 128;
-    int dx1 = (int)x - 78;
-    int dy1 = (int)y - 166;
-    int dx2 = (int)x - 181;
-    int dy2 = (int)y - 75;
-    bool spot = dx0 * dx0 + dy0 * dy0 < 18 * 18
-        || dx1 * dx1 + dy1 * dy1 < 11 * 11
-        || dx2 * dx2 + dy2 * dy2 < 14 * 14;
     float noise = (float)(lab256_hash(x + y * LAB256_SIZE + seed) & 1023u)
         * (1.0f / 1023.0f);
-    float v = spot ? 0.82f + noise * 0.16f : noise * 0.012f;
-    return (float2)(1.0f - v * 0.55f, v);
+    // Start almost chemically quiet. Pointer injection is the only strong B
+    // source, so the reaction layer cannot grow unrelated seeded colonies.
+    float v = noise * 0.0015f;
+    return (float2)(1.0f, v);
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
@@ -166,6 +158,11 @@ __kernel void lab256_step(
         center += (float2)(
             0.16f * laplacian.x - reaction + feed * (1.0f - center.x),
             0.08f * laplacian.y + reaction - (feed + kill) * center.y) * dt;
+
+        // Bound the visual wake to roughly the recent second of movement at
+        // 60 Hz. This keeps cursor input as a small reactive trail rather than
+        // an autonomous, continuously blooming reaction garden.
+        center.y *= 0.985f;
     }
 
     if ((flags & LAB256_FLAG_INJECT) != 0u) {
@@ -173,11 +170,11 @@ __kernel void lab256_step(
         float pointer_x = (float)(packed_xy & 0xFFFFu);
         float pointer_y = (float)(packed_xy >> 16);
         float radius = clamp(
-            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_RADIUS]), 12.0f),
+            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_RADIUS]), 6.0f),
             1.0f,
             48.0f);
         float strength = clamp(
-            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_STRENGTH]), 0.8f),
+            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_STRENGTH]), 0.82f),
             0.0f,
             1.0f);
         float2 delta = (float2)((float)x - pointer_x, (float)y - pointer_y);
@@ -291,25 +288,11 @@ __kernel void lab256_composite(
         return;
     }
 
-    uint flags = control[LAB256_CTRL_FLAGS];
     float time = lab256_finite_or(as_float(control[LAB256_CTRL_TIME_F32]), 0.0f);
     float2 state_uv = lab256_unpack_state(state[y * LAB256_SIZE + x]);
     float field = state_uv.y;
     float mean_v = report[0] == LAB256_REPORT_MAGIC ? lab256_mean_v(report) : 0.0f;
     float2 point = ((float2)((float)x + 0.5f, (float)y + 0.5f) / 256.0f - 0.5f) * 2.0f;
-
-    // The flare stays near the avatar center while the physical cursor can
-    // lean its emitter by roughly 18 pixels in either direction. This keeps
-    // the hardware cursor surface spatially stable while making the scene
-    // visibly responsive to the kernel cursor snapshot.
-    float2 emitter = (float2)(0.0f);
-    if ((flags & LAB256_FLAG_POINTER_SHADE) != 0u) {
-        uint packed_xy = control[LAB256_CTRL_POINTER_XY];
-        float2 pointer_point = (float2)(
-            (float)(packed_xy & 0xFFFFu),
-            (float)(packed_xy >> 16)) * (2.0f / 255.0f) - 1.0f;
-        emitter = pointer_point * 0.14f;
-    }
 
     float flare_radius = clamp(
         lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_RADIUS]), 0.52f),
@@ -328,19 +311,19 @@ __kernel void lab256_composite(
         0.1f,
         4.0f);
 
-    float2 flare_point = point - emitter;
+    // The flare is its own centered layer. Pointer coordinates never enter
+    // this geometry; they only seed the independent reaction field in pass 1.
+    float2 flare_point = point;
     float radius2 = dot(flare_point, flare_point);
     float radius = native_sqrt(max(radius2, 1.0e-8f));
-    float edge = fabs(state_uv.x - state_uv.y);
-    float organic = clamp((field - mean_v) * 1.4f + edge * 0.65f, -1.0f, 1.0f);
     float radial_wave = 0.5f + 0.5f * native_sin(
         radius * 26.0f
-            - time * (1.65f * pulse_speed)
-            + field * 7.5f
-            + edge * 4.0f);
+            - time * (1.65f * pulse_speed));
+    float lobe = (flare_point.x * flare_point.x - flare_point.y * flare_point.y)
+        / (radius2 + 0.04f);
     float distorted_radius = flare_radius
-        + organic * turbulence
-        + (radial_wave - 0.5f) * (turbulence * 0.55f);
+        + (radial_wave - 0.5f) * (turbulence * 0.55f)
+        + lobe * (turbulence * 0.08f);
 
     float body_t = lab256_clamp01(
         (radius - (distorted_radius - 0.10f)) * 5.0f);
@@ -352,11 +335,11 @@ __kernel void lab256_composite(
     float outer = 1.0f - outer_t;
     float plume = outer
         * (0.12f + radial_wave * 0.48f)
-        * (0.38f + lab256_clamp01(field + edge * 1.8f) * 0.62f);
+        * (0.64f + radial_wave * 0.36f);
 
     // Four analytical flare axes replace the reference shader's texture
-    // feedback. They are cheap reciprocal distance fields whose brightness is
-    // modulated by the persistent reaction state and the same radial pulse.
+    // feedback. They are cheap reciprocal distance fields modulated only by
+    // the centered flare pulse, not by pointer or reaction coordinates.
     float axis_x = 0.008f / (fabs(flare_point.y) + 0.008f);
     float axis_y = 0.008f / (fabs(flare_point.x) + 0.008f);
     float diagonal_a = 0.010f
@@ -368,8 +351,7 @@ __kernel void lab256_composite(
     float rays = ray_shape
         * ray_envelope
         * ray_gain
-        * (0.52f + radial_wave * 0.48f)
-        * (0.72f + field * 0.28f);
+        * (0.52f + radial_wave * 0.48f);
 
     float core = 0.010f / (radius2 + 0.010f);
     float halo = 0.055f / (radius2 + 0.055f);
@@ -377,6 +359,20 @@ __kernel void lab256_composite(
         + (float3)(1.00f, 0.62f, 0.10f) * (body * 0.44f + halo * 0.32f)
         + (float3)(1.00f, 0.98f, 0.84f) * (core * 1.9f + rays * 1.05f)
         + (float3)(0.16f, 0.30f, 1.00f) * (halo * 0.16f + plume * 0.07f);
+
+    // The mouse-authored reaction is a second visual layer in real surface
+    // coordinates. A mean-relative floor rejects the quiet seed; high B values
+    // form a compact mint core while the decaying wake cools toward blue.
+    float trail_floor = max(0.035f, min(mean_v * 1.5f, 0.12f));
+    float reaction_trail = lab256_clamp01((field - trail_floor) * 2.35f);
+    reaction_trail = reaction_trail * reaction_trail
+        * (3.0f - 2.0f * reaction_trail);
+    float trail_hot = lab256_clamp01((field - 0.30f) * 1.8f);
+    float3 trail_color = mix(
+        (float3)(0.10f, 0.28f, 1.00f),
+        (float3)(0.18f, 1.00f, 0.66f),
+        trail_hot);
+    color += trail_color * (reaction_trail * 0.78f);
 
     float background_alpha = clamp(
         lab256_finite_or(
@@ -389,20 +385,9 @@ __kernel void lab256_composite(
             + body * 0.78f
             + plume * 0.56f
             + rays * 0.88f
-            + halo * 0.20f);
+            + halo * 0.20f
+            + reaction_trail * 0.72f);
     float output_alpha = mix(background_alpha, 1.0f, content_alpha);
-
-    if ((flags & LAB256_FLAG_INJECT) != 0u) {
-        uint packed_xy = control[LAB256_CTRL_POINTER_XY];
-        int pointer_x = (int)(packed_xy & 0xFFFFu);
-        int pointer_y = (int)(packed_xy >> 16);
-        int dx = abs((int)x - pointer_x);
-        int dy = abs((int)y - pointer_y);
-        if ((dx <= 7 && dy == 0) || (dy <= 7 && dx == 0)) {
-            color = (float3)(0.94f, 0.98f, 1.0f);
-            output_alpha = 1.0f;
-        }
-    }
 
     // One fully opaque status dot reports Spirit's half-second average of
     // cursor-plane CUR_SURFLIVE completions. The host seeds it at the 60 Hz

@@ -2,8 +2,11 @@ use core::future::Future;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LumenBackend {
+    #[cfg(feature = "host-runtime")]
     Cpu,
+    #[cfg(all(feature = "host-runtime", feature = "cuda"))]
     Cuda,
+    #[cfg(feature = "truega")]
     Truega,
 }
 
@@ -11,12 +14,16 @@ impl LumenBackend {
     #[inline]
     pub const fn as_str(self) -> &'static str {
         match self {
+            #[cfg(feature = "host-runtime")]
             Self::Cpu => "cpu",
+            #[cfg(all(feature = "host-runtime", feature = "cuda"))]
             Self::Cuda => "cuda",
+            #[cfg(feature = "truega")]
             Self::Truega => "truega",
         }
     }
 
+    #[cfg(feature = "truega")]
     #[inline]
     pub const fn is_truega(self) -> bool {
         matches!(self, Self::Truega)
@@ -30,13 +37,14 @@ pub const fn truega_compiled() -> bool {
 
 #[inline]
 pub const fn default_backend() -> LumenBackend {
-    if truega_compiled() {
-        LumenBackend::Truega
-    } else if cfg!(feature = "cuda") {
-        LumenBackend::Cuda
-    } else {
-        LumenBackend::Cpu
-    }
+    #[cfg(feature = "truega")]
+    return LumenBackend::Truega;
+
+    #[cfg(all(feature = "host-runtime", feature = "cuda"))]
+    return LumenBackend::Cuda;
+
+    #[cfg(all(feature = "host-runtime", not(feature = "cuda")))]
+    return LumenBackend::Cpu;
 }
 
 #[inline]
