@@ -59,7 +59,7 @@ pub(crate) mod flags {
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Warn);
+        LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
 
     pub(crate) const NET_LOG_RX_TAP: bool = false;

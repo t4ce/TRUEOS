@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use embassy_sync::{mutex::Mutex as AsyncMutex, signal::Signal};
@@ -35,6 +35,7 @@ const COMPLETION_INTERRUPT_TIMEOUT_MS: u64 = 2_000;
 const HEARTBEAT_PERIOD_MS: u64 = 250;
 
 static NEXT_CALL_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_LFM25_DECODE_SESSION_EPOCH: AtomicU32 = AtomicU32::new(1);
 static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState::new());
@@ -122,12 +123,29 @@ struct Request {
 }
 
 type Lfm25StreamCallResult = Result<crate::tga::Lfm25StreamResult, Error>;
+pub type Lfm25DecodeCallResult =
+    Result<trueos_fpga_abi::lfm25_decode_transport::Completion, Error>;
+type Lfm25DecodeCompletionCallback = Box<dyn FnOnce(Lfm25DecodeCallResult) + Send + 'static>;
 
 struct Lfm25StreamRequest {
     mode: u32,
     row: u32,
     connection_generation: u32,
     reply: Arc<Signal<crate::wait::EmbassySpinRawMutex, Lfm25StreamCallResult>>,
+}
+
+struct Lfm25DecodeRequest {
+    command: trueos_fpga_abi::lfm25_decode_transport::Command,
+    connection_generation: u32,
+    callback: Option<Lfm25DecodeCompletionCallback>,
+}
+
+impl Lfm25DecodeRequest {
+    fn deliver(mut self, result: Lfm25DecodeCallResult) {
+        if let Some(callback) = self.callback.take() {
+            callback(result);
+        }
+    }
 }
 
 /// One operation accepted by the sole FPGA transport worker. The variants
@@ -137,11 +155,13 @@ struct Lfm25StreamRequest {
 enum TransportJob {
     Inline(CallId),
     Lfm25Stream(Lfm25StreamRequest),
+    Lfm25Decode(Lfm25DecodeRequest),
 }
 
 enum ActiveTransportJob {
     Inline(Request),
     Lfm25Stream(Lfm25StreamRequest),
+    Lfm25Decode(Lfm25DecodeRequest),
 }
 
 enum Delivery {
@@ -442,6 +462,109 @@ pub async fn acquire_lfm25_stream_transport()
     LFM25_STREAM_SESSION_LANE.lock().await
 }
 
+/// Exclusive ownership of the BAR2 resident-tensor domain for one fixed decode session.
+/// The epoch is carried through every device request and becomes part of every resident
+/// handle minted by the higher-level decode backend.
+pub struct Lfm25DecodeTransportSession {
+    _bar2_lane:
+        embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()>,
+    connection_generation: u32,
+    session_epoch: u32,
+    epoch_installed: bool,
+}
+
+impl Lfm25DecodeTransportSession {
+    pub const fn connection_generation(&self) -> u32 {
+        self.connection_generation
+    }
+
+    pub const fn session_epoch(&self) -> u32 {
+        self.session_epoch
+    }
+
+    /// Submit one fixed AOT operation. The returned future is signalled only by the
+    /// callback which the single worker invokes after MSI retirement.
+    pub async fn execute(
+        &mut self,
+        command: trueos_fpga_abi::lfm25_decode_transport::Command,
+    ) -> Lfm25DecodeCallResult {
+        use trueos_fpga_abi::lfm25_decode::DecodeOpKind;
+
+        if command.session_epoch != self.session_epoch {
+            return Err(Error::Protocol);
+        }
+        if !crate::tga::is_online()
+            || crate::tga::connection_generation() != self.connection_generation
+        {
+            return Err(Error::DeviceLost);
+        }
+        command.validate().map_err(|_| Error::Protocol)?;
+        let installs_epoch = !self.epoch_installed;
+        if installs_epoch
+            && (command.operation != DecodeOpKind::TokenEmbedding || command.position != 0)
+        {
+            return Err(Error::Protocol);
+        }
+        if self.epoch_installed
+            && command.operation == DecodeOpKind::TokenEmbedding
+            && command.position == 0
+        {
+            return Err(Error::Protocol);
+        }
+
+        let reply = Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, Lfm25DecodeCallResult>::new());
+        let callback_reply = Arc::clone(&reply);
+        let request = Lfm25DecodeRequest {
+            command,
+            connection_generation: self.connection_generation,
+            callback: Some(Box::new(move |result| callback_reply.signal(result))),
+        };
+        {
+            let mut service = SERVICE.lock();
+            if service.queue.len() >= MAX_ACTIVE_CALLS {
+                return Err(Error::QueueFull);
+            }
+            service.queue.push_back(TransportJob::Lfm25Decode(request));
+        }
+        WORK_AVAILABLE.signal(());
+        let result = reply.wait().await;
+        if installs_epoch && result.is_ok() {
+            self.epoch_installed = true;
+        }
+        result
+    }
+}
+
+pub fn lfm25_decode_transport_available() -> bool {
+    crate::tga::lfm25_decode_transport_available()
+}
+
+/// Acquire the same BAR2 session lane used by the proven FFN row streamer. Firmware
+/// without the exact decode-v1 magic and complete capability bits is rejected before an
+/// epoch is minted or any request register is written.
+pub async fn acquire_lfm25_decode_transport() -> Result<Lfm25DecodeTransportSession, Error> {
+    let lane = LFM25_STREAM_SESSION_LANE.lock().await;
+    if !crate::tga::is_online() {
+        return Err(Error::DeviceLost);
+    }
+    if !crate::tga::lfm25_decode_transport_available() {
+        return Err(Error::Protocol);
+    }
+    let connection_generation = crate::tga::connection_generation();
+    let session_epoch = loop {
+        let candidate = NEXT_LFM25_DECODE_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+        if candidate != 0 {
+            break candidate;
+        }
+    };
+    Ok(Lfm25DecodeTransportSession {
+        _bar2_lane: lane,
+        connection_generation,
+        session_epoch,
+        epoch_installed: false,
+    })
+}
+
 pub fn lfm25_row_stream_available() -> bool {
     crate::tga::lfm25_stream_available()
 }
@@ -533,6 +656,7 @@ fn map_transport_error(error: crate::tga::OffloadTransportError) -> Error {
     match error {
         crate::tga::OffloadTransportError::Offline => Error::DeviceLost,
         crate::tga::OffloadTransportError::InvalidPackage => Error::Protocol,
+        crate::tga::OffloadTransportError::Device(code) => Error::Device(code),
         crate::tga::OffloadTransportError::WriteVerification {
             word,
             observed,
@@ -667,6 +791,9 @@ fn take_next_transport_job() -> Option<ActiveTransportJob> {
             TransportJob::Lfm25Stream(request) => {
                 return Some(ActiveTransportJob::Lfm25Stream(request));
             }
+            TransportJob::Lfm25Decode(request) => {
+                return Some(ActiveTransportJob::Lfm25Decode(request));
+            }
         }
     }
     None
@@ -776,6 +903,7 @@ impl ActiveTransportJob {
         match self {
             Self::Inline(_) => None,
             Self::Lfm25Stream(request) => Some(request.connection_generation),
+            Self::Lfm25Decode(request) => Some(request.connection_generation),
         }
     }
 
@@ -789,6 +917,9 @@ impl ActiveTransportJob {
             Self::Lfm25Stream(request) => {
                 crate::tga::start_lfm25_stream_row(request.mode, request.row)
                     .map_err(map_transport_error)
+            }
+            Self::Lfm25Decode(request) => {
+                crate::tga::start_lfm25_decode(request.command).map_err(map_transport_error)
             }
         }
     }
@@ -808,6 +939,15 @@ impl ActiveTransportJob {
                     )
                 })
                 .map_err(map_transport_error),
+            Self::Lfm25Decode(_) => crate::tga::lfm25_decode_state()
+                .map(|state| {
+                    matches!(
+                        state,
+                        trueos_fpga_abi::lfm25_decode_transport::State::Complete
+                            | trueos_fpga_abi::lfm25_decode_transport::State::Failed
+                    )
+                })
+                .map_err(map_transport_error),
         }
     }
 
@@ -815,6 +955,7 @@ impl ActiveTransportJob {
         match self {
             Self::Inline(request) => finish_call(request.call_id, Err(error)),
             Self::Lfm25Stream(request) => request.reply.signal(Err(error)),
+            Self::Lfm25Decode(request) => request.deliver(Err(error)),
         }
     }
 
@@ -858,6 +999,21 @@ impl ActiveTransportJob {
                     let _ = crate::tga::ack_offload_interrupt();
                 }
                 request.reply.signal(result);
+            }
+            Self::Lfm25Decode(request) => {
+                let result = terminal.and_then(|()| {
+                    if !crate::tga::is_online()
+                        || crate::tga::connection_generation() != request.connection_generation
+                    {
+                        return Err(Error::DeviceLost);
+                    }
+                    crate::tga::read_lfm25_decode_completion(request.command)
+                        .map_err(map_transport_error)
+                });
+                if terminal_reached {
+                    let _ = crate::tga::ack_offload_interrupt();
+                }
+                request.deliver(result);
             }
         }
     }

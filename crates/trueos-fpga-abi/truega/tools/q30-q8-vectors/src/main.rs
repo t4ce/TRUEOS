@@ -62,9 +62,7 @@ fn synthetic_cases() -> Vec<Case> {
     // max=254*2^20 makes odd multiples of 2^20 exact half-integer quants.
     let unit = 1i64 << 20;
     let maximum = 254 * unit;
-    let tie_targets = [
-        1i64, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-    ];
+    let tie_targets = [1i64, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31];
     let mut ties = [0i64; VALUES];
     for index in 0..15 {
         ties[index] = tie_targets[index] * unit;
@@ -121,7 +119,104 @@ fn synthetic_cases() -> Vec<Case> {
         id: 7,
         input: fp32_boundary,
     });
+    cases.push(Case {
+        id: 8,
+        input: find_inverse_rounding_boundary()
+            .expect("deterministic search must find an F32 inverse/product boundary"),
+    });
+
+    // F16 subnormal 1.5 is a tie which rounds to the even encoding 2.  The
+    // maximum immediately below that exact boundary must instead encode 1:
+    //   boundary_q30 = 1.5 * 2^-24 * 127 * 2^30 = 3 * 4064.
+    // The old RNE(max_q30 / 127) fixed-point shortcut erases the -1 and emits
+    // the tie (2); Rust's F32 division retains it and emits 1.
+    let mut scale_fp32_boundary = [0i64; VALUES];
+    let scale_boundary_maximum = 3 * 4064 - 1;
+    scale_fp32_boundary[0] = scale_boundary_maximum;
+    scale_fp32_boundary[1] = -scale_boundary_maximum;
+    let strict_scale = f16::from_f32((scale_boundary_maximum as f32 / Q30_ONE) / 127.0).to_bits();
+    let old_fixed_q30 =
+        scale_boundary_maximum / 127 + i64::from((scale_boundary_maximum % 127) * 2 > 127);
+    let old_scale = f16::from_f32(old_fixed_q30 as f32 / Q30_ONE).to_bits();
+    assert_eq!(strict_scale, 0x0001);
+    assert_eq!(old_scale, 0x0002);
+    cases.push(Case {
+        id: 9,
+        input: scale_fp32_boundary,
+    });
     cases
+}
+
+fn find_inverse_rounding_boundary() -> Option<[i64; VALUES]> {
+    let mut random = 0x4d59_5df4_d0f3_3173u64;
+    for _ in 0..2_000_000 {
+        random = xorshift64(random);
+        let exponent = 24 + (random % 38) as u32;
+        random = xorshift64(random);
+        let significand = 0x80_0000u64 | (random & 0x7f_ffff);
+        let maximum = significand << (exponent - 23);
+        if maximum > i64::MAX as u64 {
+            continue;
+        }
+        random = xorshift64(random);
+        let quant = (random % 126) as u64;
+        let threshold_numerator = (2 * quant + 1) as u128 * maximum as u128;
+        let threshold = (threshold_numerator / 254) as u64;
+        for candidate in [
+            threshold.saturating_sub(1),
+            threshold,
+            threshold.saturating_add(1),
+        ] {
+            let sample = round_u64_to_f32_integer(candidate);
+            if sample > maximum {
+                continue;
+            }
+            let exact = round_ratio_ties_even(sample as u128 * 127, maximum as u128);
+            let rust = (((sample as i64 as f32 / Q30_ONE)
+                * (127.0 / (maximum as i64 as f32 / Q30_ONE)))
+                .round_ties_even()) as i64;
+            if exact as i64 != rust {
+                let mut input = [0i64; VALUES];
+                input[0] = maximum as i64;
+                input[1] = sample as i64;
+                input[2] = -(sample as i64);
+                return Some(input);
+            }
+        }
+    }
+    None
+}
+
+fn xorshift64(mut value: u64) -> u64 {
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^ (value << 17)
+}
+
+fn round_u64_to_f32_integer(value: u64) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+    let msb = 63 - value.leading_zeros();
+    if msb <= 23 {
+        return value;
+    }
+    let shift = msb - 23;
+    let truncated = value >> shift;
+    let mask = (1u64 << shift) - 1;
+    let discarded = value & mask;
+    let halfway = 1u64 << (shift - 1);
+    (truncated + u64::from(discarded > halfway || (discarded == halfway && truncated & 1 != 0)))
+        << shift
+}
+
+fn round_ratio_ties_even(numerator: u128, denominator: u128) -> u128 {
+    let quotient = numerator / denominator;
+    let remainder = numerator % denominator;
+    quotient
+        + u128::from(
+            remainder * 2 > denominator || (remainder * 2 == denominator && quotient & 1 != 0),
+        )
 }
 
 fn trace_block_as_q30(trace: &[u8], wanted: usize) -> Result<[i64; VALUES], String> {
@@ -184,7 +279,8 @@ fn reference(input: &[i64; VALUES]) -> (u16, [u8; VALUES]) {
 }
 
 fn write_vectors(path: &Path, cases: &[Case]) -> Result<(), String> {
-    let file = fs::File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
+    let file =
+        fs::File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
     let mut output = BufWriter::new(file);
     writeln!(output, "{}", cases.len()).map_err(|error| error.to_string())?;
     for case in cases {

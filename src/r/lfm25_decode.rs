@@ -5,9 +5,6 @@
 //! invokes the registered Rust completion callback. The scheduler awaits each callback
 //! before issuing the next request, so there is no pool or second device scheduler.
 
-extern crate alloc;
-
-use alloc::vec::Vec;
 use core::future::Future;
 
 use trueos_fpga_abi::lfm25;
@@ -18,54 +15,71 @@ use trueos_fpga_abi::lfm25_decode::{
 
 pub const HIDDEN_ELEMENTS: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
 pub const HIDDEN_Q8_BLOCKS: usize = HIDDEN_ELEMENTS / lfm25::Q8_0_BLOCK_VALUES;
-pub type Q8Block = [u8; lfm25::Q8_0_BLOCK_BYTES];
+/// Backend-owned storage identity for one fixed 1024-element tensor.
+///
+/// This is deliberately not a BAR address or a host pointer. The backend mints a
+/// handle only after an MSI callback retires the operation which produced it,
+/// and rejects handles from an old connection generation/session epoch.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ResidentTensorHandle {
+    connection_generation: u32,
+    session_epoch: u32,
+    storage_slot: u16,
+}
 
-/// An opaque FPGA-produced residual-stream value. Rust may route/copy it but never
-/// computes its elements.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HiddenQ30(Vec<i64>);
+impl ResidentTensorHandle {
+    pub(crate) const fn new(
+        connection_generation: u32,
+        session_epoch: u32,
+        storage_slot: u16,
+    ) -> Self {
+        Self {
+            connection_generation,
+            session_epoch,
+            storage_slot,
+        }
+    }
+
+    pub const fn connection_generation(self) -> u32 {
+        self.connection_generation
+    }
+
+    pub const fn session_epoch(self) -> u32 {
+        self.session_epoch
+    }
+
+    pub const fn storage_slot(self) -> u16 {
+        self.storage_slot
+    }
+}
+
+/// Opaque FPGA-resident Q30[1024]. Rust can route this handle between fixed
+/// operations, but there is no host slice and therefore no numerical fallback.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct HiddenQ30(ResidentTensorHandle);
 
 impl HiddenQ30 {
-    pub fn new(values: Vec<i64>) -> Result<Self, TensorError> {
-        if values.len() != HIDDEN_ELEMENTS {
-            return Err(TensorError::HiddenShape);
-        }
-        Ok(Self(values))
+    pub(crate) const fn from_resident(handle: ResidentTensorHandle) -> Self {
+        Self(handle)
     }
 
-    pub fn as_slice(&self) -> &[i64] {
-        &self.0
-    }
-
-    pub fn into_vec(self) -> Vec<i64> {
+    pub const fn resident(self) -> ResidentTensorHandle {
         self.0
     }
 }
 
-/// An exact Q8_0 hidden vector consumed by projection circuits.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HiddenQ8(Vec<Q8Block>);
+/// Opaque FPGA-resident GGML Q8_0[1024] (exactly 32 native blocks).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct HiddenQ8(ResidentTensorHandle);
 
 impl HiddenQ8 {
-    pub fn new(blocks: Vec<Q8Block>) -> Result<Self, TensorError> {
-        if blocks.len() != HIDDEN_Q8_BLOCKS {
-            return Err(TensorError::HiddenShape);
-        }
-        Ok(Self(blocks))
+    pub(crate) const fn from_resident(handle: ResidentTensorHandle) -> Self {
+        Self(handle)
     }
 
-    pub fn as_blocks(&self) -> &[Q8Block] {
-        &self.0
-    }
-
-    pub fn into_blocks(self) -> Vec<Q8Block> {
+    pub const fn resident(self) -> ResidentTensorHandle {
         self.0
     }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum TensorError {
-    HiddenShape,
 }
 
 /// Fixed commands understood by an AOT TRUEGA decode firmware.
@@ -171,6 +185,11 @@ pub trait AotDecodeBackend {
 
     fn capabilities(&self) -> DecodeCapabilities;
 
+    /// Number of token positions physically backed by the fused cache design.
+    /// A token-1 BRAM image may report a small value; the future DDR image may
+    /// report the complete sealed context. The scheduler never assumes DDR.
+    fn max_context_positions(&self) -> u32;
+
     fn submit(
         &mut self,
         request: AotDecodeRequest,
@@ -192,6 +211,12 @@ pub enum DecodeError<BackendError> {
     CallbackSequence {
         previous: u64,
         observed: u64,
+    },
+    TensorDomain {
+        expected_generation: u32,
+        expected_epoch: u32,
+        observed_generation: u32,
+        observed_epoch: u32,
     },
     CallbackPayload(DecodeOpKind),
     StateCommit {
@@ -222,6 +247,7 @@ pub struct DecodeSession {
     shortconv_next: [u32; 10],
     kv_next: [u32; 6],
     last_callback_sequence: u64,
+    tensor_domain: Option<(u32, u32)>,
     in_flight: bool,
     in_flight_state_mutated: bool,
     poisoned: bool,
@@ -234,6 +260,7 @@ impl DecodeSession {
             shortconv_next: [0; 10],
             kv_next: [0; 6],
             last_callback_sequence: 0,
+            tensor_domain: None,
             in_flight: false,
             in_flight_state_mutated: false,
             poisoned: false,
@@ -253,6 +280,7 @@ impl DecodeSession {
         self.position = 0;
         self.shortconv_next = [0; 10];
         self.kv_next = [0; 6];
+        self.tensor_domain = None;
         self.in_flight = false;
         self.in_flight_state_mutated = false;
         self.poisoned = false;
@@ -269,7 +297,9 @@ impl DecodeSession {
         if self.poisoned {
             return Err(DecodeError::StatePoisoned);
         }
-        if self.position >= lfm25::MODEL_INITIAL_CONTEXT {
+        if self.position >= lfm25::MODEL_INITIAL_CONTEXT
+            || self.position >= backend.max_context_positions()
+        {
             return Err(DecodeError::ContextFull);
         }
         DecodePlan::require_capabilities(backend.capabilities())
@@ -451,7 +481,10 @@ impl DecodeSession {
         output: AotDecodeOutput,
     ) -> Result<HiddenQ30, DecodeError<BackendError>> {
         match output {
-            AotDecodeOutput::HiddenQ30(output) => Ok(output),
+            AotDecodeOutput::HiddenQ30(output) => {
+                self.admit_tensor_domain(output.resident())?;
+                Ok(output)
+            }
             _ => self.payload_error(kind),
         }
     }
@@ -462,7 +495,10 @@ impl DecodeSession {
         output: AotDecodeOutput,
     ) -> Result<HiddenQ8, DecodeError<BackendError>> {
         match output {
-            AotDecodeOutput::HiddenQ8(output) => Ok(output),
+            AotDecodeOutput::HiddenQ8(output) => {
+                self.admit_tensor_domain(output.resident())?;
+                Ok(output)
+            }
             _ => self.payload_error(kind),
         }
     }
@@ -478,7 +514,10 @@ impl DecodeSession {
                 output,
                 state,
                 position,
-            } if state == expected_state && position == self.position => Ok(output),
+            } if state == expected_state && position == self.position => {
+                self.admit_tensor_domain(output.resident())?;
+                Ok(output)
+            }
             AotDecodeOutput::StatefulHiddenQ30 {
                 state, position, ..
             } => Err(DecodeError::StateCommit {
@@ -496,6 +535,29 @@ impl DecodeSession {
         kind: DecodeOpKind,
     ) -> Result<T, DecodeError<BackendError>> {
         Err(DecodeError::CallbackPayload(kind))
+    }
+
+    fn admit_tensor_domain<BackendError>(
+        &mut self,
+        handle: ResidentTensorHandle,
+    ) -> Result<(), DecodeError<BackendError>> {
+        let observed = (handle.connection_generation(), handle.session_epoch());
+        match self.tensor_domain {
+            None => {
+                self.tensor_domain = Some(observed);
+                Ok(())
+            }
+            Some(expected) if expected == observed => Ok(()),
+            Some((expected_generation, expected_epoch)) => {
+                self.poisoned = true;
+                Err(DecodeError::TensorDomain {
+                    expected_generation,
+                    expected_epoch,
+                    observed_generation: observed.0,
+                    observed_epoch: observed.1,
+                })
+            }
+        }
     }
 
     fn require_state_position<BackendError>(
@@ -559,6 +621,10 @@ impl AotDecodeBackend for FailClosedBackend {
 
     fn capabilities(&self) -> DecodeCapabilities {
         DecodeCapabilities::NONE
+    }
+
+    fn max_context_positions(&self) -> u32 {
+        0
     }
 
     async fn submit(

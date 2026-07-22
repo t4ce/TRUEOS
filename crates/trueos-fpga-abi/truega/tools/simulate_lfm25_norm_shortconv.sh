@@ -58,6 +58,31 @@ run_tb truega_lfm25_shortconv_channel_slot_tb \
   "$RTL_DIR/truega_lfm25_shortconv_channel_slot.v" \
   "$RTL_DIR/truega_lfm25_shortconv_channel_slot_tb.sv"
 
-run_tb truega_q30_to_q8_0_block_slot_tb \
+# The strict quantizer test generates adversarial and sealed-trace vectors with
+# its Rust reference before invoking Icarus.
+"$SCRIPT_DIR/simulate_q30_to_q8_0.sh"
+
+run_tb truega_lfm25_rmsnorm_vector_slot_tb \
+  "$RTL_DIR/truega_q30_mul_seq.v" \
+  "$RTL_DIR/truega_float_to_q30.v" \
+  "$RTL_DIR/truega_lfm25_rmsnorm_reduce_slot.v" \
+  "$RTL_DIR/truega_lfm25_rmsnorm_residual_slot.v" \
   "$RTL_DIR/truega_q30_to_q8_0_block_slot.v" \
-  "$RTL_DIR/truega_q30_to_q8_0_block_slot_tb.sv"
+  "$RTL_DIR/truega_lfm25_rmsnorm_vector_slot.v" \
+  "$RTL_DIR/truega_lfm25_rmsnorm_vector_slot_tb.sv"
+
+run_tb truega_lfm25_residual_vector_slot_tb \
+  "$RTL_DIR/truega_lfm25_residual_vector_slot.v" \
+  "$RTL_DIR/truega_lfm25_residual_vector_slot_tb.sv"
+
+run_tb truega_lfm25_shortconv_token_slot_tb \
+  "$RTL_DIR/truega_q8_0_dot32.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_gemv.v" \
+  "$RTL_DIR/truega_lfm25_shortconv_triplet_row_slot.v" \
+  "$RTL_DIR/truega_q30_mul_seq.v" \
+  "$RTL_DIR/truega_float_to_q30.v" \
+  "$RTL_DIR/truega_lfm25_shortconv_channel_slot.v" \
+  "$RTL_DIR/truega_q30_to_q8_0_block_slot.v" \
+  "$RTL_DIR/truega_lfm25_shortconv_token_slot.v" \
+  "$RTL_DIR/truega_lfm25_shortconv_token_slot_tb.sv"

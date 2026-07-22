@@ -113,6 +113,7 @@ unsafe impl Send for Tga {}
 pub(crate) enum OffloadTransportError {
     Offline,
     InvalidPackage,
+    Device(i32),
     WriteVerification {
         word: u8,
         observed: u32,
@@ -657,6 +658,122 @@ pub(crate) fn lfm25_stream_available() -> bool {
         && tga.stream_mmio_base.is_some()
         && Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CAPABILITY_OFFSET)
             == trueos_fpga_abi::LFM25_STREAM_CAPABILITY_MAGIC
+}
+
+fn lfm25_decode_capability_valid(tga: &Tga) -> bool {
+    use trueos_fpga_abi::lfm25_decode_transport as decode;
+
+    let magic = Tga::read_reg(tga.mmio_base + decode::BAR0_CAPABILITY_MAGIC_OFFSET);
+    let bits = Tga::read_reg(tga.mmio_base + decode::BAR0_CAPABILITY_BITS_OFFSET);
+    decode::capability_is_exact(magic, bits)
+}
+
+/// Report the decode lane only after matching firmware publishes both exact v1 words.
+/// Current row-only firmware therefore fails closed here instead of being mistaken for
+/// a partially compatible decode implementation.
+pub(crate) fn lfm25_decode_transport_available() -> bool {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return false;
+    };
+    tga.stream_bar_phys.is_some()
+        && tga.stream_mmio_base.is_some()
+        && lfm25_decode_capability_valid(tga)
+}
+
+pub(crate) fn start_lfm25_decode(
+    command: trueos_fpga_abi::lfm25_decode_transport::Command,
+) -> Result<(), OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_transport as decode;
+
+    command.validate().map_err(|_| OffloadTransportError::InvalidPackage)?;
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    if tga.stream_mmio_base.is_none() || !lfm25_decode_capability_valid(tga) {
+        return Err(OffloadTransportError::Offline);
+    }
+    if Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET)
+        == trueos_fpga_abi::Lfm25StreamState::Busy as u32
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_STATE_OFFSET)
+            == decode::State::Busy as u32
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    Tga::write_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET, command.control_word());
+    Tga::write_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET, command.position);
+    Tga::write_reg(
+        tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET,
+        command.session_epoch,
+    );
+    fence(Ordering::SeqCst);
+
+    // The capability read commits the preceding posted BAR writes. Re-read the exact
+    // command envelope before the doorbell so a dropped or misdecoded write fails closed.
+    if !lfm25_decode_capability_valid(tga)
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET)
+            != command.control_word()
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET) != command.position
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET)
+            != command.session_epoch
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    fence(Ordering::Release);
+    Tga::write_reg(tga.mmio_base + decode::BAR0_DOORBELL_OFFSET, decode::DOORBELL_MAGIC);
+    Ok(())
+}
+
+pub(crate) fn lfm25_decode_state()
+-> Result<trueos_fpga_abi::lfm25_decode_transport::State, OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_transport as decode;
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    if !lfm25_decode_capability_valid(tga) {
+        return Err(OffloadTransportError::Offline);
+    }
+    fence(Ordering::Acquire);
+    decode::State::from_raw(Tga::read_reg(tga.mmio_base + decode::BAR0_STATE_OFFSET))
+        .ok_or(OffloadTransportError::InvalidPackage)
+}
+
+pub(crate) fn read_lfm25_decode_completion(
+    command: trueos_fpga_abi::lfm25_decode_transport::Command,
+) -> Result<trueos_fpga_abi::lfm25_decode_transport::Completion, OffloadTransportError> {
+    use trueos_fpga_abi::lfm25_decode_transport as decode;
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    fence(Ordering::Acquire);
+    if !lfm25_decode_capability_valid(tga)
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET)
+            != command.control_word()
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET) != command.position
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET)
+            != command.session_epoch
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    let state = decode::State::from_raw(Tga::read_reg(tga.mmio_base + decode::BAR0_STATE_OFFSET))
+        .ok_or(OffloadTransportError::InvalidPackage)?;
+    let result0 = Tga::read_reg(tga.mmio_base + decode::BAR0_RESULT0_OFFSET);
+    let result1 = Tga::read_reg(tga.mmio_base + decode::BAR0_RESULT1_OFFSET);
+    let score_low = Tga::read_reg(tga.mmio_base + decode::BAR0_ARGMAX_SCORE_LO_OFFSET) as u64;
+    let score_high = Tga::read_reg(tga.mmio_base + decode::BAR0_ARGMAX_SCORE_HI_OFFSET) as u64;
+    let argmax_score_q30 = ((score_high << 32) | score_low) as i64;
+    decode::decode_completion(command, state, result0, result1, argmax_score_q30).map_err(
+        |error| match error {
+            decode::CodecError::Device(code) => OffloadTransportError::Device(code),
+            _ => OffloadTransportError::InvalidPackage,
+        },
+    )
 }
 
 pub(crate) fn lfm25_stream_write_blocks(

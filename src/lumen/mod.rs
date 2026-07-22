@@ -17,6 +17,8 @@ use trueos_fpga_abi::{AotFirmwareCapability, AotTransportKind};
 
 use crate::r::{fpga_offload, lfm25_ffn};
 
+pub(crate) mod decode;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TruegaBackend;
 

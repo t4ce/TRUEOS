@@ -1,0 +1,11 @@
+[package]
+name = "lumen-decode-adapter-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lumen = { path = "../../vendor/lumen", default-features = false, features = ["truega"] }
+trueos-fpga-abi = { path = "../../crates/trueos-fpga-abi" }
+
+[workspace]

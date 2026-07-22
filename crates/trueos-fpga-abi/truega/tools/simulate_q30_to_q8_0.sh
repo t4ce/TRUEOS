@@ -32,7 +32,8 @@ fi
 
 (
   cd /tmp
-  CARGO_TARGET_DIR="$HOST_TARGET" cargo "+$HOST_TOOLCHAIN" run --quiet \
+  CARGO_TARGET_DIR="$HOST_TARGET" RUSTFLAGS="${RUSTFLAGS:-} -Aunsafe-op-in-unsafe-fn" \
+    cargo "+$HOST_TOOLCHAIN" run --quiet \
     --manifest-path "$GENERATOR" -- "$TRACE" "$STAGE_DIR/vectors.txt"
 )
 

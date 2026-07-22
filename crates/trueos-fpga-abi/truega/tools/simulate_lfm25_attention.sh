@@ -50,3 +50,29 @@ fi
   "$RTL_DIR/truega_lfm25_online_softmax_value_slot.v" \
   "$RTL_DIR/truega_lfm25_attention_cache_softmax_tb.sv"
 "$VVP" "${vvp_args[@]}" "$STAGE_DIR/cache_softmax.vvp"
+
+"$IVERILOG" "${iverilog_base_args[@]}" -g2012 \
+  -s truega_lfm25_attention_token_slot_tb \
+  -o "$STAGE_DIR/token_slot.vvp" \
+  "$RTL_DIR/truega_q30_mul_seq.v" \
+  "$RTL_DIR/truega_lfm25_head_rms_inverse_slot.v" \
+  "$RTL_DIR/truega_lfm25_qk_norm_rope_slot.v" \
+  "$RTL_DIR/truega_lfm25_gqa_dot_slot.v" \
+  "$RTL_DIR/truega_lfm25_online_softmax_value_slot.v" \
+  "$RTL_DIR/truega_lfm25_attention_token_slot.v" \
+  "$RTL_DIR/truega_lfm25_attention_token_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/token_slot.vvp"
+
+"$IVERILOG" "${iverilog_base_args[@]}" -g2012 \
+  -s truega_lfm25_attention_first_token_slot_tb \
+  -o "$STAGE_DIR/first_token_slot.vvp" \
+  "$RTL_DIR/truega_float_to_q30.v" \
+  "$RTL_DIR/truega_q30_mul_seq.v" \
+  "$RTL_DIR/truega_lfm25_head_rms_inverse_slot.v" \
+  "$RTL_DIR/truega_lfm25_qk_norm_rope_slot.v" \
+  "$RTL_DIR/truega_lfm25_gqa_dot_slot.v" \
+  "$RTL_DIR/truega_lfm25_online_softmax_value_slot.v" \
+  "$RTL_DIR/truega_lfm25_attention_token_slot.v" \
+  "$RTL_DIR/truega_lfm25_attention_first_token_slot.v" \
+  "$RTL_DIR/truega_lfm25_attention_first_token_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/first_token_slot.vvp"
