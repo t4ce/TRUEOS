@@ -202,7 +202,7 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
             "tga: model ffn0=start path=trueosfs:/{} seal=checking preflight_calls={} expected_calls={}",
             crate::r::lfm25_model::NATIVE_IMAGE_PATH,
             lfm25_ffn::FPGA_PREFLIGHT_CALLS,
-            lfm25_ffn::FPGA_CALLS_PER_FFN,
+            lfm25_ffn::expected_fpga_calls(),
         )
         .as_str(),
     );
@@ -333,8 +333,13 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
     print_matrix_target_line(
         target,
         alloc::format!(
-            "tga: model ffn0 down_q30_sha256={} completion=msi-worker-callback caller={} backend={}",
+            "tga: model ffn0 down_q30_sha256={} completion={} caller={} backend={}",
             digest_hex(&report.down_sha256),
+            if report.streamed {
+                "msi-bar2-row-stream"
+            } else {
+                "msi-worker-callback"
+            },
             if cfg!(feature = "trueos_lumen") {
                 "lumen"
             } else {

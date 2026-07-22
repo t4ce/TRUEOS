@@ -845,6 +845,12 @@ mod tests {
     const BOARD_CST: &str = include_str!("../../../src/min_pci_led.cst");
     const BOARD_SDC: &str = include_str!("../../../src/min_pci_led.sdc");
     const PCIE_PLL: &str = include_str!("../../../src/gowin_pll/gowin_pll.v");
+    const ROW_STREAMER_RTL: &str =
+        include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
+    const GOWIN_PROJECT: &str = include_str!("../../../min_pci_led.gprj");
+    const PCIE_CONTROLLER_IPC: &str =
+        include_str!("../../../src/serdes/pcie_controller/pcie_controller.ipc");
+    const SERDES_IPC: &str = include_str!("../../../src/serdes/serdes.ipc");
 
     #[test]
     fn binary_manifest_matches_shared_abi_layout() {
@@ -1034,5 +1040,47 @@ mod tests {
             assert!(TOP_VHDL.contains(required), "missing BAR read pipeline boundary: {required}");
         }
         assert!(!TOP_VHDL.contains("queue_cpld(req_id, req_tag, addr_dw, read_data_dw);"));
+    }
+
+    #[test]
+    fn final_image_has_a_separate_bar2_row_stream_transport() {
+        for required in [
+            "component truega_lfm25_row_streamer is",
+            "u_lfm25_row_streamer: truega_lfm25_row_streamer",
+            "transaction_bardec <= rx_snapshot_bardec;",
+            "if hit_write and (transaction_bardec(2) = '1') then",
+            "((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))",
+            "read_data_dw := STREAM_CAPABILITY_MAGIC;",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing BAR2 transport: {required}");
+        }
+        for required in [
+            "module truega_lfm25_row_streamer (",
+            "MODE_GATE_UP_SILU",
+            "MODE_DOWN",
+            "truega_q8_0_row_block_slot",
+            "truega_lfm25_silu_q30_slot",
+            "activation_memory [0:143]",
+            "weight0_memory [0:143]",
+            "weight1_memory [0:143]",
+        ] {
+            assert!(ROW_STREAMER_RTL.contains(required), "missing row engine: {required}");
+        }
+        assert!(GOWIN_PROJECT.contains("truega_lfm25_row_streamer.v"));
+    }
+
+    #[test]
+    fn pcie_configuration_exposes_a_512k_prefetchable_64_bit_bar2() {
+        for ipc in [PCIE_CONTROLLER_IPC, SERDES_IPC] {
+            for required in [
+                "Bar2_Enable=true",
+                "Bit64_2=true",
+                "Prefetchable2=true",
+                "Size2=512KiloBytes",
+                "value2=FFF8000C",
+            ] {
+                assert!(ipc.contains(required), "missing BAR2 PCIe setting: {required}");
+            }
+        }
     }
 }

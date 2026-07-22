@@ -51,6 +51,17 @@ pub const FPGA_PREFLIGHT_CALLS: u64 = PREFLIGHT_GATE_BLOCKS as u64;
 /// fixed SiLU calls. The six single-block preflight calls remain outside this
 /// sealed full-pipeline count.
 pub const FPGA_CALLS_PER_FFN: u64 = 226_000;
+/// One gate+up+SiLU retirement per intermediate row and one down retirement
+/// per output row. This is the first BAR2 streaming checkpoint.
+pub const FPGA_STREAM_ROWS_PER_FFN: u64 = 4_608 + 1_024;
+
+pub fn expected_fpga_calls() -> u64 {
+    if fpga_offload::lfm25_row_stream_available() {
+        FPGA_STREAM_ROWS_PER_FFN
+    } else {
+        FPGA_CALLS_PER_FFN
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stage {
@@ -93,6 +104,7 @@ pub struct Report {
     pub fpga_calls: u64,
     pub interrupt_delta: u64,
     pub timeout_recovery_delta: u64,
+    pub streamed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,6 +172,10 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
         completed: 1,
         total: 1,
     });
+
+    if fpga_offload::lfm25_row_stream_available() {
+        return run_streamed(image, normalized, progress).await;
+    }
 
     // The six-call preflight is intentionally outside the full-pipeline
     // counters so the sealed 226,000-call contract stays unchanged.
@@ -250,6 +266,178 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
         fpga_calls,
         interrupt_delta,
         timeout_recovery_delta,
+        streamed: false,
+    })
+}
+
+async fn run_streamed(
+    image: lfm25_model::NativeImage,
+    normalized: Vec<[u8; Q8_BLOCK_BYTES]>,
+    mut progress: impl FnMut(Progress),
+) -> Result<Report, Error> {
+    let gate_descriptor = tensor("blk.0.ffn_gate.weight")?;
+    let up_descriptor = tensor("blk.0.ffn_up.weight")?;
+    let down_descriptor = tensor("blk.0.ffn_down.weight")?;
+    if gate_descriptor.format != 2
+        || up_descriptor.format != 2
+        || down_descriptor.format != 2
+        || gate_descriptor.ggml_ne0 != 1_024
+        || up_descriptor.ggml_ne0 != 1_024
+        || gate_descriptor.ggml_ne1 != 4_608
+        || up_descriptor.ggml_ne1 != 4_608
+        || down_descriptor.ggml_ne0 != 4_608
+        || down_descriptor.ggml_ne1 != 1_024
+        || normalized.len() != 32
+    {
+        return Err(Error::Tensor);
+    }
+
+    // Read all three exact layer matrices before taking exclusive ownership of
+    // the shared MSI bridge. The FPGA remains a fixed asynchronous function;
+    // TRUEOS still owns the sealed model and all file I/O.
+    let gate_matrix = read_tensor(&image, gate_descriptor).await?;
+    let up_matrix = read_tensor(&image, up_descriptor).await?;
+    let down_matrix = read_tensor(&image, down_descriptor).await?;
+
+    let mut gate = try_i64_vec(4_608)?;
+    let mut up = try_i64_vec(4_608)?;
+    let mut silu = try_i64_vec(4_608)?;
+    let mut down = try_i64_vec(1_024)?;
+    let mut gate_max_abs = 0.0f32;
+    let mut up_max_abs = 0.0f32;
+    let mut silu_max_abs = 0.0f32;
+    let mut down_max_abs = 0.0f32;
+
+    let before = fpga_offload::stats();
+    let completion_before = fpga_offload::lfm25_stream_completion_count()?;
+    let _transport = fpga_offload::acquire_lfm25_stream_transport().await;
+    fpga_offload::lfm25_stream_load_activation(&normalized)?;
+
+    const NARROW_ROW_BYTES: usize = 32 * Q8_BLOCK_BYTES;
+    for row in 0..4_608usize {
+        let row_start = row * NARROW_ROW_BYTES;
+        let row_end = row_start + NARROW_ROW_BYTES;
+        let gate_blocks = gate_matrix
+            .get(row_start..row_end)
+            .ok_or(Error::Tensor)?;
+        let up_blocks = up_matrix
+            .get(row_start..row_end)
+            .ok_or(Error::Tensor)?;
+        let result = fpga_offload::lfm25_stream_gate_up_row(
+            row as u32,
+            gate_blocks,
+            up_blocks,
+        )
+        .await?;
+        gate.push(result.gate_q30);
+        up.push(result.up_q30);
+        silu.push(result.result_q30);
+
+        for (stage, vector, value, bound, max_abs) in [
+            (Stage::Gate, 1usize, result.gate_q30, PROJECTION_BOUND, &mut gate_max_abs),
+            (Stage::Up, 2usize, result.up_q30, PROJECTION_BOUND, &mut up_max_abs),
+            (Stage::Silu, 3usize, result.result_q30, SILU_BOUND, &mut silu_max_abs),
+        ] {
+            let expected = golden_f32(vector, row)?;
+            let error = q30_error(value, expected);
+            *max_abs = (*max_abs).max(error);
+            if error > bound {
+                return Err(Error::ProjectionBound {
+                    stage,
+                    row: row as u16,
+                    observed_q30: value,
+                    expected_f32_bits: expected.to_bits(),
+                    error_f32_bits: error.to_bits(),
+                });
+            }
+        }
+
+        if row % 512 == 511 || row + 1 == 4_608 {
+            progress(Progress {
+                stage: Stage::Gate,
+                completed: row + 1,
+                total: 4_608,
+            });
+        }
+    }
+
+    let gate_sha256 = q30_vector_sha256(&gate);
+    let up_sha256 = q30_vector_sha256(&up);
+    let silu_sha256 = q30_vector_sha256(&silu);
+    require_hash(Stage::Gate, gate_sha256, GATE_Q30_SHA256)?;
+    require_hash(Stage::Up, up_sha256, UP_Q30_SHA256)?;
+    require_hash(Stage::Silu, silu_sha256, SILU_Q30_SHA256)?;
+    for stage in [Stage::Up, Stage::Silu] {
+        for quarter in 1..=4 {
+            progress(Progress {
+                stage,
+                completed: 4_608 * quarter / 4,
+                total: 4_608,
+            });
+        }
+    }
+
+    let down_activation = quantize_q30_vector(&silu)?;
+    fpga_offload::lfm25_stream_load_activation(&down_activation)?;
+    const WIDE_ROW_BYTES: usize = 144 * Q8_BLOCK_BYTES;
+    for row in 0..1_024usize {
+        let row_start = row * WIDE_ROW_BYTES;
+        let row_end = row_start + WIDE_ROW_BYTES;
+        let weight_blocks = down_matrix
+            .get(row_start..row_end)
+            .ok_or(Error::Tensor)?;
+        let value = fpga_offload::lfm25_stream_down_row(row as u32, weight_blocks).await?;
+        down.push(value);
+        let expected = golden_f32(4, row)?;
+        let error = q30_error(value, expected);
+        down_max_abs = down_max_abs.max(error);
+        if error > PROJECTION_BOUND {
+            return Err(Error::ProjectionBound {
+                stage: Stage::Down,
+                row: row as u16,
+                observed_q30: value,
+                expected_f32_bits: expected.to_bits(),
+                error_f32_bits: error.to_bits(),
+            });
+        }
+        if row % 128 == 127 || row + 1 == 1_024 {
+            progress(Progress {
+                stage: Stage::Down,
+                completed: row + 1,
+                total: 1_024,
+            });
+        }
+    }
+
+    let down_sha256 = q30_vector_sha256(&down);
+    require_hash(Stage::Down, down_sha256, DOWN_Q30_SHA256)?;
+    let completion_after = fpga_offload::lfm25_stream_completion_count()?;
+    let fpga_calls = completion_after.wrapping_sub(completion_before) as u64;
+    let after = fpga_offload::stats();
+    let interrupt_delta = after.interrupts.saturating_sub(before.interrupts);
+    let timeout_recovery_delta = after
+        .timeout_recoveries
+        .saturating_sub(before.timeout_recoveries);
+    if fpga_calls != FPGA_STREAM_ROWS_PER_FFN
+        || interrupt_delta < FPGA_STREAM_ROWS_PER_FFN
+        || timeout_recovery_delta != 0
+    {
+        return Err(Error::CompletionPath);
+    }
+
+    Ok(Report {
+        gate_max_abs,
+        up_max_abs,
+        silu_max_abs,
+        down_max_abs,
+        gate_sha256,
+        up_sha256,
+        silu_sha256,
+        down_sha256,
+        fpga_calls,
+        interrupt_delta,
+        timeout_recovery_delta,
+        streamed: true,
     })
 }
 

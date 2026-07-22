@@ -59,9 +59,10 @@ const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
 const VIDEO_NV12_BLACK_PROOF_LIFT: bool = false;
 const PRIMARY_BOOT_LOGO_JPEG: &[u8] = include_bytes!("../../logo.jpg");
-const PRIMARY_BOOT_HORIZON_STAMP_PNG: &[u8] = include_bytes!("../../tools/HorizonServer.png");
+const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG: &[u8] =
+    include_bytes!("../../Intel_Graphics_logo.png");
 const PRIMARY_BOOT_LOGO_ENABLED: bool = true;
-const PRIMARY_BOOT_HORIZON_STAMP_ENABLED: bool = false;
+const PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_ENABLED: bool = true;
 const PRIMARY_BOOT_LOGO_DECODE_MODE: PrimaryBootLogoDecodeMode =
     PrimaryBootLogoDecodeMode::ZuneJpeg;
 const PRIMARY_BOOT_LOGO_WAIT_TIMEOUT_MS: u64 = 5000;
@@ -1237,18 +1238,20 @@ pub(super) fn log_bsp_display_metrics_probe(dev: crate::intel::Dev) {
     display_metrics::log_bsp_display_metrics_probe(active_target);
 }
 
-fn stamp_horizon_logo_top_left_screen() -> bool {
-    if !PRIMARY_BOOT_HORIZON_STAMP_ENABLED {
+fn stamp_intel_graphics_logo_top_left_screen() -> bool {
+    if !PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_ENABLED {
         return false;
     }
 
-    let stamp = match crate::graphics::png_codec::decode_png_rgba(PRIMARY_BOOT_HORIZON_STAMP_PNG) {
+    let stamp = match crate::graphics::png_codec::decode_png_rgba(
+        PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG,
+    ) {
         Ok(stamp) => stamp,
         Err(err) => {
             crate::log!(
-                "intel/display: boot-logo horizon stamp decode failed code={} bytes=0x{:X}\n",
+                "intel/display: boot-logo intel-graphics stamp decode failed code={} bytes=0x{:X}\n",
                 err.code(),
-                PRIMARY_BOOT_HORIZON_STAMP_PNG.len()
+                PRIMARY_BOOT_INTEL_GRAPHICS_STAMP_PNG.len()
             );
             return false;
         }
@@ -1265,10 +1268,10 @@ fn stamp_horizon_logo_top_left_screen() -> bool {
         0,
         stamp.width,
         stamp.height,
-        "boot-logo-horizon-stamp-top-left-screen",
+        "boot-logo-intel-graphics-stamp-top-left-screen-native-1to1",
     );
     crate::log!(
-        "intel/display: boot-logo horizon stamp src={}x{} dst=0,0 screen=top-left stored={}\n",
+        "intel/display: boot-logo intel-graphics stamp src={}x{} dst=0,0 screen=top-left scale=1 native_1to1=1 stored={}\n",
         stamp.width,
         stamp.height,
         stamped as u8

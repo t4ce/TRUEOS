@@ -15,6 +15,7 @@ const TGA_VENDOR_ID: u16 = 0x22c2; // DEC vendor:
 const TGA_DEVICE_ID: u16 = 0x1100; // TGA adapter
 const TGA_PCI_OWNER: &str = "tga";
 const TGA_EXPECTED_BAR0_SIZE: u64 = 1024; // 1 KiB
+const TGA_EXPECTED_BAR2_SIZE: u64 = trueos_fpga_abi::BAR2_LFM25_STREAM_BYTES as u64;
 
 // Minimal TGA contract (we control both ends):
 // - BAR0 is MMIO
@@ -66,6 +67,8 @@ struct Tga {
     bar_is_64: bool,
     bar_assignment: TgaBarAssignment,
     mmio_base: usize,
+    stream_bar_phys: Option<u64>,
+    stream_mmio_base: Option<usize>,
     led_reg: usize,
     magic_reg: usize,
     offload_work_package_reg: usize,
@@ -173,6 +176,7 @@ impl Tga {
 
 static TGA: Mutex<Option<Tga>> = Mutex::new(None);
 static TGA_LAST_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
+static TGA_LAST_STREAM_MAP: Mutex<Option<(u64, usize)>> = Mutex::new(None);
 static TGA_LAST_DISCONNECT: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
 static TGA_LAST_WORKING_LEASE: Mutex<Option<TgaHotplugSnapshot>> = Mutex::new(None);
 static TGA_LINK_RECOVERY_ATTEMPTED: AtomicBool = AtomicBool::new(false);
@@ -326,7 +330,7 @@ fn configure_completion_interrupt(tga: &Tga) -> bool {
     true
 }
 
-fn tga_bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
+fn tga_bar_size_bytes(bus: u8, slot: u8, function: u8, bar_index: u8) -> Option<u64> {
     // BAR sizing writes can confuse some devices if decode is enabled.
     // Also, some endpoints incorrectly return a 0 upper mask for 64-bit BAR sizing.
     // We harden both issues locally for TGA bring-up.
@@ -340,7 +344,11 @@ fn tga_bar0_size_bytes(bus: u8, slot: u8, function: u8) -> Option<u64> {
         crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_disabled);
     }
 
-    let off = 0x10u16;
+    if bar_index >= 6 {
+        crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_before);
+        return None;
+    }
+    let off = 0x10u16 + u16::from(bar_index) * 4;
     let orig_lo = crate::pci::config_read_u32(bus, slot, function, off);
     if orig_lo == 0xFFFF_FFFF {
         crate::pci::config_write_u16(bus, slot, function, 0x04, cmd_before);
@@ -596,6 +604,218 @@ pub fn tga_led_write(value: u32) {
 
 pub fn tga_led_set(on: bool) {
     tga_led_write(if on { 1 } else { 0 });
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Lfm25StreamResult {
+    pub gate_q30: i64,
+    pub up_q30: i64,
+    pub result_q30: i64,
+    pub error_code: u32,
+}
+
+pub(crate) fn lfm25_stream_available() -> bool {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return false;
+    };
+    tga.stream_bar_phys.is_some()
+        && tga.stream_mmio_base.is_some()
+        && Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CAPABILITY_OFFSET)
+            == trueos_fpga_abi::LFM25_STREAM_CAPABILITY_MAGIC
+}
+
+pub(crate) fn lfm25_stream_write_blocks(
+    buffer_offset: usize,
+    blocks: &[[u8; trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES]],
+) -> Result<(), OffloadTransportError> {
+    if blocks.is_empty()
+        || blocks.len() > 144
+        || !matches!(
+            buffer_offset,
+            trueos_fpga_abi::BAR2_LFM25_STREAM_ACTIVATION_OFFSET
+                | trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET
+                | trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT1_OFFSET
+        )
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    let Some(stream_base) = tga.stream_mmio_base else {
+        return Err(OffloadTransportError::Offline);
+    };
+    if Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET)
+        == trueos_fpga_abi::Lfm25StreamState::Busy as u32
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    for (block_index, block) in blocks.iter().enumerate() {
+        let slot = stream_base
+            + buffer_offset
+            + block_index * trueos_fpga_abi::BAR2_LFM25_STREAM_BLOCK_STRIDE;
+        for word_index in 0..9 {
+            let byte_index = word_index * 4;
+            let mut bytes = [0u8; 4];
+            let available = block.len().saturating_sub(byte_index).min(4);
+            if available != 0 {
+                bytes[..available].copy_from_slice(&block[byte_index..byte_index + available]);
+            }
+            Tga::write_reg(slot + word_index * 4, u32::from_le_bytes(bytes));
+        }
+    }
+    fence(Ordering::Release);
+    Ok(())
+}
+
+pub(crate) fn lfm25_stream_write_block_bytes(
+    buffer_offset: usize,
+    bytes: &[u8],
+) -> Result<(), OffloadTransportError> {
+    let block_bytes = trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES;
+    let block_count = bytes.len() / block_bytes;
+    if bytes.len() % block_bytes != 0
+        || block_count == 0
+        || block_count > 144
+        || !matches!(
+            buffer_offset,
+            trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET
+                | trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT1_OFFSET
+        )
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    let Some(stream_base) = tga.stream_mmio_base else {
+        return Err(OffloadTransportError::Offline);
+    };
+    if Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET)
+        == trueos_fpga_abi::Lfm25StreamState::Busy as u32
+    {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+
+    for (block_index, block) in bytes.chunks_exact(block_bytes).enumerate() {
+        let slot = stream_base
+            + buffer_offset
+            + block_index * trueos_fpga_abi::BAR2_LFM25_STREAM_BLOCK_STRIDE;
+        for word_index in 0..9 {
+            let byte_index = word_index * 4;
+            let mut word = [0u8; 4];
+            let available = block.len().saturating_sub(byte_index).min(4);
+            if available != 0 {
+                word[..available].copy_from_slice(&block[byte_index..byte_index + available]);
+            }
+            Tga::write_reg(slot + word_index * 4, u32::from_le_bytes(word));
+        }
+    }
+    fence(Ordering::Release);
+    Ok(())
+}
+
+pub(crate) fn start_lfm25_stream_row(
+    mode: u32,
+    row: u32,
+) -> Result<(), OffloadTransportError> {
+    if !matches!(
+        mode,
+        trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU
+            | trueos_fpga_abi::LFM25_STREAM_MODE_DOWN
+    ) {
+        return Err(OffloadTransportError::InvalidPackage);
+    }
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    if tga.stream_mmio_base.is_none()
+        || Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CAPABILITY_OFFSET)
+            != trueos_fpga_abi::LFM25_STREAM_CAPABILITY_MAGIC
+    {
+        return Err(OffloadTransportError::Offline);
+    }
+
+    let control = mode | trueos_fpga_abi::LFM25_STREAM_CONTROL_INTERRUPT_ENABLE;
+    Tga::write_reg(
+        tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CONTROL_OFFSET,
+        control,
+    );
+    Tga::write_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ROW_OFFSET, row);
+    fence(Ordering::SeqCst);
+    // This non-posted BAR0 read is the producer commit: all preceding BAR2
+    // posted writes must be visible before the doorbell can reach the endpoint.
+    let capability =
+        Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CAPABILITY_OFFSET);
+    if capability != trueos_fpga_abi::LFM25_STREAM_CAPABILITY_MAGIC {
+        return Err(OffloadTransportError::Offline);
+    }
+    fence(Ordering::Release);
+    Tga::write_reg(
+        tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_DOORBELL_OFFSET,
+        trueos_fpga_abi::LFM25_STREAM_DOORBELL_MAGIC,
+    );
+    Ok(())
+}
+
+pub(crate) fn lfm25_stream_state()
+-> Result<trueos_fpga_abi::Lfm25StreamState, OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    fence(Ordering::Acquire);
+    let raw = Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET);
+    trueos_fpga_abi::Lfm25StreamState::from_raw(raw)
+        .ok_or(OffloadTransportError::InvalidPackage)
+}
+
+pub(crate) fn read_lfm25_stream_result()
+-> Result<Lfm25StreamResult, OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    fence(Ordering::Acquire);
+    let read_i64 = |low_offset: usize, high_offset: usize| {
+        let low = Tga::read_reg(tga.mmio_base + low_offset) as u64;
+        let high = Tga::read_reg(tga.mmio_base + high_offset) as u64;
+        ((high << 32) | low) as i64
+    };
+    Ok(Lfm25StreamResult {
+        gate_q30: read_i64(
+            trueos_fpga_abi::BAR0_LFM25_STREAM_GATE_LO_OFFSET,
+            trueos_fpga_abi::BAR0_LFM25_STREAM_GATE_HI_OFFSET,
+        ),
+        up_q30: read_i64(
+            trueos_fpga_abi::BAR0_LFM25_STREAM_UP_LO_OFFSET,
+            trueos_fpga_abi::BAR0_LFM25_STREAM_UP_HI_OFFSET,
+        ),
+        result_q30: read_i64(
+            trueos_fpga_abi::BAR0_LFM25_STREAM_RESULT_LO_OFFSET,
+            trueos_fpga_abi::BAR0_LFM25_STREAM_RESULT_HI_OFFSET,
+        ),
+        error_code: Tga::read_reg(
+            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ERROR_OFFSET,
+        ),
+    })
+}
+
+pub(crate) fn lfm25_stream_completion_count() -> Result<u32, OffloadTransportError> {
+    let guard = TGA.lock();
+    let Some(tga) = guard.as_ref() else {
+        return Err(OffloadTransportError::Offline);
+    };
+    Ok(Tga::read_reg(
+        tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_COMPLETION_COUNT_OFFSET,
+    ))
 }
 
 /// Copy one complete call into the fixed BAR window and hand it to the FPGA.
@@ -902,6 +1122,82 @@ fn is_tga(dev: &PciDevice) -> bool {
     dev.vendor == TGA_VENDOR_ID && dev.device == TGA_DEVICE_ID
 }
 
+fn bring_lfm25_stream_bar_online(dev: &PciDevice) -> Option<(u64, usize)> {
+    let size = tga_bar_size_bytes(dev.bus, dev.slot, dev.function, 2)?;
+    if size != TGA_EXPECTED_BAR2_SIZE {
+        crate::log_warn!(
+            "tga: optional BAR2 size mismatch bdf={:02X}:{:02X}.{} probed=0x{:X} expected=0x{:X}; row streamer disabled\n",
+            dev.bus,
+            dev.slot,
+            dev.function,
+            size,
+            TGA_EXPECTED_BAR2_SIZE
+        );
+        return None;
+    }
+
+    let (mut bar_lo, mut bar_hi) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 2);
+    if bar_lo == 0xFFFF_FFFF || (bar_lo & 0x1) != 0 || ((bar_lo >> 1) & 0x3) != 0x2 {
+        return None;
+    }
+    if (bar_lo & 0x8) == 0 {
+        crate::log_warn!(
+            "tga: optional BAR2 is not prefetchable bdf={:02X}:{:02X}.{}; row streamer disabled\n",
+            dev.bus,
+            dev.slot,
+            dev.function
+        );
+        return None;
+    }
+
+    let mut phys = ((bar_hi? as u64) << 32) | ((bar_lo as u64) & !0xFu64);
+    if phys == 0 || phys >= 0x40_0000_0000 {
+        let base = crate::pci::alloc_hotplug_mmio_base(
+            dev.bus,
+            TGA_EXPECTED_BAR2_SIZE,
+            TGA_EXPECTED_BAR2_SIZE,
+        )?;
+        let new_lo = ((base as u32) & !0xFu32) | (bar_lo & 0xFu32);
+        crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x18, new_lo);
+        crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x1C, (base >> 32) as u32);
+        crate::pci::enable_mem_space_only(dev.bus, dev.slot, dev.function);
+        (bar_lo, bar_hi) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 2);
+        if bar_lo == 0xFFFF_FFFF || (bar_lo & 0x1) != 0 || ((bar_lo >> 1) & 0x3) != 0x2 {
+            return None;
+        }
+        phys = ((bar_hi? as u64) << 32) | ((bar_lo as u64) & !0xFu64);
+        if phys == 0 {
+            return None;
+        }
+    }
+
+    let mapped = {
+        let last = *TGA_LAST_STREAM_MAP.lock();
+        if let Some((last_phys, last_base)) = last {
+            if last_phys == phys {
+                NonNull::new(last_base as *mut u8)?
+            } else {
+                let mapping = crate::pci::mmio::map_mmio_region_exact(
+                    phys,
+                    trueos_fpga_abi::BAR2_LFM25_STREAM_BYTES,
+                )
+                .ok()?;
+                *TGA_LAST_STREAM_MAP.lock() = Some((phys, mapping.as_ptr() as usize));
+                mapping
+            }
+        } else {
+            let mapping = crate::pci::mmio::map_mmio_region_exact(
+                phys,
+                trueos_fpga_abi::BAR2_LFM25_STREAM_BYTES,
+            )
+            .ok()?;
+            *TGA_LAST_STREAM_MAP.lock() = Some((phys, mapping.as_ptr() as usize));
+            mapping
+        }
+    };
+    Some((phys, mapped.as_ptr() as usize))
+}
+
 fn bring_online(dev: &PciDevice) -> Option<Tga> {
     // Re-validate the device is still present at this BDF.
     // A return of 0xFFFF typically means config space read failed / no device.
@@ -941,7 +1237,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         return None;
     }
 
-    let mut bar_size = tga_bar0_size_bytes(dev.bus, dev.slot, dev.function).unwrap_or(0);
+    let mut bar_size = tga_bar_size_bytes(dev.bus, dev.slot, dev.function, 0).unwrap_or(0);
     if bar_size == 0 {
         bar_size = TGA_EXPECTED_BAR0_SIZE;
     } else if bar_size != TGA_EXPECTED_BAR0_SIZE {
@@ -1083,6 +1379,7 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
     let offload_doorbell_reg = base + TGA_OFFLOAD_DOORBELL_OFF;
     let offload_irq_ack_reg = base + TGA_OFFLOAD_IRQ_ACK_OFF;
     let firmware_manifest_reg = base + TGA_FIRMWARE_MANIFEST_OFF;
+    let stream_bar = bring_lfm25_stream_bar_online(dev);
 
     let tga = Tga {
         bus: dev.bus,
@@ -1093,6 +1390,8 @@ fn bring_online(dev: &PciDevice) -> Option<Tga> {
         bar_is_64,
         bar_assignment,
         mmio_base: base,
+        stream_bar_phys: stream_bar.map(|(phys, _)| phys),
+        stream_mmio_base: stream_bar.map(|(_, mapped)| mapped),
         led_reg,
         magic_reg,
         offload_work_package_reg,

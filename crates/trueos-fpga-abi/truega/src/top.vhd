@@ -112,6 +112,28 @@ architecture rtl of top is
 		);
 	end component;
 
+	-- Optional BAR2 row streamer. It reuses the exact Q8 row and SiLU circuits
+	-- but retires a complete output row instead of one inline block pair.
+	component truega_lfm25_row_streamer is
+		port (
+			clk                    : in  std_logic;
+			reset_n                : in  std_logic;
+			write_i                : in  std_logic;
+			write_addr_dw_i        : in  std_logic_vector(16 downto 0);
+			write_data_i           : in  std_logic_vector(31 downto 0);
+			start_i                : in  std_logic;
+			mode_i                 : in  std_logic_vector(1 downto 0);
+			busy_o                 : out std_logic;
+			done_o                 : out std_logic;
+			error_o                : out std_logic;
+			error_code_o           : out std_logic_vector(31 downto 0);
+			gate_q30_o             : out std_logic_vector(63 downto 0);
+			up_q30_o               : out std_logic_vector(63 downto 0);
+			result_q30_o           : out std_logic_vector(63 downto 0);
+			accepted_write_count_o : out std_logic_vector(31 downto 0)
+		);
+	end component;
+
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	type call_data_arr_t is array (0 to 23) of std_logic_vector(31 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
@@ -141,6 +163,19 @@ architecture rtl of top is
 	constant BAR0_CALL_IRQ_REQUEST_COUNT_DW : integer := 16#08C# / 4;
 	constant BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW : integer := 16#090# / 4;
 	constant BAR0_CALL_IRQ_STATE_DW : integer := 16#094# / 4;
+	constant BAR0_STREAM_CAPABILITY_DW : integer := 16#098# / 4;
+	constant BAR0_STREAM_CONTROL_DW : integer := 16#09C# / 4;
+	constant BAR0_STREAM_ROW_DW : integer := 16#0A0# / 4;
+	constant BAR0_STREAM_DOORBELL_DW : integer := 16#0A4# / 4;
+	constant BAR0_STREAM_STATE_DW : integer := 16#0A8# / 4;
+	constant BAR0_STREAM_GATE_LO_DW : integer := 16#0AC# / 4;
+	constant BAR0_STREAM_GATE_HI_DW : integer := 16#0B0# / 4;
+	constant BAR0_STREAM_UP_LO_DW : integer := 16#0B4# / 4;
+	constant BAR0_STREAM_UP_HI_DW : integer := 16#0B8# / 4;
+	constant BAR0_STREAM_RESULT_LO_DW : integer := 16#0BC# / 4;
+	constant BAR0_STREAM_RESULT_HI_DW : integer := 16#0C0# / 4;
+	constant BAR0_STREAM_ERROR_DW : integer := 16#0C4# / 4;
+	constant BAR0_STREAM_COMPLETION_COUNT_DW : integer := 16#0C8# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
@@ -168,6 +203,13 @@ architecture rtl of top is
 	constant CALL_ERROR_BAD_LENGTH : std_logic_vector(31 downto 0) := x"BAD00002";
 	constant CALL_ERROR_BAD_FUNCTION : std_logic_vector(31 downto 0) := x"BAD00003";
 	constant CALL_ERROR_FUNCTION_FAILED : std_logic_vector(31 downto 0) := x"BAD00004";
+	constant STREAM_CAPABILITY_MAGIC : std_logic_vector(31 downto 0) := x"32524754";
+	constant STREAM_DOORBELL_MAGIC : std_logic_vector(31 downto 0) := x"4D525453";
+	constant STREAM_STATE_IDLE : std_logic_vector(31 downto 0) := x"00000000";
+	constant STREAM_STATE_BUSY : std_logic_vector(31 downto 0) := x"00000001";
+	constant STREAM_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000002";
+	constant STREAM_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000003";
+	constant STREAM_ERROR_BAD_DOORBELL : std_logic_vector(31 downto 0) := x"BAD20001";
 	constant LED_DEBUG_ON : std_logic_vector(31 downto 0) := x"D06D0001";
 	constant LED_DEBUG_OFF : std_logic_vector(31 downto 0) := x"D06D0000";
 	constant BAR_READ_BANK_NONE : std_logic_vector(2 downto 0) := "000";
@@ -205,6 +247,7 @@ architecture rtl of top is
 	signal call_irq_controller_ack_prev : std_logic := '0';
 	signal call_irq_request_count : unsigned(31 downto 0) := (others => '0');
 	signal call_irq_controller_ack_count : unsigned(31 downto 0) := (others => '0');
+	signal stream_irq_enable : std_logic := '0';
 
 	-- Active-high logical state (the board outputs are inverted below).  Seed a
 	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
@@ -247,6 +290,26 @@ architecture rtl of top is
 	signal function_done : std_logic;
 	signal function_error : std_logic;
 	signal firmware_manifest_word : std_logic_vector(31 downto 0);
+	signal stream_write : std_logic := '0';
+	signal stream_write_addr_dw : std_logic_vector(16 downto 0) := (others => '0');
+	signal stream_write_data : std_logic_vector(31 downto 0) := (others => '0');
+	signal stream_start : std_logic := '0';
+	signal stream_control : std_logic_vector(31 downto 0) := (others => '0');
+	signal stream_row : std_logic_vector(31 downto 0) := (others => '0');
+	signal stream_state : std_logic_vector(31 downto 0) := STREAM_STATE_IDLE;
+	signal stream_error_code : std_logic_vector(31 downto 0) := (others => '0');
+	signal stream_gate_q30 : std_logic_vector(63 downto 0) := (others => '0');
+	signal stream_up_q30 : std_logic_vector(63 downto 0) := (others => '0');
+	signal stream_result_q30 : std_logic_vector(63 downto 0) := (others => '0');
+	signal stream_completion_count : unsigned(31 downto 0) := (others => '0');
+	signal stream_engine_busy : std_logic;
+	signal stream_engine_done : std_logic;
+	signal stream_engine_error : std_logic;
+	signal stream_engine_error_code : std_logic_vector(31 downto 0);
+	signal stream_engine_gate_q30 : std_logic_vector(63 downto 0);
+	signal stream_engine_up_q30 : std_logic_vector(63 downto 0);
+	signal stream_engine_result_q30 : std_logic_vector(63 downto 0);
+	signal stream_accepted_write_count : std_logic_vector(31 downto 0);
 	signal tx_pending : std_logic := '0';
 	signal tx_pending_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal tx_pending_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -260,6 +323,7 @@ architecture rtl of top is
 	signal capture_pending : std_logic := '0';
 	signal rx_snapshot_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal rx_snapshot_valid : std_logic_vector(7 downto 0) := (others => '0');
+	signal rx_snapshot_bardec : std_logic_vector(5 downto 0) := (others => '0');
 	signal pkt_cnt_fwd   : unsigned(4 downto 0) := (others => '0');
 	signal pkt_cnt_rev   : unsigned(4 downto 0) := (others => '0');
 	signal pkt_words_fwd : word_arr_t := (others => (others => '0'));
@@ -268,7 +332,8 @@ architecture rtl of top is
 	signal transaction_pending : std_logic := '0';
 	signal transaction_write : std_logic := '0';
 	signal transaction_read : std_logic := '0';
-	signal transaction_addr_dw : std_logic_vector(9 downto 0) := (others => '0');
+	signal transaction_addr_dw : std_logic_vector(16 downto 0) := (others => '0');
+	signal transaction_bardec : std_logic_vector(5 downto 0) := (others => '0');
 	signal transaction_payload_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal transaction_req_id : std_logic_vector(15 downto 0) := (others => '0');
 	signal transaction_req_tag : std_logic_vector(7 downto 0) := (others => '0');
@@ -491,12 +556,31 @@ begin
 			data       => firmware_manifest_word
 			);
 
+	u_lfm25_row_streamer: truega_lfm25_row_streamer
+		port map(
+			clk                    => tlp_clk,
+			reset_n                => pcie_core_reset_n,
+			write_i                => stream_write,
+			write_addr_dw_i        => stream_write_addr_dw,
+			write_data_i           => stream_write_data,
+			start_i                => stream_start,
+			mode_i                 => stream_control(1 downto 0),
+			busy_o                 => stream_engine_busy,
+			done_o                 => stream_engine_done,
+			error_o                => stream_engine_error,
+			error_code_o           => stream_engine_error_code,
+			gate_q30_o             => stream_engine_gate_q30,
+			up_q30_o               => stream_engine_up_q30,
+			result_q30_o           => stream_engine_result_q30,
+			accepted_write_count_o => stream_accepted_write_count
+		);
+
 	u_completion_irq: truega_completion_irq
 		port map(
 			clk                => tlp_clk,
 			reset_n            => pcie_core_reset_n,
 			retire_i           => call_irq_retire,
-			interrupt_enable_i => call_flags(0),
+			interrupt_enable_i => call_flags(0) or stream_irq_enable,
 			bar_ack_i          => call_irq_bar_ack,
 			controller_ack_i   => call_irq_controller_ack,
 			status_o           => call_irq_status,
@@ -556,12 +640,12 @@ begin
 		variable hit_write : boolean;
 		variable hit_read : boolean;
 		variable val8 : byte_t;
-		variable addr_dw : std_logic_vector(9 downto 0);
+		variable addr_dw : std_logic_vector(16 downto 0);
 		variable payload_dw : std_logic_vector(31 downto 0);
 		variable req_id : std_logic_vector(15 downto 0);
 		variable req_tag : std_logic_vector(7 downto 0);
 		variable read_data_dw : std_logic_vector(31 downto 0);
-		variable addr_index : integer range 0 to 1023;
+		variable addr_index : integer range 0 to 131071;
 
 		procedure clear_words(variable words : inout word_arr_t) is
 		begin
@@ -575,7 +659,7 @@ begin
 			constant count : in integer;
 			variable found_write : out boolean;
 			variable found_read : out boolean;
-			variable addr_out : out std_logic_vector(9 downto 0);
+			variable addr_out : out std_logic_vector(16 downto 0);
 			variable payload_out : out std_logic_vector(31 downto 0);
 			variable req_id_out : out std_logic_vector(15 downto 0);
 			variable req_tag_out : out std_logic_vector(7 downto 0)
@@ -617,7 +701,7 @@ begin
 					if (addr_idx < count) and (payload_idx < count) then
 						addr_low := words(addr_idx);
 						payload := words(payload_idx);
-						addr_out := addr_low(11 downto 2);
+						addr_out := addr_low(18 downto 2);
 						payload_out := byte_swap32(payload);
 						found_write := true;
 					end if;
@@ -633,7 +717,7 @@ begin
 					if (1 < count) and (addr_idx < count) then
 						req_hdr := words(1);
 						addr_low := words(addr_idx);
-						addr_out := addr_low(11 downto 2);
+						addr_out := addr_low(18 downto 2);
 						req_id_out := req_hdr(31 downto 16);
 						req_tag_out := req_hdr(15 downto 8);
 						found_read := true;
@@ -718,9 +802,23 @@ begin
 					call_irq_controller_ack_prev <= '0';
 					call_irq_request_count <= (others => '0');
 					call_irq_controller_ack_count <= (others => '0');
+					stream_irq_enable <= '0';
+					stream_write <= '0';
+					stream_write_addr_dw <= (others => '0');
+					stream_write_data <= (others => '0');
+					stream_start <= '0';
+					stream_control <= (others => '0');
+					stream_row <= (others => '0');
+					stream_state <= STREAM_STATE_IDLE;
+					stream_error_code <= (others => '0');
+					stream_gate_q30 <= (others => '0');
+					stream_up_q30 <= (others => '0');
+					stream_result_q30 <= (others => '0');
+					stream_completion_count <= (others => '0');
 				capture_pending <= '0';
 				rx_snapshot_data <= (others => '0');
 				rx_snapshot_valid <= (others => '0');
+				rx_snapshot_bardec <= (others => '0');
 				pkt_cnt_fwd <= (others => '0');
 				pkt_cnt_rev <= (others => '0');
 				pkt_words_fwd <= (others => (others => '0'));
@@ -730,6 +828,7 @@ begin
 				transaction_write <= '0';
 				transaction_read <= '0';
 				transaction_addr_dw <= (others => '0');
+				transaction_bardec <= (others => '0');
 				transaction_payload_dw <= (others => '0');
 				transaction_req_id <= (others => '0');
 				transaction_req_tag <= (others => '0');
@@ -801,6 +900,8 @@ begin
 					function_start <= '0';
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
+					stream_write <= '0';
+					stream_start <= '0';
 					if (call_irq_request = '1') and (call_irq_request_prev = '0') then
 						call_irq_request_count <= call_irq_request_count + 1;
 					end if;
@@ -816,6 +917,21 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
+
+					if stream_engine_done = '1' then
+						stream_gate_q30 <= stream_engine_gate_q30;
+						stream_up_q30 <= stream_engine_up_q30;
+						stream_result_q30 <= stream_engine_result_q30;
+						stream_error_code <= stream_engine_error_code;
+						stream_completion_count <= stream_completion_count + 1;
+						if stream_engine_error = '1' then
+							stream_state <= STREAM_STATE_FAILED;
+						else
+							stream_state <= STREAM_STATE_COMPLETE;
+						end if;
+						call_irq_retire <= '1';
+						call_retire_count <= call_retire_count + 1;
+					end if;
 
 					-- The doorbell launches one already-fused slot through a common
 					-- start/busy/done contract. The shell waits for done; it does not fetch
@@ -968,6 +1084,30 @@ begin
 								read_data_dw(1) := call_irq_request;
 								read_data_dw(2) := call_irq_controller_ack;
 								read_data_dw(3) := call_flags(0);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_CAPABILITY_DW then
+								read_data_dw := STREAM_CAPABILITY_MAGIC;
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_CONTROL_DW then
+								read_data_dw := stream_control;
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_ROW_DW then
+								read_data_dw := stream_row;
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_STATE_DW then
+								read_data_dw := stream_state;
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_GATE_LO_DW then
+								read_data_dw := stream_gate_q30(31 downto 0);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_GATE_HI_DW then
+								read_data_dw := stream_gate_q30(63 downto 32);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_UP_LO_DW then
+								read_data_dw := stream_up_q30(31 downto 0);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_UP_HI_DW then
+								read_data_dw := stream_up_q30(63 downto 32);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_RESULT_LO_DW then
+								read_data_dw := stream_result_q30(31 downto 0);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_RESULT_HI_DW then
+								read_data_dw := stream_result_q30(63 downto 32);
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_ERROR_DW then
+								read_data_dw := stream_error_code;
+							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_COMPLETION_COUNT_DW then
+								read_data_dw := std_logic_vector(stream_completion_count);
 							else
 								case bar_read_word_index is
 								when "000000" =>
@@ -1030,7 +1170,18 @@ begin
 							req_tag := transaction_req_tag;
 							addr_index := to_integer(unsigned(addr_dw));
 
-							if hit_write then
+							if hit_write and (transaction_bardec(2) = '1') then
+								-- BAR2 is posted-write-only in this milestone. The row
+								-- streamer owns address validation and ignores writes while
+								-- its exact row engine is consuming the staged buffers.
+								stream_write_addr_dw <= addr_dw;
+								stream_write_data <= payload_dw;
+								stream_write <= '1';
+								dbg_hit_write <= '1';
+								dbg_seen_hit_write <= '1';
+								dbg_write_count <= dbg_write_count + 1;
+								rx_nonposted_busy <= '0';
+							elsif hit_write then
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
 								dbg_write_count <= dbg_write_count + 1;
@@ -1079,9 +1230,34 @@ begin
 								elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
 									if payload_dw(0) = '1' then
 										call_irq_bar_ack <= '1';
+										if (stream_state = STREAM_STATE_COMPLETE)
+											or (stream_state = STREAM_STATE_FAILED) then
+											stream_irq_enable <= '0';
+										end if;
+									end if;
+								elsif addr_index = BAR0_STREAM_CONTROL_DW then
+									stream_control <= payload_dw;
+								elsif addr_index = BAR0_STREAM_ROW_DW then
+									stream_row <= payload_dw;
+								elsif addr_index = BAR0_STREAM_DOORBELL_DW then
+									stream_irq_enable <= stream_control(8);
+									if (payload_dw = STREAM_DOORBELL_MAGIC)
+										and (stream_state /= STREAM_STATE_BUSY)
+										and (stream_engine_busy = '0')
+										and ((stream_control(1 downto 0) = "01")
+											or (stream_control(1 downto 0) = "10")) then
+										stream_state <= STREAM_STATE_BUSY;
+										stream_error_code <= (others => '0');
+										stream_start <= '1';
+									else
+										stream_state <= STREAM_STATE_FAILED;
+										stream_error_code <= STREAM_ERROR_BAD_DOORBELL;
+										stream_completion_count <= stream_completion_count + 1;
+										call_irq_retire <= '1';
+										call_retire_count <= call_retire_count + 1;
 									end if;
 								else
-									case addr_dw is
+									case addr_dw(9 downto 0) is
 									when BAR0_LED_DW =>
 										if payload_dw = LED_DEBUG_ON then
 											debug_led_mode <= '1';
@@ -1115,10 +1291,10 @@ begin
 									end case;
 								end if;
 								rx_nonposted_busy <= '0';
-							elsif hit_read then
+							elsif hit_read and (transaction_bardec(0) = '1') then
 								dbg_hit_read <= '1';
 								dbg_seen_hit_read <= '1';
-								bar_read_addr_dw <= addr_dw;
+								bar_read_addr_dw <= addr_dw(9 downto 0);
 								bar_read_req_id <= req_id;
 								bar_read_req_tag <= req_tag;
 								if (addr_index >= BAR0_CALL_BASE_DW)
@@ -1145,11 +1321,14 @@ begin
 									bar_read_word_index <= (others => '0');
 								end if;
 								bar_read_select_pending <= '1';
+							else
+								rx_nonposted_busy <= '0';
 							end if;
 
 							transaction_pending <= '0';
 							transaction_write <= '0';
 							transaction_read <= '0';
+							transaction_bardec <= (others => '0');
 					elsif decode_pending = '1' then
 							-- Gowin presents the first protocol dword in the highest valid
 							-- lane (IPUG1020 Figure 3-1), so the descending-lane snapshot is
@@ -1158,7 +1337,7 @@ begin
 							-- like a valid one-dword Memory Read header and shadow the real
 							-- write TLP.
 							decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
-							dbg_last_addr_dw <= addr_dw;
+							dbg_last_addr_dw <= addr_dw(9 downto 0);
 							dbg_last_payload_dw <= payload_dw;
 							dbg_last_req_id <= req_id;
 							dbg_last_req_tag <= req_tag;
@@ -1179,6 +1358,7 @@ begin
 								rx_nonposted_busy <= '0';
 							end if;
 							transaction_addr_dw <= addr_dw;
+							transaction_bardec <= rx_snapshot_bardec;
 							transaction_payload_dw <= payload_dw;
 							transaction_req_id <= req_id;
 							transaction_req_tag <= req_tag;
@@ -1226,10 +1406,12 @@ begin
 						capture_pending <= '0';
 						decode_pending <= '1';
 					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
-						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
+						and (pcie_linkup = '1')
+						and ((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))
 						and (tl_rx_backpressure = '0') then
 						rx_snapshot_data <= tl_rx_data;
 						rx_snapshot_valid <= tl_rx_valid;
+						rx_snapshot_bardec <= tl_rx_bardec;
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
 						dbg_rx_capture_count <= dbg_rx_capture_count + 1;

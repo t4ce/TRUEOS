@@ -17,6 +17,38 @@ pub const INLINE_OUTPUT_BYTES: usize = 96;
 pub const WORK_PACKAGE_MAGIC: u32 = 0x4B50_5754; // "TWPK"
 pub const FIRMWARE_MANIFEST_MAGIC: u32 = 0x4D46_5754; // "TWFM"
 
+/// Optional fixed layer-0 FFN row-streamer capability published through BAR0.
+///
+/// This is deliberately separate from [`ABI_VERSION`]: firmware without BAR2 keeps
+/// implementing the complete generic work-package ABI and remains usable as a fallback.
+pub const LFM25_STREAM_CAPABILITY_MAGIC: u32 = 0x3252_4754; // "TGR2"
+pub const LFM25_STREAM_DOORBELL_MAGIC: u32 = 0x4D52_5453; // "STRM"
+pub const LFM25_STREAM_CONTROL_INTERRUPT_ENABLE: u32 = 1 << 8;
+
+pub const LFM25_STREAM_MODE_GATE_UP_SILU: u32 = 1;
+pub const LFM25_STREAM_MODE_DOWN: u32 = 2;
+
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Lfm25StreamState {
+    Idle = 0,
+    Busy = 1,
+    Complete = 2,
+    Failed = 3,
+}
+
+impl Lfm25StreamState {
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Idle),
+            1 => Some(Self::Busy),
+            2 => Some(Self::Complete),
+            3 => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 /// Ask the endpoint to raise its completion interrupt after publishing `state`.
 ///
 /// Polling the state remains valid, so early firmware can ignore this flag.
@@ -168,6 +200,29 @@ pub const BAR0_CALL_IRQ_STATE_OFFSET: usize = 0x094;
 pub const BAR0_WORK_PACKAGE_OFFSET: usize = 0x100;
 /// Read-only manifest fused into the same firmware image as the function circuits.
 pub const BAR0_FIRMWARE_MANIFEST_OFFSET: usize = 0x200;
+/// Optional row-streamer register plane. Old generic firmware reads zero here.
+pub const BAR0_LFM25_STREAM_CAPABILITY_OFFSET: usize = 0x098;
+pub const BAR0_LFM25_STREAM_CONTROL_OFFSET: usize = 0x09C;
+pub const BAR0_LFM25_STREAM_ROW_OFFSET: usize = 0x0A0;
+pub const BAR0_LFM25_STREAM_DOORBELL_OFFSET: usize = 0x0A4;
+pub const BAR0_LFM25_STREAM_STATE_OFFSET: usize = 0x0A8;
+pub const BAR0_LFM25_STREAM_GATE_LO_OFFSET: usize = 0x0AC;
+pub const BAR0_LFM25_STREAM_GATE_HI_OFFSET: usize = 0x0B0;
+pub const BAR0_LFM25_STREAM_UP_LO_OFFSET: usize = 0x0B4;
+pub const BAR0_LFM25_STREAM_UP_HI_OFFSET: usize = 0x0B8;
+pub const BAR0_LFM25_STREAM_RESULT_LO_OFFSET: usize = 0x0BC;
+pub const BAR0_LFM25_STREAM_RESULT_HI_OFFSET: usize = 0x0C0;
+pub const BAR0_LFM25_STREAM_ERROR_OFFSET: usize = 0x0C4;
+pub const BAR0_LFM25_STREAM_COMPLETION_COUNT_OFFSET: usize = 0x0C8;
+
+/// BAR2 is a prefetchable 64-bit aperture. Each unchanged 34-byte Q8_0 block
+/// occupies one 64-byte slot so the FPGA can select a block without division.
+pub const BAR2_LFM25_STREAM_BYTES: usize = 512 * 1024;
+pub const BAR2_LFM25_STREAM_BLOCK_STRIDE: usize = 64;
+pub const BAR2_LFM25_STREAM_ACTIVATION_OFFSET: usize = 0x0000;
+pub const BAR2_LFM25_STREAM_WEIGHT0_OFFSET: usize = 0x4000;
+pub const BAR2_LFM25_STREAM_WEIGHT1_OFFSET: usize = 0x8000;
+pub const BAR2_LFM25_STREAM_REQUIRED_BYTES: usize = 0xC000;
 pub const BAR0_REQUIRED_BYTES: usize =
     BAR0_FIRMWARE_MANIFEST_OFFSET + size_of::<FirmwareManifest>();
 pub const WORK_PACKAGE_STATE_OFFSET: usize = core::mem::offset_of!(WorkPackage, state);
@@ -198,6 +253,11 @@ mod tests {
         assert_eq!(size_of::<FirmwareManifest>(), 128);
         assert_eq!(align_of::<FirmwareManifest>(), 64);
         assert_eq!(BAR0_REQUIRED_BYTES, 0x280);
+        assert_eq!(BAR2_LFM25_STREAM_BYTES, 0x80000);
+        assert_eq!(BAR2_LFM25_STREAM_BLOCK_STRIDE, 64);
+        assert!(BAR2_LFM25_STREAM_REQUIRED_BYTES <= BAR2_LFM25_STREAM_BYTES);
+        assert_eq!(Lfm25StreamState::from_raw(2), Some(Lfm25StreamState::Complete));
+        assert_eq!(Lfm25StreamState::from_raw(4), None);
     }
 
     #[test]

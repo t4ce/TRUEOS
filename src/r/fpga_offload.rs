@@ -39,6 +39,7 @@ static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState::new());
 static LFM25_FFN_STEP_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
+static TGA_TRANSPORT_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
 
 pub type CompletionCallback = Box<dyn FnOnce(CallResult) + Send + 'static>;
 pub type CallResult = Result<Completion, Error>;
@@ -403,6 +404,127 @@ pub async fn acquire_lfm25_ffn_step_lane()
     LFM25_FFN_STEP_LANE.lock().await
 }
 
+/// Exclude the generic single-package worker while a BAR2 row stream owns the
+/// shared MSI status bridge. Queued heartbeats remain pending and resume after
+/// the complete FFN transaction releases this guard.
+pub async fn acquire_lfm25_stream_transport()
+-> embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()> {
+    TGA_TRANSPORT_LANE.lock().await
+}
+
+pub fn lfm25_row_stream_available() -> bool {
+    crate::tga::lfm25_stream_available()
+}
+
+pub fn lfm25_stream_completion_count() -> Result<u32, Error> {
+    crate::tga::lfm25_stream_completion_count().map_err(map_stream_transport_error)
+}
+
+pub fn lfm25_stream_load_activation(
+    blocks: &[[u8; trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES]],
+) -> Result<(), Error> {
+    if !matches!(blocks.len(), 32 | 144) {
+        return Err(Error::Protocol);
+    }
+    crate::tga::lfm25_stream_write_blocks(
+        trueos_fpga_abi::BAR2_LFM25_STREAM_ACTIVATION_OFFSET,
+        blocks,
+    )
+    .map_err(map_stream_transport_error)
+}
+
+pub async fn lfm25_stream_gate_up_row(
+    row: u32,
+    gate_weights: &[u8],
+    up_weights: &[u8],
+) -> Result<crate::tga::Lfm25StreamResult, Error> {
+    const ROW_BYTES: usize = 32 * trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES;
+    if gate_weights.len() != ROW_BYTES || up_weights.len() != ROW_BYTES {
+        return Err(Error::Protocol);
+    }
+    crate::tga::lfm25_stream_write_block_bytes(
+        trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET,
+        gate_weights,
+    )
+    .map_err(map_stream_transport_error)?;
+    crate::tga::lfm25_stream_write_block_bytes(
+        trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT1_OFFSET,
+        up_weights,
+    )
+    .map_err(map_stream_transport_error)?;
+    execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU, row).await
+}
+
+pub async fn lfm25_stream_down_row(
+    row: u32,
+    weights: &[u8],
+) -> Result<i64, Error> {
+    if weights.len() != 144 * trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES {
+        return Err(Error::Protocol);
+    }
+    crate::tga::lfm25_stream_write_block_bytes(
+        trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET,
+        weights,
+    )
+    .map_err(map_stream_transport_error)?;
+    let result =
+        execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_DOWN, row).await?;
+    Ok(result.result_q30)
+}
+
+async fn execute_lfm25_stream_row(
+    mode: u32,
+    row: u32,
+) -> Result<crate::tga::Lfm25StreamResult, Error> {
+    let interrupt_sequence = crate::tga::arm_offload_interrupt().map_err(map_stream_transport_error)?;
+    crate::tga::start_lfm25_stream_row(mode, row).map_err(map_stream_transport_error)?;
+
+    let terminal = with_timeout(
+        EmbassyDuration::from_millis(COMPLETION_INTERRUPT_TIMEOUT_MS),
+        async {
+            let mut sequence = interrupt_sequence;
+            loop {
+                sequence = crate::tga::wait_for_completion_interrupt(sequence).await;
+                record_interrupt_wake();
+                match crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)? {
+                    trueos_fpga_abi::Lfm25StreamState::Complete
+                    | trueos_fpga_abi::Lfm25StreamState::Failed => return Ok(()),
+                    trueos_fpga_abi::Lfm25StreamState::Idle
+                    | trueos_fpga_abi::Lfm25StreamState::Busy => {}
+                }
+            }
+        },
+    )
+    .await;
+
+    match terminal {
+        Ok(result) => result?,
+        Err(_) => match crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)? {
+            trueos_fpga_abi::Lfm25StreamState::Complete
+            | trueos_fpga_abi::Lfm25StreamState::Failed => record_timeout_recovery(),
+            trueos_fpga_abi::Lfm25StreamState::Idle
+            | trueos_fpga_abi::Lfm25StreamState::Busy => return Err(Error::Protocol),
+        },
+    }
+
+    let state = crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)?;
+    let result = crate::tga::read_lfm25_stream_result().map_err(map_stream_transport_error)?;
+    let _ = crate::tga::ack_offload_interrupt();
+    match state {
+        trueos_fpga_abi::Lfm25StreamState::Complete if result.error_code == 0 => Ok(result),
+        trueos_fpga_abi::Lfm25StreamState::Failed => Err(Error::Device(result.error_code as i32)),
+        _ => Err(Error::Protocol),
+    }
+}
+
+fn map_stream_transport_error(error: crate::tga::OffloadTransportError) -> Error {
+    match error {
+        crate::tga::OffloadTransportError::Offline => Error::DeviceLost,
+        crate::tga::OffloadTransportError::InvalidPackage
+        | crate::tga::OffloadTransportError::WriteVerification { .. } => Error::Protocol,
+    }
+}
+
 async fn lfm25_ffn_step_with_callback(input: &[u8]) -> Result<Completion, Error> {
     use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
 
@@ -609,6 +731,11 @@ pub async fn fpga_offload_service_task() {
         while !crate::tga::is_online() {
             Timer::after(EmbassyDuration::from_millis(DEVICE_RETRY_MS)).await;
         }
+
+        // BAR0 work packages and the BAR2 row streamer share one physical MSI
+        // status bridge. A streamed FFN holds this lane across all rows; normal
+        // calls take it only for their single in-flight package.
+        let _transport_lane = TGA_TRANSPORT_LANE.lock().await;
 
         let interrupt_sequence = match crate::tga::arm_offload_interrupt() {
             Ok(sequence) => sequence,

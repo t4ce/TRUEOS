@@ -292,8 +292,8 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     if desc_count == 0 || sprite_quad_worklist_walker_count(desc_count) != desc_count {
         return false;
     }
-    let payload_end =
-        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + desc_count * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+    let payload_end = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
+        + desc_count * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
     if payload_end > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
@@ -304,11 +304,22 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
-    if !direct_rcs_write_sprite_quad_worklist_interface_descriptor(state) {
+    if !direct_rcs_write_sprite_quad_worklist_interface_descriptor_at(
+        state,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL,
+    ) {
         return false;
     }
-    if !direct_rcs_write_alpha_blend_worklist_surface_states(
+    if !direct_rcs_write_alpha_blend_worklist_surface_states_at(
         state,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+            + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+            + SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+            + SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL,
         params.src_gpu,
         src_bytes,
         params.dst_gpu,
@@ -319,8 +330,8 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
         return false;
     }
     for descriptor in 0..desc_count {
-        let payload_offset =
-            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+        let payload_offset = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
+            + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
         let payload_params = SpriteQuadWorklistRgba8Params {
             desc_base: params.desc_base.saturating_add(descriptor as u32),
             desc_count: 1,
@@ -375,8 +386,10 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     let Some(state_bytes) = state_bytes else {
         return false;
     };
-    let Some(payload_base) =
-        align_up(RECT_WORKLIST_IDD_OFFSET_BYTES.saturating_add(state_bytes), 0x40)
+    let Some(payload_base) = align_up(
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES.saturating_add(state_bytes),
+        0x40,
+    )
     else {
         return false;
     };
@@ -394,8 +407,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
 
     let mut desc_base = 0usize;
     for (run_index, run) in runs.iter().enumerate() {
-        let run_base =
-            RECT_WORKLIST_IDD_OFFSET_BYTES + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let run_base = SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
         let idd_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_IDD_REL;
         let binding_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL;
         let src_surface_offset = run_base + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL;
@@ -678,8 +691,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
         .fold(0usize, |total, run| total.saturating_add(run.descs.len()));
     let mut submitted_descriptors = 0usize;
     for (run_index, run) in runs.iter().enumerate() {
-        let idd_offset =
-            RECT_WORKLIST_IDD_OFFSET_BYTES + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+        let idd_offset = SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+            + run_index * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
         ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
@@ -717,7 +730,10 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_command_stream(
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
 
-    if !ok {
+    if !ok
+        || cursor.saturating_mul(core::mem::size_of::<u32>())
+            > SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+    {
         return false;
     }
 
@@ -742,7 +758,11 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
-    ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_OFFSET_BYTES as u32);
+    ok &= direct_rcs_push(
+        batch,
+        &mut cursor,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES as u32,
+    );
     ok &= direct_rcs_push_store_marker_at(
         batch,
         &mut cursor,
@@ -754,8 +774,8 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
         return false;
     };
     for descriptor in 0..desc_count {
-        let payload_offset =
-            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
+        let payload_offset = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES
+            + descriptor * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES;
         ok &= direct_rcs_push_sprite_quad_worklist_walker(
             batch,
             &mut cursor,
@@ -778,7 +798,10 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );
 
-    if !ok {
+    if !ok
+        || cursor.saturating_mul(core::mem::size_of::<u32>())
+            > SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+    {
         return false;
     }
 
@@ -786,4 +809,3 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
 }
-

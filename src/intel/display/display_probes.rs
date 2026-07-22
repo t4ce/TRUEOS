@@ -131,19 +131,19 @@ fn probe_zune_boot_logo_decode() -> bool {
         decoded.width,
         decoded.height,
         decoded.width as usize * 4,
-        "boot-logo-zune-jpeg-horizon-stamp-center",
+        "boot-logo-zune-jpeg-intel-graphics-stamp-center",
     );
-    let stamped = stored && stamp_horizon_logo_top_left_screen();
+    let intel_graphics_stamped = stored && stamp_intel_graphics_logo_top_left_screen();
     let bgrt_stamped = stored && stamp_bgrt_logo_bottom_right_screen();
     let plane_bars_stamped = stored
         && PRIMARY_BOOT_NATIVE_PLANE_SLOT_BARS_ENABLED
         && stamp_boot_native_plane_slot_bars_top_right();
     crate::log!(
-        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} horizon_stamp={} bgrt_stamp={} plane_bars={} stored={}\n",
+        "intel/display: boot-logo decode mode=zune_jpeg decoded={}x{} bytes=0x{:X} intel_graphics_stamp={} bgrt_stamp={} plane_bars={} stored={}\n",
         decoded.width,
         decoded.height,
         decoded.rgba.len(),
-        stamped as u8,
+        intel_graphics_stamped as u8,
         bgrt_stamped as u8,
         plane_bars_stamped as u8,
         stored as u8

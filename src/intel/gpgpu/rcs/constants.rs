@@ -218,6 +218,13 @@ const UI4_COMPOSE_LAYERS_PER_THREAD_BYTES: usize = 96;
 const UI4_COMPOSE_LAYERS_INDIRECT_BYTES: usize =
     UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES + UI4_COMPOSE_LAYERS_PER_THREAD_BYTES;
 const SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES: usize = 0x140;
+// The sprite path can emit one walker plus an ordering flush per descriptor.
+// Its maximum command stream is therefore much larger than the older rect
+// worklists and must not share their 0x1400 state offset.  Keep the first 32
+// KiB exclusively for commands, followed by texture/run state and payloads.
+const SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES: usize = 0x8000;
+const SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES: usize =
+    SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
 const SPRITE_QUAD_WORKLIST_RUN_IDD_REL: usize = 0x00;
 const SPRITE_QUAD_WORKLIST_RUN_BINDING_REL: usize = 0x40;
 const SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL: usize = 0x80;
@@ -458,6 +465,23 @@ const DIRECT_RCS_ENABLED: bool = true;
 const DIRECT_RCS_RING_BYTES: usize = 4096;
 const DIRECT_RCS_CONTEXT_BYTES: usize = 22 * 4096;
 const DIRECT_RCS_BATCH_BYTES: usize = 256 * 1024;
+// Worst case: every descriptor changes texture, so each contributes one
+// four-DWORD IDD load, one 15-DWORD walker, one two-DWORD state flush, and one
+// six-DWORD ordering PIPE_CONTROL.  The fixed allowance covers the prologue,
+// markers, and epilogue.  These assertions make command/state aliasing a
+// build-time failure instead of a GPU hang.
+const SPRITE_QUAD_WORKLIST_MAX_COMMAND_DWORDS: usize =
+    128 + SPRITE_QUAD_WORKLIST_MAX_DESCS * 27;
+const _: () = assert!(
+    SPRITE_QUAD_WORKLIST_MAX_COMMAND_DWORDS * core::mem::size_of::<u32>()
+        <= SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+);
+const _: () = assert!(
+    SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
+        + SPRITE_QUAD_WORKLIST_MAX_DESCS * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES
+        + SPRITE_QUAD_WORKLIST_MAX_DESCS * SPRITE_QUAD_WORKLIST_INDIRECT_BYTES
+        <= DIRECT_RCS_BATCH_BYTES
+);
 const _: () = assert!(
     512 + GLYPH_MASK_BATCH_MAX_LAYERS * 27
         < GLYPH_MASK_BATCH_STATE_BASE_OFFSET_BYTES / core::mem::size_of::<u32>()
