@@ -95,6 +95,47 @@ pub(super) struct SpiritCursorFrame {
     pub(super) y_normalized: f64,
 }
 
+/// Convert one global normalized point into the exact local coordinates of a
+/// Spirit cursor surface, if that point currently overlaps the surface.
+///
+/// Both positions use the selected pipe's dimensions and the same rounding as
+/// CUR_POS programming. Keeping this beside the cursor-plane geometry avoids
+/// treating a global desktop coordinate as an always-valid 256x256 shader
+/// coordinate.
+pub(super) fn spirit_cursor_local_point(
+    channel: u8,
+    frame: SpiritCursorFrame,
+    point_x_normalized: f64,
+    point_y_normalized: f64,
+) -> Result<Option<(u16, u16)>, SpiritCursorError> {
+    if !frame.x_normalized.is_finite()
+        || !frame.y_normalized.is_finite()
+        || !point_x_normalized.is_finite()
+        || !point_y_normalized.is_finite()
+    {
+        return Err(SpiritCursorError::InvalidFrame);
+    }
+
+    let channel_index = channel_index(channel)?;
+    let (scanout_width, scanout_height) = pipe_dimensions(channel_index)?;
+    let spirit_left = normalized_cursor_to_px(frame.x_normalized, scanout_width);
+    let spirit_top = normalized_cursor_to_px(frame.y_normalized, scanout_height);
+    let point_x = normalized_screen_point_to_px(point_x_normalized, scanout_width);
+    let point_y = normalized_screen_point_to_px(point_y_normalized, scanout_height);
+    let local_x = point_x - spirit_left;
+    let local_y = point_y - spirit_top;
+
+    if local_x < 0
+        || local_x >= SPIRIT_CURSOR_DIM as i32
+        || local_y < 0
+        || local_y >= SPIRIT_CURSOR_DIM as i32
+    {
+        return Ok(None);
+    }
+
+    Ok(Some((local_x as u16, local_y as u16)))
+}
+
 /// One exact Spirit allocation selected for producer access and a later flip.
 ///
 /// `cursor_gpu` is the display GGTT alias. The physical allocation is the
@@ -582,8 +623,12 @@ fn cursor_ddb_cfg(channel: usize) -> u32 {
 }
 
 fn normalized_cursor_to_px(normalized: f64, extent: u32) -> i32 {
+    normalized_screen_point_to_px(normalized, extent) - SPIRIT_CURSOR_HOTSPOT
+}
+
+fn normalized_screen_point_to_px(normalized: f64, extent: u32) -> i32 {
     let last_pixel = extent.saturating_sub(1) as f64;
-    (normalized.clamp(0.0, 1.0) * last_pixel + 0.5) as i32 - SPIRIT_CURSOR_HOTSPOT
+    (normalized.clamp(0.0, 1.0) * last_pixel + 0.5) as i32
 }
 
 fn cursor_pos_reg_value(x: i32, y: i32) -> u32 {

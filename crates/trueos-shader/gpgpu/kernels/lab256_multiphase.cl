@@ -15,7 +15,7 @@
 #define LAB256_PIXELS (LAB256_SIZE * LAB256_SIZE)
 
 #define LAB256_CONTROL_MAGIC 0x4C414232u // "LAB2"
-#define LAB256_CONTROL_VERSION 4u
+#define LAB256_CONTROL_VERSION 5u
 #define LAB256_REPORT_MAGIC 0x4C325250u // "L2RP"
 
 #define LAB256_FLAG_WRAP        (1u << 0)
@@ -34,10 +34,10 @@
 #define LAB256_CTRL_FEED_F32         8u
 #define LAB256_CTRL_KILL_F32         9u
 #define LAB256_CTRL_DT_F32          10u
-#define LAB256_CTRL_FLARE_RADIUS    11u // f32 normalized scene radius
-#define LAB256_CTRL_FLARE_TURBULENCE 12u // f32 radial distortion
-#define LAB256_CTRL_FLARE_RAY_GAIN  13u // f32 ray intensity
-#define LAB256_CTRL_FLARE_PULSE_SPEED 14u // f32 animation rate
+#define LAB256_CTRL_FOG_RADIUS       11u // f32 normalized scene radius
+#define LAB256_CTRL_FOG_WARP         12u // f32 low-order radial distortion
+#define LAB256_CTRL_FOG_RIPPLE_GAIN  13u // f32 ripple intensity
+#define LAB256_CTRL_FOG_PULSE_SPEED  14u // f32 animation rate
 #define LAB256_CTRL_COLOR_SEED      15u
 #define LAB256_CTRL_RESERVED_16     16u
 #define LAB256_CTRL_BACKGROUND_ALPHA 17u // f32 [0, 1]
@@ -159,10 +159,9 @@ __kernel void lab256_step(
             0.16f * laplacian.x - reaction + feed * (1.0f - center.x),
             0.08f * laplacian.y + reaction - (feed + kill) * center.y) * dt;
 
-        // Bound the visual wake to roughly the recent second of movement at
-        // 60 Hz. This keeps cursor input as a small reactive trail rather than
-        // an autonomous, continuously blooming reaction garden.
-        center.y *= 0.985f;
+        // Drain twice as quickly as the initial trail experiment. At 60 Hz
+        // this confines the visible wake to roughly the recent half second.
+        center.y *= 0.970f;
     }
 
     if ((flags & LAB256_FLAG_INJECT) != 0u) {
@@ -170,11 +169,11 @@ __kernel void lab256_step(
         float pointer_x = (float)(packed_xy & 0xFFFFu);
         float pointer_y = (float)(packed_xy >> 16);
         float radius = clamp(
-            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_RADIUS]), 6.0f),
+            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_RADIUS]), 18.0f),
             1.0f,
             48.0f);
         float strength = clamp(
-            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_STRENGTH]), 0.82f),
+            lab256_finite_or(as_float(control[LAB256_CTRL_POINTER_STRENGTH]), 0.58f),
             0.0f,
             1.0f);
         float2 delta = (float2)((float)x - pointer_x, (float)y - pointer_y);
@@ -294,85 +293,57 @@ __kernel void lab256_composite(
     float mean_v = report[0] == LAB256_REPORT_MAGIC ? lab256_mean_v(report) : 0.0f;
     float2 point = ((float2)((float)x + 0.5f, (float)y + 0.5f) / 256.0f - 0.5f) * 2.0f;
 
-    float flare_radius = clamp(
-        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_RADIUS]), 0.52f),
+    float fog_radius = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FOG_RADIUS]), 0.72f),
         0.22f,
-        0.82f);
-    float turbulence = clamp(
-        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_TURBULENCE]), 0.12f),
+        1.20f);
+    float fog_warp = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FOG_WARP]), 0.12f),
         0.0f,
         0.30f);
-    float ray_gain = clamp(
-        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_RAY_GAIN]), 0.82f),
+    float ripple_gain = clamp(
+        lab256_finite_or(as_float(control[LAB256_CTRL_FOG_RIPPLE_GAIN]), 0.68f),
         0.0f,
         1.5f);
     float pulse_speed = clamp(
-        lab256_finite_or(as_float(control[LAB256_CTRL_FLARE_PULSE_SPEED]), 1.0f),
+        lab256_finite_or(as_float(control[LAB256_CTRL_FOG_PULSE_SPEED]), 1.0f),
         0.1f,
         4.0f);
 
-    // The flare is its own centered layer. Pointer coordinates never enter
-    // this geometry; they only seed the independent reaction field in pass 1.
-    float2 flare_point = point;
-    float radius2 = dot(flare_point, flare_point);
+    // A centered low-contrast fog pulse replaces the hard flare core and its
+    // reciprocal star rays. Pointer coordinates never enter this geometry.
+    float2 fog_point = point;
+    float radius2 = dot(fog_point, fog_point);
     float radius = native_sqrt(max(radius2, 1.0e-8f));
-    float radial_wave = 0.5f + 0.5f * native_sin(
-        radius * 26.0f
-            - time * (1.65f * pulse_speed));
-    float lobe = (flare_point.x * flare_point.x - flare_point.y * flare_point.y)
+    float lobe = (fog_point.x * fog_point.x - fog_point.y * fog_point.y)
         / (radius2 + 0.04f);
-    float distorted_radius = flare_radius
-        + (radial_wave - 0.5f) * (turbulence * 0.55f)
-        + lobe * (turbulence * 0.08f);
+    float warped_radius = radius * (1.0f + lobe * fog_warp * 0.12f);
+    float radial_wave = 0.5f + 0.5f * native_sin(
+        warped_radius * 15.0f
+            - time * (0.82f * pulse_speed));
+    float ripple = radial_wave * radial_wave * ripple_gain;
+    float fog_t = lab256_clamp01(warped_radius / max(fog_radius, 0.01f));
+    fog_t = fog_t * fog_t * (3.0f - 2.0f * fog_t);
+    float fog_envelope = 1.0f - fog_t;
+    float broad_haze = 0.10f / (radius2 + 0.22f);
+    float smoke = fog_envelope * (0.22f + ripple * 0.24f);
 
-    float body_t = lab256_clamp01(
-        (radius - (distorted_radius - 0.10f)) * 5.0f);
-    body_t = body_t * body_t * (3.0f - 2.0f * body_t);
-    float body = 1.0f - body_t;
-
-    float outer_t = lab256_clamp01(radius * (1.0f / 1.15f));
-    outer_t = outer_t * outer_t * (3.0f - 2.0f * outer_t);
-    float outer = 1.0f - outer_t;
-    float plume = outer
-        * (0.12f + radial_wave * 0.48f)
-        * (0.64f + radial_wave * 0.36f);
-
-    // Four analytical flare axes replace the reference shader's texture
-    // feedback. They are cheap reciprocal distance fields modulated only by
-    // the centered flare pulse, not by pointer or reaction coordinates.
-    float axis_x = 0.008f / (fabs(flare_point.y) + 0.008f);
-    float axis_y = 0.008f / (fabs(flare_point.x) + 0.008f);
-    float diagonal_a = 0.010f
-        / (fabs((flare_point.x - flare_point.y) * 0.70710678f) + 0.010f);
-    float diagonal_b = 0.010f
-        / (fabs((flare_point.x + flare_point.y) * 0.70710678f) + 0.010f);
-    float ray_shape = max(max(axis_x, axis_y), max(diagonal_a, diagonal_b) * 0.64f);
-    float ray_envelope = 1.0f / (1.0f + radius2 * 2.4f);
-    float rays = ray_shape
-        * ray_envelope
-        * ray_gain
-        * (0.52f + radial_wave * 0.48f);
-
-    float core = 0.010f / (radius2 + 0.010f);
-    float halo = 0.055f / (radius2 + 0.055f);
-    float3 color = (float3)(1.00f, 0.12f, 0.018f) * (body * 0.68f + plume * 0.54f)
-        + (float3)(1.00f, 0.62f, 0.10f) * (body * 0.44f + halo * 0.32f)
-        + (float3)(1.00f, 0.98f, 0.84f) * (core * 1.9f + rays * 1.05f)
-        + (float3)(0.16f, 0.30f, 1.00f) * (halo * 0.16f + plume * 0.07f);
+    float3 color = (float3)(0.30f, 0.34f, 0.39f) * (smoke * 0.78f)
+        + (float3)(0.24f, 0.38f, 0.52f) * (fog_envelope * ripple * 0.24f)
+        + (float3)(0.48f, 0.54f, 0.60f) * (broad_haze * 0.16f);
 
     // The mouse-authored reaction is a second visual layer in real surface
-    // coordinates. A mean-relative floor rejects the quiet seed; high B values
-    // form a compact mint core while the decaying wake cools toward blue.
-    float trail_floor = max(0.035f, min(mean_v * 1.5f, 0.12f));
-    float reaction_trail = lab256_clamp01((field - trail_floor) * 2.35f);
-    reaction_trail = reaction_trail * reaction_trail
-        * (3.0f - 2.0f * reaction_trail);
-    float trail_hot = lab256_clamp01((field - 0.30f) * 1.8f);
+    // coordinates. A broad low-saturation response makes an area disturbance,
+    // not a bright dot, while the faster B drain keeps the wake short.
+    float trail_floor = max(0.020f, min(mean_v * 1.25f, 0.08f));
+    float reaction_trail = lab256_clamp01((field - trail_floor) * 1.55f);
+    reaction_trail = reaction_trail * (2.0f - reaction_trail);
+    float trail_hot = lab256_clamp01((field - 0.25f) * 1.35f);
     float3 trail_color = mix(
-        (float3)(0.10f, 0.28f, 1.00f),
-        (float3)(0.18f, 1.00f, 0.66f),
+        (float3)(0.34f, 0.39f, 0.44f),
+        (float3)(0.42f, 0.54f, 0.63f),
         trail_hot);
-    color += trail_color * (reaction_trail * 0.78f);
+    color += trail_color * (reaction_trail * 0.38f);
 
     float background_alpha = clamp(
         lab256_finite_or(
@@ -381,12 +352,9 @@ __kernel void lab256_composite(
         0.0f,
         1.0f);
     float content_alpha = lab256_clamp01(
-        core * 1.8f
-            + body * 0.78f
-            + plume * 0.56f
-            + rays * 0.88f
-            + halo * 0.20f
-            + reaction_trail * 0.72f);
+        smoke * 0.44f
+            + broad_haze * 0.12f
+            + reaction_trail * 0.34f);
     float output_alpha = mix(background_alpha, 1.0f, content_alpha);
 
     // One fully opaque status dot reports Spirit's half-second average of

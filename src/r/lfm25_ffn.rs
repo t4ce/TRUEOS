@@ -54,6 +54,7 @@ pub const FPGA_CALLS_PER_FFN: u64 = 226_000;
 /// One gate+up+SiLU retirement per intermediate row and one down retirement
 /// per output row. This is the first BAR2 streaming checkpoint.
 pub const FPGA_STREAM_ROWS_PER_FFN: u64 = 4_608 + 1_024;
+pub const FFN_OUTPUT_ELEMENTS: usize = 1_024;
 
 pub fn expected_fpga_calls() -> u64 {
     if fpga_offload::lfm25_row_stream_available() {
@@ -105,6 +106,12 @@ pub struct Report {
     pub interrupt_delta: u64,
     pub timeout_recovery_delta: u64,
     pub streamed: bool,
+}
+
+/// The exact hardware output retained for a framework-facing forward pass.
+pub struct Execution {
+    pub output_q30: Vec<i64>,
+    pub report: Report,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +167,11 @@ impl From<fpga_offload::Error> for Error {
     }
 }
 
-pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
+pub async fn run(progress: impl FnMut(Progress)) -> Result<Report, Error> {
+    Ok(run_with_output(progress).await?.report)
+}
+
+pub async fn run_with_output(mut progress: impl FnMut(Progress)) -> Result<Execution, Error> {
     validate_golden()?;
     let image = lfm25_model::open().await?;
     lfm25_model::verify_with_progress(&image, |_, _| {}).await?;
@@ -254,19 +265,22 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
         return Err(Error::CompletionPath);
     }
 
-    Ok(Report {
-        gate_max_abs,
-        up_max_abs,
-        silu_max_abs,
-        down_max_abs,
-        gate_sha256,
-        up_sha256,
-        silu_sha256,
-        down_sha256,
-        fpga_calls,
-        interrupt_delta,
-        timeout_recovery_delta,
-        streamed: false,
+    Ok(Execution {
+        output_q30: down,
+        report: Report {
+            gate_max_abs,
+            up_max_abs,
+            silu_max_abs,
+            down_max_abs,
+            gate_sha256,
+            up_sha256,
+            silu_sha256,
+            down_sha256,
+            fpga_calls,
+            interrupt_delta,
+            timeout_recovery_delta,
+            streamed: false,
+        },
     })
 }
 
@@ -274,7 +288,7 @@ async fn run_streamed(
     image: lfm25_model::NativeImage,
     normalized: Vec<[u8; Q8_BLOCK_BYTES]>,
     mut progress: impl FnMut(Progress),
-) -> Result<Report, Error> {
+) -> Result<Execution, Error> {
     let gate_descriptor = tensor("blk.0.ffn_gate.weight")?;
     let up_descriptor = tensor("blk.0.ffn_up.weight")?;
     let down_descriptor = tensor("blk.0.ffn_down.weight")?;
@@ -415,19 +429,22 @@ async fn run_streamed(
         return Err(Error::CompletionPath);
     }
 
-    Ok(Report {
-        gate_max_abs,
-        up_max_abs,
-        silu_max_abs,
-        down_max_abs,
-        gate_sha256,
-        up_sha256,
-        silu_sha256,
-        down_sha256,
-        fpga_calls,
-        interrupt_delta,
-        timeout_recovery_delta,
-        streamed: true,
+    Ok(Execution {
+        output_q30: down,
+        report: Report {
+            gate_max_abs,
+            up_max_abs,
+            silu_max_abs,
+            down_max_abs,
+            gate_sha256,
+            up_sha256,
+            silu_sha256,
+            down_sha256,
+            fpga_calls,
+            interrupt_delta,
+            timeout_recovery_delta,
+            streamed: true,
+        },
     })
 }
 

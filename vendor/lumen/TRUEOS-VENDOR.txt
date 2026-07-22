@@ -8,7 +8,8 @@ initialize another submodule.
 
 TRUEOS enables Lumen with default features disabled and `truega` enabled.
 That feature is mutually exclusive with `host-runtime` and compiles only the
-typed asynchronous backend contract: no synchronous `Module`, CPU tensor,
-CUDA, host threading, or blocking compatibility surface is present in the
-kernel build. TRUEOS implements the device operation in src/lumen/mod.rs and
-retains scheduling, MSI completion, model I/O, and FPGA ABI ownership.
+typed asynchronous backend and `AsyncModule` contracts: no synchronous
+`Module`, CPU tensor, CUDA, host threading, or blocking compatibility surface
+is present in the kernel build. TRUEOS implements the fixed-shape device
+tensor and operation in src/lumen/mod.rs and retains scheduling, MSI
+completion, model I/O, and FPGA ABI ownership.

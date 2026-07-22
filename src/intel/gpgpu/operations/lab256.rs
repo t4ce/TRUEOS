@@ -183,14 +183,14 @@ fn lab256_write_fixed_control(
             dwords.add(5),
             (u32::from(pointer_y) << 16) | u32::from(pointer_x),
         );
-        core::ptr::write_volatile(dwords.add(6), 6.0f32.to_bits());
-        core::ptr::write_volatile(dwords.add(7), 0.82f32.to_bits());
+        core::ptr::write_volatile(dwords.add(6), 18.0f32.to_bits());
+        core::ptr::write_volatile(dwords.add(7), 0.58f32.to_bits());
         core::ptr::write_volatile(dwords.add(8), 0.0367f32.to_bits());
         core::ptr::write_volatile(dwords.add(9), 0.0649f32.to_bits());
         core::ptr::write_volatile(dwords.add(10), 1.0f32.to_bits());
-        core::ptr::write_volatile(dwords.add(11), 0.52f32.to_bits());
+        core::ptr::write_volatile(dwords.add(11), 0.72f32.to_bits());
         core::ptr::write_volatile(dwords.add(12), 0.12f32.to_bits());
-        core::ptr::write_volatile(dwords.add(13), 0.82f32.to_bits());
+        core::ptr::write_volatile(dwords.add(13), 0.68f32.to_bits());
         core::ptr::write_volatile(dwords.add(14), 1.0f32.to_bits());
         core::ptr::write_volatile(dwords.add(15), 0x53);
         core::ptr::write_volatile(dwords.add(16), 0);

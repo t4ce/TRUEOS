@@ -167,17 +167,20 @@ exact 376,701,952-byte size and pinned SHA-256 without parsing GGUF. `tga model 
 range-reads the 32 native layer-0 gate-row blocks, supplies the sealed activation blocks,
 and requires every callback's dot, term, and accumulated row result to match bit-for-bit.
 The final exact row is `29481209` Q30; its distance from captured F32 is 9 against the
-frozen bound of 2148. `tga model ffn0` executes all 4,608 gate rows, all 4,608 up rows,
-4,608 SiLU products, and all 1,024 wide down rows through 226,000 callback-completed
-slot calls: 208 activation-cache loads, 221,184 paired projection calls, and 4,608 SiLU
-calls. It requires the four full Q30-vector hashes, numerical bounds, exact slot-2
-completion count, at least that many MSI interrupts, and zero timeout recovery. An async
-lane guard prevents another diagnostic from interrupting the stateful row.
+frozen bound of 2148. `tga model ffn0` executes all 4,608 gate/up/SiLU rows and all 1,024
+wide down rows through 5,632 BAR2 row-stream retirements. It requires the four full Q30
+vector hashes, numerical bounds, at least 5,632 MSI interrupts, and zero timeout recovery.
+An async lane guard prevents another diagnostic from interrupting the stateful row. The
+BAR0 compatibility path retains the 226,000-call cached-pair implementation for firmware
+without the row-stream capability.
 
 With TRUEOS's default `trueos_lumen` feature, `tga model ffn0` enters this sealed function
 through Lumen's typed asynchronous `truega` backend. Lumen does not execute tensor math
 locally: TRUEOS retains model I/O and submits the fixed inline-BAR packages through its
 single `fpga-offload` worker, which retires MSI completions and resumes the Rust caller.
+`lumen hello` exercises the framework-facing asynchronous module directly and returns the
+actual fixed-shape 1,024-element Q30 output tensor together with the completion report;
+`tga model ffn0` remains the detailed transport and numerical verifier.
 
 Run the reproducible checks with:
 

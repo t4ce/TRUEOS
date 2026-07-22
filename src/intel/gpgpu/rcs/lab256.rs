@@ -89,7 +89,7 @@ fn direct_rcs_encode_lab256_batch(
     dst: GpgpuRgba8Surface,
 ) -> bool {
     if upload.bin_sha256 != LAB256_MULTIPHASE_ADLS_BIN_SHA256
-        || upload.bytes < (LAB256_COMPOSITE_TEXT_OFFSET_BYTES as usize + 0x2000)
+        || upload.bytes < (LAB256_COMPOSITE_TEXT_OFFSET_BYTES as usize + 0x18C0)
         || dst.width != LAB256_SIZE
         || dst.height != LAB256_SIZE
         || dst.pitch_bytes < LAB256_SIZE * 4

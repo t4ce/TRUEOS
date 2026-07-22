@@ -220,6 +220,26 @@ struct SpiritMailbox {
     last_gpgpu_release_sequence: [u64; 2],
 }
 
+#[derive(Copy, Clone)]
+struct SpiritPosition {
+    x_normalized: f64,
+    y_normalized: f64,
+}
+
+impl SpiritPosition {
+    const CENTERED: Self = Self {
+        x_normalized: 0.5,
+        y_normalized: 0.5,
+    };
+
+    const fn cursor_frame(self) -> intel_cursor::SpiritCursorFrame {
+        intel_cursor::SpiritCursorFrame {
+            x_normalized: self.x_normalized,
+            y_normalized: self.y_normalized,
+        }
+    }
+}
+
 impl SpiritMailbox {
     const fn new() -> Self {
         Self {
@@ -237,6 +257,12 @@ static MAILBOXES: [Mutex<SpiritMailbox>; SPIRIT_FENCE_COUNT] = [
     Mutex::new(SpiritMailbox::new()),
     Mutex::new(SpiritMailbox::new()),
     Mutex::new(SpiritMailbox::new()),
+];
+static POSITIONS: [Mutex<SpiritPosition>; SPIRIT_FENCE_COUNT] = [
+    Mutex::new(SpiritPosition::CENTERED),
+    Mutex::new(SpiritPosition::CENTERED),
+    Mutex::new(SpiritPosition::CENTERED),
+    Mutex::new(SpiritPosition::CENTERED),
 ];
 static COMPLETED: [AtomicU64; SPIRIT_FENCE_COUNT] = [
     AtomicU64::new(0),
@@ -424,7 +450,11 @@ fn submit_lab256_frame(
     id: SpiritFenceId,
     present_fps: u32,
 ) -> Result<GpuInflight, SpiritSubmitError> {
-    let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::GPU)?;
+    // Position, producer coordinates, and the later CUR_POS arm all belong to
+    // this one frame transaction. A concurrent move affects the next frame.
+    let position = *POSITIONS[id.index()].lock();
+    let lease =
+        acquire_frame(id, position.x_normalized, position.y_normalized, SpiritBarrierSet::GPU)?;
     let target = match gpgpu_target(lease) {
         Ok(target) => target,
         Err(error) => {
@@ -432,7 +462,7 @@ fn submit_lab256_frame(
             return Err(error);
         }
     };
-    let pointer_xy = spirit_lab256_pointer_snapshot();
+    let pointer_xy = spirit_lab256_pointer_snapshot(id, position.cursor_frame());
     let Some(submission) =
         crate::intel::gpgpu::submit_lab256_spirit_frame(target, present_fps, pointer_xy)
     else {
@@ -446,18 +476,38 @@ fn submit_lab256_frame(
     })
 }
 
-fn spirit_lab256_pointer_snapshot() -> Option<(u16, u16)> {
-    let (_, x_normalized, y_normalized, _) =
+fn spirit_lab256_pointer_snapshot(
+    id: SpiritFenceId,
+    spirit_frame: intel_cursor::SpiritCursorFrame,
+) -> Option<(u16, u16)> {
+    let (_, pointer_x_normalized, pointer_y_normalized, _) =
         crate::r::cursor::preferred_physical_cursor_snapshot_with_slot_buttons()?;
-    Some((
-        spirit_lab256_normalized_coord(x_normalized),
-        spirit_lab256_normalized_coord(y_normalized),
-    ))
+    intel_cursor::spirit_cursor_local_point(
+        id.0,
+        spirit_frame,
+        pointer_x_normalized,
+        pointer_y_normalized,
+    )
+    .ok()?
 }
 
-fn spirit_lab256_normalized_coord(value: f64) -> u16 {
-    let finite = if value.is_finite() { value } else { 0.5 };
-    (finite.clamp(0.0, 1.0) * 255.0 + 0.5) as u16
+/// Move Spirit without coupling it to the physical pointing device. The worker
+/// snapshots this value once per frame, so hover mapping and CUR_POS always use
+/// the same placement even when a higher-level controller moves Spirit.
+#[allow(dead_code)]
+pub(crate) fn set_position(
+    id: SpiritFenceId,
+    x_normalized: f64,
+    y_normalized: f64,
+) -> Result<(), SpiritSubmitError> {
+    if !x_normalized.is_finite() || !y_normalized.is_finite() {
+        return Err(SpiritSubmitError::InvalidCommand);
+    }
+    *POSITIONS[id.index()].lock() = SpiritPosition {
+        x_normalized,
+        y_normalized,
+    };
+    Ok(())
 }
 
 /// Current naive convenience path: CPU-author a solid circle and release it.
