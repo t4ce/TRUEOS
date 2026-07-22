@@ -21,4 +21,7 @@
 # likewise additive and selects built-in defaults per frame or cursor source.
 # The pointer-event take call additively exposes only broker-routed events for
 # the selected frame; it does not alter older consumers of the raw HID ABI.
-694f359e98a31bd6bd44abcafd09d71374dc10054f62d3673a1bc99e4184d396
+# The capability-backed mouse-motion, keyboard-control, and gamepad-control
+# calls are strictly additive. They expose mediated high-level programs without
+# changing the existing raw HID or selected-frame input contracts.
+1e791c726322f954fbb43e81ae51a12048a1712c809eec425c4e5abf4ec7d7dd

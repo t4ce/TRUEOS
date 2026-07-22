@@ -22,6 +22,7 @@
 #define LAB256_FLAG_INJECT      (1u << 1)
 #define LAB256_FLAG_RESET       (1u << 2)
 #define LAB256_FLAG_MANDELBROT  (1u << 3)
+#define LAB256_FLAG_POINTER_SHADE (1u << 4)
 #define LAB256_FLAG_FLOW_WARP   (1u << 5)
 
 // Control page, in dwords. Floats are stored as IEEE-754 bit patterns.
@@ -330,10 +331,25 @@ __kernel void lab256_composite(
     float field = state_uv.y;
     float mean_v = report[0] == LAB256_REPORT_MAGIC ? lab256_mean_v(report) : 0.0f;
     float2 point = ((float2)((float)x + 0.5f, (float)y + 0.5f) / 256.0f - 0.5f) * 2.0f;
+    float2 shade_point = point;
+    if ((flags & LAB256_FLAG_POINTER_SHADE) != 0u) {
+        uint packed_xy = control[LAB256_CTRL_POINTER_XY];
+        float2 pointer_point = (float2)(
+            (float)(packed_xy & 0xFFFFu),
+            (float)(packed_xy >> 16)) * (2.0f / 255.0f) - 1.0f;
+        float2 pointer_delta = point - pointer_point;
+        float pointer_falloff = clamp(
+            1.0f - dot(pointer_delta, pointer_delta) * 1.35f,
+            0.0f,
+            1.0f);
+        pointer_falloff *= pointer_falloff;
+        shade_point += (float2)(-pointer_delta.y, pointer_delta.x)
+            * (0.022f * pointer_falloff);
+    }
 
-    float flow = native_sin(point.x * 8.1f + time * 0.73f + field * 5.0f)
-        + native_sin(point.y * 9.7f - time * 0.51f - field * 3.0f)
-        + native_sin((point.x + point.y) * 6.3f + time * 0.29f);
+    float flow = native_sin(shade_point.x * 8.1f + time * 0.73f + field * 5.0f)
+        + native_sin(shade_point.y * 9.7f - time * 0.51f - field * 3.0f)
+        + native_sin((shade_point.x + shade_point.y) * 6.3f + time * 0.29f);
     flow = 0.5f + flow * (1.0f / 6.0f);
     float palette_seed = (float)(control[LAB256_CTRL_PALETTE_SEED] & 255u) * (1.0f / 255.0f);
     float color_value = lab256_clamp01(flow * 0.55f + field * 0.75f - mean_v * 0.20f);
@@ -351,7 +367,7 @@ __kernel void lab256_composite(
             0.0002f,
             2.5f);
         uint iteration_cap = clamp(control[LAB256_CTRL_MANDEL_ITERS], 12u, 96u);
-        float2 fractal_point = point;
+        float2 fractal_point = shade_point;
         if ((flags & LAB256_FLAG_FLOW_WARP) != 0u) {
             fractal_point += (float2)(
                 native_sin(field * 12.0f + time),

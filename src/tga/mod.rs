@@ -138,6 +138,14 @@ pub(crate) struct CompletionIrqHardwareStats {
     pub state: u32,
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct StreamTransportHardwareStats {
+    pub accepted_dwords: u32,
+    pub captured_tlps: u32,
+    pub decoded_writes: u32,
+    pub rx_errors: u32,
+}
+
 impl Tga {
     #[inline(always)]
     fn write_led(&self, value: u32) {
@@ -248,6 +256,27 @@ pub(crate) fn completion_irq_hardware_stats() -> Option<CompletionIrqHardwareSta
         requests: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_REQUEST_COUNT_OFF),
         controller_acks: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF),
         state: Tga::read_reg(tga.mmio_base + TGA_OFFLOAD_IRQ_STATE_OFF),
+    })
+}
+
+pub(crate) fn stream_transport_hardware_stats() -> Option<StreamTransportHardwareStats> {
+    let guard = TGA.lock();
+    let tga = guard.as_ref()?;
+    fence(Ordering::Acquire);
+    Some(StreamTransportHardwareStats {
+        accepted_dwords: Tga::read_reg(
+            tga.mmio_base
+                + trueos_fpga_abi::BAR0_LFM25_STREAM_ACCEPTED_WRITE_COUNT_OFFSET,
+        ),
+        captured_tlps: Tga::read_reg(
+            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_RX_CAPTURE_COUNT_OFFSET,
+        ),
+        decoded_writes: Tga::read_reg(
+            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_DECODED_WRITE_COUNT_OFFSET,
+        ),
+        rx_errors: Tga::read_reg(
+            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_RX_ERROR_COUNT_OFFSET,
+        ),
     })
 }
 

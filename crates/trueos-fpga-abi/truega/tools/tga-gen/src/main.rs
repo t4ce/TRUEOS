@@ -1100,9 +1100,9 @@ mod tests {
         for required in [
             "component truega_lfm25_row_streamer is",
             "u_lfm25_row_streamer: truega_lfm25_row_streamer",
-            "transaction_bardec <= rx_snapshot_bardec;",
+            "transaction_bardec <= rx_packet_bardec;",
             "if hit_write and (transaction_bardec(2) = '1') then",
-            "((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))",
+            "or (tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))",
             "read_data_dw := STREAM_CAPABILITY_MAGIC;",
         ] {
             assert!(TOP_VHDL.contains(required), "missing BAR2 transport: {required}");
@@ -1123,6 +1123,22 @@ mod tests {
             assert!(ROW_STREAMER_RTL.contains(required), "missing row engine: {required}");
         }
         assert!(GOWIN_PROJECT.contains("truega_lfm25_row_streamer.v"));
+    }
+
+    #[test]
+    fn receive_collector_serializes_continuations_through_eop() {
+        for required in [
+            "signal rx_packet_active : std_logic := '0';",
+            "signal continuation_pending : std_logic := '0';",
+            "if rx_snapshot_sop = '1' then",
+            "if rx_snapshot_eop = '1' then",
+            "elsif continuation_pending = '1' then",
+            "continuation_lane <= continuation_lane - 1;",
+            "rx_packet_active <= '1';",
+            "elsif ((tl_rx_sop = '1') or (rx_packet_active = '1'))",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing multi-beat RX collector: {required}");
+        }
     }
 
     #[test]

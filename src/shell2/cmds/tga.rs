@@ -37,6 +37,7 @@ fn parse_u32(value: &str) -> Option<u32> {
 fn print_status(io: &'static dyn ShellBackend2) {
     let stats = crate::r::fpga_offload::stats();
     let hardware = crate::tga::completion_irq_hardware_stats().unwrap_or_default();
+    let stream = crate::tga::stream_transport_hardware_stats().unwrap_or_default();
     print_shell_line(
         io,
         alloc::format!(
@@ -66,6 +67,17 @@ fn print_status(io: &'static dyn ShellBackend2) {
             hardware.requests,
             hardware.controller_acks,
             hardware.state,
+        )
+        .as_str(),
+    );
+    print_shell_line(
+        io,
+        alloc::format!(
+            "tga: stream accepted_dwords={} captured_tlps={} decoded_writes={} rx_errors={}",
+            stream.accepted_dwords,
+            stream.captured_tlps,
+            stream.decoded_writes,
+            stream.rx_errors,
         )
         .as_str(),
     );
@@ -303,6 +315,18 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
             print_matrix_target_line(
                 target,
                 alloc::format!("tga: model ffn0=fail reason={error:?}").as_str(),
+            );
+            let stream = crate::tga::stream_transport_hardware_stats().unwrap_or_default();
+            print_matrix_target_line(
+                target,
+                alloc::format!(
+                    "tga: model ffn0 transport accepted_dwords={} captured_tlps={} decoded_writes={} rx_errors={}",
+                    stream.accepted_dwords,
+                    stream.captured_tlps,
+                    stream.decoded_writes,
+                    stream.rx_errors,
+                )
+                .as_str(),
             );
             return Err(crate::r::fpga_offload::Error::Protocol);
         }

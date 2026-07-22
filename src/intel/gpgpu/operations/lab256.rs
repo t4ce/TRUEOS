@@ -48,6 +48,7 @@ struct Lab256Submitted {
     dst: GpgpuRgba8Surface,
     frame: u32,
     present_fps: u32,
+    pointer_xy: Option<(u16, u16)>,
     started_tick: u64,
 }
 
@@ -154,7 +155,12 @@ fn lab256_runtime_once() -> Option<Lab256Runtime> {
     Some(runtime)
 }
 
-fn lab256_write_fixed_control(control: Lab256Buffer, frame: u32, present_fps: u32) {
+fn lab256_write_fixed_control(
+    control: Lab256Buffer,
+    frame: u32,
+    present_fps: u32,
+    pointer_xy: Option<(u16, u16)>,
+) {
     unsafe {
         core::ptr::write_bytes(control.virt, 0, control.bytes);
         let dwords = control.virt as *mut u32;
@@ -162,12 +168,19 @@ fn lab256_write_fixed_control(control: Lab256Buffer, frame: u32, present_fps: u3
         core::ptr::write_volatile(dwords.add(1), LAB256_CONTROL_VERSION);
         core::ptr::write_volatile(dwords.add(2), frame);
         let mut flags = LAB256_FLAG_WRAP | LAB256_FLAG_MANDELBROT | LAB256_FLAG_FLOW_WARP;
+        if pointer_xy.is_some() {
+            flags |= LAB256_FLAG_POINTER_SHADE;
+        }
         if frame == 0 {
             flags |= LAB256_FLAG_RESET;
         }
         core::ptr::write_volatile(dwords.add(3), flags);
         core::ptr::write_volatile(dwords.add(4), (frame as f32 * 0.12).to_bits());
-        core::ptr::write_volatile(dwords.add(5), (128u32 << 16) | 128);
+        let (pointer_x, pointer_y) = pointer_xy.unwrap_or((128, 128));
+        core::ptr::write_volatile(
+            dwords.add(5),
+            (u32::from(pointer_y) << 16) | u32::from(pointer_x),
+        );
         core::ptr::write_volatile(dwords.add(6), 12.0f32.to_bits());
         core::ptr::write_volatile(dwords.add(7), 0.8f32.to_bits());
         core::ptr::write_volatile(dwords.add(8), 0.0367f32.to_bits());
@@ -211,6 +224,7 @@ fn lab256_report_audit(report: Lab256Buffer, frame: u32) -> bool {
 pub(crate) fn submit_lab256_spirit_frame(
     dst: GpgpuRgba8Surface,
     present_fps: u32,
+    pointer_xy: Option<(u16, u16)>,
 ) -> Option<Lab256SpiritSubmission> {
     let _submit_guard = EXECUTION_RCS_SUBMIT_LOCK.try_lock()?;
     if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
@@ -218,7 +232,7 @@ pub(crate) fn submit_lab256_spirit_frame(
     {
         return None;
     }
-    let submitted = submit_lab256_batch(dst, None, present_fps)?;
+    let submitted = submit_lab256_batch(dst, None, present_fps, pointer_xy)?;
     let tag = LAB256_SPIRIT_NEXT_TAG
         .fetch_add(1, Ordering::Relaxed)
         .wrapping_add(1)
@@ -236,10 +250,12 @@ pub(crate) fn submit_lab256_spirit_frame(
     if lab256_trace_spirit_frame(submitted.frame) {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} dst=0x{:X} owner=spirit-worker lane=execution admission=gpu-executor/vgpu/guc wait=detached\n",
+            "intel/gpgpu: lab256 one-shot accepted tag={} frame={} present_fps={} pointer_active={} pointer_xy={:?} dst=0x{:X} owner=spirit-worker lane=execution admission=gpu-executor/vgpu/guc wait=detached\n",
             tag,
             submitted.frame,
             submitted.present_fps,
+            submitted.pointer_xy.is_some() as u8,
+            submitted.pointer_xy,
             dst.gpu,
         );
     }
@@ -313,7 +329,7 @@ fn lab256_frame(dst: GpgpuRgba8Surface) -> GpgpuRgba8KernelResult {
     let Some(_submit_guard) = EXECUTION_RCS_SUBMIT_LOCK.try_lock() else {
         return GpgpuRgba8KernelResult::default();
     };
-    let Some(submitted) = submit_lab256_batch(dst, None, 0) else {
+    let Some(submitted) = submit_lab256_batch(dst, None, 0, None) else {
         return GpgpuRgba8KernelResult::default();
     };
     let marker = execution_rcs_poll_result_slot_timeout_ms(
@@ -345,6 +361,7 @@ fn submit_lab256_batch(
     dst: GpgpuRgba8Surface,
     requested_frame: Option<u32>,
     present_fps: u32,
+    pointer_xy: Option<(u16, u16)>,
 ) -> Option<Lab256Submitted> {
     if !dst.is_valid()
         || dst.width != LAB256_SIZE
@@ -378,7 +395,7 @@ fn submit_lab256_batch(
 
     let (state_in, state_out) = runtime_snapshot.state_pair();
     let present_fps = present_fps.min(1_000);
-    lab256_write_fixed_control(runtime_snapshot.control, frame, present_fps);
+    lab256_write_fixed_control(runtime_snapshot.control, frame, present_fps, pointer_xy);
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
@@ -421,6 +438,7 @@ fn submit_lab256_batch(
         dst,
         frame,
         present_fps,
+        pointer_xy,
         started_tick,
     })
 }
@@ -460,7 +478,7 @@ fn log_lab256_completion(
     {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} present_fps={} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
+            "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} present_fps={} pointer_active={} pointer_xy={:?} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
             submitted.frame,
             ok as u8,
             1,
@@ -468,6 +486,8 @@ fn log_lab256_completion(
             report_ok as u8,
             LAB256_BACKGROUND_ALPHA,
             submitted.present_fps,
+            submitted.pointer_xy.is_some() as u8,
+            submitted.pointer_xy,
             submitted.state_in.gpu,
             submitted.state_out.gpu,
             submitted.dst.gpu,

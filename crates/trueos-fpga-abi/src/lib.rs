@@ -214,6 +214,14 @@ pub const BAR0_LFM25_STREAM_RESULT_LO_OFFSET: usize = 0x0BC;
 pub const BAR0_LFM25_STREAM_RESULT_HI_OFFSET: usize = 0x0C0;
 pub const BAR0_LFM25_STREAM_ERROR_OFFSET: usize = 0x0C4;
 pub const BAR0_LFM25_STREAM_COMPLETION_COUNT_OFFSET: usize = 0x0C8;
+/// Number of BAR2 dwords accepted by the row-streamer memories.
+pub const BAR0_LFM25_STREAM_ACCEPTED_WRITE_COUNT_OFFSET: usize = 0x0CC;
+/// Number of target-BAR receive TLPs captured at SOP.
+pub const BAR0_LFM25_STREAM_RX_CAPTURE_COUNT_OFFSET: usize = 0x0D0;
+/// Number of target-BAR Memory Write TLPs decoded.
+pub const BAR0_LFM25_STREAM_DECODED_WRITE_COUNT_OFFSET: usize = 0x0D4;
+/// Number of receive beats carrying a hard-IP error indication.
+pub const BAR0_LFM25_STREAM_RX_ERROR_COUNT_OFFSET: usize = 0x0D8;
 
 /// BAR2 is a prefetchable 64-bit aperture. Each unchanged 34-byte Q8_0 block
 /// occupies one 64-byte slot so the FPGA can select a block without division.

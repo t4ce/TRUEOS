@@ -432,7 +432,9 @@ fn submit_lab256_frame(
             return Err(error);
         }
     };
-    let Some(submission) = crate::intel::gpgpu::submit_lab256_spirit_frame(target, present_fps)
+    let pointer_xy = spirit_lab256_pointer_snapshot();
+    let Some(submission) =
+        crate::intel::gpgpu::submit_lab256_spirit_frame(target, present_fps, pointer_xy)
     else {
         cancel_pending(lease);
         return Err(SpiritSubmitError::HardwareNotReady);
@@ -442,6 +444,20 @@ fn submit_lab256_frame(
         submission,
         polls: 0,
     })
+}
+
+fn spirit_lab256_pointer_snapshot() -> Option<(u16, u16)> {
+    let (_, x_normalized, y_normalized, _) =
+        crate::r::cursor::preferred_physical_cursor_snapshot_with_slot_buttons()?;
+    Some((
+        spirit_lab256_normalized_coord(x_normalized),
+        spirit_lab256_normalized_coord(y_normalized),
+    ))
+}
+
+fn spirit_lab256_normalized_coord(value: f64) -> u16 {
+    let finite = if value.is_finite() { value } else { 0.5 };
+    (finite.clamp(0.0, 1.0) * 255.0 + 0.5) as u16
 }
 
 /// Current naive convenience path: CPU-author a solid circle and release it.

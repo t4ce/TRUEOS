@@ -432,9 +432,21 @@ pub(crate) fn submit_json(
                 .and_then(Value::as_str)
                 .ok_or(KeyboardControlError::BadJson)?;
             let interval = json_u32(object.get("interval_ms"))?.max(DEFAULT_STROKE_MS);
-            for ch in text.chars() {
+            let clear_queue = object
+                .get("clear_queue")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            for (index, ch) in text.chars().enumerate() {
+                if commands.len() >= MAX_COMMANDS_PER_KEYBOARD {
+                    return Err(KeyboardControlError::Capacity);
+                }
                 commands.push(KeyboardControlCommand {
                     opcode: KEYBOARD_CONTROL_OPCODE_STROKE,
+                    flags: if clear_queue && index == 0 {
+                        KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE
+                    } else {
+                        0
+                    },
                     duration_ms: interval,
                     codepoint: ch as u32,
                     ..KeyboardControlCommand::default()
@@ -449,6 +461,9 @@ pub(crate) fn submit_json(
             "wait" => KEYBOARD_CONTROL_OPCODE_WAIT,
             _ => return Err(KeyboardControlError::BadJson),
         };
+        if commands.len() >= MAX_COMMANDS_PER_KEYBOARD {
+            return Err(KeyboardControlError::Capacity);
+        }
         commands.push(KeyboardControlCommand {
             opcode,
             flags: if object

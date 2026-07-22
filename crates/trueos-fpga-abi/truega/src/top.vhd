@@ -176,6 +176,10 @@ architecture rtl of top is
 	constant BAR0_STREAM_RESULT_HI_DW : integer := 16#0C0# / 4;
 	constant BAR0_STREAM_ERROR_DW : integer := 16#0C4# / 4;
 	constant BAR0_STREAM_COMPLETION_COUNT_DW : integer := 16#0C8# / 4;
+	constant BAR0_STREAM_ACCEPTED_WRITE_COUNT_DW : integer := 16#0CC# / 4;
+	constant BAR0_STREAM_RX_CAPTURE_COUNT_DW : integer := 16#0D0# / 4;
+	constant BAR0_STREAM_DECODED_WRITE_COUNT_DW : integer := 16#0D4# / 4;
+	constant BAR0_STREAM_RX_ERROR_COUNT_DW : integer := 16#0D8# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
@@ -318,18 +322,23 @@ architecture rtl of top is
 	signal tx_pending_sop : std_logic := '0';
 	signal tx_pending_eop : std_logic := '0';
 
-	-- Admit exactly one TLP into the registered snapshot and hold RX_WAIT until
-	-- that transaction has retired. The Gowin interface guarantees that it holds
-	-- the current beat while RX_WAIT is high, so no fabric-side burst FIFO is
-	-- required and a controller RX-buffer slot cannot be recycled under us.
+	-- Admit one receive beat into a registered snapshot and hold RX_WAIT while
+	-- that beat is compacted.  A TLP may span multiple beats: SOP starts the
+	-- packet, EOP hands the accumulated protocol dwords to the decoder, and a
+	-- continuation beat is accepted after the compactor releases RX_WAIT.
 	signal capture_pending : std_logic := '0';
 	signal rx_snapshot_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal rx_snapshot_valid : std_logic_vector(7 downto 0) := (others => '0');
 	signal rx_snapshot_bardec : std_logic_vector(5 downto 0) := (others => '0');
-	signal pkt_cnt_fwd   : unsigned(4 downto 0) := (others => '0');
+	signal rx_snapshot_err : std_logic_vector(7 downto 0) := (others => '0');
+	signal rx_snapshot_sop : std_logic := '0';
+	signal rx_snapshot_eop : std_logic := '0';
+	signal rx_packet_active : std_logic := '0';
+	signal rx_packet_bardec : std_logic_vector(5 downto 0) := (others => '0');
 	signal pkt_cnt_rev   : unsigned(4 downto 0) := (others => '0');
-	signal pkt_words_fwd : word_arr_t := (others => (others => '0'));
 	signal pkt_words_rev : word_arr_t := (others => (others => '0'));
+	signal continuation_pending : std_logic := '0';
+	signal continuation_lane : unsigned(2 downto 0) := (others => '0');
 	signal decode_pending : std_logic := '0';
 	signal transaction_pending : std_logic := '0';
 	signal transaction_write : std_logic := '0';
@@ -390,14 +399,6 @@ architecture rtl of top is
 	signal dbg_last_req_id      : std_logic_vector(15 downto 0) := (others => '0');
 	signal dbg_last_req_tag     : std_logic_vector(7 downto 0) := (others => '0');
 	signal dbg_last_read_data   : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_fwd_dw0  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_fwd_dw1  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_fwd_dw2  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_fwd_dw3  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_rev_dw0  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_rev_dw1  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_rev_dw2  : std_logic_vector(31 downto 0) := (others => '0');
-	signal dbg_last_rx_rev_dw3  : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw0    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw1    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw2    : std_logic_vector(31 downto 0) := (others => '0');
@@ -432,14 +433,6 @@ architecture rtl of top is
 	attribute syn_keep of dbg_last_req_id      : signal is true;
 	attribute syn_keep of dbg_last_req_tag     : signal is true;
 	attribute syn_keep of dbg_last_read_data   : signal is true;
-	attribute syn_keep of dbg_last_rx_fwd_dw0  : signal is true;
-	attribute syn_keep of dbg_last_rx_fwd_dw1  : signal is true;
-	attribute syn_keep of dbg_last_rx_fwd_dw2  : signal is true;
-	attribute syn_keep of dbg_last_rx_fwd_dw3  : signal is true;
-	attribute syn_keep of dbg_last_rx_rev_dw0  : signal is true;
-	attribute syn_keep of dbg_last_rx_rev_dw1  : signal is true;
-	attribute syn_keep of dbg_last_rx_rev_dw2  : signal is true;
-	attribute syn_keep of dbg_last_rx_rev_dw3  : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw0    : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw1    : signal is true;
 	attribute syn_keep of dbg_last_cpld_dw2    : signal is true;
@@ -524,10 +517,16 @@ begin
 				rx_snapshot_data <= (others => '0');
 				rx_snapshot_valid <= (others => '0');
 				rx_snapshot_bardec <= (others => '0');
+				rx_snapshot_err <= (others => '0');
+				rx_snapshot_sop <= '0';
+				rx_snapshot_eop <= '0';
 			else
 				rx_snapshot_data <= tl_rx_data;
 				rx_snapshot_valid <= tl_rx_valid;
 				rx_snapshot_bardec <= tl_rx_bardec;
+				rx_snapshot_err <= tl_rx_err;
+				rx_snapshot_sop <= tl_rx_sop;
+				rx_snapshot_eop <= tl_rx_eop;
 			end if;
 		end if;
 	end process;
@@ -662,9 +661,7 @@ begin
 
 	process(tlp_clk)
 		variable dw : word_arr_t;
-		variable next_words_fwd : word_arr_t;
 		variable next_words_rev : word_arr_t;
-		variable next_cnt_fwd : integer range 0 to PKT_MAX_WORDS;
 		variable next_cnt_rev : integer range 0 to PKT_MAX_WORDS;
 		variable hit_write : boolean;
 		variable hit_read : boolean;
@@ -714,9 +711,9 @@ begin
 			req_id_out := (others => '0');
 			req_tag_out := (others => '0');
 
-			-- SOP and lane-valid compaction guarantee that the first protocol dword is
-			-- word zero in one of the two lane interpretations. Searching every array
-			-- position creates a deep priority chain for no supported TLP case.
+			-- SOP and descending-lane compaction guarantee that the first protocol
+			-- dword is word zero. Searching every array position creates a deep
+			-- priority chain for no supported TLP case.
 			if count = 0 then
 				return;
 			end if;
@@ -860,10 +857,12 @@ begin
 					stream_result_q30 <= (others => '0');
 					stream_completion_count <= (others => '0');
 				capture_pending <= '0';
-				pkt_cnt_fwd <= (others => '0');
+				rx_packet_active <= '0';
+				rx_packet_bardec <= (others => '0');
 				pkt_cnt_rev <= (others => '0');
-				pkt_words_fwd <= (others => (others => '0'));
 				pkt_words_rev <= (others => (others => '0'));
+				continuation_pending <= '0';
+				continuation_lane <= (others => '0');
 				decode_pending <= '0';
 				transaction_pending <= '0';
 				transaction_write <= '0';
@@ -920,14 +919,6 @@ begin
 					dbg_last_req_id <= (others => '0');
 					dbg_last_req_tag <= (others => '0');
 					dbg_last_read_data <= (others => '0');
-					dbg_last_rx_fwd_dw0 <= (others => '0');
-					dbg_last_rx_fwd_dw1 <= (others => '0');
-					dbg_last_rx_fwd_dw2 <= (others => '0');
-					dbg_last_rx_fwd_dw3 <= (others => '0');
-					dbg_last_rx_rev_dw0 <= (others => '0');
-					dbg_last_rx_rev_dw1 <= (others => '0');
-					dbg_last_rx_rev_dw2 <= (others => '0');
-					dbg_last_rx_rev_dw3 <= (others => '0');
 					dbg_last_cpld_dw0 <= (others => '0');
 					dbg_last_cpld_dw1 <= (others => '0');
 					dbg_last_cpld_dw2 <= (others => '0');
@@ -1054,9 +1045,7 @@ begin
 						rx_nonposted_busy <= '0';
 					end if;
 
-				next_cnt_fwd := to_integer(pkt_cnt_fwd);
 				next_cnt_rev := to_integer(pkt_cnt_rev);
-				next_words_fwd := pkt_words_fwd;
 				next_words_rev := pkt_words_rev;
 
 					-- Stage four of a BAR read: the completion fields now come only
@@ -1134,6 +1123,10 @@ begin
 							when 10 => read_data_dw := stream_result_q30(63 downto 32);
 							when 11 => read_data_dw := stream_error_code;
 							when 12 => read_data_dw := std_logic_vector(stream_completion_count);
+							when 13 => read_data_dw := stream_accepted_write_count;
+							when 14 => read_data_dw := std_logic_vector(dbg_rx_capture_count);
+							when 15 => read_data_dw := std_logic_vector(dbg_write_count);
+							when 16 => read_data_dw := std_logic_vector(dbg_rx_error_count);
 							when others => null;
 							end case;
 							bar_read_stream_data_dw <= read_data_dw;
@@ -1372,7 +1365,7 @@ begin
 									bar_read_bank <= BAR_READ_BANK_MANIFEST;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
 								elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)
-									and (addr_index <= BAR0_STREAM_COMPLETION_COUNT_DW) then
+									and (addr_index <= BAR0_STREAM_RX_ERROR_COUNT_DW) then
 									bar_read_bank <= BAR_READ_BANK_STREAM;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_STREAM_CAPABILITY_DW, 6));
 								elsif (addr_index >= 16) and (addr_index <= 30) then
@@ -1425,15 +1418,13 @@ begin
 								rx_nonposted_busy <= '0';
 							end if;
 							transaction_addr_dw <= addr_dw;
-							transaction_bardec <= rx_snapshot_bardec;
+							transaction_bardec <= rx_packet_bardec;
 							transaction_payload_dw <= payload_dw;
 							transaction_payload_dw1 <= payload_dw1;
 							transaction_write_count <= write_count;
 							transaction_req_id <= req_id;
 							transaction_req_tag <= req_tag;
-							next_cnt_fwd := 0;
 							next_cnt_rev := 0;
-							clear_words(next_words_fwd);
 							clear_words(next_words_rev);
 							decode_pending <= '0';
 					elsif stream_write_pending = '1' then
@@ -1444,10 +1435,68 @@ begin
 						stream_write <= '1';
 						stream_write_pending <= '0';
 						rx_nonposted_busy <= '0';
+					elsif continuation_pending = '1' then
+						-- Continuation beats are deliberately serialized one protocol
+						-- dword per clock. RX_WAIT keeps the hard-IP beat stable while the
+						-- snapshot is rescanned, keeping the accumulated-count barrel mux
+						-- off the 100 MHz receive path.
+						case to_integer(continuation_lane) is
+						when 0 =>
+							payload_dw := rx_snapshot_data(31 downto 0);
+							hit_write := rx_snapshot_valid(0) = '1';
+						when 1 =>
+							payload_dw := rx_snapshot_data(63 downto 32);
+							hit_write := rx_snapshot_valid(1) = '1';
+						when 2 =>
+							payload_dw := rx_snapshot_data(95 downto 64);
+							hit_write := rx_snapshot_valid(2) = '1';
+						when 3 =>
+							payload_dw := rx_snapshot_data(127 downto 96);
+							hit_write := rx_snapshot_valid(3) = '1';
+						when 4 =>
+							payload_dw := rx_snapshot_data(159 downto 128);
+							hit_write := rx_snapshot_valid(4) = '1';
+						when 5 =>
+							payload_dw := rx_snapshot_data(191 downto 160);
+							hit_write := rx_snapshot_valid(5) = '1';
+						when 6 =>
+							payload_dw := rx_snapshot_data(223 downto 192);
+							hit_write := rx_snapshot_valid(6) = '1';
+						when others =>
+							payload_dw := rx_snapshot_data(255 downto 224);
+							hit_write := rx_snapshot_valid(7) = '1';
+						end case;
+
+						if hit_write and (next_cnt_rev < PKT_MAX_WORDS) then
+							case next_cnt_rev is
+							when 0 => next_words_rev(0) := payload_dw;
+							when 1 => next_words_rev(1) := payload_dw;
+							when 2 => next_words_rev(2) := payload_dw;
+							when 3 => next_words_rev(3) := payload_dw;
+							when 4 => next_words_rev(4) := payload_dw;
+							when 5 => next_words_rev(5) := payload_dw;
+							when 6 => next_words_rev(6) := payload_dw;
+							when others => next_words_rev(7) := payload_dw;
+							end case;
+							next_cnt_rev := next_cnt_rev + 1;
+						end if;
+
+						if continuation_lane = 0 then
+							continuation_pending <= '0';
+							if rx_snapshot_eop = '1' then
+								rx_packet_active <= '0';
+								decode_pending <= '1';
+							else
+								rx_packet_active <= '1';
+								rx_nonposted_busy <= '0';
+							end if;
+						else
+							continuation_lane <= continuation_lane - 1;
+						end if;
 					elsif capture_pending = '1' then
-						-- All supported memory TLPs fit in one 256-bit beat. First
-						-- snapshot the hard-IP outputs, then compact valid lanes here
-						-- from registers so the SerDes pins see no priority chain.
+						-- A SOP beat takes the original zero-based compactor path. A
+						-- continuation enters the serialized lane scanner so packet
+						-- accumulation never becomes a single-cycle barrel shift.
 						dw(0) := rx_snapshot_data(31 downto 0);
 						dw(1) := rx_snapshot_data(63 downto 32);
 						dw(2) := rx_snapshot_data(95 downto 64);
@@ -1456,35 +1505,41 @@ begin
 						dw(5) := rx_snapshot_data(191 downto 160);
 						dw(6) := rx_snapshot_data(223 downto 192);
 						dw(7) := rx_snapshot_data(255 downto 224);
-						next_cnt_fwd := 0;
-						next_cnt_rev := 0;
-						clear_words(next_words_fwd);
-						clear_words(next_words_rev);
-						for i in 0 to 7 loop
-							if rx_snapshot_valid(i) = '1' then
-								next_words_fwd(next_cnt_fwd) := dw(i);
-								next_cnt_fwd := next_cnt_fwd + 1;
-							end if;
-						end loop;
-						for i in 7 downto 0 loop
-							if rx_snapshot_valid(i) = '1' then
-								next_words_rev(next_cnt_rev) := dw(i);
-								next_cnt_rev := next_cnt_rev + 1;
-							end if;
-						end loop;
-						dbg_last_rx_fwd_dw0 <= next_words_fwd(0);
-						dbg_last_rx_fwd_dw1 <= next_words_fwd(1);
-						dbg_last_rx_fwd_dw2 <= next_words_fwd(2);
-						dbg_last_rx_fwd_dw3 <= next_words_fwd(3);
-						dbg_last_rx_rev_dw0 <= next_words_rev(0);
-						dbg_last_rx_rev_dw1 <= next_words_rev(1);
-						dbg_last_rx_rev_dw2 <= next_words_rev(2);
-						dbg_last_rx_rev_dw3 <= next_words_rev(3);
 						capture_pending <= '0';
-						decode_pending <= '1';
-					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
+						if rx_snapshot_sop = '1' then
+							next_cnt_rev := 0;
+							clear_words(next_words_rev);
+							for i in 7 downto 0 loop
+								if rx_snapshot_valid(i) = '1' then
+									next_words_rev(next_cnt_rev) := dw(i);
+									next_cnt_rev := next_cnt_rev + 1;
+								end if;
+							end loop;
+							rx_packet_bardec <= rx_snapshot_bardec;
+							dbg_rx_capture_count <= dbg_rx_capture_count + 1;
+							if rx_snapshot_eop = '1' then
+								rx_packet_active <= '0';
+								decode_pending <= '1';
+							else
+								rx_packet_active <= '1';
+								rx_nonposted_busy <= '0';
+							end if;
+						else
+							continuation_lane <= to_unsigned(7, continuation_lane'length);
+							continuation_pending <= '1';
+						end if;
+						if rx_snapshot_eop = '1' then
+							dbg_rx_bar0_eop <= '1';
+							dbg_seen_rx_bar0_eop <= '1';
+						end if;
+						if rx_snapshot_err /= x"00" then
+							dbg_rx_error_count <= dbg_rx_error_count + 1;
+						end if;
+					elsif ((tl_rx_sop = '1') or (rx_packet_active = '1'))
+						and (tl_rx_valid /= x"00")
 						and (pcie_linkup = '1')
-						and ((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))
+						and ((rx_packet_active = '1')
+							or (tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))
 						-- Reaching this final branch already proves that capture,
 						-- decode, transaction, and staged BAR2 work are idle.  Test
 						-- only the independently-held read/receive busy bit here;
@@ -1493,17 +1548,9 @@ begin
 						and (rx_nonposted_busy = '0') then
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
-						dbg_rx_capture_count <= dbg_rx_capture_count + 1;
-						dbg_rx_bar0_eop <= '1';
-						dbg_seen_rx_bar0_eop <= '1';
-						if tl_rx_err /= x"00" then
-							dbg_rx_error_count <= dbg_rx_error_count + 1;
-						end if;
 					end if;
 
-				pkt_cnt_fwd <= to_unsigned(next_cnt_fwd, pkt_cnt_fwd'length);
 				pkt_cnt_rev <= to_unsigned(next_cnt_rev, pkt_cnt_rev'length);
-				pkt_words_fwd <= next_words_fwd;
 				pkt_words_rev <= next_words_rev;
 				if debug_led_mode = '1' then
 					led_reg(0) <= dbg_seen_rx_bar0_eop;

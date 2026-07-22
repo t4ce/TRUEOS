@@ -473,7 +473,7 @@ fn bump_sequence(snapshot: &mut GamepadControlSnapshot) {
 }
 
 fn lerp_i16(from: i16, to: i16, t: f64) -> i16 {
-    libm::round(f64::from(from) + f64::from(to - from) * t)
+    libm::round(f64::from(from) + (f64::from(to) - f64::from(from)) * t)
         .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
 }
 
