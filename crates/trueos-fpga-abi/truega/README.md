@@ -162,10 +162,16 @@ range-reads the 32 native layer-0 gate-row blocks, supplies the sealed activatio
 and requires every callback's dot, term, and accumulated row result to match bit-for-bit.
 The final exact row is `29481209` Q30; its distance from captured F32 is 9 against the
 frozen bound of 2148. `tga model ffn0` executes all 4,608 gate rows, all 4,608 up rows,
-4,608 SiLU products, and all 1,024 wide down rows through 446,976 callback-completed
-slot calls. It requires the four full Q30-vector hashes, numerical bounds, exact
-slot-2 completion count, at least that many MSI interrupts, and zero timeout recovery.
-An async lane guard prevents another diagnostic from interrupting the stateful row.
+4,608 SiLU products, and all 1,024 wide down rows through 226,000 callback-completed
+slot calls: 208 activation-cache loads, 221,184 paired projection calls, and 4,608 SiLU
+calls. It requires the four full Q30-vector hashes, numerical bounds, exact slot-2
+completion count, at least that many MSI interrupts, and zero timeout recovery. An async
+lane guard prevents another diagnostic from interrupting the stateful row.
+
+With TRUEOS's default `trueos_lumen` feature, `tga model ffn0` enters this sealed function
+through Lumen's typed asynchronous `truega` backend. Lumen does not execute tensor math
+locally: TRUEOS retains model I/O and submits the fixed inline-BAR packages through its
+single `fpga-offload` worker, which retires MSI completions and resumes the Rust caller.
 
 Run the reproducible checks with:
 

@@ -27,6 +27,7 @@ const _: () = assert!(SPIRIT_WORKER_POOL_LIMIT <= SPIRIT_FENCE_COUNT);
 
 const SPIRIT_IDLE_POLL_MS: u64 = 16;
 const SPIRIT_FLIP_POLL_MS: u64 = 1;
+const SPIRIT_GPU_POLL_MS: u64 = 1;
 const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_LAB256_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_LAB256_PERIODIC_TRACE_FRAMES: u64 = 60;
@@ -419,7 +420,7 @@ fn release_gpgpu(
     Ok(())
 }
 
-fn submit_lab256_frame(id: SpiritFenceId, frame: u32) -> Result<SpiritFence, SpiritSubmitError> {
+fn submit_lab256_frame(id: SpiritFenceId) -> Result<GpuInflight, SpiritSubmitError> {
     let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::GPU)?;
     let target = match gpgpu_target(lease) {
         Ok(target) => target,
@@ -428,20 +429,15 @@ fn submit_lab256_frame(id: SpiritFenceId, frame: u32) -> Result<SpiritFence, Spi
             return Err(error);
         }
     };
-    let produced = crate::intel::gpgpu::lab256_spirit_frame(target, frame);
-    let Some(release) = produced.release else {
+    let Some(submission) = crate::intel::gpgpu::submit_lab256_spirit_frame(target) else {
         cancel_pending(lease);
-        return Err(if produced.submitted {
-            SpiritSubmitError::GpuSubmissionFailed
-        } else {
-            SpiritSubmitError::HardwareNotReady
-        });
+        return Err(SpiritSubmitError::HardwareNotReady);
     };
-    if let Err(error) = release_gpgpu(lease, release) {
-        cancel_pending(lease);
-        return Err(error);
-    }
-    Ok(lease.fence)
+    Ok(GpuInflight {
+        lease,
+        submission,
+        polls: 0,
+    })
 }
 
 /// Current naive convenience path: CPU-author a solid circle and release it.
@@ -478,6 +474,13 @@ struct Inflight {
     flip: intel_cursor::SpiritCursorFlip,
     frame: QueuedFrame,
     completes_fence: bool,
+    polls: u32,
+}
+
+#[derive(Copy, Clone)]
+struct GpuInflight {
+    lease: SpiritFrameLease,
+    submission: crate::intel::gpgpu::Lab256SpiritSubmission,
     polls: u32,
 }
 
@@ -562,8 +565,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
 
     let mut retained: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
+    let mut gpu_inflight: Option<GpuInflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
-    let mut stream_next_shader_frame = 0u32;
     let mut stream_queued_frames = 0u64;
     let mut stream_next_deadline = Instant::now();
     let mut stream_cadence_phase = 0u64;
@@ -571,6 +574,68 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut preflight_hold_until: Option<Instant> = None;
     let mut arm_deferred_polls = 0u32;
     loop {
+        if let Some(mut producing) = gpu_inflight {
+            match crate::intel::gpgpu::poll_lab256_spirit_submission(producing.submission) {
+                crate::intel::gpgpu::Lab256SpiritCompletion::Pending => {
+                    producing.polls = producing.polls.saturating_add(1);
+                    gpu_inflight = Some(producing);
+                    Timer::after(Duration::from_millis(SPIRIT_GPU_POLL_MS)).await;
+                    continue;
+                }
+                crate::intel::gpgpu::Lab256SpiritCompletion::Complete(release) => {
+                    if let Err(error) = release_gpgpu(producing.lease, release) {
+                        cancel_pending(producing.lease);
+                        gpu_inflight = None;
+                        stream_aborted = true;
+                        crate::log_error!(
+                            target: "gfx";
+                            "trueos-spirit: lab256 producer release rejected frame={} shader_frame={} tag={} fence={} sequence={} polls={} error={:?} action=abort-stream\n",
+                            stream_queued_frames,
+                            producing.submission.frame(),
+                            producing.submission.tag(),
+                            fence_index,
+                            producing.lease.fence.sequence,
+                            producing.polls,
+                            error,
+                        );
+                        continue;
+                    }
+                    if spirit_should_trace_frame(stream_queued_frames) {
+                        crate::log_info!(
+                            target: "gfx";
+                            "trueos-spirit: lab256 producer released frame={} shader_frame={} tag={} fence={} sequence={} polls={} gate=gpu-only next=cursor-arm\n",
+                            stream_queued_frames,
+                            producing.submission.frame(),
+                            producing.submission.tag(),
+                            fence_index,
+                            producing.lease.fence.sequence,
+                            producing.polls,
+                        );
+                    }
+                    gpu_inflight = None;
+                    continue;
+                }
+                completion @ (crate::intel::gpgpu::Lab256SpiritCompletion::Failed
+                | crate::intel::gpgpu::Lab256SpiritCompletion::InvalidSubmission) => {
+                    cancel_pending(producing.lease);
+                    gpu_inflight = None;
+                    stream_aborted = true;
+                    crate::log_error!(
+                        target: "gfx";
+                        "trueos-spirit: lab256 producer failed frame={} shader_frame={} tag={} fence={} sequence={} polls={} completion={:?} action=abort-stream-retain-last-surflive\n",
+                        stream_queued_frames,
+                        producing.submission.frame(),
+                        producing.submission.tag(),
+                        fence_index,
+                        producing.lease.fence.sequence,
+                        producing.polls,
+                        completion,
+                    );
+                    continue;
+                }
+            }
+        }
+
         if let Some(mut active) = inflight {
             match intel_cursor::spirit_cursor_poll(active.flip) {
                 Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
@@ -706,8 +771,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     Timer::at(stream_next_deadline).await;
                     continue;
                 }
-                match submit_lab256_frame(id, stream_next_shader_frame) {
-                    Ok(fence) => {
+                match submit_lab256_frame(id) {
+                    Ok(producing) => {
                         let period = spirit_lab256_frame_period(&mut stream_cadence_phase);
                         let scheduled = stream_next_deadline + period;
                         let now = Instant::now();
@@ -717,39 +782,26 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                             scheduled
                         };
                         stream_queued_frames = stream_queued_frames.saturating_add(1);
-                        stream_next_shader_frame = stream_next_shader_frame.wrapping_add(1);
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
-                                "trueos-spirit: lab256 stream queued frame={} shader_frame={} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous\n",
+                                "trueos-spirit: lab256 stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous\n",
                                 stream_queued_frames,
-                                stream_next_shader_frame.wrapping_sub(1),
+                                producing.submission.frame(),
+                                producing.submission.tag(),
                                 fence_index,
-                                fence.sequence,
+                                producing.lease.fence.sequence,
                                 SPIRIT_LAB256_TARGET_HZ,
                             );
                         }
+                        gpu_inflight = Some(producing);
                         continue;
-                    }
-                    Err(
-                        error @ (SpiritSubmitError::GpuSubmissionFailed
-                        | SpiritSubmitError::InvalidGpuRelease),
-                    ) => {
-                        stream_aborted = true;
-                        crate::log_error!(
-                            target: "gfx";
-                            "trueos-spirit: lab256 stream aborted frame={} shader_frame={} error={:?} action=retain-last-surflive-frame cpu-fallback=0\n",
-                            stream_queued_frames,
-                            stream_next_shader_frame,
-                            error,
-                        );
                     }
                     Err(error) => {
                         crate::log_warn!(
                             target: "gfx";
-                            "trueos-spirit: lab256 stream deferred frame={} shader_frame={} error={:?}\n",
+                            "trueos-spirit: lab256 stream admission deferred frame={} error={:?}\n",
                             stream_queued_frames.saturating_add(1),
-                            stream_next_shader_frame,
                             error,
                         );
                     }

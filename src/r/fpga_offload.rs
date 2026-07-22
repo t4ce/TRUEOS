@@ -318,6 +318,39 @@ pub async fn lfm25_q8_projection_block(
     function::decode(completion.output()).ok_or(Error::Protocol)
 }
 
+/// Populate one entry of slot 2's fixed activation cache. The cache contains at
+/// most the 144 native Q8_0 blocks required by the widest layer-0 projection and
+/// is circuit state, not a device-side command or model store.
+pub async fn lfm25_cache_q8_activation(
+    wide: bool,
+    block_index: u8,
+    activation: &[u8; 34],
+) -> Result<(), Error> {
+    use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+    let input = function::encode_activation_cache(wide, block_index, activation);
+    lfm25_ffn_step_with_callback(&input).await?;
+    Ok(())
+}
+
+/// Process two consecutive weight blocks against cached activations. One fixed
+/// work package and one MSI retirement now cover both exact dot/scale terms.
+pub async fn lfm25_q8_cached_pair(
+    wide: bool,
+    first: bool,
+    last: bool,
+    block_index: u8,
+    weight0: &[u8; 34],
+    weight1: &[u8; 34],
+) -> Result<trueos_fpga_abi::builtins::lfm25_ffn_step::Q8RowBlockResult, Error> {
+    use trueos_fpga_abi::builtins::lfm25_ffn_step as function;
+
+    let input =
+        function::encode_cached_pair(first, last, wide, block_index, weight0, weight1);
+    let completion = lfm25_ffn_step_with_callback(&input).await?;
+    function::decode(completion.output()).ok_or(Error::Protocol)
+}
+
 /// Fixed hardware vector operation used between the gate/up projections and
 /// the down projection. Inputs and output are signed Q30.
 pub async fn lfm25_silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {

@@ -41,6 +41,10 @@ static UI4_COMPOSITOR_SPRITE_QUAD_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+// Non-zero while a one-shot issuer has detached from an accepted direct-RCS
+// submission. New users must not rewrite the shared batch, result page, or
+// PPGTT until the owner of this exact tag observes retirement.
+static DIRECT_RCS_DETACHED_TAG: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_PPGTT_POLICY_REJECTIONS: AtomicU64 = AtomicU64::new(0);

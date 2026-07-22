@@ -47,7 +47,10 @@ const SILU_BOUND: f32 = 2.0e-6;
 const PREFLIGHT_GATE_ROW: usize = 125;
 const PREFLIGHT_GATE_BLOCKS: usize = 6;
 pub const FPGA_PREFLIGHT_CALLS: u64 = PREFLIGHT_GATE_BLOCKS as u64;
-pub const FPGA_CALLS_PER_FFN: u64 = 446_976;
+/// 221,184 two-block projection calls, 208 activation-cache loads, and 4,608
+/// fixed SiLU calls. The six single-block preflight calls remain outside this
+/// sealed full-pipeline count.
+pub const FPGA_CALLS_PER_FFN: u64 = 226_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Stage {
@@ -150,7 +153,7 @@ pub async fn run(mut progress: impl FnMut(Progress)) -> Result<Report, Error> {
     });
 
     // The six-call preflight is intentionally outside the full-pipeline
-    // counters so the sealed 446,976-call contract stays unchanged.
+    // counters so the sealed 226,000-call contract stays unchanged.
     let before = fpga_offload::stats();
     let (gate, gate_max_abs) = project(
         &image,
@@ -320,43 +323,69 @@ async fn project(
     let mut output = try_i64_vec(rows)?;
     let mut max_abs = 0.0f32;
 
+    // Activations are identical for every matrix row. Load each native block
+    // once, then carry two weight blocks in every normal 72-byte slot call.
+    for (block, activation_block) in activation.iter().enumerate() {
+        fpga_offload::lfm25_cache_q8_activation(wide, block as u8, activation_block).await?;
+    }
+
     for row in 0..rows {
         let mut row_q30 = 0i64;
         let mut expected_row_q30 = 0i64;
-        for (block, activation_block) in activation.iter().enumerate() {
-            let offset = row * row_bytes + block * Q8_BLOCK_BYTES;
-            let weight: &[u8; Q8_BLOCK_BYTES] = matrix
-                .get(offset..offset + Q8_BLOCK_BYTES)
+        for block in (0..blocks_per_row).step_by(2) {
+            let activation0 = &activation[block];
+            let activation1 = &activation[block + 1];
+            let offset0 = row * row_bytes + block * Q8_BLOCK_BYTES;
+            let offset1 = offset0 + Q8_BLOCK_BYTES;
+            let weight0: &[u8; Q8_BLOCK_BYTES] = matrix
+                .get(offset0..offset0 + Q8_BLOCK_BYTES)
                 .ok_or(Error::Tensor)?
                 .try_into()
                 .map_err(|_| Error::Tensor)?;
-            let expected_dot = integer_dot(activation_block, weight);
-            let expected_term_q30 = q30_term(
-                expected_dot,
-                u16::from_le_bytes([activation_block[0], activation_block[1]]),
-                u16::from_le_bytes([weight[0], weight[1]]),
+            let weight1: &[u8; Q8_BLOCK_BYTES] = matrix
+                .get(offset1..offset1 + Q8_BLOCK_BYTES)
+                .ok_or(Error::Tensor)?
+                .try_into()
+                .map_err(|_| Error::Tensor)?;
+
+            let expected_dot0 = integer_dot(activation0, weight0);
+            let expected_term0 = q30_term(
+                expected_dot0,
+                u16::from_le_bytes([activation0[0], activation0[1]]),
+                u16::from_le_bytes([weight0[0], weight0[1]]),
             )?;
             expected_row_q30 = expected_row_q30
-                .checked_add(expected_term_q30)
+                .checked_add(expected_term0)
                 .ok_or(Error::Arithmetic)?;
-            let result = fpga_offload::lfm25_q8_projection_block(
+
+            let expected_dot1 = integer_dot(activation1, weight1);
+            let expected_term1 = q30_term(
+                expected_dot1,
+                u16::from_le_bytes([activation1[0], activation1[1]]),
+                u16::from_le_bytes([weight1[0], weight1[1]]),
+            )?;
+            expected_row_q30 = expected_row_q30
+                .checked_add(expected_term1)
+                .ok_or(Error::Arithmetic)?;
+
+            let result = fpga_offload::lfm25_q8_cached_pair(
                 wide,
                 block == 0,
-                block + 1 == blocks_per_row,
+                block + 2 == blocks_per_row,
                 block as u8,
-                activation_block,
-                weight,
+                weight0,
+                weight1,
             )
             .await?;
             require_hardware_result(
                 stage,
                 row,
-                block,
-                activation_block,
-                weight,
+                block + 1,
+                activation1,
+                weight1,
                 result,
-                expected_dot,
-                expected_term_q30,
+                expected_dot1,
+                expected_term1,
                 expected_row_q30,
             )?;
             row_q30 = result.row_q30;

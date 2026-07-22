@@ -243,7 +243,7 @@ pub extern "C" fn kmain() -> ! {
         simd.avx2_fma_reason.as_str()
     );
     #[cfg(feature = "trueos_lumen")]
-    lumen::log_cpu_backend_once();
+    lumen::log_backend_once();
     let sse42 = crate::r::pat::sse42_available();
     crate::log_info!(
         target: "boot";

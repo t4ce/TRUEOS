@@ -67,6 +67,19 @@ fi
   "$RTL_DIR/truega_q8_0_row_block_slot_tb.sv"
 "$VVP" "${vvp_args[@]}" "$STAGE_DIR/q8_0_row_block_slot.vvp" "+VECTORS=$VECTORS"
 
+iverilog_args=(-g2012 -s truega_q8_0_cached_pair_slot_tb -o "$STAGE_DIR/q8_0_cached_pair_slot.vvp")
+if [[ -n "$IVERILOG_BASE" ]]; then
+  iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")
+fi
+"$IVERILOG" "${iverilog_args[@]}" \
+  "$RTL_DIR/truega_q8_0_dot32.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
+  "$RTL_DIR/truega_q8_0_block_slot.v" \
+  "$RTL_DIR/truega_q8_0_row_block_slot.v" \
+  "$RTL_DIR/truega_q8_0_cached_pair_slot.v" \
+  "$RTL_DIR/truega_q8_0_cached_pair_slot_tb.sv"
+"$VVP" "${vvp_args[@]}" "$STAGE_DIR/q8_0_cached_pair_slot.vvp" "+VECTORS=$VECTORS"
+
 iverilog_args=(-g2012 -s truega_q8_0_scale_q30_seq_tb -o "$STAGE_DIR/q8_0_scale_q30_seq.vvp")
 if [[ -n "$IVERILOG_BASE" ]]; then
   iverilog_args=(-B "$IVERILOG_BASE" "${iverilog_args[@]}")

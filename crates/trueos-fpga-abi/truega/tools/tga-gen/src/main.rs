@@ -17,6 +17,8 @@ const Q8_SCALE_SEQ_RTL: &str = include_str!("../../../src/compute/truega_q8_0_sc
 const Q8_BLOCK_SLOT_RTL: &str = include_str!("../../../src/compute/truega_q8_0_block_slot.v");
 const Q8_ROW_BLOCK_SLOT_RTL: &str =
     include_str!("../../../src/compute/truega_q8_0_row_block_slot.v");
+const Q8_CACHED_PAIR_SLOT_RTL: &str =
+    include_str!("../../../src/compute/truega_q8_0_cached_pair_slot.v");
 const LFM25_SILU_SLOT_RTL: &str = include_str!("../../../src/compute/truega_lfm25_silu_q30_slot.v");
 const Q8_GOLDEN_ARTIFACT: &[u8] = include_bytes!("../../../artifacts/lfm25_q8_block.golden.bin");
 const LFM25_FFN_GOLDEN: &[u8] = include_bytes!("../../../artifacts/lfm25_layer0_ffn.golden.bin");
@@ -153,12 +155,13 @@ fn rename_rust_hdl_scalar_top(verilog: String) -> String {
 fn assembled_function_rtl() -> String {
     let scalar = rename_rust_hdl_scalar_top(firmware::generate());
     format!(
-        "{scalar}\n{}\n\n// Exact native Q8_0/FFN compute sources fused into this generated bundle.\n{}\n{}\n{}\n{}\n{}\n",
+        "{scalar}\n{}\n\n// Exact native Q8_0/FFN compute sources fused into this generated bundle.\n{}\n{}\n{}\n{}\n{}\n{}\n",
         emit_slot_wrapper_verilog(),
         Q8_DOT32_RTL,
         Q8_SCALE_SEQ_RTL,
         Q8_BLOCK_SLOT_RTL,
         Q8_ROW_BLOCK_SLOT_RTL,
+        Q8_CACHED_PAIR_SLOT_RTL,
         LFM25_SILU_SLOT_RTL,
     )
 }
@@ -213,8 +216,8 @@ module truega_functions(
         .valid(scalar_valid)
     );
 
-    truega_q8_0_row_block_slot #(
-        .ROW_DIAGNOSTIC_ENABLE(1)
+    truega_q8_0_cached_pair_slot #(
+        .CACHED_PAIR_ENABLE(1)
     ) q8_row_block_slot(
         .clk(clk),
         .reset_n(reset_n),
@@ -673,6 +676,21 @@ fn emit_rust_interface(
                 rust.push_str("    pub fn encode(\n        first: bool,\n        last: bool,\n        block_index: u8,\n        activation: &[u8; Q8_0_BLOCK_BYTES],\n        weight: &[u8; Q8_0_BLOCK_BYTES],\n    ) -> [u8; INPUT_BYTES] {\n");
                 rust.push_str("        encode_projection(first, last, false, block_index, activation, weight)\n");
                 rust.push_str("    }\n\n");
+                rust.push_str("    pub fn encode_activation_cache(wide: bool, block_index: u8, activation: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
+                rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
+                rust.push_str("        let control = (u32::from(wide) << 2) | (1 << 4) | (u32::from(block_index) << 8);\n");
+                rust.push_str("        bytes[..4].copy_from_slice(&control.to_le_bytes());\n");
+                rust.push_str("        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n");
+                rust.push_str("        bytes\n");
+                rust.push_str("    }\n\n");
+                rust.push_str("    pub fn encode_cached_pair(first: bool, last: bool, wide: bool, block_index: u8, weight0: &[u8; Q8_0_BLOCK_BYTES], weight1: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
+                rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
+                rust.push_str("        let control = u32::from(first) | (u32::from(last) << 1) | (u32::from(wide) << 2) | (1 << 5) | (u32::from(block_index) << 8);\n");
+                rust.push_str("        bytes[..4].copy_from_slice(&control.to_le_bytes());\n");
+                rust.push_str("        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(weight0);\n");
+                rust.push_str("        bytes[4 + Q8_0_BLOCK_BYTES..].copy_from_slice(weight1);\n");
+                rust.push_str("        bytes\n");
+                rust.push_str("    }\n\n");
                 rust.push_str("    pub fn encode_single(activation: &[u8; Q8_0_BLOCK_BYTES], weight: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
                 rust.push_str("        encode(true, true, 0, activation, weight)\n");
                 rust.push_str("    }\n\n");
@@ -851,6 +869,8 @@ mod tests {
         assert!(interface.contains("pub mod lfm25_ffn_step"));
         assert!(interface.contains("pub use lfm25_ffn_step as lfm25_q8_row_block"));
         assert!(interface.contains("pub struct Q8RowBlockResult"));
+        assert!(interface.contains("pub fn encode_activation_cache"));
+        assert!(interface.contains("pub fn encode_cached_pair"));
         assert!(interface.contains("pub const GOLDEN_ACTIVATION"));
         assert!(interface.contains("pub const GOLDEN_GATE_ROW0_ACTIVATIONS"));
         assert_eq!(FUNCTIONS.len(), 3);
@@ -893,8 +913,9 @@ mod tests {
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
         assert!(rtl.contains("module truega_q8_0_row_block_slot"));
+        assert!(rtl.contains("module truega_q8_0_cached_pair_slot"));
         assert!(rtl.contains("module truega_lfm25_silu_q30_slot"));
-        assert!(rtl.contains(".ROW_DIAGNOSTIC_ENABLE(1)"));
+        assert!(rtl.contains(".CACHED_PAIR_ENABLE(1)"));
         assert!(rtl.contains("output reg          busy"));
         assert!(rtl.contains("output reg          done"));
     }

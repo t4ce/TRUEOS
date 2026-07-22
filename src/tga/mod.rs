@@ -695,7 +695,12 @@ pub(crate) fn offload_work_state() -> Result<trueos_fpga_abi::WorkState, Offload
     trueos_fpga_abi::WorkState::from_raw(raw).ok_or(OffloadTransportError::InvalidPackage)
 }
 
-/// Copy the completed package back after the FPGA has published a terminal state.
+/// Read the completed package fields consumed by the ABI decoder.
+///
+/// The request input, reserved header, and unused tail of the 96-byte output are
+/// already known or irrelevant after retirement. Avoiding those non-posted BAR
+/// reads matters for fine-grained accelerator calls: a 20-byte slot-2 result now
+/// needs 15 completion dwords instead of copying all 64 dwords.
 pub(crate) fn read_offload_work_package()
 -> Result<trueos_fpga_abi::WorkPackage, OffloadTransportError> {
     let guard = TGA.lock();
@@ -704,11 +709,21 @@ pub(crate) fn read_offload_work_package()
     };
     let mut package = trueos_fpga_abi::WorkPackage::ZEROED;
     let destination = &mut package as *mut trueos_fpga_abi::WorkPackage as *mut u32;
-    let word_count = core::mem::size_of::<trueos_fpga_abi::WorkPackage>() / 4;
+    const HEADER_WORDS: usize =
+        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, reserved_header) / 4;
+    const OUTPUT_WORD: usize =
+        core::mem::offset_of!(trueos_fpga_abi::WorkPackage, output) / 4;
     fence(Ordering::Acquire);
-    for index in 0..word_count {
+    for index in 0..HEADER_WORDS {
         let value = Tga::read_reg(tga.offload_work_package_reg + index * 4);
         unsafe { destination.add(index).write(value) };
+    }
+    let output_len = package.output_len as usize;
+    if output_len <= trueos_fpga_abi::INLINE_OUTPUT_BYTES {
+        for index in 0..output_len.div_ceil(4) {
+            let value = Tga::read_reg(tga.offload_work_package_reg + (OUTPUT_WORD + index) * 4);
+            unsafe { destination.add(OUTPUT_WORD + index).write(value) };
+        }
     }
     Ok(package)
 }

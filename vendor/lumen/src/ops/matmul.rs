@@ -35,20 +35,6 @@ const SILU_I8_BLOCK_ROWS: usize = 32;
 
 const ARGMAX_BLOCK_ROWS: usize = 32;
 
-#[cfg(feature = "cpu-trueos")]
-unsafe extern "C" {
-    fn lumen_trueos_matvec_rowmajor_f32_bf16(
-        x: *const f32,
-        x_len: usize,
-        w_rowmajor_bf16: *const u8,
-        w_len: usize,
-        n_rows: usize,
-        k_dim: usize,
-        out: *mut f32,
-        out_len: usize,
-    ) -> i32;
-}
-
 #[cfg(all(feature = "arm64-int8-kernels", target_arch = "aarch64"))]
 const MATVEC_I8_PAR_CHUNK_ROWS: usize = 128;
 #[cfg(not(all(feature = "arm64-int8-kernels", target_arch = "aarch64")))]
@@ -1210,25 +1196,6 @@ pub fn matvec_rowmajor_parallel_f32_bf16(
     assert_eq!(x.len(), k_dim, "x len / k_dim mismatch");
     assert_eq!(w_rowmajor.len(), n_rows * k_dim, "weight size mismatch");
     assert_eq!(out.len(), n_rows, "out size mismatch");
-
-    #[cfg(feature = "cpu-trueos")]
-    if n_rows >= MATVEC_PAR_THRESHOLD {
-        let status = unsafe {
-            lumen_trueos_matvec_rowmajor_f32_bf16(
-                x.as_ptr(),
-                x.len(),
-                w_rowmajor.as_ptr() as *const u8,
-                w_rowmajor.len().saturating_mul(core::mem::size_of::<bf16>()),
-                n_rows,
-                k_dim,
-                out.as_mut_ptr(),
-                out.len(),
-            )
-        };
-        if status == 0 {
-            return;
-        }
-    }
 
     if n_rows < MATVEC_PAR_THRESHOLD {
         matvec_rowmajor_serial_f32_bf16(x, w_rowmajor, n_rows, k_dim, out);

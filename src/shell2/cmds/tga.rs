@@ -207,7 +207,7 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
     );
     let start_tick = embassy_time_driver::now();
     let mut milestones = [0u8; 5];
-    let report = match lfm25_ffn::run(|progress| {
+    let progress = |progress: lfm25_ffn::Progress| {
         let stage_index = match progress.stage {
             lfm25_ffn::Stage::Preflight => 0,
             lfm25_ffn::Stage::Gate => 1,
@@ -229,9 +229,13 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
                 .as_str(),
             );
         }
-    })
-    .await
-    {
+    };
+    #[cfg(feature = "trueos_lumen")]
+    let report_result = crate::lumen::run_sealed_lfm25_ffn0(progress).await;
+    #[cfg(not(feature = "trueos_lumen"))]
+    let report_result = lfm25_ffn::run(progress).await;
+
+    let report = match report_result {
         Ok(report) => report,
         Err(lfm25_ffn::Error::Model(error)) => {
             print_model_verify_error(target, error);
@@ -328,8 +332,18 @@ async fn run_model_ffn0(target: &MatrixTarget) -> Result<(), crate::r::fpga_offl
     print_matrix_target_line(
         target,
         alloc::format!(
-            "tga: model ffn0 down_q30_sha256={} completion=msi-worker-callback",
+            "tga: model ffn0 down_q30_sha256={} completion=msi-worker-callback caller={} backend={}",
             digest_hex(&report.down_sha256),
+            if cfg!(feature = "trueos_lumen") {
+                "lumen"
+            } else {
+                "trueos-native"
+            },
+            if cfg!(feature = "trueos_lumen") {
+                "truega"
+            } else {
+                "direct"
+            },
         )
         .as_str(),
     );

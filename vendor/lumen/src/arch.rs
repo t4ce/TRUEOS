@@ -24,11 +24,6 @@ compile_error!(
 );
 
 #[inline]
-pub const fn trueos_cpu_backend_compiled() -> bool {
-    crate::backend::trueos_target_compiled()
-}
-
-#[inline]
 pub const fn arm64_int8_kernels_compiled() -> bool {
     cfg!(all(feature = "arm64-int8-kernels", target_arch = "aarch64"))
 }
@@ -176,9 +171,7 @@ pub fn x86_i8_kernel_runtime_available() -> bool {
 
 #[inline]
 pub fn preferred_i8_kernel_backend() -> &'static str {
-    if trueos_cpu_backend_compiled() {
-        "cpu_trueos"
-    } else if arm64_i8_kernel_runtime_available() {
+    if arm64_i8_kernel_runtime_available() {
         "arm64-neon"
     } else if x86_i8_kernel_runtime_available() {
         "x86-avx2"
@@ -189,9 +182,7 @@ pub fn preferred_i8_kernel_backend() -> &'static str {
 
 #[inline]
 pub fn preferred_fp_kernel_backend() -> &'static str {
-    if trueos_cpu_backend_compiled() {
-        "cpu_trueos"
-    } else if arm64_fp_kernel_runtime_available() {
+    if arm64_fp_kernel_runtime_available() {
         "arm64-neon"
     } else if x86_avx512_fp_kernel_runtime_available() {
         "x86-avx512"
@@ -217,9 +208,7 @@ mod tests {
     #[test]
     fn preferred_backend_is_consistent_with_runtime_probes() {
         let backend = preferred_i8_kernel_backend();
-        if trueos_cpu_backend_compiled() {
-            assert_eq!(backend, "cpu_trueos");
-        } else if arm64_i8_kernel_runtime_available() {
+        if arm64_i8_kernel_runtime_available() {
             assert_eq!(backend, "arm64-neon");
         } else if x86_i8_kernel_runtime_available() {
             assert_eq!(backend, "x86-avx2");
@@ -231,9 +220,7 @@ mod tests {
     #[test]
     fn preferred_fp_backend_is_consistent_with_runtime_probes() {
         let backend = preferred_fp_kernel_backend();
-        if trueos_cpu_backend_compiled() {
-            assert_eq!(backend, "cpu_trueos");
-        } else if arm64_fp_kernel_runtime_available() {
+        if arm64_fp_kernel_runtime_available() {
             assert_eq!(backend, "arm64-neon");
         } else if x86_avx512_fp_kernel_runtime_available() {
             assert_eq!(backend, "x86-avx512");

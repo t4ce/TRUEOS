@@ -105,6 +105,9 @@ unsafe impl Send for DirectRcsState {}
 unsafe impl Sync for DirectRcsState {}
 
 fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if DIRECT_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0 {
+        return None;
+    }
     if let Some(state) = *DIRECT_RCS_STATE.lock() {
         return Some(state);
     }
@@ -151,11 +154,7 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
         core::ptr::write_bytes(batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
         core::ptr::write_bytes(result_virt, 0, DIRECT_RCS_RESULT_BYTES);
         core::ptr::write_bytes(clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
-        core::ptr::write_bytes(
-            font_outline_mesh_out_virt,
-            0,
-            FONT_OUTLINE_MESH_OUT_ALLOC_BYTES,
-        );
+        core::ptr::write_bytes(font_outline_mesh_out_virt, 0, FONT_OUTLINE_MESH_OUT_ALLOC_BYTES);
         core::ptr::write_bytes(ppgtt_virt, 0, DIRECT_RCS_PPGTT_BYTES);
     }
 

@@ -6,5 +6,7 @@ recorded by TRUEOS as vendor/lumen.  It is stored as ordinary files so an
 offline TRUEOS checkout retains the no-std CPU implementation without needing
 to initialize another submodule.
 
-TRUEOS enables Lumen with default features disabled and `cpu-trueos` enabled.
-The host callback required by that feature lives in src/lumen/mod.rs.
+TRUEOS enables Lumen with default features disabled and `truega` enabled.
+Lumen owns only the typed asynchronous backend contract; TRUEOS implements the
+device operation in src/lumen/mod.rs and retains scheduling, MSI completion,
+model I/O, and FPGA ABI ownership on the kernel side.

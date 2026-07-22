@@ -3,19 +3,19 @@
   "default_backend": "cpu",
   "target_backends": [
     {
-      "name": "cpu_trueos",
-      "kind": "cpu",
+      "name": "truega",
+      "kind": "fpga",
       "targets": [
         "trueos",
         "zkvm"
       ],
-      "cargo_feature": "cpu-trueos",
-      "parallelism": "external_kernel_ap_chunks",
-      "threading_contract": "no_rayon_no_std_threads",
-      "matmul_contract": "cooperative_chunked_ap_worker",
+      "cargo_feature": "truega",
+      "parallelism": "single_fpga_offload_worker",
+      "threading_contract": "async_msi_wake",
+      "function_contract": "typed_ahead_of_time_fpga_function",
       "notes": [
-        "TRUEOS owns CPU parallel scheduling outside Lumen.",
-        "Use this backend when compiling Lumen for TRUEOS/zkvm-style targets."
+        "TRUEOS owns BAR transport, MSI completion, callbacks, and model I/O.",
+        "The backend never blocks a synchronous tensor callback or interprets FPGA firmware."
       ]
     },
     {

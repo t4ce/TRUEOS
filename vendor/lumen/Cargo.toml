@@ -18,7 +18,7 @@ x86-int8-kernels = []
 arm64-fp-kernels = []
 x86-fp-kernels = []
 cuda = []
-cpu-trueos = []
+truega = []
 
 [dependencies]
 ndarray = { version = "0.15", default-features = false }
