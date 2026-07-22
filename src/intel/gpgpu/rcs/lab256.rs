@@ -204,8 +204,8 @@ fn direct_rcs_encode_lab256_batch(
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
+        state.gpu_va.batch,
         upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);
@@ -220,8 +220,13 @@ fn direct_rcs_encode_lab256_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &=
-        direct_rcs_push_store_marker(batch, &mut cursor, LAB256_PRE_MARKER_SLOT, LAB256_PRE_MARKER);
+    ok &= direct_rcs_push_store_marker_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        LAB256_PRE_MARKER_SLOT,
+        LAB256_PRE_MARKER,
+    );
 
     ok &= direct_rcs_push_lab256_idd_load(batch, &mut cursor, LAB256_STEP_IDD_OFFSET_BYTES);
     ok &= direct_rcs_push_gpgpu_walker_2d(
