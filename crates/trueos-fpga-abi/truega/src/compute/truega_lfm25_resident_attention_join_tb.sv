@@ -333,6 +333,7 @@ module truega_lfm25_resident_attention_join_tb;
             setup_expect_result(SOURCE_HANDLE);
             setup_owner = 1'b0;
             @(negedge clk);
+            $display("resident_attention_join source=resident-q8 ready");
         end
     endtask
 
@@ -410,11 +411,13 @@ module truega_lfm25_resident_attention_join_tb;
             feed_projection(2'd0, 1024);
             feed_projection(2'd1, 512);
             feed_projection(2'd2, 512);
+            $display("resident_attention_join gqa projections complete q=1024 k=512 v=512");
             while (!core_ready) @(negedge clk);
             core_valid = 1'b1;
             @(negedge clk);
             core_valid = 1'b0;
             while (!core_done) @(negedge clk);
+            $display("resident_attention_join first-token core complete q8_blocks=32");
             if (q_rows != 11'd1024 || k_rows != 10'd512
                     || v_rows != 10'd512)
                 failures = failures + 1;

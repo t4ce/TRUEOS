@@ -558,8 +558,7 @@ module truega_lfm25_resident_attention_join (
 
                 ST_ACT_REQUEST: begin
                     if (abort_i) begin
-                        poisoned_o <= 1'b1;
-                        state <= ST_ABORT_INSPECT;
+                        fail_before_import(ERROR_ABORT);
                     end else if (resident_inspect_valid_o
                             && resident_inspect_ready_i)
                         state <= ST_ACT_REPLY;
