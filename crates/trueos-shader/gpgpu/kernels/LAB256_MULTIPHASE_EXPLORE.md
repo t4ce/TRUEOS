@@ -14,21 +14,26 @@ state A ── lab256_step ──> state B ── lab256_reduce ──> 576-byte
                                   └── lab256_composite <────┘ ──> RGBA8 frame
 ```
 
-The concept combines persistent reaction state, Plasma, and Mandelbrot ideas
-instead of presenting unrelated single-pass windows:
+The visible composition is now a compact radial flare inspired by
+`https://webgl-shaders.com/flare-example.html`, while preserving the original
+three-pass persistent architecture:
 
 - persistent Gray-Scott state supplies real frame-to-frame computation;
-- a plasma palette visualizes that state;
-- the state can warp a bounded Mandelbrot evaluation;
+- the reaction field replaces a separate classic-noise implementation and
+  texture-feedback allocation as the animated corona source;
+- one radial wave, an irregular hot body, a rational halo, and four analytical
+  ray axes produce the flare silhouette;
 - native premultiplied alpha makes inactive background pixels translucent
-  while field/fractal features become progressively more opaque;
+  while the flare body, rays, and hot core become progressively more opaque;
 - compact GPU telemetry supplies a frame audit and field mean;
 - one CUR_SURFLIVE-rate dot supplies a coarse presentation-health hint;
-- Spirit's preferred physical cursor subtly warps the color and fractal coordinates;
-- pointer injection changes simulation state rather than only changing color.
+- Spirit's preferred physical cursor leans the emitter within the stable avatar
+  and injects the same latched coordinate into the persistent reaction state;
+- pointer motion therefore leaves a field disturbance that continues evolving
+  after the immediate presentation response.
 
 The artifact is hash-allowlisted and wired into both TrueOS-Spirit's
-deterministic startup sequence and the live UI4 preview service. Shell2 can now
+continuous cursor-plane stream and the live UI4 preview service. Shell2 can
 exercise that exact runtime path as a fixed-size premultiplied-alpha window.
 
 ## Why 256x256 is an advantage
@@ -45,8 +50,8 @@ The fixed extent turns several otherwise open-ended costs into small constants:
 | **total** | **787,084** | **794,624** |
 
 The maximum visible work is also bounded: two 4096-thread SIMD16 2D passes,
-one 16-lane reduction pass, at most 96 Mandelbrot iterations per pixel, and no
-dynamic allocation or data-dependent dispatch dimensions.
+one 16-lane reduction pass, one radial sine per output pixel, and no dynamic
+allocation or data-dependent dispatch dimensions.
 
 ## IGC result
 
@@ -56,14 +61,14 @@ repository bake script and an available `ocloc` reporting driver version
 
 ```text
 artifact: artifacts/adls/lab256_multiphase.bin
-size:     63,120 bytes
-sha256:   b7768c1b53b195ff4cd3886ac4f9e0415d92527f089a1cbc76d2a0cb4701c4d6
+size:     60,680 bytes
+sha256:   90c7c86113f55721d37b67dc69b86d1afad096cc9ec68e94680df055c32d763f
 
 spir-v:   artifacts/adls/lab256_multiphase.spv
-sha256:   42b1b2c735db2a73a3fdab4e918d01859754f74d65080f0275002bdea068a8f3
+sha256:   43f1f81e061166b84f4ff00e4df4105bf3047f7b23576309848eebe5ce7e2666
 
 source sha256:
-4fb3cc282c274ff36caedd61e701f41c62303bcc3c7b04f87f0ee3dc6b9f0f04
+001bad745cf278b8614981688021aa7397c5d7646e2bd1d470bd93a2e6b7a031
 ```
 
 `ocloc validate` reports the binary as valid and finds exactly three kernels.
@@ -78,10 +83,10 @@ text section:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `lab256_step` | `0x0040` | 6,272 | 3 | 96 | 96 |
 | `lab256_reduce` | `0x18C0` | 1,664 | 3 | 96 | 96 |
-| `lab256_composite` | `0x1F40` | 8,192 | 4 | 96 | 96 |
+| `lab256_composite` | `0x1F40` | 8,768 | 4 | 96 | 96 |
 
 The symbol payloads within those padded text sections are 6,144, 1,536, and
-8,048 bytes respectively. Production wiring can hard-code these offsets only
+8,632 bytes respectively. Production wiring can hard-code these offsets only
 under the matching artifact hash, as the existing one-kernel path does with
 its `0x40` text offset.
 
@@ -117,17 +122,24 @@ audit. Pixel state and the RGBA frame remain GPU-resident.
 
 `lab256_composite(state, report, control, dst_rgba, dst_pitch_bytes)` dispatches
 `16 x 256` SIMD16 groups. It produces one complete premultiplied
-AABBGGRR/RGBA8 pixel per work item. It combines scientific plasma color, the
-reaction field, optional field-warped Mandelbrot, and one presentation-rate
-status dot. When Spirit supplies a physical cursor snapshot, a squared radial
-falloff applies a small tangential offset to the two shader coordinates before
-the existing flow and Mandelbrot math. It adds no additional transcendental
-operation and does not inject or mutate reaction state.
+AABBGGRR/RGBA8 pixel per work item. It combines the persistent reaction field,
+radial flare composition, and one presentation-rate status dot.
+The hot body boundary and outgoing pulse are distorted by persistent field and
+edge values. Four reciprocal-distance axes provide horizontal, vertical, and
+diagonal rays without a feedback texture. A rational core and halo complete the
+reference-inspired silhouette.
+
+When Spirit supplies a physical cursor snapshot, its normalized coordinate
+leans the flare emitter by at most `0.14` scene units, roughly 18 pixels. The
+same control snapshot enables a smooth 12-pixel reaction injector in pass 1,
+raising chemical B and suppressing chemical A around the pointer. The avatar
+remains centered, while the injected field persists through later frames and
+distorts the corona and radial pulse.
 
 Alpha is the only output path. Control dword 17 supplies a finite f32 background
 alpha clamped to `[0, 1]` (fallback `0.08`). Field concentration, reaction
-edges, and escaped fractal detail raise opacity toward one. The pointer and FPS
-dot are fully opaque. RGB is multiplied by alpha before packing, matching UI4's
+edges, core, corona, and rays raise opacity toward one. The pointer and FPS dot
+are fully opaque. RGB is multiplied by alpha before packing, matching UI4's
 `Rgba8888Premultiplied` contract rather than relying on straight-alpha blending.
 Setting background alpha to `1.0` remains available when an opaque presentation
 is wanted, but it does not select a separate shader branch or format.
@@ -149,6 +161,8 @@ three walkers, not three separately polled submissions:
 3. Validate and clamp the CPU control page before flushing it for GPU use,
    including the normalized physical-cursor coordinate in dword 5, background
    alpha in dword 17, and the rounded presentation-rate estimate in dword 18.
+   Dwords 11 through 14 provide bounded flare radius, turbulence, ray gain, and
+   pulse speed.
 4. Dispatch step with groups `16 x 256`, all SIMD16 lanes enabled.
 5. Emit `MEDIA_STATE_FLUSH`, then the existing stalling HDC/L3 producer flush
    and consumer invalidation before reduce reads state B.
@@ -179,7 +193,7 @@ memory or MMIO. The useful privilege is a narrow, trusted Shell2 service:
 - alpha changes only per-pixel coverage inside Spirit's existing premultiplied
   cursor backbuffer; it grants no additional MMIO or plane ownership;
 - the shader cannot select addresses, pitches other than the validated RGBA8
-  pitch, iteration counts above 96, or another display plane;
+  pitch, dispatch dimensions, or another display plane;
 - Spirit retains frame, cursor-plane, and SURFLIVE ownership.
 
 That boundary is substantially richer than an average one-shot shader while
@@ -209,6 +223,8 @@ gpgpu preview status
 gpgpu preview stop
 ```
 
-Pointer events map to injection coordinates. A small follow-up command may set
-only named, clamped values such as `feed`, `kill`, `mandel-scale`, and
-`mandel-iters`; raw addresses and dispatch sizes should never be user-facing.
+Physical-pointer snapshots map to both emitter and reaction-injection
+coordinates. A small follow-up command may set
+only named, clamped values such as `feed`, `kill`, `flare-radius`,
+`flare-turbulence`, `flare-ray-gain`, and `flare-pulse-speed`; raw addresses and
+dispatch sizes should never be user-facing.

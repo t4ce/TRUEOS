@@ -175,7 +175,6 @@ const fn average_us(total_ns: u64, samples: u64) -> u64 {
     }
 }
 
-#[derive(Copy, Clone)]
 struct CompositionState {
     primary: PlaneCompositionState,
     alpha: PlaneCompositionState,
@@ -183,10 +182,9 @@ struct CompositionState {
     draw3d: PlaneCompositionState,
 }
 
-#[derive(Copy, Clone)]
 struct PlaneCompositionState {
     initialized: bool,
-    windows: [Option<CompositionWindowStamp>; MAX_COMPOSITION_WINDOWS],
+    windows: Vec<CompositionWindowStamp>,
 }
 
 #[derive(Copy, Clone)]
@@ -195,27 +193,41 @@ enum CompositionTarget {
     Overlay(usize),
 }
 
-#[derive(Copy, Clone)]
 struct PlanePlan {
     target: CompositionTarget,
     changed: bool,
     /// Most recently changed window in broker/z order. Mixed buffering uses
     /// this one local winner without reconstructing other same-slot pixels.
     selected: Option<WindowId>,
-    next_windows: [Option<CompositionWindowStamp>; MAX_COMPOSITION_WINDOWS],
+    next_windows: Vec<CompositionWindowStamp>,
     damage: crate::intel::CompositionDamageRegion,
 }
 
 impl PlanePlan {
-    const fn empty(target: CompositionTarget) -> Self {
+    fn empty(target: CompositionTarget, window_capacity: usize) -> Self {
         Self {
             target,
             changed: false,
             selected: None,
-            next_windows: [None; MAX_COMPOSITION_WINDOWS],
+            next_windows: Vec::with_capacity(window_capacity),
             damage: crate::intel::CompositionDamageRegion::EMPTY,
         }
     }
+
+    const fn queue_plan(&self) -> PlaneQueuePlan {
+        PlaneQueuePlan {
+            target: self.target,
+            selected: self.selected,
+            damage: self.damage,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct PlaneQueuePlan {
+    target: CompositionTarget,
+    selected: Option<WindowId>,
+    damage: crate::intel::CompositionDamageRegion,
 }
 
 struct PendingFrame {
@@ -325,19 +337,19 @@ fn initialize() -> Runtime {
         composition: CompositionState {
             primary: PlaneCompositionState {
                 initialized: false,
-                windows: [None; MAX_COMPOSITION_WINDOWS],
+                windows: Vec::new(),
             },
             alpha: PlaneCompositionState {
                 initialized: false,
-                windows: [None; MAX_COMPOSITION_WINDOWS],
+                windows: Vec::new(),
             },
             solara: PlaneCompositionState {
                 initialized: false,
-                windows: [None; MAX_COMPOSITION_WINDOWS],
+                windows: Vec::new(),
             },
             draw3d: PlaneCompositionState {
                 initialized: false,
-                windows: [None; MAX_COMPOSITION_WINDOWS],
+                windows: Vec::new(),
             },
         },
         pending: None,
@@ -551,19 +563,22 @@ fn build_plane_plan(
     output_height: u32,
 ) -> PlanePlan {
     let plane_slot = target_plane_slot(target);
-    let mut plan = PlanePlan::empty(target);
-    let plane_windows: Vec<(usize, WindowSnapshot)> = all_windows
+    let window_capacity = all_windows
         .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, window)| window.plane.slot() == plane_slot)
-        .collect();
-    if plane_windows.is_empty() && !state.initialized {
+        .filter(|window| window.plane.slot() == plane_slot)
+        .count();
+    let mut plan = PlanePlan::empty(target, window_capacity);
+    if window_capacity == 0 && !state.initialized {
         return plan;
     }
 
     let mut composition_changed = !state.initialized;
-    for (local_slot, (global_slot, window)) in plane_windows.iter().copied().enumerate() {
+    for (global_slot, window) in all_windows
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, window)| window.plane.slot() == plane_slot)
+    {
         let placement = presentation_placement(window, views[global_slot]);
         let current = CompositionWindowStamp {
             id: window.id,
@@ -571,11 +586,10 @@ fn build_plane_plan(
             publish_serial: window.publish_serial,
             placement,
         };
-        plan.next_windows[local_slot] = Some(current);
+        plan.next_windows.push(current);
         let previous = state
             .windows
             .iter()
-            .flatten()
             .find(|previous| previous.id == current.id);
         let changed = !state.initialized || previous != Some(&current);
         composition_changed |= changed;
@@ -626,11 +640,10 @@ fn build_plane_plan(
             Some(_) => {}
         }
     }
-    for previous in state.windows.iter().flatten() {
+    for previous in &state.windows {
         if !plan
             .next_windows
             .iter()
-            .flatten()
             .any(|current| current.id == previous.id)
         {
             composition_changed = true;
@@ -693,11 +706,12 @@ fn drive_async_frame(
 
     let phase_started_ns = crate::chronos::monotonic_nanos();
     while pending.next_plane < pending.plans.len() {
-        let plan = pending.plans[pending.next_plane];
+        let plan_index = pending.next_plane;
         pending.next_plane += 1;
-        if !plan.changed {
+        if !pending.plans[plan_index].changed {
             continue;
         }
+        let plan = pending.plans[plan_index].queue_plan();
         let queued = queue_async_plane(pending, plan);
         runtime.profile.submit_steps = runtime.profile.submit_steps.saturating_add(1);
         runtime.profile.submit_ns = runtime
@@ -737,7 +751,7 @@ fn drive_async_frame(
 
 fn queue_async_plane(
     pending: &mut PendingFrame,
-    plan: PlanePlan,
+    plan: PlaneQueuePlan,
 ) -> Result<crate::intel::Ui4AsyncComposition, Ui4CompositorError> {
     let views: Vec<FrameRgbaView> = pending
         .leases
@@ -1062,8 +1076,13 @@ const fn overlay_async_reason(slot: usize) -> &'static str {
 }
 
 fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
-    for plan in pending.plans.iter().copied().filter(|plan| plan.changed) {
-        let state = match plan.target {
+    for plan_index in 0..pending.plans.len() {
+        if !pending.plans[plan_index].changed {
+            continue;
+        }
+        let target = pending.plans[plan_index].target;
+        let next_windows = core::mem::take(&mut pending.plans[plan_index].next_windows);
+        let state = match target {
             CompositionTarget::Primary => &mut runtime.composition.primary,
             CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT) => {
                 &mut runtime.composition.alpha
@@ -1077,8 +1096,8 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
             CompositionTarget::Overlay(_) => continue,
         };
         state.initialized = true;
-        state.windows = plan.next_windows;
-        let slot = target_plane_slot(plan.target);
+        state.windows = next_windows;
+        let slot = target_plane_slot(target);
         if let Some(id) = pending.direct_windows[slot] {
             if let Some(window) = pending.windows.iter().find(|window| window.id == id) {
                 let _ = acknowledge_window_frame(window.id, window.publish_serial);
@@ -1123,7 +1142,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
 }
 
 fn commit_direct_leases(runtime: &mut Runtime, pending: &mut PendingFrame) {
-    for plan in pending.plans.iter().copied().filter(|plan| plan.changed) {
+    for plan in pending.plans.iter().filter(|plan| plan.changed) {
         let slot = target_plane_slot(plan.target);
         let replacement = pending.direct_leases[slot].take();
         let previous = core::mem::replace(&mut runtime.live_direct[slot], replacement);

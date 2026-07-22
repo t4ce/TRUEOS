@@ -169,13 +169,16 @@ fn lab256_write_fixed_control(
         core::ptr::write_volatile(dwords.add(2), frame);
         let mut flags = LAB256_FLAG_WRAP;
         if pointer_xy.is_some() {
-            flags |= LAB256_FLAG_POINTER_SHADE;
+            // One proven physical-cursor snapshot now drives both halves of
+            // the interaction: an immediate flare lean in composite and a
+            // persistent Gray-Scott disturbance in the step pass.
+            flags |= LAB256_FLAG_INJECT | LAB256_FLAG_POINTER_SHADE;
         }
         if frame == 0 {
             flags |= LAB256_FLAG_RESET;
         }
         core::ptr::write_volatile(dwords.add(3), flags);
-        core::ptr::write_volatile(dwords.add(4), (frame as f32 * 0.12).to_bits());
+        core::ptr::write_volatile(dwords.add(4), (frame as f32 * 0.035).to_bits());
         let (pointer_x, pointer_y) = pointer_xy.unwrap_or((128, 128));
         core::ptr::write_volatile(
             dwords.add(5),
