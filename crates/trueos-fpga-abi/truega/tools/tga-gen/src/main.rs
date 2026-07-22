@@ -115,6 +115,14 @@ fn validate_catalogue() -> Result<(), String> {
                 spec.id, spec.binding, expected_shape.0, expected_shape.1
             ));
         }
+        if !spec.aot_contract.starts_with("truega-aot-v1|") {
+            return Err(format!("slot {} has an unversioned AOT contract", spec.id));
+        }
+        for prior in &FUNCTIONS[..index] {
+            if prior.aot_contract == spec.aot_contract {
+                return Err(format!("slots {} and {} share one AOT contract", prior.id, spec.id));
+            }
+        }
     }
     Ok(())
 }
@@ -573,7 +581,9 @@ fn emit_rust_interface(
     rust.push_str(
         "// This is ordinary host Rust metadata. It contains no HDL/compiler runtime.\n\n",
     );
-    rust.push_str("use super::{FirmwareManifest, FunctionDescriptor, FunctionId};\n\n");
+    rust.push_str(
+        "use super::{\n    AotCodecError, AotCompletionKind, AotFirmwareCapability, AotFixedShape, AotLane,\n    AotLaneOwnership, AotOpDescriptor, AotScalarFormat, AotStateOwnership,\n    AotTensorDescriptor, AotTransportKind, FirmwareManifest, FunctionDescriptor, FunctionId,\n    TruegaCustomOp,\n};\n\n",
+    );
     for spec in FUNCTIONS {
         writeln!(rust, "pub const {}: FunctionId = FunctionId::SLOT_{};", spec.rust_name, spec.id)
             .unwrap();
@@ -623,15 +633,16 @@ fn emit_rust_interface(
         writeln!(rust, "pub mod {} {{", spec.rust_module).unwrap();
         match spec.binding {
             BindingKind::NoArgsU32 | BindingKind::BinaryU32 => {
-                rust.push_str("    use super::{FunctionId, result_u32};\n\n");
+                rust.push_str("    use super::{AotCodecError, AotCompletionKind, AotFirmwareCapability, AotFixedShape, AotLane, AotLaneOwnership, AotOpDescriptor, AotScalarFormat, AotStateOwnership, AotTensorDescriptor, AotTransportKind, FunctionId, TruegaCustomOp, result_u32};\n\n");
             }
             BindingKind::Lfm25Q8RowBlock => {
-                rust.push_str("    use super::FunctionId;\n\n");
+                rust.push_str("    use super::{AotCodecError, AotCompletionKind, AotFirmwareCapability, AotFixedShape, AotLane, AotLaneOwnership, AotOpDescriptor, AotScalarFormat, AotStateOwnership, AotTensorDescriptor, AotTransportKind, FunctionId, TruegaCustomOp};\n\n");
             }
         }
         writeln!(rust, "    pub const ID: FunctionId = super::{};", spec.rust_name).unwrap();
         writeln!(rust, "    pub const INPUT_BYTES: usize = {};", spec.input_bytes).unwrap();
         writeln!(rust, "    pub const OUTPUT_BYTES: usize = {};", spec.output_bytes).unwrap();
+        emit_aot_function_contract(&mut rust, spec);
         match spec.binding {
             BindingKind::NoArgsU32 => {
                 rust.push_str("    pub const fn encode() -> [u8; 0] {\n        []\n    }\n");
@@ -680,7 +691,9 @@ fn emit_rust_interface(
                 rust.push_str("        let mut bytes = [0; INPUT_BYTES];\n");
                 rust.push_str("        let control = (u32::from(wide) << 2) | (1 << 4) | (u32::from(block_index) << 8);\n");
                 rust.push_str("        bytes[..4].copy_from_slice(&control.to_le_bytes());\n");
-                rust.push_str("        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n");
+                rust.push_str(
+                    "        bytes[4..4 + Q8_0_BLOCK_BYTES].copy_from_slice(activation);\n",
+                );
                 rust.push_str("        bytes\n");
                 rust.push_str("    }\n\n");
                 rust.push_str("    pub fn encode_cached_pair(first: bool, last: bool, wide: bool, block_index: u8, weight0: &[u8; Q8_0_BLOCK_BYTES], weight1: &[u8; Q8_0_BLOCK_BYTES]) -> [u8; INPUT_BYTES] {\n");
@@ -731,6 +744,7 @@ fn emit_rust_interface(
         }
         rust.push_str("}\n\n");
     }
+    emit_lfm25_ffn_aot_contract(&mut rust);
     rust.push_str("pub use lfm25_ffn_step as lfm25_q8_row_block;\n\n");
     rust.push_str("pub fn binary_u32_args(a: u32, b: u32) -> [u8; 8] {\n");
     rust.push_str("    add_u32::encode(a, b)\n");
@@ -739,6 +753,84 @@ fn emit_rust_interface(
     rust.push_str("    Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))\n");
     rust.push_str("}\n");
     rust
+}
+
+fn emit_sha256_array(rust: &mut String, declaration: &str, bytes: [u8; 32], indent: &str) {
+    rust.push_str(declaration);
+    rust.push_str("[\n");
+    rust.push_str(indent);
+    for (index, byte) in bytes.iter().enumerate() {
+        write!(rust, "0x{byte:02x},").unwrap();
+        if index % 16 == 15 {
+            rust.push('\n');
+            if index + 1 != bytes.len() {
+                rust.push_str(indent);
+            }
+        } else {
+            rust.push(' ');
+        }
+    }
+    rust.push_str("    ];\n");
+}
+
+fn emit_aot_function_contract(rust: &mut String, spec: FunctionSpec) {
+    let contract_hash: [u8; 32] = Sha256::digest(spec.aot_contract.as_bytes()).into();
+    emit_sha256_array(
+        rust,
+        "    pub const CONTRACT_SHA256: [u8; 32] = ",
+        contract_hash,
+        "        ",
+    );
+    match spec.binding {
+        BindingKind::NoArgsU32 => {
+            rust.push_str("    pub const AOT_INPUTS: &[AotTensorDescriptor] = &[];\n");
+            rust.push_str("    pub const AOT_OUTPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"reply\", scalar: AotScalarFormat::U32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n    ];\n");
+        }
+        BindingKind::BinaryU32 => {
+            rust.push_str("    pub const AOT_INPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"a\", scalar: AotScalarFormat::U32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n        AotTensorDescriptor { name: \"b\", scalar: AotScalarFormat::U32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n    ];\n");
+            rust.push_str("    pub const AOT_OUTPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"sum\", scalar: AotScalarFormat::U32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n    ];\n");
+        }
+        BindingKind::Lfm25Q8RowBlock => {
+            rust.push_str("    pub const AOT_INPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"control\", scalar: AotScalarFormat::U32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n        AotTensorDescriptor { name: \"activation\", scalar: AotScalarFormat::GgmlQ8_0, shape: AotFixedShape::vector(32), encoded_bytes: 34 },\n        AotTensorDescriptor { name: \"weight\", scalar: AotScalarFormat::GgmlQ8_0, shape: AotFixedShape::vector(32), encoded_bytes: 34 },\n    ];\n");
+            rust.push_str("    pub const AOT_OUTPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"dot\", scalar: AotScalarFormat::I32, shape: AotFixedShape::SCALAR, encoded_bytes: 4 },\n        AotTensorDescriptor { name: \"term_q30\", scalar: AotScalarFormat::I64Q30, shape: AotFixedShape::SCALAR, encoded_bytes: 8 },\n        AotTensorDescriptor { name: \"row_q30\", scalar: AotScalarFormat::I64Q30, shape: AotFixedShape::SCALAR, encoded_bytes: 8 },\n    ];\n");
+        }
+    }
+    writeln!(
+        rust,
+        "    pub const AOT_DESCRIPTOR: AotOpDescriptor = AotOpDescriptor {{\n        name: \"{}\",\n        contract_sha256: CONTRACT_SHA256,\n        transport: AotTransportKind::InlineBar0WorkPackage,\n        inputs: AOT_INPUTS,\n        outputs: AOT_OUTPUTS,\n        firmware: AotFirmwareCapability::FunctionSlot {{ function: ID, symbol_hash: 0x{:016x} }},\n        lane: AotLane::Bar0WorkPackage,\n        lane_ownership: AotLaneOwnership::SingleWorkerExclusive,\n        state_ownership: AotStateOwnership::HostRequestFpgaCompletion,\n        completion: AotCompletionKind::MsiWorkerCallback,\n    }};",
+        spec.rust_module,
+        fnv1a64(spec.signature.as_bytes()),
+    )
+    .unwrap();
+    rust.push_str("    pub enum AotOp {}\n");
+    match spec.binding {
+        BindingKind::NoArgsU32 => {
+            rust.push_str("    impl TruegaCustomOp for AotOp {\n        type Input = ();\n        type Output = u32;\n        const DESCRIPTOR: AotOpDescriptor = AOT_DESCRIPTOR;\n        fn encode(_: &Self::Input, _: &mut [u8]) -> Result<usize, AotCodecError> { Ok(0) }\n        fn decode(source: &[u8]) -> Result<Self::Output, AotCodecError> { decode(source).ok_or(AotCodecError::InvalidEncoding) }\n    }\n");
+        }
+        BindingKind::BinaryU32 => {
+            rust.push_str("    impl TruegaCustomOp for AotOp {\n        type Input = [u32; 2];\n        type Output = u32;\n        const DESCRIPTOR: AotOpDescriptor = AOT_DESCRIPTOR;\n        fn encode(input: &Self::Input, destination: &mut [u8]) -> Result<usize, AotCodecError> {\n            let destination = destination.get_mut(..INPUT_BYTES).ok_or(AotCodecError::BufferTooSmall)?;\n            destination.copy_from_slice(&encode(input[0], input[1]));\n            Ok(INPUT_BYTES)\n        }\n        fn decode(source: &[u8]) -> Result<Self::Output, AotCodecError> { decode(source).ok_or(AotCodecError::InvalidEncoding) }\n    }\n");
+        }
+        BindingKind::Lfm25Q8RowBlock => {
+            rust.push_str("    impl TruegaCustomOp for AotOp {\n        type Input = [u8; INPUT_BYTES];\n        type Output = Q8RowBlockResult;\n        const DESCRIPTOR: AotOpDescriptor = AOT_DESCRIPTOR;\n        fn encode(input: &Self::Input, destination: &mut [u8]) -> Result<usize, AotCodecError> {\n            let destination = destination.get_mut(..INPUT_BYTES).ok_or(AotCodecError::BufferTooSmall)?;\n            destination.copy_from_slice(input);\n            Ok(INPUT_BYTES)\n        }\n        fn decode(source: &[u8]) -> Result<Self::Output, AotCodecError> { decode(source).ok_or(AotCodecError::InvalidEncoding) }\n    }\n");
+        }
+    }
+}
+
+fn emit_lfm25_ffn_aot_contract(rust: &mut String) {
+    let contract_hash: [u8; 32] =
+        Sha256::digest(firmware::LFM25_FFN_AOT_CONTRACT.as_bytes()).into();
+    rust.push_str("pub mod lfm25_ffn {\n    use super::{AotCodecError, AotCompletionKind, AotFirmwareCapability, AotFixedShape, AotLane, AotLaneOwnership, AotOpDescriptor, AotScalarFormat, AotStateOwnership, AotTensorDescriptor, AotTransportKind, TruegaCustomOp};\n\n");
+    rust.push_str("    pub const MODEL_LAYERS: u16 = 16;\n    pub const ACTIVATION_BYTES: usize = 34 * 32;\n    pub const ENCODED_INPUT_BYTES: usize = 2 + ACTIVATION_BYTES;\n    pub const OUTPUT_ELEMENTS: usize = 1024;\n    pub const OUTPUT_BYTES: usize = OUTPUT_ELEMENTS * 8;\n    #[derive(Clone, Debug, Eq, PartialEq)]\n    pub struct Input {\n        pub layer: u16,\n        pub activation: [u8; ACTIVATION_BYTES],\n    }\n");
+    emit_sha256_array(
+        rust,
+        "    pub const CONTRACT_SHA256: [u8; 32] = ",
+        contract_hash,
+        "        ",
+    );
+    rust.push_str("    pub const AOT_INPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"layer\", scalar: AotScalarFormat::U16, shape: AotFixedShape::SCALAR, encoded_bytes: 2 },\n        AotTensorDescriptor { name: \"activation\", scalar: AotScalarFormat::GgmlQ8_0, shape: AotFixedShape::vector(1024), encoded_bytes: ACTIVATION_BYTES as u32 },\n    ];\n");
+    rust.push_str("    pub const AOT_OUTPUTS: &[AotTensorDescriptor] = &[\n        AotTensorDescriptor { name: \"down\", scalar: AotScalarFormat::I64Q30, shape: AotFixedShape::vector(1024), encoded_bytes: OUTPUT_BYTES as u32 },\n    ];\n");
+    rust.push_str("    pub const AOT_DESCRIPTOR: AotOpDescriptor = AotOpDescriptor {\n        name: \"lfm25.ffn\",\n        contract_sha256: CONTRACT_SHA256,\n        transport: AotTransportKind::FixedBar2RowStream,\n        inputs: AOT_INPUTS,\n        outputs: AOT_OUTPUTS,\n        firmware: AotFirmwareCapability::RegisterMagic { bar: 0, offset: super::super::BAR0_LFM25_STREAM_CAPABILITY_OFFSET as u16, value: super::super::LFM25_STREAM_CAPABILITY_MAGIC },\n        lane: AotLane::Bar2Lfm25RowStream,\n        lane_ownership: AotLaneOwnership::SingleWorkerExclusive,\n        state_ownership: AotStateOwnership::HostRequestFpgaCompletion,\n        completion: AotCompletionKind::MsiWorkerCallback,\n    };\n");
+    rust.push_str("    pub enum AotOp {}\n    impl TruegaCustomOp for AotOp {\n        type Input = Input;\n        type Output = [i64; OUTPUT_ELEMENTS];\n        const DESCRIPTOR: AotOpDescriptor = AOT_DESCRIPTOR;\n        fn encode(input: &Self::Input, destination: &mut [u8]) -> Result<usize, AotCodecError> {\n            if input.layer >= MODEL_LAYERS { return Err(AotCodecError::InvalidEncoding); }\n            let destination = destination.get_mut(..ENCODED_INPUT_BYTES).ok_or(AotCodecError::BufferTooSmall)?;\n            destination[..2].copy_from_slice(&input.layer.to_le_bytes());\n            destination[2..].copy_from_slice(&input.activation);\n            Ok(ENCODED_INPUT_BYTES)\n        }\n        fn decode(source: &[u8]) -> Result<Self::Output, AotCodecError> {\n            if source.len() < OUTPUT_BYTES { return Err(AotCodecError::InvalidEncoding); }\n            let mut output = [0i64; OUTPUT_ELEMENTS];\n            let mut index = 0;\n            while index < OUTPUT_ELEMENTS {\n                let start = index * 8;\n                output[index] = i64::from_le_bytes(source[start..start + 8].try_into().map_err(|_| AotCodecError::InvalidEncoding)?);\n                index += 1;\n            }\n            Ok(output)\n        }\n    }\n}\n\n");
 }
 
 fn emit_rust_byte_array(rust: &mut String, declaration: &str, bytes: &[u8]) {
@@ -878,6 +970,13 @@ mod tests {
         assert!(interface.contains("pub fn encode_cached_pair"));
         assert!(interface.contains("pub const GOLDEN_ACTIVATION"));
         assert!(interface.contains("pub const GOLDEN_GATE_ROW0_ACTIVATIONS"));
+        assert!(interface.contains("pub const AOT_DESCRIPTOR: AotOpDescriptor"));
+        assert!(interface.contains("impl TruegaCustomOp for AotOp"));
+        assert!(interface.contains("pub mod lfm25_ffn"));
+        assert!(interface.contains("name: \"lfm25.ffn\""));
+        assert!(interface.contains("pub const MODEL_LAYERS: u16 = 16"));
+        assert!(interface.contains("AotTransportKind::FixedBar2RowStream"));
+        assert!(!interface.contains("name: \"lfm25.layer0.ffn\""));
         assert_eq!(FUNCTIONS.len(), 3);
     }
 
@@ -915,9 +1014,7 @@ mod tests {
         assert!(rtl.contains("module truega_functions("));
         assert!(rtl.contains("input  wire [767:0] input_data"));
         assert!(rtl.contains("module truega_q8_0_dot32"));
-        assert!(rtl.contains(
-            "{{5{product_reg[15]}}, product_reg}"
-        ));
+        assert!(rtl.contains("{{5{product_reg[15]}}, product_reg}"));
         assert!(rtl.contains("accumulator_next = accumulator + registered_product_extended"));
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
@@ -985,9 +1082,7 @@ mod tests {
     #[test]
     fn bar_payloads_are_swapped_at_the_gowin_tlp_boundary() {
         assert!(TOP_VHDL.contains("payload_out := byte_swap32(payload);"));
-        assert!(TOP_VHDL.contains(
-            "payload1_out := byte_swap32(words(payload_idx + 1));"
-        ));
+        assert!(TOP_VHDL.contains("payload1_out := byte_swap32(words(payload_idx + 1));"));
         assert!(TOP_VHDL.contains("tx_pending_data(159 downto 128) <= byte_swap32(data_in);"));
     }
 
@@ -1007,7 +1102,9 @@ mod tests {
     #[test]
     fn receive_snapshot_is_not_clock_enabled_by_transaction_state() {
         let marker = "Register the hard-IP receive pins on every TLP clock.";
-        let start = TOP_VHDL.find(marker).expect("missing unconditional RX snapshot");
+        let start = TOP_VHDL
+            .find(marker)
+            .expect("missing unconditional RX snapshot");
         let finish = TOP_VHDL[start..]
             .find("end process;")
             .map(|offset| start + offset)

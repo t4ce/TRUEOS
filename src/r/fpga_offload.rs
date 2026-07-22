@@ -1,8 +1,8 @@
 //! Ahead-of-time FPGA function calls over the TRUEGA BAR window.
 //!
-//! The FPGA contains three compiled circuits. This service is the only software worker:
-//! it serializes calls through one fixed work package, observes the completion flag, and
-//! hands the result to either a Rust `Future` or a registered completion callback. There
+//! The FPGA contains fixed compiled circuits. This service is the only software worker:
+//! it serializes inline BAR0 packages and fixed BAR2 row operations, sleeps for MSI, and
+//! hands each result to either a Rust `Future` or a registered completion callback. There
 //! is no FPGA processor, device-side queue parser, TLB, or runtime HDL toolchain.
 
 extern crate alloc;
@@ -39,6 +39,12 @@ static WORKER_STARTED: AtomicBool = AtomicBool::new(false);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static SERVICE: Mutex<ServiceState> = Mutex::new(ServiceState::new());
 static LFM25_FFN_STEP_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
+// Serializes complete LFM25 stream sessions so one caller owns the BAR2
+// activation/weight buffers from the first load through the final row. The
+// service worker separately owns TGA_TRANSPORT_LANE for every actual hardware
+// operation, including each row in this session.
+static LFM25_STREAM_SESSION_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> =
+    AsyncMutex::new(());
 static TGA_TRANSPORT_LANE: AsyncMutex<crate::wait::EmbassySpinRawMutex, ()> = AsyncMutex::new(());
 
 pub type CompletionCallback = Box<dyn FnOnce(CallResult) + Send + 'static>;
@@ -115,6 +121,29 @@ struct Request {
     output_capacity: usize,
 }
 
+type Lfm25StreamCallResult = Result<crate::tga::Lfm25StreamResult, Error>;
+
+struct Lfm25StreamRequest {
+    mode: u32,
+    row: u32,
+    connection_generation: u32,
+    reply: Arc<Signal<crate::wait::EmbassySpinRawMutex, Lfm25StreamCallResult>>,
+}
+
+/// One operation accepted by the sole FPGA transport worker. The variants
+/// differ only in how their fixed circuit is started, inspected, and decoded;
+/// interrupt arming, MSI sleeping, timeout recovery, acknowledgement, and
+/// result delivery are owned by the same worker path.
+enum TransportJob {
+    Inline(CallId),
+    Lfm25Stream(Lfm25StreamRequest),
+}
+
+enum ActiveTransportJob {
+    Inline(Request),
+    Lfm25Stream(Lfm25StreamRequest),
+}
+
 enum Delivery {
     Future {
         waiter: Option<Waker>,
@@ -137,7 +166,7 @@ struct CallRecord {
 }
 
 struct ServiceState {
-    queue: VecDeque<CallId>,
+    queue: VecDeque<TransportJob>,
     calls: Vec<CallRecord>,
     submitted: u64,
     completed: u64,
@@ -404,12 +433,13 @@ pub async fn acquire_lfm25_ffn_step_lane()
     LFM25_FFN_STEP_LANE.lock().await
 }
 
-/// Exclude the generic single-package worker while a BAR2 row stream owns the
-/// shared MSI status bridge. Queued heartbeats remain pending and resume after
-/// the complete FFN transaction releases this guard.
+/// Exclusively owns BAR2's stateful activation and weight buffers across a
+/// complete streamed FFN transaction. Every row is still submitted to the
+/// generic worker, which owns the shared MSI bridge only while that hardware
+/// operation is in flight.
 pub async fn acquire_lfm25_stream_transport()
 -> embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()> {
-    TGA_TRANSPORT_LANE.lock().await
+    LFM25_STREAM_SESSION_LANE.lock().await
 }
 
 pub fn lfm25_row_stream_available() -> bool {
@@ -417,7 +447,7 @@ pub fn lfm25_row_stream_available() -> bool {
 }
 
 pub fn lfm25_stream_completion_count() -> Result<u32, Error> {
-    crate::tga::lfm25_stream_completion_count().map_err(map_stream_transport_error)
+    crate::tga::lfm25_stream_completion_count().map_err(map_transport_error)
 }
 
 pub fn lfm25_stream_load_activation(
@@ -430,7 +460,7 @@ pub fn lfm25_stream_load_activation(
         trueos_fpga_abi::BAR2_LFM25_STREAM_ACTIVATION_OFFSET,
         blocks,
     )
-    .map_err(map_stream_transport_error)
+    .map_err(map_transport_error)
 }
 
 pub async fn lfm25_stream_gate_up_row(
@@ -446,12 +476,12 @@ pub async fn lfm25_stream_gate_up_row(
         trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET,
         gate_weights,
     )
-    .map_err(map_stream_transport_error)?;
+    .map_err(map_transport_error)?;
     crate::tga::lfm25_stream_write_block_bytes(
         trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT1_OFFSET,
         up_weights,
     )
-    .map_err(map_stream_transport_error)?;
+    .map_err(map_transport_error)?;
     execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU, row).await
 }
 
@@ -463,7 +493,7 @@ pub async fn lfm25_stream_down_row(row: u32, weights: &[u8]) -> Result<i64, Erro
         trueos_fpga_abi::BAR2_LFM25_STREAM_WEIGHT0_OFFSET,
         weights,
     )
-    .map_err(map_stream_transport_error)?;
+    .map_err(map_transport_error)?;
     let result = execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_DOWN, row).await?;
     Ok(result.result_q30)
 }
@@ -472,52 +502,66 @@ async fn execute_lfm25_stream_row(
     mode: u32,
     row: u32,
 ) -> Result<crate::tga::Lfm25StreamResult, Error> {
-    let interrupt_sequence =
-        crate::tga::arm_offload_interrupt().map_err(map_stream_transport_error)?;
-    crate::tga::start_lfm25_stream_row(mode, row).map_err(map_stream_transport_error)?;
-
-    let terminal =
-        with_timeout(EmbassyDuration::from_millis(COMPLETION_INTERRUPT_TIMEOUT_MS), async {
-            let mut sequence = interrupt_sequence;
-            loop {
-                sequence = crate::tga::wait_for_completion_interrupt(sequence).await;
-                record_interrupt_wake();
-                match crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)? {
-                    trueos_fpga_abi::Lfm25StreamState::Complete
-                    | trueos_fpga_abi::Lfm25StreamState::Failed => return Ok(()),
-                    trueos_fpga_abi::Lfm25StreamState::Idle
-                    | trueos_fpga_abi::Lfm25StreamState::Busy => {}
-                }
-            }
-        })
-        .await;
-
-    match terminal {
-        Ok(result) => result?,
-        Err(_) => match crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)? {
-            trueos_fpga_abi::Lfm25StreamState::Complete
-            | trueos_fpga_abi::Lfm25StreamState::Failed => record_timeout_recovery(),
-            trueos_fpga_abi::Lfm25StreamState::Idle | trueos_fpga_abi::Lfm25StreamState::Busy => {
-                return Err(Error::Protocol);
-            }
-        },
+    if !matches!(
+        mode,
+        trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU | trueos_fpga_abi::LFM25_STREAM_MODE_DOWN
+    ) {
+        return Err(Error::Protocol);
     }
 
-    let state = crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)?;
-    let result = crate::tga::read_lfm25_stream_result().map_err(map_stream_transport_error)?;
-    let _ = crate::tga::ack_offload_interrupt();
-    match state {
-        trueos_fpga_abi::Lfm25StreamState::Complete if result.error_code == 0 => Ok(result),
-        trueos_fpga_abi::Lfm25StreamState::Failed => Err(Error::Device(result.error_code as i32)),
-        _ => Err(Error::Protocol),
+    let reply = Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, Lfm25StreamCallResult>::new());
+    let request = Lfm25StreamRequest {
+        mode,
+        row,
+        // BAR2 contents belong to this exact endpoint generation. Never carry
+        // a queued row across SRAM reprogramming/reconnect into a fresh device.
+        connection_generation: crate::tga::connection_generation(),
+        reply: Arc::clone(&reply),
+    };
+    {
+        let mut service = SERVICE.lock();
+        if service.queue.len() >= MAX_ACTIVE_CALLS {
+            return Err(Error::QueueFull);
+        }
+        service.queue.push_back(TransportJob::Lfm25Stream(request));
     }
+    WORK_AVAILABLE.signal(());
+    reply.wait().await
 }
 
-fn map_stream_transport_error(error: crate::tga::OffloadTransportError) -> Error {
+fn map_transport_error(error: crate::tga::OffloadTransportError) -> Error {
     match error {
         crate::tga::OffloadTransportError::Offline => Error::DeviceLost,
-        crate::tga::OffloadTransportError::InvalidPackage
-        | crate::tga::OffloadTransportError::WriteVerification { .. } => Error::Protocol,
+        crate::tga::OffloadTransportError::InvalidPackage => Error::Protocol,
+        crate::tga::OffloadTransportError::WriteVerification {
+            word,
+            observed,
+            expected,
+            rx_captures,
+            rx_capture_delta,
+            decoded_writes,
+            decoded_write_delta,
+            word30_writes,
+            word30_write_delta,
+            word30_last_payload,
+            word30_storage,
+            rx_fifo_state,
+            rx_errors,
+        } => Error::TransportWriteVerification {
+            word,
+            observed,
+            expected,
+            rx_captures,
+            rx_capture_delta,
+            decoded_writes,
+            decoded_write_delta,
+            word30_writes,
+            word30_write_delta,
+            word30_last_payload,
+            word30_storage,
+            rx_fifo_state,
+            rx_errors,
+        },
     }
 }
 
@@ -599,23 +643,30 @@ fn enqueue(
         delivery,
         result: None,
     });
-    service.queue.push_back(call_id);
+    service.queue.push_back(TransportJob::Inline(call_id));
     service.submitted = service.submitted.saturating_add(1);
     drop(service);
     WORK_AVAILABLE.signal(());
     Ok(call_id)
 }
 
-fn take_next_request() -> Option<Request> {
+fn take_next_transport_job() -> Option<ActiveTransportJob> {
     let mut service = SERVICE.lock();
-    while let Some(call_id) = service.queue.pop_front() {
-        if let Some(record) = service
-            .calls
-            .iter_mut()
-            .find(|record| record.request.call_id == call_id)
-        {
-            record.state = CallState::Inflight;
-            return Some(record.request);
+    while let Some(job) = service.queue.pop_front() {
+        match job {
+            TransportJob::Inline(call_id) => {
+                if let Some(record) = service
+                    .calls
+                    .iter_mut()
+                    .find(|record| record.request.call_id == call_id)
+                {
+                    record.state = CallState::Inflight;
+                    return Some(ActiveTransportJob::Inline(record.request));
+                }
+            }
+            TransportJob::Lfm25Stream(request) => {
+                return Some(ActiveTransportJob::Lfm25Stream(request));
+            }
         }
     }
     None
@@ -708,124 +759,160 @@ fn decode_completion(request: Request, package: WorkPackage) -> CallResult {
     }
 }
 
+impl ActiveTransportJob {
+    fn validate_connection_generation(&self) -> Result<(), Error> {
+        match self.connection_generation() {
+            Some(generation)
+                if !crate::tga::is_online()
+                    || crate::tga::connection_generation() != generation =>
+            {
+                Err(Error::DeviceLost)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn connection_generation(&self) -> Option<u32> {
+        match self {
+            Self::Inline(_) => None,
+            Self::Lfm25Stream(request) => Some(request.connection_generation),
+        }
+    }
+
+    fn start(&self) -> Result<(), Error> {
+        self.validate_connection_generation()?;
+        match self {
+            Self::Inline(request) => {
+                let package = package_for(*request);
+                crate::tga::submit_offload_work_package(&package).map_err(map_transport_error)
+            }
+            Self::Lfm25Stream(request) => {
+                crate::tga::start_lfm25_stream_row(request.mode, request.row)
+                    .map_err(map_transport_error)
+            }
+        }
+    }
+
+    fn is_terminal(&self) -> Result<bool, Error> {
+        self.validate_connection_generation()?;
+        match self {
+            Self::Inline(_) => crate::tga::offload_work_state()
+                .map(|state| matches!(state, WorkState::Complete | WorkState::Failed))
+                .map_err(map_transport_error),
+            Self::Lfm25Stream(_) => crate::tga::lfm25_stream_state()
+                .map(|state| {
+                    matches!(
+                        state,
+                        trueos_fpga_abi::Lfm25StreamState::Complete
+                            | trueos_fpga_abi::Lfm25StreamState::Failed
+                    )
+                })
+                .map_err(map_transport_error),
+        }
+    }
+
+    fn deliver_error(self, error: Error) {
+        match self {
+            Self::Inline(request) => finish_call(request.call_id, Err(error)),
+            Self::Lfm25Stream(request) => request.reply.signal(Err(error)),
+        }
+    }
+
+    fn retire_and_deliver(self, terminal: Result<(), Error>) {
+        let terminal_reached = terminal.is_ok();
+        match self {
+            Self::Inline(request) => {
+                let result = terminal.and_then(|()| {
+                    crate::tga::read_offload_work_package()
+                        .map_err(map_transport_error)
+                        .and_then(|package| decode_completion(request, package))
+                });
+                // A terminal result is acknowledged after all result fields
+                // have been consumed, even if decoding rejected their ABI.
+                if terminal_reached {
+                    let _ = crate::tga::ack_offload_interrupt();
+                }
+                finish_call(request.call_id, result);
+            }
+            Self::Lfm25Stream(request) => {
+                let result = terminal.and_then(|()| {
+                    if !crate::tga::is_online()
+                        || crate::tga::connection_generation() != request.connection_generation
+                    {
+                        return Err(Error::DeviceLost);
+                    }
+                    let state = crate::tga::lfm25_stream_state().map_err(map_transport_error)?;
+                    let result =
+                        crate::tga::read_lfm25_stream_result().map_err(map_transport_error)?;
+                    match state {
+                        trueos_fpga_abi::Lfm25StreamState::Complete if result.error_code == 0 => {
+                            Ok(result)
+                        }
+                        trueos_fpga_abi::Lfm25StreamState::Failed => {
+                            Err(Error::Device(result.error_code as i32))
+                        }
+                        _ => Err(Error::Protocol),
+                    }
+                });
+                if terminal_reached {
+                    let _ = crate::tga::ack_offload_interrupt();
+                }
+                request.reply.signal(result);
+            }
+        }
+    }
+}
+
 #[embassy_executor::task]
 pub async fn fpga_offload_service_task() {
     if WORKER_STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     crate::log!(
-        "fpga-offload: single worker started functions=3 transport=tga-bar completion=msi-worker-wake package_bytes={}\n",
+        "fpga-offload: single worker started functions=3 transport=tga-bar0+bar2 completion=msi-worker-wake package_bytes={}\n",
         core::mem::size_of::<WorkPackage>()
     );
 
     loop {
-        let Some(request) = take_next_request() else {
+        let Some(job) = take_next_transport_job() else {
             WORK_AVAILABLE.wait().await;
             continue;
         };
 
-        while !crate::tga::is_online() {
-            Timer::after(EmbassyDuration::from_millis(DEVICE_RETRY_MS)).await;
+        if let Some(generation) = job.connection_generation() {
+            if !crate::tga::is_online() || crate::tga::connection_generation() != generation {
+                job.deliver_error(Error::DeviceLost);
+                continue;
+            }
+        } else {
+            while !crate::tga::is_online() {
+                Timer::after(EmbassyDuration::from_millis(DEVICE_RETRY_MS)).await;
+            }
         }
 
-        // BAR0 work packages and the BAR2 row streamer share one physical MSI
-        // status bridge. A streamed FFN holds this lane across all rows; normal
-        // calls take it only for their single in-flight package.
+        // Both fixed transports share one physical completion bridge. Only this
+        // worker takes the hardware lane, so exactly one operation can be armed,
+        // started, retired, acknowledged, and delivered at a time.
         let _transport_lane = TGA_TRANSPORT_LANE.lock().await;
+
+        if let Some(generation) = job.connection_generation()
+            && (!crate::tga::is_online() || crate::tga::connection_generation() != generation)
+        {
+            job.deliver_error(Error::DeviceLost);
+            continue;
+        }
 
         let interrupt_sequence = match crate::tga::arm_offload_interrupt() {
             Ok(sequence) => sequence,
-            Err(crate::tga::OffloadTransportError::Offline) => {
-                finish_call(request.call_id, Err(Error::DeviceLost));
-                continue;
-            }
-            Err(crate::tga::OffloadTransportError::InvalidPackage) => {
-                finish_call(request.call_id, Err(Error::Protocol));
-                continue;
-            }
-            Err(crate::tga::OffloadTransportError::WriteVerification {
-                word,
-                observed,
-                expected,
-                rx_captures,
-                rx_capture_delta,
-                decoded_writes,
-                decoded_write_delta,
-                word30_writes,
-                word30_write_delta,
-                word30_last_payload,
-                word30_storage,
-                rx_fifo_state,
-                rx_errors,
-            }) => {
-                finish_call(
-                    request.call_id,
-                    Err(Error::TransportWriteVerification {
-                        word,
-                        observed,
-                        expected,
-                        rx_captures,
-                        rx_capture_delta,
-                        decoded_writes,
-                        decoded_write_delta,
-                        word30_writes,
-                        word30_write_delta,
-                        word30_last_payload,
-                        word30_storage,
-                        rx_fifo_state,
-                        rx_errors,
-                    }),
-                );
+            Err(error) => {
+                job.deliver_error(map_transport_error(error));
                 continue;
             }
         };
 
-        let package = package_for(request);
-        match crate::tga::submit_offload_work_package(&package) {
-            Ok(()) => {}
-            Err(crate::tga::OffloadTransportError::Offline) => {
-                finish_call(request.call_id, Err(Error::DeviceLost));
-                continue;
-            }
-            Err(crate::tga::OffloadTransportError::InvalidPackage) => {
-                finish_call(request.call_id, Err(Error::Protocol));
-                continue;
-            }
-            Err(crate::tga::OffloadTransportError::WriteVerification {
-                word,
-                observed,
-                expected,
-                rx_captures,
-                rx_capture_delta,
-                decoded_writes,
-                decoded_write_delta,
-                word30_writes,
-                word30_write_delta,
-                word30_last_payload,
-                word30_storage,
-                rx_fifo_state,
-                rx_errors,
-            }) => {
-                finish_call(
-                    request.call_id,
-                    Err(Error::TransportWriteVerification {
-                        word,
-                        observed,
-                        expected,
-                        rx_captures,
-                        rx_capture_delta,
-                        decoded_writes,
-                        decoded_write_delta,
-                        word30_writes,
-                        word30_write_delta,
-                        word30_last_payload,
-                        word30_storage,
-                        rx_fifo_state,
-                        rx_errors,
-                    }),
-                );
-                continue;
-            }
+        if let Err(error) = job.start() {
+            job.deliver_error(error);
+            continue;
         }
 
         let interrupt_wait =
@@ -834,49 +921,13 @@ pub async fn fpga_offload_service_task() {
                 loop {
                     sequence = crate::tga::wait_for_completion_interrupt(sequence).await;
                     record_interrupt_wake();
-                    match crate::tga::offload_work_state() {
-                        Ok(WorkState::Complete | WorkState::Failed) => return Ok(()),
-                        Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
+                    match job.is_terminal() {
+                        Ok(true) => return Ok(()),
+                        Ok(false) => {
                             // A stale or unrelated edge cannot complete the call. Re-arm
                             // the sequence wait without re-polling the BAR.
                         }
-                        Err(crate::tga::OffloadTransportError::Offline) => {
-                            return Err(Error::DeviceLost);
-                        }
-                        Err(crate::tga::OffloadTransportError::InvalidPackage) => {
-                            return Err(Error::Protocol);
-                        }
-                        Err(crate::tga::OffloadTransportError::WriteVerification {
-                            word,
-                            observed,
-                            expected,
-                            rx_captures,
-                            rx_capture_delta,
-                            decoded_writes,
-                            decoded_write_delta,
-                            word30_writes,
-                            word30_write_delta,
-                            word30_last_payload,
-                            word30_storage,
-                            rx_fifo_state,
-                            rx_errors,
-                        }) => {
-                            return Err(Error::TransportWriteVerification {
-                                word,
-                                observed,
-                                expected,
-                                rx_captures,
-                                rx_capture_delta,
-                                decoded_writes,
-                                decoded_write_delta,
-                                word30_writes,
-                                word30_write_delta,
-                                word30_last_payload,
-                                word30_storage,
-                                rx_fifo_state,
-                                rx_errors,
-                            });
-                        }
+                        Err(error) => return Err(error),
                     }
                 }
             })
@@ -884,59 +935,19 @@ pub async fn fpga_offload_service_task() {
 
         let terminal = match interrupt_wait {
             Ok(result) => result,
-            Err(_) => match crate::tga::offload_work_state() {
-                Ok(WorkState::Complete | WorkState::Failed) => {
+            Err(_) => match job.is_terminal() {
+                Ok(true) => {
                     // Timeout recovery is intentionally a single diagnostic read,
                     // never a replacement polling loop.
                     record_timeout_recovery();
                     Ok(())
                 }
-                Ok(WorkState::Idle | WorkState::HostReady | WorkState::FpgaBusy) => {
-                    Err(Error::Protocol)
-                }
-                Err(crate::tga::OffloadTransportError::Offline) => Err(Error::DeviceLost),
-                Err(crate::tga::OffloadTransportError::InvalidPackage) => Err(Error::Protocol),
-                Err(crate::tga::OffloadTransportError::WriteVerification {
-                    word,
-                    observed,
-                    expected,
-                    rx_captures,
-                    rx_capture_delta,
-                    decoded_writes,
-                    decoded_write_delta,
-                    word30_writes,
-                    word30_write_delta,
-                    word30_last_payload,
-                    word30_storage,
-                    rx_fifo_state,
-                    rx_errors,
-                }) => Err(Error::TransportWriteVerification {
-                    word,
-                    observed,
-                    expected,
-                    rx_captures,
-                    rx_capture_delta,
-                    decoded_writes,
-                    decoded_write_delta,
-                    word30_writes,
-                    word30_write_delta,
-                    word30_last_payload,
-                    word30_storage,
-                    rx_fifo_state,
-                    rx_errors,
-                }),
+                Ok(false) => Err(Error::Protocol),
+                Err(error) => Err(error),
             },
         };
 
-        let result = terminal.and_then(|()| {
-            crate::tga::read_offload_work_package()
-                .map_err(|_| Error::Protocol)
-                .and_then(|package| decode_completion(request, package))
-        });
-        if terminal.is_ok() {
-            let _ = crate::tga::ack_offload_interrupt();
-        }
-        finish_call(request.call_id, result);
+        job.retire_and_deliver(terminal);
     }
 }
 
@@ -951,7 +962,7 @@ async fn wait_for_tga_reconnect(previous_generation: u32) {
 }
 
 /// Periodic client of slot 0. This is not another hardware worker: all calls still pass
-/// through `fpga_offload_service_task`, which permits exactly one in-flight work package.
+/// through `fpga_offload_service_task`, which permits exactly one in-flight operation.
 /// If that end-to-end path wedges, the visible LED sequence stops as intended.
 #[embassy_executor::task]
 pub async fn fpga_offload_heartbeat_task() {

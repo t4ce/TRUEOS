@@ -27,7 +27,7 @@ x86-int8-kernels = ["host-runtime"]
 arm64-fp-kernels = ["host-runtime"]
 x86-fp-kernels = ["host-runtime"]
 cuda = ["host-runtime"]
-truega = []
+truega = ["dep:trueos-fpga-abi"]
 
 [dependencies]
 ndarray = { version = "0.15", default-features = false, optional = true }
@@ -43,6 +43,7 @@ safetensors = { version = "0.3", optional = true }
 memmap2 = { version = "0.5", optional = true }
 half = { version = "2.3", optional = true }
 mimalloc = { version = "0.1", optional = true }
+trueos-fpga-abi = { path = "../../crates/trueos-fpga-abi", optional = true }
 
 [profile.release]
 opt-level = 3       # 最高优化等级

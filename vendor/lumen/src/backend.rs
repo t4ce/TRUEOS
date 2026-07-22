@@ -1,5 +1,15 @@
 use core::future::Future;
 
+#[cfg(feature = "truega")]
+use core::marker::PhantomData;
+
+#[cfg(feature = "truega")]
+pub use trueos_fpga_abi::{
+    AotCodecError, AotCompletionKind, AotFirmwareCapability, AotFixedShape, AotLane,
+    AotLaneOwnership, AotOpDescriptor, AotScalarFormat, AotStateOwnership, AotTensorDescriptor,
+    AotTransportKind, TruegaCustomOp,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LumenBackend {
     #[cfg(feature = "host-runtime")]
@@ -65,6 +75,78 @@ pub trait AsyncBackend<Operation> {
         &self,
         operation: Operation,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>>;
+}
+
+/// Typed invocation of one operation generated beside the TRUEGA bitstream.
+///
+/// `Op` selects immutable AOT metadata and fixed codecs at compile time. Only the typed
+/// input is carried at runtime; there is no operation registry, graph, bytecode, or compiler.
+#[cfg(feature = "truega")]
+pub struct AotInvocation<Op>
+where
+    Op: TruegaCustomOp,
+{
+    pub input: Op::Input,
+    marker: PhantomData<fn() -> Op>,
+}
+
+#[cfg(feature = "truega")]
+impl<Op> AotInvocation<Op>
+where
+    Op: TruegaCustomOp,
+{
+    #[inline]
+    pub const fn new(input: Op::Input) -> Self {
+        Self {
+            input,
+            marker: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub const fn descriptor(&self) -> &'static AotOpDescriptor {
+        &Op::DESCRIPTOR
+    }
+
+    #[inline]
+    pub fn into_input(self) -> Op::Input {
+        self.input
+    }
+}
+
+/// One kernel-owned executor for every generated TRUEGA operation.
+///
+/// A TRUEOS backend implements this once. The blanket [`AsyncBackend`] implementation
+/// below preserves each generated operation's concrete output type while the executor
+/// selects only its compile-time transport descriptor.
+#[cfg(feature = "truega")]
+pub trait TruegaAotBackend {
+    type Error;
+
+    fn execute_aot<Op>(
+        &self,
+        operation: AotInvocation<Op>,
+    ) -> impl Future<Output = Result<Op::Output, Self::Error>>
+    where
+        Op: TruegaCustomOp;
+}
+
+#[cfg(feature = "truega")]
+impl<Backend, Op> AsyncBackend<AotInvocation<Op>> for Backend
+where
+    Backend: TruegaAotBackend,
+    Op: TruegaCustomOp,
+{
+    type Output = Op::Output;
+    type Error = Backend::Error;
+
+    #[inline]
+    fn execute(
+        &self,
+        operation: AotInvocation<Op>,
+    ) -> impl Future<Output = Result<Self::Output, Self::Error>> {
+        self.execute_aot(operation)
+    }
 }
 
 /// Dispatch one typed operation through its asynchronous backend.

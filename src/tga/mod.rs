@@ -281,7 +281,7 @@ pub(crate) fn stream_transport_hardware_stats() -> Option<StreamTransportHardwar
 }
 
 /// Clear any sticky device-side completion and return the interrupt sequence
-/// against which the next single-slot submission must wait.
+/// against which the single worker's next BAR0 package or BAR2 row must wait.
 pub(crate) fn arm_offload_interrupt() -> Result<u64, OffloadTransportError> {
     if !completion_interrupt_configured() {
         return Err(OffloadTransportError::Offline);
@@ -1032,8 +1032,8 @@ pub(crate) fn read_offload_work_package()
     Ok(package)
 }
 
-/// Acknowledge a completion interrupt after the service has consumed the result.
-/// Polling firmware does not require this operation.
+/// Acknowledge a completion interrupt after the service has consumed either
+/// fixed transport's result. Polling firmware does not require this operation.
 pub(crate) fn ack_offload_interrupt() -> Result<(), OffloadTransportError> {
     let guard = TGA.lock();
     let Some(tga) = guard.as_ref() else {

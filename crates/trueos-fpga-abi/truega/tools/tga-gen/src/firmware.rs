@@ -21,6 +21,8 @@ pub struct FunctionSpec {
     pub input_bytes: u16,
     pub output_bytes: u16,
     pub binding: BindingKind,
+    /// Canonical, versioned AOT operation contract hashed into the Rust interface.
+    pub aot_contract: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +41,7 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
         input_bytes: 0,
         output_bytes: 4,
         binding: BindingKind::NoArgsU32,
+        aot_contract: "truega-aot-v1|led_step_heartbeat()->u32|transport=inline-bar0-work-package|inputs=[]|outputs=[u32[]:4]|firmware=function-slot:0|lane=bar0-work-package|lane-owner=single-worker-exclusive|state=host-request-fpga-completion|completion=msi-worker-callback",
     },
     FunctionSpec {
         id: 1,
@@ -48,6 +51,7 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
         input_bytes: 8,
         output_bytes: 4,
         binding: BindingKind::BinaryU32,
+        aot_contract: "truega-aot-v1|add_u32(u32,u32)->u32|transport=inline-bar0-work-package|inputs=[u32[]:4,u32[]:4]|outputs=[u32[]:4]|firmware=function-slot:1|lane=bar0-work-package|lane-owner=single-worker-exclusive|state=host-request-fpga-completion|completion=msi-worker-callback",
     },
     FunctionSpec {
         id: 2,
@@ -57,8 +61,16 @@ pub const FUNCTIONS: [FunctionSpec; trueos_fpga_abi::FUNCTION_COUNT] = [
         input_bytes: 72,
         output_bytes: 20,
         binding: BindingKind::Lfm25Q8RowBlock,
+        aot_contract: "truega-aot-v1|lfm25_ffn_step(control,ggml-q8-0[32],ggml-q8-0[32])->(i32,i64-q30,i64-q30)|transport=inline-bar0-work-package|inputs=[u32[]:4,ggml-q8-0[32]:34,ggml-q8-0[32]:34]|outputs=[i32[]:4,i64-q30[]:8,i64-q30[]:8]|firmware=function-slot:2|lane=bar0-work-package|lane-owner=single-worker-exclusive|state=host-request-fpga-completion|completion=msi-worker-callback",
     },
 ];
+
+/// Composite BAR2 operation contract shared by all 16 generated LFM2.5 FFN layers.
+///
+/// The input and output shapes are fixed; sealed layer weights remain model-image state
+/// selected by generated tensor IDs rather than an interpreted runtime graph.
+pub const LFM25_FFN_AOT_CONTRACT: &str =
+    "truega-aot-v1|lfm25.ffn(layer:u16,ggml-q8-0[1024])->i64-q30[1024]|layers=16|transport=fixed-bar2-row-stream|inputs=[u16[]:2,ggml-q8-0[1024]:1088]|outputs=[i64-q30[1024]:8192]|firmware=bar0:0x0098:0x32524754|lane=bar2-lfm25-row-stream|lane-owner=single-worker-exclusive|state=host-request-fpga-completion|completion=msi-worker-callback";
 
 /// Slot 0: rotate one visibly lit LED and return the protocol magic.
 #[derive(LogicBlock, Default)]

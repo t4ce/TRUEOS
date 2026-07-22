@@ -13,3 +13,9 @@ typed asynchronous backend and `AsyncModule` contracts: no synchronous
 is present in the kernel build. TRUEOS implements the fixed-shape device
 tensor and operation in src/lumen/mod.rs and retains scheduling, MSI
 completion, model I/O, and FPGA ABI ownership.
+
+The `truega` feature also exposes `AotInvocation` and `TruegaAotBackend`.
+`tga-gen` emits the corresponding `TruegaCustomOp` implementations and
+immutable descriptors from `trueos-fpga-abi`; Lumen's blanket async dispatch
+therefore remains typed without introducing a runtime operation registry,
+graph compiler, bytecode interpreter, or HDL knowledge.

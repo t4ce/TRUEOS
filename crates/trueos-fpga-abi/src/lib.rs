@@ -163,6 +163,154 @@ pub struct FunctionDescriptor {
     pub symbol_hash: u64,
 }
 
+/// Maximum tensor rank described by an ahead-of-time TRUEGA operation.
+///
+/// Shapes are fixed by the firmware build. No dynamic-shape evaluator exists in TRUEOS.
+pub const AOT_MAX_TENSOR_RANK: usize = 4;
+
+/// Scalar encodings understood by generated host bindings.
+///
+/// `GgmlQ8_0` is the native 34-byte block used by the sealed LFM2.5 image. `I64Q30`
+/// identifies TRUEGA's signed fixed-point accumulator/output representation.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotScalarFormat {
+    U8 = 0,
+    I8 = 1,
+    U16 = 2,
+    I16 = 3,
+    U32 = 4,
+    I32 = 5,
+    U64 = 6,
+    I64 = 7,
+    F16 = 8,
+    Bf16 = 9,
+    F32 = 10,
+    I64Q30 = 11,
+    GgmlQ8_0 = 12,
+}
+
+/// A compile-time tensor shape. Unused dimensions must remain zero.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct AotFixedShape {
+    pub rank: u8,
+    pub dimensions: [u32; AOT_MAX_TENSOR_RANK],
+}
+
+impl AotFixedShape {
+    pub const SCALAR: Self = Self {
+        rank: 0,
+        dimensions: [0; AOT_MAX_TENSOR_RANK],
+    };
+
+    pub const fn vector(elements: u32) -> Self {
+        Self {
+            rank: 1,
+            dimensions: [elements, 0, 0, 0],
+        }
+    }
+}
+
+/// One typed input or output port in an AOT operation contract.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct AotTensorDescriptor {
+    pub name: &'static str,
+    pub scalar: AotScalarFormat,
+    pub shape: AotFixedShape,
+    /// Exact number of bytes accepted or produced by the generated Rust codec.
+    pub encoded_bytes: u32,
+}
+
+/// Physical transfer mechanism fused into the matching firmware.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotTransportKind {
+    InlineBar0WorkPackage = 0,
+    FixedBar2RowStream = 1,
+}
+
+/// Build-time proof the selected firmware implements an operation.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotFirmwareCapability {
+    /// A slot in the read-only firmware manifest with the matching generated symbol hash.
+    FunctionSlot {
+        function: FunctionId,
+        symbol_hash: u64,
+    },
+    /// A fixed BAR register whose value identifies a separately versioned transport engine.
+    RegisterMagic { bar: u8, offset: u16, value: u32 },
+}
+
+/// The one physical lane an operation must own for its entire request/completion handoff.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotLane {
+    Bar0WorkPackage = 0,
+    Bar2Lfm25RowStream = 1,
+}
+
+/// TRUEGA has one kernel worker and deliberately has no device-side scheduler.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotLaneOwnership {
+    SingleWorkerExclusive = 0,
+}
+
+/// Publication ownership of request and completion state across PCIe.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotStateOwnership {
+    HostRequestFpgaCompletion = 0,
+}
+
+/// Completion mechanism required by the processorless async architecture.
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotCompletionKind {
+    MsiWorkerCallback = 0,
+}
+
+/// Complete, immutable contract for one generated FPGA operation.
+///
+/// This is Rust metadata emitted by `tga-gen`; it is not a graph, bytecode stream, HDL
+/// fragment, runtime registry, or interpreter input. The SHA-256 covers the generator's
+/// canonical operation signature and all ABI-relevant transport/shape fields.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct AotOpDescriptor {
+    pub name: &'static str,
+    pub contract_sha256: [u8; 32],
+    pub transport: AotTransportKind,
+    pub inputs: &'static [AotTensorDescriptor],
+    pub outputs: &'static [AotTensorDescriptor],
+    pub firmware: AotFirmwareCapability,
+    pub lane: AotLane,
+    pub lane_ownership: AotLaneOwnership,
+    pub state_ownership: AotStateOwnership,
+    pub completion: AotCompletionKind,
+}
+
+/// Codec error returned before a malformed request can reach the transport.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum AotCodecError {
+    BufferTooSmall,
+    InvalidEncoding,
+}
+
+/// Generated typed boundary used by Lumen's blanket asynchronous TRUEGA dispatch.
+///
+/// Implementations are emitted beside the bitstream. They only copy fixed-layout values;
+/// they cannot compile, interpret, schedule, or otherwise change the fused operation.
+pub trait TruegaCustomOp {
+    type Input;
+    type Output;
+
+    const DESCRIPTOR: AotOpDescriptor;
+
+    fn encode(input: &Self::Input, destination: &mut [u8]) -> Result<usize, AotCodecError>;
+    fn decode(source: &[u8]) -> Result<Self::Output, AotCodecError>;
+}
+
 /// Binary manifest emitted beside, or embedded into, the FPGA bitstream.
 ///
 /// TRUEOS may compare this fixed metadata with the generated Rust interface, but it never
@@ -313,5 +461,39 @@ mod tests {
         assert_eq!(manifest.function_count as usize, FUNCTION_COUNT);
         assert_eq!(manifest.work_package_bytes as usize, size_of::<WorkPackage>());
         assert_eq!(manifest.functions, builtins::FUNCTIONS);
+    }
+
+    #[test]
+    fn generated_aot_contracts_are_typed_and_fixed() {
+        type Add = builtins::add_u32::AotOp;
+        let descriptor = Add::DESCRIPTOR;
+        assert_eq!(descriptor.transport, AotTransportKind::InlineBar0WorkPackage);
+        assert_eq!(descriptor.inputs.len(), 2);
+        assert_eq!(descriptor.outputs[0].scalar, AotScalarFormat::U32);
+        assert_ne!(descriptor.contract_sha256, [0; 32]);
+
+        let mut encoded = [0; INLINE_INPUT_BYTES];
+        assert_eq!(Add::encode(&[0x1122_3344, 0xAABB_CCDD], &mut encoded), Ok(8));
+        assert_eq!(&encoded[..8], &[0x44, 0x33, 0x22, 0x11, 0xDD, 0xCC, 0xBB, 0xAA]);
+
+        type Ffn = builtins::lfm25_ffn::AotOp;
+        let descriptor = Ffn::DESCRIPTOR;
+        assert_eq!(descriptor.name, "lfm25.ffn");
+        assert_eq!(descriptor.transport, AotTransportKind::FixedBar2RowStream);
+        assert_eq!(descriptor.inputs[0].name, "layer");
+        assert_eq!(descriptor.inputs[1].shape, AotFixedShape::vector(1024));
+        assert_eq!(descriptor.outputs[0].shape, AotFixedShape::vector(1024));
+
+        let mut ffn_input = builtins::lfm25_ffn::Input {
+            layer: builtins::lfm25_ffn::MODEL_LAYERS,
+            activation: [0; builtins::lfm25_ffn::ACTIVATION_BYTES],
+        };
+        let mut ffn_encoded = [0; builtins::lfm25_ffn::ENCODED_INPUT_BYTES];
+        assert_eq!(Ffn::encode(&ffn_input, &mut ffn_encoded), Err(AotCodecError::InvalidEncoding));
+        ffn_input.layer = 15;
+        assert_eq!(
+            Ffn::encode(&ffn_input, &mut ffn_encoded),
+            Ok(builtins::lfm25_ffn::ENCODED_INPUT_BYTES)
+        );
     }
 }

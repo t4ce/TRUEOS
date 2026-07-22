@@ -84,7 +84,7 @@ async fn lumen_hello_task(target: MatrixTarget) {
                 &target,
                 alloc::format!(
                     "lumen: hello output_q30_sha256={} calls={} irq_delta={} timeout_recovery_delta={}",
-                    digest_hex(&report.down_sha256),
+                    digest_hex(&report.output_sha256),
                     report.fpga_calls,
                     report.interrupt_delta,
                     report.timeout_recovery_delta,

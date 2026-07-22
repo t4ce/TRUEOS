@@ -55,6 +55,11 @@ pub const FPGA_CALLS_PER_FFN: u64 = 226_000;
 /// per output row. This is the first BAR2 streaming checkpoint.
 pub const FPGA_STREAM_ROWS_PER_FFN: u64 = 4_608 + 1_024;
 pub const FFN_OUTPUT_ELEMENTS: usize = 1_024;
+pub const FFN_INPUT_ELEMENTS: usize = 1_024;
+pub const FFN_LAYER_COUNT: usize = trueos_fpga_abi::lfm25::MODEL_LAYER_COUNT;
+pub const Q8_0_BLOCK_VALUES: usize = Q8_BLOCK_VALUES;
+pub const Q8_0_BLOCK_BYTES: usize = Q8_BLOCK_BYTES;
+pub type Q8_0Block = [u8; Q8_0_BLOCK_BYTES];
 
 pub fn expected_fpga_calls() -> u64 {
     if fpga_offload::lfm25_row_stream_available() {
@@ -114,11 +119,34 @@ pub struct Execution {
     pub report: Report,
 }
 
+/// Completion evidence returned by a production FFN forward pass.
+///
+/// Unlike [`Report`], this contains no golden-vector comparisons. It describes
+/// the actual runtime activation, selected model layer, hardware output, and
+/// interrupt completion path.
+#[derive(Clone, Copy, Debug)]
+pub struct ForwardReport {
+    pub layer: u8,
+    pub output_sha256: [u8; 32],
+    pub fpga_calls: u64,
+    pub interrupt_delta: u64,
+    pub timeout_recovery_delta: u64,
+    pub streamed: bool,
+}
+
+/// Runtime hardware output retained for a framework-facing forward pass.
+pub struct ForwardExecution {
+    pub output_q30: Vec<i64>,
+    pub report: ForwardReport,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Golden,
     Model(lfm25_model::Error),
     Tensor,
+    Layer,
+    StreamUnavailable,
     BufferUnavailable,
     Arithmetic,
     Fpga(fpga_offload::Error),
@@ -165,6 +193,57 @@ impl From<fpga_offload::Error> for Error {
     fn from(value: fpga_offload::Error) -> Self {
         Self::Fpga(value)
     }
+}
+
+/// Construct the checked layer-0 activation used by the sealed verifier.
+///
+/// The result has the same owned Q8_0 representation accepted by
+/// [`execute_layer`]; the sealed fixture is therefore only an input producer,
+/// not a separate module ABI.
+pub fn sealed_layer0_activation() -> Result<Vec<Q8_0Block>, Error> {
+    validate_golden()?;
+    quantize_golden_vector(0)
+}
+
+/// Keep `lumen hello` an exact sealed-vector proof while it exercises the
+/// production runtime-input path.
+pub fn verify_sealed_layer0_forward(report: &ForwardReport) -> Result<(), Error> {
+    if report.layer != 0 {
+        return Err(Error::Layer);
+    }
+    require_hash(Stage::Down, report.output_sha256, DOWN_Q30_SHA256)
+}
+
+/// Execute one LFM2.5 FFN layer from an ordinary runtime Q8_0 activation.
+///
+/// Layer selection is ahead-of-time metadata from the sealed native model.
+/// Gate, up, SiLU multiplication, and down projection all execute in the
+/// proven BAR2/MSI FPGA fast path. Golden comparison remains exclusively in
+/// [`run`] and [`run_with_output`].
+pub async fn execute_layer(
+    layer: u8,
+    activation: Vec<Q8_0Block>,
+    progress: impl FnMut(Progress),
+) -> Result<ForwardExecution, Error> {
+    if usize::from(layer) >= FFN_LAYER_COUNT
+        || activation.len() * Q8_BLOCK_VALUES != FFN_INPUT_ELEMENTS
+    {
+        return Err(if usize::from(layer) >= FFN_LAYER_COUNT {
+            Error::Layer
+        } else {
+            Error::Tensor
+        });
+    }
+    if !fpga_offload::lfm25_row_stream_available() {
+        return Err(Error::StreamUnavailable);
+    }
+
+    // Production forwards use the already admitted native-image record. A
+    // whole-image hash on every layer/token would turn model sealing into the
+    // inference hot path; the exhaustive diagnostic below retains that check.
+    let image = lfm25_model::open().await?;
+    let _lane = fpga_offload::acquire_lfm25_ffn_step_lane().await;
+    run_layer_streamed(image, layer, activation, progress).await
 }
 
 pub async fn run(progress: impl FnMut(Progress)) -> Result<Report, Error> {
@@ -445,6 +524,122 @@ async fn run_streamed(
             timeout_recovery_delta,
             streamed: true,
         },
+    })
+}
+
+/// Production BAR2 executor shared by every generated FFN layer.
+///
+/// This deliberately does not consult the layer-0 golden artifact. The only
+/// tensor identity source is the generated native model descriptor table.
+async fn run_layer_streamed(
+    image: lfm25_model::NativeImage,
+    layer: u8,
+    activation: Vec<Q8_0Block>,
+    mut progress: impl FnMut(Progress),
+) -> Result<ForwardExecution, Error> {
+    use trueos_fpga_abi::lfm25::TensorRole;
+
+    let gate_descriptor = layer_tensor(layer, TensorRole::FfnGate)?;
+    let up_descriptor = layer_tensor(layer, TensorRole::FfnUp)?;
+    let down_descriptor = layer_tensor(layer, TensorRole::FfnDown)?;
+    if gate_descriptor.format != 2
+        || up_descriptor.format != 2
+        || down_descriptor.format != 2
+        || gate_descriptor.ggml_ne0 != FFN_INPUT_ELEMENTS as u32
+        || up_descriptor.ggml_ne0 != FFN_INPUT_ELEMENTS as u32
+        || gate_descriptor.ggml_ne1 != 4_608
+        || up_descriptor.ggml_ne1 != 4_608
+        || down_descriptor.ggml_ne0 != 4_608
+        || down_descriptor.ggml_ne1 != FFN_OUTPUT_ELEMENTS as u32
+        || activation.len() * Q8_BLOCK_VALUES != FFN_INPUT_ELEMENTS
+    {
+        return Err(Error::Tensor);
+    }
+
+    // Model I/O happens before exclusive ownership of the MSI bridge. The
+    // runtime tensor itself remains in native Q8_0 form throughout the API.
+    let gate_matrix = read_tensor(&image, gate_descriptor).await?;
+    let up_matrix = read_tensor(&image, up_descriptor).await?;
+    let down_matrix = read_tensor(&image, down_descriptor).await?;
+    let mut silu = try_i64_vec(4_608)?;
+    let mut down = try_i64_vec(FFN_OUTPUT_ELEMENTS)?;
+
+    let before = fpga_offload::stats();
+    let completion_before = fpga_offload::lfm25_stream_completion_count()?;
+    let _transport = fpga_offload::acquire_lfm25_stream_transport().await;
+    fpga_offload::lfm25_stream_load_activation(&activation)?;
+
+    const NARROW_ROW_BYTES: usize = 32 * Q8_BLOCK_BYTES;
+    for row in 0..4_608usize {
+        let row_start = row * NARROW_ROW_BYTES;
+        let row_end = row_start + NARROW_ROW_BYTES;
+        let gate_blocks = gate_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
+        let up_blocks = up_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
+        let result =
+            fpga_offload::lfm25_stream_gate_up_row(row as u32, gate_blocks, up_blocks).await?;
+        silu.push(result.result_q30);
+        if row % 512 == 511 || row + 1 == 4_608 {
+            progress(Progress {
+                stage: Stage::Gate,
+                completed: row + 1,
+                total: 4_608,
+            });
+        }
+    }
+
+    // Gate/up/SiLU are a single fused hardware retirement, but preserve the
+    // semantic stage events expected by existing callers.
+    for stage in [Stage::Up, Stage::Silu] {
+        for quarter in 1..=4 {
+            progress(Progress {
+                stage,
+                completed: 4_608 * quarter / 4,
+                total: 4_608,
+            });
+        }
+    }
+
+    let down_activation = quantize_q30_vector(&silu)?;
+    fpga_offload::lfm25_stream_load_activation(&down_activation)?;
+    const WIDE_ROW_BYTES: usize = 144 * Q8_BLOCK_BYTES;
+    for row in 0..FFN_OUTPUT_ELEMENTS {
+        let row_start = row * WIDE_ROW_BYTES;
+        let row_end = row_start + WIDE_ROW_BYTES;
+        let weight_blocks = down_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
+        down.push(fpga_offload::lfm25_stream_down_row(row as u32, weight_blocks).await?);
+        if row % 128 == 127 || row + 1 == FFN_OUTPUT_ELEMENTS {
+            progress(Progress {
+                stage: Stage::Down,
+                completed: row + 1,
+                total: FFN_OUTPUT_ELEMENTS,
+            });
+        }
+    }
+
+    let completion_after = fpga_offload::lfm25_stream_completion_count()?;
+    let fpga_calls = completion_after.wrapping_sub(completion_before) as u64;
+    let after = fpga_offload::stats();
+    let interrupt_delta = after.interrupts.saturating_sub(before.interrupts);
+    let timeout_recovery_delta = after
+        .timeout_recoveries
+        .saturating_sub(before.timeout_recoveries);
+    if fpga_calls != FPGA_STREAM_ROWS_PER_FFN
+        || interrupt_delta < FPGA_STREAM_ROWS_PER_FFN
+        || timeout_recovery_delta != 0
+    {
+        return Err(Error::CompletionPath);
+    }
+
+    Ok(ForwardExecution {
+        report: ForwardReport {
+            layer,
+            output_sha256: q30_vector_sha256(&down),
+            fpga_calls,
+            interrupt_delta,
+            timeout_recovery_delta,
+            streamed: true,
+        },
+        output_q30: down,
     })
 }
 
@@ -787,6 +982,20 @@ fn tensor(name: &str) -> Result<trueos_fpga_abi::lfm25::NativeTensorDescriptor, 
     Ok(trueos_fpga_abi::lfm25::generated::TENSORS[index])
 }
 
+fn layer_tensor(
+    layer: u8,
+    role: trueos_fpga_abi::lfm25::TensorRole,
+) -> Result<trueos_fpga_abi::lfm25::NativeTensorDescriptor, Error> {
+    if usize::from(layer) >= FFN_LAYER_COUNT {
+        return Err(Error::Layer);
+    }
+    trueos_fpga_abi::lfm25::generated::TENSORS
+        .iter()
+        .copied()
+        .find(|descriptor| descriptor.layer == layer && descriptor.role == role as u8)
+        .ok_or(Error::Tensor)
+}
+
 fn quantize_golden_vector(index: usize) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
     let length = *GOLDEN_VECTOR_LENGTHS.get(index).ok_or(Error::Golden)?;
     let mut values = try_f32_vec(length)?;
@@ -909,5 +1118,20 @@ mod tests {
         let blocks = quantize_golden_vector(0).unwrap();
         assert_eq!(blocks.len(), 32);
         assert_eq!(blocks[0], trueos_fpga_abi::builtins::lfm25_ffn_step::GOLDEN_ACTIVATION);
+    }
+
+    #[test]
+    fn every_generated_layer_has_one_exact_ffn_tensor_set() {
+        use trueos_fpga_abi::lfm25::TensorRole;
+
+        for layer in 0..FFN_LAYER_COUNT as u8 {
+            let gate = layer_tensor(layer, TensorRole::FfnGate).unwrap();
+            let up = layer_tensor(layer, TensorRole::FfnUp).unwrap();
+            let down = layer_tensor(layer, TensorRole::FfnDown).unwrap();
+            assert_eq!((gate.ggml_ne0, gate.ggml_ne1), (1_024, 4_608));
+            assert_eq!((up.ggml_ne0, up.ggml_ne1), (1_024, 4_608));
+            assert_eq!((down.ggml_ne0, down.ggml_ne1), (4_608, 1_024));
+            assert_eq!((gate.format, up.format, down.format), (2, 2, 2));
+        }
     }
 }
