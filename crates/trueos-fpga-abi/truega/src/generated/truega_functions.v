@@ -271,7 +271,14 @@ endmodule
 
 // Exact native Q8_0/FFN compute sources fused into this generated bundle.
 // Exact 32-lane signed Q8_0 integer dot product.
-// Six-cycle latency, one unchanged 34-byte native-image block per cycle.
+//
+// The lanes are accumulated serially so synthesis cannot infer signed partial-
+// sum RAMs or silently zero-extend a negative tree node.  Each 16-bit product
+// is sign-extended by explicit bit replication, then added as raw two's-
+// complement bits in a 21-bit accumulator.  Lane selection, multiplication,
+// and accumulation occupy separate registered stages.  The enclosing serialized
+// block slot keeps both quant inputs stable until valid_o.  One accepted block
+// completes after 33 work cycles; valid_i is ignored while a block is active.
 module truega_q8_0_dot32 (
     input  wire                 clk,
     input  wire                 reset_n,
@@ -281,57 +288,100 @@ module truega_q8_0_dot32 (
     output wire                 valid_o,
     output wire signed [20:0]   dot_o
 );
-    reg signed [15:0] product [0:31];
-    reg signed [16:0] sum_1 [0:15];
-    reg signed [17:0] sum_2 [0:7];
-    reg signed [18:0] sum_3 [0:3];
-    reg signed [19:0] sum_4 [0:1];
-    reg signed [20:0] sum_5;
-    reg [5:0] valid_pipe;
-    integer lane;
+    localparam STATE_IDLE = 2'd0;
+    localparam STATE_RUN = 2'd1;
+    localparam STATE_LAST_PRODUCT = 2'd2;
+    localparam STATE_DRAIN = 2'd3;
 
-    assign valid_o = valid_pipe[5];
-    assign dot_o = sum_5;
+    reg [5:0] lane_index;
+    reg [1:0] state;
+    reg valid_reg;
+    reg [7:0] activation_lane_reg;
+    reg [7:0] weight_lane_reg;
+    reg [15:0] product_reg;
+    reg [20:0] accumulator;
+    reg [20:0] dot_reg;
+
+    wire [7:0] activation_lane_bits;
+    wire [7:0] weight_lane_bits;
+    wire signed [7:0] activation_lane;
+    wire signed [7:0] weight_lane;
+    wire signed [15:0] lane_product;
+    wire [15:0] current_product_bits;
+    wire [20:0] registered_product_extended;
+    wire [20:0] accumulator_next;
+
+    assign activation_lane_bits = activation_quants_i[lane_index*8 +: 8];
+    assign weight_lane_bits = weight_quants_i[lane_index*8 +: 8];
+    assign activation_lane = activation_lane_reg;
+    assign weight_lane = weight_lane_reg;
+    assign lane_product = activation_lane * weight_lane;
+    assign current_product_bits = lane_product;
+    assign registered_product_extended = {{5{product_reg[15]}}, product_reg};
+    assign accumulator_next = accumulator + registered_product_extended;
+
+    assign valid_o = valid_reg;
+    assign dot_o = dot_reg;
 
     always @(posedge clk) begin
         if (!reset_n) begin
-            valid_pipe <= 6'b0;
-            sum_5 <= 21'sd0;
-            for (lane = 0; lane < 32; lane = lane + 1)
-                product[lane] <= 16'sd0;
-            for (lane = 0; lane < 16; lane = lane + 1)
-                sum_1[lane] <= 17'sd0;
-            for (lane = 0; lane < 8; lane = lane + 1)
-                sum_2[lane] <= 18'sd0;
-            for (lane = 0; lane < 4; lane = lane + 1)
-                sum_3[lane] <= 19'sd0;
-            for (lane = 0; lane < 2; lane = lane + 1)
-                sum_4[lane] <= 20'sd0;
+            lane_index <= 6'd0;
+            state <= STATE_IDLE;
+            valid_reg <= 1'b0;
+            activation_lane_reg <= 8'd0;
+            weight_lane_reg <= 8'd0;
+            product_reg <= 16'd0;
+            accumulator <= 21'd0;
+            dot_reg <= 21'd0;
         end else begin
-            valid_pipe <= {valid_pipe[4:0], valid_i};
+            valid_reg <= 1'b0;
 
-            for (lane = 0; lane < 32; lane = lane + 1)
-                product[lane] <= $signed(activation_quants_i[lane*8 +: 8])
-                               * $signed(weight_quants_i[lane*8 +: 8]);
+            case (state)
+                STATE_IDLE: begin
+                    if (valid_i) begin
+                        activation_lane_reg <= activation_quants_i[7:0];
+                        weight_lane_reg <= weight_quants_i[7:0];
+                        lane_index <= 6'd1;
+                        product_reg <= 16'd0;
+                        accumulator <= 21'd0;
+                        state <= STATE_RUN;
+                    end
+                end
 
-            // A concatenation is unsigned in Verilog even when all of its
-            // members came from signed registers.  Cast every widened operand
-            // explicitly so synthesis cannot zero-extend a negative partial
-            // sum at a tree boundary.
-            for (lane = 0; lane < 16; lane = lane + 1)
-                sum_1[lane] <= $signed({product[lane*2][15], product[lane*2]})
-                             + $signed({product[lane*2 + 1][15], product[lane*2 + 1]});
-            for (lane = 0; lane < 8; lane = lane + 1)
-                sum_2[lane] <= $signed({sum_1[lane*2][16], sum_1[lane*2]})
-                             + $signed({sum_1[lane*2 + 1][16], sum_1[lane*2 + 1]});
-            for (lane = 0; lane < 4; lane = lane + 1)
-                sum_3[lane] <= $signed({sum_2[lane*2][17], sum_2[lane*2]})
-                             + $signed({sum_2[lane*2 + 1][17], sum_2[lane*2 + 1]});
-            for (lane = 0; lane < 2; lane = lane + 1)
-                sum_4[lane] <= $signed({sum_3[lane*2][18], sum_3[lane*2]})
-                             + $signed({sum_3[lane*2 + 1][18], sum_3[lane*2 + 1]});
-            sum_5 <= $signed({sum_4[0][19], sum_4[0]})
-                   + $signed({sum_4[1][19], sum_4[1]});
+                STATE_RUN: begin
+                    product_reg <= current_product_bits;
+                    activation_lane_reg <= activation_lane_bits;
+                    weight_lane_reg <= weight_lane_bits;
+                    if (lane_index != 6'd1)
+                        accumulator <= accumulator_next;
+                    if (lane_index == 6'd31) begin
+                        state <= STATE_LAST_PRODUCT;
+                    end else begin
+                        lane_index <= lane_index + 1'b1;
+                    end
+                end
+
+                STATE_LAST_PRODUCT: begin
+                    product_reg <= current_product_bits;
+                    accumulator <= accumulator_next;
+                    state <= STATE_DRAIN;
+                end
+
+                STATE_DRAIN: begin
+                    dot_reg <= accumulator_next;
+                    accumulator <= 21'd0;
+                    lane_index <= 6'd0;
+                    state <= STATE_IDLE;
+                    valid_reg <= 1'b1;
+                end
+
+                default: begin
+                    state <= STATE_IDLE;
+                    valid_reg <= 1'b0;
+                    product_reg <= 16'd0;
+                    accumulator <= 21'd0;
+                end
+            endcase
         end
     end
 endmodule
@@ -547,7 +597,8 @@ endmodule
 // Native blocks are unchanged: bits [15:0] hold the little-endian binary16
 // scale and bits [16 + lane*8 +: 8] hold signed quant lane `lane`.
 // A rising edge accepts start_i only with busy_o low.  Attempts while busy are
-// ignored.  done_o pulses for one cycle after both registered outputs are valid.
+// ignored.  Accepted block inputs must remain stable while busy_o is high.
+// done_o pulses for one cycle after both registered outputs are valid.
 module truega_q8_0_block_slot (
     input  wire                 clk,
     input  wire                 reset_n,
@@ -1340,14 +1391,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'hFF2EFC84;
-            5'd5: data = 32'h459DC0C4;
-            5'd6: data = 32'h12352102;
-            5'd7: data = 32'h58A75FDE;
-            5'd8: data = 32'h7F5E654E;
-            5'd9: data = 32'h5440DE44;
-            5'd10: data = 32'h999C39A8;
-            5'd11: data = 32'hBDCF19E9;
+            5'd4: data = 32'hE2383F8B;
+            5'd5: data = 32'hD10A6C85;
+            5'd6: data = 32'hCE2D6A73;
+            5'd7: data = 32'hF02E801E;
+            5'd8: data = 32'h3957F391;
+            5'd9: data = 32'hC0CB4020;
+            5'd10: data = 32'hA77D65FB;
+            5'd11: data = 32'h0A806CC6;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;

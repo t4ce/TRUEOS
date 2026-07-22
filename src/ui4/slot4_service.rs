@@ -50,7 +50,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+external-selected-frame-strip+selection-outline+maximize-preview+context-menu cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+external-selected-frame-strip+selection-outline+maximize-preview+context-menu/per-cursor-color cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -359,24 +359,22 @@ fn software_cursor_rects() -> Slot4Rects {
         let Some((x, y)) = visual.context_menu else {
             continue;
         };
-        let menu_w = 196u32;
-        let menu_h = 116u32;
-        let menu_x = x.saturating_add(14).min(screen_w.saturating_sub(menu_w));
-        let menu_y = y.saturating_add(14).min(screen_h.saturating_sub(menu_h));
-        let menu_rect = super::Ui4VisualRect {
-            x: menu_x,
-            y: menu_y,
-            width: menu_w,
-            height: menu_h,
-        };
-        push_overlay_rect(&mut rects, menu_x, menu_y, menu_w, menu_h, Rgba8::new(22, 25, 33, 235));
+        let menu_rect = super::input_broker::context_menu_rect((x, y), screen_w, screen_h);
+        push_overlay_rect(
+            &mut rects,
+            menu_rect.x,
+            menu_rect.y,
+            menu_rect.width,
+            menu_rect.height,
+            Rgba8::new(22, 25, 33, 235),
+        );
         push_rect_border(&mut rects, menu_rect, 2, visual.color);
         for row in 1..4u32 {
             push_overlay_rect(
                 &mut rects,
-                menu_x.saturating_add(12),
-                menu_y.saturating_add(row * 27),
-                menu_w.saturating_sub(24),
+                menu_rect.x.saturating_add(12),
+                menu_rect.y.saturating_add(row * 27),
+                menu_rect.width.saturating_sub(24),
                 1,
                 Rgba8::new(180, 188, 204, 150),
             );
