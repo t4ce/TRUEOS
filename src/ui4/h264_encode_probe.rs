@@ -1,4 +1,4 @@
-//! Deferred 512x512x60 H.264 boot-artifact probe.
+//! Deferred embedded 512x512x30 H.264 boot-artifact probe.
 //!
 //! Intel encode readiness is audited before the workload runs. The current
 //! VDBOX path is decode-only, so the artifact is produced by the existing
@@ -60,7 +60,13 @@ pub(crate) fn h264_encode_probe_snapshot() -> H264EncodeProbeSnapshot {
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_h264_encode_probe_task() {
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=background-worker feature=trueos_h264_encode_probe source=embedded-60-byte-scenario expanded=i420-512x512 frames=60 output=trueosfs-root/video_encode_<timestamp>.h264 start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=background-worker feature=trueos_h264_encode_probe source=embedded-raw-i420 visible={}x{} frames={} asset_bytes={} output=trueosfs-root/video_encode_<timestamp>.h264 udp_protocol=tme1 udp_port={} stream_ring_seconds={} start_delay_ms={}\n",
+        trueos_h264_encode_probe::SEQUENCE_WIDTH,
+        trueos_h264_encode_probe::SEQUENCE_HEIGHT,
+        trueos_h264_encode_probe::SEQUENCE_FRAME_COUNT,
+        trueos_h264_encode_probe::SEQUENCE_ASSET_BYTES,
+        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+        crate::allcaps::media_encode::STREAM_RING_SECONDS,
         PROBE_START_DELAY_MS,
     );
 
@@ -200,6 +206,9 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
     ENCODED_BYTES.store(metrics.encoded_bytes, Ordering::Release);
 
     let timestamp = crate::chronos::best_effort_unix_time_seconds();
+    let stream_session_id = timestamp
+        .map(|timestamp| timestamp as u32)
+        .unwrap_or_else(|| (crate::time::uptime_seconds() as u32) ^ (vcs0_probe.serial as u32));
     let path = match timestamp {
         Some(timestamp) => alloc::format!("video_encode_{}.h264", timestamp),
         None => alloc::format!("video_encode_uptime-{}.h264", crate::time::uptime_seconds()),
@@ -256,6 +265,27 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
             );
         }
     }
+
+    let udp_report =
+        super::h264_encode_udp::broadcast_annex_b(proof.annex_b.as_slice(), stream_session_id)
+            .await;
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: udp-stream complete protocol=tme1 version=1 session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} submit_retries={} adapter_send_errors={} network_waits={} destination=255.255.255.255:{} bounded_seconds={} surflive_payload=0\n",
+        udp_report.session_id,
+        udp_report.queued_access_units,
+        udp_report.sent_access_units,
+        udp_report.sent_datagrams,
+        udp_report.sent_payload_bytes,
+        udp_report.dropped_access_units,
+        udp_report.dropped_bytes,
+        udp_report.high_water_access_units,
+        udp_report.high_water_bytes,
+        udp_report.submit_retries,
+        udp_report.adapter_send_errors,
+        udp_report.network_waits,
+        crate::allports::services::MEDIA_ENCODE_PROBE_UDP_PORT,
+        crate::allcaps::media_encode::STREAM_RING_SECONDS,
+    );
 
     let snapshot = h264_encode_probe_snapshot();
     crate::log_info!(target: "intel/media-encode";

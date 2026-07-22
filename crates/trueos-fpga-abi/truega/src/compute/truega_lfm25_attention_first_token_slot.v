@@ -48,7 +48,6 @@ module truega_lfm25_attention_first_token_slot (
     reg signed [63:0] k_norm_weight_q30 [0:63];
     reg [63:0] q_norm_weight_loaded;
     reg [63:0] k_norm_weight_loaded;
-    integer reset_index;
 
     wire signed [63:0] decoded_norm_weight_q30;
     wire decoded_norm_weight_error;
@@ -93,11 +92,6 @@ module truega_lfm25_attention_first_token_slot (
             norm_weight_error_o <= 1'b0;
             rejected_start_done <= 1'b0;
             rejected_start_error <= 1'b0;
-            for (reset_index = 0; reset_index < 64;
-                 reset_index = reset_index + 1) begin
-                q_norm_weight_q30[reset_index] <= 64'sd0;
-                k_norm_weight_q30[reset_index] <= 64'sd0;
-            end
         end else begin
             norm_weight_error_o <= 1'b0;
             rejected_start_done <= 1'b0;

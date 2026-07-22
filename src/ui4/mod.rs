@@ -13,6 +13,8 @@ mod gpgpu_preview_consumer;
 mod gpgpu_svg_probe_consumer;
 #[cfg(feature = "trueos_h264_encode_probe")]
 mod h264_encode_probe;
+#[cfg(feature = "trueos_h264_encode_probe")]
+mod h264_encode_udp;
 mod input_broker;
 mod screenshot;
 mod slot4_service;

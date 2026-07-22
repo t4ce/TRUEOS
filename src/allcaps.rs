@@ -27,6 +27,14 @@ pub mod gfx {
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 
+pub mod media_encode {
+    pub const REALTIME_HZ: usize = 60;
+    pub const STREAM_RING_SECONDS: usize = 7;
+    pub const STREAM_RING_ACCESS_UNITS: usize = REALTIME_HZ * STREAM_RING_SECONDS;
+    pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 400 * 1024;
+    pub const STREAM_RING_BYTES: usize = STREAM_RING_ACCESS_UNITS * STREAM_MAX_ACCESS_UNIT_BYTES;
+}
+
 pub mod stackkeeper {
     pub const TOKIO_LANE_COUNT: usize = 16;
     pub const TOKIO_LANE_SCRATCH_BYTES: usize = 16 * 1024;

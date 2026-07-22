@@ -7,27 +7,16 @@ use std::{
 
 fn main() {
     let encode_started = Instant::now();
-    let proof = trueos_h264_encode_probe::encode_diagnostic_sequence_512x512_60()
-        .expect("encode 512x512x60 H.264 diagnostic sequence");
+    let proof = trueos_h264_encode_probe::encode_embedded_diagnostic_sequence()
+        .expect("encode embedded 512x512 H.264 diagnostic sequence");
     let encode_us = encode_started.elapsed().as_micros();
     let expected = trueos_h264_encode_probe::diagnostic_sequence_visible_i420();
+    let frame_count = trueos_h264_encode_probe::SEQUENCE_FRAME_COUNT.to_string();
 
     let mut child = Command::new("ffmpeg")
-        .args([
-            "-v",
-            "error",
-            "-f",
-            "h264",
-            "-i",
-            "pipe:0",
-            "-frames:v",
-            "60",
-            "-pix_fmt",
-            "yuv420p",
-            "-f",
-            "rawvideo",
-            "pipe:1",
-        ])
+        .args(["-v", "error", "-f", "h264", "-i", "pipe:0", "-frames:v"])
+        .arg(frame_count)
+        .args(["-pix_fmt", "yuv420p", "-f", "rawvideo", "pipe:1"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()

@@ -9,6 +9,19 @@ module truega_lfm25_resident_tensor_store_tb;
     wire session_begin_done;
     wire session_begin_error;
 
+    reg q30_tbegin = 0;
+    reg q30_tcommit = 0;
+    reg [3:0] q30_tslot = 0;
+    reg [31:0] q30_tepoch = 0;
+    wire q30_tbegin_ready;
+    wire q30_tcommit_ready;
+    reg q8_tbegin = 0;
+    reg q8_tcommit = 0;
+    reg [3:0] q8_tslot = 0;
+    reg [31:0] q8_tepoch = 0;
+    wire q8_tbegin_ready;
+    wire q8_tcommit_ready;
+
     reg q30_wvalid = 0;
     reg [3:0] q30_wslot = 0;
     reg [9:0] q30_windex = 0;
@@ -43,6 +56,18 @@ module truega_lfm25_resident_tensor_store_tb;
         .session_begin_epoch_i(session_begin_epoch),
         .session_epoch_o(epoch), .session_begin_done_o(session_begin_done),
         .session_begin_error_o(session_begin_error),
+        .q30_transaction_begin_i(q30_tbegin),
+        .q30_transaction_commit_i(q30_tcommit),
+        .q30_transaction_slot_i(q30_tslot),
+        .q30_transaction_epoch_i(q30_tepoch),
+        .q30_transaction_begin_ready_o(q30_tbegin_ready),
+        .q30_transaction_commit_ready_o(q30_tcommit_ready),
+        .q8_transaction_begin_i(q8_tbegin),
+        .q8_transaction_commit_i(q8_tcommit),
+        .q8_transaction_slot_i(q8_tslot),
+        .q8_transaction_epoch_i(q8_tepoch),
+        .q8_transaction_begin_ready_o(q8_tbegin_ready),
+        .q8_transaction_commit_ready_o(q8_tcommit_ready),
         .q30_write_valid_i(q30_wvalid), .q30_write_slot_i(q30_wslot),
         .q30_write_index_i(q30_windex), .q30_write_data_i(q30_wdata),
         .q30_write_epoch_i(q30_wepoch), .q30_write_ready_o(q30_wready),
@@ -60,6 +85,7 @@ module truega_lfm25_resident_tensor_store_tb;
     );
 
     integer failures = 0;
+    integer index;
     reg [31:0] first_epoch;
 
     task pulse_q30_read;
@@ -96,19 +122,67 @@ module truega_lfm25_resident_tensor_store_tb;
             failures = failures + 1;
         first_epoch = epoch;
 
+        @(negedge clk);
+        q30_tslot = 1;
+        q30_tepoch = first_epoch;
+        q30_tbegin = 1;
+        q8_tslot = 1;
+        q8_tepoch = first_epoch;
+        q8_tbegin = 1;
+        if (!q30_tbegin_ready || !q8_tbegin_ready)
+            failures = failures + 1;
+        @(negedge clk);
+        q30_tbegin = 0;
+        q8_tbegin = 0;
+
+        // A begun but incomplete transaction is never readable.
         q30_wslot = 1;
-        q30_windex = 10'd777;
-        q30_wdata = -64'sd123456789;
+        q30_windex = 10'd0;
+        q30_wdata = 64'sd1000;
         q30_wepoch = first_epoch;
         q30_wvalid = 1;
-        q8_wslot = 1;
-        q8_wblock = 5'd31;
-        q8_wdata = {16'h3555, 256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef};
-        q8_wepoch = first_epoch;
-        q8_wvalid = 1;
         @(negedge clk);
         q30_wvalid = 0;
+        q30_rslot = 1;
+        q30_rindex = 10'd0;
+        pulse_q30_read(first_epoch);
+        if (q30_rsp || !q30_rerror)
+            failures = failures + 1;
+
+        // Complete both payloads in strict sequential order, then commit.
+        for (index = 1; index < 1024; index = index + 1) begin
+            @(negedge clk);
+            q30_windex = index[9:0];
+            q30_wdata = index == 777 ? -64'sd123456789 : index;
+            q30_wvalid = 1;
+            if (!q30_wready)
+                failures = failures + 1;
+        end
+        @(negedge clk);
+        q30_wvalid = 0;
+
+        for (index = 0; index < 32; index = index + 1) begin
+            @(negedge clk);
+            q8_wslot = 1;
+            q8_wblock = index[4:0];
+            q8_wdata = index == 31
+                ? {16'h3555, 256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+                : index;
+            q8_wepoch = first_epoch;
+            q8_wvalid = 1;
+            if (!q8_wready)
+                failures = failures + 1;
+        end
+        @(negedge clk);
         q8_wvalid = 0;
+
+        if (!q30_tcommit_ready || !q8_tcommit_ready)
+            failures = failures + 1;
+        q30_tcommit = 1;
+        q8_tcommit = 1;
+        @(negedge clk);
+        q30_tcommit = 0;
+        q8_tcommit = 0;
 
         q30_rslot = 1;
         q30_rindex = 10'd777;
@@ -119,7 +193,8 @@ module truega_lfm25_resident_tensor_store_tb;
         q8_rslot = 1;
         q8_rblock = 5'd31;
         pulse_q8_read(first_epoch);
-        if (!q8_rsp || q8_rerror || q8_rdata !== q8_wdata)
+        if (!q8_rsp || q8_rerror
+                || q8_rdata !== {16'h3555, 256'h0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef})
             failures = failures + 1;
 
         @(negedge clk);
@@ -128,6 +203,40 @@ module truega_lfm25_resident_tensor_store_tb;
         @(negedge clk);
         session_begin = 0;
         if (!session_begin_done || session_begin_error || epoch == first_epoch)
+            failures = failures + 1;
+
+        // A new-session partial write invalidates the destination and cannot
+        // expose either old-session payload or the new partial payload.
+        q30_tepoch = epoch;
+        q30_tbegin = 1;
+        @(negedge clk);
+        q30_tbegin = 0;
+        q30_wepoch = epoch;
+        q30_windex = 10'd0;
+        q30_wdata = 64'sd999;
+        q30_wvalid = 1;
+        @(negedge clk);
+        q30_wvalid = 0;
+        q30_rindex = 10'd0;
+        pulse_q30_read(epoch);
+        if (q30_rsp || !q30_rerror || q30_tcommit_ready)
+            failures = failures + 1;
+
+        // Reusing the active epoch and epoch zero are both rejected without
+        // changing the installed session.
+        session_begin_epoch = epoch;
+        session_begin = 1;
+        @(negedge clk);
+        session_begin = 0;
+        if (!session_begin_done || !session_begin_error
+                || epoch != 32'h1234_0002)
+            failures = failures + 1;
+        session_begin_epoch = 32'd0;
+        session_begin = 1;
+        @(negedge clk);
+        session_begin = 0;
+        if (!session_begin_done || !session_begin_error
+                || epoch != 32'h1234_0002)
             failures = failures + 1;
 
         pulse_q30_read(first_epoch);

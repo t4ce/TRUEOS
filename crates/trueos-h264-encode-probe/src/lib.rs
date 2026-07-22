@@ -14,37 +14,16 @@ pub const PROBE_HEIGHT: u32 = 1080;
 pub const PROBE_CODED_WIDTH: u32 = 1920;
 pub const PROBE_CODED_HEIGHT: u32 = 1088;
 
-/// Compact boot-video workload dimensions. The 60-byte scenario below is
-/// embedded in the kernel; raw I420 frames are deterministically expanded one
-/// at a time so the image does not grow by roughly 23 MiB.
+/// Raw boot-video workload embedded directly into the kernel image.
 pub const SEQUENCE_WIDTH: u32 = 512;
 pub const SEQUENCE_HEIGHT: u32 = 512;
-pub const SEQUENCE_FRAME_COUNT: usize = 60;
+pub const SEQUENCE_FRAME_COUNT: usize = 30;
+pub const SEQUENCE_FRAME_I420_BYTES: usize =
+    SEQUENCE_WIDTH as usize * SEQUENCE_HEIGHT as usize * 3 / 2;
+pub const SEQUENCE_ASSET_BYTES: usize = SEQUENCE_FRAME_I420_BYTES * SEQUENCE_FRAME_COUNT;
 
-const SEQUENCE_SCENARIO: [u8; SEQUENCE_FRAME_COUNT] = [
-    0, 11, 22, 33, 44, 55, 6, 17, 28, 39, 50, 1, 12, 23, 34, 45, 56, 7, 18, 29, 40, 51, 2, 13, 24,
-    35, 46, 57, 8, 19, 30, 41, 52, 3, 14, 25, 36, 47, 58, 9, 20, 31, 42, 53, 4, 15, 26, 37, 48, 59,
-    10, 21, 32, 43, 54, 5, 16, 27, 38, 49,
-];
-
-const RGB_SPECTRUM: [[u8; 3]; 16] = [
-    [255, 255, 255],
-    [255, 255, 0],
-    [128, 255, 0],
-    [0, 255, 0],
-    [0, 255, 128],
-    [0, 255, 255],
-    [0, 128, 255],
-    [0, 0, 255],
-    [128, 0, 255],
-    [255, 0, 255],
-    [255, 0, 128],
-    [255, 0, 0],
-    [255, 128, 0],
-    [128, 128, 128],
-    [32, 32, 32],
-    [0, 0, 0],
-];
+static EMBEDDED_SEQUENCE_I420: &[u8; SEQUENCE_ASSET_BYTES] =
+    include_bytes!("../assets/testpattern_512x512_i420_30f.bin");
 
 const LUMA_BAR_VALUES: [u8; 8] = [16, 47, 78, 109, 141, 172, 203, 235];
 const CB_BAR_VALUES: [u8; 8] = [128, 90, 166, 54, 202, 72, 184, 128];
@@ -109,6 +88,21 @@ pub struct SequenceMetrics {
 pub struct EncodedSequenceProbe {
     pub annex_b: Vec<u8>,
     pub metrics: SequenceMetrics,
+}
+
+/// The literal planar I420 test asset linked into the kernel image.
+pub fn embedded_sequence_i420() -> &'static [u8] {
+    EMBEDDED_SEQUENCE_I420
+}
+
+/// Return one complete `Y + Cb + Cr` frame from the embedded asset.
+pub fn embedded_sequence_frame_i420(frame_index: usize) -> Option<&'static [u8]> {
+    if frame_index >= SEQUENCE_FRAME_COUNT {
+        return None;
+    }
+    let start = frame_index.checked_mul(SEQUENCE_FRAME_I420_BYTES)?;
+    let end = start.checked_add(SEQUENCE_FRAME_I420_BYTES)?;
+    EMBEDDED_SEQUENCE_I420.get(start..end)
 }
 
 struct DiagnosticFrame {
@@ -197,77 +191,21 @@ impl DiagnosticFrame {
 }
 
 struct SequenceFrame {
-    y: Vec<u8>,
-    cb: Vec<u8>,
-    cr: Vec<u8>,
+    y: &'static [u8],
+    cb: &'static [u8],
+    cr: &'static [u8],
 }
 
 impl SequenceFrame {
     fn new(frame_index: usize) -> Self {
         let width = SEQUENCE_WIDTH as usize;
         let height = SEQUENCE_HEIGHT as usize;
-        let chroma_width = width / 2;
-        let chroma_height = height / 2;
-        let mut y = vec![16; width * height];
-        let mut cb = vec![128; chroma_width * chroma_height];
-        let mut cr = vec![128; chroma_width * chroma_height];
-        let scenario = usize::from(SEQUENCE_SCENARIO[frame_index % SEQUENCE_FRAME_COUNT]);
-        let phase = (scenario + frame_index) % RGB_SPECTRUM.len();
-        let motion_x = (scenario * 7 + frame_index * 5) % (width - 64);
-        let motion_y = (scenario * 3 + frame_index * 7) % (height - 64);
-
-        // Each chroma sample owns exactly one 2x2 luma cell. This keeps the
-        // source valid I420 while exercising color bars, legal-range ramps,
-        // high-frequency chroma tiles, hard edges, and temporal motion.
-        for chroma_y in 0..chroma_height {
-            let pixel_y = chroma_y * 2;
-            for chroma_x in 0..chroma_width {
-                let pixel_x = chroma_x * 2;
-                let in_motion = pixel_x >= motion_x
-                    && pixel_x < motion_x + 64
-                    && pixel_y >= motion_y
-                    && pixel_y < motion_y + 64;
-                let rgb = if in_motion {
-                    let checker = ((pixel_x - motion_x) / 4 + (pixel_y - motion_y) / 4) & 1;
-                    if checker == 0 {
-                        RGB_SPECTRUM[(phase + frame_index / 4) % RGB_SPECTRUM.len()]
-                    } else {
-                        RGB_SPECTRUM[15]
-                    }
-                } else if pixel_y < 192 {
-                    let bar = pixel_x * RGB_SPECTRUM.len() / width;
-                    RGB_SPECTRUM[(bar + phase) % RGB_SPECTRUM.len()]
-                } else if pixel_y < 320 {
-                    let ramp = ((pixel_x * 255) / (width - 1)) as u8;
-                    [ramp, ramp, ramp]
-                } else {
-                    let tile = (pixel_x / 8) + (pixel_y / 8) + phase;
-                    RGB_SPECTRUM[tile % RGB_SPECTRUM.len()]
-                };
-                let (cell_y, cell_cb, cell_cr) = rgb_to_limited_ycbcr(rgb);
-                for row in pixel_y..pixel_y + 2 {
-                    let row_start = row * width;
-                    y[row_start + pixel_x] = cell_y;
-                    y[row_start + pixel_x + 1] = cell_y;
-                }
-                let chroma_offset = chroma_y * chroma_width + chroma_x;
-                cb[chroma_offset] = cell_cb;
-                cr[chroma_offset] = cell_cr;
-            }
-        }
-
-        // White/black registration crosshairs are luma-only on purpose: they
-        // catch single-pixel positioning errors without making invalid 4:2:0
-        // chroma transitions.
-        let cross_x = (width / 2 + frame_index) % width;
-        let cross_y = (height / 2 + frame_index * 2) % height;
-        for row in 0..height {
-            y[row * width + cross_x] = if row & 1 == 0 { 235 } else { 16 };
-        }
-        for col in 0..width {
-            y[cross_y * width + col] = if col & 1 == 0 { 235 } else { 16 };
-        }
-
+        let y_bytes = width * height;
+        let chroma_bytes = y_bytes / 4;
+        let frame = embedded_sequence_frame_i420(frame_index)
+            .expect("embedded sequence frame index is in range");
+        let (y, chroma) = frame.split_at(y_bytes);
+        let (cb, cr) = chroma.split_at(chroma_bytes);
         Self { y, cb, cr }
     }
 
@@ -277,17 +215,17 @@ impl SequenceFrame {
         YCbCrImage {
             planes: Planes::YCbCr((
                 DataPlane {
-                    data: self.y.as_slice(),
+                    data: self.y,
                     stride: luma_stride,
                     bit_depth: BitDepth::Depth8,
                 },
                 DataPlane {
-                    data: self.cb.as_slice(),
+                    data: self.cb,
                     stride: chroma_stride,
                     bit_depth: BitDepth::Depth8,
                 },
                 DataPlane {
-                    data: self.cr.as_slice(),
+                    data: self.cr,
                     stride: chroma_stride,
                     bit_depth: BitDepth::Depth8,
                 },
@@ -297,31 +235,15 @@ impl SequenceFrame {
         }
     }
 
-    fn append_visible_i420(&self, output: &mut Vec<u8>) {
-        output.extend_from_slice(self.y.as_slice());
-        output.extend_from_slice(self.cb.as_slice());
-        output.extend_from_slice(self.cr.as_slice());
-    }
-
     fn byte_len(&self) -> usize {
         self.y.len() + self.cb.len() + self.cr.len()
     }
 
     fn extend_hash(&self, hash: &mut u32) {
-        for plane in [&self.y, &self.cb, &self.cr] {
-            fnv1a32_extend(hash, plane.as_slice());
+        for plane in [self.y, self.cb, self.cr] {
+            fnv1a32_extend(hash, plane);
         }
     }
-}
-
-fn rgb_to_limited_ycbcr([red, green, blue]: [u8; 3]) -> (u8, u8, u8) {
-    let red = i32::from(red);
-    let green = i32::from(green);
-    let blue = i32::from(blue);
-    let y = 16 + ((66 * red + 129 * green + 25 * blue + 128) >> 8);
-    let cb = 128 + ((-38 * red - 74 * green + 112 * blue + 128) >> 8);
-    let cr = 128 + ((112 * red - 94 * green - 18 * blue + 128) >> 8);
-    (y.clamp(16, 235) as u8, cb.clamp(16, 240) as u8, cr.clamp(16, 240) as u8)
 }
 
 pub struct DiagnosticSequenceEncoder {
@@ -373,7 +295,7 @@ impl DiagnosticSequenceEncoder {
         self.next_frame
     }
 
-    /// Encode one additional frame. Returns `false` after all 60 frames have
+    /// Encode one additional frame. Returns `false` after the embedded frames have
     /// already been encoded, allowing an async caller to yield between steps.
     pub fn encode_next(&mut self) -> Result<bool, ProbeError> {
         if self.next_frame >= SEQUENCE_FRAME_COUNT {
@@ -425,15 +347,10 @@ impl DiagnosticSequenceEncoder {
 }
 
 pub fn diagnostic_sequence_visible_i420() -> Vec<u8> {
-    let frame_bytes = SEQUENCE_WIDTH as usize * SEQUENCE_HEIGHT as usize * 3 / 2;
-    let mut visible = Vec::with_capacity(frame_bytes * SEQUENCE_FRAME_COUNT);
-    for frame_index in 0..SEQUENCE_FRAME_COUNT {
-        SequenceFrame::new(frame_index).append_visible_i420(&mut visible);
-    }
-    visible
+    EMBEDDED_SEQUENCE_I420.to_vec()
 }
 
-pub fn encode_diagnostic_sequence_512x512_60() -> Result<EncodedSequenceProbe, ProbeError> {
+pub fn encode_embedded_diagnostic_sequence() -> Result<EncodedSequenceProbe, ProbeError> {
     let mut encoder = DiagnosticSequenceEncoder::new()?;
     while encoder.encode_next()? {}
     encoder.finish()

@@ -48,6 +48,8 @@ pub mod services {
     pub const SWARM_BLUEPRINT_RELAY_UDP_PORT: u16 = 32_345;
     /// Network MIDI piano state ingress consumed by the kernel audio mixer.
     pub const MIDI_PIANO_UDP_PORT: u16 = 9_696;
+    /// Bounded H.264 boot-probe stream broadcast for the Linux receiver tool.
+    pub const MEDIA_ENCODE_PROBE_UDP_PORT: u16 = 9_650;
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const TINYAUDIO_LIVE_HTTP_TCP_PORT: u16 = 82;

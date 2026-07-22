@@ -1,11 +1,12 @@
 # TRUEOS H.264 encode proof
 
 This `no_std` crate owns the codec-only half of the
-`trueos_h264_encode_probe` service. Its boot workload expands a 60-byte
-embedded scenario into 60 deterministic 512x512 I420 frames. The pattern
-covers rotating full-spectrum bars, a legal-range luma ramp, high-frequency
-chroma tiles, registration crosshairs, and a moving checker. Expanding the raw
-frames at runtime avoids embedding roughly 23 MiB in the kernel image.
+`trueos_h264_encode_probe` service. Its boot workload is a literal embedded
+11,796,480-byte asset containing 30 deterministic 512x512 I420 frames. The
+pattern covers rotating full-spectrum bars, a legal-range luma ramp,
+high-frequency chroma tiles, registration crosshairs, and a moving checker.
+The kernel consumes these bytes directly; it does not synthesize the frames at
+runtime.
 
 Every frame uses Baseline-profile `I_PCM` macroblocks and is emitted as an IDR
 slice after one SPS/PPS pair. It is a real, lossless software H.264 encoder
@@ -13,6 +14,13 @@ proof, but deliberately provides no useful compression. Fifteen seconds after
 boot the kernel audits Intel media-encode readiness, runs this software
 fallback because hardware encode is not wired yet, and writes
 `trueosfs:/video_encode_<timestamp>.h264`.
+
+The checked-in asset can be reproduced with the host-only generator:
+
+```sh
+cargo run --release --example generate_embedded_i420 -- \
+  assets/testpattern_512x512_i420_30f.bin
+```
 
 The service is in the default feature set. It can also be selected explicitly:
 
