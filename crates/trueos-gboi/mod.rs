@@ -11,12 +11,28 @@ pub mod timer;
 
 use cpu::GbBus;
 
-/// M-cycles per frame (~59.73 fps, 17556 M-cycles @ 4.194304 MHz)
-const FRAME_MCYCLES: u32 = 17556;
+/// DMG master clock. One normal-speed CPU M-cycle is four of these ticks.
+pub const DMG_CLOCK_HZ: u32 = 4_194_304;
+/// Master-clock dots in one 154-line LCD frame.
+pub const FRAME_DOTS: u32 = gpu::DOTS_PER_FRAME;
+/// Rounded host-side pacing interval for the native 59.7275 Hz refresh rate.
+pub const FRAME_DURATION_NANOS: u64 =
+    (FRAME_DOTS as u64 * 1_000_000_000 + (DMG_CLOCK_HZ as u64 / 2)) / DMG_CLOCK_HZ as u64;
 const HOST_KEY_ARROW_UP: u8 = 0xF0;
 const HOST_KEY_ARROW_DOWN: u8 = 0xF1;
 const HOST_KEY_ARROW_LEFT: u8 = 0xF2;
 const HOST_KEY_ARROW_RIGHT: u8 = 0xF3;
+
+fn joypad_value(select: u8, buttons: u8, directions: u8) -> u8 {
+    let mut low = 0x0F;
+    if select & 0x10 == 0 {
+        low &= directions;
+    }
+    if select & 0x20 == 0 {
+        low &= buttons;
+    }
+    0xC0 | (select & 0x30) | low
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GameBoyButton {
@@ -96,6 +112,10 @@ pub struct GameBoyEmulator {
     pub hdma4: u8,     // $FF54: HDMA Dest Low
     pub hdma5: u8,     // $FF55: HDMA Length/Mode/Start
     pub hdma_active: bool,
+
+    // Instructions are indivisible at this core's accuracy level. Carry their
+    // small frame-boundary overshoot forward instead of running it every frame.
+    frame_dot_debt: u32,
 }
 
 impl GameBoyEmulator {
@@ -126,6 +146,7 @@ impl GameBoyEmulator {
             hdma4: 0xFF,
             hdma5: 0xFF,
             hdma_active: false,
+            frame_dot_debt: 0,
         }
     }
 
@@ -180,6 +201,7 @@ impl GameBoyEmulator {
             self.wram_bank = 1;
             self.key1 = 0;
             self.hdma_active = false;
+            self.frame_dot_debt = 0;
             self.rom_loaded = true;
             crate::log!("[GB] ROM loaded successfully (CGB={})\n", is_cgb);
             true
@@ -189,37 +211,11 @@ impl GameBoyEmulator {
         }
     }
 
-    fn make_bus(&mut self) -> BusAdapter<'_> {
-        BusAdapter {
-            wram: &mut self.wram,
-            hram: &mut self.hram,
-            gpu: &mut self.gpu,
-            timer: &mut self.timer,
-            apu: &mut self.apu,
-            cart: &mut self.cart,
-            ie_reg: &mut self.ie_reg,
-            if_reg: &mut self.if_reg,
-            joypad_reg: &mut self.joypad_reg,
-            joypad_buttons: &self.joypad_buttons,
-            joypad_dirs: &self.joypad_dirs,
-            serial_data: &mut self.serial_data,
-            serial_ctrl: &mut self.serial_ctrl,
-            cgb_mode: self.cgb_mode,
-            wram_bank: &mut self.wram_bank,
-            key1: &mut self.key1,
-            hdma1: &mut self.hdma1,
-            hdma2: &mut self.hdma2,
-            hdma3: &mut self.hdma3,
-            hdma4: &mut self.hdma4,
-            hdma5: &mut self.hdma5,
-            hdma_active: &mut self.hdma_active,
-        }
-    }
-
     // Key handling — active-low (0 = pressed)
     // Joypad buttons: bit3=Start, bit2=Select, bit1=B, bit0=A
     // Joypad dirs:    bit3=Down,  bit2=Up,     bit1=Left, bit0=Right
     pub fn set_button(&mut self, button: GameBoyButton, pressed: bool) {
+        let old_lines = joypad_value(self.joypad_reg, self.joypad_buttons, self.joypad_dirs) & 0x0F;
         let mask = button.mask();
         let reg = if button.is_direction() {
             &mut self.joypad_dirs
@@ -228,9 +224,12 @@ impl GameBoyEmulator {
         };
         if pressed {
             *reg &= !mask;
-            self.if_reg |= 0x10; // Joypad interrupt
         } else {
             *reg |= mask;
+        }
+        let new_lines = joypad_value(self.joypad_reg, self.joypad_buttons, self.joypad_dirs) & 0x0F;
+        if old_lines & !new_lines != 0 {
+            self.if_reg |= 0x10;
         }
     }
 
@@ -246,25 +245,30 @@ impl GameBoyEmulator {
         }
     }
 
-    /// Run one frame (~17556 M-cycles)
+    /// Run one native LCD frame quantum.
+    ///
+    /// Callers should pace this at [`FRAME_DURATION_NANOS`] (about 16.743 ms),
+    /// not at a rounded 16 ms. Instruction overshoot is carried into the next
+    /// call so long-running emulation stays locked to the DMG master clock.
     pub fn tick(&mut self) {
         if !self.rom_loaded {
             return;
         }
 
         self.gpu.frame_ready = false;
-        let mut frame_cycles: u32 = 0;
+        let mut frame_dots = self.frame_dot_debt;
         let mut safety_counter: u32 = 0;
         const MAX_INSTRUCTIONS: u32 = 200_000; // Safety limit
 
-        while frame_cycles < FRAME_MCYCLES {
+        while frame_dots < FRAME_DOTS {
             safety_counter += 1;
             if safety_counter > MAX_INSTRUCTIONS {
                 // Prevent infinite loops from crashing the OS
                 break;
             }
 
-            let m = {
+            let double_speed = self.cgb_mode && self.key1 & 0x80 != 0;
+            let m_cycles = {
                 let mut bus = BusAdapter {
                     wram: &mut self.wram,
                     hram: &mut self.hram,
@@ -287,15 +291,17 @@ impl GameBoyEmulator {
                     hdma3: &mut self.hdma3,
                     hdma4: &mut self.hdma4,
                     hdma5: &mut self.hdma5,
-                    hdma_active: &mut self.hdma_active,
                 };
                 self.cpu.step(&mut bus)
             };
 
-            // Step GPU and Timer with M-cycles
-            self.gpu.step(m);
-            self.timer.step(m);
-            self.apu.step(m.saturating_mul(4));
+            // PPU/APU remain on the 4.194304 MHz master clock in CGB double
+            // speed, while the CPU timer/divider run at the faster CPU rate.
+            let dots_per_m_cycle = if double_speed { 2 } else { 4 };
+            let elapsed_dots = m_cycles.saturating_mul(dots_per_m_cycle);
+            self.gpu.step_dots(elapsed_dots);
+            self.timer.step(m_cycles);
+            self.apu.step(elapsed_dots);
 
             // Collect interrupt requests
             if self.gpu.vblank_irq {
@@ -311,8 +317,10 @@ impl GameBoyEmulator {
                 self.timer.interrupt = false;
             }
 
-            frame_cycles += m;
+            frame_dots = frame_dots.saturating_add(elapsed_dots);
         }
+
+        self.frame_dot_debt = frame_dots.saturating_sub(FRAME_DOTS);
     }
 
     pub fn drain_audio_samples_into(&mut self, out: &mut Vec<i16>) {
@@ -401,6 +409,12 @@ impl GameBoyEmulator {
     }
 }
 
+impl Default for GameBoyEmulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // BusAdapter: borrows components separately to satisfy borrow checker
 struct BusAdapter<'a> {
     wram: &'a mut Vec<u8>,
@@ -425,7 +439,6 @@ struct BusAdapter<'a> {
     hdma3: &'a mut u8,
     hdma4: &'a mut u8,
     hdma5: &'a mut u8,
-    hdma_active: &'a mut bool,
 }
 
 impl GbBus for BusAdapter<'_> {
@@ -473,23 +486,14 @@ impl GbBus for BusAdapter<'_> {
             // Not usable
             0xFEA0..=0xFEFF => 0xFF,
             // I/O registers
-            0xFF00 => {
-                let mut val = *self.joypad_reg & 0x30;
-                if val & 0x10 == 0 {
-                    val |= *self.joypad_dirs;
-                }
-                if val & 0x20 == 0 {
-                    val |= *self.joypad_buttons;
-                }
-                val | 0xC0
-            }
+            0xFF00 => joypad_value(*self.joypad_reg, *self.joypad_buttons, *self.joypad_dirs),
             0xFF01 => *self.serial_data,
             0xFF02 => *self.serial_ctrl,
             0xFF04 => self.timer.read_div(),
             0xFF05 => self.timer.tima,
             0xFF06 => self.timer.tma,
-            0xFF07 => self.timer.tac,
-            0xFF0F => *self.if_reg,
+            0xFF07 => self.timer.read_tac(),
+            0xFF0F => *self.if_reg | 0xE0,
             // Audio
             0xFF10..=0xFF3F => self.apu.read(addr),
             // LCD
@@ -512,7 +516,13 @@ impl GbBus for BusAdapter<'_> {
             0xFF4A => self.gpu.wy,
             0xFF4B => self.gpu.wx,
             // CGB registers
-            0xFF4D => *self.key1,                // KEY1 speed switch
+            0xFF4D => {
+                if self.cgb_mode {
+                    *self.key1 | 0x7E
+                } else {
+                    0xFF
+                }
+            }
             0xFF4F => self.gpu.vram_bank | 0xFE, // VBK VRAM bank (only bit 0)
             0xFF51 => *self.hdma1,
             0xFF52 => *self.hdma2,
@@ -572,33 +582,32 @@ impl GbBus for BusAdapter<'_> {
             // Not usable
             0xFEA0..=0xFEFF => {}
             // I/O
-            0xFF00 => *self.joypad_reg = val & 0x30,
+            0xFF00 => {
+                let old_lines =
+                    joypad_value(*self.joypad_reg, *self.joypad_buttons, *self.joypad_dirs) & 0x0F;
+                *self.joypad_reg = val & 0x30;
+                let new_lines =
+                    joypad_value(*self.joypad_reg, *self.joypad_buttons, *self.joypad_dirs) & 0x0F;
+                if old_lines & !new_lines != 0 {
+                    *self.if_reg |= 0x10;
+                }
+            }
             0xFF01 => *self.serial_data = val,
             0xFF02 => *self.serial_ctrl = val,
             0xFF04 => self.timer.write_div(),
-            0xFF05 => self.timer.tima = val,
-            0xFF06 => self.timer.tma = val,
-            0xFF07 => self.timer.tac = val,
-            0xFF0F => *self.if_reg = val,
+            0xFF05 => self.timer.write_tima(val),
+            0xFF06 => self.timer.write_tma(val),
+            0xFF07 => self.timer.write_tac(val),
+            0xFF0F => *self.if_reg = val & 0x1F,
             // Audio
             0xFF10..=0xFF3F => self.apu.write(addr, val),
             // LCD
-            0xFF40 => {
-                let old = self.gpu.lcdc;
-                self.gpu.lcdc = val;
-                // LCD just turned on — reset GPU state
-                if val & 0x80 != 0 && old & 0x80 == 0 {
-                    self.gpu.ly = 0;
-                    self.gpu.cycles = 0;
-                    self.gpu.mode = 2;
-                    self.gpu.window_line = 0;
-                }
-            }
-            0xFF41 => self.gpu.stat = (self.gpu.stat & 0x07) | (val & 0xF8),
+            0xFF40 => self.gpu.write_lcdc(val),
+            0xFF41 => self.gpu.write_stat(val),
             0xFF42 => self.gpu.scy = val,
             0xFF43 => self.gpu.scx = val,
             0xFF44 => {} // LY is read-only
-            0xFF45 => self.gpu.lyc = val,
+            0xFF45 => self.gpu.write_lyc(val),
             0xFF46 => {
                 // OAM DMA transfer — copy 160 bytes from val*$100
                 let base = (val as u16) << 8;
@@ -709,6 +718,16 @@ impl GbBus for BusAdapter<'_> {
             _ => {}
         }
     }
+
+    fn stop(&mut self) {
+        if self.cgb_mode && *self.key1 & 0x01 != 0 {
+            *self.key1 = (*self.key1 ^ 0x80) & 0x80;
+            // A CGB speed switch resets the system counter.  This core does not
+            // model the hardware's long switch pause, but the clock domains and
+            // post-switch divider phase remain coherent.
+            self.timer.write_div();
+        }
+    }
 }
 
 // ======== Simple text rendering (3×5 bitmap font) ========
@@ -785,5 +804,63 @@ fn get_glyph(ch: u8) -> [u8; 5] {
         b':' => [0b000, 0b010, 0b000, 0b010, 0b000],
         b' ' => [0b000, 0b000, 0b000, 0b000, 0b000],
         _ => [0b111, 0b111, 0b111, 0b111, 0b111],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DMG_CLOCK_HZ, FRAME_DOTS, FRAME_DURATION_NANOS, GameBoyButton, GameBoyEmulator,
+        joypad_value,
+    };
+
+    #[test]
+    fn native_frame_cadence_matches_the_dmg_master_clock() {
+        assert_eq!(FRAME_DOTS, 70_224);
+        assert_eq!(DMG_CLOCK_HZ, 4_194_304);
+        assert_eq!(FRAME_DURATION_NANOS, 16_742_706);
+    }
+
+    #[test]
+    fn instruction_overshoot_is_repaid_on_the_next_frame() {
+        let mut emulator = GameBoyEmulator::new();
+        emulator.rom_loaded = true;
+        // A stable five-M-cycle loop: LD B,0 (2) + JR -4 (3).  Since a frame
+        // is 17_556 M-cycles, its first boundary lands one M-cycle into debt.
+        emulator.cart.rom[0x0100] = 0x06;
+        emulator.cart.rom[0x0101] = 0x00;
+        emulator.cart.rom[0x0102] = 0x18;
+        emulator.cart.rom[0x0103] = 0xFC;
+
+        emulator.tick();
+        assert_eq!(emulator.frame_dot_debt, 4);
+        assert_eq!(emulator.cpu.cycles, 17_557);
+
+        emulator.tick();
+        assert_eq!(emulator.frame_dot_debt, 0);
+        assert_eq!(emulator.cpu.cycles, 35_112);
+        assert_eq!(emulator.gpu.ly, 0);
+        assert_eq!(emulator.gpu.mode, 2);
+        assert_eq!(emulator.gpu.cycles, 0);
+    }
+
+    #[test]
+    fn joypad_interrupt_only_fires_on_a_selected_falling_edge() {
+        let mut emulator = GameBoyEmulator::new();
+        emulator.joypad_reg = 0x30; // Neither key matrix row selected.
+        emulator.set_button(GameBoyButton::A, true);
+        assert_eq!(emulator.if_reg & 0x10, 0);
+
+        emulator.joypad_reg = 0x10; // Select the button row.
+        assert_eq!(
+            joypad_value(emulator.joypad_reg, emulator.joypad_buttons, emulator.joypad_dirs) & 0x0F,
+            0x0E
+        );
+
+        emulator.set_button(GameBoyButton::B, true);
+        assert_ne!(emulator.if_reg & 0x10, 0);
+        emulator.if_reg &= !0x10;
+        emulator.set_button(GameBoyButton::B, true);
+        assert_eq!(emulator.if_reg & 0x10, 0, "holding a key is not a new edge");
     }
 }

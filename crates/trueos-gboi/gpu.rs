@@ -14,6 +14,13 @@ pub const GB_PALETTE: [u32; 4] = [
 
 pub const SCREEN_W: usize = 160;
 pub const SCREEN_H: usize = 144;
+pub const DOTS_PER_SCANLINE: u32 = 456;
+pub const SCANLINES_PER_FRAME: u32 = 154;
+pub const DOTS_PER_FRAME: u32 = DOTS_PER_SCANLINE * SCANLINES_PER_FRAME;
+
+const OAM_DOTS: u32 = 80;
+const TRANSFER_DOTS: u32 = 172;
+const HBLANK_DOTS: u32 = DOTS_PER_SCANLINE - OAM_DOTS - TRANSFER_DOTS;
 
 pub struct Gpu {
     pub vram: [u8; 8192],      // $8000-$9FFF VRAM bank 0
@@ -35,13 +42,14 @@ pub struct Gpu {
     pub wx: u8,   // $FF4B Window X
 
     pub mode: u8,    // Current LCD mode (0-3)
-    pub cycles: u32, // Cycles into current scanline
+    pub cycles: u32, // Dots elapsed in the current mode
     pub frame_ready: bool,
     pub stat_irq: bool,   // STAT interrupt request
     pub vblank_irq: bool, // VBlank interrupt request
 
     // Internal
     pub window_line: u8, // Current window line counter
+    stat_line: bool,     // Combined STAT sources, for rising-edge detection
 
     // CGB extensions
     pub cgb_mode: bool,        // Running in CGB mode
@@ -78,6 +86,7 @@ impl Gpu {
             stat_irq: false,
             vblank_irq: false,
             window_line: 0,
+            stat_line: false,
             cgb_mode: false,
             vram_bank: 0,
             bg_palette: [0xFF; 64],
@@ -88,102 +97,123 @@ impl Gpu {
         }
     }
 
-    /// Advance GPU by given number of CPU cycles (1 CPU cycle = 4 dots)
-    pub fn step(&mut self, cpu_cycles: u32) {
+    /// Advance the PPU by normal-speed CPU M-cycles (four dots each).
+    pub fn step(&mut self, m_cycles: u32) {
+        self.step_dots(m_cycles.saturating_mul(4));
+    }
+
+    /// Advance the PPU by master-clock dots.  This is also the correct input
+    /// unit while the CGB CPU is in double-speed mode.
+    pub fn step_dots(&mut self, dots: u32) {
         if self.lcdc & 0x80 == 0 {
-            // LCD disabled
             return;
         }
 
-        self.cycles += cpu_cycles * 4; // Convert to dots
-
-        match self.mode {
-            2 => {
-                // OAM Search (80 dots)
-                if self.cycles >= 80 {
-                    self.cycles -= 80;
-                    self.mode = 3;
+        self.cycles = self.cycles.saturating_add(dots);
+        loop {
+            let mode_duration = match self.mode {
+                0 => HBLANK_DOTS,
+                1 => DOTS_PER_SCANLINE,
+                2 => OAM_DOTS,
+                3 => TRANSFER_DOTS,
+                _ => {
+                    self.mode = 2;
+                    OAM_DOTS
                 }
+            };
+            if self.cycles < mode_duration {
+                break;
             }
-            3 => {
-                // Pixel Transfer (~172 dots)
-                if self.cycles >= 172 {
-                    self.cycles -= 172;
-                    self.mode = 0;
 
-                    // Render scanline at end of pixel transfer
-                    self.render_scanline();
-
-                    // STAT mode 0 interrupt
-                    if self.stat & 0x08 != 0 {
-                        self.stat_irq = true;
-                    }
-                }
-            }
-            0 => {
-                // HBlank (~204 dots)
-                if self.cycles >= 204 {
-                    self.cycles -= 204;
-                    self.ly += 1;
-
-                    if self.ly == 144 {
-                        // Enter VBlank
-                        self.mode = 1;
-                        self.vblank_irq = true;
-                        self.frame_ready = true;
-                        self.window_line = 0;
-
-                        // STAT mode 1 interrupt
-                        if self.stat & 0x10 != 0 {
-                            self.stat_irq = true;
-                        }
-                    } else {
-                        self.mode = 2;
-                        // STAT mode 2 interrupt
-                        if self.stat & 0x20 != 0 {
-                            self.stat_irq = true;
-                        }
-                    }
-
-                    self.check_lyc();
-                }
-            }
-            1 => {
-                // VBlank (10 scanlines, 456 dots each)
-                if self.cycles >= 456 {
-                    self.cycles -= 456;
-                    self.ly += 1;
-
-                    if self.ly >= 154 {
-                        self.ly = 0;
-                        self.mode = 2;
-
-                        // STAT mode 2 interrupt
-                        if self.stat & 0x20 != 0 {
-                            self.stat_irq = true;
-                        }
-                    }
-
-                    self.check_lyc();
-                }
-            }
-            _ => {}
+            self.cycles -= mode_duration;
+            self.finish_mode();
         }
     }
 
-    fn check_lyc(&mut self) {
-        if self.ly == self.lyc {
-            self.stat |= 0x04; // LYC coincidence flag
-            if self.stat & 0x40 != 0 {
-                self.stat_irq = true;
+    fn finish_mode(&mut self) {
+        match self.mode {
+            2 => self.mode = 3,
+            3 => {
+                self.render_scanline();
+                self.mode = 0;
             }
+            0 => {
+                self.ly = self.ly.wrapping_add(1);
+                if self.ly == SCREEN_H as u8 {
+                    self.mode = 1;
+                    self.vblank_irq = true;
+                    self.frame_ready = true;
+                    self.window_line = 0;
+                } else {
+                    self.mode = 2;
+                }
+                self.update_lyc_flag();
+            }
+            1 => {
+                self.ly = self.ly.wrapping_add(1);
+                if self.ly >= SCANLINES_PER_FRAME as u8 {
+                    self.ly = 0;
+                    self.mode = 2;
+                }
+                self.update_lyc_flag();
+            }
+            _ => self.mode = 2,
+        }
+        self.update_stat_line();
+    }
+
+    fn update_lyc_flag(&mut self) {
+        if self.ly == self.lyc {
+            self.stat |= 0x04;
         } else {
             self.stat &= !0x04;
         }
     }
 
+    fn update_stat_line(&mut self) {
+        let coincidence = self.ly == self.lyc && self.stat & 0x40 != 0;
+        let mode_source = match self.mode {
+            0 => self.stat & 0x08 != 0,
+            1 => self.stat & 0x10 != 0,
+            2 => self.stat & 0x20 != 0,
+            _ => false,
+        };
+        let line = self.lcdc & 0x80 != 0 && (coincidence || mode_source);
+        if line && !self.stat_line {
+            self.stat_irq = true;
+        }
+        self.stat_line = line;
+    }
+
+    pub fn write_lcdc(&mut self, value: u8) {
+        let was_enabled = self.lcdc & 0x80 != 0;
+        let enabled = value & 0x80 != 0;
+        self.lcdc = value;
+
+        if was_enabled != enabled {
+            self.ly = 0;
+            self.cycles = 0;
+            self.mode = if enabled { 2 } else { 0 };
+            self.window_line = 0;
+            self.update_lyc_flag();
+        }
+        self.update_stat_line();
+    }
+
+    pub fn write_stat(&mut self, value: u8) {
+        self.stat = (self.stat & 0x07) | (value & 0xF8);
+        self.update_stat_line();
+    }
+
+    pub fn write_lyc(&mut self, value: u8) {
+        self.lyc = value;
+        self.update_lyc_flag();
+        self.update_stat_line();
+    }
+
     pub fn read_stat(&self) -> u8 {
-        (self.stat & 0xF8) | (if self.ly == self.lyc { 0x04 } else { 0 }) | self.mode
+        let mode = if self.lcdc & 0x80 != 0 { self.mode } else { 0 };
+        0x80 | (self.stat & 0x78) | (if self.ly == self.lyc { 0x04 } else { 0 }) | mode
     }
 
     /// Render one scanline to the framebuffer
@@ -743,5 +773,99 @@ impl Gpu {
         if idx < 160 {
             self.oam[idx] = val;
         }
+    }
+}
+
+impl Default for Gpu {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DOTS_PER_FRAME, Gpu};
+
+    #[test]
+    fn a_full_frame_returns_to_line_zero_mode_two() {
+        let mut gpu = Gpu::new();
+
+        gpu.step_dots(DOTS_PER_FRAME);
+
+        assert_eq!(gpu.ly, 0);
+        assert_eq!(gpu.mode, 2);
+        assert_eq!(gpu.cycles, 0);
+        assert!(gpu.frame_ready);
+        assert!(gpu.vblank_irq);
+    }
+
+    #[test]
+    fn mode_boundaries_use_classic_scanline_lengths() {
+        let mut gpu = Gpu::new();
+
+        gpu.step_dots(79);
+        assert_eq!(gpu.mode, 2);
+        gpu.step_dots(1);
+        assert_eq!(gpu.mode, 3);
+
+        gpu.step_dots(172);
+        assert_eq!(gpu.mode, 0);
+        gpu.step_dots(204);
+        assert_eq!(gpu.mode, 2);
+        assert_eq!(gpu.ly, 1);
+    }
+
+    #[test]
+    fn one_call_can_cross_multiple_mode_boundaries() {
+        let mut gpu = Gpu::new();
+
+        gpu.step_dots(456 + 80);
+
+        assert_eq!(gpu.ly, 1);
+        assert_eq!(gpu.mode, 3);
+        assert_eq!(gpu.cycles, 0);
+    }
+
+    #[test]
+    fn stat_sources_share_one_rising_edge_line() {
+        let mut gpu = Gpu::new();
+        gpu.write_lyc(99);
+        gpu.write_stat(0x28); // Mode 2 and Mode 0 sources.
+        assert!(gpu.stat_irq);
+
+        gpu.stat_irq = false;
+        gpu.step_dots(80 + 172);
+        assert_eq!(gpu.mode, 0);
+        assert!(gpu.stat_irq);
+
+        gpu.stat_irq = false;
+        gpu.step_dots(204);
+        assert_eq!(gpu.mode, 2);
+        assert!(!gpu.stat_irq, "mode 0 -> 2 keeps the shared line high");
+    }
+
+    #[test]
+    fn lyc_write_updates_coincidence_and_interrupt_immediately() {
+        let mut gpu = Gpu::new();
+        gpu.write_lyc(1);
+        gpu.write_stat(0x40);
+        gpu.stat_irq = false;
+
+        gpu.write_lyc(0);
+
+        assert_ne!(gpu.read_stat() & 0x04, 0);
+        assert!(gpu.stat_irq);
+    }
+
+    #[test]
+    fn disabling_lcd_resets_visible_timing_state() {
+        let mut gpu = Gpu::new();
+        gpu.step_dots(500);
+
+        gpu.write_lcdc(gpu.lcdc & !0x80);
+
+        assert_eq!(gpu.ly, 0);
+        assert_eq!(gpu.read_stat() & 0x03, 0);
+        assert_eq!(gpu.cycles, 0);
     }
 }

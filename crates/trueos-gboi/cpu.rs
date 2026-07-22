@@ -9,6 +9,10 @@ pub const FLAG_C: u8 = 0x10;
 pub trait GbBus {
     fn read(&mut self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
+
+    /// Execute the bus-side part of STOP.  CGB buses use this hook to perform
+    /// an armed speed switch; a DMG bus has no extra work to do here.
+    fn stop(&mut self) {}
 }
 
 pub struct Cpu {
@@ -26,6 +30,7 @@ pub struct Cpu {
     pub ime_next: bool,
     pub halted: bool,
     pub cycles: u64,
+    halt_bug: bool,
 }
 
 impl Cpu {
@@ -42,10 +47,12 @@ impl Cpu {
             l: 0x4D,
             sp: 0xFFFE,
             pc: 0x0100,
-            ime: true,
+            // IME is clear when execution leaves the boot ROM.
+            ime: false,
             ime_next: false,
             halted: false,
             cycles: 0,
+            halt_bug: false,
         }
     }
 
@@ -102,7 +109,13 @@ impl Cpu {
     // Fetch
     fn fetch8(&mut self, bus: &mut impl GbBus) -> u8 {
         let v = bus.read(self.pc);
-        self.pc = self.pc.wrapping_add(1);
+        if self.halt_bug {
+            // With IME clear and an interrupt already pending, HALT suppresses
+            // the next opcode fetch's PC increment instead of halting.
+            self.halt_bug = false;
+        } else {
+            self.pc = self.pc.wrapping_add(1);
+        }
         v
     }
     fn fetch16(&mut self, bus: &mut impl GbBus) -> u16 {
@@ -321,12 +334,6 @@ impl Cpu {
     // Main step — returns M-cycles consumed (1 M-cycle = 4 T-states)
     // ========================================================
     pub fn step(&mut self, bus: &mut impl GbBus) -> u32 {
-        // Pending EI
-        if self.ime_next {
-            self.ime = true;
-            self.ime_next = false;
-        }
-
         // Interrupts
         if self.ime || self.halted {
             let ie = bus.read(0xFFFF);
@@ -336,6 +343,7 @@ impl Cpu {
                 self.halted = false;
                 if self.ime {
                     self.ime = false;
+                    self.ime_next = false;
                     for bit in 0u16..5 {
                         if pending & (1 << bit) != 0 {
                             bus.write(0xFF0F, iflag & !(1 << bit as u8));
@@ -353,8 +361,15 @@ impl Cpu {
             return 1;
         }
 
+        // EI takes effect only after the *following* instruction has finished.
+        // Consume the pending latch now, then commit it after this instruction.
+        let enable_ime_after_instruction = self.ime_next;
+        self.ime_next = false;
         let op = self.fetch8(bus);
         let m = self.execute(op, bus);
+        if enable_ime_after_instruction && op != 0xF3 {
+            self.ime = true;
+        }
         self.cycles += m as u64;
         m
     }
@@ -435,13 +450,9 @@ impl Cpu {
 
             // ===== 0x10-0x1F =====
             0x10 => {
-                // STOP: CGB speed switch if KEY1 bit 0 set
-                let key1 = bus.read(0xFF4D);
-                if key1 & 0x01 != 0 {
-                    // Toggle speed (bit 7) and clear prepare flag (bit 0)
-                    bus.write(0xFF4D, (key1 ^ 0x80) & !0x01);
-                }
-                self.pc = self.pc.wrapping_add(1);
+                // STOP is encoded as two bytes; the second byte is padding.
+                let _padding = self.fetch8(bus);
+                bus.stop();
                 1
             }
             0x11 => {
@@ -688,7 +699,12 @@ impl Cpu {
 
             // ===== 0x40-0x7F: LD r,r (+ HALT) =====
             0x76 => {
-                self.halted = true;
+                let pending = bus.read(0xFFFF) & bus.read(0xFF0F) & 0x1F;
+                if !self.ime && pending != 0 {
+                    self.halt_bug = true;
+                } else {
+                    self.halted = true;
+                }
                 1
             }
             0x40..=0x75 | 0x77..=0x7F => {
@@ -1011,6 +1027,7 @@ impl Cpu {
             }
             0xF3 => {
                 self.ime = false;
+                self.ime_next = false;
                 1
             }
             0xF5 => {
@@ -1124,5 +1141,132 @@ impl Cpu {
             }
         }
         if is_hl { 4 } else { 2 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cpu, GbBus};
+
+    struct TestBus {
+        memory: [u8; 0x10000],
+        stopped: bool,
+    }
+
+    impl TestBus {
+        fn new() -> Self {
+            Self {
+                memory: [0; 0x10000],
+                stopped: false,
+            }
+        }
+    }
+
+    impl GbBus for TestBus {
+        fn read(&mut self, addr: u16) -> u8 {
+            self.memory[addr as usize]
+        }
+
+        fn write(&mut self, addr: u16, value: u8) {
+            self.memory[addr as usize] = value;
+        }
+
+        fn stop(&mut self) {
+            self.stopped = true;
+        }
+    }
+
+    #[test]
+    fn post_boot_ime_starts_disabled() {
+        assert!(!Cpu::new().ime);
+    }
+
+    #[test]
+    fn ei_waits_for_the_following_instruction() {
+        let mut cpu = Cpu::new();
+        let mut bus = TestBus::new();
+        bus.memory[0x0100] = 0xFB; // EI
+        bus.memory[0x0101] = 0x00; // NOP
+        bus.memory[0x0102] = 0x00; // NOP (must not execute before IRQ)
+        bus.memory[0xFFFF] = 0x01;
+        bus.memory[0xFF0F] = 0x01;
+
+        assert_eq!(cpu.step(&mut bus), 1);
+        assert!(!cpu.ime);
+        assert_eq!(cpu.pc, 0x0101);
+
+        assert_eq!(cpu.step(&mut bus), 1);
+        assert!(cpu.ime);
+        assert_eq!(cpu.pc, 0x0102);
+
+        assert_eq!(cpu.step(&mut bus), 5);
+        assert_eq!(cpu.pc, 0x0040);
+        assert!(!cpu.ime);
+    }
+
+    #[test]
+    fn di_cancels_a_pending_ei() {
+        let mut cpu = Cpu::new();
+        let mut bus = TestBus::new();
+        bus.memory[0x0100] = 0xFB; // EI
+        bus.memory[0x0101] = 0xF3; // DI
+        bus.memory[0x0102] = 0x00; // NOP
+        bus.memory[0xFFFF] = 0x01;
+        bus.memory[0xFF0F] = 0x01;
+
+        cpu.step(&mut bus);
+        cpu.step(&mut bus);
+        assert!(!cpu.ime);
+        cpu.step(&mut bus);
+        assert_eq!(cpu.pc, 0x0103);
+    }
+
+    #[test]
+    fn interrupt_service_clears_a_stale_ei_latch() {
+        let mut cpu = Cpu::new();
+        let mut bus = TestBus::new();
+        cpu.ime = true;
+        bus.memory[0x0100] = 0xFB; // EI while IME is already enabled.
+
+        cpu.step(&mut bus);
+        assert!(cpu.ime_next);
+        bus.memory[0xFFFF] = 0x01;
+        bus.memory[0xFF0F] = 0x01;
+        cpu.step(&mut bus);
+
+        assert!(!cpu.ime);
+        assert!(!cpu.ime_next);
+        assert_eq!(cpu.pc, 0x0040);
+    }
+
+    #[test]
+    fn halt_bug_reuses_the_next_opcode_byte() {
+        let mut cpu = Cpu::new();
+        let mut bus = TestBus::new();
+        bus.memory[0x0100] = 0x76; // HALT
+        bus.memory[0x0101] = 0x3E; // LD A, immediate
+        bus.memory[0x0102] = 0x12;
+        bus.memory[0xFFFF] = 0x01;
+        bus.memory[0xFF0F] = 0x01;
+
+        cpu.step(&mut bus);
+        assert!(!cpu.halted);
+        cpu.step(&mut bus);
+
+        assert_eq!(cpu.a, 0x3E);
+        assert_eq!(cpu.pc, 0x0102);
+    }
+
+    #[test]
+    fn stop_consumes_padding_and_notifies_the_bus() {
+        let mut cpu = Cpu::new();
+        let mut bus = TestBus::new();
+        bus.memory[0x0100] = 0x10;
+        bus.memory[0x0101] = 0x00;
+
+        cpu.step(&mut bus);
+
+        assert_eq!(cpu.pc, 0x0102);
+        assert!(bus.stopped);
     }
 }
