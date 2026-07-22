@@ -5,6 +5,7 @@ module truega_lfm25_q8_projection_row_engine_tb;
 
     reg clk = 1'b0;
     reg reset_n = 1'b0;
+    reg abort = 1'b0;
     reg state_reset = 1'b0;
     wire state_reset_ready;
     wire state_reset_done;
@@ -91,6 +92,7 @@ module truega_lfm25_q8_projection_row_engine_tb;
         .ROW_COUNT(ROW_COUNT)
     ) dut (
         .clk(clk), .reset_n(reset_n),
+        .abort_i(abort),
         .state_reset_i(state_reset),
         .state_reset_ready_o(state_reset_ready),
         .state_reset_done_o(state_reset_done),
@@ -258,6 +260,20 @@ module truega_lfm25_q8_projection_row_engine_tb;
             failures = failures + 1;
         pulse_state_reset();
 
+        // An external operation abort is fail-closed just like an arithmetic
+        // protocol error: the partial projection is poisoned and reaches idle
+        // only through the explicit state-reset recovery contract.
+        pulse_start();
+        load_activations();
+        feed_weight(0, 0, 272'd0);
+        abort = 1'b1;
+        @(negedge clk);
+        abort = 1'b0;
+        if (!done || !poisoned || !error || error_code != 8'd6
+                || result_valid)
+            failures = failures + 1;
+        pulse_state_reset();
+
         // A negative native scale reaches the reused GEMV scale guard and
         // poisons after the otherwise ordered row drains.
         pulse_start();
@@ -314,6 +330,7 @@ module truega_lfm25_q8_projection_shape_probe #(
         .ROW_COUNT(ROW_COUNT)
     ) implementation (
         .clk(clk), .reset_n(1'b0),
+        .abort_i(1'b0),
         .state_reset_i(1'b0), .state_reset_ready_o(),
         .state_reset_done_o(), .start_i(1'b0), .start_ready_o(),
         .activation_valid_i(1'b0), .activation_ready_o(),

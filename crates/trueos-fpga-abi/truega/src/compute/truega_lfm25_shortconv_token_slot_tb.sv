@@ -48,6 +48,8 @@ module truega_lfm25_shortconv_token_slot_tb;
 
     truega_lfm25_shortconv_token_slot dut (
         .clk(clk), .reset_n(reset_n),
+        .abort_i(1'b0), .poison_layer_i(1'b0),
+        .poison_layer_slot_i(4'd0),
         .state_reset_i(state_reset_i),
         .state_reset_layer_i(state_reset_layer_i),
         .state_reset_ready_o(state_reset_ready),

@@ -266,8 +266,7 @@ pub(crate) fn stream_transport_hardware_stats() -> Option<StreamTransportHardwar
     fence(Ordering::Acquire);
     Some(StreamTransportHardwareStats {
         accepted_dwords: Tga::read_reg(
-            tga.mmio_base
-                + trueos_fpga_abi::BAR0_LFM25_STREAM_ACCEPTED_WRITE_COUNT_OFFSET,
+            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ACCEPTED_WRITE_COUNT_OFFSET,
         ),
         captured_tlps: Tga::read_reg(
             tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_RX_CAPTURE_COUNT_OFFSET,
@@ -738,8 +737,7 @@ fn read_lfm25_feed_status_locked(
     let state_before = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_STATE_OFFSET);
     let count_before = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_COMPLETION_COUNT_OFFSET);
     let mode_layer = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_MODE_LAYER_OFFSET);
-    let session_epoch =
-        Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET);
+    let session_epoch = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET);
     let sequence = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_SEQUENCE_OFFSET);
     let item = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_RETIRED_ITEM_OFFSET);
     let error = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_ERROR_CODE_OFFSET);
@@ -782,24 +780,32 @@ pub(crate) fn lfm25_feed_shared_irq_pending(
     Ok(irq_state & feed::FEED_SHARED_IRQ_PENDING_BIT != 0)
 }
 
-/// Reset only the TGF2 feed sequencer/status plane. The write is accepted as a
-/// recovery attempt only if a flushed status read observes exact IDLE with no
-/// error; callers still fail the request which required recovery.
-pub(crate) fn reset_lfm25_feed(
-    connection_generation: u32,
-) -> Result<(), OffloadTransportError> {
+/// Recover the active TGF2 job. Because the sole worker owns the shared bridge,
+/// any pending IRQ at this point belongs to this feed job and is acknowledged
+/// before its private sequencer/status plane is reset. The request which needed
+/// recovery still fails and its logical session remains poisoned.
+pub(crate) fn reset_lfm25_feed(connection_generation: u32) -> Result<(), OffloadTransportError> {
     use trueos_fpga_abi::lfm25_decode_feed as feed;
 
     let guard = TGA.lock();
     let tga = guard.as_ref().ok_or(OffloadTransportError::Offline)?;
     validate_lfm25_feed_connection(tga, connection_generation)?;
+    let irq_state = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_SHARED_IRQ_STATE_OFFSET);
+    if irq_state & feed::FEED_SHARED_IRQ_PENDING_BIT != 0 {
+        Tga::write_reg(tga.offload_irq_ack_reg, 1);
+        fence(Ordering::SeqCst);
+    }
     Tga::write_reg(tga.mmio_base + feed::BAR0_FEED_CONTROL_OFFSET, feed::FEED_RESET_MAGIC);
     fence(Ordering::SeqCst);
     if !lfm25_feed_capability_valid(tga) {
         return Err(OffloadTransportError::Offline);
     }
     let status = read_lfm25_feed_status_locked(tga)?;
-    if status.state != feed::FeedState::Idle || status.error_code != 0 {
+    let irq_state = Tga::read_reg(tga.mmio_base + feed::BAR0_FEED_SHARED_IRQ_STATE_OFFSET);
+    if status.state != feed::FeedState::Idle
+        || status.error_code != 0
+        || irq_state & feed::FEED_SHARED_IRQ_PENDING_BIT != 0
+    {
         return Err(OffloadTransportError::InvalidPackage);
     }
     Ok(())
@@ -916,7 +922,9 @@ pub(crate) fn start_lfm25_decode(
 ) -> Result<(), OffloadTransportError> {
     use trueos_fpga_abi::lfm25_decode_transport as decode;
 
-    command.validate().map_err(|_| OffloadTransportError::InvalidPackage)?;
+    command
+        .validate()
+        .map_err(|_| OffloadTransportError::InvalidPackage)?;
     let guard = TGA.lock();
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
@@ -926,28 +934,22 @@ pub(crate) fn start_lfm25_decode(
     }
     if Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET)
         == trueos_fpga_abi::Lfm25StreamState::Busy as u32
-        || Tga::read_reg(tga.mmio_base + decode::BAR0_STATE_OFFSET)
-            == decode::State::Busy as u32
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_STATE_OFFSET) == decode::State::Busy as u32
     {
         return Err(OffloadTransportError::InvalidPackage);
     }
 
     Tga::write_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET, command.control_word());
     Tga::write_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET, command.position);
-    Tga::write_reg(
-        tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET,
-        command.session_epoch,
-    );
+    Tga::write_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET, command.session_epoch);
     fence(Ordering::SeqCst);
 
     // The capability read commits the preceding posted BAR writes. Re-read the exact
     // command envelope before the doorbell so a dropped or misdecoded write fails closed.
     if !lfm25_decode_capability_valid(tga)
-        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET)
-            != command.control_word()
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET) != command.control_word()
         || Tga::read_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET) != command.position
-        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET)
-            != command.session_epoch
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET) != command.session_epoch
     {
         return Err(OffloadTransportError::InvalidPackage);
     }
@@ -983,11 +985,9 @@ pub(crate) fn read_lfm25_decode_completion(
     };
     fence(Ordering::Acquire);
     if !lfm25_decode_capability_valid(tga)
-        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET)
-            != command.control_word()
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_COMMAND_OFFSET) != command.control_word()
         || Tga::read_reg(tga.mmio_base + decode::BAR0_POSITION_OFFSET) != command.position
-        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET)
-            != command.session_epoch
+        || Tga::read_reg(tga.mmio_base + decode::BAR0_SESSION_EPOCH_OFFSET) != command.session_epoch
     {
         return Err(OffloadTransportError::InvalidPackage);
     }
@@ -998,12 +998,12 @@ pub(crate) fn read_lfm25_decode_completion(
     let score_low = Tga::read_reg(tga.mmio_base + decode::BAR0_ARGMAX_SCORE_LO_OFFSET) as u64;
     let score_high = Tga::read_reg(tga.mmio_base + decode::BAR0_ARGMAX_SCORE_HI_OFFSET) as u64;
     let argmax_score_q30 = ((score_high << 32) | score_low) as i64;
-    decode::decode_completion(command, state, result0, result1, argmax_score_q30).map_err(
-        |error| match error {
+    decode::decode_completion(command, state, result0, result1, argmax_score_q30).map_err(|error| {
+        match error {
             decode::CodecError::Device(code) => OffloadTransportError::Device(code),
             _ => OffloadTransportError::InvalidPackage,
-        },
-    )
+        }
+    })
 }
 
 pub(crate) fn lfm25_stream_write_blocks(

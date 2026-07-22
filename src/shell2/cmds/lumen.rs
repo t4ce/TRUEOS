@@ -10,7 +10,12 @@ use crate::shell2::{
 };
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "lumen: usage `lumen hello`");
+    print_shell_line(io, "lumen: usage `lumen hello` or `lumen decode <token>`");
+}
+
+enum Command {
+    Hello,
+    Decode(u32),
 }
 
 pub(crate) fn try_parse(
@@ -19,9 +24,20 @@ pub(crate) fn try_parse(
     rest: &str,
 ) -> ParseOutcome {
     let mut args = rest.split_whitespace();
-    match (args.next(), args.next()) {
-        (Some("hello"), None) => {}
-        (Some("help" | "-h" | "--help"), None) => {
+    let command = match (args.next(), args.next(), args.next()) {
+        (Some("hello"), None, None) => Command::Hello,
+        (Some("decode"), Some(token), None) => {
+            let Ok(token) = token.parse::<u32>() else {
+                usage(io);
+                return ParseOutcome::Handled;
+            };
+            if token >= trueos_fpga_abi::lfm25::MODEL_VOCABULARY_SIZE {
+                print_shell_line(io, "lumen: token outside the sealed 65536-row vocabulary");
+                return ParseOutcome::Handled;
+            }
+            Command::Decode(token)
+        }
+        (Some("help" | "-h" | "--help"), None, None) => {
             usage(io);
             return ParseOutcome::Handled;
         }
@@ -29,7 +45,7 @@ pub(crate) fn try_parse(
             usage(io);
             return ParseOutcome::Handled;
         }
-    }
+    };
 
     if !crate::tga::is_online() {
         print_shell_line(io, "lumen: truega backend unavailable; admitted firmware is offline");
@@ -38,14 +54,95 @@ pub(crate) fn try_parse(
 
     let target = matrix_target_for_backend(io);
     set_matrix_target_active(&target, true);
-    match lumen_hello_task(target.clone()) {
-        Ok(token) => spawner.spawn(token),
-        Err(_) => {
-            set_matrix_target_active(&target, false);
-            print_shell_line(io, "lumen: async module task unavailable");
+    let spawned = match command {
+        Command::Hello => match lumen_hello_task(target.clone()) {
+            Ok(task) => {
+                spawner.spawn(task);
+                true
+            }
+            Err(_) => false,
+        },
+        Command::Decode(token) => {
+            if !crate::r::fpga_offload::lfm25_decode_transport_available()
+                || !crate::r::fpga_offload::lfm25_feed_transport_available()
+            {
+                set_matrix_target_active(&target, false);
+                print_shell_line(
+                    io,
+                    "lumen: decode unavailable; exact TGD1+TGF2 firmware is not admitted",
+                );
+                return ParseOutcome::Handled;
+            }
+            match lumen_decode_task(target.clone(), token) {
+                Ok(task) => {
+                    spawner.spawn(task);
+                    true
+                }
+                Err(_) => false,
+            }
         }
+    };
+    if !spawned {
+        set_matrix_target_active(&target, false);
+        print_shell_line(io, "lumen: async module task unavailable");
     }
     ParseOutcome::Handled
+}
+
+#[embassy_executor::task]
+async fn lumen_decode_task(target: MatrixTarget, token: u32) {
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "lumen: decode=start token={} position=0 plan_ops={} backend=truega model=sealed-native-image",
+            token,
+            trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN,
+        )
+        .as_str(),
+    );
+    let start_tick = embassy_time_driver::now();
+    let before = crate::r::fpga_offload::stats();
+    let result = match crate::lumen::decode::open_truega().await {
+        Ok(module) => ::lumen::async_module::forward(
+            &module,
+            crate::lumen::decode::Lfm25DecodeInput::new(token),
+        )
+        .await
+        .map_err(|error| alloc::format!("{error:?}")),
+        Err(error) => Err(alloc::format!("model-open={error:?}")),
+    };
+    let after = crate::r::fpga_offload::stats();
+
+    match result {
+        Ok(output) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!(
+                    "lumen: decode=pass input_token={} output_token={} score_q30={} position={} callbacks={} irq_delta={} timeout_recovery_delta={} elapsed_ms={}",
+                    token,
+                    output.token,
+                    output.score_q30,
+                    output.input_position,
+                    output.callback_sequence,
+                    after.interrupts.saturating_sub(before.interrupts),
+                    after
+                        .timeout_recoveries
+                        .saturating_sub(before.timeout_recoveries),
+                    elapsed_ms_since(start_tick),
+                )
+                .as_str(),
+            );
+            print_matrix_target_line(
+                &target,
+                "lumen: decode path=async-module->fixed-99-op-plan->sealed-range-feed->bar2->msi-worker-callback no-host-math",
+            );
+        }
+        Err(error) => print_matrix_target_line(
+            &target,
+            alloc::format!("lumen: decode=fail error={error}").as_str(),
+        ),
+    }
+    set_matrix_target_active(&target, false);
 }
 
 #[embassy_executor::task]

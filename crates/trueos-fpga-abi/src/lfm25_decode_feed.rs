@@ -31,6 +31,13 @@ pub const BAR0_FEED_SHAPE_SET_TAG_OFFSET: usize = 0x290;
 pub const BAR0_FEED_CAPABILITY_BYTES: usize = 5 * 4;
 pub const BAR0_FEED_CAPABILITY_REQUIRED_BYTES: usize =
     BAR0_FEED_CAPABILITY_MAGIC_OFFSET + BAR0_FEED_CAPABILITY_BYTES;
+/// The endpoint accepts a commit only from IDLE, then publishes BUSY. A
+/// terminal envelope remains owned until the shared IRQ is acknowledged; the
+/// host's following non-posted status read flushes that acknowledgement before
+/// another commit can be published.
+/// Retirement publication order is identity/error, incremented completion
+/// count, terminal state, then the shared IRQ request/pending bit. The host
+/// consumes a matching status snapshot before acknowledging that shared IRQ.
 pub const BAR0_FEED_STATE_OFFSET: usize = 0x294;
 pub const BAR0_FEED_RETIRED_MODE_LAYER_OFFSET: usize = 0x298;
 pub const BAR0_FEED_RETIRED_SESSION_EPOCH_OFFSET: usize = 0x29C;
@@ -41,6 +48,9 @@ pub const BAR0_FEED_COMPLETION_COUNT_OFFSET: usize = 0x2AC;
 pub const BAR0_FEED_CONTROL_OFFSET: usize = 0x2B0;
 pub const BAR0_FEED_REQUIRED_BYTES: usize = BAR0_FEED_CONTROL_OFFSET + 4;
 pub const FEED_RESET_MAGIC: u32 = 0x3254_5352; // "RST2"
+/// A reset write is synchronous with a subsequent non-posted BAR0 read: before
+/// that read completes, status is IDLE, error is zero, and shared IRQ pending is
+/// clear. Hosts reject the endpoint if this postcondition is not observed.
 pub const FEED_ERROR_NONE: u32 = 0;
 /// The fixed frontend rejected staging/commit ordering and requires an explicit reset.
 pub const FEED_ERROR_FRONTEND_POISON: u32 = 0xBAD4_0001;

@@ -259,6 +259,7 @@ module truega_lfm25_decode_engine #(
         .ROW_COUNT(PROJECTION_ROWS)
     ) projection (
         .clk(clk), .reset_n(joined_reset_n),
+        .abort_i(1'b0),
         .state_reset_i(state == ST_PROJECTION_RESET),
         .state_reset_ready_o(projection_state_reset_ready),
         .state_reset_done_o(projection_state_reset_done),

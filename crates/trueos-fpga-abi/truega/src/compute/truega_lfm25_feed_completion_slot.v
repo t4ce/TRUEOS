@@ -44,9 +44,9 @@ module truega_lfm25_feed_completion_slot (
     localparam [31:0] STATE_POISONED = 32'd4;
     localparam [31:0] RESET_MAGIC = 32'h3254_5352; // "RST2"
 
-    // FeedState::Poisoned is authoritative.  The Rust ABI intentionally leaves
-    // error values engine-defined; this fixed diagnostic distinguishes a
-    // frontend protocol poison from a downstream compute failure.
+    // Exact FEED_ERROR_FRONTEND_POISON from the Rust ABI. FeedState::Poisoned
+    // remains authoritative; downstream compute failures retain their engine
+    // error code instead.
     localparam [31:0] ERROR_FRONTEND_POISON = 32'hbad4_0001;
 
     reg poison_seen;
@@ -61,7 +61,9 @@ module truega_lfm25_feed_completion_slot (
     always @(posedge clk) begin
         if (!reset_n) begin
             state_o <= STATE_IDLE;
-            retired_mode_layer_o <= 32'h0000_ffff;
+            // Syntactically valid no-active-item identity: embedding mode 0,
+            // encoded no-layer 0xff. Rust status decoding must also accept IDLE.
+            retired_mode_layer_o <= 32'h0000_ff00;
             retired_session_epoch_o <= 32'd0;
             retired_sequence_o <= 32'd0;
             retired_item_o <= 32'd0;
@@ -80,13 +82,16 @@ module truega_lfm25_feed_completion_slot (
             // deliberately preserved. Unknown control values have no effect.
             if (valid_reset) begin
                 state_o <= STATE_IDLE;
-                retired_mode_layer_o <= 32'h0000_ffff;
+                retired_mode_layer_o <= 32'h0000_ff00;
                 retired_session_epoch_o <= 32'd0;
                 retired_sequence_o <= 32'd0;
                 retired_item_o <= 32'd0;
                 error_code_o <= 32'd0;
                 frontend_state_reset_o <= 1'b1;
-                poison_seen <= 1'b0;
+                // The frontend observes this registered reset pulse at the
+                // following edge. Suppress the still-high poison level until
+                // the frontend has actually cleared it.
+                poison_seen <= 1'b1;
             end else begin
                 if (!frontend_poisoned_i)
                     poison_seen <= 1'b0;
@@ -105,7 +110,7 @@ module truega_lfm25_feed_completion_slot (
                         poison_seen <= 1'b1;
                 end else if (poison_rises_without_item) begin
                     state_o <= STATE_POISONED;
-                    retired_mode_layer_o <= 32'h0000_ffff;
+                    retired_mode_layer_o <= 32'h0000_ff00;
                     retired_session_epoch_o <= 32'd0;
                     retired_sequence_o <= 32'd0;
                     retired_item_o <= 32'd0;

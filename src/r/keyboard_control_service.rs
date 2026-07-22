@@ -414,7 +414,8 @@ pub(crate) fn submit_json(
     if bytes.is_empty() || bytes.len() > MAX_JSON_BYTES {
         return Err(KeyboardControlError::BadJson);
     }
-    let value = serde_json::from_slice::<Value>(bytes).map_err(|_| KeyboardControlError::BadJson)?;
+    let value =
+        serde_json::from_slice::<Value>(bytes).map_err(|_| KeyboardControlError::BadJson)?;
     let values: AllocVec<Value> = match value.get("commands").and_then(Value::as_array) {
         Some(commands) => commands.clone(),
         None => alloc::vec![value],
@@ -629,7 +630,11 @@ fn json_u32(value: Option<&Value>) -> Result<u32, KeyboardControlError> {
 fn uptime_ms() -> u64 {
     let ticks = embassy_time_driver::now() as u128;
     let hz = embassy_time_driver::TICK_HZ as u128;
-    if hz == 0 { 0 } else { ((ticks * 1000) / hz) as u64 }
+    if hz == 0 {
+        0
+    } else {
+        ((ticks * 1000) / hz) as u64
+    }
 }
 
 fn uptime_ms_u32() -> u32 {

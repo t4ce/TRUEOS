@@ -15,6 +15,7 @@ module truega_lfm25_q8_projection_row_engine #(
 ) (
     input  wire                 clk,
     input  wire                 reset_n,
+    input  wire                 abort_i,
 
     input  wire                 state_reset_i,
     output wire                 state_reset_ready_o,
@@ -64,6 +65,7 @@ module truega_lfm25_q8_projection_row_engine #(
     localparam [7:0] ERROR_WEIGHT_ORDER     = 8'd3;
     localparam [7:0] ERROR_SCALE            = 8'd4;
     localparam [7:0] ERROR_INTERNAL         = 8'd5;
+    localparam [7:0] ERROR_ABORT            = 8'd6;
 
     reg [2:0] state;
     reg [5:0] activation_count;
@@ -159,7 +161,9 @@ module truega_lfm25_q8_projection_row_engine #(
         end else begin
             state_reset_done_o <= 1'b0;
             done_o <= 1'b0;
-            case (state)
+            if (abort_i && state != ST_IDLE) begin
+                poison(ERROR_ABORT);
+            end else case (state)
                 ST_IDLE: begin
                     busy_o <= 1'b0;
                     if (state_reset_i && state_reset_ready_o) begin

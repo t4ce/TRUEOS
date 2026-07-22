@@ -103,6 +103,7 @@ module truega_lfm25_resident_ffn_join (
     localparam [3:0] ST_IMPORT_CMD    = 4'd5;
     localparam [3:0] ST_IMPORT_OUTPUT = 4'd6;
     localparam [3:0] ST_RESULT        = 4'd7;
+    localparam [3:0] ST_ABORT_INSPECT = 4'd8;
 
     localparam [1:0] OP_IMPORT_Q30 = 2'd3;
     localparam [7:0] ERROR_HANDLE   = 8'd1;
@@ -129,7 +130,7 @@ module truega_lfm25_resident_ffn_join (
 
     wire joined_reset_n = reset_n && !clear_i;
     assign start_ready_o = state == ST_IDLE && !output_read_valid_i
-        && !resident_inspect_rsp_valid_i;
+        && resident_inspect_ready_i && !resident_inspect_rsp_valid_i;
     assign result_valid_o = state == ST_RESULT;
     assign busy_o = state != ST_IDLE && state != ST_RESULT;
 
@@ -238,14 +239,14 @@ module truega_lfm25_resident_ffn_join (
     // resident inspection port.  A new start is held off until a diagnostic
     // response has been consumed.
     wire external_read_allowed = state == ST_IDLE || state == ST_RESULT;
-    assign resident_inspect_valid_o = state == ST_ACT_REQUEST
+    assign resident_inspect_valid_o = (state == ST_ACT_REQUEST && !abort_i)
         || (external_read_allowed && output_read_valid_i);
     assign resident_inspect_handle_o = state == ST_ACT_REQUEST
         ? source_handle : destination_handle;
     assign resident_inspect_index_o = state == ST_ACT_REQUEST
         ? {4'd0, activation_block} : output_read_index_i;
-    assign resident_inspect_rsp_ready_o = state == ST_ACT_REPLY
-        ? ffn_activation_ready
+    assign resident_inspect_rsp_ready_o = state == ST_ABORT_INSPECT
+        ? 1'b1 : state == ST_ACT_REPLY ? ffn_activation_ready
         : external_read_allowed && output_read_rsp_ready_i;
     assign output_read_ready_o = external_read_allowed
         && resident_inspect_ready_i;
@@ -334,7 +335,14 @@ module truega_lfm25_resident_ffn_join (
                     if (abort_i) begin
                         result_error_o <= 1'b1;
                         result_error_code_o <= ERROR_ABORT;
-                        state <= ST_RESULT;
+                        // If the resident reply is already present it is
+                        // consumed on this edge.  Otherwise drain it in a
+                        // dedicated state before exposing the result/readback
+                        // port, so an internal Q8 reply cannot be mistaken for
+                        // an external Q30 diagnostic response.
+                        state <= resident_inspect_rsp_valid_i
+                            && resident_inspect_rsp_ready_o
+                            ? ST_RESULT : ST_ABORT_INSPECT;
                     end else if (resident_inspect_rsp_valid_i
                             && resident_inspect_rsp_error_i) begin
                         result_error_o <= 1'b1;
@@ -354,6 +362,12 @@ module truega_lfm25_resident_ffn_join (
                             state <= ST_ACT_REQUEST;
                         end
                     end
+                end
+
+                ST_ABORT_INSPECT: begin
+                    if (resident_inspect_rsp_valid_i
+                            && resident_inspect_rsp_ready_o)
+                        state <= ST_RESULT;
                 end
 
                 ST_FEED_ROWS: begin

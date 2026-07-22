@@ -6,6 +6,10 @@
 //! output handle is minted only after the transport's MSI-driven completion future
 //! resolves.
 
+extern crate alloc;
+
+#[cfg(target_os = "trueos")]
+use alloc::vec::Vec;
 use core::future::Future;
 
 use trueos_fpga_abi::lfm25;
@@ -202,6 +206,10 @@ pub trait DecodeCommandTransport {
 /// tagged TGF2 stage/commit sequences for every operation while the matching BAR2
 /// session lane is owned.
 pub trait DecodeModelDataPlane {
+    /// Must be the exact session type used to issue the following TGD1 command.
+    /// This prevents a feeder from acquiring a second BAR2 lane or minting an
+    /// unrelated epoch.
+    type Session;
     type Error;
 
     /// The capability read from the TGF2 publication registers. The backend performs
@@ -212,10 +220,11 @@ pub trait DecodeModelDataPlane {
     fn sealed_model_payloads_ready(&self) -> bool;
     fn max_context_positions(&self) -> u32;
 
-    fn prepare_operation(
-        &mut self,
+    fn prepare_operation<'a>(
+        &'a mut self,
+        session: &'a mut Self::Session,
         request: DecodeDataPlaneRequest,
-    ) -> impl Future<Output = Result<DecodeDataPlaneReceipt, Self::Error>> + '_;
+    ) -> impl Future<Output = Result<DecodeDataPlaneReceipt, Self::Error>> + 'a;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -262,7 +271,7 @@ enum OutputContract {
 pub struct TruegaAotDecodeBackend<Transport, DataPlane>
 where
     Transport: DecodeCommandTransport,
-    DataPlane: DecodeModelDataPlane,
+    DataPlane: DecodeModelDataPlane<Session = Transport::Session>,
 {
     transport: Transport,
     data_plane: DataPlane,
@@ -276,7 +285,7 @@ where
 impl<Transport, DataPlane> TruegaAotDecodeBackend<Transport, DataPlane>
 where
     Transport: DecodeCommandTransport,
-    DataPlane: DecodeModelDataPlane,
+    DataPlane: DecodeModelDataPlane<Session = Transport::Session>,
 {
     pub const fn new(transport: Transport, data_plane: DataPlane) -> Self {
         Self {
@@ -434,7 +443,7 @@ where
 impl<Transport, DataPlane> AotDecodeBackend for TruegaAotDecodeBackend<Transport, DataPlane>
 where
     Transport: DecodeCommandTransport,
-    DataPlane: DecodeModelDataPlane,
+    DataPlane: DecodeModelDataPlane<Session = Transport::Session>,
 {
     type Error = TruegaDecodeBackendError<Transport::Error, DataPlane::Error>;
 
@@ -711,9 +720,18 @@ where
             DecodeDataPlaneRequest::new(domain, self.next_ordinal, command, embedding_row)
                 .map_err(|_| Self::request_shape_error(operation))?;
         let expected_receipt = DecodeDataPlaneReceipt::complete(data_plane_request);
+        // From the first model-feed read through the TGD1 completion callback,
+        // cancellation must leave the session unusable. Only the fully checked
+        // success path below clears this in-flight poison marker.
+        self.poisoned = true;
         let receipt = self
             .data_plane
-            .prepare_operation(data_plane_request)
+            .prepare_operation(
+                self.session
+                    .as_mut()
+                    .ok_or(TruegaDecodeBackendError::InternalPlan)?,
+                data_plane_request,
+            )
             .await
             .map_err(|error| {
                 self.poisoned = true;
@@ -761,42 +779,13 @@ where
         } else {
             self.next_ordinal += 1;
         }
+        self.poisoned = false;
 
         Ok(AotDecodeCallback {
             operation,
             callback_sequence: self.callback_sequence,
             output,
         })
-    }
-}
-
-/// Explicit placeholder until the native model-image/BAR2 staging implementation lands.
-/// Its absent TGF2 publication prevents even transport-session acquisition.
-pub struct UnavailableDecodeDataPlane;
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct DecodeDataPlaneUnavailable;
-
-impl DecodeModelDataPlane for UnavailableDecodeDataPlane {
-    type Error = DecodeDataPlaneUnavailable;
-
-    fn published_feed_capability(&self) -> Option<FeedCapability> {
-        None
-    }
-
-    fn sealed_model_payloads_ready(&self) -> bool {
-        false
-    }
-
-    fn max_context_positions(&self) -> u32 {
-        0
-    }
-
-    async fn prepare_operation(
-        &mut self,
-        _request: DecodeDataPlaneRequest,
-    ) -> Result<DecodeDataPlaneReceipt, Self::Error> {
-        Err(DecodeDataPlaneUnavailable)
     }
 }
 
@@ -832,16 +821,303 @@ impl DecodeCommandTransport for KernelDecodeCommandTransport {
     }
 }
 
-/// Concrete kernel backend today. TGD1 alone is insufficient: exact TGF2 publication and
-/// its typed model data plane are deliberately unavailable, so this alias reports no
-/// decode capabilities.
 #[cfg(target_os = "trueos")]
-pub type KernelTruegaAotDecodeBackend =
-    TruegaAotDecodeBackend<KernelDecodeCommandTransport, UnavailableDecodeDataPlane>;
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum KernelDecodeDataPlaneError {
+    Model(super::lfm25_model::Error),
+    Feed(trueos_fpga_abi::lfm25_decode_feed::FeedError),
+    Transport(super::fpga_offload::Error),
+    Capability,
+    SessionDomain,
+    BufferUnavailable,
+    TensorRange,
+    Retirement,
+}
 
 #[cfg(target_os = "trueos")]
-pub const fn fail_closed_kernel_backend() -> KernelTruegaAotDecodeBackend {
-    TruegaAotDecodeBackend::new(KernelDecodeCommandTransport, UnavailableDecodeDataPlane)
+const MODEL_RANGE_CACHE_BYTES: usize = 4096;
+
+/// One lane-local native-image page. TGF2 consumes paired/triplet tensors in
+/// stage-major order, so a single shared cache would thrash between distant
+/// tensor ranges. Three fixed pages preserve that ordering while coalescing
+/// the underlying TRUEOSFS reads; returned BAR payloads remain exact 34/64-byte
+/// validator-issued slices.
+#[cfg(target_os = "trueos")]
+struct KernelDecodeRangeCache {
+    valid: bool,
+    page_offset: u64,
+    valid_bytes: usize,
+    bytes: [u8; MODEL_RANGE_CACHE_BYTES],
+}
+
+#[cfg(target_os = "trueos")]
+impl KernelDecodeRangeCache {
+    const fn new() -> Self {
+        Self {
+            valid: false,
+            page_offset: 0,
+            valid_bytes: 0,
+            bytes: [0; MODEL_RANGE_CACHE_BYTES],
+        }
+    }
+}
+
+/// One verified, pinned native-image handle feeding the same BAR2 session that
+/// executes TGD1. Only one item worth of 34/64-byte stages exists in memory at a
+/// time; the complete tensor is never materialized by the kernel.
+#[cfg(target_os = "trueos")]
+pub struct KernelDecodeModelDataPlane {
+    image: super::lfm25_model::NativeImage,
+    verified_sha256: [u8; 32],
+    range_cache: [KernelDecodeRangeCache; 3],
+}
+
+#[cfg(target_os = "trueos")]
+impl KernelDecodeModelDataPlane {
+    pub async fn open_verified() -> Result<Self, KernelDecodeDataPlaneError> {
+        let image = super::lfm25_model::open()
+            .await
+            .map_err(KernelDecodeDataPlaneError::Model)?;
+        let verified_sha256 = super::lfm25_model::verify_with_progress(&image, |_, _| {})
+            .await
+            .map_err(KernelDecodeDataPlaneError::Model)?;
+        if verified_sha256 != super::lfm25_model::NATIVE_IMAGE_SHA256 {
+            return Err(KernelDecodeDataPlaneError::Capability);
+        }
+        Ok(Self {
+            image,
+            verified_sha256,
+            range_cache: [
+                KernelDecodeRangeCache::new(),
+                KernelDecodeRangeCache::new(),
+                KernelDecodeRangeCache::new(),
+            ],
+        })
+    }
+
+    async fn read_stage_payload(
+        &mut self,
+        bank: trueos_fpga_abi::lfm25_decode_feed::StageBank,
+        offset: u64,
+        out: &mut [u8],
+    ) -> Result<(), KernelDecodeDataPlaneError> {
+        let cache = &mut self.range_cache[bank as usize];
+        let mut source_offset = offset;
+        let mut destination_offset = 0usize;
+        while destination_offset < out.len() {
+            let page_offset = source_offset & !((MODEL_RANGE_CACHE_BYTES as u64) - 1);
+            if !cache.valid || cache.page_offset != page_offset {
+                cache.valid = false;
+                let available = self.image.len().saturating_sub(page_offset);
+                let want = core::cmp::min(available, MODEL_RANGE_CACHE_BYTES as u64) as usize;
+                if want == 0 {
+                    return Err(KernelDecodeDataPlaneError::TensorRange);
+                }
+                self.image
+                    .read_exact_at(page_offset, &mut cache.bytes[..want])
+                    .await
+                    .map_err(KernelDecodeDataPlaneError::Model)?;
+                cache.page_offset = page_offset;
+                cache.valid_bytes = want;
+                cache.valid = true;
+            }
+
+            let in_page = source_offset
+                .checked_sub(cache.page_offset)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+            if in_page >= cache.valid_bytes {
+                return Err(KernelDecodeDataPlaneError::TensorRange);
+            }
+            let take = core::cmp::min(cache.valid_bytes - in_page, out.len() - destination_offset);
+            out[destination_offset..destination_offset + take]
+                .copy_from_slice(&cache.bytes[in_page..in_page + take]);
+            destination_offset += take;
+            source_offset = source_offset
+                .checked_add(take as u64)
+                .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+        }
+        Ok(())
+    }
+
+    fn expected_tensor_bytes(
+        tensor: trueos_fpga_abi::lfm25_decode_feed::TensorExpectation,
+    ) -> Option<u32> {
+        use trueos_fpga_abi::lfm25::TensorFormat;
+
+        match tensor.format {
+            TensorFormat::Bf16Le => tensor.ggml_ne0.checked_mul(tensor.ggml_ne1)?.checked_mul(2),
+            TensorFormat::Q8_0 => {
+                if !tensor
+                    .ggml_ne0
+                    .is_multiple_of(lfm25::Q8_0_BLOCK_VALUES as u32)
+                {
+                    return None;
+                }
+                tensor
+                    .ggml_ne0
+                    .checked_div(lfm25::Q8_0_BLOCK_VALUES as u32)?
+                    .checked_mul(lfm25::Q8_0_BLOCK_BYTES as u32)?
+                    .checked_mul(tensor.ggml_ne1)
+            }
+        }
+    }
+
+    async fn feed_sequence(
+        &mut self,
+        session: &mut super::fpga_offload::Lfm25DecodeTransportSession,
+        capability: FeedCapability,
+        request: FeedRequest,
+    ) -> Result<u32, KernelDecodeDataPlaneError> {
+        use trueos_fpga_abi::lfm25_decode::tensor_descriptor;
+        use trueos_fpga_abi::lfm25_decode_feed::{FeedSequenceValidator, FeedState};
+
+        let mut validator = FeedSequenceValidator::begin(capability, request)
+            .map_err(KernelDecodeDataPlaneError::Feed)?;
+        while !validator.is_complete() {
+            let payload_count =
+                request.mode.shape().stages_per_item as usize * request.mode.shape().lanes as usize;
+            let mut stages = Vec::new();
+            stages
+                .try_reserve_exact(payload_count)
+                .map_err(|_| KernelDecodeDataPlaneError::BufferUnavailable)?;
+
+            while !validator.staging_complete() {
+                let staged = validator
+                    .expected_stage()
+                    .map_err(KernelDecodeDataPlaneError::Feed)?;
+                let source = validator
+                    .expected_source()
+                    .map_err(KernelDecodeDataPlaneError::Feed)?;
+                if source.payload_bytes != staged.payload_bytes {
+                    return Err(KernelDecodeDataPlaneError::TensorRange);
+                }
+                let tensor = tensor_descriptor(request.layer, source.tensor.role)
+                    .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+                source
+                    .tensor
+                    .validate(tensor, request.layer)
+                    .map_err(KernelDecodeDataPlaneError::Feed)?;
+                if tensor.native_bytes
+                    != Self::expected_tensor_bytes(source.tensor)
+                        .ok_or(KernelDecodeDataPlaneError::TensorRange)?
+                    || tensor.native_offset as usize % lfm25::MODEL_TENSOR_ALIGNMENT != 0
+                {
+                    return Err(KernelDecodeDataPlaneError::TensorRange);
+                }
+                let relative_end = source
+                    .relative_byte_offset
+                    .checked_add(source.payload_bytes as u32)
+                    .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+                let absolute_offset = tensor
+                    .native_offset
+                    .checked_add(source.relative_byte_offset)
+                    .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+                let absolute_end = absolute_offset
+                    .checked_add(source.payload_bytes as u32)
+                    .ok_or(KernelDecodeDataPlaneError::TensorRange)?;
+                if relative_end > tensor.native_bytes
+                    || absolute_end as u64 > self.image.len()
+                    || source.payload_bytes as usize
+                        > super::fpga_offload::LFM25_FEED_MAX_PAYLOAD_BYTES
+                {
+                    return Err(KernelDecodeDataPlaneError::TensorRange);
+                }
+
+                let mut payload = [0u8; super::fpga_offload::LFM25_FEED_MAX_PAYLOAD_BYTES];
+                let payload = &mut payload[..source.payload_bytes as usize];
+                self.read_stage_payload(staged.bank, absolute_offset as u64, payload)
+                    .await?;
+                stages.push(
+                    super::fpga_offload::Lfm25FeedStage::new(staged, payload)
+                        .map_err(KernelDecodeDataPlaneError::Transport)?,
+                );
+                validator
+                    .stage(staged)
+                    .map_err(KernelDecodeDataPlaneError::Feed)?;
+            }
+
+            let record = validator
+                .expected_commit()
+                .map_err(KernelDecodeDataPlaneError::Feed)?;
+            let status = session
+                .commit_feed_item(record, stages)
+                .await
+                .map_err(KernelDecodeDataPlaneError::Transport)?;
+            if status.state != FeedState::Complete
+                || status.error_code != 0
+                || !status.identity_matches(record)
+            {
+                return Err(KernelDecodeDataPlaneError::Retirement);
+            }
+            validator
+                .commit(record)
+                .map_err(KernelDecodeDataPlaneError::Feed)?;
+        }
+        Ok(validator.committed_units())
+    }
+}
+
+#[cfg(target_os = "trueos")]
+impl DecodeModelDataPlane for KernelDecodeModelDataPlane {
+    type Session = super::fpga_offload::Lfm25DecodeTransportSession;
+    type Error = KernelDecodeDataPlaneError;
+
+    fn published_feed_capability(&self) -> Option<FeedCapability> {
+        super::fpga_offload::lfm25_feed_capability().ok()
+    }
+
+    fn sealed_model_payloads_ready(&self) -> bool {
+        self.verified_sha256 == super::lfm25_model::NATIVE_IMAGE_SHA256
+            && self.image.len() == super::lfm25_model::NATIVE_IMAGE_BYTES
+            && super::fpga_offload::lfm25_feed_transport_available()
+    }
+
+    fn max_context_positions(&self) -> u32 {
+        lfm25::MODEL_INITIAL_CONTEXT
+    }
+
+    async fn prepare_operation<'a>(
+        &'a mut self,
+        session: &'a mut Self::Session,
+        request: DecodeDataPlaneRequest,
+    ) -> Result<DecodeDataPlaneReceipt, Self::Error> {
+        let observed_domain = DecodeTensorDomain {
+            connection_generation: session.connection_generation(),
+            session_epoch: session.session_epoch(),
+        };
+        if observed_domain != request.domain || session.feed_is_poisoned() {
+            return Err(KernelDecodeDataPlaneError::SessionDomain);
+        }
+        let capability = self
+            .published_feed_capability()
+            .filter(|capability| capability_is_exact(*capability))
+            .ok_or(KernelDecodeDataPlaneError::Capability)?;
+
+        let mut committed_units = [0u32; MAX_FEED_SEQUENCES_PER_OPERATION];
+        for (index, feed) in request.feeds.iter().copied().enumerate() {
+            if let Some(feed) = feed {
+                committed_units[index] = self.feed_sequence(session, capability, feed).await?;
+            }
+        }
+        Ok(DecodeDataPlaneReceipt {
+            request,
+            committed_units,
+        })
+    }
+}
+
+/// Concrete production kernel backend: one verified native-image handle, one
+/// TGD1/TGF2 session, one BAR2 lane, and one MSI-driven offload worker.
+#[cfg(target_os = "trueos")]
+pub type KernelTruegaAotDecodeBackend =
+    TruegaAotDecodeBackend<KernelDecodeCommandTransport, KernelDecodeModelDataPlane>;
+
+#[cfg(target_os = "trueos")]
+pub async fn open_kernel_backend()
+-> Result<KernelTruegaAotDecodeBackend, KernelDecodeDataPlaneError> {
+    let data_plane = KernelDecodeModelDataPlane::open_verified().await?;
+    Ok(TruegaAotDecodeBackend::new(KernelDecodeCommandTransport, data_plane))
 }
 
 #[cfg(test)]
@@ -926,9 +1202,11 @@ mod tests {
         fail: bool,
         bad_receipt: bool,
         prepared: Vec<DecodeDataPlaneRequest>,
+        commands_before_prepare: Vec<usize>,
     }
 
     impl DecodeModelDataPlane for FakeDataPlane {
+        type Session = FakeSession;
         type Error = &'static str;
 
         fn published_feed_capability(&self) -> Option<FeedCapability> {
@@ -943,10 +1221,12 @@ mod tests {
             2
         }
 
-        async fn prepare_operation(
-            &mut self,
+        async fn prepare_operation<'a>(
+            &'a mut self,
+            session: &'a mut Self::Session,
             request: DecodeDataPlaneRequest,
         ) -> Result<DecodeDataPlaneReceipt, Self::Error> {
+            self.commands_before_prepare.push(session.commands.len());
             self.prepared.push(request);
             if self.fail {
                 return Err("prepare");
@@ -987,6 +1267,7 @@ mod tests {
                 fail: false,
                 bad_receipt: false,
                 prepared: Vec::new(),
+                commands_before_prepare: Vec::new(),
             },
         )
     }
@@ -1027,6 +1308,7 @@ mod tests {
         let (transport, data_plane, session) = backend.into_parts();
         assert_eq!(transport.acquisitions, 1);
         assert_eq!(data_plane.prepared.len(), OPS_PER_TOKEN);
+        assert_eq!(data_plane.commands_before_prepare, (0..OPS_PER_TOKEN).collect::<Vec<_>>());
 
         let commands = session.unwrap().commands;
         assert_eq!(commands.len(), OPS_PER_TOKEN);

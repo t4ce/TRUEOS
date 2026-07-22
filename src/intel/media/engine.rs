@@ -416,7 +416,7 @@ impl MediaApiShape {
 
 /// Encode-specific readiness is intentionally separate from VDBOX decode
 /// readiness. Alder/Raptor Lake hardware can encode, but TRUEOS must not route
-/// a boot workload there until all three software-owned gates are present.
+/// a boot workload there until every software-owned gate is present.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MediaEncodeReadiness {
     pub device_claimed: bool,
@@ -425,6 +425,7 @@ pub(crate) struct MediaEncodeReadiness {
     pub guc_media_context_wired: bool,
     pub guc_media_transport_probe_passed: bool,
     pub avc_encode_commands_wired: bool,
+    pub avc_encode_probe_passed: bool,
     pub coded_bitstream_output_wired: bool,
     pub ready: bool,
 }
@@ -442,11 +443,19 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
     // VCS0 now has a dedicated GuC class, isolated LRC, and retirement-marker
     // probe. Actual decoding still prefers Execlists until that production
     // path is migrated, and encoder readiness requires the probe to have
-    // passed on this boot. h264_cmd remains a decode recipe: no VDEnc/MFX
-    // encode stream or coded-data writeback has landed yet.
+    // passed on this boot. h264_cmd remains a decode recipe; the separate
+    // avc_encode_probe module now owns the fixed one-IDR VDEnc/MFX command
+    // graph. Coded-data writeback validation is still a separate gate.
     let guc_media_context_wired = true;
     let guc_media_transport_probe_passed = super::guc_probe::passed();
+    #[cfg(feature = "trueos_h264_encode_probe")]
+    let avc_encode_commands_wired = super::avc_encode_probe::commands_wired();
+    #[cfg(not(feature = "trueos_h264_encode_probe"))]
     let avc_encode_commands_wired = false;
+    #[cfg(feature = "trueos_h264_encode_probe")]
+    let avc_encode_probe_passed = super::avc_encode_probe::passed();
+    #[cfg(not(feature = "trueos_h264_encode_probe"))]
+    let avc_encode_probe_passed = false;
     let coded_bitstream_output_wired = false;
     let ready = device_claimed
         && vdbox_discovered
@@ -454,6 +463,7 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
         && guc_media_context_wired
         && guc_media_transport_probe_passed
         && avc_encode_commands_wired
+        && avc_encode_probe_passed
         && coded_bitstream_output_wired;
     MediaEncodeReadiness {
         device_claimed,
@@ -462,6 +472,7 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
         guc_media_context_wired,
         guc_media_transport_probe_passed,
         avc_encode_commands_wired,
+        avc_encode_probe_passed,
         coded_bitstream_output_wired,
         ready,
     }

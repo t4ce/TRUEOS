@@ -127,9 +127,80 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
         );
     }
 
+    if vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Passed {
+        let mut avc_probe = crate::intel::run_media_avc_encode_probe_once();
+        let mut avc_probe_attempts = 1usize;
+        while avc_probe.state
+            == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Deferred
+            && avc_probe_attempts < VCS0_PROBE_RETRY_LIMIT
+        {
+            Timer::after(Duration::from_millis(VCS0_PROBE_RETRY_MS)).await;
+            avc_probe = crate::intel::run_media_avc_encode_probe_once();
+            avc_probe_attempts += 1;
+        }
+        if avc_probe.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed {
+            crate::log_info!(target: "intel/media-encode";
+                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 submission_owner=guc source_frame=0 source_layout=nv12-linear visible=512x512 pitch=512 i420_bytes={} nv12_bytes={} i420_fnv1a32=0x{:08X} nv12_fnv1a32=0x{:08X} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 next=coded-output-validation\n",
+                avc_probe.source_i420_bytes,
+                avc_probe.source_nv12_bytes,
+                avc_probe.source_i420_fnv1a32,
+                avc_probe.source_nv12_fnv1a32,
+                avc_probe.backing_ready as u8,
+                avc_probe.surface_uploaded as u8,
+                avc_probe.batch_ready as u8,
+                avc_probe.batch_bytes,
+                avc_probe.codec_packets,
+                avc_probe.bitstream_buffer_bound as u8,
+                avc_probe.registered as u8,
+                avc_probe.submitted as u8,
+                avc_probe.retired as u8,
+                avc_probe.context_destroyed as u8,
+                avc_probe.serial,
+                avc_probe.hwlrca_hi,
+                avc_probe.hwlrca_lo,
+                avc_probe.kickoff,
+                avc_probe.codec_begin,
+                avc_probe.codec_end,
+                avc_probe.complete,
+                avc_probe.poll_iters,
+                avc_probe.elapsed_us,
+                avc_probe_attempts,
+            );
+        } else {
+            crate::log_error!(target: "intel/media-encode";
+                "intel/media-encode: avc-idr-probe accepted=0 state={:?} failure={} forcewake={} backing={} surface_uploaded={} batch={} batch_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated=0 hardware_encode=0 fallback=software\n",
+                avc_probe.state,
+                avc_probe.failure.name(),
+                avc_probe.forcewake as u8,
+                avc_probe.backing_ready as u8,
+                avc_probe.surface_uploaded as u8,
+                avc_probe.batch_ready as u8,
+                avc_probe.batch_bytes,
+                avc_probe.codec_packets,
+                avc_probe.bitstream_buffer_bound as u8,
+                avc_probe.registered as u8,
+                avc_probe.submitted as u8,
+                avc_probe.retired as u8,
+                avc_probe.context_destroyed as u8,
+                avc_probe.serial,
+                avc_probe.kickoff,
+                avc_probe.codec_begin,
+                avc_probe.codec_end,
+                avc_probe.complete,
+                avc_probe.poll_iters,
+                avc_probe.elapsed_us,
+                avc_probe_attempts,
+            );
+        }
+    } else {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: avc-idr-probe accepted=0 state=deferred failure=guc-vcs0-transport-probe-unavailable surface_uploaded=0 codec_packets=0 submitted=0 retired=0 coded_output_validated=0 hardware_encode=0 fallback=software\n",
+        );
+    }
+
     let readiness = crate::intel::media_encode_readiness();
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: hardware-readiness ready={} device_claimed={} vdbox_discovered={} guc_transport_ready={} guc_media_context_wired={} guc_media_transport_probe_passed={} avc_encode_commands_wired={} coded_bitstream_output_wired={} decode_transport=execlists probe_transport=guc-vcs0 action=software-fallback\n",
+        "intel/media-encode: hardware-readiness ready={} device_claimed={} vdbox_discovered={} guc_transport_ready={} guc_media_context_wired={} guc_media_transport_probe_passed={} avc_encode_commands_wired={} avc_encode_probe_passed={} coded_bitstream_output_wired={} decode_transport=execlists probe_transport=guc-vcs0 action=software-fallback\n",
         readiness.ready as u8,
         readiness.device_claimed as u8,
         readiness.vdbox_discovered as u8,
@@ -137,6 +208,7 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
         readiness.guc_media_context_wired as u8,
         readiness.guc_media_transport_probe_passed as u8,
         readiness.avc_encode_commands_wired as u8,
+        readiness.avc_encode_probe_passed as u8,
         readiness.coded_bitstream_output_wired as u8,
     );
 

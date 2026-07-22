@@ -46,8 +46,8 @@ pub(crate) struct Lfm25DecodeState {
 /// Vendor-compatible asynchronous Lumen module for one sealed LFM2.5 session.
 ///
 /// `Backend` must complete each request only from its registered worker
-/// callback. The generic boundary is intentional: the concrete TRUEGA backend
-/// is added only after every required capability is fused and published.
+/// callback. The generic boundary keeps the vendor Lumen interface independent
+/// of the kernel transport while production uses the exact TGD1/TGF2 backend.
 pub(crate) struct Lfm25Decode<Backend> {
     session: RefCell<DecodeSession>,
     backend: RefCell<Backend>,
@@ -83,6 +83,18 @@ impl<Backend> Lfm25Decode<Backend> {
     pub(crate) fn into_parts(self) -> (DecodeSession, Backend) {
         (self.session.into_inner(), self.backend.into_inner())
     }
+}
+
+/// Open and seal-check the pinned native image once, then bind the production
+/// TRUEGA backend to this Lumen async module. Capability/session acquisition
+/// remains lazy and fail-closed until the first forward call.
+#[cfg(target_os = "trueos")]
+pub(crate) async fn open_truega() -> Result<
+    Lfm25Decode<crate::r::truega_decode_backend::KernelTruegaAotDecodeBackend>,
+    crate::r::truega_decode_backend::KernelDecodeDataPlaneError,
+> {
+    let backend = crate::r::truega_decode_backend::open_kernel_backend().await?;
+    Ok(Lfm25Decode::new(backend))
 }
 
 impl<Backend> AsyncModule for Lfm25Decode<Backend>

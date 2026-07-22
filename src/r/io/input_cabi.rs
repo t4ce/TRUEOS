@@ -669,15 +669,9 @@ pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_text(
         Ok(text) => text,
         Err(error) => return error,
     };
-    submit_keyboard_text(
-        keyboard_control_principal(),
-        handle,
-        text,
-        interval_ms,
-        flags & 1 != 0,
-    )
-    .map(|count| count.min(i32::MAX as usize) as i32)
-    .unwrap_or_else(|error| error.code())
+    submit_keyboard_text(keyboard_control_principal(), handle, text, interval_ms, flags & 1 != 0)
+        .map(|count| count.min(i32::MAX as usize) as i32)
+        .unwrap_or_else(|error| error.code())
 }
 
 #[unsafe(no_mangle)]

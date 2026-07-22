@@ -293,7 +293,11 @@ impl GamepadControlStation {
         for gamepad in &mut self.gamepads {
             if gamepad.active.is_none() {
                 while let Some(command) = gamepad.commands.pop_front() {
-                    apply_buttons(&mut gamepad.snapshot, command.buttons_set, command.buttons_clear);
+                    apply_buttons(
+                        &mut gamepad.snapshot,
+                        command.buttons_set,
+                        command.buttons_clear,
+                    );
                     match command.opcode {
                         GAMEPAD_CONTROL_OPCODE_SET => {
                             apply_targets(&mut gamepad.snapshot, command);
@@ -556,5 +560,9 @@ fn json_u16(value: Option<&Value>) -> Result<u16, GamepadControlError> {
 fn uptime_ms() -> u64 {
     let ticks = embassy_time_driver::now() as u128;
     let hz = embassy_time_driver::TICK_HZ as u128;
-    if hz == 0 { 0 } else { ((ticks * 1000) / hz) as u64 }
+    if hz == 0 {
+        0
+    } else {
+        ((ticks * 1000) / hz) as u64
+    }
 }

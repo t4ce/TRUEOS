@@ -15,6 +15,14 @@ module truega_lfm25_shortconv_token_slot (
     input  wire                clk,
     input  wire                reset_n,
 
+    // Abort during an active token cannot roll back already advanced channel
+    // RAM, so the selected layer is poisoned until explicit state_reset_i.
+    // poison_layer_i extends the same safety rule to a downstream projection
+    // or resident-import failure after this slot has completed its token.
+    input  wire                abort_i,
+    input  wire                poison_layer_i,
+    input  wire [3:0]          poison_layer_slot_i,
+
     input  wire                state_reset_i,
     input  wire [3:0]          state_reset_layer_i,
     output wire                state_reset_ready_o,
@@ -218,12 +226,27 @@ module truega_lfm25_shortconv_token_slot (
             channel_start <= 1'b0;
             quant_start <= 1'b0;
 
-            case (state)
+            if (abort_i && active_command) begin
+                layer_state_poisoned[active_layer] <= 1'b1;
+                state <= ST_IDLE;
+                busy_o <= 1'b0;
+                done_o <= 1'b1;
+                error_o <= 1'b1;
+                quant_sample_valid <= 1'b0;
+                active_command <= 1'b0;
+            end else case (state)
                 ST_IDLE: begin
                     busy_o <= 1'b0;
                     active_command <= 1'b0;
                     quant_sample_valid <= 1'b0;
-                    if (state_reset_i) begin
+                    if (poison_layer_i) begin
+                        if (poison_layer_slot_i < 4'd10)
+                            layer_state_poisoned[poison_layer_slot_i] <= 1'b1;
+                        else begin
+                            done_o <= 1'b1;
+                            error_o <= 1'b1;
+                        end
+                    end else if (state_reset_i) begin
                         if (state_reset_layer_i < 4'd10) begin
                             layer_state_valid[state_reset_layer_i] <= 1'b0;
                             layer_state_poisoned[state_reset_layer_i] <= 1'b0;

@@ -123,8 +123,7 @@ struct Request {
 }
 
 type Lfm25StreamCallResult = Result<crate::tga::Lfm25StreamResult, Error>;
-pub type Lfm25DecodeCallResult =
-    Result<trueos_fpga_abi::lfm25_decode_transport::Completion, Error>;
+pub type Lfm25DecodeCallResult = Result<trueos_fpga_abi::lfm25_decode_transport::Completion, Error>;
 type Lfm25DecodeCompletionCallback = Box<dyn FnOnce(Lfm25DecodeCallResult) + Send + 'static>;
 pub type Lfm25FeedCallResult =
     Result<trueos_fpga_abi::lfm25_decode_feed::FeedRetirementStatus, Error>;
@@ -204,6 +203,7 @@ struct Lfm25FeedRequest {
     record: trueos_fpga_abi::lfm25_decode_feed::FeedCommitRecord,
     stages: Vec<Lfm25FeedStage>,
     connection_generation: u32,
+    reset_before_start: bool,
     previous_completion_count: Option<u32>,
     callback: Option<Lfm25FeedCompletionCallback>,
 }
@@ -536,11 +536,12 @@ pub async fn acquire_lfm25_stream_transport()
 /// The epoch is carried through every device request and becomes part of every resident
 /// handle minted by the higher-level decode backend.
 pub struct Lfm25DecodeTransportSession {
-    _bar2_lane:
-        embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()>,
+    _bar2_lane: embassy_sync::mutex::MutexGuard<'static, crate::wait::EmbassySpinRawMutex, ()>,
     connection_generation: u32,
     session_epoch: u32,
     epoch_installed: bool,
+    feed_initialized: bool,
+    feed_poisoned: bool,
 }
 
 impl Lfm25DecodeTransportSession {
@@ -582,7 +583,8 @@ impl Lfm25DecodeTransportSession {
             return Err(Error::Protocol);
         }
 
-        let reply = Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, Lfm25DecodeCallResult>::new());
+        let reply =
+            Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, Lfm25DecodeCallResult>::new());
         let callback_reply = Arc::clone(&reply);
         let request = Lfm25DecodeRequest {
             command,
@@ -603,17 +605,81 @@ impl Lfm25DecodeTransportSession {
         }
         result
     }
+
+    /// Queue one complete fixed-shape TGF2 item on the existing sole transport
+    /// worker. Payloads are copied before queue publication; the worker stages
+    /// them in stage-major/lane-minor order and publishes FCM2 last.
+    pub async fn commit_feed_item(
+        &mut self,
+        record: trueos_fpga_abi::lfm25_decode_feed::FeedCommitRecord,
+        stages: Vec<Lfm25FeedStage>,
+    ) -> Lfm25FeedCallResult {
+        if self.feed_poisoned || record.session_epoch != self.session_epoch {
+            return Err(Error::Protocol);
+        }
+        if !crate::tga::is_online()
+            || crate::tga::connection_generation() != self.connection_generation
+        {
+            self.feed_poisoned = true;
+            return Err(Error::DeviceLost);
+        }
+        if !crate::tga::lfm25_feed_transport_available() || record.validate_for_publish().is_err() {
+            self.feed_poisoned = true;
+            return Err(Error::Protocol);
+        }
+        let expected_count = record.staged_payload_count().map_err(|_| Error::Protocol)?;
+        if stages.len() != expected_count
+            || stages.iter().enumerate().any(|(ordinal, stage)| {
+                record.expected_staged_payload(ordinal).ok() != Some(stage.descriptor())
+            })
+        {
+            self.feed_poisoned = true;
+            return Err(Error::Protocol);
+        }
+
+        let reply =
+            Arc::new(Signal::<crate::wait::EmbassySpinRawMutex, Lfm25FeedCallResult>::new());
+        let callback_reply = Arc::clone(&reply);
+        let request = Lfm25FeedRequest {
+            record,
+            stages,
+            connection_generation: self.connection_generation,
+            reset_before_start: !self.feed_initialized,
+            previous_completion_count: None,
+            callback: Some(Box::new(move |result| callback_reply.signal(result))),
+        };
+        {
+            let mut service = SERVICE.lock();
+            if service.queue.len() >= MAX_ACTIVE_CALLS {
+                return Err(Error::QueueFull);
+            }
+            service.queue.push_back(TransportJob::Lfm25Feed(request));
+        }
+        // Treat an outstanding feed as poisoned until its exact callback is
+        // observed. If this async future is cancelled, the queued hardware job
+        // still retires safely but the session cannot issue a follow-on item.
+        self.feed_poisoned = true;
+        WORK_AVAILABLE.signal(());
+        let result = reply.wait().await;
+        if result.is_ok() {
+            self.feed_initialized = true;
+            self.feed_poisoned = false;
+        } else {
+            // A failed/mismatched item cannot be followed by another commit in
+            // the same logical session, even when the worker reset hardware.
+            self.feed_poisoned = true;
+        }
+        result
+    }
+
+    pub const fn feed_is_poisoned(&self) -> bool {
+        self.feed_poisoned
+    }
 }
 
 pub fn lfm25_decode_transport_available() -> bool {
     crate::tga::lfm25_decode_transport_available()
 }
-
-/// Completion/status registers still absent from the finalized TGF2 feed ABI.
-/// Their names are intentionally exposed without invented offsets so callers
-/// can distinguish an exact staging capability from a usable async job path.
-pub const LFM25_FEED_MISSING_COMPLETION_REGISTERS: [&str; 8] =
-    crate::tga::LFM25_FEED_MISSING_COMPLETION_REGISTERS;
 
 /// Read the exact five-dword TGF2 publication at BAR0 0x280..0x293. This is a
 /// diagnostic read; callers must use `capability_is_exact` before interpreting
@@ -624,27 +690,26 @@ pub fn lfm25_feed_capability() -> Result<trueos_fpga_abi::lfm25_decode_feed::Fee
 }
 
 /// True when BAR2 exists and all five TGF2 capability fields match exactly.
-/// Staging availability alone does not authorize a worker job.
 pub fn lfm25_feed_staging_available() -> bool {
     crate::tga::lfm25_feed_staging_available()
 }
 
-/// Deliberately false until TGF2 defines completion state, retired
-/// mode/session/sequence/item identity, an error code, and IRQ pending/acknowledgement.
-/// Consequently no TGF2 `TransportJob` variant can be queued yet.
+/// True only for an exact TGF2 publication and the installed shared MSI path.
 pub fn lfm25_feed_transport_available() -> bool {
     crate::tga::lfm25_feed_transport_available()
 }
 
-/// Acquire the same BAR2 session lane used by the proven FFN row streamer. Firmware
-/// without the exact decode-v1 magic and complete capability bits is rejected before an
-/// epoch is minted or any request register is written.
+/// Acquire the one production decode/feed BAR2 session. Both the exact TGD1
+/// decode contract and the exact TGF2 staged-feed/MSI contract must be present
+/// before an epoch is minted or any request register is written.
 pub async fn acquire_lfm25_decode_transport() -> Result<Lfm25DecodeTransportSession, Error> {
     let lane = LFM25_STREAM_SESSION_LANE.lock().await;
     if !crate::tga::is_online() {
         return Err(Error::DeviceLost);
     }
-    if !crate::tga::lfm25_decode_transport_available() {
+    if !crate::tga::lfm25_decode_transport_available()
+        || !crate::tga::lfm25_feed_transport_available()
+    {
         return Err(Error::Protocol);
     }
     let connection_generation = crate::tga::connection_generation();
@@ -659,6 +724,8 @@ pub async fn acquire_lfm25_decode_transport() -> Result<Lfm25DecodeTransportSess
         connection_generation,
         session_epoch,
         epoch_installed: false,
+        feed_initialized: false,
+        feed_poisoned: false,
     })
 }
 
@@ -891,6 +958,9 @@ fn take_next_transport_job() -> Option<ActiveTransportJob> {
             TransportJob::Lfm25Decode(request) => {
                 return Some(ActiveTransportJob::Lfm25Decode(request));
             }
+            TransportJob::Lfm25Feed(request) => {
+                return Some(ActiveTransportJob::Lfm25Feed(request));
+            }
         }
     }
     None
@@ -1001,10 +1071,11 @@ impl ActiveTransportJob {
             Self::Inline(_) => None,
             Self::Lfm25Stream(request) => Some(request.connection_generation),
             Self::Lfm25Decode(request) => Some(request.connection_generation),
+            Self::Lfm25Feed(request) => Some(request.connection_generation),
         }
     }
 
-    fn start(&self) -> Result<(), Error> {
+    fn start(&mut self) -> Result<(), Error> {
         self.validate_connection_generation()?;
         match self {
             Self::Inline(request) => {
@@ -1017,6 +1088,39 @@ impl ActiveTransportJob {
             }
             Self::Lfm25Decode(request) => {
                 crate::tga::start_lfm25_decode(request.command).map_err(map_transport_error)
+            }
+            Self::Lfm25Feed(request) => {
+                use trueos_fpga_abi::lfm25_decode_feed::FeedState;
+
+                // TGF2 deliberately reuses the proven v1 BAR2 banks. Reset the
+                // frontend metadata once, under the sole physical worker lane,
+                // so payload writes from an earlier row-stream session cannot
+                // contaminate the new logical decode epoch. Never repeat this
+                // between tokens: resident recurrent/KV state must survive.
+                if request.reset_before_start {
+                    crate::tga::reset_lfm25_feed(request.connection_generation)
+                        .map_err(map_transport_error)?;
+                }
+                let status = crate::tga::lfm25_feed_status(request.connection_generation)
+                    .map_err(map_transport_error)?;
+                // The completion slot cannot accept a new BUSY owner while a
+                // previous terminal envelope is still awaiting the shared IRQ
+                // ACK. A non-posted status read also flushes that preceding
+                // ACK, so anything except IDLE is a real ownership failure.
+                if status.state != FeedState::Idle || status.error_code != 0 {
+                    return Err(Error::Protocol);
+                }
+                request.previous_completion_count = Some(status.completion_count);
+                for stage in &request.stages {
+                    crate::tga::lfm25_feed_write_stage(
+                        request.connection_generation,
+                        stage.descriptor(),
+                        stage.payload(),
+                    )
+                    .map_err(map_transport_error)?;
+                }
+                crate::tga::lfm25_feed_publish_commit(request.connection_generation, request.record)
+                    .map_err(map_transport_error)
             }
         }
     }
@@ -1045,6 +1149,24 @@ impl ActiveTransportJob {
                     )
                 })
                 .map_err(map_transport_error),
+            Self::Lfm25Feed(request) => {
+                let status = crate::tga::lfm25_feed_status(request.connection_generation)
+                    .map_err(map_transport_error)?;
+                if !status.state.is_terminal() {
+                    return Ok(false);
+                }
+                let previous_count = request.previous_completion_count.ok_or(Error::Protocol)?;
+                let pending =
+                    crate::tga::lfm25_feed_shared_irq_pending(request.connection_generation)
+                        .map_err(map_transport_error)?;
+                if !pending
+                    || !status.identity_matches(request.record)
+                    || status.completion_count != previous_count.wrapping_add(1)
+                {
+                    return Err(Error::Protocol);
+                }
+                Ok(true)
+            }
         }
     }
 
@@ -1053,6 +1175,10 @@ impl ActiveTransportJob {
             Self::Inline(request) => finish_call(request.call_id, Err(error)),
             Self::Lfm25Stream(request) => request.reply.signal(Err(error)),
             Self::Lfm25Decode(request) => request.deliver(Err(error)),
+            Self::Lfm25Feed(request) => {
+                let _ = crate::tga::reset_lfm25_feed(request.connection_generation);
+                request.deliver(Err(error));
+            }
         }
     }
 
@@ -1112,6 +1238,48 @@ impl ActiveTransportJob {
                 }
                 request.deliver(result);
             }
+            Self::Lfm25Feed(request) => {
+                use trueos_fpga_abi::lfm25_decode_feed::FeedState;
+
+                let mut result = terminal.and_then(|()| {
+                    if !crate::tga::is_online()
+                        || crate::tga::connection_generation() != request.connection_generation
+                    {
+                        return Err(Error::DeviceLost);
+                    }
+                    let previous_count =
+                        request.previous_completion_count.ok_or(Error::Protocol)?;
+                    let status = crate::tga::lfm25_feed_status(request.connection_generation)
+                        .map_err(map_transport_error)?;
+                    let pending =
+                        crate::tga::lfm25_feed_shared_irq_pending(request.connection_generation)
+                            .map_err(map_transport_error)?;
+                    if !pending
+                        || !status.identity_matches(request.record)
+                        || status.completion_count != previous_count.wrapping_add(1)
+                    {
+                        return Err(Error::Protocol);
+                    }
+                    match status.state {
+                        FeedState::Complete if status.error_code == 0 => Ok(status),
+                        FeedState::Failed | FeedState::Poisoned if status.error_code != 0 => {
+                            Err(Error::Device(status.error_code))
+                        }
+                        _ => Err(Error::Protocol),
+                    }
+                });
+                // Exact retirement identity has been consumed before the shared
+                // IRQ is acknowledged. Ack failure prevents a success callback.
+                if terminal_reached && let Err(error) = crate::tga::ack_offload_interrupt() {
+                    result = Err(map_transport_error(error));
+                }
+                if result.is_err() {
+                    // Recovery is hardware-local, but the logical session stays
+                    // poisoned so no later item can silently cross the failure.
+                    let _ = crate::tga::reset_lfm25_feed(request.connection_generation);
+                }
+                request.deliver(result);
+            }
         }
     }
 }
@@ -1127,7 +1295,7 @@ pub async fn fpga_offload_service_task() {
     );
 
     loop {
-        let Some(job) = take_next_transport_job() else {
+        let Some(mut job) = take_next_transport_job() else {
             WORK_AVAILABLE.wait().await;
             continue;
         };

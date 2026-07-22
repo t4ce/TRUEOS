@@ -110,7 +110,7 @@ module truega_lfm25_feed_completion_slot_tb;
         next_cycle();
         check(state_value == 0 && completion_count == 0,
             "physical reset publishes IDLE and clears count");
-        check(retired_mode_layer == 32'h0000_ffff && error_code == 0,
+        check(retired_mode_layer == 32'h0000_ff00 && error_code == 0,
             "physical reset publishes no-retirement sentinel");
         check(!irq_retire && !frontend_state_reset,
             "physical reset emits no event pulse");
@@ -209,7 +209,7 @@ module truega_lfm25_feed_completion_slot_tb;
         check(state_value == 4, "frontend poison publishes POISONED");
         check(error_code == 32'hbad4_0001,
             "poison publishes ABI FEED_ERROR_FRONTEND_POISON");
-        check(retired_mode_layer == 32'h0000_ffff
+        check(retired_mode_layer == 32'h0000_ff00
                 && retired_epoch == 0 && retired_sequence == 0 && retired_item == 0,
             "poison without item publishes no-item tag envelope");
         check(completion_count == 3 && irq_retire,
@@ -233,6 +233,9 @@ module truega_lfm25_feed_completion_slot_tb;
         check(state_value == 0 && frontend_state_reset
                 && completion_count == 3,
             "RST2 pulses frontend reset and preserves completion count");
+        next_cycle();
+        check(state_value == 0 && completion_count == 3 && irq_pulses == 3,
+            "held poison is suppressed across registered frontend reset pulse");
         frontend_poisoned = 1'b0;
         next_cycle();
         check(!frontend_state_reset && !irq_retire,
