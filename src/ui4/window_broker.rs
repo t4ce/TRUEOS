@@ -253,10 +253,6 @@ pub(crate) struct WindowSnapshot {
     pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
     pub(crate) interaction: WindowInteraction,
-    /// The window paints its own pointer at the routed cursor position. UI4
-    /// suppresses the default slot-4 cursor only while that window is topmost
-    /// below the cursor.
-    pub(crate) custom_cursor: bool,
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
     pub(crate) publish_serial: u64,
@@ -294,7 +290,6 @@ struct WindowRecord {
     plane: WindowPlane,
     placement: WindowPlacement,
     interaction: WindowInteraction,
-    custom_cursor: bool,
     state: WindowState,
     revision: u64,
     publish_serial: u64,
@@ -752,7 +747,6 @@ impl WindowRecord {
             plane: request.plane,
             placement: request.placement,
             interaction: request.interaction,
-            custom_cursor: false,
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
@@ -772,7 +766,6 @@ impl WindowRecord {
             plane: self.plane,
             placement: self.placement,
             interaction: self.interaction,
-            custom_cursor: self.custom_cursor,
             state: self.state,
             revision: self.revision,
             publish_serial: self.publish_serial,
@@ -791,6 +784,7 @@ pub(crate) fn begin_window_session(
 ) -> Result<WindowSessionId, WindowBrokerError> {
     let (result, retirements) = WINDOW_BROKER.lock().begin_session(owner);
     complete_transition_retirements(retirements);
+    super::cursor_frame_inout::owner_closed(owner);
     result
 }
 
@@ -804,10 +798,12 @@ pub(crate) fn finish_window_session(
     owner: WindowOwner,
     session: WindowSessionId,
 ) -> Result<usize, WindowBrokerError> {
-    WINDOW_BROKER
+    let closed = WINDOW_BROKER
         .lock()
         .finish_session(owner, session, false, false, false, false, false, 0)
-        .map(|finish| finish.closed)
+        .map(|finish| finish.closed)?;
+    super::cursor_frame_inout::session_closed(owner, session);
+    Ok(closed)
 }
 
 pub(crate) fn finish_window_session_with_request(
@@ -826,6 +822,7 @@ pub(crate) fn finish_window_session_with_request(
         request.retire_frames,
         started_ms,
     )?;
+    super::cursor_frame_inout::session_closed(owner, session);
     if request.persist_final_frame {
         super::screenshot::capture_final_session_frames(
             owner,
@@ -922,7 +919,12 @@ fn reap_transition_retired_frames() {
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
-    WINDOW_BROKER.lock().create(request)
+    let id = WINDOW_BROKER.lock().create(request)?;
+    if super::cursor_frame_inout::frame_opened(request.owner, request.session, id).is_err() {
+        let _ = close_window(request.owner, id);
+        return Err(WindowBrokerError::Capacity);
+    }
+    Ok(id)
 }
 
 pub(crate) fn replace_window_frame(
@@ -938,6 +940,8 @@ pub(crate) fn replace_window_frame(
     window.damage = None;
     window.revision = next_serial(window.revision);
     broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
 }
 
@@ -950,28 +954,6 @@ pub(crate) fn window_placement(
 ) -> Result<WindowPlacement, WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
     Ok(broker.checked_window_mut(owner, id)?.placement)
-}
-
-/// Declare whether a window replaces UI4's default slot-4 cursor with pixels
-/// in its own frame. The declaration is window-scoped: the OS cursor returns
-/// automatically when the pointer leaves this window or another window is
-/// above it.
-pub(crate) fn set_window_custom_cursor(
-    owner: WindowOwner,
-    id: WindowId,
-    enabled: bool,
-) -> Result<(), WindowBrokerError> {
-    let changed = {
-        let mut broker = WINDOW_BROKER.lock();
-        let window = broker.checked_window_mut(owner, id)?;
-        let changed = window.custom_cursor != enabled;
-        window.custom_cursor = enabled;
-        changed
-    };
-    if changed {
-        super::input_broker::notify_slot4_visual_change();
-    }
-    Ok(())
 }
 
 pub(crate) fn set_window_placement(
@@ -988,7 +970,6 @@ pub(crate) fn set_window_placement(
     let notify_resize = window.interaction.receives_input
         && (previous.width != placement.width || previous.height != placement.height);
     let changed = window.placement != placement;
-    let notify_custom_cursor = changed && window.custom_cursor;
     if changed {
         window.placement = placement;
         window.revision = next_serial(window.revision);
@@ -1007,8 +988,8 @@ pub(crate) fn set_window_placement(
             placement.height,
         );
     }
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
+    if changed {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
     Ok(())
 }
@@ -1033,15 +1014,15 @@ pub(crate) fn move_window(
     {
         return Err(WindowBrokerError::InteractionDenied);
     }
-    let notify_custom_cursor = window.custom_cursor && window.placement != placement;
-    if window.placement != placement {
+    let changed = window.placement != placement;
+    if changed {
         window.placement = placement;
         window.revision = next_serial(window.revision);
         broker.mark_composition_changed();
     }
     drop(broker);
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
+    if changed {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
     Ok(())
 }
@@ -1112,7 +1093,6 @@ pub(crate) fn toggle_window_maximized(
     let notify_resize = window.interaction.receives_input
         && window.interaction.resize_on_maximize
         && (previous.width != placement.width || previous.height != placement.height);
-    let notify_custom_cursor = changed && window.custom_cursor;
     if changed {
         broker.mark_composition_changed();
     }
@@ -1127,8 +1107,8 @@ pub(crate) fn toggle_window_maximized(
             placement.height,
         );
     }
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
+    if changed {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
     Ok(WindowPlacementTransition {
         previous,
@@ -1147,7 +1127,6 @@ pub(crate) fn publish_window_frame(
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
-    let notify_custom_cursor = window.custom_cursor && window.state != WindowState::Ready;
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
     window.revision = next_serial(window.revision);
@@ -1156,9 +1135,7 @@ pub(crate) fn publish_window_frame(
     let publish_serial = window.publish_serial;
     broker.mark_composition_changed();
     drop(broker);
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
-    }
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(publish_serial)
 }
 
@@ -1199,11 +1176,9 @@ pub(crate) fn publish_window_frames(
             WindowState::Closed => return Err(WindowBrokerError::Closed),
         }
     }
-    let mut notify_custom_cursor = false;
     for (id, damage) in publications.iter().copied() {
         let (slot, _) = unpack_handle(id.0)?;
         let window = &mut broker.windows[slot];
-        notify_custom_cursor |= window.custom_cursor && window.state != WindowState::Ready;
         window.state = WindowState::Ready;
         window.publish_serial = next_serial(window.publish_serial);
         window.revision = next_serial(window.revision);
@@ -1214,8 +1189,8 @@ pub(crate) fn publish_window_frames(
         broker.mark_composition_changed();
     }
     drop(broker);
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
+    for (id, _) in publications.iter().copied() {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
     Ok(())
 }
@@ -1223,15 +1198,12 @@ pub(crate) fn publish_window_frames(
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
-    let notify_custom_cursor = window.custom_cursor && window.state == WindowState::Ready;
     window.state = WindowState::Closed;
     window.damage = None;
     window.revision = next_serial(window.revision);
     broker.mark_composition_changed();
     drop(broker);
-    if notify_custom_cursor {
-        super::input_broker::notify_slot4_visual_change();
-    }
+    super::cursor_frame_inout::frame_closed(owner, id);
     Ok(())
 }
 
@@ -1263,6 +1235,16 @@ pub(crate) fn visible_windows_for_output_with_revision(
 
 pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
     WINDOW_BROKER.lock().snapshots(output)
+}
+
+pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<WindowSnapshot> {
+    let (slot, generation) = unpack_handle(id.0).ok()?;
+    let broker = WINDOW_BROKER.lock();
+    let window = broker.windows.get(slot)?;
+    if window.generation != generation || window.owner != owner {
+        return None;
+    }
+    window.snapshot(slot)
 }
 
 /// Clear only the damage represented by a successfully composed snapshot.

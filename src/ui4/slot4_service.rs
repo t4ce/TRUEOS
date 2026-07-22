@@ -50,7 +50,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu custom-cursor=window-scoped-suppression press=contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+external-selected-frame-strip+selection-outline+maximize-preview+context-menu cursor-set=default+loading+resize-horizontal+resize-vertical+resize-diagonal+app-owned scope=selected-frame/per-source press=default-contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -315,6 +315,24 @@ fn software_cursor_rects() -> Slot4Rects {
     let mut rects = Slot4Rects::new();
     let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
 
+    if let Some(output) = super::OutputId::from_slot(0)
+        && let Some(strip) = super::selection_strip(output, screen_w, screen_h)
+    {
+        let count = strip.colors.len() as u64;
+        for (index, color) in strip.colors.iter().copied().enumerate() {
+            let start = u64::from(strip.width).saturating_mul(index as u64) / count;
+            let end = u64::from(strip.width).saturating_mul(index as u64 + 1) / count;
+            push_overlay_rect(
+                &mut rects,
+                strip.x.saturating_add(start as u32),
+                strip.y,
+                end.saturating_sub(start) as u32,
+                1,
+                color,
+            );
+        }
+    }
+
     for visual in &visuals {
         let Some(preview) = visual.maximize_preview else {
             continue;
@@ -369,21 +387,33 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
-        if !visual.draw_cursor {
-            continue;
-        }
         let x = visual.x;
         let y = visual.y;
         let color = visual.color;
-        push_software_cursor(
-            &mut rects,
-            x,
-            y,
-            screen_w,
-            screen_h,
-            color,
-            visual.buttons_down != 0,
-        );
+        match visual.icon {
+            super::Ui4CursorIcon::Default => push_software_cursor(
+                &mut rects,
+                x,
+                y,
+                screen_w,
+                screen_h,
+                color,
+                visual.buttons_down != 0,
+            ),
+            super::Ui4CursorIcon::Loading => {
+                push_loading_cursor(&mut rects, x, y, screen_w, screen_h, color)
+            }
+            super::Ui4CursorIcon::ResizeHorizontal => {
+                push_resize_horizontal_cursor(&mut rects, x, y, screen_w, screen_h, color)
+            }
+            super::Ui4CursorIcon::ResizeVertical => {
+                push_resize_vertical_cursor(&mut rects, x, y, screen_w, screen_h, color)
+            }
+            super::Ui4CursorIcon::ResizeDiagonal => {
+                push_resize_diagonal_cursor(&mut rects, x, y, screen_w, screen_h, color)
+            }
+            super::Ui4CursorIcon::AppOwned => {}
+        }
     }
 
     rects
@@ -459,6 +489,192 @@ fn push_software_cursor(
         screen_h,
         color,
     );
+}
+
+fn push_loading_cursor(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    push_cursor_offset_rect(rects, x, y, -8, -10, 17, 3, screen_w, screen_h, color);
+    push_cursor_offset_rect(rects, x, y, -8, 8, 17, 3, screen_w, screen_h, color);
+    for (offset_x, offset_y) in [
+        (-6, -7),
+        (4, -7),
+        (-4, -5),
+        (2, -5),
+        (-2, -3),
+        (0, -3),
+        (-2, 1),
+        (0, 1),
+        (-4, 3),
+        (2, 3),
+        (-6, 5),
+        (4, 5),
+    ] {
+        push_cursor_offset_rect(
+            rects,
+            x,
+            y,
+            offset_x,
+            offset_y,
+            3,
+            3,
+            screen_w,
+            screen_h,
+            color,
+        );
+    }
+    push_cursor_offset_rect(
+        rects,
+        x,
+        y,
+        -1,
+        -1,
+        3,
+        3,
+        screen_w,
+        screen_h,
+        Rgba8::new(255, 255, 255, 240),
+    );
+}
+
+fn push_resize_horizontal_cursor(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    push_cursor_offset_rect(rects, x, y, -13, -2, 27, 5, screen_w, screen_h, color);
+    push_cursor_offset_rect(rects, x, y, -13, -6, 5, 13, screen_w, screen_h, color);
+    push_cursor_offset_rect(rects, x, y, 9, -6, 5, 13, screen_w, screen_h, color);
+    push_cursor_offset_rect(
+        rects,
+        x,
+        y,
+        -1,
+        -1,
+        3,
+        3,
+        screen_w,
+        screen_h,
+        Rgba8::new(255, 255, 255, 240),
+    );
+}
+
+fn push_resize_vertical_cursor(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    push_cursor_offset_rect(rects, x, y, -2, -13, 5, 27, screen_w, screen_h, color);
+    push_cursor_offset_rect(rects, x, y, -6, -13, 13, 5, screen_w, screen_h, color);
+    push_cursor_offset_rect(rects, x, y, -6, 9, 13, 5, screen_w, screen_h, color);
+    push_cursor_offset_rect(
+        rects,
+        x,
+        y,
+        -1,
+        -1,
+        3,
+        3,
+        screen_w,
+        screen_h,
+        Rgba8::new(255, 255, 255, 240),
+    );
+}
+
+fn push_resize_diagonal_cursor(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    use crate::graphics::primitives::Rgba8;
+
+    for offset in [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10] {
+        push_cursor_offset_rect(
+            rects,
+            x,
+            y,
+            offset,
+            offset,
+            3,
+            3,
+            screen_w,
+            screen_h,
+            color,
+        );
+    }
+    for (offset_x, offset_y) in [(-10, -6), (-6, -10), (10, 6), (6, 10)] {
+        push_cursor_offset_rect(
+            rects,
+            x,
+            y,
+            offset_x,
+            offset_y,
+            3,
+            3,
+            screen_w,
+            screen_h,
+            color,
+        );
+    }
+    push_cursor_offset_rect(
+        rects,
+        x,
+        y,
+        -1,
+        -1,
+        3,
+        3,
+        screen_w,
+        screen_h,
+        Rgba8::new(255, 255, 255, 240),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_cursor_offset_rect(
+    rects: &mut Slot4Rects,
+    center_x: u32,
+    center_y: u32,
+    offset_x: i32,
+    offset_y: i32,
+    width: u32,
+    height: u32,
+    screen_w: u32,
+    screen_h: u32,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    let width = width.min(screen_w);
+    let height = height.min(screen_h);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let x = i64::from(center_x)
+        .saturating_add(i64::from(offset_x))
+        .clamp(0, i64::from(screen_w - width)) as u32;
+    let y = i64::from(center_y)
+        .saturating_add(i64::from(offset_y))
+        .clamp(0, i64::from(screen_h - height)) as u32;
+    push_overlay_rect(rects, x, y, width, height, color);
 }
 
 #[allow(clippy::too_many_arguments)]

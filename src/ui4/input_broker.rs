@@ -12,7 +12,9 @@ use embassy_time::Timer;
 use heapless::Vec;
 use spin::Mutex;
 
-use super::{OutputId, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState};
+use super::{
+    OutputId, Ui4CursorSource, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
+};
 
 const MAX_CURSOR_ROUTES: usize = 32;
 const MAX_OWNER_QUEUES: usize = 64;
@@ -31,25 +33,6 @@ const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Ui4CursorSource {
-    pub(crate) controller_id: u32,
-    pub(crate) slot_id: u32,
-    pub(crate) ep_target: u32,
-    pub(crate) hid_kind: u8,
-}
-
-impl Ui4CursorSource {
-    fn from_event(event: crate::usb2::hid::TrueosHidCursorEvent) -> Self {
-        Self {
-            controller_id: event.controller_id,
-            slot_id: event.slot_id,
-            ep_target: event.ep_target,
-            hid_kind: event.hid_kind,
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4PointerEvent {
@@ -165,7 +148,7 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
     pub(crate) buttons_down: u32,
-    pub(crate) draw_cursor: bool,
+    pub(crate) icon: super::Ui4CursorIcon,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) maximize_preview: Option<Ui4VisualRect>,
@@ -182,6 +165,21 @@ impl From<WindowSnapshot> for WindowTarget {
         Self {
             owner: window.owner,
             window: window.id,
+        }
+    }
+}
+
+impl WindowTarget {
+    const fn cursor_frame_key(self) -> super::CursorFrameKey {
+        super::CursorFrameKey::new(self.owner, self.window)
+    }
+}
+
+impl From<super::CursorFrameKey> for WindowTarget {
+    fn from(key: super::CursorFrameKey) -> Self {
+        Self {
+            owner: key.owner,
+            window: key.window,
         }
     }
 }
@@ -209,7 +207,6 @@ struct CursorRoute {
     x: u32,
     y: u32,
     buttons_down: u32,
-    focus: Option<WindowTarget>,
     capture: Option<WindowTarget>,
     keyboard_source: Option<KeyboardSource>,
     focus_serial: u64,
@@ -222,6 +219,7 @@ struct CursorRoute {
     maximize_preview: Option<Ui4VisualRect>,
     context_menu: Option<(u32, u32)>,
     selection_anchor: Option<(u32, u32)>,
+    absorb_select: bool,
 }
 
 impl CursorRoute {
@@ -231,12 +229,11 @@ impl CursorRoute {
             x,
             y,
             buttons_down,
-            focus: None,
             capture: None,
             keyboard_source: None,
             focus_serial: 0,
             visible_after_motion: false,
-            color: software_cursor_color(source),
+            color: super::cursor_frame_inout::cursor_color(source),
             secondary_anchor: None,
             secondary_start_placement: None,
             secondary_dragged: false,
@@ -244,7 +241,20 @@ impl CursorRoute {
             maximize_preview: None,
             context_menu: None,
             selection_anchor: None,
+            absorb_select: false,
         }
+    }
+
+    fn clear_window_interaction(&mut self) {
+        self.capture = None;
+        self.keyboard_source = None;
+        self.secondary_anchor = None;
+        self.secondary_start_placement = None;
+        self.secondary_dragged = false;
+        self.secondary_restored_from_maximize = false;
+        self.maximize_preview = None;
+        self.context_menu = None;
+        self.selection_anchor = None;
     }
 }
 
@@ -288,23 +298,30 @@ impl InputBroker {
         index
     }
 
-    fn set_focus(
+    fn select_frame(
         &mut self,
         cursor_index: usize,
         next: Option<WindowTarget>,
         combo_id: u32,
         vcursor: bool,
-    ) {
-        let previous = self.cursors[cursor_index].focus;
-        if previous == next {
-            return;
-        }
-        self.focus_serial = self.focus_serial.wrapping_add(1).max(1);
-        self.cursors[cursor_index].focus = next;
-        self.cursors[cursor_index].keyboard_source = None;
-        self.cursors[cursor_index].focus_serial = self.focus_serial;
+    ) -> bool {
         let source = self.cursors[cursor_index].source;
-        if let Some(previous) = previous {
+        let color = self.cursors[cursor_index].color;
+        let change = super::cursor_frame_inout::select_frame(
+            next.map(WindowTarget::cursor_frame_key),
+            source,
+            color,
+        );
+        self.focus_serial = self.focus_serial.wrapping_add(1).max(1);
+        self.cursors[cursor_index].focus_serial = self.focus_serial;
+        if !change.changed {
+            return false;
+        }
+        for route in &mut self.cursors {
+            route.clear_window_interaction();
+            route.absorb_select |= route.buttons_down != 0;
+        }
+        if let Some(previous) = change.previous.map(WindowTarget::from) {
             enqueue_owner_event(
                 previous.owner,
                 Ui4InputEvent::Focus(Ui4FocusEvent {
@@ -316,7 +333,7 @@ impl InputBroker {
                 }),
             );
         }
-        if let Some(next) = next {
+        if let Some(next) = change.selected.map(WindowTarget::from) {
             enqueue_owner_event(
                 next.owner,
                 Ui4InputEvent::Focus(Ui4FocusEvent {
@@ -328,30 +345,17 @@ impl InputBroker {
                 }),
             );
         }
+        true
     }
 
     fn release_owner(&mut self, owner: WindowOwner) -> usize {
         let mut released = 0usize;
         for route in &mut self.cursors {
-            let owned_focus = route.focus.is_some_and(|target| target.owner == owner);
             let owned_capture = route.capture.is_some_and(|target| target.owner == owner);
-            if !owned_focus && !owned_capture {
+            if !owned_capture {
                 continue;
             }
-            if owned_focus {
-                route.focus = None;
-                route.keyboard_source = None;
-            }
-            if owned_capture {
-                route.capture = None;
-            }
-            route.secondary_anchor = None;
-            route.secondary_start_placement = None;
-            route.secondary_dragged = false;
-            route.secondary_restored_from_maximize = false;
-            route.maximize_preview = None;
-            route.context_menu = None;
-            route.selection_anchor = None;
+            route.clear_window_interaction();
             released = released.saturating_add(1);
         }
         released
@@ -391,6 +395,37 @@ impl InputBroker {
             self.cursors[index].visible_after_motion = true;
         }
         self.cursors[index].maximize_preview = None;
+
+        if previous_routed_buttons == 0 && pressed != 0 {
+            let next = hit.map(WindowTarget::from);
+            if self.select_frame(index, next, combo_id, vcursor) {
+                self.cursors[index].absorb_select = true;
+            } else {
+                let selected = super::selected_frame();
+                self.cursors[index].capture = hit
+                    .filter(|window| {
+                        selected == Some(WindowTarget::from(*window).cursor_frame_key())
+                            && (window.interaction.movable
+                                || window.interaction.maximizable
+                                || window.interaction.receives_input)
+                    })
+                    .map(WindowTarget::from);
+            }
+        }
+
+        // A selection-changing click is a complete absorbed gesture. Keeping
+        // the latch through button-up prevents a release (or drag motion)
+        // leaking into the newly selected application.
+        if self.cursors[index].absorb_select {
+            self.cursors[index].x = x;
+            self.cursors[index].y = y;
+            self.cursors[index].buttons_down = event.buttons_down;
+            if buttons_down == 0 {
+                self.cursors[index].absorb_select = false;
+            }
+            return;
+        }
+
         if pressed & PRIMARY_BUTTON_MASK != 0 {
             self.cursors[index].selection_anchor = Some((x, y));
         }
@@ -423,24 +458,16 @@ impl InputBroker {
             self.cursors[index].secondary_dragged = false;
         }
 
-        if previous_routed_buttons == 0 && pressed != 0 {
-            let focus = hit
-                .filter(|window| window.interaction.receives_input)
-                .map(WindowTarget::from);
-            self.set_focus(index, focus, combo_id, vcursor);
-            self.cursors[index].capture = hit
-                .filter(|window| {
-                    window.interaction.movable
-                        || window.interaction.maximizable
-                        || window.interaction.receives_input
-                })
-                .map(WindowTarget::from);
-        }
-
+        let selected = super::selected_frame();
         let target = self.cursors[index]
             .capture
             .and_then(window_snapshot_for_target)
-            .or(hit);
+            .filter(|window| selected == Some(WindowTarget::from(*window).cursor_frame_key()))
+            .or_else(|| {
+                hit.filter(|window| {
+                    selected == Some(WindowTarget::from(*window).cursor_frame_key())
+                })
+            });
         if let Some(mut target) = target {
             if target.maximized
                 && buttons_down & SECONDARY_BUTTON_MASK != 0
@@ -698,6 +725,9 @@ impl InputBroker {
     }
 
     fn process_keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
+        if !super::cursor_frame_inout::global_keyboard_passes(&event) {
+            return;
+        }
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
         if INTERACTIVE_SCREENSHOT_ENABLED
             && event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
@@ -737,13 +767,21 @@ impl InputBroker {
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
+        let Some(target) = super::selected_frame().map(WindowTarget::from) else {
+            return;
+        };
+        let Some(window) = window_snapshot_for_target(target) else {
+            return;
+        };
+        if !window.interaction.receives_input {
+            return;
+        }
         let matched_route = self
             .cursors
             .iter()
             .enumerate()
             .filter_map(|(index, route)| {
-                let focus = route.focus?;
-                if window_snapshot_for_target(focus).is_none() {
+                if !super::cursor_frame_inout::source_selected(route.source) {
                     return None;
                 }
                 let matches = if combo_id != 0 {
@@ -764,9 +802,7 @@ impl InputBroker {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, route)| {
-                    let focus = route.focus?;
-                    window_snapshot_for_target(focus)
-                        .is_some()
+                    super::cursor_frame_inout::source_selected(route.source)
                         .then_some((route.focus_serial, index))
                 })
                 .max_by_key(|(serial, _)| *serial)
@@ -775,12 +811,9 @@ impl InputBroker {
         let Some(route_index) = route_index else {
             return;
         };
-        let Some(target) = self.cursors[route_index].focus else {
-            return;
-        };
-        // Keep the focused keyboard identity beside the cursor-owned focus.
-        // Blueprint game consumers can then sample held HID usages without
-        // gaining access to the global HUT keyboard list.
+        // Keep the keyboard identity beside the cursor which participated in
+        // selecting the one global frame. Blueprint game consumers can then
+        // sample held HID usages without access to the global HUT list.
         self.cursors[route_index].keyboard_source = Some(event.into());
         enqueue_owner_event(
             target.owner,
@@ -797,13 +830,15 @@ impl InputBroker {
         &self,
         target: WindowTarget,
     ) -> Option<crate::usb2::hid::hut::HidKeyboardState> {
-        if window_snapshot_for_target(target).is_none() {
+        if super::selected_frame() != Some(target.cursor_frame_key())
+            || window_snapshot_for_target(target).is_none()
+        {
             return None;
         }
         let source = self
             .cursors
             .iter()
-            .filter(|route| route.focus == Some(target))
+            .filter(|route| super::cursor_frame_inout::source_selected(route.source))
             .filter_map(|route| {
                 route
                     .keyboard_source
@@ -882,18 +917,25 @@ impl InputBroker {
             if !route.visible_after_motion {
                 continue;
             }
+            let icon = topmost_window_at(route.x, route.y)
+                .filter(|window| {
+                    super::selected_frame()
+                        == Some(WindowTarget::from(*window).cursor_frame_key())
+                })
+                .map(|window| {
+                    super::cursor_icon_for(
+                        WindowTarget::from(window).cursor_frame_key(),
+                        route.source,
+                    )
+                })
+                .unwrap_or(super::Ui4CursorIcon::Default);
             let _ = visuals.push(Ui4SoftwareCursorVisual {
                 source: route.source,
                 x: route.x,
                 y: route.y,
                 color: route.color,
                 buttons_down: route.buttons_down,
-                // A topmost window may explicitly replace this OS-owned
-                // crosshair with a cursor authored in its application frame.
-                // The declaration follows the window, not the input source,
-                // so the default returns as soon as the cursor leaves it.
-                draw_cursor: !topmost_window_at(route.x, route.y)
-                    .is_some_and(|window| window.custom_cursor),
+                icon,
                 context_menu: route.context_menu,
                 maximize_preview: route.maximize_preview,
                 selection: route.selection_anchor.and_then(|anchor| {
@@ -913,7 +955,7 @@ static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signa
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback cursor=slot4-software/all-active-sources hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/broker-move-policy maximize=interaction-capability-gated selection=primary-button/active-outline owner_events=interaction-capability-gated screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=global-zero-or-one-frame first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     let mut cadence = super::InteractionCadence::new();
@@ -1127,34 +1169,6 @@ fn translated_frame_placement(
     placement.x = next_x;
     placement.y = next_y;
     Some(placement)
-}
-
-fn software_cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
-    use crate::graphics::primitives::Rgba8;
-
-    const COLORS: [Rgba8; 16] = [
-        Rgba8::new(255, 64, 64, 255),
-        Rgba8::new(32, 168, 255, 255),
-        Rgba8::new(32, 224, 128, 255),
-        Rgba8::new(255, 190, 32, 255),
-        Rgba8::new(220, 80, 255, 255),
-        Rgba8::new(255, 112, 32, 255),
-        Rgba8::new(32, 224, 224, 255),
-        Rgba8::new(152, 112, 255, 255),
-        Rgba8::new(192, 240, 48, 255),
-        Rgba8::new(255, 64, 176, 255),
-        Rgba8::new(64, 112, 255, 255),
-        Rgba8::new(48, 192, 96, 255),
-        Rgba8::new(255, 224, 64, 255),
-        Rgba8::new(176, 80, 224, 255),
-        Rgba8::new(255, 128, 160, 255),
-        Rgba8::new(96, 224, 255, 255),
-    ];
-    let hash = source.controller_id.wrapping_mul(0x9E37_79B9)
-        ^ source.slot_id.rotate_left(11)
-        ^ source.ep_target.rotate_left(19)
-        ^ u32::from(source.hid_kind);
-    COLORS[(hash as usize) % COLORS.len()]
 }
 
 fn placement_contains(placement: WindowPlacement, x: u32, y: u32) -> bool {

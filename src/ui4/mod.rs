@@ -5,6 +5,7 @@
 
 pub(crate) mod blueprint_text;
 mod compositor_service;
+mod cursor_frame_inout;
 mod damage;
 mod font_stamp;
 mod frame_pool;
@@ -56,6 +57,10 @@ impl InteractionCadence {
 }
 
 pub(crate) use compositor_service::ui4_compositor_service_task;
+pub(crate) use cursor_frame_inout::{
+    CursorFrameKey, Ui4CursorIcon, Ui4CursorSource, cursor_icon_for, selected_frame,
+    selection_strip, set_window_cursor_icon, set_window_custom_cursor,
+};
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use font_stamp::{present_font_stamp, ui4_font_stamp_service_task};
 pub(crate) use frame_pool::{
@@ -80,9 +85,8 @@ pub(crate) use gpgpu_svg_probe_consumer::{
 #[cfg(feature = "trueos_h264_encode_probe")]
 pub(crate) use h264_encode_probe::ui4_h264_encode_probe_task;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4CursorSource, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
-    Ui4VisualRect, focused_keyboard_state, software_cursor_visuals, take_owner_input_events,
-    ui4_input_service_task,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent, Ui4VisualRect,
+    focused_keyboard_state, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
 };
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
@@ -99,7 +103,7 @@ pub(crate) use window_broker::{
     finish_window_session_with_request, move_window, publish_window_frame, publish_window_frames,
     replace_window_frame, set_window_placement, toggle_window_maximized,
     visible_windows_for_output, visible_windows_for_output_with_revision,
-    wait_for_window_composition_change, window_close_transitions_active, set_window_custom_cursor,
+    wait_for_window_composition_change, window_close_transitions_active,
     window_composition_revision, window_placement,
 };
 
@@ -117,6 +121,7 @@ pub(crate) struct OwnerReleaseSummary {
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> OwnerReleaseSummary {
     let surfaces = blueprint_text::release_owner_resources(owner);
     let (input_routes, input_events) = input_broker::release_owner(owner);
+    cursor_frame_inout::owner_closed(owner);
     OwnerReleaseSummary {
         surfaces,
         input_routes,

@@ -66,6 +66,15 @@ pub struct TrueosUi4ResizeEvent {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorSource {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4KeyboardState {
     pub controller_id: u32,
     pub slot_id: u32,
@@ -207,6 +216,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_set_cursor_icon(
+        window_id: u32,
+        source: *const TrueosUi4CursorSource,
+        icon: u32,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
         window_id: u32,

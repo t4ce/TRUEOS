@@ -34,8 +34,9 @@ use super::{
     create_frame, create_window, destroy_frame, finish_window_session,
     finish_window_session_with_request, focused_keyboard_state, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_window_frame, replace_window_frame, set_window_custom_cursor, set_window_placement,
-    take_owner_input_events, window_placement, writable_rgba_view,
+    publish_window_frame, replace_window_frame, set_window_cursor_icon, set_window_custom_cursor,
+    set_window_placement, take_owner_input_events, window_placement, writable_rgba_view,
+    Ui4CursorIcon, Ui4CursorSource,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -136,6 +137,18 @@ pub struct TrueosUi4ResizeEvent {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4ResizeEvent>() == 4 * 4);
+
+/// Stable identity for one of the kernel's N independent cursor routes.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorSource {
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+    pub hid_kind: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
 /// Held-key snapshot for the keyboard assigned to this window's focused
 /// cursor/HUT route. HID usages index `key_down_bits` directly.
@@ -879,9 +892,9 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     0
 }
 
-/// Declare that this Blueprint window authors the cursor pixels within its own
-/// frame. UI4 hides the default slot-4 cursor only while this window is topmost
-/// below that cursor; passing zero restores the OS cursor policy.
+/// Compatibility shorthand for a frame-wide `AppOwned` cursor override.
+/// Overrides are retained per frame but activate only for the one globally
+/// selected frame while the cursor is inside that frame.
 pub extern "C" fn trueos_cabi_ui4_scene_set_custom_cursor(
     window_id: u32,
     enabled: u32,
@@ -908,6 +921,67 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_custom_cursor(
         surface.window
     };
     if set_window_custom_cursor(owner, window, enabled != 0).is_err() {
+        return ERROR_UI4;
+    }
+    0
+}
+
+/// Set a kernel cursor sprite for this frame. A null source changes the
+/// frame-wide fallback; a source selects only that one cursor route.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
+    window_id: u32,
+    source: *const TrueosUi4CursorSource,
+    icon: u32,
+) -> i32 {
+    let Some(icon) = Ui4CursorIcon::from_raw(icon) else {
+        return ERROR_INVALID;
+    };
+    let source = if source.is_null() {
+        None
+    } else {
+        // SAFETY: the C ABI requires one readable source record.
+        let source = unsafe { source.read() };
+        let Ok(hid_kind) = u8::try_from(source.hid_kind) else {
+            return ERROR_INVALID;
+        };
+        Some(Ui4CursorSource {
+            controller_id: source.controller_id,
+            slot_id: source.slot_id,
+            ep_target: source.ep_target,
+            hid_kind,
+        })
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = source.map(|source| TrueosUi4CursorSource {
+            controller_id: source.controller_id,
+            slot_id: source.slot_id,
+            ep_target: source.ep_target,
+            hid_kind: u32::from(source.hid_kind),
+        });
+        let payload = payload.as_ref().map_or(&[][..], |source| unsafe {
+            core::slice::from_raw_parts(
+                (source as *const TrueosUi4CursorSource).cast::<u8>(),
+                core::mem::size_of::<TrueosUi4CursorSource>(),
+            )
+        });
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_ICON,
+            window_id as u64,
+            icon as u64,
+            payload,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    if set_window_cursor_icon(owner, window, source, icon).is_err() {
         return ERROR_UI4;
     }
     0

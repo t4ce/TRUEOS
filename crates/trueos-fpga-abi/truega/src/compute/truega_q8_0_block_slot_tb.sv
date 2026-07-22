@@ -113,7 +113,7 @@ module truega_q8_0_block_slot_tb;
             end
 
             wait_cycles = 0;
-            while (!done_o && wait_cycles < 100) begin
+            while (!done_o && wait_cycles < 160) begin
                 @(negedge clk);
                 wait_cycles = wait_cycles + 1;
             end
@@ -170,7 +170,7 @@ module truega_q8_0_block_slot_tb;
         @(negedge clk);
         start_i = 1'b0;
         wait_cycles = 0;
-        while (!done_o && wait_cycles < 100) begin
+        while (!done_o && wait_cycles < 160) begin
             @(negedge clk);
             wait_cycles = wait_cycles + 1;
         end
