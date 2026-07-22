@@ -164,6 +164,7 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
+    pub(crate) buttons_down: u32,
     pub(crate) draw_cursor: bool,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
@@ -886,10 +887,13 @@ impl InputBroker {
                 x: route.x,
                 y: route.y,
                 color: route.color,
-                // Slot 4 draws every active source. The preferred physical
-                // source is intentionally duplicated by the hardware cursor
-                // for a direct software-versus-hardware motion comparison.
-                draw_cursor: true,
+                buttons_down: route.buttons_down,
+                // A topmost window may explicitly replace this OS-owned
+                // crosshair with a cursor authored in its application frame.
+                // The declaration follows the window, not the input source,
+                // so the default returns as soon as the cursor leaves it.
+                draw_cursor: !topmost_window_at(route.x, route.y)
+                    .is_some_and(|window| window.custom_cursor),
                 context_menu: route.context_menu,
                 maximize_preview: route.maximize_preview,
                 selection: route.selection_anchor.and_then(|anchor| {
@@ -923,6 +927,10 @@ pub(crate) async fn ui4_input_service_task() {
 
 pub(super) async fn wait_slot4_visual_change() {
     SLOT4_VISUAL_CHANGE.wait().await;
+}
+
+pub(super) fn notify_slot4_visual_change() {
+    SLOT4_VISUAL_CHANGE.signal(());
 }
 
 pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, MAX_OWNER_EVENTS> {

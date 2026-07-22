@@ -99,7 +99,7 @@ pub(crate) use window_broker::{
     finish_window_session_with_request, move_window, publish_window_frame, publish_window_frames,
     replace_window_frame, set_window_placement, toggle_window_maximized,
     visible_windows_for_output, visible_windows_for_output_with_revision,
-    wait_for_window_composition_change, window_close_transitions_active,
+    wait_for_window_composition_change, window_close_transitions_active, set_window_custom_cursor,
     window_composition_revision, window_placement,
 };
 

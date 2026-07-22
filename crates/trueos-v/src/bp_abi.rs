@@ -206,6 +206,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
+    pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
         window_id: u32,

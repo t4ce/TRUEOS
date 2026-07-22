@@ -559,7 +559,7 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
 
 #[cfg(feature = "trueos_h264_encode_probe")]
 fn spawn_ui4_h264_encode_probe_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_h264_encode_probe_task())
+    spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_h264_encode_probe_task())
 }
 
 fn spawn_ui4_compositor_service_task(spawner: Spawner) -> SpawnAttempt {
@@ -1542,8 +1542,8 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     #[cfg(feature = "trueos_h264_encode_probe")]
     TaskSpec::enabled_gated(
         "ui4-h264-encode-probe",
-        0,
-        ap1_ui_core_ready_gate,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        intel_media_engine_gate,
         &UI4_H264_ENCODE_PROBE_STARTED,
         spawn_ui4_h264_encode_probe_task,
     ),

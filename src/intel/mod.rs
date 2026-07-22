@@ -880,6 +880,10 @@ pub(crate) fn has_media_decode_engine() -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn media_encode_readiness() -> self::xelp_media2_ngin::MediaEncodeReadiness {
+    self::xelp_media2_ngin::encode_readiness()
+}
+
 pub(crate) fn hw_pic_service()
 -> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
     self::hw_pic::hw_pic_service()

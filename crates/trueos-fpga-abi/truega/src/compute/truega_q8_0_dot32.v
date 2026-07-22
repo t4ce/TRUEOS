@@ -42,21 +42,24 @@ module truega_q8_0_dot32 (
                 product[lane] <= $signed(activation_quants_i[lane*8 +: 8])
                                * $signed(weight_quants_i[lane*8 +: 8]);
 
+            // A concatenation is unsigned in Verilog even when all of its
+            // members came from signed registers.  Cast every widened operand
+            // explicitly so synthesis cannot zero-extend a negative partial
+            // sum at a tree boundary.
             for (lane = 0; lane < 16; lane = lane + 1)
-                sum_1[lane] <= {{1{product[lane*2][15]}}, product[lane*2]}
-                             + {{1{product[lane*2 + 1][15]}}, product[lane*2 + 1]};
+                sum_1[lane] <= $signed({product[lane*2][15], product[lane*2]})
+                             + $signed({product[lane*2 + 1][15], product[lane*2 + 1]});
             for (lane = 0; lane < 8; lane = lane + 1)
-                sum_2[lane] <= {{1{sum_1[lane*2][16]}}, sum_1[lane*2]}
-                             + {{1{sum_1[lane*2 + 1][16]}}, sum_1[lane*2 + 1]};
+                sum_2[lane] <= $signed({sum_1[lane*2][16], sum_1[lane*2]})
+                             + $signed({sum_1[lane*2 + 1][16], sum_1[lane*2 + 1]});
             for (lane = 0; lane < 4; lane = lane + 1)
-                sum_3[lane] <= {{1{sum_2[lane*2][17]}}, sum_2[lane*2]}
-                             + {{1{sum_2[lane*2 + 1][17]}}, sum_2[lane*2 + 1]};
+                sum_3[lane] <= $signed({sum_2[lane*2][17], sum_2[lane*2]})
+                             + $signed({sum_2[lane*2 + 1][17], sum_2[lane*2 + 1]});
             for (lane = 0; lane < 2; lane = lane + 1)
-                sum_4[lane] <= {{1{sum_3[lane*2][18]}}, sum_3[lane*2]}
-                             + {{1{sum_3[lane*2 + 1][18]}}, sum_3[lane*2 + 1]};
-            sum_5 <= {{1{sum_4[0][19]}}, sum_4[0]}
-                   + {{1{sum_4[1][19]}}, sum_4[1]};
+                sum_4[lane] <= $signed({sum_3[lane*2][18], sum_3[lane*2]})
+                             + $signed({sum_3[lane*2 + 1][18], sum_3[lane*2 + 1]});
+            sum_5 <= $signed({sum_4[0][19], sum_4[0]})
+                   + $signed({sum_4[1][19], sum_4[1]});
         end
     end
 endmodule
-

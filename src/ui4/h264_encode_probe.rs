@@ -1,14 +1,15 @@
-//! Feature-gated Full-HD H.264 software-encoder bring-up service.
+//! Deferred 512x512x60 H.264 boot-artifact probe.
 //!
-//! This proof deliberately stops at a verified Annex-B access unit. It does
-//! not retain the encoded bytes, touch TRUEOSFS, or create a network socket.
+//! Intel encode readiness is audited before the workload runs. The current
+//! VDBOX path is decode-only, so the artifact is produced by the existing
+//! no_std I_PCM encoder and is always labelled as a software fallback.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use embassy_time::{Duration, Timer};
 
-const PROBE_START_DELAY_MS: u64 = 1_000;
-const DEFERRED_UDP_PORT: u16 = 8921;
+const PROBE_START_DELAY_MS: u64 = 15_000;
+const ROOT_RETRY_MS: u64 = 1_000;
 
 static STATE: AtomicU8 = AtomicU8::new(H264EncodeProbeState::Waiting as u8);
 static ENCODE_US: AtomicU64 = AtomicU64::new(0);
@@ -20,16 +21,18 @@ static ENCODED_BYTES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) enum H264EncodeProbeState {
     Waiting = 0,
     Encoding = 1,
-    Verified = 2,
-    Failed = 3,
+    Writing = 2,
+    Verified = 3,
+    Failed = 4,
 }
 
 impl H264EncodeProbeState {
     fn from_raw(raw: u8) -> Self {
         match raw {
             1 => Self::Encoding,
-            2 => Self::Verified,
-            3 => Self::Failed,
+            2 => Self::Writing,
+            3 => Self::Verified,
+            4 => Self::Failed,
             _ => Self::Waiting,
         }
     }
@@ -54,89 +57,168 @@ pub(crate) fn h264_encode_probe_snapshot() -> H264EncodeProbeSnapshot {
 
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_h264_encode_probe_task() {
-    let carrier_slot = crate::percpu::current_slot();
-    crate::log_info!(target: "ui4/h264-encode";
-        "ui4/h264-encode: service online carrier=ap1-ui-core expected_slot={} current_slot={} feature=trueos_h264_encode_probe source=synthetic-i420-fullhd output=discard transport=none udp_port_8921=deferred start_delay_ms={}\n",
-        crate::workers::AP1_UI_SERVICE_SLOT,
-        carrier_slot,
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: service online carrier=background-worker feature=trueos_h264_encode_probe source=embedded-60-byte-scenario expanded=i420-512x512 frames=60 output=trueosfs-root/video_encode_<timestamp>.h264 start_delay_ms={}\n",
         PROBE_START_DELAY_MS,
     );
-    if carrier_slot != crate::workers::AP1_UI_SERVICE_SLOT as usize {
-        STATE.store(H264EncodeProbeState::Failed as u8, Ordering::Release);
-        crate::log_error!(target: "ui4/h264-encode";
-            "ui4/h264-encode: proof rejected reason=wrong-carrier expected_slot={} current_slot={} socket_calls=0\n",
-            crate::workers::AP1_UI_SERVICE_SLOT,
-            carrier_slot,
-        );
-        park().await;
-    }
 
     Timer::after(Duration::from_millis(PROBE_START_DELAY_MS)).await;
+
+    let readiness = crate::intel::media_encode_readiness();
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: hardware-readiness ready={} device_claimed={} vdbox_discovered={} guc_transport_ready={} guc_media_context_wired={} avc_encode_commands_wired={} coded_bitstream_output_wired={} current_media_transport=execlists action=software-fallback\n",
+        readiness.ready as u8,
+        readiness.device_claimed as u8,
+        readiness.vdbox_discovered as u8,
+        readiness.guc_transport_ready as u8,
+        readiness.guc_media_context_wired as u8,
+        readiness.avc_encode_commands_wired as u8,
+        readiness.coded_bitstream_output_wired as u8,
+    );
+
+    let disk = loop {
+        match crate::r::fs::trueosfs::primary_root_handle() {
+            Some(disk) if disk.info().is_read_only() => {
+                STATE.store(H264EncodeProbeState::Failed as u8, Ordering::Release);
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: rejected stage=trueosfs reason=primary-root-read-only\n",
+                );
+                park().await;
+            }
+            Some(disk) => break disk,
+            None => {
+                crate::log_info!(target: "intel/media-encode";
+                    "intel/media-encode: waiting stage=trueosfs reason=primary-root-unavailable retry_ms={}\n",
+                    ROOT_RETRY_MS,
+                );
+                Timer::after(Duration::from_millis(ROOT_RETRY_MS)).await;
+            }
+        }
+    };
+
     STATE.store(H264EncodeProbeState::Encoding as u8, Ordering::Release);
     let started_ns = crate::chronos::monotonic_nanos();
-    let result = trueos_h264_encode_probe::encode_full_hd_diagnostic_idr();
-    let encode_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
-    ENCODE_US.store(encode_us, Ordering::Release);
+    let mut encoder = match trueos_h264_encode_probe::DiagnosticSequenceEncoder::new() {
+        Ok(encoder) => encoder,
+        Err(error) => {
+            fail_encode(error, started_ns).await;
+        }
+    };
 
-    match result {
-        Ok(proof) => {
-            let metrics = proof.metrics;
-            SOURCE_BYTES.store(metrics.source_bytes, Ordering::Release);
-            ENCODED_BYTES.store(metrics.encoded_bytes, Ordering::Release);
-            let ratio_permille = metrics
-                .encoded_bytes
-                .saturating_mul(1_000)
-                .checked_div(metrics.source_bytes.max(1))
-                .unwrap_or(0);
-            let estimated_30fps_kbit = metrics
-                .encoded_bytes
-                .saturating_mul(8)
-                .saturating_mul(30)
-                .checked_div(1_000)
-                .unwrap_or(usize::MAX);
-            crate::log_info!(target: "ui4/h264-encode";
-                "ui4/h264-encode: proof accepted=1 codec=h264 profile=baseline frame=idr macroblock_mode=i_pcm compression=lossless-none visible={}x{} coded={}x{} macroblocks={} source_bytes={} annexb_bytes={} sps_bytes={} pps_bytes={} idr_bytes={} size_permille={} estimated_30fps_kbit={} encode_us={} source_fnv1a32=0x{:08X} encoded_fnv1a32=0x{:08X} nals=7,8,5\n",
+    loop {
+        match encoder.encode_next() {
+            Ok(true) => {
+                let frames = encoder.encoded_frames();
+                if frames.is_multiple_of(10)
+                    || frames == trueos_h264_encode_probe::SEQUENCE_FRAME_COUNT
+                {
+                    crate::log_info!(target: "intel/media-encode";
+                        "intel/media-encode: progress backend=software-less-avc-ipcm frames={}/{}\n",
+                        frames,
+                        trueos_h264_encode_probe::SEQUENCE_FRAME_COUNT,
+                    );
+                }
+                // Keep the deferred diagnostic cooperative with other worker
+                // services even though the codec itself is synchronous.
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            Ok(false) => break,
+            Err(error) => {
+                fail_encode(error, started_ns).await;
+            }
+        }
+    }
+
+    let proof = match encoder.finish() {
+        Ok(proof) => proof,
+        Err(error) => {
+            fail_encode(error, started_ns).await;
+        }
+    };
+    let encode_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+    let metrics = proof.metrics;
+    ENCODE_US.store(encode_us, Ordering::Release);
+    SOURCE_BYTES.store(metrics.source_bytes, Ordering::Release);
+    ENCODED_BYTES.store(metrics.encoded_bytes, Ordering::Release);
+
+    let timestamp = crate::chronos::best_effort_unix_time_seconds();
+    let path = match timestamp {
+        Some(timestamp) => alloc::format!("video_encode_{}.h264", timestamp),
+        None => alloc::format!("video_encode_uptime-{}.h264", crate::time::uptime_seconds()),
+    };
+    STATE.store(H264EncodeProbeState::Writing as u8, Ordering::Release);
+    let write_started_ns = crate::chronos::monotonic_nanos();
+    match crate::r::fs::trueosfs::file_write_all_async(
+        disk,
+        path.as_str(),
+        proof.annex_b.as_slice(),
+    )
+    .await
+    {
+        Ok(true) => {
+            let write_us =
+                crate::chronos::monotonic_nanos().saturating_sub(write_started_ns) / 1_000;
+            STATE.store(H264EncodeProbeState::Verified as u8, Ordering::Release);
+            crate::log_info!(target: "intel/media-encode";
+                "intel/media-encode: proof accepted=1 backend=software-less-avc-ipcm hardware_encode=0 codec=h264 profile=baseline frames={} all_idr=1 visible={}x{} coded={}x{} macroblocks_per_frame={} source_bytes={} annexb_bytes={} sps_bytes={} pps_bytes={} frame_bytes_min={} frame_bytes_max={} encode_us={} write_us={} source_fnv1a32=0x{:08X} encoded_fnv1a32=0x{:08X} path=trueosfs:/{}\n",
+                metrics.frames,
                 metrics.visible_width,
                 metrics.visible_height,
                 metrics.coded_width,
                 metrics.coded_height,
-                metrics.macroblocks,
+                metrics.macroblocks_per_frame,
                 metrics.source_bytes,
                 metrics.encoded_bytes,
                 metrics.sps_bytes,
                 metrics.pps_bytes,
-                metrics.idr_bytes,
-                ratio_permille,
-                estimated_30fps_kbit,
+                metrics.frame_bytes_min,
+                metrics.frame_bytes_max,
                 encode_us,
+                write_us,
                 metrics.source_fnv1a32,
                 metrics.encoded_fnv1a32,
+                path,
             );
-            drop(proof);
-            STATE.store(H264EncodeProbeState::Verified as u8, Ordering::Release);
-            crate::log_info!(target: "ui4/h264-encode";
-                "ui4/h264-encode: result discarded=1 retained_bytes=0 filesystem_writes=0 socket_calls=0 udp_port={} status=verified service=parked next_step=independent-compressed-encoder-or-transport\n",
-                DEFERRED_UDP_PORT,
+        }
+        Ok(false) => {
+            STATE.store(H264EncodeProbeState::Failed as u8, Ordering::Release);
+            crate::log_error!(target: "intel/media-encode";
+                "intel/media-encode: proof accepted=0 stage=trueosfs-write reason=no-space-or-placement path=trueosfs:/{} bytes={}\n",
+                path,
+                metrics.encoded_bytes,
             );
         }
         Err(error) => {
             STATE.store(H264EncodeProbeState::Failed as u8, Ordering::Release);
-            crate::log_error!(target: "ui4/h264-encode";
-                "ui4/h264-encode: proof accepted=0 error={:?} code={} encode_us={} filesystem_writes=0 socket_calls=0 udp_port={} status=failed service=parked\n",
+            crate::log_error!(target: "intel/media-encode";
+                "intel/media-encode: proof accepted=0 stage=trueosfs-write reason=io-error path=trueosfs:/{} bytes={} error={:?}\n",
+                path,
+                metrics.encoded_bytes,
                 error,
-                error.code(),
-                encode_us,
-                DEFERRED_UDP_PORT,
             );
         }
     }
+
     let snapshot = h264_encode_probe_snapshot();
-    crate::log_info!(target: "ui4/h264-encode";
-        "ui4/h264-encode: snapshot state={:?} encode_us={} source_bytes={} encoded_bytes={}\n",
+    crate::log_info!(target: "intel/media-encode";
+        "intel/media-encode: snapshot state={:?} encode_us={} source_bytes={} encoded_bytes={} service=parked\n",
         snapshot.state,
         snapshot.encode_us,
         snapshot.source_bytes,
         snapshot.encoded_bytes,
+    );
+    park().await;
+}
+
+async fn fail_encode(error: trueos_h264_encode_probe::ProbeError, started_ns: u64) -> ! {
+    let encode_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+    ENCODE_US.store(encode_us, Ordering::Release);
+    STATE.store(H264EncodeProbeState::Failed as u8, Ordering::Release);
+    crate::log_error!(target: "intel/media-encode";
+        "intel/media-encode: proof accepted=0 stage=encode backend=software-less-avc-ipcm error={:?} code={} encode_us={} filesystem_writes=0\n",
+        error,
+        error.code(),
+        encode_us,
     );
     park().await;
 }

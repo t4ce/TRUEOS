@@ -16,4 +16,6 @@
 # The UI4 resize-event take call is also strictly additive. It grants new
 # Blueprints the existing resize-on-maximize notification while older v2
 # artifacts continue to retain their fixed backing extent.
-054fdf8f81ea59bba76348e024de4137075845a96c713f6761fb16fcefd28994
+# The UI4 custom-cursor declaration is strictly additive and lets a Blueprint
+# suppress the default cursor only over its own declared window.
+6353f62a405a046f707748eba712e26d9333245e30ab440ce8ecc148a1122207

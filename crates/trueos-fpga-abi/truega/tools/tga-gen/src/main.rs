@@ -915,6 +915,9 @@ mod tests {
         assert!(rtl.contains("module truega_functions("));
         assert!(rtl.contains("input  wire [767:0] input_data"));
         assert!(rtl.contains("module truega_q8_0_dot32"));
+        assert!(rtl.contains(
+            "$signed({sum_2[lane*2][17], sum_2[lane*2]})"
+        ));
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
         assert!(rtl.contains("module truega_q8_0_row_block_slot"));

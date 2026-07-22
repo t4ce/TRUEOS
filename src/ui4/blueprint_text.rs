@@ -34,8 +34,8 @@ use super::{
     create_frame, create_window, destroy_frame, finish_window_session,
     finish_window_session_with_request, focused_keyboard_state, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_window_frame, replace_window_frame, set_window_placement, take_owner_input_events,
-    window_placement, writable_rgba_view,
+    publish_window_frame, replace_window_frame, set_window_custom_cursor, set_window_placement,
+    take_owner_input_events, window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -876,6 +876,40 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
         return ERROR_UI4;
     }
     surface.placement = placement;
+    0
+}
+
+/// Declare that this Blueprint window authors the cursor pixels within its own
+/// frame. UI4 hides the default slot-4 cursor only while this window is topmost
+/// below that cursor; passing zero restores the OS cursor policy.
+pub extern "C" fn trueos_cabi_ui4_scene_set_custom_cursor(
+    window_id: u32,
+    enabled: u32,
+) -> i32 {
+    if enabled > 1 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR,
+            window_id as u64,
+            enabled as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    if set_window_custom_cursor(owner, window, enabled != 0).is_err() {
+        return ERROR_UI4;
+    }
     0
 }
 

@@ -314,24 +314,27 @@ module truega_q8_0_dot32 (
                 product[lane] <= $signed(activation_quants_i[lane*8 +: 8])
                                * $signed(weight_quants_i[lane*8 +: 8]);
 
+            // A concatenation is unsigned in Verilog even when all of its
+            // members came from signed registers.  Cast every widened operand
+            // explicitly so synthesis cannot zero-extend a negative partial
+            // sum at a tree boundary.
             for (lane = 0; lane < 16; lane = lane + 1)
-                sum_1[lane] <= {{1{product[lane*2][15]}}, product[lane*2]}
-                             + {{1{product[lane*2 + 1][15]}}, product[lane*2 + 1]};
+                sum_1[lane] <= $signed({product[lane*2][15], product[lane*2]})
+                             + $signed({product[lane*2 + 1][15], product[lane*2 + 1]});
             for (lane = 0; lane < 8; lane = lane + 1)
-                sum_2[lane] <= {{1{sum_1[lane*2][16]}}, sum_1[lane*2]}
-                             + {{1{sum_1[lane*2 + 1][16]}}, sum_1[lane*2 + 1]};
+                sum_2[lane] <= $signed({sum_1[lane*2][16], sum_1[lane*2]})
+                             + $signed({sum_1[lane*2 + 1][16], sum_1[lane*2 + 1]});
             for (lane = 0; lane < 4; lane = lane + 1)
-                sum_3[lane] <= {{1{sum_2[lane*2][17]}}, sum_2[lane*2]}
-                             + {{1{sum_2[lane*2 + 1][17]}}, sum_2[lane*2 + 1]};
+                sum_3[lane] <= $signed({sum_2[lane*2][17], sum_2[lane*2]})
+                             + $signed({sum_2[lane*2 + 1][17], sum_2[lane*2 + 1]});
             for (lane = 0; lane < 2; lane = lane + 1)
-                sum_4[lane] <= {{1{sum_3[lane*2][18]}}, sum_3[lane*2]}
-                             + {{1{sum_3[lane*2 + 1][18]}}, sum_3[lane*2 + 1]};
-            sum_5 <= {{1{sum_4[0][19]}}, sum_4[0]}
-                   + {{1{sum_4[1][19]}}, sum_4[1]};
+                sum_4[lane] <= $signed({sum_3[lane*2][18], sum_3[lane*2]})
+                             + $signed({sum_3[lane*2 + 1][18], sum_3[lane*2 + 1]});
+            sum_5 <= $signed({sum_4[0][19], sum_4[0]})
+                   + $signed({sum_4[1][19], sum_4[1]});
         end
     end
 endmodule
-
 
 // Multi-cycle conversion of one exact Q8_0 integer dot product to signed Q30.
 //
@@ -1337,14 +1340,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'h8F733CA7;
-            5'd5: data = 32'h4172B0D0;
-            5'd6: data = 32'h2390A67F;
-            5'd7: data = 32'hCF18A907;
-            5'd8: data = 32'h8C046602;
-            5'd9: data = 32'h2ECAB51C;
-            5'd10: data = 32'hFBC077FA;
-            5'd11: data = 32'hC2D210EA;
+            5'd4: data = 32'hFF2EFC84;
+            5'd5: data = 32'h459DC0C4;
+            5'd6: data = 32'h12352102;
+            5'd7: data = 32'h58A75FDE;
+            5'd8: data = 32'h7F5E654E;
+            5'd9: data = 32'h5440DE44;
+            5'd10: data = 32'h999C39A8;
+            5'd11: data = 32'hBDCF19E9;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;

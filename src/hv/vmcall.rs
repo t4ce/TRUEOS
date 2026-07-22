@@ -110,6 +110,7 @@ pub const OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK: u32 = 0xE2; // arg0 window,arg1 qua
 pub const OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH: u32 = 0xE3; // arg0 window -> rc
 pub const OP_BP_VRAM_SNAPSHOT_READ: u32 = 0xE4; // arg0 offset, arg1 cap -> cached vGPU memory snapshot text
 pub const OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE: u32 = 0xE5; // arg0 window -> rc + ResizeEvent payload
+pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 enabled -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1350,6 +1351,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR => {
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_custom_cursor(
+                arg0 as u32,
+                arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_KEYBOARD_STATE => {

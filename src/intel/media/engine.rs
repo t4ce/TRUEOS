@@ -367,6 +367,55 @@ impl MediaApiShape {
     }
 }
 
+/// Encode-specific readiness is intentionally separate from VDBOX decode
+/// readiness. Alder/Raptor Lake hardware can encode, but TRUEOS must not route
+/// a boot workload there until all three software-owned gates are present.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MediaEncodeReadiness {
+    pub device_claimed: bool,
+    pub vdbox_discovered: bool,
+    pub guc_transport_ready: bool,
+    pub guc_media_context_wired: bool,
+    pub avc_encode_commands_wired: bool,
+    pub coded_bitstream_output_wired: bool,
+    pub ready: bool,
+}
+
+pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
+    let device_claimed = super::claimed_device().is_some();
+    let topology = current_topology();
+    let vdbox_discovered = topology
+        .engines
+        .iter()
+        .take(topology.active_engine_count)
+        .any(|engine| engine.capabilities.decode);
+    let guc_transport_ready = crate::intel::guc_submission_ready();
+
+    // The generic GuC scheduler currently exposes RCS0 and BCS0 only, while
+    // this media backend's preferred transport remains Execlists. Likewise,
+    // h264_cmd is a decode recipe and no VDEnc/MFX encode stream or coded-data
+    // writeback buffer has landed. Keep these explicit so topology discovery
+    // can never be mistaken for a usable encoder.
+    let guc_media_context_wired = false;
+    let avc_encode_commands_wired = false;
+    let coded_bitstream_output_wired = false;
+    let ready = device_claimed
+        && vdbox_discovered
+        && guc_transport_ready
+        && guc_media_context_wired
+        && avc_encode_commands_wired
+        && coded_bitstream_output_wired;
+    MediaEncodeReadiness {
+        device_claimed,
+        vdbox_discovered,
+        guc_transport_ready,
+        guc_media_context_wired,
+        avc_encode_commands_wired,
+        coded_bitstream_output_wired,
+        ready,
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct MediaTopology {
     pub sku_name: &'static str,

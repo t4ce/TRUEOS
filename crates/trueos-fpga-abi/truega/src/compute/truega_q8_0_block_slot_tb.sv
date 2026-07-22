@@ -155,8 +155,34 @@ module truega_q8_0_block_slot_tb;
             end
         end
 
+        // Physical preflight regression: gate row 125 block 0 has three
+        // negative 18-bit partial sums. Zero-extending them at the next tree
+        // level produces 797237 instead of the exact signed dot 10805.
+        activation_block_i = {
+            256'h211da756d317082a81dab021e7cfd24a8925f6e7a8253cb3b616491f4ed4a80d,
+            16'h1830
+        };
+        weight_block_i = {
+            256'h113c6228c67f0cdc21664d1048c0ef099f76180b1cb54225c3e022ffc4e9c15b,
+            16'h0b7f
+        };
+        start_i = 1'b1;
+        @(negedge clk);
+        start_i = 1'b0;
+        wait_cycles = 0;
+        while (!done_o && wait_cycles < 100) begin
+            @(negedge clk);
+            wait_cycles = wait_cycles + 1;
+        end
+        if (!done_o || dot_o !== 32'sd10805 || term_q30_o !== 64'sd5426685
+            || scale_error_o) begin
+            $display("FAIL preflight row=125 block=0 dot=%0d term=%0d error=%0d",
+                dot_o, term_q30_o, scale_error_o);
+            failures = failures + 1;
+        end
+
         if (failures == 0) begin
-            $display("PASS q8_0_block_slot blocks=%0d exact_dot exact_q30 ignored_busy_start",
+            $display("PASS q8_0_block_slot blocks=%0d preflight_row125 exact_dot exact_q30 ignored_busy_start",
                 vector_count);
             $finish;
         end

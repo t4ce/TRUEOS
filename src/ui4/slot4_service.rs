@@ -11,6 +11,9 @@ use spin::Mutex;
 const SLOT4_RECT_CAPACITY: usize = 512;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
+// Nearest odd pixel length to 75% keeps the two arms symmetric around the
+// unchanged five-pixel stroke while making a press visibly contract the cross.
+const SOFTWARE_CURSOR_PRESSED_LONG_PX: u32 = 21;
 const SOFTWARE_CURSOR_HALO_PX: u32 = 9;
 
 type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
@@ -47,7 +50,7 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu custom-cursor=window-scoped-suppression press=contract-25-percent hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-change coalesce=display-cadence damage=changed-pixels/disjoint gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -173,15 +176,132 @@ fn changed_rect_damage(
     current: &[crate::intel::LiveOverlayRect],
 ) -> crate::intel::CompositionDamageRegion {
     let mut damage = crate::intel::CompositionDamageRegion::EMPTY;
-    for rect in previous.iter().chain(current) {
-        damage.add(crate::intel::CompositionDamageRect::new(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-        ));
+    let mut previous_matched = [false; SLOT4_RECT_CAPACITY];
+    let mut current_matched = [false; SLOT4_RECT_CAPACITY];
+
+    // Identical retained rectangles change no pixels at all.
+    for (previous_index, previous_rect) in previous.iter().enumerate() {
+        if let Some((current_index, _)) = current.iter().enumerate().find(|(index, current_rect)| {
+            !current_matched[*index] && overlay_rect_eq(previous_rect, current_rect)
+        }) {
+            previous_matched[previous_index] = true;
+            current_matched[current_index] = true;
+        }
+    }
+
+    // A press/release replaces each long crosshair rectangle with a same-color
+    // contained rectangle. Damage only the removed/added caps, not its retained
+    // center pixels. The containment form also preserves the edge-clamped T.
+    for (previous_index, previous_rect) in previous.iter().enumerate() {
+        if previous_matched[previous_index] {
+            continue;
+        }
+        if let Some((current_index, current_rect)) =
+            current.iter().enumerate().find(|(index, current_rect)| {
+                !current_matched[*index]
+                    && previous_rect.color == current_rect.color
+                    && overlay_rect_axis_contraction(previous_rect, current_rect)
+                    && (overlay_rect_contains(previous_rect, current_rect)
+                        || overlay_rect_contains(current_rect, previous_rect))
+            })
+        {
+            previous_matched[previous_index] = true;
+            current_matched[current_index] = true;
+            if overlay_rect_contains(previous_rect, current_rect) {
+                add_rect_subtraction(&mut damage, previous_rect, current_rect);
+            } else {
+                add_rect_subtraction(&mut damage, current_rect, previous_rect);
+            }
+        }
+    }
+
+    for (index, rect) in previous.iter().enumerate() {
+        if !previous_matched[index] {
+            add_overlay_rect_damage(&mut damage, rect);
+        }
+    }
+    for (index, rect) in current.iter().enumerate() {
+        if !current_matched[index] {
+            add_overlay_rect_damage(&mut damage, rect);
+        }
     }
     damage
+}
+
+fn overlay_rect_eq(
+    left: &crate::intel::LiveOverlayRect,
+    right: &crate::intel::LiveOverlayRect,
+) -> bool {
+    left.x == right.x
+        && left.y == right.y
+        && left.width == right.width
+        && left.height == right.height
+        && left.color == right.color
+}
+
+fn overlay_rect_axis_contraction(
+    left: &crate::intel::LiveOverlayRect,
+    right: &crate::intel::LiveOverlayRect,
+) -> bool {
+    (left.width == right.width && left.height != right.height)
+        || (left.height == right.height && left.width != right.width)
+}
+
+fn overlay_rect_contains(
+    outer: &crate::intel::LiveOverlayRect,
+    inner: &crate::intel::LiveOverlayRect,
+) -> bool {
+    outer.x <= inner.x
+        && outer.y <= inner.y
+        && outer.x.saturating_add(outer.width) >= inner.x.saturating_add(inner.width)
+        && outer.y.saturating_add(outer.height) >= inner.y.saturating_add(inner.height)
+}
+
+fn add_rect_subtraction(
+    damage: &mut crate::intel::CompositionDamageRegion,
+    outer: &crate::intel::LiveOverlayRect,
+    inner: &crate::intel::LiveOverlayRect,
+) {
+    let outer_right = outer.x.saturating_add(outer.width);
+    let outer_bottom = outer.y.saturating_add(outer.height);
+    let inner_right = inner.x.saturating_add(inner.width);
+    let inner_bottom = inner.y.saturating_add(inner.height);
+    damage.add(crate::intel::CompositionDamageRect::new(
+        outer.x,
+        outer.y,
+        outer.width,
+        inner.y.saturating_sub(outer.y),
+    ));
+    damage.add(crate::intel::CompositionDamageRect::new(
+        outer.x,
+        inner_bottom,
+        outer.width,
+        outer_bottom.saturating_sub(inner_bottom),
+    ));
+    damage.add(crate::intel::CompositionDamageRect::new(
+        outer.x,
+        inner.y,
+        inner.x.saturating_sub(outer.x),
+        inner.height,
+    ));
+    damage.add(crate::intel::CompositionDamageRect::new(
+        inner_right,
+        inner.y,
+        outer_right.saturating_sub(inner_right),
+        inner.height,
+    ));
+}
+
+fn add_overlay_rect_damage(
+    damage: &mut crate::intel::CompositionDamageRegion,
+    rect: &crate::intel::LiveOverlayRect,
+) {
+    damage.add(crate::intel::CompositionDamageRect::new(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    ));
 }
 
 pub(super) fn presented_rects() -> Slot4Rects {
@@ -255,7 +375,15 @@ fn software_cursor_rects() -> Slot4Rects {
         let x = visual.x;
         let y = visual.y;
         let color = visual.color;
-        push_software_cursor(&mut rects, x, y, screen_w, screen_h, color);
+        push_software_cursor(
+            &mut rects,
+            x,
+            y,
+            screen_w,
+            screen_h,
+            color,
+            visual.buttons_down != 0,
+        );
     }
 
     rects
@@ -272,17 +400,25 @@ fn push_software_cursor(
     screen_w: u32,
     screen_h: u32,
     color: crate::graphics::primitives::Rgba8,
+    pressed: bool,
 ) {
     use crate::graphics::primitives::Rgba8;
+
+    let long = if pressed {
+        SOFTWARE_CURSOR_PRESSED_LONG_PX
+    } else {
+        SOFTWARE_CURSOR_LONG_PX
+    };
+    let long_before = long / 2;
 
     push_cursor_rect(
         rects,
         x,
         y,
         2,
-        13,
+        long_before,
         SOFTWARE_CURSOR_STROKE_PX,
-        SOFTWARE_CURSOR_LONG_PX,
+        long,
         screen_w,
         screen_h,
         color,
@@ -291,9 +427,9 @@ fn push_software_cursor(
         rects,
         x,
         y,
-        13,
+        long_before,
         2,
-        SOFTWARE_CURSOR_LONG_PX,
+        long,
         SOFTWARE_CURSOR_STROKE_PX,
         screen_w,
         screen_h,
@@ -418,7 +554,7 @@ mod tests {
     const TEST_SCREEN_W: u32 = 100;
     const TEST_SCREEN_H: u32 = 80;
 
-    fn test_cursor_rects(x: u32, y: u32) -> Slot4Rects {
+    fn test_cursor_rects(x: u32, y: u32, pressed: bool) -> Slot4Rects {
         let mut rects = Slot4Rects::new();
         push_software_cursor(
             &mut rects,
@@ -427,6 +563,7 @@ mod tests {
             TEST_SCREEN_W,
             TEST_SCREEN_H,
             Rgba8::new(255, 0, 0, 255),
+            pressed,
         );
         rects
     }
@@ -452,10 +589,10 @@ mod tests {
 
     #[test]
     fn software_cursor_shape_is_mirrored_at_opposite_edges() {
-        let left = test_cursor_rects(0, TEST_SCREEN_H / 2);
-        let right = test_cursor_rects(TEST_SCREEN_W - 1, TEST_SCREEN_H / 2);
-        let top = test_cursor_rects(TEST_SCREEN_W / 2, 0);
-        let bottom = test_cursor_rects(TEST_SCREEN_W / 2, TEST_SCREEN_H - 1);
+        let left = test_cursor_rects(0, TEST_SCREEN_H / 2, false);
+        let right = test_cursor_rects(TEST_SCREEN_W - 1, TEST_SCREEN_H / 2, false);
+        let top = test_cursor_rects(TEST_SCREEN_W / 2, 0, false);
+        let bottom = test_cursor_rects(TEST_SCREEN_W / 2, TEST_SCREEN_H - 1, false);
 
         assert_eq!(left.len(), 4);
         assert_eq!(right.len(), left.len());
@@ -477,7 +614,7 @@ mod tests {
 
     #[test]
     fn software_cursor_remains_centered_away_from_edges() {
-        let rects = test_cursor_rects(50, 40);
+        let rects = test_cursor_rects(50, 40, false);
         let expected = [
             (48, 27, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_LONG_PX),
             (37, 38, SOFTWARE_CURSOR_LONG_PX, SOFTWARE_CURSOR_STROKE_PX),
@@ -499,12 +636,48 @@ mod tests {
             (0, TEST_SCREEN_H - 1),
             (TEST_SCREEN_W - 1, TEST_SCREEN_H - 1),
         ] {
-            let rects = test_cursor_rects(x, y);
+            let rects = test_cursor_rects(x, y, false);
             assert_eq!(rects.len(), 4);
             for rect in rects {
                 assert!(rect.x.saturating_add(rect.width) <= TEST_SCREEN_W);
                 assert!(rect.y.saturating_add(rect.height) <= TEST_SCREEN_H);
             }
         }
+    }
+
+    #[test]
+    fn pressed_cursor_shortens_only_the_long_axes() {
+        let released = test_cursor_rects(50, 40, false);
+        let pressed = test_cursor_rects(50, 40, true);
+        assert_eq!(pressed.len(), released.len());
+        assert_eq!(
+            (pressed[0].x, pressed[0].y, pressed[0].width, pressed[0].height),
+            (48, 30, SOFTWARE_CURSOR_STROKE_PX, SOFTWARE_CURSOR_PRESSED_LONG_PX)
+        );
+        assert_eq!(
+            (pressed[1].x, pressed[1].y, pressed[1].width, pressed[1].height),
+            (40, 38, SOFTWARE_CURSOR_PRESSED_LONG_PX, SOFTWARE_CURSOR_STROKE_PX)
+        );
+        for index in 2..released.len() {
+            assert!(overlay_rect_eq(&released[index], &pressed[index]));
+        }
+    }
+
+    #[test]
+    fn press_damage_is_only_the_four_removed_caps() {
+        let released = test_cursor_rects(50, 40, false);
+        let pressed = test_cursor_rects(50, 40, true);
+        let damage = changed_rect_damage(&released, &pressed);
+        let expected = [
+            crate::intel::CompositionDamageRect::new(48, 27, 5, 3),
+            crate::intel::CompositionDamageRect::new(48, 51, 5, 3),
+            crate::intel::CompositionDamageRect::new(37, 38, 3, 5),
+            crate::intel::CompositionDamageRect::new(61, 38, 3, 5),
+        ];
+        assert_eq!(damage.len(), expected.len());
+        for rect in expected {
+            assert!(damage.rects().contains(&rect));
+        }
+        assert_eq!(changed_rect_damage(&pressed, &released), damage);
     }
 }

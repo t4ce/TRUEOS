@@ -253,6 +253,10 @@ pub(crate) struct WindowSnapshot {
     pub(crate) plane: WindowPlane,
     pub(crate) placement: WindowPlacement,
     pub(crate) interaction: WindowInteraction,
+    /// The window paints its own pointer at the routed cursor position. UI4
+    /// suppresses the default slot-4 cursor only while that window is topmost
+    /// below the cursor.
+    pub(crate) custom_cursor: bool,
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
     pub(crate) publish_serial: u64,
@@ -290,6 +294,7 @@ struct WindowRecord {
     plane: WindowPlane,
     placement: WindowPlacement,
     interaction: WindowInteraction,
+    custom_cursor: bool,
     state: WindowState,
     revision: u64,
     publish_serial: u64,
@@ -747,6 +752,7 @@ impl WindowRecord {
             plane: request.plane,
             placement: request.placement,
             interaction: request.interaction,
+            custom_cursor: false,
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
@@ -766,6 +772,7 @@ impl WindowRecord {
             plane: self.plane,
             placement: self.placement,
             interaction: self.interaction,
+            custom_cursor: self.custom_cursor,
             state: self.state,
             revision: self.revision,
             publish_serial: self.publish_serial,
@@ -945,6 +952,28 @@ pub(crate) fn window_placement(
     Ok(broker.checked_window_mut(owner, id)?.placement)
 }
 
+/// Declare whether a window replaces UI4's default slot-4 cursor with pixels
+/// in its own frame. The declaration is window-scoped: the OS cursor returns
+/// automatically when the pointer leaves this window or another window is
+/// above it.
+pub(crate) fn set_window_custom_cursor(
+    owner: WindowOwner,
+    id: WindowId,
+    enabled: bool,
+) -> Result<(), WindowBrokerError> {
+    let changed = {
+        let mut broker = WINDOW_BROKER.lock();
+        let window = broker.checked_window_mut(owner, id)?;
+        let changed = window.custom_cursor != enabled;
+        window.custom_cursor = enabled;
+        changed
+    };
+    if changed {
+        super::input_broker::notify_slot4_visual_change();
+    }
+    Ok(())
+}
+
 pub(crate) fn set_window_placement(
     owner: WindowOwner,
     id: WindowId,
@@ -959,6 +988,7 @@ pub(crate) fn set_window_placement(
     let notify_resize = window.interaction.receives_input
         && (previous.width != placement.width || previous.height != placement.height);
     let changed = window.placement != placement;
+    let notify_custom_cursor = changed && window.custom_cursor;
     if changed {
         window.placement = placement;
         window.revision = next_serial(window.revision);
@@ -976,6 +1006,9 @@ pub(crate) fn set_window_placement(
             placement.width,
             placement.height,
         );
+    }
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
     }
     Ok(())
 }
@@ -1000,10 +1033,15 @@ pub(crate) fn move_window(
     {
         return Err(WindowBrokerError::InteractionDenied);
     }
+    let notify_custom_cursor = window.custom_cursor && window.placement != placement;
     if window.placement != placement {
         window.placement = placement;
         window.revision = next_serial(window.revision);
         broker.mark_composition_changed();
+    }
+    drop(broker);
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
     }
     Ok(())
 }
@@ -1074,6 +1112,7 @@ pub(crate) fn toggle_window_maximized(
     let notify_resize = window.interaction.receives_input
         && window.interaction.resize_on_maximize
         && (previous.width != placement.width || previous.height != placement.height);
+    let notify_custom_cursor = changed && window.custom_cursor;
     if changed {
         broker.mark_composition_changed();
     }
@@ -1087,6 +1126,9 @@ pub(crate) fn toggle_window_maximized(
             placement.width,
             placement.height,
         );
+    }
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
     }
     Ok(WindowPlacementTransition {
         previous,
@@ -1105,6 +1147,7 @@ pub(crate) fn publish_window_frame(
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    let notify_custom_cursor = window.custom_cursor && window.state != WindowState::Ready;
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
     window.revision = next_serial(window.revision);
@@ -1112,6 +1155,10 @@ pub(crate) fn publish_window_frame(
     pending.add(damage);
     let publish_serial = window.publish_serial;
     broker.mark_composition_changed();
+    drop(broker);
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
+    }
     Ok(publish_serial)
 }
 
@@ -1152,9 +1199,11 @@ pub(crate) fn publish_window_frames(
             WindowState::Closed => return Err(WindowBrokerError::Closed),
         }
     }
+    let mut notify_custom_cursor = false;
     for (id, damage) in publications.iter().copied() {
         let (slot, _) = unpack_handle(id.0)?;
         let window = &mut broker.windows[slot];
+        notify_custom_cursor |= window.custom_cursor && window.state != WindowState::Ready;
         window.state = WindowState::Ready;
         window.publish_serial = next_serial(window.publish_serial);
         window.revision = next_serial(window.revision);
@@ -1164,16 +1213,25 @@ pub(crate) fn publish_window_frames(
     if !publications.is_empty() {
         broker.mark_composition_changed();
     }
+    drop(broker);
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
+    }
     Ok(())
 }
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    let notify_custom_cursor = window.custom_cursor && window.state == WindowState::Ready;
     window.state = WindowState::Closed;
     window.damage = None;
     window.revision = next_serial(window.revision);
     broker.mark_composition_changed();
+    drop(broker);
+    if notify_custom_cursor {
+        super::input_broker::notify_slot4_visual_change();
+    }
     Ok(())
 }
 
