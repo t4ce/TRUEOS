@@ -62,6 +62,77 @@ fn direct_rcs_encode_fill_rect_worklist_batch(
     )
 }
 
+fn direct_rcs_encode_alpha_blend_worklist_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: AlphaBlendWorklistRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+    desc_bytes: usize,
+) -> bool {
+    let desc_count = params.desc_count as usize;
+    let walker_count = rect_worklist_walker_count(desc_count);
+    if desc_count == 0 || desc_count > ALPHA_BLEND_WORKLIST_MAX_DESCS || walker_count == 0 {
+        return false;
+    }
+    let payload_end =
+        RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker_count * ALPHA_BLEND_WORKLIST_INDIRECT_BYTES;
+    if payload_end > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_RCS_RING_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+    if !direct_rcs_write_rect_worklist_interface_descriptor_at(
+        state,
+        RECT_WORKLIST_IDD_OFFSET_BYTES,
+        RECT_WORKLIST_BINDING_TABLE_OFFSET_BYTES,
+        ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        3,
+        ALPHA_BLEND_WORKLIST_CROSS_THREAD_GRFS,
+    ) || !direct_rcs_write_alpha_blend_worklist_surface_states(
+        state,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+        params.desc_gpu,
+        desc_bytes,
+    ) {
+        return false;
+    }
+    for walker in 0..walker_count {
+        let desc_base = walker.saturating_mul(RECT_WORKLIST_DESCS_PER_WALKER);
+        let local_count = desc_count
+            .saturating_sub(desc_base)
+            .min(RECT_WORKLIST_DESCS_PER_WALKER);
+        let payload_offset =
+            RECT_WORKLIST_PAYLOAD_OFFSET_BYTES + walker * ALPHA_BLEND_WORKLIST_INDIRECT_BYTES;
+        let payload_params = AlphaBlendWorklistRgba8Params {
+            desc_base: params.desc_base.saturating_add(desc_base as u32),
+            desc_count: local_count as u32,
+            ..params
+        };
+        if !direct_rcs_write_alpha_blend_worklist_payload_at(state, payload_offset, payload_params)
+        {
+            return false;
+        }
+    }
+
+    direct_rcs_encode_rect_worklist_command_stream(
+        state,
+        upload,
+        walker_count,
+        desc_count,
+        ALPHA_BLEND_WORKLIST_PRE_MARKER,
+        ALPHA_BLEND_WORKLIST_POST_MARKER,
+        true,
+    )
+}
+
 fn direct_rcs_encode_mandel64_worklist_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -314,12 +385,9 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     if !direct_rcs_write_alpha_blend_worklist_surface_states_at(
         state,
         SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_BINDING_REL,
-        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
-            + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL,
-        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
-            + SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL,
-        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES
-            + SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_SRC_SURFACE_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_DST_SURFACE_REL,
+        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + SPRITE_QUAD_WORKLIST_RUN_DESC_SURFACE_REL,
         params.src_gpu,
         src_bytes,
         params.dst_gpu,
@@ -386,10 +454,8 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     let Some(state_bytes) = state_bytes else {
         return false;
     };
-    let Some(payload_base) = align_up(
-        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES.saturating_add(state_bytes),
-        0x40,
-    )
+    let Some(payload_base) =
+        align_up(SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES.saturating_add(state_bytes), 0x40)
     else {
         return false;
     };
@@ -758,11 +824,7 @@ fn direct_rcs_encode_sprite_quad_worklist_command_stream(
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_BYTES as u32);
-    ok &= direct_rcs_push(
-        batch,
-        &mut cursor,
-        SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES as u32,
-    );
+    ok &= direct_rcs_push(batch, &mut cursor, SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES as u32);
     ok &= direct_rcs_push_store_marker_at(
         batch,
         &mut cursor,

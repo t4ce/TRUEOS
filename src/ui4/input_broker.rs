@@ -8,7 +8,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -19,7 +19,6 @@ const MAX_OWNER_QUEUES: usize = 64;
 const MAX_OWNER_EVENTS: usize = 256;
 const CURSOR_BATCH: usize = 64;
 const KEYBOARD_BATCH: usize = 64;
-const INPUT_PUMP_PERIOD_MS: u64 = 4;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
@@ -910,13 +909,15 @@ static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signa
 #[embassy_executor::task]
 pub(crate) async fn ui4_input_service_task() {
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback cursor=slot4-software/all-active-sources hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/broker-move-policy maximize=interaction-capability-gated selection=primary-button/active-outline owner_events=interaction-capability-gated screenshot=parked\n"
+        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional focus=per-cursor keyboard=hut-combo/exact-slot/recent-focus-fallback cursor=slot4-software/all-active-sources hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/broker-move-policy maximize=interaction-capability-gated selection=primary-button/active-outline owner_events=interaction-capability-gated screenshot=parked\n",
+        super::INTERACTION_CADENCE_HZ,
     );
+    let mut cadence = super::InteractionCadence::new();
     loop {
         if INPUT_BROKER.lock().pump() {
             SLOT4_VISUAL_CHANGE.signal(());
         }
-        Timer::after(Duration::from_millis(INPUT_PUMP_PERIOD_MS)).await;
+        Timer::at(cadence.next_deadline()).await;
     }
 }
 

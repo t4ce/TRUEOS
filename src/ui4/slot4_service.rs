@@ -8,7 +8,6 @@
 use embassy_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
 
-const SLOT4_PRESENT_PERIOD_MS: u64 = 16;
 const SLOT4_RECT_CAPACITY: usize = 512;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
@@ -48,16 +47,17 @@ impl Slot4State {
 pub(crate) async fn ui4_slot4_service_task() {
     crate::intel::wait_hw_logo_sequence_done().await;
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu hardware-cursor=preferred-physical-source/concurrent present_ms={} wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic-motion=off\n",
-        SLOT4_PRESENT_PERIOD_MS,
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=software-cursors/all-active-sources+selection-outline+maximize-preview+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-change coalesce=display-cadence damage=disjoint-old+new gpu_submits=0 synthetic-motion=off\n",
+        super::INTERACTION_CADENCE_HZ,
     );
 
     let mut state = Slot4State::new();
     let mut visual_dirty = true;
-    let mut next_present_ms = 0u64;
+    let mut cadence = super::InteractionCadence::new();
+    let mut next_present = Instant::MIN;
 
     loop {
-        let now_ms = Instant::now().as_millis();
+        let now = Instant::now();
         if let Some(pending) = state.pending.take() {
             match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
                 crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
@@ -70,12 +70,12 @@ pub(crate) async fn ui4_slot4_service_task() {
                 crate::intel::Ui4LiveOverlayFlipPoll::Failed => {
                     note_present_failure(&mut state, pending.rects.len());
                     visual_dirty = true;
-                    next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
+                    next_present = cadence.next_deadline();
                 }
             }
         }
 
-        if state.pending.is_none() && visual_dirty && now_ms >= next_present_ms {
+        if state.pending.is_none() && visual_dirty && now >= next_present {
             let rects = software_cursor_rects();
             match queue_slot4(&mut state, &rects) {
                 Ok(Some(pending)) => {
@@ -91,28 +91,29 @@ pub(crate) async fn ui4_slot4_service_task() {
                     visual_dirty = true;
                 }
             }
-            next_present_ms = now_ms.saturating_add(SLOT4_PRESENT_PERIOD_MS);
+            next_present = cadence.next_deadline();
         }
 
-        let now_ms = Instant::now().as_millis();
+        let now = Instant::now();
         if state.pending.is_none() && !visual_dirty {
             super::input_broker::wait_slot4_visual_change().await;
             visual_dirty = true;
             continue;
         }
         let present_wait = if visual_dirty {
-            next_present_ms.saturating_sub(now_ms)
+            next_present.saturating_duration_since(now)
         } else {
-            u64::MAX
+            Duration::MAX
         };
-        let flip_wait = if state.pending.is_some() { 1 } else { u64::MAX };
-        let wait_ms = present_wait.min(flip_wait).max(1);
-        if with_timeout(
-            Duration::from_millis(wait_ms),
-            super::input_broker::wait_slot4_visual_change(),
-        )
-        .await
-        .is_ok()
+        let flip_wait = if state.pending.is_some() {
+            Duration::from_hz(super::INTERACTION_CADENCE_HZ)
+        } else {
+            Duration::MAX
+        };
+        let wait = present_wait.min(flip_wait).max(Duration::from_ticks(1));
+        if with_timeout(wait, super::input_broker::wait_slot4_visual_change())
+            .await
+            .is_ok()
         {
             visual_dirty = true;
         }
@@ -159,10 +160,10 @@ fn note_present_failure(state: &mut Slot4State, rect_count: usize) {
         || state.consecutive_present_failures.is_power_of_two()
     {
         crate::log_warn!(target: "ui4/slot4";
-            "ui4/slot4: present deferred reason=display-transaction-busy rects={} consecutive={} retry_ms={}\n",
+            "ui4/slot4: present deferred reason=display-transaction-busy rects={} consecutive={} retry_hz={}\n",
             rect_count,
             state.consecutive_present_failures,
-            SLOT4_PRESENT_PERIOD_MS,
+            super::INTERACTION_CADENCE_HZ,
         );
     }
 }

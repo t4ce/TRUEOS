@@ -18,6 +18,43 @@ mod slot4_service;
 mod video_frame;
 mod window_broker;
 
+const INTERACTION_CADENCE_HZ: u64 = 60;
+
+/// Absolute 60 Hz deadlines represented on Embassy's 1 kHz clock. The fractional
+/// remainder produces a 16/17/17 ms pattern instead of rounding every period to
+/// 17 ms (58.8 Hz), and rebases after a delayed executor turn rather than bursting.
+struct InteractionCadence {
+    next_tick: u64,
+    remainder: u64,
+}
+
+impl InteractionCadence {
+    fn new() -> Self {
+        Self {
+            next_tick: embassy_time::Instant::now().as_ticks(),
+            remainder: 0,
+        }
+    }
+
+    fn next_deadline(&mut self) -> embassy_time::Instant {
+        let now_tick = embassy_time::Instant::now().as_ticks();
+        if self.next_tick < now_tick {
+            self.next_tick = now_tick;
+            self.remainder = 0;
+        }
+
+        let tick_hz = embassy_time::TICK_HZ;
+        let mut period_ticks = tick_hz / INTERACTION_CADENCE_HZ;
+        self.remainder = self
+            .remainder
+            .saturating_add(tick_hz % INTERACTION_CADENCE_HZ);
+        period_ticks = period_ticks.saturating_add(self.remainder / INTERACTION_CADENCE_HZ);
+        self.remainder %= INTERACTION_CADENCE_HZ;
+        self.next_tick = self.next_tick.saturating_add(period_ticks.max(1));
+        embassy_time::Instant::from_ticks(self.next_tick)
+    }
+}
+
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use font_stamp::{present_font_stamp, ui4_font_stamp_service_task};

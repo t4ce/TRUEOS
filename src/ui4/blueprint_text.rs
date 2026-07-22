@@ -10,12 +10,15 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
-    GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc,
-    GpgpuSpriteQuadWorklistRun, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, SkyboxSampleRgb565Params,
-    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
-    Ui4SpriteSceneCompletion, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
-    queue_ui4_blueprint_sprite_scene, skybox_sample_rgb565_to_rgba8,
-    sprite_quad_worklist_max_descs,
+    ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
+    ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
+    GpgpuAlphaBlendWorklistDesc, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface,
+    GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER,
+    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
+    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
+    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
+    skybox_sample_rgb565_to_rgba8, sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
@@ -2159,11 +2162,249 @@ fn valid_sprite_quad(quad: TrueosUi4SpriteQuad) -> bool {
     values.iter().all(|value| value.is_finite()) && quad.flags & !SPRITE_QUAD_VALID_FLAGS == 0
 }
 
+#[derive(Copy, Clone)]
+enum AlphaRectConversion {
+    Exact(GpgpuAlphaBlendWorklistDesc),
+    Clipped,
+    Unsupported,
+}
+
+fn rounded_sprite_coordinate(value: f32) -> Option<i32> {
+    const EPSILON: f32 = 0.01;
+
+    if !value.is_finite() {
+        return None;
+    }
+    let rounded = libm::roundf(value);
+    if (value - rounded).abs() > EPSILON
+        || f64::from(rounded) < f64::from(i32::MIN)
+        || f64::from(rounded) > f64::from(i32::MAX)
+    {
+        return None;
+    }
+    Some(rounded as i32)
+}
+
+fn gpgpu_sprite_quad_descriptor(quad: TrueosUi4SpriteQuad) -> GpgpuSpriteQuadWorklistDesc {
+    GpgpuSpriteQuadWorklistDesc {
+        c0_x: quad.c0_x,
+        c0_y: quad.c0_y,
+        c0_u: quad.c0_u,
+        c0_v: quad.c0_v,
+        c1_x: quad.c1_x,
+        c1_y: quad.c1_y,
+        c1_u: quad.c1_u,
+        c1_v: quad.c1_v,
+        c2_x: quad.c2_x,
+        c2_y: quad.c2_y,
+        c2_u: quad.c2_u,
+        c2_v: quad.c2_v,
+        c3_x: quad.c3_x,
+        c3_y: quad.c3_y,
+        c3_u: quad.c3_u,
+        c3_v: quad.c3_v,
+        color_rgba: quad.color_rgba,
+        flags: if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+            SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
+        } else {
+            0
+        },
+    }
+}
+
+/// Convert an axis-aligned, pixel-locked sprite to the compact alpha worklist.
+/// Anything involving resampling, rotation, flipping, or sampler clamping stays
+/// on the arbitrary-quad compute path so the native scene contract is exact.
+fn alpha_rect_descriptor(
+    quad: TrueosUi4SpriteQuad,
+    source: GpgpuRgba8Surface,
+    destination: GpgpuRgba8Surface,
+) -> AlphaRectConversion {
+    let geometry = [
+        rounded_sprite_coordinate(quad.c0_x),
+        rounded_sprite_coordinate(quad.c0_y),
+        rounded_sprite_coordinate(quad.c1_x),
+        rounded_sprite_coordinate(quad.c1_y),
+        rounded_sprite_coordinate(quad.c2_x),
+        rounded_sprite_coordinate(quad.c2_y),
+        rounded_sprite_coordinate(quad.c3_x),
+        rounded_sprite_coordinate(quad.c3_y),
+    ];
+    let [
+        Some(c0_x),
+        Some(c0_y),
+        Some(c1_x),
+        Some(c1_y),
+        Some(c2_x),
+        Some(c2_y),
+        Some(c3_x),
+        Some(c3_y),
+    ] = geometry
+    else {
+        return AlphaRectConversion::Unsupported;
+    };
+
+    let source_pixels = [
+        rounded_sprite_coordinate(quad.c0_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c0_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c1_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c1_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c2_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c2_v * source.height as f32),
+        rounded_sprite_coordinate(quad.c3_u * source.width as f32),
+        rounded_sprite_coordinate(quad.c3_v * source.height as f32),
+    ];
+    let [
+        Some(s0_x),
+        Some(s0_y),
+        Some(s1_x),
+        Some(s1_y),
+        Some(s2_x),
+        Some(s2_y),
+        Some(s3_x),
+        Some(s3_y),
+    ] = source_pixels
+    else {
+        return AlphaRectConversion::Unsupported;
+    };
+
+    if c0_y != c1_y
+        || c1_x != c2_x
+        || c2_y != c3_y
+        || c3_x != c0_x
+        || s0_y != s1_y
+        || s1_x != s2_x
+        || s2_y != s3_y
+        || s3_x != s0_x
+    {
+        return AlphaRectConversion::Unsupported;
+    }
+
+    let mut dst_x = i64::from(c0_x);
+    let mut dst_y = i64::from(c0_y);
+    let mut src_x = i64::from(s0_x);
+    let mut src_y = i64::from(s0_y);
+    let mut width = i64::from(c1_x) - dst_x;
+    let mut height = i64::from(c3_y) - dst_y;
+    let source_width = i64::from(s1_x) - src_x;
+    let source_height = i64::from(s3_y) - src_y;
+    if width <= 0 || height <= 0 || width != source_width || height != source_height {
+        return AlphaRectConversion::Unsupported;
+    }
+    if src_x < 0
+        || src_y < 0
+        || src_x.saturating_add(width) > i64::from(source.width)
+        || src_y.saturating_add(height) > i64::from(source.height)
+    {
+        return AlphaRectConversion::Unsupported;
+    }
+
+    let dst_width = i64::from(destination.width);
+    let dst_height = i64::from(destination.height);
+    if dst_x >= dst_width
+        || dst_y >= dst_height
+        || dst_x.saturating_add(width) <= 0
+        || dst_y.saturating_add(height) <= 0
+    {
+        return AlphaRectConversion::Clipped;
+    }
+    if dst_x < 0 {
+        let clipped = -dst_x;
+        dst_x = 0;
+        src_x += clipped;
+        width -= clipped;
+    }
+    if dst_y < 0 {
+        let clipped = -dst_y;
+        dst_y = 0;
+        src_y += clipped;
+        height -= clipped;
+    }
+    width = width.min(dst_width - dst_x);
+    height = height.min(dst_height - dst_y);
+    if width <= 0 || height <= 0 {
+        return AlphaRectConversion::Clipped;
+    }
+
+    if src_x > i64::from(u16::MAX)
+        || src_y > i64::from(u16::MAX)
+        || dst_x > i64::from(i16::MAX)
+        || dst_y > i64::from(i16::MAX)
+        || width > i64::from(u16::MAX)
+        || height > i64::from(u16::MAX)
+    {
+        return AlphaRectConversion::Unsupported;
+    }
+
+    let [r, g, b, a] = quad.color_rgba.to_le_bytes();
+    let mut flags = if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+        ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER
+    } else {
+        ALPHA_BLEND_WORKLIST_FLAG_COPY
+    };
+    if r != u8::MAX || g != u8::MAX || b != u8::MAX {
+        flags |= ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB;
+    }
+    if a != u8::MAX {
+        flags |= ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA;
+    }
+
+    AlphaRectConversion::Exact(GpgpuAlphaBlendWorklistDesc {
+        src_xy: (src_x as u32) | ((src_y as u32) << 16),
+        dst_xy: (dst_x as u32) | ((dst_y as u32) << 16),
+        size: (width as u32) | ((height as u32) << 16),
+        flags,
+        color_rgba: quad.color_rgba,
+    })
+}
+
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     struct OwnedRun {
         sprite_id: u32,
         source: GpgpuRgba8Surface,
         descriptors: Vec<GpgpuSpriteQuadWorklistDesc>,
+    }
+
+    #[derive(Copy, Clone)]
+    enum PreparedOp {
+        Alpha {
+            sprite_id: u32,
+            source: GpgpuRgba8Surface,
+            descriptor: GpgpuAlphaBlendWorklistDesc,
+        },
+        Quad {
+            sprite_id: u32,
+            source: GpgpuRgba8Surface,
+            descriptor: GpgpuSpriteQuadWorklistDesc,
+        },
+    }
+
+    enum PreparedBatch {
+        Alpha {
+            source: GpgpuRgba8Surface,
+            descriptors: Vec<GpgpuAlphaBlendWorklistDesc>,
+        },
+        Quad {
+            groups: Vec<OwnedRun>,
+        },
+    }
+
+    impl PreparedBatch {
+        fn descriptor_count(&self) -> usize {
+            match self {
+                Self::Alpha { descriptors, .. } => descriptors.len(),
+                Self::Quad { groups } => groups
+                    .iter()
+                    .fold(0usize, |total, group| total.saturating_add(group.descriptors.len())),
+            }
+        }
+
+        fn backend(&self) -> &'static str {
+            match self {
+                Self::Alpha { .. } => "gpgpu-alpha-rect-worklist",
+                Self::Quad { .. } => "gpgpu-arbitrary-quad-fallback",
+            }
+        }
     }
 
     let mut surfaces = SURFACES.lock();
@@ -2193,8 +2434,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         return ERROR_UI4;
     };
 
-    let mut ordered = Vec::with_capacity(upload.quads.len().saturating_add(1));
-    ordered.push(TrueosUi4SpriteQuad {
+    let retry_quads = upload.quads.clone();
+    let clear = TrueosUi4SpriteQuad {
         sprite_id: 0,
         c0_x: 0.0,
         c0_y: 0.0,
@@ -2206,108 +2447,171 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         c3_y: surface.height as f32,
         color_rgba: clear_rgba,
         ..TrueosUi4SpriteQuad::default()
+    };
+    let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
+    prepared.push(PreparedOp::Quad {
+        sprite_id: 0,
+        source: solid.surface,
+        descriptor: gpgpu_sprite_quad_descriptor(clear),
     });
-    ordered.extend(upload.quads);
+    for quad in upload.quads {
+        let source = if quad.sprite_id == 0 {
+            solid.surface
+        } else {
+            let Some((_, source)) = surface
+                .sprites
+                .iter()
+                .find(|(sprite_id, _)| *sprite_id == quad.sprite_id)
+            else {
+                return ERROR_NOT_FOUND;
+            };
+            source.surface
+        };
+        let conversion = if quad.sprite_id == 0 {
+            AlphaRectConversion::Unsupported
+        } else {
+            alpha_rect_descriptor(quad, source, destination)
+        };
+        match conversion {
+            AlphaRectConversion::Exact(descriptor) => prepared.push(PreparedOp::Alpha {
+                sprite_id: quad.sprite_id,
+                source,
+                descriptor,
+            }),
+            AlphaRectConversion::Clipped => {}
+            AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
+                sprite_id: quad.sprite_id,
+                source,
+                descriptor: gpgpu_sprite_quad_descriptor(quad),
+            }),
+        }
+    }
 
-    let batch_capacity = sprite_quad_worklist_max_descs();
-    let batch_count = ordered.len().div_ceil(batch_capacity);
-    let mut final_release = None;
-    for (batch_index, batch) in ordered.chunks(batch_capacity).enumerate() {
-        let mut groups = Vec::<OwnedRun>::new();
-        for quad in batch.iter().copied() {
-            let source = if quad.sprite_id == 0 {
-                solid.surface
-            } else {
-                let Some((_, source)) = surface
-                    .sprites
-                    .iter()
-                    .find(|(sprite_id, _)| *sprite_id == quad.sprite_id)
-                else {
-                    return ERROR_NOT_FOUND;
-                };
-                source.surface
-            };
-            let descriptor = GpgpuSpriteQuadWorklistDesc {
-                c0_x: quad.c0_x,
-                c0_y: quad.c0_y,
-                c0_u: quad.c0_u,
-                c0_v: quad.c0_v,
-                c1_x: quad.c1_x,
-                c1_y: quad.c1_y,
-                c1_u: quad.c1_u,
-                c1_v: quad.c1_v,
-                c2_x: quad.c2_x,
-                c2_y: quad.c2_y,
-                c2_u: quad.c2_u,
-                c2_v: quad.c2_v,
-                c3_x: quad.c3_x,
-                c3_y: quad.c3_y,
-                c3_u: quad.c3_u,
-                c3_v: quad.c3_v,
-                color_rgba: quad.color_rgba,
-                flags: if quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
-                    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
-                } else {
-                    0
-                },
-            };
-            if let Some(group) = groups.last_mut()
-                && group.sprite_id == quad.sprite_id
-            {
-                group.descriptors.push(descriptor);
-            } else {
-                groups.push(OwnedRun {
-                    sprite_id: quad.sprite_id,
+    let batch_capacity = alpha_blend_worklist_max_descs().min(sprite_quad_worklist_max_descs());
+    let mut batches = Vec::<PreparedBatch>::new();
+    let mut cursor = 0usize;
+    while cursor < prepared.len() {
+        match prepared[cursor] {
+            PreparedOp::Alpha {
+                sprite_id, source, ..
+            } => {
+                let mut descriptors = Vec::new();
+                while cursor < prepared.len() && descriptors.len() < batch_capacity {
+                    let PreparedOp::Alpha {
+                        sprite_id: next_sprite_id,
+                        source: next_source,
+                        descriptor,
+                    } = prepared[cursor]
+                    else {
+                        break;
+                    };
+                    if next_sprite_id != sprite_id
+                        || next_source.gpu != source.gpu
+                        || next_source.phys != source.phys
+                    {
+                        break;
+                    }
+                    descriptors.push(descriptor);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Alpha {
                     source,
-                    descriptors: alloc::vec![descriptor],
+                    descriptors,
                 });
             }
+            PreparedOp::Quad { .. } => {
+                let mut groups = Vec::<OwnedRun>::new();
+                let mut descriptor_count = 0usize;
+                while cursor < prepared.len() && descriptor_count < batch_capacity {
+                    let PreparedOp::Quad {
+                        sprite_id,
+                        source,
+                        descriptor,
+                    } = prepared[cursor]
+                    else {
+                        break;
+                    };
+                    if let Some(group) = groups.last_mut()
+                        && group.sprite_id == sprite_id
+                    {
+                        group.descriptors.push(descriptor);
+                    } else {
+                        groups.push(OwnedRun {
+                            sprite_id,
+                            source,
+                            descriptors: alloc::vec![descriptor],
+                        });
+                    }
+                    descriptor_count = descriptor_count.saturating_add(1);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Quad { groups });
+            }
         }
-        let runs = groups
-            .iter()
-            .map(|group| GpgpuSpriteQuadWorklistRun {
-                src: group.source,
-                descs: &group.descriptors,
-            })
-            .collect::<Vec<_>>();
-        let submission = match queue_blueprint_sprite_batch(destination, &runs) {
+    }
+
+    let batch_count = batches.len();
+    let mut final_release = None;
+    for (batch_index, batch) in batches.iter().enumerate() {
+        let descriptor_count = batch.descriptor_count();
+        let backend = batch.backend();
+        let queued = match batch {
+            PreparedBatch::Alpha {
+                source,
+                descriptors,
+            } => queue_blueprint_alpha_batch(*source, destination, descriptors),
+            PreparedBatch::Quad { groups } => {
+                let runs = groups
+                    .iter()
+                    .map(|group| GpgpuSpriteQuadWorklistRun {
+                        src: group.source,
+                        descs: &group.descriptors,
+                    })
+                    .collect::<Vec<_>>();
+                queue_blueprint_sprite_batch(destination, &runs)
+            }
+        };
+        let submission = match queued {
             Ok(submission) => submission,
             Err(Ui4CompositorSubmitError::Busy)
             | Err(Ui4CompositorSubmitError::SubmissionRejected) => {
                 surface.sprite_scene_upload = Some(SpriteSceneUpload {
-                    expected: ordered.len().saturating_sub(1),
-                    quads: ordered[1..].to_vec(),
+                    expected: retry_quads.len(),
+                    quads: retry_quads.clone(),
                 });
                 crate::log_warn!(target: "ui4/blueprint-frame";
-                    "sprite scene deferred owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-upload+retry-finish\n",
+                    "sprite scene deferred owner={:?} window={} frame={} buffer={} batch={}/{} descriptors={} backend={} reason=ui4-compositor-admission-timeout hardware_accepted=0 action=retain-upload+retry-finish\n",
                     owner,
                     window_id,
                     lease.frame.raw(),
                     lease.buffer_index,
                     batch_index.saturating_add(1),
                     batch_count,
-                    batch.len(),
+                    descriptor_count,
+                    backend,
                 );
                 return ERROR_BUSY;
             }
             Err(Ui4CompositorSubmitError::Unavailable) => {
                 crate::log_warn!(target: "ui4/blueprint-frame";
-                    "sprite scene rejected owner={:?} window={} batch={}/{} reason=ui4-compositor-unavailable hardware_accepted=0\n",
+                    "sprite scene rejected owner={:?} window={} batch={}/{} backend={} reason=ui4-compositor-unavailable hardware_accepted=0\n",
                     owner,
                     window_id,
                     batch_index.saturating_add(1),
                     batch_count,
+                    backend,
                 );
                 return ERROR_UI4;
             }
             Err(Ui4CompositorSubmitError::InvalidWorklist) => {
                 crate::log_error!(target: "ui4/blueprint-frame";
-                    "sprite scene rejected owner={:?} window={} batch={}/{} descriptors={} reason=invalid-private-ui4-worklist hardware_accepted=0\n",
+                    "sprite scene rejected owner={:?} window={} batch={}/{} descriptors={} backend={} reason=invalid-private-ui4-worklist hardware_accepted=0\n",
                     owner,
                     window_id,
                     batch_index.saturating_add(1),
                     batch_count,
-                    batch.len(),
+                    descriptor_count,
+                    backend,
                 );
                 return ERROR_UI4;
             }
@@ -2320,14 +2624,14 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 match poll_ui4_blueprint_sprite_scene(submission, destination) {
                     Ui4SpriteSceneCompletion::Pending => false,
                     Ui4SpriteSceneCompletion::Complete { stats, release } => {
-                        if stats.descs != batch.len() || stats.submits != 1 {
+                        if stats.descs != descriptor_count || stats.submits != 1 {
                             crate::log_error!(target: "ui4/blueprint-frame";
                                 "sprite scene retirement contract mismatch owner={:?} window={} batch={}/{} expected_descs={} retired_descs={} retired_submits={} action=reject-release\n",
                                 owner,
                                 window_id,
                                 batch_index.saturating_add(1),
                                 batch_count,
-                                batch.len(),
+                                descriptor_count,
                                 stats.descs,
                                 stats.submits,
                             );
@@ -2353,14 +2657,14 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 match poll_ui4_compositor_submission(submission) {
                     Ui4CompositorCompletion::Pending => false,
                     Ui4CompositorCompletion::Complete(stats) => {
-                        if stats.descs != batch.len() || stats.submits != 1 {
+                        if stats.descs != descriptor_count || stats.submits != 1 {
                             crate::log_error!(target: "ui4/blueprint-frame";
                                 "sprite scene retirement contract mismatch owner={:?} window={} batch={}/{} expected_descs={} retired_descs={} retired_submits={} action=abort-before-release\n",
                                 owner,
                                 window_id,
                                 batch_index.saturating_add(1),
                                 batch_count,
-                                batch.len(),
+                                descriptor_count,
                                 stats.descs,
                                 stats.submits,
                             );
@@ -2409,6 +2713,26 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     surface.pending_gpu_release = Some(final_release);
     surface.sprite_clear_rgba = None;
     0
+}
+
+fn queue_blueprint_alpha_batch(
+    source: GpgpuRgba8Surface,
+    destination: GpgpuRgba8Surface,
+    descriptors: &[GpgpuAlphaBlendWorklistDesc],
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    let started = crate::chronos::monotonic_nanos();
+    loop {
+        match queue_ui4_blueprint_alpha_rects(source, destination, descriptors) {
+            Err(Ui4CompositorSubmitError::Busy)
+            | Err(Ui4CompositorSubmitError::SubmissionRejected)
+                if crate::chronos::monotonic_nanos().saturating_sub(started)
+                    < UI4_SPRITE_BATCH_TIMEOUT_NS =>
+            {
+                core::hint::spin_loop();
+            }
+            result => return result,
+        }
+    }
 }
 
 fn queue_blueprint_sprite_batch(

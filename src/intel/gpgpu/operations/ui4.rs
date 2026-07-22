@@ -229,6 +229,166 @@ pub(crate) fn queue_ui4_blueprint_sprite_scene(
     queue_ui4_sprite_quad_runs(dst, runs, true, "blueprint-sprite-scene")
 }
 
+/// Queue one ordered set of 1:1 Blueprint sprite rectangles.  This uses the
+/// proven descriptor alpha compositor: sixteen descriptors per walker, no 3D
+/// draws or triangles, and the exact UI4 lease as its scanout-safe destination.
+pub(crate) fn queue_ui4_blueprint_alpha_rects(
+    src: GpgpuRgba8Surface,
+    dst: GpgpuRgba8Surface,
+    descriptors: &[GpgpuAlphaBlendWorklistDesc],
+) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    const VALID_FLAGS: u32 = ALPHA_BLEND_WORKLIST_FLAG_COPY
+        | ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER
+        | ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB
+        | ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA
+        | ALPHA_BLEND_WORKLIST_FLAG_PREMUL_SRC;
+
+    if !src.is_valid()
+        || !dst.is_valid()
+        || descriptors.is_empty()
+        || descriptors.len() > ALPHA_BLEND_WORKLIST_MAX_DESCS
+        || gpu_ranges_overlap(src.gpu, src.bytes, dst.gpu, dst.bytes)
+        || gpu_ranges_overlap(src.phys, src.bytes, dst.phys, dst.bytes)
+        || descriptors.iter().any(|descriptor| {
+            let src_x = descriptor.src_xy & 0xFFFF;
+            let src_y = descriptor.src_xy >> 16;
+            let dst_x = (descriptor.dst_xy as u16 as i16) as i32;
+            let dst_y = ((descriptor.dst_xy >> 16) as u16 as i16) as i32;
+            let width = descriptor.size & 0xFFFF;
+            let height = descriptor.size >> 16;
+            let copy = descriptor.flags & ALPHA_BLEND_WORKLIST_FLAG_COPY != 0;
+            let source_over = descriptor.flags & ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER != 0;
+            width == 0
+                || height == 0
+                || dst_x < 0
+                || dst_y < 0
+                || descriptor.flags & !VALID_FLAGS != 0
+                || copy == source_over
+                || src_x
+                    .checked_add(width)
+                    .is_none_or(|right| right > src.width)
+                || src_y
+                    .checked_add(height)
+                    .is_none_or(|bottom| bottom > src.height)
+                || (dst_x as u32)
+                    .checked_add(width)
+                    .is_none_or(|right| right > dst.width)
+                || (dst_y as u32)
+                    .checked_add(height)
+                    .is_none_or(|bottom| bottom > dst.height)
+        })
+    {
+        return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+
+    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    if runtime.pending.is_some() {
+        return Err(Ui4CompositorSubmitError::Busy);
+    }
+    let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let upload =
+        upload_alpha_blend_worklist_rgba8_kernel().ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let desc = ui4_compositor_sprite_quad_desc_buffer_once()
+        .ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    if desc.bytes < ALPHA_BLEND_WORKLIST_DESC_BYTES {
+        return Err(Ui4CompositorSubmitError::Unavailable);
+    }
+
+    unsafe {
+        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
+        let out = desc.virt as *mut GpgpuAlphaBlendWorklistDesc;
+        for (index, descriptor) in descriptors.iter().copied().enumerate() {
+            core::ptr::write_volatile(out.add(index), descriptor);
+        }
+    }
+    super::dma_flush(desc.virt, desc.bytes);
+
+    let forcewake_ok = direct_rcs_forcewake(dev);
+    let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
+    if mapped_ok {
+        runtime.state_mapped = true;
+    }
+    let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(state));
+    if ppgtt_ok {
+        runtime.ppgtt_initialized = true;
+    }
+    let kernel_ok = ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    let src_ok = kernel_ok && direct_rcs_map_ppgtt_kernel(state, src.gpu, src.phys, src.bytes);
+    let dst_ok = src_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    let desc_ok = dst_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let params = AlphaBlendWorklistRgba8Params {
+        src_gpu: src.gpu,
+        dst_gpu: dst.gpu,
+        desc_gpu: desc.gpu,
+        src_pitch_bytes: src.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
+        desc_base: 0,
+        desc_count: descriptors.len() as u32,
+    };
+    let batch_ok = desc_ok
+        && direct_rcs_encode_alpha_blend_worklist_batch(
+            state, upload, params, src.bytes, dst.bytes, desc.bytes,
+        );
+    if !batch_ok {
+        crate::log_error!(target: "ui4";
+            "ui4/guc-compositor: queue rejected stage=prepare request=blueprint-alpha-rects forcewake={} mapped={} ppgtt={} kernel={} src={} dst={} desc={} batch={} rects={}\n",
+            forcewake_ok as u8,
+            mapped_ok as u8,
+            ppgtt_ok as u8,
+            kernel_ok as u8,
+            src_ok as u8,
+            dst_ok as u8,
+            desc_ok as u8,
+            batch_ok as u8,
+            descriptors.len(),
+        );
+        return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+
+    let started_tick = direct_rcs_now_tick();
+    if !direct_rcs_submit_batch_with_runtime(
+        dev,
+        state,
+        &mut runtime.submit,
+        crate::gpu::vgpu::KernelClient::Ui4Compositor,
+    ) {
+        return Err(Ui4CompositorSubmitError::SubmissionRejected);
+    }
+    runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
+    let serial = runtime.next_serial;
+    let gpu = runtime
+        .submit
+        .pending
+        .expect("accepted UI4 alpha submission must have an executor token");
+    let submission = Ui4CompositorSubmission { serial, gpu };
+    runtime.last_completion = None;
+    runtime.pending = Some(Ui4CompositorPending {
+        submission,
+        started_tick,
+        marker_slot: RECT_WORKLIST_POST_MARKER_SLOT,
+        marker_value: ALPHA_BLEND_WORKLIST_POST_MARKER,
+        kernel: "blueprint-alpha-rects",
+        stats: GpgpuWorklistSubmitStats {
+            descs: descriptors.len(),
+            walkers: rect_worklist_walker_count(descriptors.len()),
+            submits: 1,
+            submit_ms: 0,
+        },
+        overdue_logged: false,
+    });
+    crate::log_trace!(target: "ui4";
+        "ui4/guc-compositor: queued serial={} kernel=blueprint-alpha-rects rects={} walkers={} src_gpu=0x{:X} dst_gpu=0x{:X} dst_cache=pat3-uc context=isolated persistent=1 wait=none\n",
+        serial,
+        descriptors.len(),
+        rect_worklist_walker_count(descriptors.len()),
+        src.gpu,
+        dst.gpu,
+    );
+    Ok(submission)
+}
+
 fn queue_ui4_sprite_quad_runs(
     dst: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
@@ -647,8 +807,8 @@ pub(crate) fn poll_ui4_video_frame_submission(
     }
 }
 
-/// Retire the final arbitrary-quad Blueprint batch and mint the producer
-/// release for the exact UI4 write lease. Intermediate batches use
+/// Retire the final Blueprint sprite batch and mint the producer release for
+/// the exact UI4 write lease. Intermediate alpha or arbitrary-quad batches use
 /// `poll_ui4_compositor_submission()` and therefore cannot manufacture a
 /// publishable fence before the complete ordered scene has retired.
 pub(crate) fn poll_ui4_blueprint_sprite_scene(

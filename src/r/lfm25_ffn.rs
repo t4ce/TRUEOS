@@ -317,18 +317,10 @@ async fn run_streamed(
     for row in 0..4_608usize {
         let row_start = row * NARROW_ROW_BYTES;
         let row_end = row_start + NARROW_ROW_BYTES;
-        let gate_blocks = gate_matrix
-            .get(row_start..row_end)
-            .ok_or(Error::Tensor)?;
-        let up_blocks = up_matrix
-            .get(row_start..row_end)
-            .ok_or(Error::Tensor)?;
-        let result = fpga_offload::lfm25_stream_gate_up_row(
-            row as u32,
-            gate_blocks,
-            up_blocks,
-        )
-        .await?;
+        let gate_blocks = gate_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
+        let up_blocks = up_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
+        let result =
+            fpga_offload::lfm25_stream_gate_up_row(row as u32, gate_blocks, up_blocks).await?;
         gate.push(result.gate_q30);
         up.push(result.up_q30);
         silu.push(result.result_q30);
@@ -383,9 +375,7 @@ async fn run_streamed(
     for row in 0..1_024usize {
         let row_start = row * WIDE_ROW_BYTES;
         let row_end = row_start + WIDE_ROW_BYTES;
-        let weight_blocks = down_matrix
-            .get(row_start..row_end)
-            .ok_or(Error::Tensor)?;
+        let weight_blocks = down_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
         let value = fpga_offload::lfm25_stream_down_row(row as u32, weight_blocks).await?;
         down.push(value);
         let expected = golden_f32(4, row)?;

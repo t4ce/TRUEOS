@@ -845,8 +845,7 @@ mod tests {
     const BOARD_CST: &str = include_str!("../../../src/min_pci_led.cst");
     const BOARD_SDC: &str = include_str!("../../../src/min_pci_led.sdc");
     const PCIE_PLL: &str = include_str!("../../../src/gowin_pll/gowin_pll.v");
-    const ROW_STREAMER_RTL: &str =
-        include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
+    const ROW_STREAMER_RTL: &str = include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
     const GOWIN_PROJECT: &str = include_str!("../../../min_pci_led.gprj");
     const PCIE_CONTROLLER_IPC: &str =
         include_str!("../../../src/serdes/pcie_controller/pcie_controller.ipc");

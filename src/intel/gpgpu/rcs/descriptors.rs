@@ -235,6 +235,47 @@ fn direct_rcs_write_fill_rect_worklist_payload_at(
     true
 }
 
+fn direct_rcs_write_alpha_blend_worklist_payload_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: AlphaBlendWorklistRgba8Params,
+) -> bool {
+    if payload_offset + ALPHA_BLEND_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+        return false;
+    }
+
+    unsafe {
+        let payload = state.batch_virt.add(payload_offset);
+        core::ptr::write_bytes(payload, 0, ALPHA_BLEND_WORKLIST_INDIRECT_BYTES);
+        let dwords = payload as *mut u32;
+        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(4), 1);
+        core::ptr::write_volatile(dwords.add(5), 1);
+        // The baked artifact's .ze_info places its three 64-bit buffer
+        // addresses at byte offsets 32/40/48 and the scalar arguments at
+        // 56/60/64/68. Unlike the arbitrary-quad artifact, this 1D kernel has
+        // no enqueued_local_size field in its cross-thread payload.
+        core::ptr::write_volatile(dwords.add(8), params.src_gpu as u32);
+        core::ptr::write_volatile(dwords.add(9), (params.src_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(10), params.dst_gpu as u32);
+        core::ptr::write_volatile(dwords.add(11), (params.dst_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(12), params.desc_gpu as u32);
+        core::ptr::write_volatile(dwords.add(13), (params.desc_gpu >> 32) as u32);
+        core::ptr::write_volatile(dwords.add(14), params.src_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(15), params.dst_pitch_bytes);
+        core::ptr::write_volatile(dwords.add(16), params.desc_base);
+        core::ptr::write_volatile(dwords.add(17), params.desc_count);
+
+        let local_ids = payload.add(ALPHA_BLEND_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
+        for lane in 0..16usize {
+            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
+            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
+            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
+        }
+    }
+    true
+}
+
 fn direct_rcs_write_mandel64_worklist_payload_at(
     state: DirectRcsState,
     payload_offset: usize,
@@ -439,4 +480,3 @@ fn direct_rcs_read_worklist_probe_span(
     }
     values
 }
-

@@ -455,10 +455,7 @@ pub async fn lfm25_stream_gate_up_row(
     execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU, row).await
 }
 
-pub async fn lfm25_stream_down_row(
-    row: u32,
-    weights: &[u8],
-) -> Result<i64, Error> {
+pub async fn lfm25_stream_down_row(row: u32, weights: &[u8]) -> Result<i64, Error> {
     if weights.len() != 144 * trueos_fpga_abi::lfm25::Q8_0_BLOCK_BYTES {
         return Err(Error::Protocol);
     }
@@ -467,8 +464,7 @@ pub async fn lfm25_stream_down_row(
         weights,
     )
     .map_err(map_stream_transport_error)?;
-    let result =
-        execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_DOWN, row).await?;
+    let result = execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_DOWN, row).await?;
     Ok(result.result_q30)
 }
 
@@ -476,12 +472,12 @@ async fn execute_lfm25_stream_row(
     mode: u32,
     row: u32,
 ) -> Result<crate::tga::Lfm25StreamResult, Error> {
-    let interrupt_sequence = crate::tga::arm_offload_interrupt().map_err(map_stream_transport_error)?;
+    let interrupt_sequence =
+        crate::tga::arm_offload_interrupt().map_err(map_stream_transport_error)?;
     crate::tga::start_lfm25_stream_row(mode, row).map_err(map_stream_transport_error)?;
 
-    let terminal = with_timeout(
-        EmbassyDuration::from_millis(COMPLETION_INTERRUPT_TIMEOUT_MS),
-        async {
+    let terminal =
+        with_timeout(EmbassyDuration::from_millis(COMPLETION_INTERRUPT_TIMEOUT_MS), async {
             let mut sequence = interrupt_sequence;
             loop {
                 sequence = crate::tga::wait_for_completion_interrupt(sequence).await;
@@ -493,17 +489,17 @@ async fn execute_lfm25_stream_row(
                     | trueos_fpga_abi::Lfm25StreamState::Busy => {}
                 }
             }
-        },
-    )
-    .await;
+        })
+        .await;
 
     match terminal {
         Ok(result) => result?,
         Err(_) => match crate::tga::lfm25_stream_state().map_err(map_stream_transport_error)? {
             trueos_fpga_abi::Lfm25StreamState::Complete
             | trueos_fpga_abi::Lfm25StreamState::Failed => record_timeout_recovery(),
-            trueos_fpga_abi::Lfm25StreamState::Idle
-            | trueos_fpga_abi::Lfm25StreamState::Busy => return Err(Error::Protocol),
+            trueos_fpga_abi::Lfm25StreamState::Idle | trueos_fpga_abi::Lfm25StreamState::Busy => {
+                return Err(Error::Protocol);
+            }
         },
     }
 

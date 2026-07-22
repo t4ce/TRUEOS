@@ -721,14 +721,10 @@ pub(crate) fn lfm25_stream_write_block_bytes(
     Ok(())
 }
 
-pub(crate) fn start_lfm25_stream_row(
-    mode: u32,
-    row: u32,
-) -> Result<(), OffloadTransportError> {
+pub(crate) fn start_lfm25_stream_row(mode: u32, row: u32) -> Result<(), OffloadTransportError> {
     if !matches!(
         mode,
-        trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU
-            | trueos_fpga_abi::LFM25_STREAM_MODE_DOWN
+        trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU | trueos_fpga_abi::LFM25_STREAM_MODE_DOWN
     ) {
         return Err(OffloadTransportError::InvalidPackage);
     }
@@ -744,10 +740,7 @@ pub(crate) fn start_lfm25_stream_row(
     }
 
     let control = mode | trueos_fpga_abi::LFM25_STREAM_CONTROL_INTERRUPT_ENABLE;
-    Tga::write_reg(
-        tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CONTROL_OFFSET,
-        control,
-    );
+    Tga::write_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_CONTROL_OFFSET, control);
     Tga::write_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ROW_OFFSET, row);
     fence(Ordering::SeqCst);
     // This non-posted BAR0 read is the producer commit: all preceding BAR2
@@ -773,12 +766,10 @@ pub(crate) fn lfm25_stream_state()
     };
     fence(Ordering::Acquire);
     let raw = Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_STATE_OFFSET);
-    trueos_fpga_abi::Lfm25StreamState::from_raw(raw)
-        .ok_or(OffloadTransportError::InvalidPackage)
+    trueos_fpga_abi::Lfm25StreamState::from_raw(raw).ok_or(OffloadTransportError::InvalidPackage)
 }
 
-pub(crate) fn read_lfm25_stream_result()
--> Result<Lfm25StreamResult, OffloadTransportError> {
+pub(crate) fn read_lfm25_stream_result() -> Result<Lfm25StreamResult, OffloadTransportError> {
     let guard = TGA.lock();
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
@@ -802,9 +793,7 @@ pub(crate) fn read_lfm25_stream_result()
             trueos_fpga_abi::BAR0_LFM25_STREAM_RESULT_LO_OFFSET,
             trueos_fpga_abi::BAR0_LFM25_STREAM_RESULT_HI_OFFSET,
         ),
-        error_code: Tga::read_reg(
-            tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ERROR_OFFSET,
-        ),
+        error_code: Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_ERROR_OFFSET),
     })
 }
 
@@ -813,9 +802,7 @@ pub(crate) fn lfm25_stream_completion_count() -> Result<u32, OffloadTransportErr
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
     };
-    Ok(Tga::read_reg(
-        tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_COMPLETION_COUNT_OFFSET,
-    ))
+    Ok(Tga::read_reg(tga.mmio_base + trueos_fpga_abi::BAR0_LFM25_STREAM_COMPLETION_COUNT_OFFSET))
 }
 
 /// Copy one complete call into the fixed BAR window and hand it to the FPGA.
