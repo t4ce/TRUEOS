@@ -1,9 +1,10 @@
 //! UI4 input focus and delivery over the kernel HID rings.
 //!
 //! The HID/HUT layer owns device discovery and identity. UI4 starts at its
-//! sequence rings: it hit-tests windows, keeps one focus/capture per cursor
-//! source, associates keyboards through HUT combos, and queues callbacks for
-//! the trusted `WindowOwner`. Consumers never drain a global HID queue.
+//! sequence rings: it hit-tests windows, enforces the one global selected
+//! frame, keeps pointer capture per cursor source, associates keyboards through
+//! HUT combos, and queues callbacks for the trusted `WindowOwner`. Consumers
+//! never drain a global HID queue.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -209,7 +210,7 @@ struct CursorRoute {
     buttons_down: u32,
     capture: Option<WindowTarget>,
     keyboard_source: Option<KeyboardSource>,
-    focus_serial: u64,
+    selection_serial: u64,
     visible_after_motion: bool,
     color: crate::graphics::primitives::Rgba8,
     secondary_anchor: Option<(u32, u32)>,
@@ -231,7 +232,7 @@ impl CursorRoute {
             buttons_down,
             capture: None,
             keyboard_source: None,
-            focus_serial: 0,
+            selection_serial: 0,
             visible_after_motion: false,
             color: super::cursor_frame_inout::cursor_color(source),
             secondary_anchor: None,
@@ -266,7 +267,7 @@ struct OwnerQueue {
 struct InputBroker {
     cursor_read_seq: u64,
     keyboard_read_seq: u64,
-    focus_serial: u64,
+    selection_serial: u64,
     cursors: Vec<CursorRoute, MAX_CURSOR_ROUTES>,
 }
 
@@ -275,7 +276,7 @@ impl InputBroker {
         Self {
             cursor_read_seq: 0,
             keyboard_read_seq: 0,
-            focus_serial: 0,
+            selection_serial: 0,
             cursors: Vec::new(),
         }
     }
@@ -291,7 +292,7 @@ impl InputBroker {
             .cursors
             .iter()
             .enumerate()
-            .min_by_key(|(_, route)| route.focus_serial)
+            .min_by_key(|(_, route)| route.selection_serial)
             .map(|(index, _)| index)
             .unwrap_or(0);
         super::cursor_frame_inout::cursor_retired(self.cursors[index].source);
@@ -313,8 +314,8 @@ impl InputBroker {
             source,
             color,
         );
-        self.focus_serial = self.focus_serial.wrapping_add(1).max(1);
-        self.cursors[cursor_index].focus_serial = self.focus_serial;
+        self.selection_serial = self.selection_serial.wrapping_add(1).max(1);
+        self.cursors[cursor_index].selection_serial = self.selection_serial;
         if !change.changed {
             return false;
         }
@@ -745,8 +746,12 @@ impl InputBroker {
                             && route.source.slot_id == event.slot_id
                     }
                 })
-                .max_by_key(|route| route.focus_serial)
-                .or_else(|| self.cursors.iter().max_by_key(|route| route.focus_serial));
+                .max_by_key(|route| route.selection_serial)
+                .or_else(|| {
+                    self.cursors
+                        .iter()
+                        .max_by_key(|route| route.selection_serial)
+                });
             let Some(route) = route else {
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: F1 ignored reason=no-ui4-cursor keyboard_ctrl={} keyboard_slot={} combo={}\n",
@@ -791,7 +796,7 @@ impl InputBroker {
                     route.source.controller_id == event.controller_id
                         && route.source.slot_id == event.slot_id
                 };
-                matches.then_some((route.focus_serial, index))
+                matches.then_some((route.selection_serial, index))
             })
             .max_by_key(|(serial, _)| *serial)
             .map(|(_, index)| index);
@@ -804,7 +809,7 @@ impl InputBroker {
                 .enumerate()
                 .filter_map(|(index, route)| {
                     super::cursor_frame_inout::source_selected(route.source)
-                        .then_some((route.focus_serial, index))
+                        .then_some((route.selection_serial, index))
                 })
                 .max_by_key(|(serial, _)| *serial)
                 .map(|(_, index)| index)
@@ -843,7 +848,7 @@ impl InputBroker {
             .filter_map(|route| {
                 route
                     .keyboard_source
-                    .map(|source| (route.focus_serial, source))
+                    .map(|source| (route.selection_serial, source))
             })
             .max_by_key(|(serial, _)| *serial)
             .map(|(_, source)| source)?;

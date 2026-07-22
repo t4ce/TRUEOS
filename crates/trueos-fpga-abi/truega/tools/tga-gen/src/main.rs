@@ -916,9 +916,9 @@ mod tests {
         assert!(rtl.contains("input  wire [767:0] input_data"));
         assert!(rtl.contains("module truega_q8_0_dot32"));
         assert!(rtl.contains(
-            "{{5{lane_product_bits[15]}}, lane_product_bits}"
+            "{{5{product_reg[15]}}, product_reg}"
         ));
-        assert!(rtl.contains("accumulator_next = accumulator + lane_product_extended"));
+        assert!(rtl.contains("accumulator_next = accumulator + registered_product_extended"));
         assert!(rtl.contains("module truega_q8_0_scale_q30_seq"));
         assert!(rtl.contains("module truega_q8_0_block_slot"));
         assert!(rtl.contains("module truega_q8_0_row_block_slot"));

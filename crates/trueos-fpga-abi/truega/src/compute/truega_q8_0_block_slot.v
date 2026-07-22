@@ -2,7 +2,8 @@
 // Native blocks are unchanged: bits [15:0] hold the little-endian binary16
 // scale and bits [16 + lane*8 +: 8] hold signed quant lane `lane`.
 // A rising edge accepts start_i only with busy_o low.  Attempts while busy are
-// ignored.  done_o pulses for one cycle after both registered outputs are valid.
+// ignored.  Accepted block inputs must remain stable while busy_o is high.
+// done_o pulses for one cycle after both registered outputs are valid.
 module truega_q8_0_block_slot (
     input  wire                 clk,
     input  wire                 reset_n,

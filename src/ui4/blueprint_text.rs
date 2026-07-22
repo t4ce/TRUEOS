@@ -175,7 +175,7 @@ pub struct TrueosUi4PointerEvent {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4PointerEvent>() == 16 * 4);
 
-/// Held-key snapshot for the keyboard assigned to this window's focused
+/// Held-key snapshot for the keyboard assigned to this selected window's
 /// cursor/HUT route. HID usages index `key_down_bits` directly.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -819,7 +819,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
     0
 }
 
-/// Read the held HID usages for the keyboard routed to this focused window.
+/// Read the held HID usages for the keyboard routed to this selected window.
 ///
 /// This is window-scoped state, not the global HUT inventory. A return value
 /// of one means the window currently has no keyboard-bearing focus route.
