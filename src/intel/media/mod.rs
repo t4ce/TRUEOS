@@ -1,4 +1,5 @@
 pub(crate) mod engine;
+pub(crate) mod guc_probe;
 pub(crate) mod h264_cmd;
 pub(crate) mod hw_pic;
 pub(crate) mod hw_vid;

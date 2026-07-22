@@ -93,7 +93,7 @@ async fn lumen_hello_task(target: MatrixTarget) {
             );
             print_matrix_target_line(
                 &target,
-                "lumen: hello path=async-module->truega-backend->bar2-row-stream completion=msi",
+                "lumen: hello path=async-module->generated-aot-op->truega-backend->bar2-row-stream completion=msi",
             );
         }
         Err(error) => {

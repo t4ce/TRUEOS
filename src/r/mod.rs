@@ -13,6 +13,7 @@ pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod keyboard_control_service;
 pub mod lfm25_ffn;
+pub mod lfm25_decode;
 pub mod lfm25_model;
 pub mod mouse_motion_service;
 pub mod net;

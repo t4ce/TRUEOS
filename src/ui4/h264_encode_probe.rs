@@ -9,6 +9,8 @@ use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use embassy_time::{Duration, Timer};
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
+const VCS0_PROBE_RETRY_MS: u64 = 50;
+const VCS0_PROBE_RETRY_LIMIT: usize = 20;
 const ROOT_RETRY_MS: u64 = 1_000;
 
 static STATE: AtomicU8 = AtomicU8::new(H264EncodeProbeState::Waiting as u8);
@@ -64,14 +66,70 @@ pub(crate) async fn ui4_h264_encode_probe_task() {
 
     Timer::after(Duration::from_millis(PROBE_START_DELAY_MS)).await;
 
+    let mut vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once();
+    let mut vcs0_probe_attempts = 1usize;
+    while vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Deferred
+        && vcs0_probe_attempts < VCS0_PROBE_RETRY_LIMIT
+    {
+        Timer::after(Duration::from_millis(VCS0_PROBE_RETRY_MS)).await;
+        vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once();
+        vcs0_probe_attempts += 1;
+    }
+    if vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Passed {
+        crate::log_info!(target: "intel/media-encode";
+            "intel/media-encode: guc-vcs0-probe accepted=1 engine=vcs0 class=1 instance_mask=0x1 submission_owner=guc serial={} forcewake={} backing={} batch={} context={} registered={} submitted={} retired={} context_destroyed={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} codec_packets=0 encode_claim=0\n",
+            vcs0_probe.serial,
+            vcs0_probe.forcewake as u8,
+            vcs0_probe.backing_ready as u8,
+            vcs0_probe.batch_ready as u8,
+            vcs0_probe.context_ready as u8,
+            vcs0_probe.registered as u8,
+            vcs0_probe.submitted as u8,
+            vcs0_probe.retired as u8,
+            vcs0_probe.context_destroyed as u8,
+            vcs0_probe.hwlrca_hi,
+            vcs0_probe.hwlrca_lo,
+            vcs0_probe.kickoff,
+            vcs0_probe.presubmit,
+            vcs0_probe.postsubmit,
+            vcs0_probe.complete,
+            vcs0_probe.poll_iters,
+            vcs0_probe.elapsed_us,
+            vcs0_probe_attempts,
+        );
+    } else {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: guc-vcs0-probe accepted=0 state={:?} failure={} forcewake={} backing={} batch={} context={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} fallback=software encode_claim=0\n",
+            vcs0_probe.state,
+            vcs0_probe.failure.name(),
+            vcs0_probe.forcewake as u8,
+            vcs0_probe.backing_ready as u8,
+            vcs0_probe.batch_ready as u8,
+            vcs0_probe.context_ready as u8,
+            vcs0_probe.registered as u8,
+            vcs0_probe.submitted as u8,
+            vcs0_probe.retired as u8,
+            vcs0_probe.context_destroyed as u8,
+            vcs0_probe.serial,
+            vcs0_probe.kickoff,
+            vcs0_probe.presubmit,
+            vcs0_probe.postsubmit,
+            vcs0_probe.complete,
+            vcs0_probe.poll_iters,
+            vcs0_probe.elapsed_us,
+            vcs0_probe_attempts,
+        );
+    }
+
     let readiness = crate::intel::media_encode_readiness();
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: hardware-readiness ready={} device_claimed={} vdbox_discovered={} guc_transport_ready={} guc_media_context_wired={} avc_encode_commands_wired={} coded_bitstream_output_wired={} current_media_transport=execlists action=software-fallback\n",
+        "intel/media-encode: hardware-readiness ready={} device_claimed={} vdbox_discovered={} guc_transport_ready={} guc_media_context_wired={} guc_media_transport_probe_passed={} avc_encode_commands_wired={} coded_bitstream_output_wired={} decode_transport=execlists probe_transport=guc-vcs0 action=software-fallback\n",
         readiness.ready as u8,
         readiness.device_claimed as u8,
         readiness.vdbox_discovered as u8,
         readiness.guc_transport_ready as u8,
         readiness.guc_media_context_wired as u8,
+        readiness.guc_media_transport_probe_passed as u8,
         readiness.avc_encode_commands_wired as u8,
         readiness.coded_bitstream_output_wired as u8,
     );

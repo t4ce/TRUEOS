@@ -21,12 +21,12 @@ module truega_q8_0_gemv (
     wire signed [20:0] dot;
     wire signed [63:0] scaled_term;
     wire scale_error;
-    reg [5:0] first_pipe;
-    reg [5:0] last_pipe;
-    reg [15:0] activation_scale_pipe [0:5];
-    reg [15:0] weight_scale_pipe [0:5];
+    reg block_active;
+    reg block_first;
+    reg block_last;
+    reg [15:0] activation_scale;
+    reg [15:0] weight_scale;
     reg signed [63:0] accumulator;
-    integer stage;
 
     truega_q8_0_dot32 dot32 (
         .clk(clk),
@@ -40,16 +40,19 @@ module truega_q8_0_gemv (
 
     truega_q8_0_scale_q30 scale_q30 (
         .dot_i(dot),
-        .activation_scale_f16_i(activation_scale_pipe[5]),
-        .weight_scale_f16_i(weight_scale_pipe[5]),
+        .activation_scale_f16_i(activation_scale),
+        .weight_scale_f16_i(weight_scale),
         .term_q30_o(scaled_term),
         .scale_error_o(scale_error)
     );
 
     always @(posedge clk) begin
         if (!reset_n) begin
-            first_pipe <= 6'b0;
-            last_pipe <= 6'b0;
+            block_active <= 1'b0;
+            block_first <= 1'b0;
+            block_last <= 1'b0;
+            activation_scale <= 16'd0;
+            weight_scale <= 16'd0;
             accumulator <= 64'sd0;
             row_valid_o <= 1'b0;
             row_q30_o <= 64'sd0;
@@ -57,36 +60,32 @@ module truega_q8_0_gemv (
             block_valid_o <= 1'b0;
             block_dot_o <= 21'sd0;
             block_term_q30_o <= 64'sd0;
-            for (stage = 0; stage < 6; stage = stage + 1) begin
-                activation_scale_pipe[stage] <= 16'd0;
-                weight_scale_pipe[stage] <= 16'd0;
-            end
         end else begin
-            first_pipe <= {first_pipe[4:0], row_first_i && valid_i};
-            last_pipe <= {last_pipe[4:0], row_last_i && valid_i};
-            activation_scale_pipe[0] <= activation_scale_f16_i;
-            weight_scale_pipe[0] <= weight_scale_f16_i;
-            for (stage = 1; stage < 6; stage = stage + 1) begin
-                activation_scale_pipe[stage] <= activation_scale_pipe[stage - 1];
-                weight_scale_pipe[stage] <= weight_scale_pipe[stage - 1];
+            if (valid_i && !block_active) begin
+                block_active <= 1'b1;
+                block_first <= row_first_i;
+                block_last <= row_last_i;
+                activation_scale <= activation_scale_f16_i;
+                weight_scale <= weight_scale_f16_i;
             end
 
             row_valid_o <= 1'b0;
             block_valid_o <= dot_valid;
             if (dot_valid) begin
+                block_active <= 1'b0;
                 block_dot_o <= dot;
                 block_term_q30_o <= scaled_term;
                 if (scale_error)
                     scale_error_o <= 1'b1;
-                if (first_pipe[5]) begin
-                    if (last_pipe[5]) begin
+                if (block_first) begin
+                    if (block_last) begin
                         row_q30_o <= scaled_term;
                         row_valid_o <= 1'b1;
                         accumulator <= 64'sd0;
                     end else begin
                         accumulator <= scaled_term;
                     end
-                end else if (last_pipe[5]) begin
+                end else if (block_last) begin
                     row_q30_o <= accumulator + scaled_term;
                     row_valid_o <= 1'b1;
                     accumulator <= 64'sd0;

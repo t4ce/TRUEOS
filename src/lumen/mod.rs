@@ -11,12 +11,119 @@ use alloc::vec::Vec;
 use core::future::Future;
 
 use ::lumen::async_module::AsyncModule;
-use ::lumen::backend::AsyncBackend;
+use ::lumen::backend::{AotInvocation, AsyncBackend, TruegaAotBackend, TruegaCustomOp};
+use sha2::{Digest, Sha256};
+use trueos_fpga_abi::{AotFirmwareCapability, AotTransportKind};
 
-use crate::r::lfm25_ffn;
+use crate::r::{fpga_offload, lfm25_ffn};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TruegaBackend;
+
+impl TruegaAotBackend for TruegaBackend {
+    type Error = lfm25_ffn::Error;
+
+    fn execute_aot<Op>(
+        &self,
+        operation: AotInvocation<Op>,
+    ) -> impl Future<Output = Result<Op::Output, Self::Error>>
+    where
+        Op: TruegaCustomOp,
+    {
+        async move {
+            match Op::DESCRIPTOR.transport {
+                AotTransportKind::InlineBar0WorkPackage => {
+                    let (function, symbol_hash) = match Op::DESCRIPTOR.firmware {
+                        AotFirmwareCapability::FunctionSlot {
+                            function,
+                            symbol_hash,
+                        } => (function, symbol_hash),
+                        _ => return Err(lfm25_ffn::Error::Tensor),
+                    };
+                    let generated = trueos_fpga_abi::builtins::FUNCTIONS
+                        .get(function.raw() as usize)
+                        .ok_or(lfm25_ffn::Error::Tensor)?;
+                    if generated.symbol_hash != symbol_hash {
+                        return Err(lfm25_ffn::Error::Tensor);
+                    }
+
+                    let mut input = [0u8; trueos_fpga_abi::INLINE_INPUT_BYTES];
+                    let input_len = Op::encode(&operation.input, &mut input)
+                        .map_err(|_| lfm25_ffn::Error::Tensor)?;
+                    let output_capacity = Op::DESCRIPTOR
+                        .outputs
+                        .iter()
+                        .try_fold(0usize, |total, output| {
+                            total.checked_add(output.encoded_bytes as usize)
+                        })
+                        .ok_or(lfm25_ffn::Error::Arithmetic)?;
+                    let completion =
+                        fpga_offload::call(function, &input[..input_len], output_capacity).await?;
+                    Op::decode(completion.output()).map_err(|_| lfm25_ffn::Error::Tensor)
+                }
+                AotTransportKind::FixedBar2RowStream => {
+                    // BAR2 currently exposes one generated composite operation. Matching
+                    // its complete AOT seal keeps this a compile-time dispatch, not a
+                    // runtime name/graph registry.
+                    let expected = trueos_fpga_abi::builtins::lfm25_ffn::AOT_DESCRIPTOR;
+                    if Op::DESCRIPTOR.contract_sha256 != expected.contract_sha256
+                        || Op::DESCRIPTOR.firmware != expected.firmware
+                    {
+                        return Err(lfm25_ffn::Error::Tensor);
+                    }
+
+                    let encoded_bytes = Op::DESCRIPTOR
+                        .inputs
+                        .iter()
+                        .try_fold(0usize, |total, input| {
+                            total.checked_add(input.encoded_bytes as usize)
+                        })
+                        .ok_or(lfm25_ffn::Error::Arithmetic)?;
+                    let mut encoded = try_zeroed_bytes(encoded_bytes)?;
+                    let used = Op::encode(&operation.input, &mut encoded)
+                        .map_err(|_| lfm25_ffn::Error::Tensor)?;
+                    if used != trueos_fpga_abi::builtins::lfm25_ffn::ENCODED_INPUT_BYTES {
+                        return Err(lfm25_ffn::Error::Tensor);
+                    }
+                    let layer = u16::from_le_bytes(
+                        encoded[..2]
+                            .try_into()
+                            .map_err(|_| lfm25_ffn::Error::Tensor)?,
+                    );
+                    let mut blocks = Vec::new();
+                    blocks
+                        .try_reserve_exact(
+                            lfm25_ffn::FFN_INPUT_ELEMENTS / lfm25_ffn::Q8_0_BLOCK_VALUES,
+                        )
+                        .map_err(|_| lfm25_ffn::Error::BufferUnavailable)?;
+                    for block in encoded[2..used].chunks_exact(lfm25_ffn::Q8_0_BLOCK_BYTES) {
+                        blocks.push(block.try_into().map_err(|_| lfm25_ffn::Error::Tensor)?);
+                    }
+
+                    let execution = lfm25_ffn::execute_layer(layer as u8, blocks, |_| {}).await?;
+                    let mut output =
+                        try_zeroed_bytes(trueos_fpga_abi::builtins::lfm25_ffn::OUTPUT_BYTES)?;
+                    for (destination, value) in output
+                        .chunks_exact_mut(core::mem::size_of::<i64>())
+                        .zip(execution.output_q30)
+                    {
+                        destination.copy_from_slice(&value.to_le_bytes());
+                    }
+                    Op::decode(&output).map_err(|_| lfm25_ffn::Error::Tensor)
+                }
+            }
+        }
+    }
+}
+
+fn try_zeroed_bytes(bytes: usize) -> Result<Vec<u8>, lfm25_ffn::Error> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(bytes)
+        .map_err(|_| lfm25_ffn::Error::BufferUnavailable)?;
+    output.resize(bytes, 0);
+    Ok(output)
+}
 
 /// Fixed-shape native GGML Q8_0 tensor accepted by TRUEGA operations.
 ///
@@ -112,28 +219,6 @@ impl Lfm25FfnOutput {
     }
 }
 
-/// Typed backend operation for any generated LFM2.5 FFN layer.
-struct Lfm25FfnForward<Progress> {
-    layer: u8,
-    input: Q8_0<{ lfm25_ffn::FFN_INPUT_ELEMENTS }>,
-    progress: Progress,
-}
-
-impl<Progress> AsyncBackend<Lfm25FfnForward<Progress>> for TruegaBackend
-where
-    Progress: FnMut(lfm25_ffn::Progress),
-{
-    type Output = lfm25_ffn::ForwardExecution;
-    type Error = lfm25_ffn::Error;
-
-    fn execute(
-        &self,
-        operation: Lfm25FfnForward<Progress>,
-    ) -> impl Future<Output = Result<Self::Output, Self::Error>> {
-        lfm25_ffn::execute_layer(operation.layer, operation.input.into_blocks(), operation.progress)
-    }
-}
-
 /// Diagnostic operation retaining the exhaustive sealed layer-0 checks.
 struct VerifiedLfm25Ffn0<Progress> {
     progress: Progress,
@@ -198,18 +283,45 @@ impl AsyncModule for Lfm25Ffn {
         let backend = self.backend;
         let layer = self.layer;
         async move {
-            let execution = ::lumen::backend::execute(
+            let mut activation = [0u8; trueos_fpga_abi::builtins::lfm25_ffn::ACTIVATION_BYTES];
+            for (destination, block) in activation
+                .chunks_exact_mut(lfm25_ffn::Q8_0_BLOCK_BYTES)
+                .zip(input.into_blocks())
+            {
+                destination.copy_from_slice(&block);
+            }
+
+            let before = fpga_offload::stats();
+            let completion_before = fpga_offload::lfm25_stream_completion_count()?;
+            type FfnOp = trueos_fpga_abi::builtins::lfm25_ffn::AotOp;
+            let output = ::lumen::backend::execute(
                 &backend,
-                Lfm25FfnForward {
-                    layer,
-                    input,
-                    progress: |_| {},
-                },
+                AotInvocation::<FfnOp>::new(trueos_fpga_abi::builtins::lfm25_ffn::Input {
+                    layer: u16::from(layer),
+                    activation,
+                }),
             )
             .await?;
+            let completion_after = fpga_offload::lfm25_stream_completion_count()?;
+            let after = fpga_offload::stats();
+            let output_q30 = Vec::from(output);
+            let mut hasher = Sha256::new();
+            for value in &output_q30 {
+                hasher.update(value.to_le_bytes());
+            }
+            let report = lfm25_ffn::ForwardReport {
+                layer,
+                output_sha256: hasher.finalize().into(),
+                fpga_calls: completion_after.wrapping_sub(completion_before) as u64,
+                interrupt_delta: after.interrupts.saturating_sub(before.interrupts),
+                timeout_recovery_delta: after
+                    .timeout_recoveries
+                    .saturating_sub(before.timeout_recoveries),
+                streamed: true,
+            };
             Ok(Lfm25FfnOutput {
-                tensor: Q30Tensor::new(execution.output_q30)?,
-                report: execution.report,
+                tensor: Q30Tensor::new(output_q30)?,
+                report,
             })
         }
     }
@@ -240,7 +352,7 @@ pub(crate) async fn hello() -> Result<Lfm25FfnOutput, lfm25_ffn::Error> {
 pub(crate) fn log_backend_once() {
     crate::log_info!(
         target: "boot";
-        "lumen: backend={} execution=async-function transport=inline-bar completion=msi-worker-callback model_io=trueosfs\n",
+        "lumen: backend={} execution=generated-aot-custom-op transport=bar0+bar2 completion=msi-worker-callback model_io=trueosfs\n",
         ::lumen::backend::default_backend_name(),
     );
 }

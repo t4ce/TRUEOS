@@ -5,7 +5,7 @@
 // is sign-extended by explicit bit replication, then added as raw two's-
 // complement bits in a 21-bit accumulator.  Lane selection, multiplication,
 // and accumulation occupy separate registered stages.  The enclosing serialized
-// block slot keeps both quant inputs stable until valid_o.  One accepted block
+// block slot latches both quant inputs on acceptance.  One accepted block
 // completes after 33 work cycles; valid_i is ignored while a block is active.
 module truega_q8_0_dot32 (
     input  wire                 clk,
@@ -29,6 +29,8 @@ module truega_q8_0_dot32 (
     reg [15:0] product_reg;
     reg [20:0] accumulator;
     reg [20:0] dot_reg;
+    reg [255:0] activation_quants_reg;
+    reg [255:0] weight_quants_reg;
 
     wire [7:0] activation_lane_bits;
     wire [7:0] weight_lane_bits;
@@ -39,8 +41,8 @@ module truega_q8_0_dot32 (
     wire [20:0] registered_product_extended;
     wire [20:0] accumulator_next;
 
-    assign activation_lane_bits = activation_quants_i[lane_index*8 +: 8];
-    assign weight_lane_bits = weight_quants_i[lane_index*8 +: 8];
+    assign activation_lane_bits = activation_quants_reg[lane_index*8 +: 8];
+    assign weight_lane_bits = weight_quants_reg[lane_index*8 +: 8];
     assign activation_lane = activation_lane_reg;
     assign weight_lane = weight_lane_reg;
     assign lane_product = activation_lane * weight_lane;
@@ -61,6 +63,8 @@ module truega_q8_0_dot32 (
             product_reg <= 16'd0;
             accumulator <= 21'd0;
             dot_reg <= 21'd0;
+            activation_quants_reg <= 256'd0;
+            weight_quants_reg <= 256'd0;
         end else begin
             valid_reg <= 1'b0;
 
@@ -69,6 +73,8 @@ module truega_q8_0_dot32 (
                     if (valid_i) begin
                         activation_lane_reg <= activation_quants_i[7:0];
                         weight_lane_reg <= weight_quants_i[7:0];
+                        activation_quants_reg <= activation_quants_i;
+                        weight_quants_reg <= weight_quants_i;
                         lane_index <= 6'd1;
                         product_reg <= 16'd0;
                         accumulator <= 21'd0;

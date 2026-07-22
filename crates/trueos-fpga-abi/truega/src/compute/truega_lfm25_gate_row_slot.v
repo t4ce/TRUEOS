@@ -33,6 +33,7 @@ module truega_lfm25_gate_row_slot #(
     localparam STATE_DRAIN = 2'd2;
 
     reg [1:0] state;
+    reg block_in_flight;
     wire start_accept = DIAGNOSTIC_ENABLE && start_i && (state == STATE_IDLE);
     wire feed_accept = feeder_valid_i && feeder_ready_o;
     wire gemv_reset_n = reset_n && (state != STATE_IDLE);
@@ -43,7 +44,13 @@ module truega_lfm25_gate_row_slot #(
     wire signed [63:0] gemv_row_q30;
     wire gemv_scale_error;
 
-    assign feeder_ready_o = DIAGNOSTIC_ENABLE && (state == STATE_FEED);
+    // The dot product is intentionally serialized: a new native Q8_0 block
+    // may be accepted only after the previous block has retired.  Keep that
+    // backpressure at this feeder boundary so an upstream BAR/ROM reader
+    // cannot advance and silently drop blocks while the GEMV is busy.
+    assign feeder_ready_o = DIAGNOSTIC_ENABLE
+                          && (state == STATE_FEED)
+                          && !block_in_flight;
     assign feeder_block_index_o = blocks_accepted_o[4:0];
 
     truega_q8_0_gemv gemv (
@@ -72,6 +79,7 @@ module truega_lfm25_gate_row_slot #(
             error_o <= 1'b0;
             blocks_accepted_o <= 6'd0;
             row_q30_o <= 64'sd0;
+            block_in_flight <= 1'b0;
         end else begin
             done_o <= 1'b0;
 
@@ -84,11 +92,15 @@ module truega_lfm25_gate_row_slot #(
                         error_o <= 1'b0;
                         blocks_accepted_o <= 6'd0;
                         row_q30_o <= 64'sd0;
+                        block_in_flight <= 1'b0;
                     end
                 end
 
                 STATE_FEED: begin
+                    if (gemv_block_valid)
+                        block_in_flight <= 1'b0;
                     if (feed_accept) begin
+                        block_in_flight <= 1'b1;
                         blocks_accepted_o <= blocks_accepted_o + 6'd1;
                         if (blocks_accepted_o == 6'd31)
                             state <= STATE_DRAIN;
@@ -102,6 +114,7 @@ module truega_lfm25_gate_row_slot #(
                         done_o <= 1'b1;
                         error_o <= gemv_scale_error;
                         row_q30_o <= gemv_row_q30;
+                        block_in_flight <= 1'b0;
                     end
                 end
 
@@ -110,6 +123,7 @@ module truega_lfm25_gate_row_slot #(
                     busy_o <= 1'b0;
                     done_o <= 1'b1;
                     error_o <= 1'b1;
+                    block_in_flight <= 1'b0;
                 end
             endcase
         end

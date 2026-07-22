@@ -392,6 +392,7 @@ pub use generated as builtins;
 
 /// Fixed LFM2.5 model-image layout.  This is data metadata, not a runtime compiler.
 pub mod lfm25;
+pub mod lfm25_decode;
 
 const _: [(); 256] = [(); size_of::<WorkPackage>()];
 const _: [(); 64] = [(); align_of::<WorkPackage>()];

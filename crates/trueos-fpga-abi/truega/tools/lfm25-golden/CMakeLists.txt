@@ -26,3 +26,10 @@ target_include_directories(truega-lfm25-trace PRIVATE
 )
 target_link_libraries(truega-lfm25-trace PRIVATE llama)
 
+add_executable(truega-lfm25-decode-trace llama_decode_trace.cpp)
+target_compile_features(truega-lfm25-decode-trace PRIVATE cxx_std_17)
+target_include_directories(truega-lfm25-decode-trace PRIVATE
+    "${LLAMA_SOURCE_DIR}/include"
+    "${LLAMA_SOURCE_DIR}/ggml/include"
+)
+target_link_libraries(truega-lfm25-decode-trace PRIVATE llama)

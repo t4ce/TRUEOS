@@ -151,6 +151,13 @@ module truega_q8_0_gemv_tb;
             weight_scale_f16_i = vector_weight_scale[drive_index];
             activation_quants_i = vector_activation_quants[drive_index];
             weight_quants_i = vector_weight_quants[drive_index];
+            // dot32 is intentionally serialized and ignores valid_i while a
+            // block is active. Present one pulse, then wait for its exact
+            // retirement before advancing the fixture index.
+            @(negedge clk);
+            valid_i = 1'b0;
+            while (!block_valid_o)
+                @(negedge clk);
         end
         @(negedge clk);
         valid_i = 1'b0;

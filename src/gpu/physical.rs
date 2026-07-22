@@ -8,6 +8,7 @@ use spin::Mutex;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum EngineClass {
     RenderCompute,
+    VideoDecode,
     Copy,
 }
 

@@ -143,11 +143,58 @@ static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_OUTPUT_SURFACE_PROBES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
+static MEDIA_VCS0_LANE_BUSY: AtomicBool = AtomicBool::new(false);
+static MEDIA_VCS0_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // Unlike the original fixed low-address page table, this root can accept a
 // leased UI4 SFC target before submission and remove it after retirement.
 // The root physical address remains stable for the lifetime of the VDBOX
 // context, so adding a target never requires replacing the context image.
 static MEDIA_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum MediaVcs0LaneAcquireError {
+    Busy,
+    Quarantined,
+}
+
+/// Exclusive ownership of VCS0 across the legacy decode path and the GuC
+/// transport probe. A timed-out GuC submission consumes this guard with
+/// `quarantine`, deliberately preventing a different transport from touching
+/// an engine whose context may still be live.
+pub(super) struct MediaVcs0LaneGuard {
+    release_on_drop: bool,
+}
+
+impl MediaVcs0LaneGuard {
+    pub(super) fn quarantine(mut self) {
+        MEDIA_VCS0_LANE_QUARANTINED.store(true, Ordering::Release);
+        self.release_on_drop = false;
+    }
+}
+
+impl Drop for MediaVcs0LaneGuard {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            MEDIA_VCS0_LANE_BUSY.store(false, Ordering::Release);
+        }
+    }
+}
+
+pub(super) fn try_acquire_vcs0_lane() -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
+    if MEDIA_VCS0_LANE_QUARANTINED.load(Ordering::Acquire) {
+        return Err(MediaVcs0LaneAcquireError::Quarantined);
+    }
+    MEDIA_VCS0_LANE_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| MediaVcs0LaneAcquireError::Busy)?;
+    if MEDIA_VCS0_LANE_QUARANTINED.load(Ordering::Acquire) {
+        MEDIA_VCS0_LANE_BUSY.store(false, Ordering::Release);
+        return Err(MediaVcs0LaneAcquireError::Quarantined);
+    }
+    Ok(MediaVcs0LaneGuard {
+        release_on_drop: true,
+    })
+}
 
 pub(crate) fn set_output_surface_probes_enabled(enabled: bool) -> bool {
     MEDIA_OUTPUT_SURFACE_PROBES_ENABLED.swap(enabled, Ordering::AcqRel)
@@ -376,6 +423,7 @@ pub(crate) struct MediaEncodeReadiness {
     pub vdbox_discovered: bool,
     pub guc_transport_ready: bool,
     pub guc_media_context_wired: bool,
+    pub guc_media_transport_probe_passed: bool,
     pub avc_encode_commands_wired: bool,
     pub coded_bitstream_output_wired: bool,
     pub ready: bool,
@@ -391,18 +439,20 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
         .any(|engine| engine.capabilities.decode);
     let guc_transport_ready = crate::intel::guc_submission_ready();
 
-    // The generic GuC scheduler currently exposes RCS0 and BCS0 only, while
-    // this media backend's preferred transport remains Execlists. Likewise,
-    // h264_cmd is a decode recipe and no VDEnc/MFX encode stream or coded-data
-    // writeback buffer has landed. Keep these explicit so topology discovery
-    // can never be mistaken for a usable encoder.
-    let guc_media_context_wired = false;
+    // VCS0 now has a dedicated GuC class, isolated LRC, and retirement-marker
+    // probe. Actual decoding still prefers Execlists until that production
+    // path is migrated, and encoder readiness requires the probe to have
+    // passed on this boot. h264_cmd remains a decode recipe: no VDEnc/MFX
+    // encode stream or coded-data writeback has landed yet.
+    let guc_media_context_wired = true;
+    let guc_media_transport_probe_passed = super::guc_probe::passed();
     let avc_encode_commands_wired = false;
     let coded_bitstream_output_wired = false;
     let ready = device_claimed
         && vdbox_discovered
         && guc_transport_ready
         && guc_media_context_wired
+        && guc_media_transport_probe_passed
         && avc_encode_commands_wired
         && coded_bitstream_output_wired;
     MediaEncodeReadiness {
@@ -410,6 +460,7 @@ pub(crate) fn encode_readiness() -> MediaEncodeReadiness {
         vdbox_discovered,
         guc_transport_ready,
         guc_media_context_wired,
+        guc_media_transport_probe_passed,
         avc_encode_commands_wired,
         coded_bitstream_output_wired,
         ready,
@@ -2315,6 +2366,19 @@ pub(super) fn build_media_execlist_context_descriptor(
     (lo, hi)
 }
 
+/// GuC receives the stable LRCA descriptor. Unlike a direct execlist port
+/// descriptor, its high dword must not carry TRUEOS's software context id and
+/// the GuC registration ABI owns scheduling/restore policy.
+pub(super) fn build_media_guc_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
+    let base = (context_gpu_addr as u32) & 0xFFFF_F000;
+    (
+        base | CTX_DESC_VALID
+            | CTX_DESC_PRIVILEGE
+            | (INTEL_LEGACY_64B_CONTEXT << CTX_DESC_ADDRESSING_MODE_SHIFT),
+        (context_gpu_addr >> 32) as u32,
+    )
+}
+
 pub(super) fn media_ctx_control_value(inhibit_restore: bool) -> u32 {
     let mut ctl =
         masked_bits_update(CTX_CTRL_INHIBIT_SYN_CTX_SWITCH, CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT);
@@ -2558,6 +2622,13 @@ pub(super) fn wake_media_engine_forcewake(
         ack_value,
         awake: (ack_value & FORCEWAKE_KERNEL) != 0,
     }
+}
+
+pub(super) fn wake_media_engine_for_guc(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+) -> bool {
+    wake_media_engine_forcewake(dev, engine).awake
 }
 
 const GDRST: usize = 0x0000_941C;

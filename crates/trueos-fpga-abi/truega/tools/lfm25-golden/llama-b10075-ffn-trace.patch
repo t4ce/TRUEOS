@@ -1,8 +1,9 @@
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index ec9fdcf8..8c5fa56f 100644
+index c8ecb0a..e5743a0 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -1738,8 +1738,5 @@ ggml_tensor * llm_graph_context::build_ffn(
+@@ -1734,9 +1734,6 @@ ggml_tensor * llm_graph_context::build_ffn(
+             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
              ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
          }
 -    }
@@ -12,10 +13,17 @@ index ec9fdcf8..8c5fa56f 100644
      }
  
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index fef9fd83..58778f03 100644
+index 70e837d..f4f4d80 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -263,7 +263,7 @@ struct llm_build_lfm2 : public llm_graph_context {
+@@ -257,13 +257,14 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         }
+ 
+         cur = ggml_add(ctx0, prev_cur, cur);
++        cb(cur, "model.layers.{}.operator_residual", il);
+ 
+         auto * ffn_norm_out = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+         cb(ffn_norm_out, "model.layers.{}.ffn_norm", il);
  
          ggml_tensor * ffn_out =
              is_moe_layer ? build_moe_feed_forward(ffn_norm_out, il) : build_dense_feed_forward(ffn_norm_out, il);

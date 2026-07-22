@@ -78,3 +78,24 @@ The block artifact is little-endian:
 The checked-in call has dot `-14901`, Q30 term `-9429888`, payload SHA-256
 `2faaf8b87bc3d121642d60b3c95019f61fc88b1bc17c7b264933d06fa3e8f1d1`, and complete-file
 SHA-256 `d05cd8cd89f23dcdae758c7b8fe2a27a55d6ad8de60a33ade60c089da558eed2`.
+
+## Sealed token-1 whole-model decode trace
+
+`artifacts/lfm25_token1_decode.golden.bin` is the deterministic CPU reference for the
+fixed AOT decode scheduler. It is captured from the pinned llama.cpp commit and exact
+trace-only patch with one input token (`1`), one sequence, one thread, and no GPU/op
+offload. Reproduce it with:
+
+```sh
+./tools/capture_lfm25_decode_golden.sh
+```
+
+The 670,936-byte `TGALDEC1` artifact contains 99 F32 checkpoints in scheduler order:
+the embedding; operator RMSNorm, mixer output, operator residual, FFN RMSNorm, FFN
+output and final residual for each of 16 layers; final RMSNorm; and all 65,536 tied-head
+logits. The header pins llama.cpp, GGUF, native-image, and model-contract hashes. The
+resulting tied-head argmax is token `1`. Its complete-file SHA-256 is
+`0f66cf36914d52dc56223f7b852e13896e5896e0e22a5e220d3ff3037534ce9a`.
+
+This artifact is validation input only. It is not loaded by TRUEOS and does not add a
+runtime graph, compiler, CPU fallback, or tokenizer to the FPGA path.

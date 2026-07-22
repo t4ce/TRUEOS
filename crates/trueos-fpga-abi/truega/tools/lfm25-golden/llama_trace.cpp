@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -51,6 +52,14 @@ bool capture_callback(ggml_tensor * tensor, bool ask, void * opaque) {
     const int index = target_index(tensor->name);
 
     if (ask) {
+        if (std::getenv("TRUEGA_TRACE_TENSOR_NAMES") != nullptr) {
+            std::fprintf(stderr, "truega-trace-tensor name=%s type=%s ne=[%lld,%lld,%lld,%lld]\n",
+                         tensor->name, ggml_type_name(tensor->type),
+                         static_cast<long long>(tensor->ne[0]),
+                         static_cast<long long>(tensor->ne[1]),
+                         static_cast<long long>(tensor->ne[2]),
+                         static_cast<long long>(tensor->ne[3]));
+        }
         return index >= 0;
     }
     if (index < 0 || !state.error.empty()) {

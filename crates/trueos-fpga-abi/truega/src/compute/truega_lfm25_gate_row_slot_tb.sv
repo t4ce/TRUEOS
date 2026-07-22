@@ -185,7 +185,7 @@ module truega_lfm25_gate_row_slot_tb;
             end
 
             wait_cycles = 0;
-            while (!done_o && wait_cycles < 100) begin
+            while (!done_o && wait_cycles < 1500) begin
                 @(negedge clk);
                 wait_cycles = wait_cycles + 1;
             end
