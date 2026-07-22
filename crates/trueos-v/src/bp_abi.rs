@@ -637,6 +637,49 @@ unsafe extern "C" {
         json_len: usize,
     ) -> i32;
     pub fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32;
+    pub fn trueos_cabi_keyboard_control_request(
+        label_ptr: *const u8,
+        label_len: usize,
+        out_keyboard: *mut KeyboardControlDeviceInfo,
+    ) -> i32;
+    pub fn trueos_cabi_keyboard_control_release(handle: u64) -> i32;
+    pub fn trueos_cabi_keyboard_control_submit(
+        handle: u64,
+        command: *const KeyboardControlCommand,
+    ) -> i32;
+    pub fn trueos_cabi_keyboard_control_submit_text(
+        handle: u64,
+        text_ptr: *const u8,
+        text_len: usize,
+        interval_ms: u32,
+        flags: u32,
+    ) -> i32;
+    pub fn trueos_cabi_keyboard_control_submit_json(
+        handle: u64,
+        json_ptr: *const u8,
+        json_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_keyboard_control_idle(handle: u64) -> i32;
+    pub fn trueos_cabi_gamepad_control_request(
+        label_ptr: *const u8,
+        label_len: usize,
+        out_gamepad: *mut GamepadControlDeviceInfo,
+    ) -> i32;
+    pub fn trueos_cabi_gamepad_control_release(handle: u64) -> i32;
+    pub fn trueos_cabi_gamepad_control_submit(
+        handle: u64,
+        command: *const GamepadControlCommand,
+    ) -> i32;
+    pub fn trueos_cabi_gamepad_control_submit_json(
+        handle: u64,
+        json_ptr: *const u8,
+        json_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_gamepad_control_idle(handle: u64) -> i32;
+    pub fn trueos_cabi_gamepad_control_snapshot(
+        handle: u64,
+        out_snapshot: *mut GamepadControlSnapshot,
+    ) -> i32;
     pub fn trueos_cabi_hid_keyboard_read(
         controller_id: u32,
         slot_id: u32,
@@ -791,6 +834,68 @@ pub struct MouseMotionCommand {
     pub buttons_clear: u32,
     pub wheel: i16,
     pub reserved: u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct KeyboardControlDeviceInfo {
+    pub handle: u64,
+    pub slot_id: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct KeyboardControlCommand {
+    pub opcode: u8,
+    pub flags: u8,
+    pub modifiers: u8,
+    pub reserved0: u8,
+    pub duration_ms: u32,
+    pub codepoint: u32,
+    pub key_code: u16,
+    pub reserved1: u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct GamepadControlDeviceInfo {
+    pub handle: u64,
+    pub slot_id: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct GamepadControlCommand {
+    pub opcode: u8,
+    pub easing: u8,
+    pub flags: u8,
+    pub reserved0: u8,
+    pub duration_ms: u32,
+    pub buttons_set: u32,
+    pub buttons_clear: u32,
+    pub left_x: i16,
+    pub left_y: i16,
+    pub right_x: i16,
+    pub right_y: i16,
+    pub left_trigger: u16,
+    pub right_trigger: u16,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct GamepadControlSnapshot {
+    pub slot_id: u32,
+    pub sequence: u32,
+    pub buttons_down: u32,
+    pub reserved0: u32,
+    pub left_x: i16,
+    pub left_y: i16,
+    pub right_x: i16,
+    pub right_y: i16,
+    pub left_trigger: u16,
+    pub right_trigger: u16,
 }
 
 #[repr(C)]

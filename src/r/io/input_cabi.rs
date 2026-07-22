@@ -1,5 +1,14 @@
 extern crate alloc;
 
+use crate::r::gamepad_control_service::{
+    GamepadControlPrincipal, gamepad_is_idle, gamepad_snapshot, release_gamepad, request_gamepad,
+    submit_command as submit_gamepad_command, submit_json as submit_gamepad_json,
+};
+use crate::r::keyboard_control_service::{
+    KeyboardControlPrincipal, keyboard_is_idle, release_keyboard, request_keyboard,
+    submit_command as submit_keyboard_command, submit_json as submit_keyboard_json,
+    submit_text as submit_keyboard_text,
+};
 use crate::r::mouse_motion_service::{
     MouseControlPrincipal, legacy_write_cursor, release_cursor, request_cursor, submit_command,
     submit_json,
@@ -403,6 +412,18 @@ fn mouse_motion_principal() -> MouseControlPrincipal {
         .unwrap_or(MouseControlPrincipal::Kernel)
 }
 
+fn keyboard_control_principal() -> KeyboardControlPrincipal {
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(KeyboardControlPrincipal::Vm)
+        .unwrap_or(KeyboardControlPrincipal::Kernel)
+}
+
+fn gamepad_control_principal() -> GamepadControlPrincipal {
+    crate::hv::current_guest_execution_context_vm_id()
+        .map(GamepadControlPrincipal::Vm)
+        .unwrap_or(GamepadControlPrincipal::Kernel)
+}
+
 unsafe fn checked_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, i32> {
     if ptr.is_null() || len == 0 || len > 16 * 1024 {
         return Err(-1);
@@ -586,4 +607,197 @@ pub extern "C" fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32 {
     crate::r::mouse_motion_service::cursor_is_idle(mouse_motion_principal(), handle)
         .map(i32::from)
         .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_keyboard_control_request(
+    label_ptr: *const u8,
+    label_len: usize,
+    out_keyboard: *mut v::vinput::KeyboardControlDeviceInfo,
+) -> i32 {
+    if out_keyboard.is_null() {
+        return -1;
+    }
+    let label = match unsafe { checked_utf8(label_ptr, label_len) } {
+        Ok(label) => label,
+        Err(error) => return error,
+    };
+    match request_keyboard(keyboard_control_principal(), label) {
+        Ok(keyboard) => {
+            unsafe {
+                *out_keyboard = v::vinput::KeyboardControlDeviceInfo {
+                    handle: keyboard.handle,
+                    slot_id: keyboard.slot_id,
+                    reserved: 0,
+                };
+            }
+            0
+        }
+        Err(error) => error.code(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_keyboard_control_release(handle: u64) -> i32 {
+    release_keyboard(keyboard_control_principal(), handle)
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit(
+    handle: u64,
+    command: *const v::vinput::KeyboardControlCommand,
+) -> i32 {
+    if command.is_null() {
+        return -1;
+    }
+    submit_keyboard_command(keyboard_control_principal(), handle, unsafe { *command }.into())
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_text(
+    handle: u64,
+    text_ptr: *const u8,
+    text_len: usize,
+    interval_ms: u32,
+    flags: u32,
+) -> i32 {
+    let text = match unsafe { checked_utf8(text_ptr, text_len) } {
+        Ok(text) => text,
+        Err(error) => return error,
+    };
+    submit_keyboard_text(
+        keyboard_control_principal(),
+        handle,
+        text,
+        interval_ms,
+        flags & 1 != 0,
+    )
+    .map(|count| count.min(i32::MAX as usize) as i32)
+    .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_keyboard_control_submit_json(
+    handle: u64,
+    json_ptr: *const u8,
+    json_len: usize,
+) -> i32 {
+    if json_ptr.is_null() || json_len == 0 || json_len > 16 * 1024 {
+        return -1;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    submit_keyboard_json(keyboard_control_principal(), handle, bytes)
+        .map(|count| count.min(i32::MAX as usize) as i32)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_keyboard_control_idle(handle: u64) -> i32 {
+    keyboard_is_idle(keyboard_control_principal(), handle)
+        .map(i32::from)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gamepad_control_request(
+    label_ptr: *const u8,
+    label_len: usize,
+    out_gamepad: *mut v::vinput::GamepadControlDeviceInfo,
+) -> i32 {
+    if out_gamepad.is_null() {
+        return -1;
+    }
+    let label = match unsafe { checked_utf8(label_ptr, label_len) } {
+        Ok(label) => label,
+        Err(error) => return error,
+    };
+    match request_gamepad(gamepad_control_principal(), label) {
+        Ok(gamepad) => {
+            unsafe {
+                *out_gamepad = v::vinput::GamepadControlDeviceInfo {
+                    handle: gamepad.handle,
+                    slot_id: gamepad.slot_id,
+                    reserved: 0,
+                };
+            }
+            0
+        }
+        Err(error) => error.code(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gamepad_control_release(handle: u64) -> i32 {
+    release_gamepad(gamepad_control_principal(), handle)
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gamepad_control_submit(
+    handle: u64,
+    command: *const v::vinput::GamepadControlCommand,
+) -> i32 {
+    if command.is_null() {
+        return -1;
+    }
+    submit_gamepad_command(gamepad_control_principal(), handle, unsafe { *command }.into())
+        .map(|()| 0)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gamepad_control_submit_json(
+    handle: u64,
+    json_ptr: *const u8,
+    json_len: usize,
+) -> i32 {
+    if json_ptr.is_null() || json_len == 0 || json_len > 16 * 1024 {
+        return -1;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(json_ptr, json_len) };
+    submit_gamepad_json(gamepad_control_principal(), handle, bytes)
+        .map(|count| count.min(i32::MAX as usize) as i32)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_gamepad_control_idle(handle: u64) -> i32 {
+    gamepad_is_idle(gamepad_control_principal(), handle)
+        .map(i32::from)
+        .unwrap_or_else(|error| error.code())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_gamepad_control_snapshot(
+    handle: u64,
+    out_snapshot: *mut v::vinput::GamepadControlSnapshot,
+) -> i32 {
+    if out_snapshot.is_null() {
+        return -1;
+    }
+    match gamepad_snapshot(gamepad_control_principal(), handle) {
+        Ok(snapshot) => {
+            unsafe {
+                *out_snapshot = v::vinput::GamepadControlSnapshot {
+                    slot_id: snapshot.slot_id,
+                    sequence: snapshot.sequence,
+                    buttons_down: snapshot.buttons_down,
+                    reserved0: snapshot.reserved0,
+                    left_x: snapshot.left_x,
+                    left_y: snapshot.left_y,
+                    right_x: snapshot.right_x,
+                    right_y: snapshot.right_y,
+                    left_trigger: snapshot.left_trigger,
+                    right_trigger: snapshot.right_trigger,
+                };
+            }
+            0
+        }
+        Err(error) => error.code(),
+    }
 }

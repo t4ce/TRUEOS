@@ -154,6 +154,11 @@ impl Tga {
         unsafe { write_volatile(reg as *mut u32, value) };
     }
 
+    #[inline(always)]
+    fn write_reg64(reg: usize, value: u64) {
+        unsafe { write_volatile(reg as *mut u64, value) };
+    }
+
     fn protocol_magic(&self) -> u32 {
         Self::read_reg(self.magic_reg)
     }
@@ -658,15 +663,18 @@ pub(crate) fn lfm25_stream_write_blocks(
         let slot = stream_base
             + buffer_offset
             + block_index * trueos_fpga_abi::BAR2_LFM25_STREAM_BLOCK_STRIDE;
-        for word_index in 0..9 {
-            let byte_index = word_index * 4;
-            let mut bytes = [0u8; 4];
-            let available = block.len().saturating_sub(byte_index).min(4);
+        for qword_index in 0..4 {
+            let byte_index = qword_index * 8;
+            let mut bytes = [0u8; 8];
+            let available = block.len().saturating_sub(byte_index).min(8);
             if available != 0 {
                 bytes[..available].copy_from_slice(&block[byte_index..byte_index + available]);
             }
-            Tga::write_reg(slot + word_index * 4, u32::from_le_bytes(bytes));
+            Tga::write_reg64(slot + qword_index * 8, u64::from_le_bytes(bytes));
         }
+        let mut tail = [0u8; 4];
+        tail[..2].copy_from_slice(&block[32..34]);
+        Tga::write_reg(slot + 32, u32::from_le_bytes(tail));
     }
     fence(Ordering::Release);
     Ok(())
@@ -707,15 +715,18 @@ pub(crate) fn lfm25_stream_write_block_bytes(
         let slot = stream_base
             + buffer_offset
             + block_index * trueos_fpga_abi::BAR2_LFM25_STREAM_BLOCK_STRIDE;
-        for word_index in 0..9 {
-            let byte_index = word_index * 4;
-            let mut word = [0u8; 4];
-            let available = block.len().saturating_sub(byte_index).min(4);
+        for qword_index in 0..4 {
+            let byte_index = qword_index * 8;
+            let mut word = [0u8; 8];
+            let available = block.len().saturating_sub(byte_index).min(8);
             if available != 0 {
                 word[..available].copy_from_slice(&block[byte_index..byte_index + available]);
             }
-            Tga::write_reg(slot + word_index * 4, u32::from_le_bytes(word));
+            Tga::write_reg64(slot + qword_index * 8, u64::from_le_bytes(word));
         }
+        let mut tail = [0u8; 4];
+        tail[..2].copy_from_slice(&block[32..34]);
+        Tga::write_reg(slot + 32, u32::from_le_bytes(tail));
     }
     fence(Ordering::Release);
     Ok(())

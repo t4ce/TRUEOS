@@ -72,6 +72,8 @@ define_started_flags!(
     GPU_COMPLETION_REAPER_STARTED,
     TRUEOS_SPIRIT_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
+    KEYBOARD_CONTROL_SERVICE_STARTED,
+    GAMEPAD_CONTROL_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
     UI4_FONT_STAMP_SERVICE_STARTED,
     UI4_SLOT4_SERVICE_STARTED,
@@ -538,6 +540,18 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
         crate::r::mouse_motion_service::mouse_motion_service_task()
+    })
+}
+
+fn spawn_keyboard_control_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+        crate::r::keyboard_control_service::keyboard_control_service_task()
+    })
+}
+
+fn spawn_gamepad_control_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
+        crate::r::gamepad_control_service::gamepad_control_service_task()
     })
 }
 
@@ -1511,6 +1525,20 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ap1_ui_core_ready_gate,
         &MOUSE_MOTION_SERVICE_STARTED,
         spawn_mouse_motion_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "keyboard-control-service",
+        0,
+        ap1_ui_core_ready_gate,
+        &KEYBOARD_CONTROL_SERVICE_STARTED,
+        spawn_keyboard_control_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "gamepad-control-service",
+        0,
+        ap1_ui_core_ready_gate,
+        &GAMEPAD_CONTROL_SERVICE_STARTED,
+        spawn_gamepad_control_service_task,
     ),
     TaskSpec::enabled_gated(
         "ui4-input-service",

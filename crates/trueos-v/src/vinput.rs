@@ -5,10 +5,11 @@ use alloc::vec::Vec;
 
 use crate::vcabi;
 pub use crate::vcabi::{
-    MouseMotionCommand, MouseMotionCursorInfo, TrueosHidCursorEvent, TrueosHidHutCombo,
-    TrueosHidHutKeyboardState, TrueosHidHutMouseState, TrueosHidHutTabletState,
-    TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample, TrueosMouseState,
-    TrueosTabletEvent,
+    GamepadControlCommand, GamepadControlDeviceInfo, GamepadControlSnapshot,
+    KeyboardControlCommand, KeyboardControlDeviceInfo, MouseMotionCommand, MouseMotionCursorInfo,
+    TrueosHidCursorEvent, TrueosHidHutCombo, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
+    TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
+    TrueosMouseState, TrueosTabletEvent,
 };
 
 pub const MOUSE_MOTION_OPCODE_TELEPORT: u8 = 1;
@@ -22,6 +23,17 @@ pub const MOUSE_MOTION_EASING_LINEAR: u8 = 0;
 pub const MOUSE_MOTION_EASING_FAST_LINEAR: u8 = 1;
 pub const MOUSE_MOTION_EASING_NATURAL: u8 = 2;
 pub const MOUSE_MOTION_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
+pub const KEYBOARD_CONTROL_OPCODE_STROKE: u8 = 1;
+pub const KEYBOARD_CONTROL_OPCODE_DOWN: u8 = 2;
+pub const KEYBOARD_CONTROL_OPCODE_UP: u8 = 3;
+pub const KEYBOARD_CONTROL_OPCODE_WAIT: u8 = 4;
+pub const KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
+pub const GAMEPAD_CONTROL_OPCODE_SET: u8 = 1;
+pub const GAMEPAD_CONTROL_OPCODE_TWEEN: u8 = 2;
+pub const GAMEPAD_CONTROL_OPCODE_WAIT: u8 = 3;
+pub const GAMEPAD_CONTROL_EASING_LINEAR: u8 = 0;
+pub const GAMEPAD_CONTROL_EASING_NATURAL: u8 = 1;
+pub const GAMEPAD_CONTROL_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
 
 /// Capability-backed virtual cursor. Motion is accepted and clocked by the
 /// kernel mouse-motion service; this object cannot inject a HID event directly.
@@ -111,6 +123,212 @@ impl VCursor {
 }
 
 impl Drop for VCursor {
+    fn drop(&mut self) {
+        let _ = self.close_inner();
+    }
+}
+
+/// Capability-backed virtual keyboard. Key programs are clocked by the kernel
+/// and appear as one coherent AI keyboard in HUT and the keyboard event ring.
+#[derive(Debug)]
+pub struct VKeyboard {
+    info: KeyboardControlDeviceInfo,
+    open: bool,
+}
+
+impl VKeyboard {
+    pub fn request(label: &str) -> Result<Self, i32> {
+        let mut info = KeyboardControlDeviceInfo::default();
+        let rc = unsafe {
+            vcabi::trueos_cabi_keyboard_control_request(label.as_ptr(), label.len(), &mut info)
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        Ok(Self { info, open: true })
+    }
+
+    pub const fn handle(&self) -> u64 {
+        self.info.handle
+    }
+
+    pub const fn slot_id(&self) -> u32 {
+        self.info.slot_id
+    }
+
+    pub fn submit(&self, command: KeyboardControlCommand) -> Result<(), i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        let rc = unsafe { vcabi::trueos_cabi_keyboard_control_submit(self.info.handle, &command) };
+        if rc == 0 { Ok(()) } else { Err(rc) }
+    }
+
+    pub fn type_text(
+        &self,
+        text: &str,
+        interval_ms: u32,
+        clear_queue: bool,
+    ) -> Result<usize, i32> {
+        if !self.open || text.is_empty() {
+            return Err(-1);
+        }
+        let rc = unsafe {
+            vcabi::trueos_cabi_keyboard_control_submit_text(
+                self.info.handle,
+                text.as_ptr(),
+                text.len(),
+                interval_ms,
+                u32::from(clear_queue),
+            )
+        };
+        if rc < 0 { Err(rc) } else { Ok(rc as usize) }
+    }
+
+    pub fn submit_json(&self, json: &str) -> Result<usize, i32> {
+        if !self.open || json.is_empty() {
+            return Err(-1);
+        }
+        let rc = unsafe {
+            vcabi::trueos_cabi_keyboard_control_submit_json(
+                self.info.handle,
+                json.as_ptr(),
+                json.len(),
+            )
+        };
+        if rc < 0 { Err(rc) } else { Ok(rc as usize) }
+    }
+
+    pub fn idle(&self) -> Result<bool, i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        match unsafe { vcabi::trueos_cabi_keyboard_control_idle(self.info.handle) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            rc => Err(rc),
+        }
+    }
+
+    pub fn close(mut self) -> Result<(), i32> {
+        let result = self.close_inner();
+        self.open = false;
+        result
+    }
+
+    fn close_inner(&mut self) -> Result<(), i32> {
+        if !self.open {
+            return Ok(());
+        }
+        let rc = unsafe { vcabi::trueos_cabi_keyboard_control_release(self.info.handle) };
+        if rc == 0 {
+            self.open = false;
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+}
+
+impl Drop for VKeyboard {
+    fn drop(&mut self) {
+        let _ = self.close_inner();
+    }
+}
+
+/// Capability-backed virtual gamepad. Its mediated state is ready for a future
+/// UI/game consumer without granting callers a raw HID injection endpoint.
+#[derive(Debug)]
+pub struct VGamepad {
+    info: GamepadControlDeviceInfo,
+    open: bool,
+}
+
+impl VGamepad {
+    pub fn request(label: &str) -> Result<Self, i32> {
+        let mut info = GamepadControlDeviceInfo::default();
+        let rc = unsafe {
+            vcabi::trueos_cabi_gamepad_control_request(label.as_ptr(), label.len(), &mut info)
+        };
+        if rc != 0 {
+            return Err(rc);
+        }
+        Ok(Self { info, open: true })
+    }
+
+    pub const fn handle(&self) -> u64 {
+        self.info.handle
+    }
+
+    pub const fn slot_id(&self) -> u32 {
+        self.info.slot_id
+    }
+
+    pub fn submit(&self, command: GamepadControlCommand) -> Result<(), i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        let rc = unsafe { vcabi::trueos_cabi_gamepad_control_submit(self.info.handle, &command) };
+        if rc == 0 { Ok(()) } else { Err(rc) }
+    }
+
+    pub fn submit_json(&self, json: &str) -> Result<usize, i32> {
+        if !self.open || json.is_empty() {
+            return Err(-1);
+        }
+        let rc = unsafe {
+            vcabi::trueos_cabi_gamepad_control_submit_json(
+                self.info.handle,
+                json.as_ptr(),
+                json.len(),
+            )
+        };
+        if rc < 0 { Err(rc) } else { Ok(rc as usize) }
+    }
+
+    pub fn idle(&self) -> Result<bool, i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        match unsafe { vcabi::trueos_cabi_gamepad_control_idle(self.info.handle) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            rc => Err(rc),
+        }
+    }
+
+    pub fn snapshot(&self) -> Result<GamepadControlSnapshot, i32> {
+        if !self.open {
+            return Err(-3);
+        }
+        let mut snapshot = GamepadControlSnapshot::default();
+        let rc = unsafe {
+            vcabi::trueos_cabi_gamepad_control_snapshot(self.info.handle, &mut snapshot)
+        };
+        if rc == 0 { Ok(snapshot) } else { Err(rc) }
+    }
+
+    pub fn close(mut self) -> Result<(), i32> {
+        let result = self.close_inner();
+        self.open = false;
+        result
+    }
+
+    fn close_inner(&mut self) -> Result<(), i32> {
+        if !self.open {
+            return Ok(());
+        }
+        let rc = unsafe { vcabi::trueos_cabi_gamepad_control_release(self.info.handle) };
+        if rc == 0 {
+            self.open = false;
+            Ok(())
+        } else {
+            Err(rc)
+        }
+    }
+}
+
+impl Drop for VGamepad {
     fn drop(&mut self) {
         let _ = self.close_inner();
     }

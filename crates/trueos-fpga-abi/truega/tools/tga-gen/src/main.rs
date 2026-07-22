@@ -985,7 +985,23 @@ mod tests {
     #[test]
     fn bar_payloads_are_swapped_at_the_gowin_tlp_boundary() {
         assert!(TOP_VHDL.contains("payload_out := byte_swap32(payload);"));
+        assert!(TOP_VHDL.contains(
+            "payload1_out := byte_swap32(words(payload_idx + 1));"
+        ));
         assert!(TOP_VHDL.contains("tx_pending_data(159 downto 128) <= byte_swap32(data_in);"));
+    }
+
+    #[test]
+    fn bar2_accepts_two_dword_posted_writes() {
+        for required in [
+            "hdr(9 downto 0) = \"0000000010\"",
+            "signal stream_write_pending : std_logic := '0';",
+            "stream_write_pending_addr_dw <= std_logic_vector(unsigned(addr_dw) + 1);",
+            "elsif stream_write_pending = '1' then",
+            "stream_write_data <= stream_write_pending_data;",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing two-DW BAR2 path: {required}");
+        }
     }
 
     #[test]

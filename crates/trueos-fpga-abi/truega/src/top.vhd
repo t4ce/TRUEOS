@@ -337,8 +337,13 @@ architecture rtl of top is
 	signal transaction_addr_dw : std_logic_vector(16 downto 0) := (others => '0');
 	signal transaction_bardec : std_logic_vector(5 downto 0) := (others => '0');
 	signal transaction_payload_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal transaction_payload_dw1 : std_logic_vector(31 downto 0) := (others => '0');
+	signal transaction_write_count : std_logic_vector(1 downto 0) := (others => '0');
 	signal transaction_req_id : std_logic_vector(15 downto 0) := (others => '0');
 	signal transaction_req_tag : std_logic_vector(7 downto 0) := (others => '0');
+	signal stream_write_pending : std_logic := '0';
+	signal stream_write_pending_addr_dw : std_logic_vector(16 downto 0) := (others => '0');
+	signal stream_write_pending_data : std_logic_vector(31 downto 0) := (others => '0');
 	-- BAR reads cross two explicit timing boundaries before a completion is
 	-- presented to the PCIe core.  The first stage reduces the address to a
 	-- small bank and bank-local index.  The second stage selects only within
@@ -666,6 +671,8 @@ begin
 		variable val8 : byte_t;
 		variable addr_dw : std_logic_vector(16 downto 0);
 		variable payload_dw : std_logic_vector(31 downto 0);
+		variable payload_dw1 : std_logic_vector(31 downto 0);
+		variable write_count : std_logic_vector(1 downto 0);
 		variable req_id : std_logic_vector(15 downto 0);
 		variable req_tag : std_logic_vector(7 downto 0);
 		variable read_data_dw : std_logic_vector(31 downto 0);
@@ -685,6 +692,8 @@ begin
 			variable found_read : out boolean;
 			variable addr_out : out std_logic_vector(16 downto 0);
 			variable payload_out : out std_logic_vector(31 downto 0);
+			variable payload1_out : out std_logic_vector(31 downto 0);
+			variable write_count_out : out std_logic_vector(1 downto 0);
 			variable req_id_out : out std_logic_vector(15 downto 0);
 			variable req_tag_out : out std_logic_vector(7 downto 0)
 		) is
@@ -700,6 +709,8 @@ begin
 			found_read := false;
 			addr_out := (others => '0');
 			payload_out := (others => '0');
+			payload1_out := (others => '0');
+			write_count_out := "00";
 			req_id_out := (others => '0');
 			req_tag_out := (others => '0');
 
@@ -713,7 +724,8 @@ begin
 			fmt_type := hdr(31 downto 24);
 
 			if (fmt_type = x"40") or (fmt_type = x"60") then
-				if hdr(9 downto 0) = "0000000001" then
+				if (hdr(9 downto 0) = "0000000001")
+					or (hdr(9 downto 0) = "0000000010") then
 					if fmt_type = x"40" then
 						addr_idx := 2;
 						payload_idx := 3;
@@ -722,11 +734,19 @@ begin
 						payload_idx := 4;
 					end if;
 
-					if (addr_idx < count) and (payload_idx < count) then
+					if (addr_idx < count) and (payload_idx < count)
+						and ((hdr(9 downto 0) = "0000000001")
+							or (payload_idx + 1 < count)) then
 						addr_low := words(addr_idx);
 						payload := words(payload_idx);
 						addr_out := addr_low(18 downto 2);
 						payload_out := byte_swap32(payload);
+						if hdr(9 downto 0) = "0000000010" then
+							payload1_out := byte_swap32(words(payload_idx + 1));
+							write_count_out := "10";
+						else
+							write_count_out := "01";
+						end if;
 						found_write := true;
 					end if;
 				end if;
@@ -851,8 +871,13 @@ begin
 				transaction_addr_dw <= (others => '0');
 				transaction_bardec <= (others => '0');
 				transaction_payload_dw <= (others => '0');
+				transaction_payload_dw1 <= (others => '0');
+				transaction_write_count <= (others => '0');
 				transaction_req_id <= (others => '0');
 				transaction_req_tag <= (others => '0');
+				stream_write_pending <= '0';
+				stream_write_pending_addr_dw <= (others => '0');
+				stream_write_pending_data <= (others => '0');
 				bar_read_select_pending <= '0';
 				bar_read_data_select_pending <= '0';
 				bar_read_completion_pending <= '0';
@@ -1204,10 +1229,16 @@ begin
 								stream_write_addr_dw <= addr_dw;
 								stream_write_data <= payload_dw;
 								stream_write <= '1';
+								if transaction_write_count = "10" then
+									stream_write_pending <= '1';
+									stream_write_pending_addr_dw <= std_logic_vector(unsigned(addr_dw) + 1);
+									stream_write_pending_data <= transaction_payload_dw1;
+								else
+									rx_nonposted_busy <= '0';
+								end if;
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
 								dbg_write_count <= dbg_write_count + 1;
-								rx_nonposted_busy <= '0';
 							elsif hit_write and (transaction_bardec(0) = '1') then
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
@@ -1363,6 +1394,7 @@ begin
 							transaction_write <= '0';
 							transaction_read <= '0';
 							transaction_bardec <= (others => '0');
+							transaction_write_count <= (others => '0');
 					elsif decode_pending = '1' then
 							-- Gowin presents the first protocol dword in the highest valid
 							-- lane (IPUG1020 Figure 3-1), so the descending-lane snapshot is
@@ -1370,7 +1402,8 @@ begin
 							-- ascending view: a payload such as 0x20DF9801 can itself look
 							-- like a valid one-dword Memory Read header and shadow the real
 							-- write TLP.
-							decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
+							decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read,
+								addr_dw, payload_dw, payload_dw1, write_count, req_id, req_tag);
 							dbg_last_addr_dw <= addr_dw(9 downto 0);
 							dbg_last_payload_dw <= payload_dw;
 							dbg_last_req_id <= req_id;
@@ -1394,6 +1427,8 @@ begin
 							transaction_addr_dw <= addr_dw;
 							transaction_bardec <= rx_snapshot_bardec;
 							transaction_payload_dw <= payload_dw;
+							transaction_payload_dw1 <= payload_dw1;
+							transaction_write_count <= write_count;
 							transaction_req_id <= req_id;
 							transaction_req_tag <= req_tag;
 							next_cnt_fwd := 0;
@@ -1401,6 +1436,14 @@ begin
 							clear_words(next_words_fwd);
 							clear_words(next_words_rev);
 							decode_pending <= '0';
+					elsif stream_write_pending = '1' then
+						-- A two-dword posted write is retired into the existing
+						-- single-dword row-memory port over two adjacent clocks.
+						stream_write_addr_dw <= stream_write_pending_addr_dw;
+						stream_write_data <= stream_write_pending_data;
+						stream_write <= '1';
+						stream_write_pending <= '0';
+						rx_nonposted_busy <= '0';
 					elsif capture_pending = '1' then
 						-- All supported memory TLPs fit in one 256-bit beat. First
 						-- snapshot the hard-IP outputs, then compact valid lanes here
@@ -1442,7 +1485,12 @@ begin
 					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
 						and (pcie_linkup = '1')
 						and ((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))
-						and (tl_rx_backpressure = '0') then
+						-- Reaching this final branch already proves that capture,
+						-- decode, transaction, and staged BAR2 work are idle.  Test
+						-- only the independently-held read/receive busy bit here;
+						-- feeding the combined RX-wait signal back into this clock
+						-- enable creates an avoidable decode-to-debug-counter path.
+						and (rx_nonposted_busy = '0') then
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
 						dbg_rx_capture_count <= dbg_rx_capture_count + 1;
