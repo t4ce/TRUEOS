@@ -41,6 +41,13 @@ const TGA_OFFLOAD_IRQ_CONTROLLER_ACK_COUNT_OFF: usize =
 const TGA_OFFLOAD_IRQ_STATE_OFF: usize = trueos_fpga_abi::BAR0_CALL_IRQ_STATE_OFFSET;
 const TGA_OFFLOAD_WORK_PACKAGE_OFF: usize = trueos_fpga_abi::BAR0_WORK_PACKAGE_OFFSET;
 const TGA_FIRMWARE_MANIFEST_OFF: usize = trueos_fpga_abi::BAR0_FIRMWARE_MANIFEST_OFFSET;
+const TGA_DBG_RX_CAPTURE_COUNT_OFF: usize = 0x060;
+const TGA_DBG_WRITE_COUNT_OFF: usize = 0x064;
+const TGA_DBG_WORD30_WRITE_COUNT_OFF: usize = 0x068;
+const TGA_DBG_WORD30_LAST_PAYLOAD_OFF: usize = 0x06c;
+const TGA_DBG_WORD30_STORAGE_OFF: usize = 0x070;
+const TGA_DBG_RX_FIFO_STATE_OFF: usize = 0x074;
+const TGA_DBG_RX_ERROR_COUNT_OFF: usize = 0x078;
 
 const TGA_OFFLOAD_DOORBELL_MAGIC: u32 = 0x4C4C_4143; // "CALL"
 const TGA_BOOT_MMIO_TOUCH_ENABLED: bool = false;
@@ -107,6 +114,16 @@ pub(crate) enum OffloadTransportError {
         word: u8,
         observed: u32,
         expected: u32,
+        rx_captures: u32,
+        rx_capture_delta: u32,
+        decoded_writes: u32,
+        decoded_write_delta: u32,
+        word30_writes: u32,
+        word30_write_delta: u32,
+        word30_last_payload: u32,
+        word30_storage: u32,
+        rx_fifo_state: u32,
+        rx_errors: u32,
     },
 }
 
@@ -591,53 +608,67 @@ pub(crate) fn submit_offload_work_package(
     let Some(tga) = guard.as_ref() else {
         return Err(OffloadTransportError::Offline);
     };
+    let rx_captures_before = Tga::read_reg(tga.mmio_base + TGA_DBG_RX_CAPTURE_COUNT_OFF);
+    let decoded_writes_before = Tga::read_reg(tga.mmio_base + TGA_DBG_WRITE_COUNT_OFF);
+    let word30_writes_before = Tga::read_reg(tga.mmio_base + TGA_DBG_WORD30_WRITE_COUNT_OFF);
     let source = package as *const trueos_fpga_abi::WorkPackage as *const u32;
-    let word_count = core::mem::size_of::<trueos_fpga_abi::WorkPackage>() / 4;
-    for index in 0..word_count {
-        let value = unsafe { source.add(index).read() };
-        Tga::write_reg(tga.offload_work_package_reg + index * 4, value);
-    }
-
-    // The endpoint accepts one-dword posted writes.  Before the doorbell, use
-    // non-posted reads to prove that the complete request prefix actually
-    // reached its BAR registers.  This is stronger than reading only `state`:
-    // that flushes ordering but cannot detect a dropped payload TLP.  A live
-    // LFM2.5 run exposed exactly that case as one input dword left over from
-    // the preceding call.
+    // The endpoint accepts one-dword posted writes.  Commit only the request
+    // prefix, and acknowledge each word with an immediate non-posted read
+    // before presenting the next write.  Bulk-writing all 64 package words and
+    // verifying them afterwards allowed the physical endpoint to occasionally
+    // lose one payload while its RX path was saturated.  This ordering keeps at
+    // most one unacknowledged request word at that boundary without changing
+    // the BAR ABI or increasing the number of verification reads.
     const WRITE_REPAIR_ATTEMPTS: usize = 8;
     let input_end =
         core::mem::offset_of!(trueos_fpga_abi::WorkPackage, input) + package.input_len as usize;
     let request_word_count = input_end.div_ceil(core::mem::size_of::<u32>());
-    fence(Ordering::SeqCst);
     let mut repaired_any = false;
     for index in 0..request_word_count {
         let expected = unsafe { source.add(index).read() };
         let register = tga.offload_work_package_reg + index * 4;
-        let mut observed = Tga::read_reg(register);
-        if observed == expected {
-            continue;
-        }
-
-        // Serialize a rare repair at the exact failing address.  The previous
-        // implementation wrote the replacement and continued issuing reads for
-        // later words; on the physical endpoint that repeated the same RX timing
-        // collision three times.  An immediate non-posted read both drains the
-        // posted write and proves acceptance before another TLP is introduced.
-        for _ in 0..WRITE_REPAIR_ATTEMPTS {
+        let mut observed = 0;
+        for attempt in 0..WRITE_REPAIR_ATTEMPTS {
             Tga::write_reg(register, expected);
-            TGA_OFFLOAD_WRITE_REPAIR_COUNT.fetch_add(1, Ordering::Relaxed);
+            if attempt != 0 {
+                TGA_OFFLOAD_WRITE_REPAIR_COUNT.fetch_add(1, Ordering::Relaxed);
+            }
             fence(Ordering::SeqCst);
             observed = Tga::read_reg(register);
             if observed == expected {
-                repaired_any = true;
+                repaired_any |= attempt != 0;
                 break;
             }
         }
         if observed != expected {
+            // Snapshot the endpoint before releasing TGA to the heartbeat
+            // client. These counters separate a missing posted write from a
+            // stale read completion without changing the failing traffic.
+            let rx_captures = Tga::read_reg(tga.mmio_base + TGA_DBG_RX_CAPTURE_COUNT_OFF);
+            let decoded_writes = Tga::read_reg(tga.mmio_base + TGA_DBG_WRITE_COUNT_OFF);
+            let word30_writes = Tga::read_reg(tga.mmio_base + TGA_DBG_WORD30_WRITE_COUNT_OFF);
+            let rx_capture_delta = rx_captures.wrapping_sub(rx_captures_before);
+            let decoded_write_delta = decoded_writes.wrapping_sub(decoded_writes_before);
+            let word30_write_delta = word30_writes.wrapping_sub(word30_writes_before);
+            let word30_last_payload =
+                Tga::read_reg(tga.mmio_base + TGA_DBG_WORD30_LAST_PAYLOAD_OFF);
+            let word30_storage = Tga::read_reg(tga.mmio_base + TGA_DBG_WORD30_STORAGE_OFF);
+            let rx_fifo_state = Tga::read_reg(tga.mmio_base + TGA_DBG_RX_FIFO_STATE_OFF);
+            let rx_errors = Tga::read_reg(tga.mmio_base + TGA_DBG_RX_ERROR_COUNT_OFF);
             return Err(OffloadTransportError::WriteVerification {
                 word: index as u8,
                 observed,
                 expected,
+                rx_captures,
+                rx_capture_delta,
+                decoded_writes,
+                decoded_write_delta,
+                word30_writes,
+                word30_write_delta,
+                word30_last_payload,
+                word30_storage,
+                rx_fifo_state,
+                rx_errors,
             });
         }
     }

@@ -1,3 +1,6 @@
+const LAB256_SPIRIT_INITIAL_TRACE_FRAMES: u32 = 30;
+const LAB256_SPIRIT_PERIODIC_TRACE_FRAMES: u32 = 60;
+
 #[derive(Copy, Clone, Debug)]
 struct Lab256Buffer {
     phys: u64,
@@ -35,7 +38,7 @@ impl Lab256Runtime {
     fn accepts_frame(self, frame: u32) -> bool {
         match self.last_complete_frame {
             None => frame == 0,
-            Some(last) => frame == last.saturating_add(1),
+            Some(last) => frame == last.wrapping_add(1),
         }
     }
 }
@@ -127,11 +130,11 @@ fn lab256_write_fixed_control(control: Lab256Buffer, frame: u32) {
         core::ptr::write_volatile(dwords.add(12), 0.0f32.to_bits());
         core::ptr::write_volatile(dwords.add(13), 1.55f32.to_bits());
         core::ptr::write_volatile(dwords.add(14), 48);
-        core::ptr::write_volatile(dwords.add(15), 0x53u32.wrapping_add(frame * 7));
+        core::ptr::write_volatile(dwords.add(15), 0x53u32.wrapping_add(frame.wrapping_mul(7)));
         core::ptr::write_volatile(dwords.add(16), frame & 255);
         core::ptr::write_volatile(dwords.add(17), LAB256_BACKGROUND_ALPHA.to_bits());
         for index in 0..256usize {
-            let sample = (((index as u32).wrapping_add(frame * 9)) & 255) * 257;
+            let sample = (((index as u32).wrapping_add(frame.wrapping_mul(9))) & 255) * 257;
             core::ptr::write_volatile(dwords.add(32 + index), sample);
         }
     }
@@ -167,7 +170,7 @@ pub(crate) fn lab256_spirit_frame(dst: GpgpuRgba8Surface, frame: u32) -> GpgpuRg
 
 /// Produce the next persistent Lab256 frame for a live UI4 preview.
 ///
-/// Spirit owns the deterministic startup frame numbers. A Shell2 preview may
+/// Spirit owns the deterministic continuous frame numbers. A Shell2 preview may
 /// begin after any number of those frames, so it advances from the last
 /// retired state while holding the shared direct-RCS submit lock instead of
 /// guessing a frame number in the UI service.
@@ -209,7 +212,7 @@ fn lab256_frame(dst: GpgpuRgba8Surface, requested_frame: Option<u32>) -> GpgpuRg
     let frame = requested_frame.unwrap_or_else(|| {
         runtime_snapshot
             .last_complete_frame
-            .map_or(0, |last| last.saturating_add(1))
+            .map_or(0, |last| last.wrapping_add(1))
     });
     if runtime_snapshot.quarantined || !runtime_snapshot.accepts_frame(frame) {
         return GpgpuRgba8KernelResult::default();
@@ -277,21 +280,27 @@ fn lab256_frame(dst: GpgpuRgba8Surface, requested_frame: Option<u32>) -> GpgpuRg
         }
     }
 
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
-        frame,
-        ok as u8,
-        submitted as u8,
-        marker,
-        report_ok as u8,
-        LAB256_BACKGROUND_ALPHA,
-        state_in.gpu,
-        state_out.gpu,
-        dst.gpu,
-        direct_rcs_elapsed_ms_since(started),
-        producer_owner,
-    );
+    let trace_spirit_frame = frame < LAB256_SPIRIT_INITIAL_TRACE_FRAMES
+        || frame
+            .wrapping_add(1)
+            .is_multiple_of(LAB256_SPIRIT_PERIODIC_TRACE_FRAMES);
+    if requested_frame.is_none() || trace_spirit_frame || !ok || !report_ok {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: lab256 frame={} ok={} submitted={} marker=0x{:08X} report_audit={} control_alpha={:.2} state_in=0x{:X} state_out=0x{:X} dst=0x{:X} submit_ms={} owner={} admission=gpu-executor/vgpu/guc direct_elsp=0\n",
+            frame,
+            ok as u8,
+            submitted as u8,
+            marker,
+            report_ok as u8,
+            LAB256_BACKGROUND_ALPHA,
+            state_in.gpu,
+            state_out.gpu,
+            dst.gpu,
+            direct_rcs_elapsed_ms_since(started),
+            producer_owner,
+        );
+    }
     GpgpuRgba8KernelResult {
         ok,
         submitted,

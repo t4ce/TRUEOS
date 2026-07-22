@@ -11,7 +11,7 @@
 //! proof that completes the public Spirit fence.
 
 use core::ops::BitOr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
@@ -28,9 +28,10 @@ const _: () = assert!(SPIRIT_WORKER_POOL_LIMIT <= SPIRIT_FENCE_COUNT);
 const SPIRIT_IDLE_POLL_MS: u64 = 16;
 const SPIRIT_FLIP_POLL_MS: u64 = 1;
 const SPIRIT_RETRY_MS: u64 = 50;
-const SPIRIT_LAB256_STARTUP_FRAMES: u32 = 10;
+const SPIRIT_LAB256_INITIAL_TRACE_FRAMES: u64 = 30;
+const SPIRIT_LAB256_PERIODIC_TRACE_FRAMES: u64 = 60;
 const SPIRIT_LAB256_TARGET_HZ: u64 = 60;
-const SPIRIT_LAB256_FRAME_PERIOD_MS: u64 = 1_000u64.div_ceil(SPIRIT_LAB256_TARGET_HZ);
+const SPIRIT_CPU_PREFLIGHT_HOLD_MS: u64 = 1_000;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritFenceId(u8);
@@ -55,8 +56,8 @@ impl SpiritFenceId {
         self.0 as usize
     }
 
-    pub(crate) const fn is_active(self) -> bool {
-        self.index() < SPIRIT_WORKER_POOL_LIMIT
+    pub(crate) fn is_active(self) -> bool {
+        ACTIVE_FENCE_MASK.load(Ordering::Acquire) & (1 << self.0) != 0
     }
 }
 
@@ -242,6 +243,7 @@ static COMPLETED: [AtomicU64; SPIRIT_FENCE_COUNT] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
 ];
+static ACTIVE_FENCE_MASK: AtomicU8 = AtomicU8::new(0);
 
 /// Reserve the non-visible member of one Spirit double buffer.
 ///
@@ -417,10 +419,7 @@ fn release_gpgpu(
     Ok(())
 }
 
-fn submit_lab256_startup_frame(
-    id: SpiritFenceId,
-    frame: u32,
-) -> Result<SpiritFence, SpiritSubmitError> {
+fn submit_lab256_frame(id: SpiritFenceId, frame: u32) -> Result<SpiritFence, SpiritSubmitError> {
     let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::GPU)?;
     let target = match gpgpu_target(lease) {
         Ok(target) => target,
@@ -462,107 +461,72 @@ pub(crate) fn submit(
     Ok(lease.fence)
 }
 
+fn submit_cpu_preflight_red_cross(id: SpiritFenceId) -> Result<SpiritFence, SpiritSubmitError> {
+    let lease = acquire_frame(id, 0.5, 0.5, SpiritBarrierSet::CPU)?;
+    if let Err(error) = intel_cursor::spirit_cursor_draw_red_cross(lease.surface)
+        .map_err(map_cursor_error)
+        .and_then(|_| release_cpu(lease))
+    {
+        cancel_pending(lease);
+        return Err(error);
+    }
+    Ok(lease.fence)
+}
+
 #[derive(Copy, Clone)]
 struct Inflight {
     flip: intel_cursor::SpiritCursorFlip,
     frame: QueuedFrame,
     completes_fence: bool,
+    polls: u32,
 }
 
 /// The macro pool is intentionally one today. Fence/pipe capacity remains
 /// four so later activation is a deliberate pool-limit and spawn-limit change.
 #[embassy_executor::task(pool_size = 1)]
-pub(crate) async fn spirit_worker_task(fence_index: u8) {
-    let Some(id) = SpiritFenceId::new(fence_index).filter(|id| id.is_active()) else {
+pub(crate) async fn spirit_worker_task(worker_index: u8) {
+    if worker_index as usize >= SPIRIT_WORKER_POOL_LIMIT {
         return;
-    };
-    let serial = match crate::ui4::request_gpgpu_lab256_startup(
-        u64::from(SPIRIT_LAB256_STARTUP_FRAMES),
-        SPIRIT_LAB256_TARGET_HZ,
-    ) {
-        Ok(serial) => serial,
-        Err(error) => {
-            crate::log_error!(
-                target: "gfx";
-                "trueos-spirit: lab256 ui4 startup rejected fence={} error={}\n",
-                fence_index,
-                error,
-            );
-            return;
+    }
+
+    let id = loop {
+        if let Some(slot) = crate::intel::complete_scanout_pipeline_slot()
+            && let Ok(fence_index) = u8::try_from(slot)
+            && let Some(id) = SpiritFenceId::new(fence_index)
+        {
+            break id;
         }
+        Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     };
-    crate::log_info!(
-        target: "gfx";
-        "trueos-spirit: worker start fence={} pipe={} pool-active={} route=ui4-gpgpu-preview request={} frames={} target_hz={} producer=guc-lab256-three-pass display_release=ui4-plane-surflive\n",
-        fence_index,
+    let bit = 1u8 << id.0;
+    if ACTIVE_FENCE_MASK.fetch_or(bit, Ordering::AcqRel) & bit != 0 {
+        crate::log_error!(
+            target: "gfx";
+            "trueos-spirit: worker={} rejected pipe={} reason=cursor-fence-already-owned\n",
+            worker_index,
+            pipe_name(id),
+        );
+        return;
+    }
+    crate::log!(
+        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} route=guc-lab256->spirit-cursor-backbuffer->cur-base producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
+        worker_index,
+        id.index(),
         pipe_name(id),
+        crate::percpu::current_slot(),
+        crate::workers::AP1_UI_SERVICE_SLOT,
         SPIRIT_WORKER_POOL_LIMIT,
-        serial,
-        SPIRIT_LAB256_STARTUP_FRAMES,
+        SPIRIT_LAB256_INITIAL_TRACE_FRAMES,
         SPIRIT_LAB256_TARGET_HZ,
     );
-
-    let mut surflive_proven = false;
-    loop {
-        let status = crate::ui4::gpgpu_preview_status();
-        if status.request_serial != serial {
-            crate::log_warn!(
-                target: "gfx";
-                "trueos-spirit: lab256 ui4 startup replaced request={} replacement={} published={}\n",
-                serial,
-                status.request_serial,
-                status.metrics.published,
-            );
-            return;
-        }
-        if status.applied_serial == serial
-            && let Some(frame) = status.frame
-            && !surflive_proven
-            && let Some(publish_serial) =
-                crate::intel::ui4_direct_scanout_ready_for_frame(frame.raw())
-        {
-            surflive_proven = true;
-            crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: lab256 ui4 SURFLIVE proven request={} frame={} publish_serial={} published={} boundary=display-live\n",
-                serial,
-                frame.raw(),
-                publish_serial,
-                status.metrics.published,
-            );
-        }
-        if surflive_proven
-            && status.applied_serial == serial
-            && status.metrics.published >= u64::from(SPIRIT_LAB256_STARTUP_FRAMES)
-        {
-            crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: lab256 startup held request={} frames={} target_hz={} final=ui4-direct-plane-surflive\n",
-                serial,
-                status.metrics.published,
-                SPIRIT_LAB256_TARGET_HZ,
-            );
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-            }
-        }
-        Timer::after(Duration::from_millis(10)).await;
-    }
+    spirit_cursor_worker_loop(id).await;
 }
 
-#[allow(dead_code)]
-async fn spirit_cursor_worker_loop(fence_index: u8) {
-    let Some(id) = SpiritFenceId::new(fence_index).filter(|id| id.is_active()) else {
+async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
+    if !id.is_active() {
         return;
-    };
-    crate::log_info!(
-        target: "gfx";
-        "trueos-spirit: worker start fence={} pipe={} pool-active={} pipe-cap={}\n",
-        fence_index,
-        pipe_name(id),
-        SPIRIT_WORKER_POOL_LIMIT,
-        SPIRIT_FENCE_COUNT,
-    );
+    }
+    let fence_index = id.0;
 
     while let Err(error) = intel_cursor::spirit_cursor_prepare(fence_index) {
         crate::log_warn!(
@@ -574,18 +538,83 @@ async fn spirit_cursor_worker_loop(fence_index: u8) {
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
 
+    let preflight_fence = loop {
+        match submit_cpu_preflight_red_cross(id) {
+            Ok(fence) => break fence,
+            Err(error) => {
+                crate::log_warn!(
+                    target: "gfx";
+                    "trueos-spirit: cpu red-cross preflight deferred fence={} error={:?}\n",
+                    fence_index,
+                    error,
+                );
+                Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
+            }
+        }
+    };
+    crate::log!(
+        "trueos-spirit: cpu red-cross preflight queued fence={} sequence={} pipe={} gate=cpu-only display_release=cursor-surflive hold_ms={}\n",
+        fence_index,
+        preflight_fence.sequence,
+        pipe_name(id),
+        SPIRIT_CPU_PREFLIGHT_HOLD_MS,
+    );
+
     let mut retained: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
-    let mut startup_next_frame = 0u32;
-    let mut startup_next_deadline = Instant::now();
-    let mut startup_aborted = false;
+    let mut stream_next_shader_frame = 0u32;
+    let mut stream_queued_frames = 0u64;
+    let mut stream_next_deadline = Instant::now();
+    let mut stream_cadence_phase = 0u64;
+    let mut stream_aborted = false;
+    let mut preflight_hold_until: Option<Instant> = None;
+    let mut arm_deferred_polls = 0u32;
     loop {
-        if let Some(active) = inflight {
+        if let Some(mut active) = inflight {
             match intel_cursor::spirit_cursor_poll(active.flip) {
-                Ok(intel_cursor::SpiritCursorFlipState::Visible) => {
+                Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
+                        if active.frame.lease.fence == preflight_fence {
+                            preflight_hold_until = Some(
+                                Instant::now()
+                                    + Duration::from_millis(SPIRIT_CPU_PREFLIGHT_HOLD_MS),
+                            );
+                            crate::log!(
+                                "trueos-spirit: cpu red-cross CUR_SURFLIVE proven fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} hold_ms={} next=guc-lab256\n",
+                                fence_index,
+                                active.frame.lease.fence.sequence,
+                                pipe_name(id),
+                                active.frame.lease.surface.surface,
+                                ctl,
+                                base,
+                                live,
+                                SPIRIT_CPU_PREFLIGHT_HOLD_MS,
+                            );
+                        } else if spirit_should_trace_frame(stream_queued_frames) {
+                            crate::log_info!(
+                                target: "gfx";
+                                "trueos-spirit: cursor SURFLIVE proven frame={} fence={} sequence={} pipe={} buffer={} ctl=0x{:08X} base=0x{:08X} live=0x{:08X} boundary=cursor-display-live mode=continuous ui4_publish=0\n",
+                                stream_queued_frames,
+                                fence_index,
+                                active.frame.lease.fence.sequence,
+                                pipe_name(id),
+                                active.frame.lease.surface.surface,
+                                ctl,
+                                base,
+                                live,
+                            );
+                            if stream_queued_frames == SPIRIT_LAB256_INITIAL_TRACE_FRAMES {
+                                crate::log!(
+                                    "trueos-spirit: lab256 initial window complete frames={} target_hz={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
+                                    stream_queued_frames,
+                                    SPIRIT_LAB256_TARGET_HZ,
+                                    pipe_name(id),
+                                    active.frame.lease.surface.surface,
+                                );
+                            }
+                        }
                     } else {
                         finish_rearm(id);
                     }
@@ -593,11 +622,42 @@ async fn spirit_cursor_worker_loop(fence_index: u8) {
                     inflight = None;
                     continue;
                 }
-                Ok(intel_cursor::SpiritCursorFlipState::Waiting) => {
+                Ok(intel_cursor::SpiritCursorFlipState::Waiting { ctl, base, live }) => {
+                    active.polls = active.polls.saturating_add(1);
+                    if (active.frame.lease.fence == preflight_fence
+                        || spirit_should_trace_frame(stream_queued_frames))
+                        && (active.polls == 1 || active.polls.is_multiple_of(1_000))
+                    {
+                        crate::log_warn!(
+                            target: "gfx";
+                            "trueos-spirit: cursor SURFLIVE waiting fence={} sequence={} pipe={} buffer={} polls={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X}\n",
+                            fence_index,
+                            active.frame.lease.fence.sequence,
+                            pipe_name(id),
+                            active.frame.lease.surface.surface,
+                            active.polls,
+                            ctl,
+                            base,
+                            active.frame.lease.surface.cursor_gpu,
+                            live,
+                        );
+                    }
+                    inflight = Some(active);
                     Timer::after(Duration::from_millis(SPIRIT_FLIP_POLL_MS)).await;
                     continue;
                 }
-                Ok(intel_cursor::SpiritCursorFlipState::Interrupted) => {
+                Ok(intel_cursor::SpiritCursorFlipState::Interrupted { ctl, base, live }) => {
+                    crate::log_warn!(
+                        target: "gfx";
+                        "trueos-spirit: cursor flip interrupted fence={} sequence={} pipe={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X}\n",
+                        fence_index,
+                        active.frame.lease.fence.sequence,
+                        pipe_name(id),
+                        ctl,
+                        base,
+                        active.frame.lease.surface.cursor_gpu,
+                        live,
+                    );
                     if !active.completes_fence {
                         rearm_retry = Some(active.frame);
                     }
@@ -622,7 +682,7 @@ async fn spirit_cursor_worker_loop(fence_index: u8) {
             Some((frame, true))
         } else if let Some(frame) = rearm_retry.take() {
             Some((frame, false))
-        } else if (startup_aborted || startup_next_frame >= SPIRIT_LAB256_STARTUP_FRAMES)
+        } else if stream_aborted
             && let Some(frame) = retained
             && matches!(intel_cursor::spirit_cursor_rearm_needed(fence_index), Ok(true))
             && begin_rearm(id)
@@ -633,50 +693,63 @@ async fn spirit_cursor_worker_loop(fence_index: u8) {
         };
 
         let Some((frame, completes_fence)) = candidate else {
-            if !startup_aborted && startup_next_frame < SPIRIT_LAB256_STARTUP_FRAMES {
-                if Instant::now() < startup_next_deadline {
-                    Timer::at(startup_next_deadline).await;
+            if let Some(deadline) = preflight_hold_until {
+                if Instant::now() < deadline {
+                    Timer::at(deadline).await;
                     continue;
                 }
-                match submit_lab256_startup_frame(id, startup_next_frame) {
+                preflight_hold_until = None;
+                stream_next_deadline = Instant::now();
+            }
+            if !stream_aborted {
+                if Instant::now() < stream_next_deadline {
+                    Timer::at(stream_next_deadline).await;
+                    continue;
+                }
+                match submit_lab256_frame(id, stream_next_shader_frame) {
                     Ok(fence) => {
-                        let period = Duration::from_millis(SPIRIT_LAB256_FRAME_PERIOD_MS);
-                        let scheduled = startup_next_deadline + period;
+                        let period = spirit_lab256_frame_period(&mut stream_cadence_phase);
+                        let scheduled = stream_next_deadline + period;
                         let now = Instant::now();
-                        startup_next_deadline = if now > scheduled {
+                        stream_next_deadline = if now > scheduled {
                             now + period
                         } else {
                             scheduled
                         };
-                        crate::log_info!(
-                            target: "gfx";
-                            "trueos-spirit: lab256 startup queued frame={}/{} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive\n",
-                            startup_next_frame + 1,
-                            SPIRIT_LAB256_STARTUP_FRAMES,
-                            fence_index,
-                            fence.sequence,
-                            SPIRIT_LAB256_TARGET_HZ,
-                        );
-                        startup_next_frame += 1;
+                        stream_queued_frames = stream_queued_frames.saturating_add(1);
+                        stream_next_shader_frame = stream_next_shader_frame.wrapping_add(1);
+                        if spirit_should_trace_frame(stream_queued_frames) {
+                            crate::log_info!(
+                                target: "gfx";
+                                "trueos-spirit: lab256 stream queued frame={} shader_frame={} fence={} sequence={} target_hz={} cadence=deadline-paced/no-catch-up gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous\n",
+                                stream_queued_frames,
+                                stream_next_shader_frame.wrapping_sub(1),
+                                fence_index,
+                                fence.sequence,
+                                SPIRIT_LAB256_TARGET_HZ,
+                            );
+                        }
                         continue;
                     }
                     Err(
                         error @ (SpiritSubmitError::GpuSubmissionFailed
                         | SpiritSubmitError::InvalidGpuRelease),
                     ) => {
-                        startup_aborted = true;
+                        stream_aborted = true;
                         crate::log_error!(
                             target: "gfx";
-                            "trueos-spirit: lab256 startup aborted frame={} error={:?} action=retain-last-surflive-frame cpu-fallback=0\n",
-                            startup_next_frame,
+                            "trueos-spirit: lab256 stream aborted frame={} shader_frame={} error={:?} action=retain-last-surflive-frame cpu-fallback=0\n",
+                            stream_queued_frames,
+                            stream_next_shader_frame,
                             error,
                         );
                     }
                     Err(error) => {
                         crate::log_warn!(
                             target: "gfx";
-                            "trueos-spirit: lab256 startup deferred frame={} error={:?}\n",
-                            startup_next_frame,
+                            "trueos-spirit: lab256 stream deferred frame={} shader_frame={} error={:?}\n",
+                            stream_queued_frames.saturating_add(1),
+                            stream_next_shader_frame,
                             error,
                         );
                     }
@@ -693,18 +766,33 @@ async fn spirit_cursor_worker_loop(fence_index: u8) {
         };
         match intel_cursor::spirit_cursor_arm(frame.lease.surface, cursor_frame) {
             Ok(flip) => {
+                arm_deferred_polls = 0;
                 inflight = Some(Inflight {
                     flip,
                     frame,
                     completes_fence,
+                    polls: 0,
                 });
             }
             Err(
-                intel_cursor::SpiritCursorError::PipeInactive
+                error @ (intel_cursor::SpiritCursorError::PipeInactive
                 | intel_cursor::SpiritCursorError::DbufNotReady
                 | intel_cursor::SpiritCursorError::HardwareNotReady
-                | intel_cursor::SpiritCursorError::FlipPending,
+                | intel_cursor::SpiritCursorError::FlipPending),
             ) => {
+                arm_deferred_polls = arm_deferred_polls.saturating_add(1);
+                if arm_deferred_polls == 1 || arm_deferred_polls.is_multiple_of(300) {
+                    crate::log_warn!(
+                        target: "gfx";
+                        "trueos-spirit: cursor arm waiting fence={} sequence={} selected_pipe={} complete_scanout_slot={:?} retries={} error={:?}\n",
+                        fence_index,
+                        frame.lease.fence.sequence,
+                        pipe_name(id),
+                        crate::intel::complete_scanout_pipeline_slot(),
+                        arm_deferred_polls,
+                        error,
+                    );
+                }
                 if !completes_fence {
                     rearm_retry = Some(frame);
                 }
@@ -792,6 +880,22 @@ fn begin_rearm(id: SpiritFenceId) -> bool {
 
 fn finish_rearm(id: SpiritFenceId) {
     MAILBOXES[id.index()].lock().rearming = false;
+}
+
+fn spirit_lab256_frame_period(phase: &mut u64) -> Duration {
+    let hz = SPIRIT_LAB256_TARGET_HZ;
+    let mut ticks = embassy_time::TICK_HZ / hz;
+    *phase = phase.saturating_add(embassy_time::TICK_HZ % hz);
+    if *phase >= hz {
+        *phase -= hz;
+        ticks = ticks.saturating_add(1);
+    }
+    Duration::from_ticks(ticks.max(1))
+}
+
+fn spirit_should_trace_frame(frame: u64) -> bool {
+    frame <= SPIRIT_LAB256_INITIAL_TRACE_FRAMES
+        || frame.is_multiple_of(SPIRIT_LAB256_PERIODIC_TRACE_FRAMES)
 }
 
 fn map_cursor_error(error: intel_cursor::SpiritCursorError) -> SpiritSubmitError {

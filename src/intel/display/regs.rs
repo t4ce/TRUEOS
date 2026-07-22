@@ -1,7 +1,9 @@
-pub(in crate::intel) const PIPE_A_SRC: usize = 0x7001C;
-pub(in crate::intel) const PIPE_B_SRC: usize = 0x7101C;
-pub(in crate::intel) const PIPE_C_SRC: usize = 0x7201C;
-pub(in crate::intel) const PIPE_D_SRC: usize = 0x7301C;
+// PIPESRC lives in the transcoder register range, not the 0x70000 pipe
+// register range. Its packed value is width in 31:16 and height in 15:0.
+pub(in crate::intel) const PIPE_A_SRC: usize = 0x6001C;
+pub(in crate::intel) const PIPE_B_SRC: usize = 0x6101C;
+pub(in crate::intel) const PIPE_C_SRC: usize = 0x6201C;
+pub(in crate::intel) const PIPE_D_SRC: usize = 0x6301C;
 pub(in crate::intel) const PIPECONF_A: usize = 0x70008;
 pub(in crate::intel) const TRANS_HTOTAL_A: usize = 0x60000;
 pub(in crate::intel) const TRANS_HSYNC_A: usize = 0x60008;
@@ -233,8 +235,8 @@ pub(in crate::intel) fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
     if value == 0 || value == u32::MAX {
         return None;
     }
-    let width = (value & 0xFFFF).saturating_add(1);
-    let height = ((value >> 16) & 0xFFFF).saturating_add(1);
+    let width = ((value >> 16) & 0xFFFF).saturating_add(1);
+    let height = (value & 0xFFFF).saturating_add(1);
     if !(320..=8192).contains(&width) || !(200..=4320).contains(&height) {
         return None;
     }

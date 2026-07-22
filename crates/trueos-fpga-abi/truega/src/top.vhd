@@ -114,9 +114,6 @@ architecture rtl of top is
 
 	type word_arr_t is array (0 to 7) of std_logic_vector(31 downto 0);
 	type call_data_arr_t is array (0 to 23) of std_logic_vector(31 downto 0);
-	constant RX_FIFO_DEPTH : integer := 4;
-	type rx_data_fifo_t is array (0 to RX_FIFO_DEPTH - 1) of std_logic_vector(255 downto 0);
-	type rx_valid_fifo_t is array (0 to RX_FIFO_DEPTH - 1) of std_logic_vector(7 downto 0);
 	subtype byte_t is std_logic_vector(7 downto 0);
 	constant PKT_MAX_WORDS : integer := 8;
 	constant BAR0_LED_DW : std_logic_vector(9 downto 0) := "0000000000";
@@ -131,6 +128,13 @@ architecture rtl of top is
 	constant BAR0_DBG_LAST_CPLD1_DW : std_logic_vector(9 downto 0) := "0000010101";
 	constant BAR0_DBG_LAST_CPLD2_DW : std_logic_vector(9 downto 0) := "0000010110";
 	constant BAR0_DBG_LAST_CPLD_DATA_DW : std_logic_vector(9 downto 0) := "0000010111";
+	constant BAR0_DBG_RX_CAPTURE_COUNT_DW : std_logic_vector(9 downto 0) := "0000011000";
+	constant BAR0_DBG_WRITE_COUNT_DW : std_logic_vector(9 downto 0) := "0000011001";
+	constant BAR0_DBG_WORD30_WRITE_COUNT_DW : std_logic_vector(9 downto 0) := "0000011010";
+	constant BAR0_DBG_WORD30_LAST_PAYLOAD_DW : std_logic_vector(9 downto 0) := "0000011011";
+	constant BAR0_DBG_WORD30_STORAGE_DW : std_logic_vector(9 downto 0) := "0000011100";
+	constant BAR0_DBG_RX_FIFO_STATE_DW : std_logic_vector(9 downto 0) := "0000011101";
+	constant BAR0_DBG_RX_ERROR_COUNT_DW : std_logic_vector(9 downto 0) := "0000011110";
 	constant BAR0_CALL_DOORBELL_DW : integer := 16#080# / 4;
 	constant BAR0_CALL_IRQ_ACK_DW : integer := 16#084# / 4;
 	constant BAR0_CALL_IRQ_RETIRE_COUNT_DW : integer := 16#088# / 4;
@@ -150,6 +154,7 @@ architecture rtl of top is
 	constant CALL_ERROR_WORD : integer := 9;
 	constant CALL_INPUT_WORD : integer := 16;
 	constant CALL_OUTPUT_WORD : integer := 40;
+	constant DEBUG_TARGET_PACKAGE_WORD : integer := 30;
 	constant PROTOCOL_MAGIC : std_logic_vector(31 downto 0) := x"54534154";
 	constant WORK_PACKAGE_MAGIC : std_logic_vector(31 downto 0) := x"4B505754";
 	constant WORK_ABI_VERSION : std_logic_vector(15 downto 0) := x"0001";
@@ -239,14 +244,10 @@ architecture rtl of top is
 	signal tx_pending_sop : std_logic := '0';
 	signal tx_pending_eop : std_logic := '0';
 
-	-- The hard IP can present posted writes back-to-back. Keep that receive
-	-- boundary independent of the multi-cycle decode/execute path so asserting
-	-- RX_WAIT never creates a one-beat acceptance hole.
-	signal rx_fifo_data : rx_data_fifo_t := (others => (others => '0'));
-	signal rx_fifo_valid : rx_valid_fifo_t := (others => (others => '0'));
-	signal rx_fifo_write_ptr : unsigned(1 downto 0) := (others => '0');
-	signal rx_fifo_read_ptr : unsigned(1 downto 0) := (others => '0');
-	signal rx_fifo_count : unsigned(2 downto 0) := (others => '0');
+	-- Admit exactly one TLP into the registered snapshot and hold RX_WAIT until
+	-- that transaction has retired. The Gowin interface guarantees that it holds
+	-- the current beat while RX_WAIT is high, so no fabric-side burst FIFO is
+	-- required and a controller RX-buffer slot cannot be recycled under us.
 	signal capture_pending : std_logic := '0';
 	signal rx_snapshot_data : std_logic_vector(255 downto 0) := (others => '0');
 	signal rx_snapshot_valid : std_logic_vector(7 downto 0) := (others => '0');
@@ -298,11 +299,15 @@ architecture rtl of top is
 	signal dbg_last_cpld_dw1    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_dw2    : std_logic_vector(31 downto 0) := (others => '0');
 	signal dbg_last_cpld_data   : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_rx_capture_count : unsigned(31 downto 0) := (others => '0');
+	signal dbg_write_count : unsigned(31 downto 0) := (others => '0');
+	signal dbg_word30_write_count : unsigned(31 downto 0) := (others => '0');
+	signal dbg_word30_last_payload : std_logic_vector(31 downto 0) := (others => '0');
+	signal dbg_rx_error_count : unsigned(31 downto 0) := (others => '0');
 
 	attribute syn_keep : boolean;
-	-- Keep the explicit FIFO-read snapshot as a physical timing boundary.  If
-	-- these registers are folded into the lane compactor, a BSRAM read and the
-	-- variable valid-lane packing land on the same 100 MHz path.
+	-- Keep the receive snapshot as a physical timing boundary before the variable
+	-- valid-lane compactor on the 100 MHz transaction clock.
 	attribute syn_keep of capture_pending   : signal is true;
 	attribute syn_keep of rx_snapshot_data  : signal is true;
 	attribute syn_keep of rx_snapshot_valid : signal is true;
@@ -410,12 +415,11 @@ begin
 	tl_tx_valid <= tx_pending_valid when tx_pending = '1' else (others => '0');
 	tl_tx_sop <= tx_pending_sop when tx_pending = '1' else '0';
 	tl_tx_eop <= tx_pending_eop when tx_pending = '1' else '0';
-	-- Backpressure describes the ingress queue itself, not downstream decode
-	-- latency. This permits a burst to continue until every accepted beat has a
-	-- physical slot and then holds the controller while the queue drains.
-	tl_rx_backpressure <= '1'
-		when rx_fifo_count = to_unsigned(RX_FIFO_DEPTH, rx_fifo_count'length)
-		else '0';
+	-- The controller holds its current RX beat while this is high. Keep one
+	-- transaction in flight all the way through a read completion; this removes
+	-- RX-buffer reuse from the correctness boundary of the inline BAR protocol.
+	tl_rx_backpressure <= capture_pending or decode_pending or
+		transaction_pending or rx_nonposted_busy;
 	-- A BAR read is a non-posted request: keep later non-posted requests out of
 	-- the controller until our completion has actually entered its TX buffer.
 	-- Include the live SOP cycle so the mask is visible when the first request
@@ -529,8 +533,6 @@ begin
 		variable req_tag : std_logic_vector(7 downto 0);
 		variable read_data_dw : std_logic_vector(31 downto 0);
 		variable addr_index : integer range 0 to 1023;
-		variable rx_fifo_push : boolean;
-		variable rx_fifo_pop : boolean;
 
 		procedure clear_words(variable words : inout word_arr_t) is
 		begin
@@ -657,8 +659,6 @@ begin
 	end procedure;
 	begin
 		if rising_edge(tlp_clk) then
-			rx_fifo_push := false;
-			rx_fifo_pop := false;
 			if (pcie_perst_n = '0') or (pll_lock = '0') then
 				led_reg <= "00001";
 				debug_led_mode <= '0';
@@ -707,11 +707,6 @@ begin
 				tx_pending_valid <= (others => '0');
 				tx_pending_sop <= '0';
 				tx_pending_eop <= '0';
-				rx_fifo_data <= (others => (others => '0'));
-				rx_fifo_valid <= (others => (others => '0'));
-				rx_fifo_write_ptr <= (others => '0');
-				rx_fifo_read_ptr <= (others => '0');
-				rx_fifo_count <= (others => '0');
 				dbg_rx_bar0_eop <= '0';
 					dbg_hit_write <= '0';
 					dbg_hit_read <= '0';
@@ -743,6 +738,11 @@ begin
 					dbg_last_cpld_dw1 <= (others => '0');
 					dbg_last_cpld_dw2 <= (others => '0');
 					dbg_last_cpld_data <= (others => '0');
+					dbg_rx_capture_count <= (others => '0');
+					dbg_write_count <= (others => '0');
+					dbg_word30_write_count <= (others => '0');
+					dbg_word30_last_payload <= (others => '0');
+					dbg_rx_error_count <= (others => '0');
 				else
 					function_start <= '0';
 					call_irq_retire <= '0';
@@ -762,21 +762,6 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
-
-					-- Capture is deliberately independent of the decoder state. The
-					-- controller is allowed to advance only while RX_WAIT is low, and
-					-- every such single-beat BAR0 TLP is committed to this FIFO here.
-					if (tl_rx_sop = '1') and (tl_rx_eop = '1')
-						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
-						and (tl_rx_backpressure = '0') then
-						rx_fifo_data(to_integer(rx_fifo_write_ptr)) <= tl_rx_data;
-						rx_fifo_valid(to_integer(rx_fifo_write_ptr)) <= tl_rx_valid;
-						rx_fifo_write_ptr <= rx_fifo_write_ptr + 1;
-						rx_fifo_push := true;
-						rx_nonposted_busy <= '1';
-						dbg_rx_bar0_eop <= '1';
-						dbg_seen_rx_bar0_eop <= '1';
-					end if;
 
 					-- The doorbell launches one already-fused slot through a common
 					-- start/busy/done contract. The shell waits for done; it does not fetch
@@ -868,6 +853,11 @@ begin
 							if hit_write then
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
+								dbg_write_count <= dbg_write_count + 1;
+								if addr_index = BAR0_CALL_BASE_DW + DEBUG_TARGET_PACKAGE_WORD then
+									dbg_word30_write_count <= dbg_word30_write_count + 1;
+									dbg_word30_last_payload <= payload_dw;
+								end if;
 								if (addr_index >= BAR0_CALL_BASE_DW)
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
 									if (addr_index >= BAR0_CALL_BASE_DW + CALL_INPUT_WORD)
@@ -1025,6 +1015,24 @@ begin
 									read_data_dw := dbg_last_cpld_dw2;
 									when BAR0_DBG_LAST_CPLD_DATA_DW =>
 									read_data_dw := dbg_last_cpld_data;
+									when BAR0_DBG_RX_CAPTURE_COUNT_DW =>
+									read_data_dw := std_logic_vector(dbg_rx_capture_count);
+									when BAR0_DBG_WRITE_COUNT_DW =>
+									read_data_dw := std_logic_vector(dbg_write_count);
+									when BAR0_DBG_WORD30_WRITE_COUNT_DW =>
+									read_data_dw := std_logic_vector(dbg_word30_write_count);
+									when BAR0_DBG_WORD30_LAST_PAYLOAD_DW =>
+									read_data_dw := dbg_word30_last_payload;
+									when BAR0_DBG_WORD30_STORAGE_DW =>
+									read_data_dw := call_input_words(DEBUG_TARGET_PACKAGE_WORD - CALL_INPUT_WORD);
+									when BAR0_DBG_RX_FIFO_STATE_DW =>
+									read_data_dw(7) := capture_pending;
+									read_data_dw(8) := decode_pending;
+									read_data_dw(9) := transaction_pending;
+									read_data_dw(10) := tl_rx_backpressure;
+									read_data_dw(11) := rx_nonposted_busy;
+									when BAR0_DBG_RX_ERROR_COUNT_DW =>
+									read_data_dw := std_logic_vector(dbg_rx_error_count);
 									when others =>
 									read_data_dw := (others => '0');
 									end case;
@@ -1045,13 +1053,13 @@ begin
 							transaction_write <= '0';
 							transaction_read <= '0';
 					elsif decode_pending = '1' then
-							-- Decode only the preceding cycle's packet snapshot. Using the
-							-- capture variables here creates a false live RX-to-transaction
-							-- combinational path through their input muxes.
-							decode_words(pkt_words_fwd, to_integer(pkt_cnt_fwd), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
-							if not hit_write and not hit_read then
-								decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
-							end if;
+							-- Gowin presents the first protocol dword in the highest valid
+							-- lane (IPUG1020 Figure 3-1), so the descending-lane snapshot is
+							-- the only protocol order. Do not heuristically decode the
+							-- ascending view: a payload such as 0x20DF9801 can itself look
+							-- like a valid one-dword Memory Read header and shadow the real
+							-- write TLP.
+							decode_words(pkt_words_rev, to_integer(pkt_cnt_rev), hit_write, hit_read, addr_dw, payload_dw, req_id, req_tag);
 							dbg_last_addr_dw <= addr_dw;
 							dbg_last_payload_dw <= payload_dw;
 							dbg_last_req_id <= req_id;
@@ -1119,19 +1127,19 @@ begin
 						dbg_last_rx_rev_dw3 <= next_words_rev(3);
 						capture_pending <= '0';
 						decode_pending <= '1';
-					elsif rx_fifo_count /= to_unsigned(0, rx_fifo_count'length) then
-						rx_snapshot_data <= rx_fifo_data(to_integer(rx_fifo_read_ptr));
-						rx_snapshot_valid <= rx_fifo_valid(to_integer(rx_fifo_read_ptr));
-						rx_fifo_read_ptr <= rx_fifo_read_ptr + 1;
-						rx_fifo_pop := true;
+					elsif (tl_rx_sop = '1') and (tl_rx_eop = '1')
+						and (pcie_linkup = '1') and (tl_rx_bardec(0) = '1')
+						and (tl_rx_backpressure = '0') then
+						rx_snapshot_data <= tl_rx_data;
+						rx_snapshot_valid <= tl_rx_valid;
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
-					end if;
-
-					if rx_fifo_push and not rx_fifo_pop then
-						rx_fifo_count <= rx_fifo_count + 1;
-					elsif rx_fifo_pop and not rx_fifo_push then
-						rx_fifo_count <= rx_fifo_count - 1;
+						dbg_rx_capture_count <= dbg_rx_capture_count + 1;
+						dbg_rx_bar0_eop <= '1';
+						dbg_seen_rx_bar0_eop <= '1';
+						if tl_rx_err /= x"00" then
+							dbg_rx_error_count <= dbg_rx_error_count + 1;
+						end if;
 					end if;
 
 				pkt_cnt_fwd <= to_unsigned(next_cnt_fwd, pkt_cnt_fwd'length);

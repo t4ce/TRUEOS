@@ -322,6 +322,14 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
 
+pub(crate) fn complete_scanout_pipeline_slot() -> Option<usize> {
+    self::display::complete_scanout_pipeline_slot()
+}
+
+pub(crate) fn complete_scanout_pipeline_dimensions(slot: usize) -> Option<(u32, u32)> {
+    self::display::complete_scanout_pipeline_dimensions(slot)
+}
+
 pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
     self::display::ui4_rgba8_plane_stack_is_ready()
 }

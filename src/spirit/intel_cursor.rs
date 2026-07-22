@@ -19,25 +19,11 @@ const SPIRIT_CURSOR_SURFACE_BYTES: u64 =
     SPIRIT_CURSOR_SCANLINE_BYTES as u64 * SPIRIT_CURSOR_DIM as u64;
 const _: () = assert!(SPIRIT_CURSOR_GPU_STRIDE >= SPIRIT_CURSOR_SURFACE_BYTES);
 
-const PIPECONF_A: usize = 0x70008;
-const PIPE_MMIO_STRIDE: usize = 0x1000;
 const PIPES: [PipeInfo; SPIRIT_CHANNEL_COUNT] = [
-    PipeInfo {
-        name: "pipe-a",
-        pipe_src: 0x7001C,
-    },
-    PipeInfo {
-        name: "pipe-b",
-        pipe_src: 0x7101C,
-    },
-    PipeInfo {
-        name: "pipe-c",
-        pipe_src: 0x7201C,
-    },
-    PipeInfo {
-        name: "pipe-d",
-        pipe_src: 0x7301C,
-    },
+    PipeInfo { name: "pipe-a" },
+    PipeInfo { name: "pipe-b" },
+    PipeInfo { name: "pipe-c" },
+    PipeInfo { name: "pipe-d" },
 ];
 
 const CURSOR_A_BASE: usize = 0x70080;
@@ -140,9 +126,9 @@ pub(super) struct SpiritCursorFlip {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum SpiritCursorFlipState {
-    Waiting,
-    Visible,
-    Interrupted,
+    Waiting { ctl: u32, base: u32, live: u32 },
+    Visible { ctl: u32, base: u32, live: u32 },
+    Interrupted { ctl: u32, base: u32, live: u32 },
 }
 
 #[derive(Copy, Clone)]
@@ -162,7 +148,6 @@ struct CursorRegs {
 #[derive(Copy, Clone)]
 struct PipeInfo {
     name: &'static str,
-    pipe_src: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -287,6 +272,14 @@ pub(super) fn spirit_cursor_draw_solid_circle(
     Ok(())
 }
 
+pub(super) fn spirit_cursor_draw_red_cross(
+    access: SpiritCursorSurfaceAccess,
+) -> Result<(), SpiritCursorError> {
+    let surface = registered_surface(access)?;
+    draw_red_cross(surface);
+    Ok(())
+}
+
 pub(super) fn spirit_cursor_flush_cpu(
     access: SpiritCursorSurfaceAccess,
 ) -> Result<(), SpiritCursorError> {
@@ -306,7 +299,7 @@ pub(super) fn spirit_cursor_arm(
 
     let channel_index = channel_index(access.channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
-    let (scanout_width, scanout_height) = pipe_dimensions(dev, channel_index)?;
+    let (scanout_width, scanout_height) = pipe_dimensions(channel_index)?;
     if !ensure_dbuf_power(dev, channel_index) {
         return Err(SpiritCursorError::DbufNotReady);
     }
@@ -376,20 +369,21 @@ pub(super) fn spirit_cursor_poll(
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
     let regs = cursor_regs(channel_index);
     let pipe_inactive =
-        matches!(pipe_dimensions(dev, channel_index), Err(SpiritCursorError::PipeInactive));
-    if pipe_inactive || crate::intel::mmio_read(dev, regs.base) != flip.gpu {
+        matches!(pipe_dimensions(channel_index), Err(SpiritCursorError::PipeInactive));
+    let base = crate::intel::mmio_read(dev, regs.base);
+    let live = crate::intel::mmio_read(dev, regs.surf_live);
+    let ctl = crate::intel::mmio_read(dev, regs.ctl);
+    if pipe_inactive || base != flip.gpu {
         let mut state = SPIRIT_CURSOR_STATE.lock();
         let channel_state = &mut state.channels[channel_index];
         if channel_state.pending == Some(flip.surface) {
             channel_state.pending = None;
         }
         channel_state.visible = false;
-        return Ok(SpiritCursorFlipState::Interrupted);
+        return Ok(SpiritCursorFlipState::Interrupted { ctl, base, live });
     }
-    let live = crate::intel::mmio_read(dev, regs.surf_live);
-    let ctl = crate::intel::mmio_read(dev, regs.ctl);
     if live != flip.gpu || ctl & CURSOR_MODE_MASK == 0 {
-        return Ok(SpiritCursorFlipState::Waiting);
+        return Ok(SpiritCursorFlipState::Waiting { ctl, base, live });
     }
 
     let mut state = SPIRIT_CURSOR_STATE.lock();
@@ -399,13 +393,13 @@ pub(super) fn spirit_cursor_poll(
         channel_state.pending = None;
         channel_state.visible = true;
     }
-    Ok(SpiritCursorFlipState::Visible)
+    Ok(SpiritCursorFlipState::Visible { ctl, base, live })
 }
 
 pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCursorError> {
     let channel_index = channel_index(channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
-    match pipe_dimensions(dev, channel_index) {
+    match pipe_dimensions(channel_index) {
         Ok(_) => {}
         Err(SpiritCursorError::PipeInactive) => return Ok(false),
         Err(error) => return Err(error),
@@ -512,16 +506,8 @@ fn allocate_surface(
     })
 }
 
-fn pipe_dimensions(
-    dev: crate::intel::Dev,
-    channel: usize,
-) -> Result<(u32, u32), SpiritCursorError> {
-    let pipe = PIPES[channel];
-    let pipeconf = crate::intel::mmio_read(dev, PIPECONF_A + channel * PIPE_MMIO_STRIDE);
-    if pipeconf & (1 << 31) == 0 {
-        return Err(SpiritCursorError::PipeInactive);
-    }
-    decode_pipe_src(crate::intel::mmio_read(dev, pipe.pipe_src))
+fn pipe_dimensions(channel: usize) -> Result<(u32, u32), SpiritCursorError> {
+    crate::intel::complete_scanout_pipeline_dimensions(channel)
         .ok_or(SpiritCursorError::PipeInactive)
 }
 
@@ -568,9 +554,20 @@ fn cursor_ctl(device_id: u16) -> u32 {
 }
 
 fn cursor_needs_one_arb_slot(device_id: u16) -> bool {
+    // Wa_22012358565 applies to display version 13. Keep both ADL-S (Xe_D)
+    // and ADL-P/N (Xe_LPD) PCI IDs here; omitting ADL-S starves the cursor
+    // fetch even though CUR_CTL and CUR_BASE accept their programmed values.
     matches!(
         device_id,
-        0x46A0
+        0x4680
+            | 0x4682
+            | 0x4688
+            | 0x468A
+            | 0x468B
+            | 0x4690
+            | 0x4692
+            | 0x4693
+            | 0x46A0
             | 0x46A1
             | 0x46A2
             | 0x46A3
@@ -635,6 +632,40 @@ fn draw_solid_circle(surface: SpiritCursorSurface, color: u32) {
     }
 }
 
+fn draw_red_cross(surface: SpiritCursorSurface) {
+    const RED_BGRA_PREMULTIPLIED: u32 = 0xFFFF_0000;
+    const MARGIN: i32 = 16;
+    const HALF_THICKNESS: i32 = 4;
+
+    fill_surface_color(
+        surface.virt,
+        surface.pitch_bytes as usize,
+        surface.width,
+        surface.height,
+        0,
+    );
+    let width = surface.width as i32;
+    let height = surface.height as i32;
+    let drawable_width = width.saturating_sub(MARGIN * 2).max(1);
+    let drawable_height = height.saturating_sub(MARGIN * 2).max(1);
+    let pitch_pixels = surface.pitch_bytes as usize / core::mem::size_of::<u32>();
+    for y in MARGIN..height.saturating_sub(MARGIN) {
+        let relative_y = y - MARGIN;
+        let down_x = MARGIN + relative_y * drawable_width / drawable_height;
+        let up_x = width - 1 - down_x;
+        let row = unsafe { (surface.virt as *mut u32).add(y as usize * pitch_pixels) };
+        for center_x in [down_x, up_x] {
+            for x in (center_x - HALF_THICKNESS)..=(center_x + HALF_THICKNESS) {
+                if (0..width).contains(&x) {
+                    unsafe {
+                        core::ptr::write_volatile(row.add(x as usize), RED_BGRA_PREMULTIPLIED);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn write_if_changed(dev: crate::intel::Dev, register: usize, value: u32) {
     if crate::intel::mmio_read(dev, register) != value {
         crate::intel::mmio_write(dev, register, value);
@@ -644,18 +675,6 @@ fn write_if_changed(dev: crate::intel::Dev, register: usize, value: u32) {
 fn aligned_pitch_bytes(width: u32, bytes_per_pixel: u32) -> Option<u32> {
     let bytes = width.checked_mul(bytes_per_pixel)?;
     u32::try_from(crate::intel::align_up(bytes as usize, 64)?).ok()
-}
-
-fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
-    if value == 0 || value == u32::MAX {
-        return None;
-    }
-    let width = (value & 0xFFFF).saturating_add(1);
-    let height = ((value >> 16) & 0xFFFF).saturating_add(1);
-    if !(320..=8192).contains(&width) || !(200..=4320).contains(&height) {
-        return None;
-    }
-    Some((width, height))
 }
 
 fn fill_surface_color(ptr: *mut u8, pitch_bytes: usize, width: u32, height: u32, color: u32) {

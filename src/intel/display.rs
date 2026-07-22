@@ -1860,6 +1860,36 @@ pub(crate) fn active_scanout_dimensions() -> Option<(u32, u32)> {
     Some((target.width, target.height))
 }
 
+/// Hardware pipe with a complete scanout route for the primary logical output.
+///
+/// Cursor-plane owners must not bind from a provisional compatibility rank:
+/// the cursor register bank is pipe-local, so accepting a merely observed pipe
+/// can permanently attach the one-worker Spirit deployment to the wrong bank.
+fn complete_scanout_pipeline_target() -> Option<DisplayPipelineTarget> {
+    let dev = crate::intel::claimed_device()?;
+    let snapshots = display_pipeline_snapshots_for_dev(dev);
+    let selection = select_compatibility_pipeline_from_snapshots(&snapshots)?;
+    log_compatibility_pipeline_selection(selection);
+    if selection.snapshot.activity != DisplayPipelineActivity::Scanout {
+        return None;
+    }
+    selection.snapshot.target
+}
+
+pub(crate) fn complete_scanout_pipeline_slot() -> Option<usize> {
+    Some(complete_scanout_pipeline_target()?.pipeline.slot())
+}
+
+/// Dimensions belonging to one exact complete hardware pipeline.
+///
+/// This keeps cursor placement on the same accepted topology snapshot as the
+/// fence-to-cursor-bank selection. Callers must not reinterpret PIPESRC through
+/// a second private decoder after this proof has succeeded.
+pub(crate) fn complete_scanout_pipeline_dimensions(slot: usize) -> Option<(u32, u32)> {
+    let target = complete_scanout_pipeline_target()?;
+    (target.pipeline.slot() == slot).then_some((target.width, target.height))
+}
+
 /// Resolve a physical extent against the active mode and validated boot EDID.
 /// Callers retain their own fallback policy for displays which omit size data.
 pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u32, u32)> {
@@ -2161,8 +2191,10 @@ fn log_compatibility_pipeline_selection(selection: CompatibilityPipelineSelectio
             potential_reason,
         );
     } else {
-        crate::log_info!(
-            target: "intel/display";
+        // This is also the eligibility proof consumed by pipe-local owners
+        // such as Spirit. Keep the one-shot route transition visible even
+        // when the focused GFX policy suppresses ordinary info records.
+        crate::log!(
             "intel/display: compatibility-pipeline selected={} rank={} reason={} route={} link_mode={} bpc={} port_width={} mode={}x{} candidates=0x{:X} scanout=0x{:X}\n",
             selection.snapshot.pipeline.name(),
             selection.rank,
@@ -2171,8 +2203,16 @@ fn log_compatibility_pipeline_selection(selection: CompatibilityPipelineSelectio
             selection.snapshot.route.mode_name(),
             selection.snapshot.route.bits_per_color(),
             selection.snapshot.route.port_width,
-            selection.snapshot.target.map(|target| target.width).unwrap_or(0),
-            selection.snapshot.target.map(|target| target.height).unwrap_or(0),
+            selection
+                .snapshot
+                .target
+                .map(|target| target.width)
+                .unwrap_or(0),
+            selection
+                .snapshot
+                .target
+                .map(|target| target.height)
+                .unwrap_or(0),
             selection.candidate_mask,
             selection.scanout_mask,
         );

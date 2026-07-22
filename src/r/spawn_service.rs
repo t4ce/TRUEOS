@@ -632,7 +632,9 @@ fn intel_device_gate() -> bool {
 
 #[inline]
 fn trueos_spirit_gate() -> bool {
-    crate::spirit::hardware_ready() && crate::workers::ap1_ui_core_spawner().is_some()
+    crate::spirit::hardware_ready()
+        && crate::intel::complete_scanout_pipeline_slot().is_some()
+        && crate::workers::ap1_ui_core_spawner().is_some()
 }
 
 #[inline]
@@ -1493,8 +1495,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_gpu_completion_reaper,
     ),
     // TrueOS-Spirit reserves all four cursor-pipe fences, but its sane initial
-    // deployment activates only fence 0 and one Embassy worker. No input or
-    // UI path writes CUR_* registers directly.
+    // deployment starts one Embassy worker only after a complete scanout
+    // route exists, then binds fence N directly to cursor bank N. No input,
+    // UI composition, or universal-plane path writes CUR_* registers.
     TaskSpec::enabled_gated(
         "trueos-spirit",
         0,
