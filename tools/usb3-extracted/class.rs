@@ -1,3 +1,5 @@
+//! Extracted from the live USB3 source directory; retained through an explicit module path.
+
 // We paused this richer class metadata after planning a GUI app for browsing
 // USB class information. Keep it around for that future UI work.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

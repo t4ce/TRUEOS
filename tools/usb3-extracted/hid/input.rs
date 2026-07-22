@@ -1,3 +1,5 @@
+//! Extracted USB HID support retained through the compatibility module path.
+
 use embassy_time_driver::{TICK_HZ, now};
 use heapless::Vec;
 use spin::Mutex;

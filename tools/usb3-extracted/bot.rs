@@ -1,3 +1,5 @@
+//! Extracted from the live USB3 module; retained as a reference implementation.
+
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use core::ptr::{write_bytes, write_volatile};
 use dma_api::{DArray, DeviceDma, DmaDirection};

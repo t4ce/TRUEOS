@@ -1,3 +1,5 @@
+//! Extracted USB HID support retained through the compatibility module path.
+
 use core::cmp::min;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 

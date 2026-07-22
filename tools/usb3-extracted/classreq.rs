@@ -1,3 +1,5 @@
+//! Extracted from the live USB3 module; retained as a reference implementation.
+
 use super::super::control;
 use super::super::syscall::{control_in_sync, control_out_sync};
 use super::super::xhci::{Trb, TrbRing, XhciContext, trb_type, xhc_list};

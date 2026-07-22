@@ -1,7 +1,13 @@
+// Auxiliary USB modules live outside the core USB3 source directory. Keep their
+// module identities stable for the input and diagnostic compatibility surfaces.
+#[path = "../../tools/usb3-extracted/api.rs"]
 mod api;
+#[path = "../../tools/usb3-extracted/class.rs"]
 pub mod class;
+#[path = "../../tools/usb3-extracted/descriptor.rs"]
 mod descriptor;
 mod dev_gears;
+#[path = "../../tools/usb3-extracted/hid/mod.rs"]
 pub mod hid;
 mod lib;
 mod skhynix;

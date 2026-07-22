@@ -1,3 +1,5 @@
+//! Extracted USB HID support retained through the compatibility module path.
+
 extern crate alloc;
 use alloc::vec::Vec;
 use spin::Mutex;

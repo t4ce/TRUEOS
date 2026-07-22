@@ -1,3 +1,5 @@
+//! Extracted from the live USB3 source directory; retained through an explicit module path.
+
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};

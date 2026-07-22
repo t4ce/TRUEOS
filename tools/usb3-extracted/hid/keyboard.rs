@@ -1,3 +1,5 @@
+//! Extracted USB HID support retained through the compatibility module path.
+
 use super::{HID_DEBUG_REPORT_LOGS, HidRuntime};
 
 const HID_KEYBOARD_RING_CAP: usize = crate::allcaps::input::HID_KEYBOARD_RING_CAP;
