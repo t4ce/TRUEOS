@@ -100,7 +100,7 @@ pub(crate) use window_broker::{
     replace_window_frame, set_window_placement, toggle_window_maximized,
     visible_windows_for_output, visible_windows_for_output_with_revision,
     wait_for_window_composition_change, window_close_transitions_active,
-    window_composition_revision,
+    window_composition_revision, window_placement,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

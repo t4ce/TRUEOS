@@ -57,6 +57,15 @@ pub struct TrueosUi4PanEvent {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ResizeEvent {
+    pub old_width: u32,
+    pub old_height: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4KeyboardState {
     pub controller_id: u32,
     pub slot_id: u32,
@@ -160,6 +169,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
     -> i32;
+    pub fn trueos_cabi_ui4_scene_resize_event_take(
+        window_id: u32,
+        out: *mut TrueosUi4ResizeEvent,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_keyboard_state(
         window_id: u32,
         out: *mut TrueosUi4KeyboardState,

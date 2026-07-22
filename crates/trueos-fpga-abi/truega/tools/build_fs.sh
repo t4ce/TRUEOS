@@ -42,6 +42,7 @@ PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
 PLACE_OPTION="${TRUEGA_PLACE_OPTION:-4}"
 ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
 CLOCK_CONVERSION="${TRUEGA_CLOCK_CONVERSION:-1}"
+REQUIRED_TLP_FMAX_MHZ="${TRUEGA_REQUIRED_TLP_FMAX_MHZ:-100.5}"
 HOST_TOOLCHAIN="${TRUEGA_HOST_TOOLCHAIN:-1.96}"
 HOST_TARGET="${TRUEGA_HOST_TARGET:-x86_64-unknown-linux-gnu}"
 GENERATOR_TARGET_DIR="${TRUEGA_GENERATOR_TARGET_DIR:-/tmp/truega-tga-gen-target}"
@@ -207,15 +208,16 @@ if [[ -z "$TLP_FMAX" || -z "$VIOLATED_ENDPOINTS" ]]; then
   echo "could not parse TLP Fmax/violations from $TIMING_REPORT" >&2
   exit 1
 fi
-if ! awk -v actual="$TLP_FMAX" 'BEGIN { exit !(actual >= 100.0) }'; then
-  echo "timing failure: tlp_clk actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=100" >&2
+if ! awk -v actual="$TLP_FMAX" -v required="$REQUIRED_TLP_FMAX_MHZ" \
+  'BEGIN { exit !(actual >= required) }'; then
+  echo "timing failure: tlp_clk actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=$REQUIRED_TLP_FMAX_MHZ" >&2
   exit 1
 fi
 if [[ "$VIOLATED_ENDPOINTS" != "0" ]]; then
   echo "timing failure: violated_endpoints=$VIOLATED_ENDPOINTS" >&2
   exit 1
 fi
-echo "timing=pass tlp_actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=100 violated_endpoints=0"
+echo "timing=pass tlp_actual_fmax_mhz=$TLP_FMAX required_fmax_mhz=$REQUIRED_TLP_FMAX_MHZ violated_endpoints=0"
 
 # End the temporary Gowin input swap before publishing anything. Each destination is
 # prepared on its own filesystem and renamed into place; SHA256SUMS is the final seal.

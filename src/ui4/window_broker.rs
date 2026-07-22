@@ -934,6 +934,17 @@ pub(crate) fn replace_window_frame(
     Ok(())
 }
 
+/// Read the broker's live geometry for a producer which is about to replace
+/// its backing frame. This preserves maximize/restore position changes that
+/// are newer than a producer's own cached scene placement.
+pub(crate) fn window_placement(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<WindowPlacement, WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    Ok(broker.checked_window_mut(owner, id)?.placement)
+}
+
 pub(crate) fn set_window_placement(
     owner: WindowOwner,
     id: WindowId,

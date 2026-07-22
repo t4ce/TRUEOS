@@ -985,6 +985,38 @@ mod tests {
     }
 
     #[test]
+    fn receive_snapshot_is_not_clock_enabled_by_transaction_state() {
+        let marker = "Register the hard-IP receive pins on every TLP clock.";
+        let start = TOP_VHDL.find(marker).expect("missing unconditional RX snapshot");
+        let finish = TOP_VHDL[start..]
+            .find("end process;")
+            .map(|offset| start + offset)
+            .expect("unterminated RX snapshot process");
+        let process = &TOP_VHDL[start..finish];
+        for required in [
+            "rx_snapshot_data <= tl_rx_data;",
+            "rx_snapshot_valid <= tl_rx_valid;",
+            "rx_snapshot_bardec <= tl_rx_bardec;",
+        ] {
+            assert!(process.contains(required), "missing RX register: {required}");
+        }
+        assert!(!process.contains("transaction_pending"));
+        assert!(!process.contains("capture_pending"));
+    }
+
+    #[test]
+    fn bar0_and_bar2_addresses_are_decoded_in_their_own_apertures() {
+        for required in [
+            "if transaction_bardec(0) = '1' then",
+            "addr_index := to_integer(unsigned(addr_dw(7 downto 0)));",
+            "elsif hit_write and (transaction_bardec(0) = '1') then",
+            "if hit_write and (transaction_bardec(2) = '1') then",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing BAR-relative decode: {required}");
+        }
+    }
+
+    #[test]
     fn final_image_gives_leds_to_the_fused_heartbeat_function() {
         assert!(TOP_VHDL.contains("signal debug_led_mode : std_logic := '0';"));
         assert!(TOP_VHDL.contains("debug_led_mode <= '0';"));
@@ -1032,6 +1064,8 @@ mod tests {
             "bar_read_bank <= BAR_READ_BANK_CALL_INPUT;",
             "bar_read_bank <= BAR_READ_BANK_CALL_OUTPUT;",
             "bar_read_bank <= BAR_READ_BANK_MANIFEST;",
+            "bar_read_bank <= BAR_READ_BANK_STREAM;",
+            "bar_read_bank <= BAR_READ_BANK_DEBUG;",
             "bar_read_selected_bank <= bar_read_bank;",
             "bar_read_data_dw <= read_data_dw;",
             "queue_cpld(bar_read_req_id, bar_read_req_tag, bar_read_addr_dw, bar_read_data_dw);",
@@ -1062,6 +1096,9 @@ mod tests {
             "activation_memory [0:143]",
             "weight0_memory [0:143]",
             "weight1_memory [0:143]",
+            "activation_read_valid <= activation_valid[read_index];",
+            "weight0_read_valid <= weight0_valid[read_index];",
+            "weight1_read_valid <= weight1_valid[read_index];",
         ] {
             assert!(ROW_STREAMER_RTL.contains(required), "missing row engine: {required}");
         }

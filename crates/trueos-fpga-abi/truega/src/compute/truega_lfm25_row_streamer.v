@@ -68,6 +68,9 @@ module truega_lfm25_row_streamer (
     reg [287:0] activation_read_data;
     reg [287:0] weight0_read_data;
     reg [287:0] weight1_read_data;
+    reg activation_read_valid;
+    reg weight0_read_valid;
+    reg weight1_read_valid;
 
     // Unreset data arrays with synchronous reads are intentional: validity is
     // reset and checked block-by-block before any entry can be consumed.
@@ -75,11 +78,17 @@ module truega_lfm25_row_streamer (
         activation_read_data <= activation_memory[read_index];
         weight0_read_data <= weight0_memory[read_index];
         weight1_read_data <= weight1_memory[read_index];
+        activation_read_valid <= activation_valid[read_index];
+        weight0_read_valid <= weight0_valid[read_index];
+        weight1_read_valid <= weight1_valid[read_index];
 
         if (!reset_n) begin
             activation_valid <= 144'd0;
             weight0_valid <= 144'd0;
             weight1_valid <= 144'd0;
+            activation_read_valid <= 1'b0;
+            weight0_read_valid <= 1'b0;
+            weight1_read_valid <= 1'b0;
             accepted_write_count_o <= 32'd0;
         end else if (accept_write) begin
             accepted_write_count_o <= accepted_write_count_o + 32'd1;
@@ -164,10 +173,13 @@ module truega_lfm25_row_streamer (
     wire silu_error;
     wire signed [63:0] silu_result;
 
-    wire current_activation_valid = activation_valid[block_index];
+    // Register validity beside each synchronous RAM read.  A direct indexed
+    // validity lookup in ST_START would put its 144:1 decode on the clock-enable
+    // of all 544 row payload registers and leaves essentially no timing margin.
+    wire current_activation_valid = activation_read_valid;
     wire current_weight_valid = phase == PHASE_UP
-        ? weight1_valid[block_index]
-        : weight0_valid[block_index];
+        ? weight1_read_valid
+        : weight0_read_valid;
 
     truega_q8_0_row_block_slot #(
         .ROW_DIAGNOSTIC_ENABLE(1)

@@ -218,6 +218,8 @@ architecture rtl of top is
 	constant BAR_READ_BANK_CALL_INPUT : std_logic_vector(2 downto 0) := "011";
 	constant BAR_READ_BANK_CALL_OUTPUT : std_logic_vector(2 downto 0) := "100";
 	constant BAR_READ_BANK_MANIFEST : std_logic_vector(2 downto 0) := "101";
+	constant BAR_READ_BANK_STREAM : std_logic_vector(2 downto 0) := "110";
+	constant BAR_READ_BANK_DEBUG : std_logic_vector(2 downto 0) := "111";
 
 	signal pcie_linkup : std_logic;
 	signal tlp_clk : std_logic;
@@ -352,6 +354,8 @@ architecture rtl of top is
 	signal bar_read_req_id : std_logic_vector(15 downto 0) := (others => '0');
 	signal bar_read_req_tag : std_logic_vector(7 downto 0) := (others => '0');
 	signal bar_read_control_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_stream_data_dw : std_logic_vector(31 downto 0) := (others => '0');
+	signal bar_read_debug_data_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal bar_read_call_header_data_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal bar_read_call_input_data_dw : std_logic_vector(31 downto 0) := (others => '0');
 	signal bar_read_call_output_data_dw : std_logic_vector(31 downto 0) := (others => '0');
@@ -499,6 +503,26 @@ begin
 				pcie_core_reset_n <= '0';
 			else
 				pcie_core_reset_n <= '1';
+			end if;
+		end if;
+	end process;
+
+	-- Register the hard-IP receive pins on every TLP clock.  Keeping these wide
+	-- registers out of the transaction-state priority chain prevents the current
+	-- control state from becoming their clock-enable path.  The PCIe
+	-- controller holds an accepted beat while backpressure is asserted, so the
+	-- main state machine can consume this snapshot on the following cycle.
+	process(tlp_clk)
+	begin
+		if rising_edge(tlp_clk) then
+			if (pcie_perst_n = '0') or (pll_lock = '0') then
+				rx_snapshot_data <= (others => '0');
+				rx_snapshot_valid <= (others => '0');
+				rx_snapshot_bardec <= (others => '0');
+			else
+				rx_snapshot_data <= tl_rx_data;
+				rx_snapshot_valid <= tl_rx_valid;
+				rx_snapshot_bardec <= tl_rx_bardec;
 			end if;
 		end if;
 	end process;
@@ -816,9 +840,6 @@ begin
 					stream_result_q30 <= (others => '0');
 					stream_completion_count <= (others => '0');
 				capture_pending <= '0';
-				rx_snapshot_data <= (others => '0');
-				rx_snapshot_valid <= (others => '0');
-				rx_snapshot_bardec <= (others => '0');
 				pkt_cnt_fwd <= (others => '0');
 				pkt_cnt_rev <= (others => '0');
 				pkt_words_fwd <= (others => (others => '0'));
@@ -842,6 +863,8 @@ begin
 				bar_read_req_id <= (others => '0');
 				bar_read_req_tag <= (others => '0');
 				bar_read_control_data_dw <= (others => '0');
+				bar_read_stream_data_dw <= (others => '0');
+				bar_read_debug_data_dw <= (others => '0');
 				bar_read_call_header_data_dw <= (others => '0');
 				bar_read_call_input_data_dw <= (others => '0');
 				bar_read_call_output_data_dw <= (others => '0');
@@ -1031,6 +1054,8 @@ begin
 					if bar_read_data_select_pending = '1' then
 						case bar_read_selected_bank is
 						when BAR_READ_BANK_CONTROL => read_data_dw := bar_read_control_data_dw;
+						when BAR_READ_BANK_STREAM => read_data_dw := bar_read_stream_data_dw;
+						when BAR_READ_BANK_DEBUG => read_data_dw := bar_read_debug_data_dw;
 						when BAR_READ_BANK_CALL_HEADER => read_data_dw := bar_read_call_header_data_dw;
 						when BAR_READ_BANK_CALL_INPUT => read_data_dw := bar_read_call_input_data_dw;
 						when BAR_READ_BANK_CALL_OUTPUT => read_data_dw := bar_read_call_output_data_dw;
@@ -1070,89 +1095,83 @@ begin
 							bar_read_call_output_data_dw <= call_output_words(to_integer(unsigned(bar_read_word_index)));
 						when BAR_READ_BANK_MANIFEST =>
 							bar_read_manifest_data_dw <= firmware_manifest_word;
+						when BAR_READ_BANK_STREAM =>
+							case to_integer(unsigned(bar_read_word_index)) is
+							when 0 => read_data_dw := STREAM_CAPABILITY_MAGIC;
+							when 1 => read_data_dw := stream_control;
+							when 2 => read_data_dw := stream_row;
+							when 4 => read_data_dw := stream_state;
+							when 5 => read_data_dw := stream_gate_q30(31 downto 0);
+							when 6 => read_data_dw := stream_gate_q30(63 downto 32);
+							when 7 => read_data_dw := stream_up_q30(31 downto 0);
+							when 8 => read_data_dw := stream_up_q30(63 downto 32);
+							when 9 => read_data_dw := stream_result_q30(31 downto 0);
+							when 10 => read_data_dw := stream_result_q30(63 downto 32);
+							when 11 => read_data_dw := stream_error_code;
+							when 12 => read_data_dw := std_logic_vector(stream_completion_count);
+							when others => null;
+							end case;
+							bar_read_stream_data_dw <= read_data_dw;
+						when BAR_READ_BANK_DEBUG =>
+							case bar_read_word_index is
+							when "000000" =>
+								read_data_dw := make_seen_word(
+									dbg_seen_rx_bar0_eop,
+									dbg_seen_hit_write,
+									dbg_seen_hit_read,
+									dbg_seen_magic_read,
+									dbg_seen_queue_cpld,
+									dbg_seen_tx_fire,
+									dbg_cpld_blocked,
+									pcie_linkup
+								);
+							when "000001" => read_data_dw(9 downto 0) := dbg_last_addr_dw;
+							when "000010" => read_data_dw := dbg_last_read_data;
+							when "000011" =>
+								read_data_dw(31 downto 16) := dbg_last_req_id;
+								read_data_dw(15 downto 8) := dbg_last_req_tag;
+							when "000100" => read_data_dw := dbg_last_cpld_dw0;
+							when "000101" => read_data_dw := dbg_last_cpld_dw1;
+							when "000110" => read_data_dw := dbg_last_cpld_dw2;
+							when "000111" => read_data_dw := dbg_last_cpld_data;
+							when "001000" => read_data_dw := std_logic_vector(dbg_rx_capture_count);
+							when "001001" => read_data_dw := std_logic_vector(dbg_write_count);
+							when "001010" => read_data_dw := std_logic_vector(dbg_word30_write_count);
+							when "001011" => read_data_dw := dbg_word30_last_payload;
+							when "001100" => read_data_dw := call_input_words(DEBUG_TARGET_PACKAGE_WORD - CALL_INPUT_WORD);
+							when "001101" =>
+								read_data_dw(7) := capture_pending;
+								read_data_dw(8) := decode_pending;
+								read_data_dw(9) := transaction_pending;
+								read_data_dw(10) := tl_rx_backpressure;
+								read_data_dw(11) := rx_nonposted_busy;
+							when "001110" => read_data_dw := std_logic_vector(dbg_rx_error_count);
+							when others => null;
+							end case;
+							bar_read_debug_data_dw <= read_data_dw;
 						when BAR_READ_BANK_CONTROL =>
-							if to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_DOORBELL_DW then
+							case to_integer(unsigned(bar_read_word_index)) is
+							when 0 => read_data_dw(4 downto 0) := led_reg;
+							when 5 => read_data_dw := call_state;
+							when 8 =>
+								read_data_dw := PROTOCOL_MAGIC;
+								dbg_magic_read <= '1';
+								dbg_seen_magic_read <= '1';
+							when BAR0_CALL_DOORBELL_DW =>
 								read_data_dw := std_logic_vector(call_retire_count);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_RETIRE_COUNT_DW then
+							when BAR0_CALL_IRQ_RETIRE_COUNT_DW =>
 								read_data_dw := std_logic_vector(call_retire_count);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_REQUEST_COUNT_DW then
+							when BAR0_CALL_IRQ_REQUEST_COUNT_DW =>
 								read_data_dw := std_logic_vector(call_irq_request_count);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW then
+							when BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW =>
 								read_data_dw := std_logic_vector(call_irq_controller_ack_count);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_CALL_IRQ_STATE_DW then
+							when BAR0_CALL_IRQ_STATE_DW =>
 								read_data_dw(0) := call_irq_status;
 								read_data_dw(1) := call_irq_request;
 								read_data_dw(2) := call_irq_controller_ack;
 								read_data_dw(3) := call_flags(0);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_CAPABILITY_DW then
-								read_data_dw := STREAM_CAPABILITY_MAGIC;
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_CONTROL_DW then
-								read_data_dw := stream_control;
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_ROW_DW then
-								read_data_dw := stream_row;
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_STATE_DW then
-								read_data_dw := stream_state;
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_GATE_LO_DW then
-								read_data_dw := stream_gate_q30(31 downto 0);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_GATE_HI_DW then
-								read_data_dw := stream_gate_q30(63 downto 32);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_UP_LO_DW then
-								read_data_dw := stream_up_q30(31 downto 0);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_UP_HI_DW then
-								read_data_dw := stream_up_q30(63 downto 32);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_RESULT_LO_DW then
-								read_data_dw := stream_result_q30(31 downto 0);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_RESULT_HI_DW then
-								read_data_dw := stream_result_q30(63 downto 32);
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_ERROR_DW then
-								read_data_dw := stream_error_code;
-							elsif to_integer(unsigned(bar_read_word_index)) = BAR0_STREAM_COMPLETION_COUNT_DW then
-								read_data_dw := std_logic_vector(stream_completion_count);
-							else
-								case bar_read_word_index is
-								when "000000" =>
-									read_data_dw(4 downto 0) := led_reg;
-								when "000101" =>
-									read_data_dw := call_state;
-								when "001000" =>
-									read_data_dw := PROTOCOL_MAGIC;
-									dbg_magic_read <= '1';
-									dbg_seen_magic_read <= '1';
-								when "010000" =>
-									read_data_dw := make_seen_word(
-										dbg_seen_rx_bar0_eop,
-										dbg_seen_hit_write,
-										dbg_seen_hit_read,
-										dbg_seen_magic_read,
-										dbg_seen_queue_cpld,
-										dbg_seen_tx_fire,
-										dbg_cpld_blocked,
-										pcie_linkup
-									);
-								when "010001" => read_data_dw(9 downto 0) := dbg_last_addr_dw;
-								when "010010" => read_data_dw := dbg_last_read_data;
-								when "010011" =>
-									read_data_dw(31 downto 16) := dbg_last_req_id;
-									read_data_dw(15 downto 8) := dbg_last_req_tag;
-								when "010100" => read_data_dw := dbg_last_cpld_dw0;
-								when "010101" => read_data_dw := dbg_last_cpld_dw1;
-								when "010110" => read_data_dw := dbg_last_cpld_dw2;
-								when "010111" => read_data_dw := dbg_last_cpld_data;
-								when "011000" => read_data_dw := std_logic_vector(dbg_rx_capture_count);
-								when "011001" => read_data_dw := std_logic_vector(dbg_write_count);
-								when "011010" => read_data_dw := std_logic_vector(dbg_word30_write_count);
-								when "011011" => read_data_dw := dbg_word30_last_payload;
-								when "011100" => read_data_dw := call_input_words(DEBUG_TARGET_PACKAGE_WORD - CALL_INPUT_WORD);
-								when "011101" =>
-									read_data_dw(7) := capture_pending;
-									read_data_dw(8) := decode_pending;
-									read_data_dw(9) := transaction_pending;
-									read_data_dw(10) := tl_rx_backpressure;
-									read_data_dw(11) := rx_nonposted_busy;
-								when "011110" => read_data_dw := std_logic_vector(dbg_rx_error_count);
-								when others => null;
-								end case;
-							end if;
+							when others => null;
+							end case;
 							bar_read_control_data_dw <= read_data_dw;
 						when others => null;
 						end case;
@@ -1168,7 +1187,15 @@ begin
 							payload_dw := transaction_payload_dw;
 							req_id := transaction_req_id;
 							req_tag := transaction_req_tag;
-							addr_index := to_integer(unsigned(addr_dw));
+							-- BAR0 is a 1 KiB register aperture; BAR2 is a 512 KiB
+							-- streaming aperture.  Decode each address relative to the
+							-- BAR that the PCIe hard block reports, even if it preserves
+							-- upper bus-address bits in the receive header.
+							if transaction_bardec(0) = '1' then
+								addr_index := to_integer(unsigned(addr_dw(7 downto 0)));
+							else
+								addr_index := to_integer(unsigned(addr_dw));
+							end if;
 
 							if hit_write and (transaction_bardec(2) = '1') then
 								-- BAR2 is posted-write-only in this milestone. The row
@@ -1181,7 +1208,7 @@ begin
 								dbg_seen_hit_write <= '1';
 								dbg_write_count <= dbg_write_count + 1;
 								rx_nonposted_busy <= '0';
-							elsif hit_write then
+							elsif hit_write and (transaction_bardec(0) = '1') then
 								dbg_hit_write <= '1';
 								dbg_seen_hit_write <= '1';
 								dbg_write_count <= dbg_write_count + 1;
@@ -1313,6 +1340,13 @@ begin
 									and (addr_index < BAR0_FIRMWARE_MANIFEST_BASE_DW + FIRMWARE_MANIFEST_WORD_COUNT) then
 									bar_read_bank <= BAR_READ_BANK_MANIFEST;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
+								elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)
+									and (addr_index <= BAR0_STREAM_COMPLETION_COUNT_DW) then
+									bar_read_bank <= BAR_READ_BANK_STREAM;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_STREAM_CAPABILITY_DW, 6));
+								elsif (addr_index >= 16) and (addr_index <= 30) then
+									bar_read_bank <= BAR_READ_BANK_DEBUG;
+									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - 16, 6));
 								elsif addr_index < 64 then
 									bar_read_bank <= BAR_READ_BANK_CONTROL;
 									bar_read_word_index <= addr_dw(5 downto 0);
@@ -1409,9 +1443,6 @@ begin
 						and (pcie_linkup = '1')
 						and ((tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))
 						and (tl_rx_backpressure = '0') then
-						rx_snapshot_data <= tl_rx_data;
-						rx_snapshot_valid <= tl_rx_valid;
-						rx_snapshot_bardec <= tl_rx_bardec;
 						capture_pending <= '1';
 						rx_nonposted_busy <= '1';
 						dbg_rx_capture_count <= dbg_rx_capture_count + 1;

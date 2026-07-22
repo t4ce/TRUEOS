@@ -35,7 +35,7 @@ use super::{
     finish_window_session_with_request, focused_keyboard_state, gpgpu_rgba_surface,
     mark_frame_buffer_cpu_authored, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
     publish_window_frame, replace_window_frame, set_window_placement, take_owner_input_events,
-    writable_rgba_view,
+    window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -122,6 +122,20 @@ pub struct TrueosUi4PanEvent {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4PanEvent>() == 13 * 4);
+
+/// One broker-requested frame extent transition. The Blueprint may ignore the
+/// event and retain its old 1:1 backing allocation, or replace that allocation
+/// through `trueos_cabi_ui4_scene_frame_resize`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ResizeEvent {
+    pub old_width: u32,
+    pub old_height: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4ResizeEvent>() == 4 * 4);
 
 /// Held-key snapshot for the keyboard assigned to this window's focused
 /// cursor/HUT route. HID usages index `key_down_bits` directly.
@@ -214,6 +228,7 @@ struct BlueprintSceneSurface {
     sprite_clear_rgba: Option<u32>,
     sprite_scene_upload: Option<SpriteSceneUpload>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
+    pending_resize_events: VecDeque<TrueosUi4ResizeEvent>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -460,7 +475,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         output,
         plane: WindowPlane::Universal(plane_slot as u8),
         placement,
-        interaction: super::WindowInteraction::APPLICATION_FIXED_FRAME,
+        interaction: super::WindowInteraction::APPLICATION,
     }) {
         Ok(window) => window,
         Err(error) => {
@@ -495,6 +510,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
                 sprite_clear_rgba: None,
                 sprite_scene_upload: None,
                 pending_pan_events: VecDeque::new(),
+                pending_resize_events: VecDeque::new(),
             },
             BlueprintSurfaceRelease::Animated,
         );
@@ -520,6 +536,7 @@ fn open_blueprint_frame(x: i32, y: i32, width: u32, height: u32, cadence: FrameC
         sprite_clear_rgba: None,
         sprite_scene_upload: None,
         pending_pan_events: VecDeque::new(),
+        pending_resize_events: VecDeque::new(),
     });
     let (cadence_name, buffer_count) = match cadence {
         FrameCadence::Dirty => ("dirty", 2),
@@ -689,6 +706,42 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_pan_event_take(
     0
 }
 
+/// Take the next maximize/restore extent notification for this Blueprint
+/// window. A return value of one means the queue is currently empty; zero
+/// writes one event. The producer chooses whether and when to resize.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4ResizeEvent,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_resize_event_take(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+
+    route_owner_input_events(owner);
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(event) = surface.pending_resize_events.pop_front() else {
+        return 1;
+    };
+    // SAFETY: the non-null output points to one writable ABI event.
+    unsafe { out.write(event) };
+    0
+}
+
 /// Read the held HID usages for the keyboard routed to this focused window.
 ///
 /// This is window-scoped state, not the global HUT inventory. A return value
@@ -735,10 +788,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_state(
     0
 }
 
-/// Drain one VM owner's broker queue once and preserve every pan event for its
-/// exact surface. Keyboard held state remains in the input broker; draining
-/// its cooked events here prevents an interactive Blueprint from filling the
-/// owner queue while it polls the focused state contract.
+/// Drain one VM owner's broker queue once and preserve every pan and resize
+/// event for its exact surface. Keyboard held state remains in the input
+/// broker; draining its cooked events here prevents an interactive Blueprint
+/// from filling the owner queue while it polls the focused state contract.
 fn route_owner_input_events(owner: WindowOwner) {
     let input_events = take_owner_input_events(owner);
     if input_events.is_empty() {
@@ -746,35 +799,54 @@ fn route_owner_input_events(owner: WindowOwner) {
     }
     let mut surfaces = SURFACES.lock();
     for input in input_events {
-        let Ui4InputEvent::Pan(event) = input else {
-            continue;
-        };
-        let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
-            continue;
-        };
-        if surface.pending_pan_events.len() >= MAX_PENDING_PAN_EVENTS {
-            continue;
+        match input {
+            Ui4InputEvent::Pan(event) => {
+                let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
+                    continue;
+                };
+                if surface.pending_pan_events.len() >= MAX_PENDING_PAN_EVENTS {
+                    continue;
+                }
+                let phase = match event.phase {
+                    super::Ui4PanPhase::Begin => 1,
+                    super::Ui4PanPhase::Update => 2,
+                    super::Ui4PanPhase::End => 3,
+                };
+                surface.pending_pan_events.push_back(TrueosUi4PanEvent {
+                    controller_id: event.source.controller_id,
+                    slot_id: event.source.slot_id,
+                    ep_target: event.source.ep_target,
+                    hid_kind: u32::from(event.source.hid_kind),
+                    phase,
+                    x: event.x,
+                    y: event.y,
+                    local_x: event.local_x,
+                    local_y: event.local_y,
+                    dx: event.dx,
+                    dy: event.dy,
+                    combo_id: event.combo_id,
+                    vcursor: u32::from(event.vcursor),
+                });
+            }
+            Ui4InputEvent::Resize(event) => {
+                let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
+                    continue;
+                };
+                // Extents are target state, not deltas. Only the newest
+                // maximize/restore request matters if the producer has not
+                // serviced an older one yet.
+                surface.pending_resize_events.clear();
+                surface
+                    .pending_resize_events
+                    .push_back(TrueosUi4ResizeEvent {
+                        old_width: event.old_width,
+                        old_height: event.old_height,
+                        width: event.width,
+                        height: event.height,
+                    });
+            }
+            _ => {}
         }
-        let phase = match event.phase {
-            super::Ui4PanPhase::Begin => 1,
-            super::Ui4PanPhase::Update => 2,
-            super::Ui4PanPhase::End => 3,
-        };
-        surface.pending_pan_events.push_back(TrueosUi4PanEvent {
-            controller_id: event.source.controller_id,
-            slot_id: event.source.slot_id,
-            ep_target: event.source.ep_target,
-            hid_kind: u32::from(event.source.hid_kind),
-            phase,
-            x: event.x,
-            y: event.y,
-            local_x: event.local_x,
-            local_y: event.local_y,
-            dx: event.dx,
-            dy: event.dy,
-            combo_id: event.combo_id,
-            vcursor: u32::from(event.vcursor),
-        });
     }
 }
 
@@ -828,7 +900,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let cadence = {
+    let (cadence, window) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
@@ -836,7 +908,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         if surface.write_lease.is_some() {
             return ERROR_STATE;
         }
-        surface.cadence
+        (surface.cadence, surface.window)
     };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let replacement = match create_frame(FrameSpec {
@@ -857,6 +929,13 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         Err(_) => return ERROR_UI4,
     };
 
+    let live_placement = match window_placement(owner, window) {
+        Ok(placement) => placement,
+        Err(_) => {
+            let _ = destroy_frame(replacement);
+            return ERROR_UI4;
+        }
+    };
     let previous = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -875,7 +954,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         let placement = WindowPlacement {
             width,
             height,
-            ..surface.placement
+            ..live_placement
         };
         if set_window_placement(owner, surface.window, placement).is_err() {
             let _ = replace_window_frame(owner, surface.window, previous);
@@ -1700,6 +1779,27 @@ unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i
     let mut response = [0u8; core::mem::size_of::<TrueosUi4PanEvent>()];
     let (status, data) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_PAN_EVENT_TAKE,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
+}
+
+unsafe fn guest_resize_event_take(window_id: u32, out: *mut TrueosUi4ResizeEvent) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4ResizeEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE,
         window_id as u64,
         0,
         &[],

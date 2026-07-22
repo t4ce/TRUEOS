@@ -109,6 +109,7 @@ pub const OP_BP_UI4_SCENE_SPRITE_DRAW_BEGIN: u32 = 0xE1; // arg0 window,arg1 qua
 pub const OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK: u32 = 0xE2; // arg0 window,arg1 quad offset,payload records -> rc
 pub const OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH: u32 = 0xE3; // arg0 window -> rc
 pub const OP_BP_VRAM_SNAPSHOT_READ: u32 = 0xE4; // arg0 offset, arg1 cap -> cached vGPU memory snapshot text
+pub const OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE: u32 = 0xE5; // arg0 window -> rc + ResizeEvent payload
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -1325,6 +1326,21 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let mut event = crate::ui4::blueprint_text::TrueosUi4PanEvent::default();
             let rc = unsafe {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_scene_pan_event_take(
+                    arg0 as u32,
+                    &mut event,
+                )
+            };
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE => {
+            let mut event = crate::ui4::blueprint_text::TrueosUi4ResizeEvent::default();
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_resize_event_take(
                     arg0 as u32,
                     &mut event,
                 )

@@ -13,4 +13,7 @@
 # The UI4 retained-sprite upload, GPU-cleared sprite-frame begin, and ordered
 # sprite-quad submission calls are strictly additive; existing v2 artifacts do
 # not import them and retain their previous frame-write behavior.
-ee16ce33ba4be928025d69a8cdde57da02e0fd28006f736c43b804ebf3557959
+# The UI4 resize-event take call is also strictly additive. It grants new
+# Blueprints the existing resize-on-maximize notification while older v2
+# artifacts continue to retain their fixed backing extent.
+054fdf8f81ea59bba76348e024de4137075845a96c713f6761fb16fcefd28994
