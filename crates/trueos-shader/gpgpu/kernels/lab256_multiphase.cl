@@ -15,7 +15,7 @@
 #define LAB256_PIXELS (LAB256_SIZE * LAB256_SIZE)
 
 #define LAB256_CONTROL_MAGIC 0x4C414232u // "LAB2"
-#define LAB256_CONTROL_VERSION 5u
+#define LAB256_CONTROL_VERSION 6u
 #define LAB256_REPORT_MAGIC 0x4C325250u // "L2RP"
 
 #define LAB256_FLAG_WRAP        (1u << 0)
@@ -325,12 +325,16 @@ __kernel void lab256_composite(
     float fog_t = lab256_clamp01(warped_radius / max(fog_radius, 0.01f));
     fog_t = fog_t * fog_t * (3.0f - 2.0f * fog_t);
     float fog_envelope = 1.0f - fog_t;
-    float broad_haze = 0.10f / (radius2 + 0.22f);
+    // Gate the rational haze by the finite fog envelope. Unlike the previous
+    // form, pixels outside the effect reach an exact zero-alpha baseline.
+    float broad_haze = fog_envelope * (0.10f / (radius2 + 0.22f));
     float smoke = fog_envelope * (0.22f + ripple * 0.24f);
 
-    float3 color = (float3)(0.30f, 0.34f, 0.39f) * (smoke * 0.78f)
-        + (float3)(0.24f, 0.38f, 0.52f) * (fog_envelope * ripple * 0.24f)
-        + (float3)(0.48f, 0.54f, 0.60f) * (broad_haze * 0.16f);
+    // Neutral grayscale carries the static effect. Contrast comes from the
+    // ripple and opacity shape rather than a saturated blue/white core.
+    float3 color = (float3)(0.48f) * (smoke * 1.05f)
+        + (float3)(0.68f) * (fog_envelope * ripple * 0.28f)
+        + (float3)(0.38f) * (broad_haze * 0.22f);
 
     // The mouse-authored reaction is a second visual layer in real surface
     // coordinates. A broad low-saturation response makes an area disturbance,
@@ -348,12 +352,13 @@ __kernel void lab256_composite(
     float background_alpha = clamp(
         lab256_finite_or(
             as_float(control[LAB256_CTRL_BACKGROUND_ALPHA]),
-            0.08f),
+            0.0f),
         0.0f,
         1.0f);
     float content_alpha = lab256_clamp01(
-        smoke * 0.44f
-            + broad_haze * 0.12f
+        smoke * 0.62f
+            + fog_envelope * ripple * 0.10f
+            + broad_haze * 0.20f
             + reaction_trail * 0.34f);
     float output_alpha = mix(background_alpha, 1.0f, content_alpha);
 

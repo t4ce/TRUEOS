@@ -62,14 +62,14 @@ repository bake script and an available `ocloc` reporting driver version
 
 ```text
 artifact: artifacts/adls/lab256_multiphase.bin
-size:     53,304 bytes
-sha256:   bc8aa550f9899c98e7af5c0059bb66fe63b22dd5e3465a3cf23395a11b5f06e0
+size:     52,632 bytes
+sha256:   6f51ff134f9f1fa22cc213d24818a67d7593bc98241ce92ecda98e50c29296d2
 
 spir-v:   artifacts/adls/lab256_multiphase.spv
-sha256:   ad5b769624a1c9b2b45ee1afac373a3e2c6e48d2a38fca4aa37b9edb03f88fa9
+sha256:   3fd24b10f10eae4b058b4bcfa483f7da5229805f802bdbd49efab00db59ad87b
 
 source sha256:
-32afd26494df768f612f4d70f4d99a574687ef922847a2d6852f85eb7bcdaae9
+b87e9c7a2d9cf0bae49f96baa3d2f1df46870449640fe689a151a3e20a3c6221
 ```
 
 `ocloc validate` reports the binary as valid and finds exactly three kernels.
@@ -131,6 +131,11 @@ separate layers. The fog uses one slow radial wave, a small algebraic lobe, and
 a broad rational haze. The former white reciprocal core and four star-ray axes
 are absent. No pointer coordinate or reaction value enters the fog geometry.
 
+The centered layer uses neutral grayscale at higher contrast than the initial
+fog experiment. Its rational haze is multiplied by the finite fog envelope, so
+both color and alpha reach exact zero outside the effect instead of tinting the
+whole 256x256 cursor rectangle gray.
+
 The reaction layer is composited in actual surface coordinates. A mean-relative
 floor rejects the quiet seed, then a concave response spreads low field values
 into a larger gray-blue area instead of emphasizing a saturated point. It
@@ -138,7 +143,7 @@ contributes restrained color and alpha without moving or warping the centered
 fog. The former direct pointer cross remains absent.
 
 Alpha is the only output path. Control dword 17 supplies a finite f32 background
-alpha clamped to `[0, 1]` (fallback `0.08`). Fog, ripple, and reaction-trail
+alpha clamped to `[0, 1]` (fallback and Spirit default `0.0`). Fog, ripple, and reaction-trail
 concentration raise opacity modestly. The FPS dot is fully opaque. RGB is
 multiplied by alpha before packing, matching UI4's
 `Rgba8888Premultiplied` contract rather than relying on straight-alpha blending.
