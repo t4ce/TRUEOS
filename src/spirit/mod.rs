@@ -18,6 +18,7 @@ use spin::Mutex;
 
 mod intel_cursor;
 mod lilly;
+pub(crate) mod lilly_protocol;
 
 /// Architectural pipe/fence capacity kept for later activation.
 pub(crate) const SPIRIT_FENCE_COUNT: usize = 4;

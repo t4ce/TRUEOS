@@ -419,13 +419,29 @@ module truega_lfm25_fixed_decode_datapath (
 
     function [3:0] shortconv_slot;
         input [7:0] layer;
-        integer n;
-        integer k;
         begin
-            n = 0;
-            for (k = 0; k < layer; k = k + 1)
-                if ((16'h5524 & (16'h1 << k)) == 0) n = n + 1;
-            shortconv_slot = n[3:0];
+            // Fixed layer-to-state-slot map for the sealed 0x5524
+            // attention schedule.  Keeping this as a bounded decode avoids a
+            // data-dependent synthesis loop in the production datapath.
+            case (layer)
+                8'd0:  shortconv_slot = 4'd0;
+                8'd1:  shortconv_slot = 4'd1;
+                8'd2:  shortconv_slot = 4'd2;
+                8'd3:  shortconv_slot = 4'd2;
+                8'd4:  shortconv_slot = 4'd3;
+                8'd5:  shortconv_slot = 4'd4;
+                8'd6:  shortconv_slot = 4'd4;
+                8'd7:  shortconv_slot = 4'd5;
+                8'd8:  shortconv_slot = 4'd6;
+                8'd9:  shortconv_slot = 4'd6;
+                8'd10: shortconv_slot = 4'd7;
+                8'd11: shortconv_slot = 4'd7;
+                8'd12: shortconv_slot = 4'd8;
+                8'd13: shortconv_slot = 4'd8;
+                8'd14: shortconv_slot = 4'd9;
+                8'd15: shortconv_slot = 4'd9;
+                default: shortconv_slot = 4'd0;
+            endcase
         end
     endfunction
 

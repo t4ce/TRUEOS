@@ -53,6 +53,7 @@ module truega_lfm25_fixed_decode_datapath_tb;
         input integer src;
         input integer dst;
         begin
+            @(negedge clk);
             operation = op;
             input_slot = src;
             destination_slot = dst;

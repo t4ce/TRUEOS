@@ -12,8 +12,42 @@
         <File path="src/serdes/upar_arbiter/upar_arbiter.v" type="file.verilog" enable="1"/>
         <File path="src/truega_completion_irq.v" type="file.verilog" enable="1"/>
         <File path="src/generated/truega_functions.v" type="file.verilog" enable="1"/>
-        <File path="src/compute/truega_lfm25_row_streamer.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_float_to_q30.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_q30_mul_seq.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_q8_0_scale_q30.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_q8_0_gemv.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_q8_0_dequant_block_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_q30_to_q8_0_block_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_rmsnorm_reduce_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_rmsnorm_residual_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_rmsnorm_vector_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_residual_vector_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_tensor_store.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_vector_engine.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_gate_row_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_ffn_row_engine.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_ffn_join.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_shortconv_triplet_row_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_shortconv_channel_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_shortconv_token_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_q8_projection_row_engine.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_shortconv_join.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_head_rms_inverse_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_qk_norm_rope_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_gqa_dot_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_online_softmax_value_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_attention_token_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_attention_first_token_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_attention_join.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_tied_lm_head_argmax_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_decode_tail.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_resident_norm_residual_join.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_fixed_decode_datapath.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_fixed_decode_controller.v" type="file.verilog" enable="1"/>
         <File path="src/compute/truega_lfm25_decode_dispatch.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_feed_frontend.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_feed_completion_slot.v" type="file.verilog" enable="1"/>
+        <File path="src/compute/truega_lfm25_decode_endpoint.v" type="file.verilog" enable="1"/>
         <File path="src/top.vhd" type="file.vhdl" enable="1"/>
         <File path="src/min_pci_led.cst" type="file.cst" enable="1"/>
         <File path="src/min_pci_led.sdc" type="file.sdc" enable="1"/>

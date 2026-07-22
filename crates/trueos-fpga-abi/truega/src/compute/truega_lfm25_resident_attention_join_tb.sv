@@ -307,7 +307,16 @@ module truega_lfm25_resident_attention_join_tb;
     task automatic establish_resident_q8;
         begin
             setup_owner = 1'b1;
+            // Ownership changes at a negedge in the calling scenarios.  Give
+            // the muxed resident ready path one full half-cycle to settle
+            // before asserting command_valid; otherwise a TB delta-cycle
+            // race can hold valid after the command has already been accepted.
+            @(negedge clk);
+            $display("resident_attention_join setup embedding command ready=%b resident_state=%0d",
+                setup_command_ready, resident.state);
             setup_command(2'd0, STREAM_HANDLE, EMBEDDING_HANDLE);
+            $display("resident_attention_join setup embedding command accepted resident_state=%0d",
+                resident.state);
             for (setup_number = 0; setup_number < 32;
                  setup_number = setup_number + 1) begin
                 while (!embedding_ready) @(negedge clk);
@@ -318,7 +327,9 @@ module truega_lfm25_resident_attention_join_tb;
                 embedding_valid = 1'b0;
             end
             setup_expect_result(EMBEDDING_HANDLE);
+            $display("resident_attention_join setup embedding published");
             setup_command(2'd1, EMBEDDING_HANDLE, SOURCE_HANDLE);
+            $display("resident_attention_join setup rms command accepted");
             for (setup_number = 0; setup_number < 1024;
                  setup_number = setup_number + 1) begin
                 while (!setup_norm_ready) @(negedge clk);
@@ -503,6 +514,45 @@ module truega_lfm25_resident_attention_join_tb;
         repeat (5) @(negedge clk);
         reset_n = 1'b1;
         repeat (2) @(negedge clk);
+
+        // The first-token position is circuit-fixed.  Reject it before any
+        // resident read, then exercise the one explicit poison-clear path.
+        setup_owner = 1'b0;
+        pulse_start(4'd2, 17'd1, DESTINATION_ONE);
+        consume_result(1'b1, 8'd2, 37'd0);
+        if (!poisoned || start_ready)
+            failures = failures + 1;
+        clear = 1'b1;
+        @(negedge clk);
+        clear = 1'b0;
+        repeat (2) @(negedge clk);
+        establish_resident_q8();
+
+        // A weight tagged for the wrong fixed projection is consumed as a
+        // protocol violation, never silently reinterpreted as the expected Q
+        // row.  Clear both the join cache and resident setup before the full
+        // proof transaction.
+        pulse_start(4'd8, 17'd0, DESTINATION_ONE);
+        feed_norm_weights();
+        while (!projection_weight_ready) @(negedge clk);
+        if (projection_expected_kind != 2'd0
+                || projection_expected_row != 13'd0
+                || projection_expected_block != 5'd0)
+            failures = failures + 1;
+        projection_kind = 2'd1;
+        projection_row = 13'd0;
+        projection_block = 5'd0;
+        projection_weight = model_projection_block(2'd1, 0, 0);
+        projection_weight_valid = 1'b1;
+        @(negedge clk);
+        projection_weight_valid = 1'b0;
+        consume_result(1'b1, 8'd5, 37'd0);
+        if (!poisoned || start_ready)
+            failures = failures + 1;
+        clear = 1'b1;
+        @(negedge clk);
+        clear = 1'b0;
+        repeat (2) @(negedge clk);
         establish_resident_q8();
 
         // Complete first-token attention with exact 16:8 GQA dimensions.
@@ -562,40 +612,8 @@ module truega_lfm25_resident_attention_join_tb;
         inspect_output(10'd0, 1'b1, 64'sd0);
         $display("resident_attention_join aborted destination unpublished");
 
-        // Clear is the only cache-safe poison recovery.  Re-establish the
-        // source, then prove a wrong projection mode is rejected immediately.
-        clear = 1'b1;
-        @(negedge clk);
-        clear = 1'b0;
-        repeat (2) @(negedge clk);
-        establish_resident_q8();
-        $display("resident_attention_join poison clear and source reload complete");
-        pulse_start(4'd8, 17'd0, DESTINATION_ONE);
-        feed_norm_weights();
-        while (!projection_weight_ready) @(negedge clk);
-        if (projection_expected_kind != 2'd0
-                || projection_expected_row != 13'd0
-                || projection_expected_block != 5'd0)
-            failures = failures + 1;
-        projection_kind = 2'd1;
-        projection_row = 13'd0;
-        projection_block = 5'd0;
-        projection_weight = model_projection_block(2'd1, 0, 0);
-        projection_weight_valid = 1'b1;
-        @(negedge clk);
-        projection_weight_valid = 1'b0;
-        consume_result(1'b1, 8'd5, 37'd0);
-
-        // Position zero is a hard circuit contract, not a runtime cache mode.
-        clear = 1'b1;
-        @(negedge clk);
-        clear = 1'b0;
-        repeat (2) @(negedge clk);
-        pulse_start(4'd2, 17'd1, DESTINATION_ONE);
-        consume_result(1'b1, 8'd2, 37'd0);
-
         if (failures == 0)
-            $display("PASS resident_attention_join resident_q8 exact_gqa_q1024_k512_v512 qk_norm=128 control_only_core=1 attention_q8_blocks=32 output_rows=1024 signed_witnesses backpressure=stable transactional_abort=unpublished strict_mode_position poison_clear_required no_host_math no_runtime_graph");
+            $display("PASS resident_attention_join resident_q8 exact_gqa_q1024_k512_v512 qk_norm=128 control_only_core=1 attention_q8_blocks=32 output_rows=1024 signed_witnesses backpressure=stable transactional_abort=unpublished strict_mode_order_position poison_clear_required no_host_math no_runtime_graph");
         else begin
             $display("FAIL resident_attention_join failures=%0d", failures);
             $fatal(1);

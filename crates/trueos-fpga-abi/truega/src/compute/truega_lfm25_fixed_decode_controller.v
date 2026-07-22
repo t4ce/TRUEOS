@@ -83,6 +83,7 @@ module truega_lfm25_fixed_decode_controller #(
     localparam [5:0] ST_EXEC_DP_RESULT = 6'd12;
     localparam [5:0] ST_FAST_EXEC      = 6'd13;
     localparam [5:0] ST_POISONED       = 6'd14;
+    localparam [5:0] ST_ITEM_FAIL      = 6'd15;
 
     localparam [31:0] ERROR_FEED_ORDER = 32'hbad4_3001;
     localparam [31:0] ERROR_FEED_DOMAIN = 32'hbad4_3002;
@@ -556,8 +557,22 @@ module truega_lfm25_fixed_decode_controller #(
                     state <= ST_ITEM_EFFECT;
                 end
                 ST_ITEM_EFFECT: begin
-                    if (datapath_item_effect_done)
+                    if (datapath_result_valid && datapath_result_error)
+                        state <= ST_ITEM_FAIL;
+                    else if (datapath_item_effect_done)
                         state <= ST_ITEM_RETIRE;
+                end
+                ST_ITEM_FAIL: begin
+                    feed_item_ready_o <= 1;
+                    feed_item_error_o <= 1;
+                    feed_item_error_code_o <= ERROR_DATAPATH
+                        | datapath_result_error_code;
+                    feed_items_retired_o <= feed_items_retired_o + 1'b1;
+                    poisoned_o <= 1;
+                    engine_error_o <= 1;
+                    engine_error_code_o <= ERROR_DATAPATH
+                        | datapath_result_error_code;
+                    state <= ST_POISONED;
                 end
                 ST_ITEM_RETIRE: begin
                     feed_item_ready_o <= 1;
@@ -607,8 +622,9 @@ module truega_lfm25_fixed_decode_controller #(
                             datapath_result_ready <= 1;
                             engine_done_o <= 1;
                             engine_error_o <= datapath_result_error;
-                            engine_error_code_o <= ERROR_DATAPATH
-                                | datapath_result_error_code;
+                            engine_error_code_o <= datapath_result_error
+                                ? ERROR_DATAPATH | datapath_result_error_code
+                                : 32'd0;
                             engine_result_slot_o <= datapath_result_slot;
                             engine_result_position_o <= 0;
                             engine_argmax_token_o <= datapath_result_token;
@@ -634,8 +650,9 @@ module truega_lfm25_fixed_decode_controller #(
                         datapath_result_ready <= 1;
                         engine_done_o <= 1;
                         engine_error_o <= datapath_result_error;
-                        engine_error_code_o <= ERROR_DATAPATH
-                            | datapath_result_error_code;
+                        engine_error_code_o <= datapath_result_error
+                            ? ERROR_DATAPATH | datapath_result_error_code
+                            : 32'd0;
                         engine_result_slot_o <= datapath_result_slot;
                         engine_result_position_o <= 0;
                         operation_active <= 0;

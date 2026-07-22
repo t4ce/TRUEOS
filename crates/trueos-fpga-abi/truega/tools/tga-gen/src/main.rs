@@ -937,9 +937,10 @@ mod tests {
     const BOARD_CST: &str = include_str!("../../../src/min_pci_led.cst");
     const BOARD_SDC: &str = include_str!("../../../src/min_pci_led.sdc");
     const PCIE_PLL: &str = include_str!("../../../src/gowin_pll/gowin_pll.v");
-    const ROW_STREAMER_RTL: &str = include_str!("../../../src/compute/truega_lfm25_row_streamer.v");
     const DECODE_DISPATCH_RTL: &str =
         include_str!("../../../src/compute/truega_lfm25_decode_dispatch.v");
+    const DECODE_ENDPOINT_RTL: &str =
+        include_str!("../../../src/compute/truega_lfm25_decode_endpoint.v");
     const FEED_FRONTEND_RTL: &str =
         include_str!("../../../src/compute/truega_lfm25_feed_frontend.v");
     const GOWIN_PROJECT: &str = include_str!("../../../min_pci_led.gprj");
@@ -1158,18 +1159,32 @@ mod tests {
     }
 
     #[test]
-    fn final_image_reserves_tgf2_publication_but_fails_closed_until_joined() {
-        assert!(TOP_VHDL.contains(
-            "constant BAR0_FEED_CAPABILITY_BASE_DW : integer := 16#280# / 4;"
-        ));
+    fn final_image_publishes_the_joined_tgf2_capability_and_completion_slot() {
+        assert!(
+            TOP_VHDL.contains("constant BAR0_FEED_CAPABILITY_BASE_DW : integer := 16#280# / 4;")
+        );
         assert!(TOP_VHDL.contains("constant FEED_CAPABILITY_WORD_COUNT : integer := 5;"));
-        assert!(TOP_VHDL.contains(
-            "addr_index < BAR0_FEED_CAPABILITY_BASE_DW + FEED_CAPABILITY_WORD_COUNT"
-        ));
-        assert!(TOP_VHDL.contains(
-            "if to_integer(unsigned(bar_read_word_index)) < FIRMWARE_MANIFEST_WORD_COUNT then"
-        ));
-        assert!(!TOP_VHDL.contains("constant FEED_CAPABILITY_MAGIC : std_logic_vector"));
+        assert!(TOP_VHDL.contains("constant FEED_STATUS_WORD_COUNT : integer := 7;"));
+        for required in [
+            "constant BAR0_FEED_STATE_DW : integer := 16#294# / 4;",
+            "constant BAR0_FEED_RETIRED_MODE_LAYER_DW : integer := 16#298# / 4;",
+            "constant BAR0_FEED_RETIRED_SESSION_EPOCH_DW : integer := 16#29C# / 4;",
+            "constant BAR0_FEED_RETIRED_SEQUENCE_DW : integer := 16#2A0# / 4;",
+            "constant BAR0_FEED_RETIRED_ITEM_DW : integer := 16#2A4# / 4;",
+            "constant BAR0_FEED_ERROR_DW : integer := 16#2A8# / 4;",
+            "constant BAR0_FEED_COMPLETION_COUNT_DW : integer := 16#2AC# / 4;",
+            "constant BAR0_FEED_CONTROL_DW : integer := 16#2B0# / 4;",
+            "when 32 => read_data_dw := lfm25_feed_capability_magic;",
+            "when 36 => read_data_dw := lfm25_feed_capability_shape_set_tag;",
+            "when 37 => read_data_dw := lfm25_feed_state;",
+            "when 43 => read_data_dw := lfm25_feed_completion_count;",
+            "lfm25_feed_control_write <= '1';",
+        ] {
+            assert!(TOP_VHDL.contains(required), "missing joined TGF2 register: {required}");
+        }
+        assert!(TOP_VHDL.contains("+ FEED_CAPABILITY_WORD_COUNT + FEED_STATUS_WORD_COUNT"));
+        assert!(DECODE_ENDPOINT_RTL.contains("truega_lfm25_feed_frontend frontend"));
+        assert!(DECODE_ENDPOINT_RTL.contains("truega_lfm25_feed_completion_slot feed_completion"));
     }
 
     #[test]
@@ -1193,10 +1208,7 @@ mod tests {
             let expected = format!("localparam [31:0] {name} = 32'h{word:08x};");
             assert!(normalized.contains(&expected), "missing exact RTL literal: {expected}");
         }
-        let model_generation = format!(
-            "localparam [31:0] FEEDMODELGENERATION = 32'd{};",
-            words[3]
-        );
+        let model_generation = format!("localparam [31:0] FEEDMODELGENERATION = 32'd{};", words[3]);
         assert!(normalized.contains(&model_generation));
 
         for mode in feed::ALL_FEED_MODES {
@@ -1256,52 +1268,48 @@ mod tests {
     }
 
     #[test]
-    fn final_image_has_a_separate_bar2_row_stream_transport() {
+    fn final_image_routes_bar2_only_to_the_fixed_decode_endpoint() {
         for required in [
-            "component truega_lfm25_row_streamer is",
-            "u_lfm25_row_streamer: truega_lfm25_row_streamer",
+            "component truega_lfm25_decode_endpoint is",
+            "u_lfm25_decode_endpoint: truega_lfm25_decode_endpoint",
+            "FAST_SCHEDULE_SIM => 0",
             "transaction_bardec <= rx_packet_bardec;",
             "if hit_write and (transaction_bardec(2) = '1') then",
+            "bar2_write_address_i                   => stream_write_addr_dw & \"00\"",
+            "bar2_write_strobe_i                    => \"1111\"",
             "or (tl_rx_bardec(0) = '1') or (tl_rx_bardec(2) = '1'))",
-            "read_data_dw := STREAM_CAPABILITY_MAGIC;",
         ] {
             assert!(TOP_VHDL.contains(required), "missing BAR2 transport: {required}");
         }
-        for required in [
-            "module truega_lfm25_row_streamer (",
-            "MODE_GATE_UP_SILU",
-            "MODE_DOWN",
-            "truega_q8_0_row_block_slot",
-            "truega_lfm25_silu_q30_slot",
-            "activation_memory [0:143]",
-            "weight0_memory [0:143]",
-            "weight1_memory [0:143]",
-            "activation_read_valid <= activation_valid[read_index];",
-            "weight0_read_valid <= weight0_valid[read_index];",
-            "weight1_read_valid <= weight1_valid[read_index];",
-        ] {
-            assert!(ROW_STREAMER_RTL.contains(required), "missing row engine: {required}");
-        }
-        assert!(GOWIN_PROJECT.contains("truega_lfm25_row_streamer.v"));
+        assert!(!TOP_VHDL.contains("component truega_lfm25_row_streamer is"));
+        assert!(!TOP_VHDL.contains("u_lfm25_row_streamer: truega_lfm25_row_streamer"));
+        assert!(!GOWIN_PROJECT.contains("truega_lfm25_row_streamer.v"));
+        assert!(GOWIN_PROJECT.contains("truega_lfm25_decode_endpoint.v"));
     }
 
     #[test]
-    fn final_image_has_a_fail_closed_tgd1_bar_msi_envelope() {
+    fn final_image_has_the_enabled_tgd1_bar_msi_endpoint() {
         for required in [
-            "component truega_lfm25_decode_dispatch is",
-            "u_lfm25_decode_dispatch: truega_lfm25_decode_dispatch",
-            "ENABLE => 0",
+            "component truega_lfm25_decode_endpoint is",
+            "u_lfm25_decode_endpoint: truega_lfm25_decode_endpoint",
+            "FAST_SCHEDULE_SIM => 0",
             "BAR0_DECODE_CAPABILITY_MAGIC_DW",
             "BAR0_DECODE_RESULT1_DW",
-            "decode_irq_enable <= '1';",
-            "call_flags(0) or stream_irq_enable or decode_irq_enable",
-            "call_irq_retire or decode_irq_retire",
+            "lfm25_decode_doorbell <= '1';",
+            "retire_i           => call_irq_retire or lfm25_endpoint_irq_retire",
+            "interrupt_enable_i => call_flags(0) or lfm25_endpoint_irq_retire",
+            "irq_ack_i                              => call_irq_bar_ack",
         ] {
             assert!(
                 TOP_VHDL.contains(required),
-                "missing fail-closed TGD1 transport boundary: {required}"
+                "missing enabled TGD1 transport boundary: {required}"
             );
         }
+        assert!(!TOP_VHDL.contains("ENABLE => 0"));
+        assert!(DECODE_ENDPOINT_RTL.contains("truega_lfm25_fixed_decode_controller"));
+        assert!(DECODE_ENDPOINT_RTL.contains("truega_lfm25_decode_dispatch #(.ENABLE(1))"));
+        assert!(DECODE_ENDPOINT_RTL
+            .contains("assign irq_retire_o = feed_irq_retire_o || decode_irq_retire_o;"));
         for required in [
             "parameter integer ENABLE = 0",
             "assign capability_magic_o = ENABLE != 0",
@@ -1314,6 +1322,64 @@ mod tests {
             );
         }
         assert!(GOWIN_PROJECT.contains("truega_lfm25_decode_dispatch.v"));
+        assert!(GOWIN_PROJECT.contains("truega_lfm25_fixed_decode_controller.v"));
+    }
+
+    #[test]
+    fn final_project_contains_the_complete_decode_endpoint_hierarchy_once() {
+        for source in [
+            "truega_float_to_q30.v",
+            "truega_q30_mul_seq.v",
+            "truega_q8_0_scale_q30.v",
+            "truega_q8_0_gemv.v",
+            "truega_q8_0_dequant_block_slot.v",
+            "truega_q30_to_q8_0_block_slot.v",
+            "truega_lfm25_rmsnorm_reduce_slot.v",
+            "truega_lfm25_rmsnorm_residual_slot.v",
+            "truega_lfm25_rmsnorm_vector_slot.v",
+            "truega_lfm25_residual_vector_slot.v",
+            "truega_lfm25_resident_tensor_store.v",
+            "truega_lfm25_resident_vector_engine.v",
+            "truega_lfm25_gate_row_slot.v",
+            "truega_lfm25_resident_ffn_row_engine.v",
+            "truega_lfm25_resident_ffn_join.v",
+            "truega_lfm25_shortconv_triplet_row_slot.v",
+            "truega_lfm25_shortconv_channel_slot.v",
+            "truega_lfm25_shortconv_token_slot.v",
+            "truega_lfm25_q8_projection_row_engine.v",
+            "truega_lfm25_resident_shortconv_join.v",
+            "truega_lfm25_head_rms_inverse_slot.v",
+            "truega_lfm25_qk_norm_rope_slot.v",
+            "truega_lfm25_gqa_dot_slot.v",
+            "truega_lfm25_online_softmax_value_slot.v",
+            "truega_lfm25_attention_token_slot.v",
+            "truega_lfm25_attention_first_token_slot.v",
+            "truega_lfm25_resident_attention_join.v",
+            "truega_lfm25_tied_lm_head_argmax_slot.v",
+            "truega_lfm25_resident_decode_tail.v",
+            "truega_lfm25_resident_norm_residual_join.v",
+            "truega_lfm25_fixed_decode_datapath.v",
+            "truega_lfm25_fixed_decode_controller.v",
+            "truega_lfm25_decode_dispatch.v",
+            "truega_lfm25_feed_frontend.v",
+            "truega_lfm25_feed_completion_slot.v",
+            "truega_lfm25_decode_endpoint.v",
+        ] {
+            let occurrences = GOWIN_PROJECT.matches(source).count();
+            assert_eq!(occurrences, 1, "project source count drift: {source}");
+        }
+
+        // These primitives already live in generated/truega_functions.v.
+        for duplicate in [
+            "src/compute/truega_q8_0_dot32.v",
+            "src/compute/truega_q8_0_scale_q30_seq.v",
+            "src/compute/truega_q8_0_block_slot.v",
+            "src/compute/truega_q8_0_row_block_slot.v",
+            "src/compute/truega_q8_0_cached_pair_slot.v",
+            "src/compute/truega_lfm25_silu_q30_slot.v",
+        ] {
+            assert!(!GOWIN_PROJECT.contains(duplicate), "duplicate module source: {duplicate}");
+        }
     }
 
     #[test]

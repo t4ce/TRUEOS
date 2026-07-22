@@ -38,13 +38,15 @@ fi
   "$RTL_DIR/truega_lfm25_fixed_decode_controller_tb.sv"
 "$VVP" "${vvp_args[@]}" "$STAGE_DIR/fixed_decode_controller.vvp"
 
-# A short production-datapath smoke elaborates every fixed join and exercises
-# the real one-resident-engine mux through embedding and RMSNorm. The complete
-# 194,616-feed schedule above remains accelerated only to keep CI bounded.
+# A short FAST=0 smoke enters through the controller's frontend dword-read
+# boundary, elaborates every fixed join, and numerically checks the real shared
+# resident engine. The complete schedule above is accelerated only to keep CI
+# bounded.
 compute_sources=("$RTL_DIR"/*.v)
 "$IVERILOG" "${iverilog_base_args[@]}" -g2012 \
-  -s truega_lfm25_fixed_decode_datapath_tb \
-  -o "$STAGE_DIR/fixed_decode_datapath.vvp" \
+  -s truega_lfm25_fixed_decode_controller_production_tb \
+  -o "$STAGE_DIR/fixed_decode_controller_production.vvp" \
   "${compute_sources[@]}" \
-  "$RTL_DIR/truega_lfm25_fixed_decode_datapath_tb.sv"
-"$VVP" "${vvp_args[@]}" "$STAGE_DIR/fixed_decode_datapath.vvp"
+  "$RTL_DIR/truega_lfm25_fixed_decode_controller_production_tb.sv"
+"$VVP" "${vvp_args[@]}" \
+  "$STAGE_DIR/fixed_decode_controller_production.vvp"

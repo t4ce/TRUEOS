@@ -277,7 +277,7 @@ endmodule
 // is sign-extended by explicit bit replication, then added as raw two's-
 // complement bits in a 21-bit accumulator.  Lane selection, multiplication,
 // and accumulation occupy separate registered stages.  The enclosing serialized
-// block slot keeps both quant inputs stable until valid_o.  One accepted block
+// block slot latches both quant inputs on acceptance.  One accepted block
 // completes after 33 work cycles; valid_i is ignored while a block is active.
 module truega_q8_0_dot32 (
     input  wire                 clk,
@@ -301,6 +301,8 @@ module truega_q8_0_dot32 (
     reg [15:0] product_reg;
     reg [20:0] accumulator;
     reg [20:0] dot_reg;
+    reg [255:0] activation_quants_reg;
+    reg [255:0] weight_quants_reg;
 
     wire [7:0] activation_lane_bits;
     wire [7:0] weight_lane_bits;
@@ -311,8 +313,8 @@ module truega_q8_0_dot32 (
     wire [20:0] registered_product_extended;
     wire [20:0] accumulator_next;
 
-    assign activation_lane_bits = activation_quants_i[lane_index*8 +: 8];
-    assign weight_lane_bits = weight_quants_i[lane_index*8 +: 8];
+    assign activation_lane_bits = activation_quants_reg[lane_index*8 +: 8];
+    assign weight_lane_bits = weight_quants_reg[lane_index*8 +: 8];
     assign activation_lane = activation_lane_reg;
     assign weight_lane = weight_lane_reg;
     assign lane_product = activation_lane * weight_lane;
@@ -333,6 +335,8 @@ module truega_q8_0_dot32 (
             product_reg <= 16'd0;
             accumulator <= 21'd0;
             dot_reg <= 21'd0;
+            activation_quants_reg <= 256'd0;
+            weight_quants_reg <= 256'd0;
         end else begin
             valid_reg <= 1'b0;
 
@@ -341,6 +345,8 @@ module truega_q8_0_dot32 (
                     if (valid_i) begin
                         activation_lane_reg <= activation_quants_i[7:0];
                         weight_lane_reg <= weight_quants_i[7:0];
+                        activation_quants_reg <= activation_quants_i;
+                        weight_quants_reg <= weight_quants_i;
                         lane_index <= 6'd1;
                         product_reg <= 16'd0;
                         accumulator <= 21'd0;
@@ -1391,14 +1397,14 @@ case (word_index)
             5'd1: data = 32'h00030001;
             5'd2: data = 32'h00000100;
             5'd3: data = 32'h00000000;
-            5'd4: data = 32'hE2383F8B;
-            5'd5: data = 32'hD10A6C85;
-            5'd6: data = 32'hCE2D6A73;
-            5'd7: data = 32'hF02E801E;
-            5'd8: data = 32'h3957F391;
-            5'd9: data = 32'hC0CB4020;
-            5'd10: data = 32'hA77D65FB;
-            5'd11: data = 32'h0A806CC6;
+            5'd4: data = 32'h45E3B817;
+            5'd5: data = 32'hE16013C9;
+            5'd6: data = 32'hAABB4864;
+            5'd7: data = 32'h6931CC09;
+            5'd8: data = 32'h7F9CA673;
+            5'd9: data = 32'h344510A7;
+            5'd10: data = 32'h6A4FDCB7;
+            5'd11: data = 32'hDED62563;
             5'd12: data = 32'h00000000;
             5'd13: data = 32'h00000004;
             5'd14: data = 32'h82C72268;

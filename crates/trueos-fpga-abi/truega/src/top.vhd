@@ -112,67 +112,56 @@ architecture rtl of top is
 		);
 	end component;
 
-	-- Optional BAR2 row streamer. It reuses the exact Q8 row and SiLU circuits
-	-- but retires a complete output row instead of one inline block pair.
-	component truega_lfm25_row_streamer is
-		port (
-			clk                    : in  std_logic;
-			reset_n                : in  std_logic;
-			write_i                : in  std_logic;
-			write_addr_dw_i        : in  std_logic_vector(16 downto 0);
-			write_data_i           : in  std_logic_vector(31 downto 0);
-			start_i                : in  std_logic;
-			mode_i                 : in  std_logic_vector(1 downto 0);
-			busy_o                 : out std_logic;
-			done_o                 : out std_logic;
-			error_o                : out std_logic;
-			error_code_o           : out std_logic_vector(31 downto 0);
-			gate_q30_o             : out std_logic_vector(63 downto 0);
-			up_q30_o               : out std_logic_vector(63 downto 0);
-			result_q30_o           : out std_logic_vector(63 downto 0);
-			accepted_write_count_o : out std_logic_vector(31 downto 0)
-		);
-	end component;
-
-	-- Fixed ten-way LFM2.5 decode circuit selector.  The instance is deliberately
-	-- disabled until every resident engine and its model-feed data plane is joined.
-	-- With ENABLE=0 it publishes zero capability words, so host admission remains
-	-- fail-closed even though the final BAR/MSI envelope is already physical.
-	component truega_lfm25_decode_dispatch is
+	-- Complete fixed LFM2.5 first-token endpoint. TGF2 BAR2 packages feed one
+	-- resident datapath and matching TGD1 BAR0 doorbells retire its fixed 99-op
+	-- schedule. Both sides share the existing MSI/ACK lane.
+	component truega_lfm25_decode_endpoint is
 		generic (
-			ENABLE : integer := 0
+			FAST_SCHEDULE_SIM : integer := 0
 		);
 		port (
-			clk                         : in  std_logic;
-			reset_n                     : in  std_logic;
-			command_i                   : in  std_logic_vector(31 downto 0);
-			position_i                  : in  std_logic_vector(31 downto 0);
-			session_epoch_i             : in  std_logic_vector(31 downto 0);
-			doorbell_i                  : in  std_logic;
-			doorbell_value_i            : in  std_logic_vector(31 downto 0);
-			capability_magic_o          : out std_logic_vector(31 downto 0);
-			capability_bits_o           : out std_logic_vector(31 downto 0);
-			state_o                     : out std_logic_vector(31 downto 0);
-			result0_o                   : out std_logic_vector(31 downto 0);
-			result1_o                   : out std_logic_vector(31 downto 0);
-			argmax_score_q30_o          : out std_logic_vector(63 downto 0);
-			execute_start_o             : out std_logic;
-			execute_operation_o         : out std_logic_vector(3 downto 0);
-			execute_layer_o             : out std_logic_vector(7 downto 0);
-			execute_position_o          : out std_logic_vector(31 downto 0);
-			execute_input_slot_o        : out std_logic_vector(7 downto 0);
-			execute_residual_slot_o     : out std_logic_vector(7 downto 0);
-			execute_session_epoch_o     : out std_logic_vector(31 downto 0);
-			execute_session_begin_o     : out std_logic;
-			engine_done_i               : in  std_logic;
-			engine_error_i              : in  std_logic;
-			engine_error_code_i         : in  std_logic_vector(31 downto 0);
-			engine_result_slot_i        : in  std_logic_vector(7 downto 0);
-			engine_result_position_i    : in  std_logic_vector(31 downto 0);
-			engine_argmax_token_i       : in  std_logic_vector(31 downto 0);
-			engine_argmax_rows_i        : in  std_logic_vector(31 downto 0);
-			engine_argmax_score_q30_i   : in  std_logic_vector(63 downto 0);
-			retire_o                    : out std_logic
+			clk                                      : in  std_logic;
+			reset_n                                  : in  std_logic;
+			bar2_write_valid_i                       : in  std_logic;
+			bar2_write_address_i                     : in  std_logic_vector(18 downto 0);
+			bar2_write_data_i                        : in  std_logic_vector(31 downto 0);
+			bar2_write_strobe_i                      : in  std_logic_vector(3 downto 0);
+			bar2_write_ready_o                       : out std_logic;
+			irq_ack_i                                : in  std_logic;
+			feed_control_write_i                     : in  std_logic;
+			feed_control_value_i                     : in  std_logic_vector(31 downto 0);
+			decode_command_i                         : in  std_logic_vector(31 downto 0);
+			decode_position_i                        : in  std_logic_vector(31 downto 0);
+			decode_session_epoch_i                   : in  std_logic_vector(31 downto 0);
+			decode_doorbell_i                        : in  std_logic;
+			decode_doorbell_value_i                  : in  std_logic_vector(31 downto 0);
+			irq_retire_o                             : out std_logic;
+			feed_irq_retire_o                        : out std_logic;
+			decode_irq_retire_o                      : out std_logic;
+			decode_irq_owned_o                       : out std_logic;
+			feed_capability_magic_o                  : out std_logic_vector(31 downto 0);
+			feed_capability_version_record_bytes_o   : out std_logic_vector(31 downto 0);
+			feed_capability_bits_o                   : out std_logic_vector(31 downto 0);
+			feed_capability_model_generation_o       : out std_logic_vector(31 downto 0);
+			feed_capability_shape_set_tag_o          : out std_logic_vector(31 downto 0);
+			feed_state_o                             : out std_logic_vector(31 downto 0);
+			feed_retired_mode_layer_o                : out std_logic_vector(31 downto 0);
+			feed_retired_session_epoch_o             : out std_logic_vector(31 downto 0);
+			feed_retired_sequence_o                  : out std_logic_vector(31 downto 0);
+			feed_retired_item_o                      : out std_logic_vector(31 downto 0);
+			feed_error_code_o                        : out std_logic_vector(31 downto 0);
+			feed_completion_count_o                  : out std_logic_vector(31 downto 0);
+			decode_capability_magic_o                : out std_logic_vector(31 downto 0);
+			decode_capability_bits_o                 : out std_logic_vector(31 downto 0);
+			decode_state_o                           : out std_logic_vector(31 downto 0);
+			decode_result0_o                         : out std_logic_vector(31 downto 0);
+			decode_result1_o                         : out std_logic_vector(31 downto 0);
+			decode_argmax_score_q30_o                : out std_logic_vector(63 downto 0);
+			operation_ordinal_o                      : out std_logic_vector(6 downto 0);
+			feed_items_retired_o                     : out std_logic_vector(31 downto 0);
+			controller_poisoned_o                    : out std_logic;
+			controller_busy_o                        : out std_logic;
+			frontend_poisoned_o                      : out std_logic
 		);
 	end component;
 
@@ -206,22 +195,6 @@ architecture rtl of top is
 	constant BAR0_CALL_IRQ_CONTROLLER_ACK_COUNT_DW : integer := 16#090# / 4;
 	constant BAR0_CALL_IRQ_STATE_DW : integer := 16#094# / 4;
 	constant BAR0_STREAM_CAPABILITY_DW : integer := 16#098# / 4;
-	constant BAR0_STREAM_CONTROL_DW : integer := 16#09C# / 4;
-	constant BAR0_STREAM_ROW_DW : integer := 16#0A0# / 4;
-	constant BAR0_STREAM_DOORBELL_DW : integer := 16#0A4# / 4;
-	constant BAR0_STREAM_STATE_DW : integer := 16#0A8# / 4;
-	constant BAR0_STREAM_GATE_LO_DW : integer := 16#0AC# / 4;
-	constant BAR0_STREAM_GATE_HI_DW : integer := 16#0B0# / 4;
-	constant BAR0_STREAM_UP_LO_DW : integer := 16#0B4# / 4;
-	constant BAR0_STREAM_UP_HI_DW : integer := 16#0B8# / 4;
-	constant BAR0_STREAM_RESULT_LO_DW : integer := 16#0BC# / 4;
-	constant BAR0_STREAM_RESULT_HI_DW : integer := 16#0C0# / 4;
-	constant BAR0_STREAM_ERROR_DW : integer := 16#0C4# / 4;
-	constant BAR0_STREAM_COMPLETION_COUNT_DW : integer := 16#0C8# / 4;
-	constant BAR0_STREAM_ACCEPTED_WRITE_COUNT_DW : integer := 16#0CC# / 4;
-	constant BAR0_STREAM_RX_CAPTURE_COUNT_DW : integer := 16#0D0# / 4;
-	constant BAR0_STREAM_DECODED_WRITE_COUNT_DW : integer := 16#0D4# / 4;
-	constant BAR0_STREAM_RX_ERROR_COUNT_DW : integer := 16#0D8# / 4;
 	constant BAR0_DECODE_CAPABILITY_MAGIC_DW : integer := 16#0DC# / 4;
 	constant BAR0_DECODE_CAPABILITY_BITS_DW : integer := 16#0E0# / 4;
 	constant BAR0_DECODE_COMMAND_DW : integer := 16#0E4# / 4;
@@ -233,12 +206,20 @@ architecture rtl of top is
 	constant BAR0_DECODE_RESULT1_DW : integer := 16#0FC# / 4;
 	constant BAR0_CALL_BASE_DW : integer := 16#100# / 4;
 	constant BAR0_FIRMWARE_MANIFEST_BASE_DW : integer := 16#200# / 4;
-	-- TGF2's read-only publication follows the generated manifest.  Keep the
-	-- words physically decoded but fail closed until the complete fixed decode
-	-- engine and feed frontend are joined into this image.
+	-- TGF2's capability and completion publication follows the generated
+	-- manifest in the high half of BAR0. RST2 is its sole writable register.
 	constant BAR0_FEED_CAPABILITY_BASE_DW : integer := 16#280# / 4;
+	constant BAR0_FEED_STATE_DW : integer := 16#294# / 4;
+	constant BAR0_FEED_RETIRED_MODE_LAYER_DW : integer := 16#298# / 4;
+	constant BAR0_FEED_RETIRED_SESSION_EPOCH_DW : integer := 16#29C# / 4;
+	constant BAR0_FEED_RETIRED_SEQUENCE_DW : integer := 16#2A0# / 4;
+	constant BAR0_FEED_RETIRED_ITEM_DW : integer := 16#2A4# / 4;
+	constant BAR0_FEED_ERROR_DW : integer := 16#2A8# / 4;
+	constant BAR0_FEED_COMPLETION_COUNT_DW : integer := 16#2AC# / 4;
+	constant BAR0_FEED_CONTROL_DW : integer := 16#2B0# / 4;
 	constant FIRMWARE_MANIFEST_WORD_COUNT : integer := 32;
 	constant FEED_CAPABILITY_WORD_COUNT : integer := 5;
+	constant FEED_STATUS_WORD_COUNT : integer := 7;
 	constant CALL_WORD_COUNT : integer := 64;
 	constant CALL_MAGIC_WORD : integer := 0;
 	constant CALL_ABI_FUNCTION_WORD : integer := 1;
@@ -263,13 +244,6 @@ architecture rtl of top is
 	constant CALL_ERROR_BAD_LENGTH : std_logic_vector(31 downto 0) := x"BAD00002";
 	constant CALL_ERROR_BAD_FUNCTION : std_logic_vector(31 downto 0) := x"BAD00003";
 	constant CALL_ERROR_FUNCTION_FAILED : std_logic_vector(31 downto 0) := x"BAD00004";
-	constant STREAM_CAPABILITY_MAGIC : std_logic_vector(31 downto 0) := x"32524754";
-	constant STREAM_DOORBELL_MAGIC : std_logic_vector(31 downto 0) := x"4D525453";
-	constant STREAM_STATE_IDLE : std_logic_vector(31 downto 0) := x"00000000";
-	constant STREAM_STATE_BUSY : std_logic_vector(31 downto 0) := x"00000001";
-	constant STREAM_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000002";
-	constant STREAM_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000003";
-	constant STREAM_ERROR_BAD_DOORBELL : std_logic_vector(31 downto 0) := x"BAD20001";
 	constant DECODE_STATE_COMPLETE : std_logic_vector(31 downto 0) := x"00000002";
 	constant DECODE_STATE_FAILED : std_logic_vector(31 downto 0) := x"00000003";
 	constant DECODE_OP_LM_HEAD_ARGMAX : std_logic_vector(7 downto 0) := x"09";
@@ -312,9 +286,7 @@ architecture rtl of top is
 	signal call_irq_controller_ack_prev : std_logic := '0';
 	signal call_irq_request_count : unsigned(31 downto 0) := (others => '0');
 	signal call_irq_controller_ack_count : unsigned(31 downto 0) := (others => '0');
-	signal stream_irq_enable : std_logic := '0';
-	signal decode_irq_enable : std_logic := '0';
-	signal decode_irq_retire : std_logic;
+	signal lfm25_endpoint_irq_retire : std_logic;
 
 	-- Active-high logical state (the board outputs are inverted below).  Seed a
 	-- visible one-hot heartbeat so a configured, idle image is never all-dark.
@@ -360,23 +332,21 @@ architecture rtl of top is
 	signal stream_write : std_logic := '0';
 	signal stream_write_addr_dw : std_logic_vector(16 downto 0) := (others => '0');
 	signal stream_write_data : std_logic_vector(31 downto 0) := (others => '0');
-	signal stream_start : std_logic := '0';
-	signal stream_control : std_logic_vector(31 downto 0) := (others => '0');
-	signal stream_row : std_logic_vector(31 downto 0) := (others => '0');
-	signal stream_state : std_logic_vector(31 downto 0) := STREAM_STATE_IDLE;
-	signal stream_error_code : std_logic_vector(31 downto 0) := (others => '0');
-	signal stream_gate_q30 : std_logic_vector(63 downto 0) := (others => '0');
-	signal stream_up_q30 : std_logic_vector(63 downto 0) := (others => '0');
-	signal stream_result_q30 : std_logic_vector(63 downto 0) := (others => '0');
-	signal stream_completion_count : unsigned(31 downto 0) := (others => '0');
-	signal stream_engine_busy : std_logic;
-	signal stream_engine_done : std_logic;
-	signal stream_engine_error : std_logic;
-	signal stream_engine_error_code : std_logic_vector(31 downto 0);
-	signal stream_engine_gate_q30 : std_logic_vector(63 downto 0);
-	signal stream_engine_up_q30 : std_logic_vector(63 downto 0);
-	signal stream_engine_result_q30 : std_logic_vector(63 downto 0);
-	signal stream_accepted_write_count : std_logic_vector(31 downto 0);
+	signal stream_write_ready : std_logic;
+	signal lfm25_feed_control_write : std_logic := '0';
+	signal lfm25_feed_control_value : std_logic_vector(31 downto 0) := (others => '0');
+	signal lfm25_feed_capability_magic : std_logic_vector(31 downto 0);
+	signal lfm25_feed_capability_version_record_bytes : std_logic_vector(31 downto 0);
+	signal lfm25_feed_capability_bits : std_logic_vector(31 downto 0);
+	signal lfm25_feed_capability_model_generation : std_logic_vector(31 downto 0);
+	signal lfm25_feed_capability_shape_set_tag : std_logic_vector(31 downto 0);
+	signal lfm25_feed_state : std_logic_vector(31 downto 0);
+	signal lfm25_feed_retired_mode_layer : std_logic_vector(31 downto 0);
+	signal lfm25_feed_retired_session_epoch : std_logic_vector(31 downto 0);
+	signal lfm25_feed_retired_sequence : std_logic_vector(31 downto 0);
+	signal lfm25_feed_retired_item : std_logic_vector(31 downto 0);
+	signal lfm25_feed_error_code : std_logic_vector(31 downto 0);
+	signal lfm25_feed_completion_count : std_logic_vector(31 downto 0);
 	signal lfm25_decode_capability_magic : std_logic_vector(31 downto 0);
 	signal lfm25_decode_capability_bits : std_logic_vector(31 downto 0);
 	signal lfm25_decode_command : std_logic_vector(31 downto 0) := (others => '0');
@@ -667,68 +637,61 @@ begin
 			data       => firmware_manifest_word
 			);
 
-	u_lfm25_row_streamer: truega_lfm25_row_streamer
-		port map(
-			clk                    => tlp_clk,
-			reset_n                => pcie_core_reset_n,
-			write_i                => stream_write,
-			write_addr_dw_i        => stream_write_addr_dw,
-			write_data_i           => stream_write_data,
-			start_i                => stream_start,
-			mode_i                 => stream_control(1 downto 0),
-			busy_o                 => stream_engine_busy,
-			done_o                 => stream_engine_done,
-			error_o                => stream_engine_error,
-			error_code_o           => stream_engine_error_code,
-			gate_q30_o             => stream_engine_gate_q30,
-			up_q30_o               => stream_engine_up_q30,
-			result_q30_o           => stream_engine_result_q30,
-			accepted_write_count_o => stream_accepted_write_count
-		);
-
-	u_lfm25_decode_dispatch: truega_lfm25_decode_dispatch
+	u_lfm25_decode_endpoint: truega_lfm25_decode_endpoint
 		generic map(
-			ENABLE => 0
+			FAST_SCHEDULE_SIM => 0
 		)
 		port map(
-			clk                       => tlp_clk,
-			reset_n                   => pcie_core_reset_n,
-			command_i                 => lfm25_decode_command,
-			position_i                => lfm25_decode_position,
-			session_epoch_i           => lfm25_decode_session_epoch,
-			doorbell_i                => lfm25_decode_doorbell,
-			doorbell_value_i          => lfm25_decode_doorbell_value,
-			capability_magic_o        => lfm25_decode_capability_magic,
-			capability_bits_o         => lfm25_decode_capability_bits,
-			state_o                   => lfm25_decode_state,
-			result0_o                 => lfm25_decode_result0,
-			result1_o                 => lfm25_decode_result1,
-			argmax_score_q30_o        => lfm25_decode_argmax_score_q30,
-			execute_start_o           => open,
-			execute_operation_o       => open,
-			execute_layer_o           => open,
-			execute_position_o        => open,
-			execute_input_slot_o      => open,
-			execute_residual_slot_o   => open,
-			execute_session_epoch_o   => open,
-			execute_session_begin_o   => open,
-			engine_done_i             => '0',
-			engine_error_i            => '0',
-			engine_error_code_i       => (others => '0'),
-			engine_result_slot_i      => (others => '0'),
-			engine_result_position_i  => (others => '0'),
-			engine_argmax_token_i     => (others => '0'),
-			engine_argmax_rows_i      => (others => '0'),
-			engine_argmax_score_q30_i => (others => '0'),
-			retire_o                  => decode_irq_retire
+			clk                                    => tlp_clk,
+			reset_n                                => pcie_core_reset_n,
+			bar2_write_valid_i                     => stream_write,
+			bar2_write_address_i                   => stream_write_addr_dw & "00",
+			bar2_write_data_i                      => stream_write_data,
+			bar2_write_strobe_i                    => "1111",
+			bar2_write_ready_o                     => stream_write_ready,
+			irq_ack_i                              => call_irq_bar_ack,
+			feed_control_write_i                   => lfm25_feed_control_write,
+			feed_control_value_i                   => lfm25_feed_control_value,
+			decode_command_i                       => lfm25_decode_command,
+			decode_position_i                      => lfm25_decode_position,
+			decode_session_epoch_i                 => lfm25_decode_session_epoch,
+			decode_doorbell_i                      => lfm25_decode_doorbell,
+			decode_doorbell_value_i                => lfm25_decode_doorbell_value,
+			irq_retire_o                           => lfm25_endpoint_irq_retire,
+			feed_irq_retire_o                      => open,
+			decode_irq_retire_o                    => open,
+			decode_irq_owned_o                     => open,
+			feed_capability_magic_o                => lfm25_feed_capability_magic,
+			feed_capability_version_record_bytes_o => lfm25_feed_capability_version_record_bytes,
+			feed_capability_bits_o                 => lfm25_feed_capability_bits,
+			feed_capability_model_generation_o     => lfm25_feed_capability_model_generation,
+			feed_capability_shape_set_tag_o        => lfm25_feed_capability_shape_set_tag,
+			feed_state_o                           => lfm25_feed_state,
+			feed_retired_mode_layer_o              => lfm25_feed_retired_mode_layer,
+			feed_retired_session_epoch_o           => lfm25_feed_retired_session_epoch,
+			feed_retired_sequence_o                => lfm25_feed_retired_sequence,
+			feed_retired_item_o                    => lfm25_feed_retired_item,
+			feed_error_code_o                      => lfm25_feed_error_code,
+			feed_completion_count_o                => lfm25_feed_completion_count,
+			decode_capability_magic_o              => lfm25_decode_capability_magic,
+			decode_capability_bits_o               => lfm25_decode_capability_bits,
+			decode_state_o                         => lfm25_decode_state,
+			decode_result0_o                       => lfm25_decode_result0,
+			decode_result1_o                       => lfm25_decode_result1,
+			decode_argmax_score_q30_o              => lfm25_decode_argmax_score_q30,
+			operation_ordinal_o                    => open,
+			feed_items_retired_o                   => open,
+			controller_poisoned_o                  => open,
+			controller_busy_o                      => open,
+			frontend_poisoned_o                    => open
 		);
 
 	u_completion_irq: truega_completion_irq
 		port map(
 			clk                => tlp_clk,
 			reset_n            => pcie_core_reset_n,
-			retire_i           => call_irq_retire or decode_irq_retire,
-			interrupt_enable_i => call_flags(0) or stream_irq_enable or decode_irq_enable,
+			retire_i           => call_irq_retire or lfm25_endpoint_irq_retire,
+			interrupt_enable_i => call_flags(0) or lfm25_endpoint_irq_retire,
 			bar_ack_i          => call_irq_bar_ack,
 			controller_ack_i   => call_irq_controller_ack,
 			status_o           => call_irq_status,
@@ -963,8 +926,6 @@ begin
 					call_irq_controller_ack_prev <= '0';
 					call_irq_request_count <= (others => '0');
 					call_irq_controller_ack_count <= (others => '0');
-					stream_irq_enable <= '0';
-					decode_irq_enable <= '0';
 					lfm25_decode_command <= (others => '0');
 					lfm25_decode_position <= (others => '0');
 					lfm25_decode_session_epoch <= (others => '0');
@@ -973,15 +934,8 @@ begin
 					stream_write <= '0';
 					stream_write_addr_dw <= (others => '0');
 					stream_write_data <= (others => '0');
-					stream_start <= '0';
-					stream_control <= (others => '0');
-					stream_row <= (others => '0');
-					stream_state <= STREAM_STATE_IDLE;
-					stream_error_code <= (others => '0');
-					stream_gate_q30 <= (others => '0');
-					stream_up_q30 <= (others => '0');
-					stream_result_q30 <= (others => '0');
-					stream_completion_count <= (others => '0');
+					lfm25_feed_control_write <= '0';
+					lfm25_feed_control_value <= (others => '0');
 				capture_pending <= '0';
 				rx_packet_active <= '0';
 				rx_packet_bardec <= (others => '0');
@@ -1073,9 +1027,9 @@ begin
 					call_irq_retire <= '0';
 					call_irq_bar_ack <= '0';
 					stream_write <= '0';
-					stream_start <= '0';
+					lfm25_feed_control_write <= '0';
 					lfm25_decode_doorbell <= '0';
-					if decode_irq_retire = '1' then
+					if lfm25_endpoint_irq_retire = '1' then
 						call_retire_count <= call_retire_count + 1;
 					end if;
 					if (call_irq_request = '1') and (call_irq_request_prev = '0') then
@@ -1093,21 +1047,6 @@ begin
 					dbg_queue_cpld <= '0';
 					dbg_tx_fire <= '0';
 					dbg_cpld_blocked <= '0';
-
-					if stream_engine_done = '1' then
-						stream_gate_q30 <= stream_engine_gate_q30;
-						stream_up_q30 <= stream_engine_up_q30;
-						stream_result_q30 <= stream_engine_result_q30;
-						stream_error_code <= stream_engine_error_code;
-						stream_completion_count <= stream_completion_count + 1;
-						if stream_engine_error = '1' then
-							stream_state <= STREAM_STATE_FAILED;
-						else
-							stream_state <= STREAM_STATE_COMPLETE;
-						end if;
-						call_irq_retire <= '1';
-						call_retire_count <= call_retire_count + 1;
-					end if;
 
 					-- The doorbell launches one already-fused slot through a common
 					-- start/busy/done contract. The shell waits for done; it does not fetch
@@ -1246,50 +1185,49 @@ begin
 							bar_read_call_output_data_dw <= call_output_words(to_integer(unsigned(bar_read_word_index)));
 						when BAR_READ_BANK_MANIFEST =>
 							read_data_dw := (others => '0');
-							if to_integer(unsigned(bar_read_word_index)) < FIRMWARE_MANIFEST_WORD_COUNT then
+							case to_integer(unsigned(bar_read_word_index)) is
+							when 0 to FIRMWARE_MANIFEST_WORD_COUNT - 1 =>
 								read_data_dw := firmware_manifest_word;
-							end if;
+							when 32 => read_data_dw := lfm25_feed_capability_magic;
+							when 33 => read_data_dw := lfm25_feed_capability_version_record_bytes;
+							when 34 => read_data_dw := lfm25_feed_capability_bits;
+							when 35 => read_data_dw := lfm25_feed_capability_model_generation;
+							when 36 => read_data_dw := lfm25_feed_capability_shape_set_tag;
+							when 37 => read_data_dw := lfm25_feed_state;
+							when 38 => read_data_dw := lfm25_feed_retired_mode_layer;
+							when 39 => read_data_dw := lfm25_feed_retired_session_epoch;
+							when 40 => read_data_dw := lfm25_feed_retired_sequence;
+							when 41 => read_data_dw := lfm25_feed_retired_item;
+							when 42 => read_data_dw := lfm25_feed_error_code;
+							when 43 => read_data_dw := lfm25_feed_completion_count;
+							when others => null;
+							end case;
 							bar_read_manifest_data_dw <= read_data_dw;
 						when BAR_READ_BANK_STREAM =>
 							case to_integer(unsigned(bar_read_word_index)) is
-							when 0 => read_data_dw := STREAM_CAPABILITY_MAGIC;
-							when 1 => read_data_dw := stream_control;
-							when 2 => read_data_dw := stream_row;
-							when 4 => read_data_dw := stream_state;
-							when 5 => read_data_dw := stream_gate_q30(31 downto 0);
-							when 6 => read_data_dw := stream_gate_q30(63 downto 32);
-							when 7 => read_data_dw := stream_up_q30(31 downto 0);
-							when 8 => read_data_dw := stream_up_q30(63 downto 32);
-								when 9 =>
+							when 9 =>
 									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
 										and (lfm25_decode_command(7 downto 0) = DECODE_OP_LM_HEAD_ARGMAX) then
 										read_data_dw := lfm25_decode_argmax_score_q30(31 downto 0);
-									else
-										read_data_dw := stream_result_q30(31 downto 0);
 									end if;
-								when 10 =>
+							when 10 =>
 									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
 										and (lfm25_decode_command(7 downto 0) = DECODE_OP_LM_HEAD_ARGMAX) then
 										read_data_dw := lfm25_decode_argmax_score_q30(63 downto 32);
-									else
-										read_data_dw := stream_result_q30(63 downto 32);
 									end if;
-								when 11 => read_data_dw := stream_error_code;
-							when 12 => read_data_dw := std_logic_vector(stream_completion_count);
-							when 13 => read_data_dw := stream_accepted_write_count;
 							when 14 => read_data_dw := std_logic_vector(dbg_rx_capture_count);
 							when 15 => read_data_dw := std_logic_vector(dbg_write_count);
-								when 16 => read_data_dw := std_logic_vector(dbg_rx_error_count);
-								when 17 => read_data_dw := lfm25_decode_capability_magic;
-								when 18 => read_data_dw := lfm25_decode_capability_bits;
-								when 19 => read_data_dw := lfm25_decode_command;
-								when 20 => read_data_dw := lfm25_decode_position;
-								when 21 => read_data_dw := lfm25_decode_session_epoch;
-								when 22 => read_data_dw := (others => '0');
-								when 23 => read_data_dw := lfm25_decode_state;
-								when 24 => read_data_dw := lfm25_decode_result0;
-								when 25 => read_data_dw := lfm25_decode_result1;
-								when others => null;
+							when 16 => read_data_dw := std_logic_vector(dbg_rx_error_count);
+							when 17 => read_data_dw := lfm25_decode_capability_magic;
+							when 18 => read_data_dw := lfm25_decode_capability_bits;
+							when 19 => read_data_dw := lfm25_decode_command;
+							when 20 => read_data_dw := lfm25_decode_position;
+							when 21 => read_data_dw := lfm25_decode_session_epoch;
+							when 22 => read_data_dw := (others => '0');
+							when 23 => read_data_dw := lfm25_decode_state;
+							when 24 => read_data_dw := lfm25_decode_result0;
+							when 25 => read_data_dw := lfm25_decode_result1;
+							when others => null;
 							end case;
 							bar_read_stream_data_dw <= read_data_dw;
 						when BAR_READ_BANK_DEBUG =>
@@ -1378,9 +1316,9 @@ begin
 							end if;
 
 							if hit_write and (transaction_bardec(2) = '1') then
-								-- BAR2 is posted-write-only in this milestone. The row
-								-- streamer owns address validation and ignores writes while
-								-- its exact row engine is consuming the staged buffers.
+								-- BAR2 is the byte-addressed TGF2 staging/commit aperture.
+								-- The endpoint validates address and ordering; this PCIe
+								-- shim serializes a two-dword Memory Write over two clocks.
 								stream_write_addr_dw <= addr_dw;
 								stream_write_data <= payload_dw;
 								stream_write <= '1';
@@ -1440,51 +1378,22 @@ begin
 										call_irq_retire <= '1';
 										call_retire_count <= call_retire_count + 1;
 									end if;
-							elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
-								if payload_dw(0) = '1' then
-									call_irq_bar_ack <= '1';
-										if (stream_state = STREAM_STATE_COMPLETE)
-											or (stream_state = STREAM_STATE_FAILED) then
-										stream_irq_enable <= '0';
-									end if;
-									if (lfm25_decode_state = DECODE_STATE_COMPLETE)
-										or (lfm25_decode_state = DECODE_STATE_FAILED) then
-										decode_irq_enable <= '0';
-									end if;
-								end if;
-								elsif addr_index = BAR0_STREAM_CONTROL_DW then
-									stream_control <= payload_dw;
-								elsif addr_index = BAR0_STREAM_ROW_DW then
-									stream_row <= payload_dw;
-							elsif addr_index = BAR0_STREAM_DOORBELL_DW then
-									stream_irq_enable <= stream_control(8);
-									if (payload_dw = STREAM_DOORBELL_MAGIC)
-										and (stream_state /= STREAM_STATE_BUSY)
-										and (stream_engine_busy = '0')
-										and ((stream_control(1 downto 0) = "01")
-											or (stream_control(1 downto 0) = "10")) then
-										stream_state <= STREAM_STATE_BUSY;
-										stream_error_code <= (others => '0');
-										stream_start <= '1';
-									else
-										stream_state <= STREAM_STATE_FAILED;
-										stream_error_code <= STREAM_ERROR_BAD_DOORBELL;
-										stream_completion_count <= stream_completion_count + 1;
-										call_irq_retire <= '1';
-									call_retire_count <= call_retire_count + 1;
-								end if;
-							elsif addr_index = BAR0_DECODE_COMMAND_DW then
+						elsif addr_index = BAR0_CALL_IRQ_ACK_DW then
+							if payload_dw(0) = '1' then
+								call_irq_bar_ack <= '1';
+							end if;
+						elsif addr_index = BAR0_DECODE_COMMAND_DW then
 								lfm25_decode_command <= payload_dw;
 							elsif addr_index = BAR0_DECODE_POSITION_DW then
 								lfm25_decode_position <= payload_dw;
 							elsif addr_index = BAR0_DECODE_SESSION_EPOCH_DW then
 								lfm25_decode_session_epoch <= payload_dw;
-							elsif addr_index = BAR0_DECODE_DOORBELL_DW then
-								-- TGD1 owns interrupt admission for exactly this doorbell;
-								-- it never depends on the legacy row stream's control bit.
-								decode_irq_enable <= '1';
-								lfm25_decode_doorbell_value <= payload_dw;
-								lfm25_decode_doorbell <= '1';
+						elsif addr_index = BAR0_DECODE_DOORBELL_DW then
+							lfm25_decode_doorbell_value <= payload_dw;
+							lfm25_decode_doorbell <= '1';
+						elsif addr_index = BAR0_FEED_CONTROL_DW then
+							lfm25_feed_control_value <= payload_dw;
+							lfm25_feed_control_write <= '1';
 							else
 									case addr_dw(9 downto 0) is
 									when BAR0_LED_DW =>
@@ -1538,8 +1447,9 @@ begin
 									and (addr_index < BAR0_CALL_BASE_DW + CALL_WORD_COUNT) then
 									bar_read_bank <= BAR_READ_BANK_CALL_OUTPUT;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_CALL_BASE_DW - CALL_OUTPUT_WORD, 6));
-								elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
-									and (addr_index < BAR0_FEED_CAPABILITY_BASE_DW + FEED_CAPABILITY_WORD_COUNT) then
+							elsif (addr_index >= BAR0_FIRMWARE_MANIFEST_BASE_DW)
+								and (addr_index < BAR0_FEED_CAPABILITY_BASE_DW
+									+ FEED_CAPABILITY_WORD_COUNT + FEED_STATUS_WORD_COUNT) then
 									bar_read_bank <= BAR_READ_BANK_MANIFEST;
 									bar_read_word_index <= std_logic_vector(to_unsigned(addr_index - BAR0_FIRMWARE_MANIFEST_BASE_DW, 6));
 							elsif (addr_index >= BAR0_STREAM_CAPABILITY_DW)
