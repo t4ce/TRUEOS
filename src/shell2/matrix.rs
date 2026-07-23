@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String as HString;
 use spin::Once;
 
-use super::{LineSource, TranscriptEntry};
+use super::TranscriptEntry;
 
 pub(crate) const MATRIX_SLOT_ID_MAX: usize = 3;
 const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
@@ -196,12 +196,11 @@ fn active_slot_id_mut(state: &mut MatrixState, output_mask: u8) -> &mut MatrixSl
     }
 }
 
-fn push_line(slot: &mut MatrixSlot, source: LineSource, text: &str) {
+fn push_line(slot: &mut MatrixSlot, text: &str) {
     if slot.lines.len() >= DEFAULT_MATRIX_SLOT_LINE_CAP {
         let _ = slot.lines.pop_front();
     }
     slot.lines.push_back(TranscriptEntry {
-        source,
         text: AllocString::from(text),
     });
 }

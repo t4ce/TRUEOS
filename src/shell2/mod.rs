@@ -64,16 +64,8 @@ static REGISTERED_OUTPUTS: AtomicU8 = AtomicU8::new(0);
 static NET_TCP_TERMINAL_ROWS: AtomicUsize =
     AtomicUsize::new(DEFAULT_TRANSCRIPT_VIEW_ROWS + SCROLL_TOP_ROW - 1);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LineSource {
-    User,
-    Native,
-    System,
-}
-
 #[derive(Clone)]
 pub(crate) struct TranscriptEntry {
-    pub(crate) source: LineSource,
     pub(crate) text: AllocString,
 }
 
@@ -243,26 +235,14 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str("\x1b[2K");
     }
 
-    fn transcript_line_at(&self, row: usize, source: LineSource, s: &str) {
+    fn transcript_line_at(&self, row: usize, s: &str) {
         self.move_to(row, 1);
         self.clear_line();
+        // Transcript output has one neutral presentation. Reset any style
+        // inherited from the fixed chrome, then preserve the application's
+        // bytes without attaching source-specific alignment or color.
         self.io.raw_write_str(ecma48::RESET);
-
-        match source {
-            LineSource::User | LineSource::Native => {
-                self.io.raw_write_str(s);
-            }
-            LineSource::System => {
-                let width = ecma48::visible_width(s);
-                if width > self.line_width() {
-                    return;
-                }
-                let col = self.line_width().saturating_sub(width).saturating_add(1);
-                self.move_to(row, col);
-                self.io
-                    .raw_write_fmt(format_args!("{}", term_style::paint(s).color(SYSTEM_TEXT_RGB)));
-            }
-        }
+        self.io.raw_write_str(s);
     }
 
     fn render_transcript(&self, transcript: &VecDeque<TranscriptEntry>) {
@@ -275,25 +255,18 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str("\x1b[J");
         let view_rows = self.transcript_view_rows.get().max(1);
 
-        if transcript_prefers_chronological_layout(transcript) {
-            for (idx, entry) in transcript.iter().take(view_rows).enumerate() {
-                let row = top_row + idx;
-                self.transcript_line_at(row, entry.source, entry.text.as_str());
-            }
-        } else {
-            for (idx, entry) in transcript.iter().rev().take(view_rows).enumerate() {
-                let row = top_row + idx;
-                self.transcript_line_at(row, entry.source, entry.text.as_str());
-            }
+        for (idx, entry) in transcript.iter().rev().take(view_rows).enumerate() {
+            let row = top_row + idx;
+            self.transcript_line_at(row, entry.text.as_str());
         }
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
-    fn push_transcript_line(&self, entry: &TranscriptEntry) {
+    fn push_transcript_line(&self, top_row: usize, entry: &TranscriptEntry) {
         self.io.raw_write_str(ecma48::SAVE_CURSOR);
-        self.move_to(SCROLL_TOP_ROW, 1);
+        self.move_to(top_row, 1);
         self.io.raw_write_str("\x1b[L");
-        self.transcript_line_at(SCROLL_TOP_ROW, entry.source, entry.text.as_str());
+        self.transcript_line_at(top_row, entry.text.as_str());
         self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
