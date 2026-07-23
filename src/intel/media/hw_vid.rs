@@ -1771,7 +1771,7 @@ async fn h264_i_p_playback_probe_with_reader(
     );
     let conversion_probe = conversion_report.probe;
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: conversion-probe generation={} samples={} rcs_samples={} worker_avg_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_max_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_percentile_us=end_to_end_p50:{},p95:{},p99:{} rcs_avg_us=queue_prepare:{},queue_total:{},forcewake:{},state_map:{},ppgtt_init:{},kernel_map:{},source_map:{},destination_map:{},batch_encode:{},admission:{},submit_to_marker:{} rcs_max_us=queue_prepare:{},submit_to_marker:{} rcs_percentile_us=queue_prepare_p50:{},p95:{},p99:{},submit_to_marker_p50:{},p95:{},p99:{} gpu_walker=samples:{},avg_us:{},max_us:{},p50_us:{},p95_us:{},p99_us:{},timestamp_hz:{} gpu_phase=samples:{},avg_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{},max_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},p50_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},p95_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{} completion_polls_avg={} completion_polls_max={} quantile_bucket_us={} clock=embassy-us+gpu-pipe-control marker_metric=accepted-guc-to-host-observed-post-marker gpu_metric=ordered-pre-walker-to-post-media-state-flush gpu_phase_metric=host-pre-submit-to-batch-entry+batch-entry-to-pre-walker+post-walker-to-post-release+post-release-to-host-observe scope=live-ordered-path\n",
+        "intel/hw_vid: conversion-probe generation={} samples={} rcs_samples={} worker_avg_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_max_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_percentile_us=end_to_end_p50:{},p95:{},p99:{} rcs_avg_us=queue_prepare:{},queue_total:{},forcewake:{},state_map:{},ppgtt_init:{},kernel_map:{},source_map:{},destination_map:{},batch_encode:{},admission:{},submit_to_marker:{} rcs_max_us=queue_prepare:{},submit_to_marker:{} rcs_percentile_us=queue_prepare_p50:{},p95:{},p99:{},submit_to_marker_p50:{},p95:{},p99:{} gpu_walker=samples:{},avg_us:{},max_us:{},p50_us:{},p95_us:{},p99_us:{},timestamp_hz:{} gpu_phase=samples:{},avg_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{},max_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},p50_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{},p95_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{} guc_h2g_split=samples:{},avg_us=pre_submit_to_consumed_observe:{},consumed_observe_to_batch:{},max_us=pre_submit_to_consumed_observe:{},consumed_observe_to_batch:{},p50_us=pre_submit_to_consumed_observe:{},consumed_observe_to_batch:{},p95_us=pre_submit_to_consumed_observe:{},consumed_observe_to_batch:{} completion_polls_avg={} completion_polls_max={} quantile_bucket_us={} clock=embassy-us+gpu-pipe-control marker_metric=h2g-published-to-host-observed-post-marker gpu_metric=ordered-pre-walker-to-post-media-state-flush gpu_phase_metric=host-pre-submit-to-h2g-consumed-observe+consumed-observe-to-batch-entry+batch-entry-to-pre-walker+post-walker-to-post-release+post-release-to-host-observe h2g_split_bounds=consume-upper+dispatch-lower scope=live-ordered-path\n",
         conversion_report.generation,
         conversion_probe.samples,
         conversion_probe.rcs_samples,
@@ -1838,6 +1838,15 @@ async fn h264_i_p_playback_probe_with_reader(
         conversion_probe.p95_gpu_batch_to_walker_us,
         conversion_probe.p95_gpu_walker_to_release_us,
         conversion_probe.p95_gpu_release_to_observe_us,
+        conversion_probe.gpu_h2g_split_samples,
+        conversion_probe.avg_gpu_pre_submit_to_h2g_consumed_us,
+        conversion_probe.avg_gpu_h2g_consumed_to_batch_us,
+        conversion_probe.max_gpu_pre_submit_to_h2g_consumed_us,
+        conversion_probe.max_gpu_h2g_consumed_to_batch_us,
+        conversion_probe.p50_gpu_pre_submit_to_h2g_consumed_us,
+        conversion_probe.p50_gpu_h2g_consumed_to_batch_us,
+        conversion_probe.p95_gpu_pre_submit_to_h2g_consumed_us,
+        conversion_probe.p95_gpu_h2g_consumed_to_batch_us,
         conversion_probe.avg_completion_polls,
         conversion_probe.max_completion_polls,
         conversion_probe.quantile_bucket_us,

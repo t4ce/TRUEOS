@@ -42,6 +42,12 @@ impl KernelSubmission {
     pub(crate) fn fence(self) -> GpuFence {
         GpuFence::new(FenceTarget::Kernel(self.client), self.point)
     }
+
+    /// Backend-defined monotonic position of this request in the physical
+    /// scheduler transport. Zero denotes an untracked/control submission.
+    pub(crate) const fn physical_publish_sequence(self) -> u64 {
+        self.point.physical_publish_sequence
+    }
 }
 
 /// Future that resolves when one exact vGPU timeline point retires.

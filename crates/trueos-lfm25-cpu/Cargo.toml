@@ -11,7 +11,7 @@ sha2 = { version = "0.10.9", default-features = false }
 trueos-fpga-abi = { path = "../trueos-fpga-abi" }
 
 [[bin]]
-name = "lfm25-cpu-token1"
+name = "lfm25-cpu-parity"
 path = "src/bin/token1.rs"
 
 [[bin]]

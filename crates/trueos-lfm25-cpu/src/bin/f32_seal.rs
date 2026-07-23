@@ -125,11 +125,7 @@ fn main() -> Result<(), String> {
 
     let gguf = fs::read(&input).map_err(|error| format!("read {input}: {error}"))?;
     if gguf.len() != lfm25::PINNED_GGUF_BYTES as usize {
-        return Err(format!(
-            "GGUF bytes {} != pinned {}",
-            gguf.len(),
-            lfm25::PINNED_GGUF_BYTES
-        ));
+        return Err(format!("GGUF bytes {} != pinned {}", gguf.len(), lfm25::PINNED_GGUF_BYTES));
     }
     let observed_gguf: [u8; 32] = Sha256::digest(&gguf).into();
     if observed_gguf != lfm25::PINNED_GGUF_SHA256 {
@@ -145,8 +141,7 @@ fn main() -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
-    fs::write(output, &artifact)
-        .map_err(|error| format!("write {}: {error}", output.display()))?;
+    fs::write(output, &artifact).map_err(|error| format!("write {}: {error}", output.display()))?;
     let artifact_hash: [u8; 32] = Sha256::digest(&artifact).into();
     println!(
         "f32_sidecar={} bytes={} elements={} sha256={}",
@@ -171,10 +166,7 @@ fn parse_gguf(bytes: &[u8]) -> Result<(usize, Vec<Tensor>), String> {
         usize::try_from(reader.u64()?).map_err(|_| "tensor count is too large".to_string())?;
     let metadata_count = reader.u64()?;
     if tensor_count != lfm25::MODEL_TENSOR_COUNT {
-        return Err(format!(
-            "GGUF tensor count {tensor_count} != {}",
-            lfm25::MODEL_TENSOR_COUNT
-        ));
+        return Err(format!("GGUF tensor count {tensor_count} != {}", lfm25::MODEL_TENSOR_COUNT));
     }
     let mut alignment = 32usize;
     for _ in 0..metadata_count {
@@ -208,8 +200,8 @@ fn parse_gguf(bytes: &[u8]) -> Result<(usize, Vec<Tensor>), String> {
         if !matches!(source_type, GGUF_F32 | GGUF_Q8_0) {
             return Err(format!("{name} has unsupported type {source_type}"));
         }
-        let relative_offset = usize::try_from(reader.u64()?)
-            .map_err(|_| format!("{name} offset is too large"))?;
+        let relative_offset =
+            usize::try_from(reader.u64()?).map_err(|_| format!("{name} offset is too large"))?;
         tensors.push(Tensor {
             name,
             dimensions,
@@ -291,23 +283,16 @@ fn seal(bytes: &[u8], data_offset: usize, tensors: &[Tensor]) -> Result<Vec<u8>,
         let entry = F32_SIDECAR_HEADER_BYTES + entry_index * F32_SIDECAR_ENTRY_BYTES;
         artifact[entry..entry + 2].copy_from_slice(&descriptor.tensor_id.to_le_bytes());
         artifact[entry + 4..entry + 8].copy_from_slice(&(elements as u32).to_le_bytes());
-        artifact[entry + 8..entry + 12]
-            .copy_from_slice(&(payload_offset as u32).to_le_bytes());
-        artifact[entry + 12..entry + 16]
-            .copy_from_slice(&(source_bytes as u32).to_le_bytes());
+        artifact[entry + 8..entry + 12].copy_from_slice(&(payload_offset as u32).to_le_bytes());
+        artifact[entry + 12..entry + 16].copy_from_slice(&(source_bytes as u32).to_le_bytes());
         artifact[payload_offset..payload_offset + source_bytes].copy_from_slice(source);
         payload_offset += source_bytes;
         entry_index += 1;
     }
-    if entry_index != F32_SIDECAR_TENSOR_COUNT
-        || payload_offset != F32_SIDECAR_BYTES
-    {
-        return Err(format!(
-            "sidecar totals tensors={entry_index} bytes={payload_offset}"
-        ));
+    if entry_index != F32_SIDECAR_TENSOR_COUNT || payload_offset != F32_SIDECAR_BYTES {
+        return Err(format!("sidecar totals tensors={entry_index} bytes={payload_offset}"));
     }
-    let payload_hash: [u8; 32] =
-        Sha256::digest(&artifact[F32_SIDECAR_PAYLOAD_OFFSET..]).into();
+    let payload_hash: [u8; 32] = Sha256::digest(&artifact[F32_SIDECAR_PAYLOAD_OFFSET..]).into();
     artifact[128..160].copy_from_slice(&payload_hash);
     Ok(artifact)
 }

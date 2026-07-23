@@ -116,6 +116,15 @@ pub(crate) struct DecodedVideoConversionProbeReport {
     pub(crate) max_gpu_pre_submit_to_batch_us: u64,
     pub(crate) p50_gpu_pre_submit_to_batch_us: u64,
     pub(crate) p95_gpu_pre_submit_to_batch_us: u64,
+    pub(crate) gpu_h2g_split_samples: usize,
+    pub(crate) avg_gpu_pre_submit_to_h2g_consumed_us: u64,
+    pub(crate) max_gpu_pre_submit_to_h2g_consumed_us: u64,
+    pub(crate) p50_gpu_pre_submit_to_h2g_consumed_us: u64,
+    pub(crate) p95_gpu_pre_submit_to_h2g_consumed_us: u64,
+    pub(crate) avg_gpu_h2g_consumed_to_batch_us: u64,
+    pub(crate) max_gpu_h2g_consumed_to_batch_us: u64,
+    pub(crate) p50_gpu_h2g_consumed_to_batch_us: u64,
+    pub(crate) p95_gpu_h2g_consumed_to_batch_us: u64,
     pub(crate) avg_gpu_batch_to_walker_us: u64,
     pub(crate) max_gpu_batch_to_walker_us: u64,
     pub(crate) p50_gpu_batch_to_walker_us: u64,
@@ -298,6 +307,11 @@ struct DecodedVideoConversionProbeState {
     gpu_phase_samples: usize,
     gpu_pre_submit_to_batch: VideoConversionProbeMetric,
     gpu_pre_submit_to_batch_histogram: VideoConversionProbeHistogram,
+    gpu_h2g_split_samples: usize,
+    gpu_pre_submit_to_h2g_consumed: VideoConversionProbeMetric,
+    gpu_pre_submit_to_h2g_consumed_histogram: VideoConversionProbeHistogram,
+    gpu_h2g_consumed_to_batch: VideoConversionProbeMetric,
+    gpu_h2g_consumed_to_batch_histogram: VideoConversionProbeHistogram,
     gpu_batch_to_walker: VideoConversionProbeMetric,
     gpu_batch_to_walker_histogram: VideoConversionProbeHistogram,
     gpu_walker_to_release: VideoConversionProbeMetric,
@@ -343,6 +357,11 @@ impl DecodedVideoConversionProbeState {
             gpu_phase_samples: 0,
             gpu_pre_submit_to_batch: VideoConversionProbeMetric::new(),
             gpu_pre_submit_to_batch_histogram: VideoConversionProbeHistogram::new(),
+            gpu_h2g_split_samples: 0,
+            gpu_pre_submit_to_h2g_consumed: VideoConversionProbeMetric::new(),
+            gpu_pre_submit_to_h2g_consumed_histogram: VideoConversionProbeHistogram::new(),
+            gpu_h2g_consumed_to_batch: VideoConversionProbeMetric::new(),
+            gpu_h2g_consumed_to_batch_histogram: VideoConversionProbeHistogram::new(),
             gpu_batch_to_walker: VideoConversionProbeMetric::new(),
             gpu_batch_to_walker_histogram: VideoConversionProbeHistogram::new(),
             gpu_walker_to_release: VideoConversionProbeMetric::new(),
@@ -401,6 +420,17 @@ impl DecodedVideoConversionProbeState {
                 .record(rcs.gpu_pre_submit_to_batch_us);
             self.gpu_pre_submit_to_batch_histogram
                 .record(rcs.gpu_pre_submit_to_batch_us);
+            if rcs.gpu_h2g_split_valid {
+                self.gpu_h2g_split_samples = self.gpu_h2g_split_samples.saturating_add(1);
+                self.gpu_pre_submit_to_h2g_consumed
+                    .record(rcs.gpu_pre_submit_to_h2g_consumed_us);
+                self.gpu_pre_submit_to_h2g_consumed_histogram
+                    .record(rcs.gpu_pre_submit_to_h2g_consumed_us);
+                self.gpu_h2g_consumed_to_batch
+                    .record(rcs.gpu_h2g_consumed_to_batch_us);
+                self.gpu_h2g_consumed_to_batch_histogram
+                    .record(rcs.gpu_h2g_consumed_to_batch_us);
+            }
             self.gpu_batch_to_walker.record(rcs.gpu_batch_to_walker_us);
             self.gpu_batch_to_walker_histogram
                 .record(rcs.gpu_batch_to_walker_us);
@@ -514,6 +544,27 @@ impl DecodedVideoConversionProbeState {
             p95_gpu_pre_submit_to_batch_us: self
                 .gpu_pre_submit_to_batch_histogram
                 .percentile(95, self.gpu_pre_submit_to_batch.max_us),
+            gpu_h2g_split_samples: self.gpu_h2g_split_samples,
+            avg_gpu_pre_submit_to_h2g_consumed_us: self
+                .gpu_pre_submit_to_h2g_consumed
+                .average(self.gpu_h2g_split_samples),
+            max_gpu_pre_submit_to_h2g_consumed_us: self.gpu_pre_submit_to_h2g_consumed.max_us,
+            p50_gpu_pre_submit_to_h2g_consumed_us: self
+                .gpu_pre_submit_to_h2g_consumed_histogram
+                .percentile(50, self.gpu_pre_submit_to_h2g_consumed.max_us),
+            p95_gpu_pre_submit_to_h2g_consumed_us: self
+                .gpu_pre_submit_to_h2g_consumed_histogram
+                .percentile(95, self.gpu_pre_submit_to_h2g_consumed.max_us),
+            avg_gpu_h2g_consumed_to_batch_us: self
+                .gpu_h2g_consumed_to_batch
+                .average(self.gpu_h2g_split_samples),
+            max_gpu_h2g_consumed_to_batch_us: self.gpu_h2g_consumed_to_batch.max_us,
+            p50_gpu_h2g_consumed_to_batch_us: self
+                .gpu_h2g_consumed_to_batch_histogram
+                .percentile(50, self.gpu_h2g_consumed_to_batch.max_us),
+            p95_gpu_h2g_consumed_to_batch_us: self
+                .gpu_h2g_consumed_to_batch_histogram
+                .percentile(95, self.gpu_h2g_consumed_to_batch.max_us),
             avg_gpu_batch_to_walker_us: self.gpu_batch_to_walker.average(self.gpu_phase_samples),
             max_gpu_batch_to_walker_us: self.gpu_batch_to_walker.max_us,
             p50_gpu_batch_to_walker_us: self

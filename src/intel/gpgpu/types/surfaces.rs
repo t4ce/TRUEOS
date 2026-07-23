@@ -424,7 +424,11 @@ pub(crate) struct GpgpuSubmissionProbe {
     pub(crate) gpu_timestamp_frequency_hz: u64,
     /// Host and PIPE_CONTROL samples from the same 36-bit RCS timestamp
     /// domain, ordered across the complete video submission.
+    pub(crate) guc_h2g_publish_sequence: u64,
     pub(crate) gpu_host_pre_submit_timestamp: u64,
+    /// First host observation that GuC advanced the H2G head through this
+    /// submission. This can lag actual consumption by one completion poll.
+    pub(crate) gpu_h2g_consumed_observe_timestamp: u64,
     pub(crate) gpu_batch_enter_timestamp: u64,
     pub(crate) gpu_pre_walker_timestamp: u64,
     pub(crate) gpu_post_walker_timestamp: u64,
@@ -432,6 +436,10 @@ pub(crate) struct GpgpuSubmissionProbe {
     pub(crate) gpu_host_observe_timestamp: u64,
     pub(crate) gpu_pre_submit_to_batch_ticks: u64,
     pub(crate) gpu_pre_submit_to_batch_us: u64,
+    pub(crate) gpu_pre_submit_to_h2g_consumed_ticks: u64,
+    pub(crate) gpu_pre_submit_to_h2g_consumed_us: u64,
+    pub(crate) gpu_h2g_consumed_to_batch_ticks: u64,
+    pub(crate) gpu_h2g_consumed_to_batch_us: u64,
     pub(crate) gpu_batch_to_walker_ticks: u64,
     pub(crate) gpu_batch_to_walker_us: u64,
     pub(crate) gpu_walker_ticks: u64,
@@ -444,6 +452,7 @@ pub(crate) struct GpgpuSubmissionProbe {
     pub(crate) gpu_pre_submit_to_observe_us: u64,
     pub(crate) gpu_walker_timestamp_valid: bool,
     pub(crate) gpu_phase_timestamps_valid: bool,
+    pub(crate) gpu_h2g_split_valid: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

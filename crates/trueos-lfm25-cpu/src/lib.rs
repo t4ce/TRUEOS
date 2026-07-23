@@ -42,8 +42,7 @@ pub const F32_SIDECAR_ENTRY_BYTES: usize = 16;
 pub const F32_SIDECAR_ELEMENT_COUNT: usize = 65_280;
 pub const F32_SIDECAR_PAYLOAD_OFFSET: usize =
     F32_SIDECAR_HEADER_BYTES + F32_SIDECAR_TENSOR_COUNT * F32_SIDECAR_ENTRY_BYTES;
-pub const F32_SIDECAR_BYTES: usize =
-    F32_SIDECAR_PAYLOAD_OFFSET + F32_SIDECAR_ELEMENT_COUNT * 4;
+pub const F32_SIDECAR_BYTES: usize = F32_SIDECAR_PAYLOAD_OFFSET + F32_SIDECAR_ELEMENT_COUNT * 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct F32SidecarEntry {
@@ -70,8 +69,7 @@ impl F32Sidecar {
             || artifact_u32(artifact, 20)? as usize != F32_SIDECAR_ENTRY_BYTES
             || artifact_u32(artifact, 24)? as usize != F32_SIDECAR_ELEMENT_COUNT
             || artifact_u32(artifact, 28)? as usize != F32_SIDECAR_PAYLOAD_OFFSET
-            || artifact.get(32..64)
-                != Some(trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256.as_slice())
+            || artifact.get(32..64) != Some(trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256.as_slice())
             || artifact.get(64..96)
                 != Some(trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256.as_slice())
             || artifact.get(96..128)
@@ -129,7 +127,9 @@ impl F32Sidecar {
                 element_offset: total_elements,
                 elements,
             });
-            total_elements = total_elements.checked_add(elements).ok_or(Error::Artifact)?;
+            total_elements = total_elements
+                .checked_add(elements)
+                .ok_or(Error::Artifact)?;
             next_payload = next_payload
                 .checked_add(payload_bytes)
                 .ok_or(Error::Artifact)?;
@@ -676,7 +676,11 @@ pub fn q8_row_dot_q8(row: &[u8], input: &[[u8; Q8_BLOCK_BYTES]]) -> Result<f32, 
     {
         return Err(Error::Shape);
     }
-    let mut sum = 0.0f32;
+    // The pinned one-thread llama.cpp build uses its AVX2 Q8_0 dot kernel:
+    // eight F32 lanes, four integer products per lane, fused scale/add per
+    // block, then its fixed horizontal reduction tree. Reproduce that order
+    // explicitly so the no_std scalar backend is numerically invariant.
+    let mut lanes = [0.0f32; 8];
     for (weight, activation) in row.chunks_exact(Q8_BLOCK_BYTES).zip(input) {
         let weight_scale = f16::from_bits(u16::from_le_bytes([weight[0], weight[1]])).to_f32();
         let activation_scale =
@@ -684,12 +688,29 @@ pub fn q8_row_dot_q8(row: &[u8], input: &[[u8; Q8_BLOCK_BYTES]]) -> Result<f32, 
         if !weight_scale.is_finite() || !activation_scale.is_finite() {
             return Err(Error::NonFinite);
         }
-        let mut dot = 0i32;
-        for (&weight, &activation) in weight[2..].iter().zip(&activation[2..]) {
-            dot += i32::from(weight as i8) * i32::from(activation as i8);
+        let scale = weight_scale * activation_scale;
+        for (lane, accumulator) in lanes.iter_mut().enumerate() {
+            let start = 2 + lane * 4;
+            // AVX2 uses `_mm256_maddubs_epi16` before widening. Its two
+            // adjacent byte products saturate to signed i16 independently;
+            // this matters for the rare ±128/±127 Q8 pairs at the limit.
+            let pair = |index: usize| {
+                let sum = i32::from(weight[index] as i8) * i32::from(activation[index] as i8)
+                    + i32::from(weight[index + 1] as i8) * i32::from(activation[index + 1] as i8);
+                sum.clamp(i16::MIN as i32, i16::MAX as i32)
+            };
+            let dot = pair(start) + pair(start + 2);
+            *accumulator = libm::fmaf(scale, dot as f32, *accumulator);
         }
-        sum += weight_scale * activation_scale * dot as f32;
     }
+    let low_high = [
+        lanes[0] + lanes[4],
+        lanes[1] + lanes[5],
+        lanes[2] + lanes[6],
+        lanes[3] + lanes[7],
+    ];
+    let quarters = [low_high[0] + low_high[2], low_high[1] + low_high[3]];
+    let sum = quarters[0] + quarters[1];
     if sum.is_finite() {
         Ok(sum)
     } else {
@@ -776,11 +797,14 @@ pub fn rms_norm(input: &[f32], weights: &[f32]) -> Result<Vec<f32>, Error> {
     if input.is_empty() || input.len() != weights.len() {
         return Err(Error::Shape);
     }
-    let mut sum_squares = 0.0f32;
+    // llama.cpp accumulates each already-rounded F32 square into ggml_float
+    // (F64), then rounds the mean back to F32 before sqrtf.
+    let mut sum_squares = 0.0f64;
     for value in input {
-        sum_squares += value * value;
+        sum_squares += f64::from(value * value);
     }
-    let inverse_rms = 1.0 / libm::sqrtf(sum_squares / input.len() as f32 + RMS_EPSILON);
+    let mean = (sum_squares / input.len() as f64) as f32;
+    let inverse_rms = 1.0 / libm::sqrtf(mean + RMS_EPSILON);
     if !inverse_rms.is_finite() {
         return Err(Error::NonFinite);
     }
@@ -798,11 +822,12 @@ pub fn rms_norm_head_in_place(head: &mut [f32], weights: &[f32]) -> Result<(), E
     if head.len() != HEAD_DIMENSION || weights.len() != HEAD_DIMENSION {
         return Err(Error::Shape);
     }
-    let mut sum_squares = 0.0f32;
+    let mut sum_squares = 0.0f64;
     for value in head.iter() {
-        sum_squares += value * value;
+        sum_squares += f64::from(*value * *value);
     }
-    let inverse_rms = 1.0 / libm::sqrtf(sum_squares / HEAD_DIMENSION as f32 + RMS_EPSILON);
+    let mean = (sum_squares / HEAD_DIMENSION as f64) as f32;
+    let inverse_rms = 1.0 / libm::sqrtf(mean + RMS_EPSILON);
     for (value, weight) in head.iter_mut().zip(weights) {
         *value = *value * inverse_rms * *weight;
     }
@@ -814,15 +839,23 @@ pub fn rope_neox_in_place(head: &mut [f32], position: u32) -> Result<(), Error> 
     if head.len() != HEAD_DIMENSION {
         return Err(Error::Shape);
     }
+    // ggml builds one cache row by repeatedly multiplying theta by a single
+    // F32 scale. Computing each frequency independently with powf changes the
+    // last bits and can cross an F16 cache boundary at later positions.
+    let theta_scale = libm::powf(ROPE_FREQUENCY_BASE, -2.0 / HEAD_DIMENSION as f32);
+    let mut angle = position as f32;
     for pair in 0..HALF_HEAD_DIMENSION {
-        let exponent = pair as f32 / HALF_HEAD_DIMENSION as f32;
-        let angle = position as f32 / libm::powf(ROPE_FREQUENCY_BASE, exponent);
-        let cosine = libm::cosf(angle);
-        let sine = libm::sinf(angle);
+        // The pinned host reference resolves glibc's correctly-rounded F32
+        // sin/cos. Evaluate the same F32 argument at F64 precision before the
+        // single narrowing step; the no_std libm `sinf`/`cosf` fast paths can
+        // otherwise differ by one ULP.
+        let cosine = libm::cos(f64::from(angle)) as f32;
+        let sine = libm::sin(f64::from(angle)) as f32;
         let low = head[pair];
         let high = head[pair + HALF_HEAD_DIMENSION];
         head[pair] = low * cosine - high * sine;
         head[pair + HALF_HEAD_DIMENSION] = low * sine + high * cosine;
+        angle *= theta_scale;
     }
     Ok(())
 }
@@ -832,31 +865,108 @@ pub fn softmax_in_place(values: &mut [f32]) -> Result<(), Error> {
         return Err(Error::Shape);
     }
     let maximum = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let mut sum = 0.0f32;
+    let mut sum = 0.0f64;
     for value in values.iter_mut() {
         *value = libm::expf(*value - maximum);
-        sum += *value;
+        sum += f64::from(*value);
     }
     if !sum.is_finite() || sum <= 0.0 {
         return Err(Error::NonFinite);
     }
-    let inverse = 1.0 / sum;
+    let inverse = (1.0 / sum) as f32;
     for value in values {
         *value *= inverse;
     }
     Ok(())
 }
 
+/// F32 dot product in the fixed AVX2/FMA reduction order used by the pinned
+/// llama.cpp CPU reference. TRUEOS expresses it scalarly to keep the result
+/// independent of compiler auto-vectorization.
+pub fn f32_dot_pinned(lhs: &[f32], rhs: &[f32]) -> Result<f32, Error> {
+    if lhs.len() != rhs.len() {
+        return Err(Error::Shape);
+    }
+    let vectorized = lhs.len() & !31usize;
+    let mut lanes = [[0.0f32; 8]; 4];
+    for base in (0..vectorized).step_by(32) {
+        for register in 0..4 {
+            for lane in 0..8 {
+                let index = base + register * 8 + lane;
+                lanes[register][lane] = libm::fmaf(lhs[index], rhs[index], lanes[register][lane]);
+            }
+        }
+    }
+    for lane in 0..8 {
+        lanes[0][lane] += lanes[2][lane];
+        lanes[1][lane] += lanes[3][lane];
+        lanes[0][lane] += lanes[1][lane];
+    }
+    let low_high = [
+        lanes[0][0] + lanes[0][4],
+        lanes[0][1] + lanes[0][5],
+        lanes[0][2] + lanes[0][6],
+        lanes[0][3] + lanes[0][7],
+    ];
+    let pair = [low_high[0] + low_high[1], low_high[2] + low_high[3]];
+    let mut sum = pair[0] + pair[1];
+    for index in vectorized..lhs.len() {
+        sum += lhs[index] * rhs[index];
+    }
+    if sum.is_finite() {
+        Ok(sum)
+    } else {
+        Err(Error::NonFinite)
+    }
+}
+
+/// AVX2/FMA dot product with an explicitly zero-padded physical row.
+///
+/// llama.cpp stores causal KQ/KQV rows in 256-position tiles. The logical
+/// cache prefix may be shorter, but those zero lanes still determine the SIMD
+/// accumulator and reduction layout.
+pub fn f32_dot_pinned_padded(
+    lhs: &[f32],
+    rhs: &[f32],
+    padded_elements: usize,
+) -> Result<f32, Error> {
+    if lhs.len() != rhs.len()
+        || padded_elements < lhs.len()
+        || padded_elements == 0
+        || padded_elements % 32 != 0
+    {
+        return Err(Error::Shape);
+    }
+    let mut lanes = [[0.0f32; 8]; 4];
+    for (index, (&lhs, &rhs)) in lhs.iter().zip(rhs).enumerate() {
+        let within_block = index % 32;
+        let register = within_block / 8;
+        let lane = within_block % 8;
+        lanes[register][lane] = libm::fmaf(lhs, rhs, lanes[register][lane]);
+    }
+    for lane in 0..8 {
+        lanes[0][lane] += lanes[2][lane];
+        lanes[1][lane] += lanes[3][lane];
+        lanes[0][lane] += lanes[1][lane];
+    }
+    let low_high = [
+        lanes[0][0] + lanes[0][4],
+        lanes[0][1] + lanes[0][5],
+        lanes[0][2] + lanes[0][6],
+        lanes[0][3] + lanes[0][7],
+    ];
+    let pair = [low_high[0] + low_high[1], low_high[2] + low_high[3]];
+    let sum = pair[0] + pair[1];
+    if sum.is_finite() {
+        Ok(sum)
+    } else {
+        Err(Error::NonFinite)
+    }
+}
+
 /// Map one query head to its grouped-query K/V head.
-pub fn gqa_kv_head(
-    query_head: usize,
-    query_heads: usize,
-    kv_heads: usize,
-) -> Result<usize, Error> {
-    if query_heads == 0
-        || kv_heads == 0
-        || query_heads % kv_heads != 0
-        || query_head >= query_heads
+pub fn gqa_kv_head(query_head: usize, query_heads: usize, kv_heads: usize) -> Result<usize, Error> {
+    if query_heads == 0 || kv_heads == 0 || query_heads % kv_heads != 0 || query_head >= query_heads
     {
         return Err(Error::Shape);
     }
@@ -925,6 +1035,51 @@ pub fn f32_to_q30(value: f32) -> Result<i64, Error> {
     }
 }
 
+/// Pinned llama.cpp AVX2/FMA SiLU lane followed by the ordinary F32 multiply.
+///
+/// LFM2.5's 4,608-wide SwiGLU rows are wholly processed by the eight-lane
+/// vector kernel in the reference build. Reproducing its exp approximation is
+/// necessary at Q8 halfway boundaries even when the visible F32 error is only
+/// one ULP.
+pub fn silu_mul_f32_pinned(gate: f32, up: f32) -> Result<f32, Error> {
+    if !gate.is_finite() || !up.is_finite() {
+        return Err(Error::NonFinite);
+    }
+    let exponent = pinned_avx2_expf(-gate)?;
+    let value = (gate / (1.0 + exponent)) * up;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::NonFinite)
+    }
+}
+
+fn pinned_avx2_expf(value: f32) -> Result<f32, Error> {
+    let r = f32::from_bits(0x4b40_0000);
+    let z = libm::fmaf(value, f32::from_bits(0x3fb8_aa3b), r);
+    let n = z - r;
+    // All sealed LFM2.5 SwiGLU values are in this ordinary branch. Fail closed
+    // instead of silently substituting a different scalar overflow path.
+    if !n.is_finite() || n.abs() > 126.0 {
+        return Err(Error::NonFinite);
+    }
+    let inner = libm::fmaf(-n, f32::from_bits(0x3f31_7200), value);
+    let b = libm::fmaf(-n, f32::from_bits(0x35bf_be8e), inner);
+    let exponent_bits = z.to_bits().wrapping_shl(23);
+    let k = f32::from_bits(exponent_bits.wrapping_add(1.0f32.to_bits()));
+    let u = b * b;
+    let left = libm::fmaf(f32::from_bits(0x3c07_2010), b, f32::from_bits(0x3d2b_9f17));
+    let right = libm::fmaf(f32::from_bits(0x3e2a_af33), b, f32::from_bits(0x3eff_fedb));
+    let polynomial = libm::fmaf(left, u, right);
+    let j = libm::fmaf(polynomial, u, f32::from_bits(0x3f7f_fff6) * b);
+    let output = libm::fmaf(j, k, k);
+    if output.is_finite() {
+        Ok(output)
+    } else {
+        Err(Error::NonFinite)
+    }
+}
+
 /// Evaluate the model's exact f32 `SiLU(gate) * up` from FPGA Q30
 /// projections and return Q30 for the downstream quantizer.
 ///
@@ -936,8 +1091,7 @@ pub fn silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {
     const SCALE: f32 = (1u64 << 30) as f32;
     let gate = gate_q30 as f32 / SCALE;
     let up = up_q30 as f32 / SCALE;
-    let sigmoid = 1.0 / (1.0 + libm::expf(-gate));
-    f32_to_q30(gate * sigmoid * up)
+    f32_to_q30(silu_mul_f32_pinned(gate, up)?)
 }
 
 #[cfg(test)]
@@ -959,11 +1113,9 @@ mod tests {
             artifact[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
         artifact[32..64].copy_from_slice(&trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256);
-        artifact[64..96]
-            .copy_from_slice(&trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256);
-        artifact[96..128].copy_from_slice(
-            &trueos_fpga_abi::lfm25::generated::MODEL_SEAL.tensor_table_sha256,
-        );
+        artifact[64..96].copy_from_slice(&trueos_fpga_abi::lfm25::PINNED_NATIVE_IMAGE_SHA256);
+        artifact[96..128]
+            .copy_from_slice(&trueos_fpga_abi::lfm25::generated::MODEL_SEAL.tensor_table_sha256);
         let mut payload_offset = F32_SIDECAR_PAYLOAD_OFFSET;
         let mut value_index = 0usize;
         for (entry_index, descriptor) in trueos_fpga_abi::lfm25::generated::TENSORS
@@ -977,10 +1129,8 @@ mod tests {
             let elements = descriptor.ggml_ne0 as usize * descriptor.ggml_ne1 as usize;
             let entry = F32_SIDECAR_HEADER_BYTES + entry_index * F32_SIDECAR_ENTRY_BYTES;
             artifact[entry..entry + 2].copy_from_slice(&descriptor.tensor_id.to_le_bytes());
-            artifact[entry + 4..entry + 8]
-                .copy_from_slice(&(elements as u32).to_le_bytes());
-            artifact[entry + 8..entry + 12]
-                .copy_from_slice(&(payload_offset as u32).to_le_bytes());
+            artifact[entry + 4..entry + 8].copy_from_slice(&(elements as u32).to_le_bytes());
+            artifact[entry + 8..entry + 12].copy_from_slice(&(payload_offset as u32).to_le_bytes());
             artifact[entry + 12..entry + 16]
                 .copy_from_slice(&((elements * 4) as u32).to_le_bytes());
             for _ in 0..elements {
@@ -991,8 +1141,7 @@ mod tests {
                 value_index += 1;
             }
         }
-        let payload_hash: [u8; 32] =
-            Sha256::digest(&artifact[F32_SIDECAR_PAYLOAD_OFFSET..]).into();
+        let payload_hash: [u8; 32] = Sha256::digest(&artifact[F32_SIDECAR_PAYLOAD_OFFSET..]).into();
         artifact[128..160].copy_from_slice(&payload_hash);
         artifact
     }
@@ -1030,10 +1179,7 @@ mod tests {
 
         let mut corrupt = artifact.clone();
         corrupt[F32_SIDECAR_PAYLOAD_OFFSET + 17] ^= 0x80;
-        assert!(matches!(
-            F32Sidecar::from_artifact(&corrupt),
-            Err(Error::Artifact)
-        ));
+        assert!(matches!(F32Sidecar::from_artifact(&corrupt), Err(Error::Artifact)));
 
         let mut reordered = artifact;
         let first = F32_SIDECAR_HEADER_BYTES;
@@ -1041,10 +1187,7 @@ mod tests {
         for byte in 0..F32_SIDECAR_ENTRY_BYTES {
             reordered.swap(first + byte, second + byte);
         }
-        assert!(matches!(
-            F32Sidecar::from_artifact(&reordered),
-            Err(Error::Artifact)
-        ));
+        assert!(matches!(F32Sidecar::from_artifact(&reordered), Err(Error::Artifact)));
     }
 
     #[test]
@@ -1118,9 +1261,7 @@ mod tests {
         let cosine = libm::cosf(1.0);
         let sine = libm::sinf(1.0);
         assert!((head[0] - (2.0 * cosine - 3.0 * sine)).abs() < 1.0e-6);
-        assert!(
-            (head[HALF_HEAD_DIMENSION] - (2.0 * sine + 3.0 * cosine)).abs() < 1.0e-6
-        );
+        assert!((head[HALF_HEAD_DIMENSION] - (2.0 * sine + 3.0 * cosine)).abs() < 1.0e-6);
     }
 
     #[test]
@@ -1138,6 +1279,14 @@ mod tests {
             .collect();
         assert_eq!(observed, [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7]);
         assert_eq!(gqa_kv_head(16, 16, 8), Err(Error::Shape));
+    }
+
+    #[test]
+    fn attention_dot_uses_zero_padded_vector_reduction() {
+        let lhs = [1.0f32, -2.0, 3.0];
+        let rhs = [4.0f32, 5.0, -6.0];
+        assert_eq!(f32_dot_pinned_padded(&lhs, &rhs, 256).unwrap(), -24.0);
+        assert_eq!(f32_dot_pinned_padded(&lhs, &rhs, 31), Err(Error::Shape));
     }
 
     #[test]

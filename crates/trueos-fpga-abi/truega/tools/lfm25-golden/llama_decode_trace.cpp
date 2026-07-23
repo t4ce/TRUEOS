@@ -17,6 +17,7 @@ constexpr uint32_t kHidden = 1024;
 constexpr uint32_t kFfn = 4608;
 constexpr uint32_t kKv = 512;
 constexpr uint32_t kVocabulary = 65536;
+constexpr uint32_t kAttentionSlots = 256;
 constexpr uint32_t kHeaderBytes = 256;
 constexpr std::array<uint32_t, 10> kTokens = {
     1, 6, 6423, 708, 6928, 7, 708, 6, 64015, 708,
@@ -81,6 +82,13 @@ std::vector<checkpoint_spec> checkpoint_specs() {
                 spec("model.layers.{}.self_attn.k_layernorm-%u", layer, kKv));
             result.push_back(spec("model.layers.{}.self_attn.q_rope-%u", layer, kHidden));
             result.push_back(spec("model.layers.{}.self_attn.k_rope-%u", layer, kKv));
+            result.push_back(
+                spec("model.layers.{}.self_attn.k_cache_commit-%u", layer, kKv));
+            result.push_back(
+                spec("model.layers.{}.self_attn.v_cache_commit-%u", layer, kKv));
+            result.push_back(spec("kq-%u", layer, kAttentionSlots * 16));
+            result.push_back(spec("kq_soft_max-%u", layer, kAttentionSlots * 16));
+            result.push_back(spec("kqv-%u", layer, kHidden));
             result.push_back(spec("kqv_out-%u", layer, kHidden));
             result.push_back(
                 spec("model.layers.{}.self_attn.out_proj-%u", layer, kHidden));
@@ -96,8 +104,7 @@ std::vector<checkpoint_spec> checkpoint_specs() {
         result.push_back(spec("model.layers.{}.ffn_norm-%u", layer, kHidden));
         result.push_back(spec("ffn_up-%u", layer, kFfn));
         result.push_back(spec("ffn_gate-%u", layer, kFfn));
-        result.push_back(spec("ffn_silu-%u", layer, kFfn));
-        result.push_back(spec("ffn_gate_par-%u", layer, kFfn));
+        result.push_back(spec("ffn_swiglu-%u", layer, kFfn));
         result.push_back(spec("model.layers.{}.ffn_out-%u", layer, kHidden));
         result.push_back(spec("l_out-%u", layer, kHidden));
     }
@@ -108,9 +115,10 @@ std::vector<checkpoint_spec> checkpoint_specs() {
 
 capture_state make_capture_state() {
     capture_state state;
-    const auto specs = checkpoint_specs();
     state.tokens.resize(kTokens.size());
-    for (auto & token : state.tokens) {
+    for (size_t position = 0; position < state.tokens.size(); ++position) {
+        auto & token = state.tokens[position];
+        const auto specs = checkpoint_specs();
         token.reserve(specs.size());
         for (const auto & item : specs) {
             checkpoint value;
@@ -138,12 +146,19 @@ bool capture_callback(ggml_tensor * tensor, bool ask, void * opaque) {
         return true;
     }
     if (found->seen) {
-        state.error = std::string("checkpoint evaluated twice: ") + tensor->name;
         return true;
     }
     if (tensor->type != GGML_TYPE_F32 || !ggml_is_contiguous(tensor) ||
         ggml_nelements(tensor) != found->spec.elements) {
-        state.error = std::string("checkpoint shape/type mismatch: ") + tensor->name;
+        char detail[256] = {};
+        std::snprintf(
+            detail, sizeof(detail),
+            "checkpoint shape/type mismatch: %s type=%d contiguous=%d elements=%lld expected=%u ne=[%lld,%lld,%lld,%lld]",
+            tensor->name, static_cast<int>(tensor->type), ggml_is_contiguous(tensor) ? 1 : 0,
+            static_cast<long long>(ggml_nelements(tensor)), found->spec.elements,
+            static_cast<long long>(tensor->ne[0]), static_cast<long long>(tensor->ne[1]),
+            static_cast<long long>(tensor->ne[2]), static_cast<long long>(tensor->ne[3]));
+        state.error = detail;
         return true;
     }
     found->values.resize(found->spec.elements);
@@ -225,7 +240,8 @@ bool write_trace(const char * path, const capture_state & state) {
         std::fprintf(
             stderr,
             "truega-decode-trace tokens=%zu checkpoints_per_token=%u total=%u final_token=%u path=%s\n",
-            kTokens.size(), checkpoints_per_token, checkpoints_per_token * kTokens.size(),
+            kTokens.size(), checkpoints_per_token,
+            static_cast<unsigned>(checkpoints_per_token * kTokens.size()),
             argmax_token(state.tokens.back().back().values), path);
     }
     return ok;

@@ -199,6 +199,7 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             .map(|submission| PhysicalSubmission {
                 context,
                 serial: submission.serial,
+                scheduler_publish_sequence: submission.h2g_publish_sequence,
             })
             .map_err(|_| PhysicalGpuError::SubmitFailed)
     }

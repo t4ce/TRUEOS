@@ -7,6 +7,8 @@ LFM2.5-350M model.
 
 - Model: `LFM2.5-350M-Q8_0.gguf`
 - TRUEOS tokenizer: `LFM2.5-350M-Q8_0.tokenizer.bin` (generated)
+- TRUEGA native weights: `LFM2.5-350M-Q8_0.truega.bin` (generated)
+- Hybrid CPU F32 sidecar: `LFM2.5-350M-Q8_0.cpu-f32.bin` (generated)
 - Upstream: `LiquidAI/LFM2.5-350M-GGUF`
 - Upstream revision: `bb7ee58b243e4cede04187e323e760b04f8a0091`
 - Exact size: `379217632` bytes (379 MB decimal, 361.6 MiB)
@@ -65,10 +67,20 @@ From the repository root, seal the pinned GGUF into the deterministic TRUEGA mod
 ./crates/trueos-fpga-abi/truega/tools/build_lfm25_image.sh
 ```
 
-The generated `LFM2.5-350M-Q8_0.truega.bin` and
-`LFM2.5-350M-Q8_0.tokenizer.bin` remain ignored beside the GGUF. Install both
-under `trueosfs:/models/lfm2.5/`. This is an offline conversion only; the
-command does not invoke Gowin, PCIe, JTAG, or flashing.
+Generate the software-only F32 sidecar separately:
+
+```sh
+./tools/lfm2.5-350m/build_cpu_f32_sidecar.sh
+```
+
+Install `LFM2.5-350M-Q8_0.truega.bin`,
+`LFM2.5-350M-Q8_0.tokenizer.bin`, and
+`LFM2.5-350M-Q8_0.cpu-f32.bin` under
+`trueosfs:/models/lfm2.5/`. The sidecar contains the original little-endian
+F32 bits for the 55 generated normalization and short-convolution tensors and
+is sealed to the pinned GGUF, native image, and generated tensor table. These
+are offline conversions only; neither command invokes Gowin, PCIe, JTAG, or
+flashing.
 
 ## Capture the layer-0 FFN golden vectors
 

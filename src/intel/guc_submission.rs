@@ -111,6 +111,7 @@ impl GucSubmissionError {
 pub(crate) struct GucPhysicalSubmission {
     pub(crate) context: GucContextToken,
     pub(crate) serial: u64,
+    pub(crate) h2g_publish_sequence: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -385,6 +386,7 @@ pub(crate) fn submit_context(
         return Ok(GucPhysicalSubmission {
             context: token,
             serial,
+            h2g_publish_sequence: scheduled.h2g_publish_sequence,
         });
     };
     let scheduled = crate::intel::guc_ctb::send_hxg_fast_action(dev, action, args);
@@ -409,6 +411,7 @@ pub(crate) fn submit_context(
     Ok(GucPhysicalSubmission {
         context: token,
         serial,
+        h2g_publish_sequence: scheduled.h2g_publish_sequence,
     })
 }
 

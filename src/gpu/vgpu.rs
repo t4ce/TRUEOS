@@ -235,6 +235,7 @@ pub(crate) struct TimelinePoint {
     pub(crate) queue: QueueHandle,
     pub(crate) value: u64,
     pub(crate) physical_serial: u64,
+    pub(crate) physical_publish_sequence: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -1167,6 +1168,7 @@ pub(crate) fn submit_control_nop(
         queue: queue_handle,
         value: queue.timeline.submitted,
         physical_serial: 0,
+        physical_publish_sequence: 0,
     })
 }
 
@@ -1220,6 +1222,7 @@ pub(crate) fn submit_scene_aabb(
                 queue: queue_handle,
                 value: queue.timeline.submitted,
                 physical_serial: 0,
+                physical_publish_sequence: 0,
             },
             hits: 0,
         });
@@ -1258,6 +1261,7 @@ pub(crate) fn submit_scene_aabb(
             queue: queue_handle,
             value: queue.timeline.submitted,
             physical_serial: completion.serial,
+            physical_publish_sequence: 0,
         },
         hits: completion.hits,
     })
@@ -1444,6 +1448,7 @@ pub(crate) fn submit_kernel_context(
         queue: queue_handle,
         value: queue.timeline.submitted,
         physical_serial: submission.serial,
+        physical_publish_sequence: submission.scheduler_publish_sequence,
     })
 }
 
@@ -1478,6 +1483,7 @@ pub(crate) fn complete_kernel_submission(
         queue: queue_handle,
         value: point.value,
         physical_serial: point.physical_serial,
+        physical_publish_sequence: point.physical_publish_sequence,
     })
 }
 

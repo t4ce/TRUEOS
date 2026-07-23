@@ -50,6 +50,9 @@ struct CtbState {
     len: usize,
     gpu: u64,
     h2g_tail: u32,
+    h2g_observed_head: u32,
+    h2g_published_dwords: u64,
+    h2g_consumed_dwords: u64,
     g2h_head: u32,
 }
 
@@ -62,6 +65,10 @@ pub(crate) struct CtbSendResult {
     pub(crate) error: u32,
     pub(crate) h2g_poll_iters: usize,
     pub(crate) g2h_poll_iters: usize,
+    /// Monotonic H2G stream position immediately after this message. A
+    /// consumer can compare it with `h2g_sequence_consumed` without relying
+    /// on a wrapping descriptor index or synchronously waiting for GuC.
+    pub(crate) h2g_publish_sequence: u64,
 }
 
 pub(crate) fn enabled() -> bool {
@@ -90,6 +97,9 @@ pub(crate) fn init_and_enable(dev: crate::intel::Dev) -> bool {
         len: CT_BLOB_BYTES,
         gpu: crate::intel::GPU_VA_GUC_CTB_BASE,
         h2g_tail: 0,
+        h2g_observed_head: 0,
+        h2g_published_dwords: 0,
+        h2g_consumed_dwords: 0,
         g2h_head: 0,
     };
     write_desc(state, CT_H2G_DESC_OFFSET, 0, 0, 0);
@@ -185,6 +195,30 @@ pub(crate) fn send_hxg_fast_action(
     send_hxg(dev, action, args, GUC_HXG_TYPE_FAST_REQUEST, false)
 }
 
+/// Non-blockingly observe whether GuC has advanced the H2G descriptor head
+/// through one previously published message.
+///
+/// This is an observation boundary, not a wait. The monotonic sequence keeps
+/// the result unambiguous across CTB ring wrap and across unrelated producers.
+pub(crate) fn h2g_sequence_consumed(target_sequence: u64) -> bool {
+    if target_sequence == 0 {
+        return false;
+    }
+    let mut guard = STATE.lock();
+    let Some(mut state) = *guard else {
+        return false;
+    };
+    flush_blob_range(state, CT_H2G_DESC_OFFSET, CT_DESC_BYTES);
+    let head = read_desc_head(state, CT_H2G_DESC_OFFSET) as usize;
+    if head >= CT_H2G_RING_DWORDS {
+        return false;
+    }
+    observe_h2g_head(&mut state, head);
+    let consumed = state.h2g_consumed_dwords >= target_sequence;
+    *guard = Some(state);
+    consumed
+}
+
 fn send_hxg(
     dev: crate::intel::Dev,
     action: u32,
@@ -200,6 +234,7 @@ fn send_hxg(
             error: 1,
             h2g_poll_iters: 0,
             g2h_poll_iters: 0,
+            h2g_publish_sequence: 0,
         };
     }
     let mut guard = STATE.lock();
@@ -211,6 +246,7 @@ fn send_hxg(
             error: 2,
             h2g_poll_iters: 0,
             g2h_poll_iters: 0,
+            h2g_publish_sequence: 0,
         };
     };
 
@@ -230,8 +266,10 @@ fn send_hxg(
                 error: 6,
                 h2g_poll_iters,
                 g2h_poll_iters: 0,
+                h2g_publish_sequence: 0,
             };
         }
+        observe_h2g_head(&mut state, h2g_head);
         let tail = state.h2g_tail as usize;
         let required = if tail.saturating_add(total_len) > CT_H2G_RING_DWORDS {
             CT_H2G_RING_DWORDS
@@ -253,6 +291,7 @@ fn send_hxg(
                 error: 3,
                 h2g_poll_iters,
                 g2h_poll_iters: 0,
+                h2g_publish_sequence: 0,
             };
         }
         core::hint::spin_loop();
@@ -275,6 +314,8 @@ fn send_hxg(
         tail = (tail + 1) % CT_H2G_RING_DWORDS;
     }
     state.h2g_tail = tail as u32;
+    state.h2g_published_dwords = state.h2g_published_dwords.saturating_add(required as u64);
+    let h2g_publish_sequence = state.h2g_published_dwords;
     write_desc_tail(state, CT_H2G_DESC_OFFSET, state.h2g_tail);
     flush_blob_range(state, CT_H2G_OFFSET, CT_H2G_RING_BYTES);
     flush_blob_range(state, CT_H2G_DESC_OFFSET, CT_DESC_BYTES);
@@ -289,6 +330,7 @@ fn send_hxg(
             error: 0,
             h2g_poll_iters: h2g_poll_iters.saturating_add(required),
             g2h_poll_iters: 0,
+            h2g_publish_sequence,
         };
     }
 
@@ -341,6 +383,7 @@ fn send_hxg(
                     error,
                     h2g_poll_iters: h2g_poll_iters.saturating_add(required),
                     g2h_poll_iters,
+                    h2g_publish_sequence,
                 };
             }
         }
@@ -359,6 +402,7 @@ fn send_hxg(
         error,
         h2g_poll_iters: h2g_poll_iters.saturating_add(required),
         g2h_poll_iters,
+        h2g_publish_sequence,
     }
 }
 
@@ -453,6 +497,19 @@ fn ct_ring_distance(head: usize, tail: usize, size: usize) -> usize {
     } else {
         size - head + tail
     }
+}
+
+fn observe_h2g_head(state: &mut CtbState, head: usize) {
+    let previous = state.h2g_observed_head as usize;
+    if previous >= CT_H2G_RING_DWORDS || head >= CT_H2G_RING_DWORDS {
+        return;
+    }
+    state.h2g_consumed_dwords = state.h2g_consumed_dwords.saturating_add(ct_ring_distance(
+        previous,
+        head,
+        CT_H2G_RING_DWORDS,
+    ) as u64);
+    state.h2g_observed_head = head as u32;
 }
 
 fn flush_blob_range(state: CtbState, off: usize, len: usize) {

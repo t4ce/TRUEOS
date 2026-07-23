@@ -26,6 +26,7 @@ const HEADS: usize = lfm25::MODEL_ATTENTION_HEADS as usize;
 const KV_HEADS: usize = lfm25::MODEL_KV_HEADS as usize;
 const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
+const ATTENTION_REDUCTION_TILE: usize = 256;
 const MODEL_READ_CHUNK: usize = 256 * 1024;
 const PROJECT_YIELD_ROWS: usize = 128;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
@@ -448,6 +449,10 @@ impl HybridCpuAotDecodeBackend {
         }
 
         let positions = position as usize + 1;
+        let padded_positions = positions
+            .checked_add(ATTENTION_REDUCTION_TILE - 1)
+            .map(|value| value & !(ATTENTION_REDUCTION_TILE - 1))
+            .ok_or(HybridCpuBackendError::State)?;
         let mut context = vec![0.0f32; HIDDEN];
         let scale = 1.0 / libm::sqrtf(HEAD_DIM as f32);
         let mut scores = Vec::new();
@@ -458,25 +463,39 @@ impl HybridCpuAotDecodeBackend {
             scores.clear();
             let query_start = query_head * HEAD_DIM;
             let query_values = &query[query_start..query_start + HEAD_DIM];
+            let query_values: Vec<f32> = query_values
+                .iter()
+                .map(|&value| cpu::f16_cache_bits(value).map(cpu::f16_cache_f32))
+                .collect::<Result<_, _>>()?;
             let kv_head = cpu::gqa_kv_head(query_head, HEADS, KV_HEADS)?;
             for cache_position in 0..positions {
                 let key_start = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM;
                 let key_values = &self.kv[slot].keys[key_start..key_start + HEAD_DIM];
-                let mut dot = 0.0f32;
-                for (&query, &key) in query_values.iter().zip(key_values) {
-                    dot += query * cpu::f16_cache_f32(key);
-                }
+                let key_values: Vec<f32> = key_values
+                    .iter()
+                    .map(|&key| cpu::f16_cache_f32(key))
+                    .collect();
+                let dot = cpu::f32_dot_pinned(&query_values, &key_values)?;
                 scores.push(dot * scale);
             }
             cpu::softmax_in_place(&mut scores)?;
             let output_start = query_head * HEAD_DIM;
+            let weights = scores
+                .iter()
+                .map(|&weight| cpu::f16_cache_bits(weight).map(cpu::f16_cache_f32))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut values = Vec::new();
+            values
+                .try_reserve_exact(positions)
+                .map_err(|_| HybridCpuBackendError::Allocation)?;
             for dimension in 0..HEAD_DIM {
-                let mut sum = 0.0f32;
-                for (cache_position, &weight) in scores.iter().enumerate() {
+                values.clear();
+                for cache_position in 0..positions {
                     let value_index = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM + dimension;
-                    sum += weight * cpu::f16_cache_f32(self.kv[slot].values[value_index]);
+                    values.push(cpu::f16_cache_f32(self.kv[slot].values[value_index]));
                 }
-                context[output_start + dimension] = sum;
+                context[output_start + dimension] =
+                    cpu::f32_dot_pinned_padded(&values, &weights, padded_positions)?;
             }
         }
         let output = self

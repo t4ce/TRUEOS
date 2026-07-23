@@ -438,6 +438,49 @@ mod tests {
     }
 
     #[test]
+    fn all_sixteen_layers_have_the_generated_state_mapping() {
+        assert_eq!(
+            [
+                state_slot_for_layer(0).unwrap(),
+                state_slot_for_layer(1).unwrap(),
+                state_slot_for_layer(2).unwrap(),
+                state_slot_for_layer(3).unwrap(),
+                state_slot_for_layer(4).unwrap(),
+                state_slot_for_layer(5).unwrap(),
+                state_slot_for_layer(6).unwrap(),
+                state_slot_for_layer(7).unwrap(),
+                state_slot_for_layer(8).unwrap(),
+                state_slot_for_layer(9).unwrap(),
+                state_slot_for_layer(10).unwrap(),
+                state_slot_for_layer(11).unwrap(),
+                state_slot_for_layer(12).unwrap(),
+                state_slot_for_layer(13).unwrap(),
+                state_slot_for_layer(14).unwrap(),
+                state_slot_for_layer(15).unwrap(),
+            ],
+            [
+                LayerStateSlot::ShortConv(0),
+                LayerStateSlot::ShortConv(1),
+                LayerStateSlot::KvCache(0),
+                LayerStateSlot::ShortConv(2),
+                LayerStateSlot::ShortConv(3),
+                LayerStateSlot::KvCache(1),
+                LayerStateSlot::ShortConv(4),
+                LayerStateSlot::ShortConv(5),
+                LayerStateSlot::KvCache(2),
+                LayerStateSlot::ShortConv(6),
+                LayerStateSlot::KvCache(3),
+                LayerStateSlot::ShortConv(7),
+                LayerStateSlot::KvCache(4),
+                LayerStateSlot::ShortConv(8),
+                LayerStateSlot::KvCache(5),
+                LayerStateSlot::ShortConv(9),
+            ]
+        );
+        assert_eq!(state_slot_for_layer(16), None);
+    }
+
+    #[test]
     fn all_circuits_are_required_before_token_mutation() {
         assert_eq!(
             DecodePlan::require_capabilities(DecodeCapabilities::NONE),

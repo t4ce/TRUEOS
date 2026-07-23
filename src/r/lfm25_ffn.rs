@@ -29,8 +29,8 @@ const UP_Q30_SHA256: [u8; 32] = [
     0x06, 0x0b, 0x32, 0x4d, 0x7e, 0xa9, 0x7f, 0xe7, 0x4c, 0x30, 0x2a, 0x3e, 0xf4, 0xe3, 0x58, 0xa1,
 ];
 const SILU_Q30_SHA256: [u8; 32] = [
-    0x0b, 0xcf, 0x3a, 0xfd, 0x42, 0x70, 0xe2, 0xd4, 0xe1, 0xb7, 0xea, 0xd0, 0xc0, 0x9b, 0x11, 0xf2,
-    0xea, 0x08, 0x09, 0x82, 0xed, 0x5d, 0xe2, 0x38, 0xdd, 0x7b, 0x88, 0xed, 0xb1, 0xaf, 0x5a, 0x63,
+    0x96, 0xf4, 0x91, 0x29, 0xf7, 0xfa, 0x09, 0x04, 0x91, 0x06, 0x19, 0x5e, 0x04, 0x83, 0xfb, 0xcc,
+    0xe9, 0x38, 0xda, 0x3e, 0xac, 0xed, 0x7f, 0xd1, 0x8f, 0x31, 0x96, 0x9e, 0x1e, 0x2c, 0x39, 0x51,
 ];
 const DOWN_Q30_SHA256: [u8; 32] = [
     0x32, 0xe1, 0xf3, 0xdb, 0x56, 0x1c, 0xc2, 0x7a, 0x7b, 0xe3, 0xdc, 0x7d, 0x35, 0xf7, 0x84, 0xda,
@@ -393,7 +393,8 @@ async fn run_streamed(
 
     let mut gate = try_i64_vec(4_608)?;
     let mut up = try_i64_vec(4_608)?;
-    let mut silu = try_i64_vec(4_608)?;
+    let mut silu = try_f32_vec(4_608)?;
+    let mut silu_q30 = try_i64_vec(4_608)?;
     let mut down = try_i64_vec(1_024)?;
     let mut gate_max_abs = 0.0f32;
     let mut up_max_abs = 0.0f32;
@@ -414,14 +415,17 @@ async fn run_streamed(
         let result =
             fpga_offload::lfm25_stream_gate_up_row(row as u32, gate_blocks, up_blocks).await?;
         let silu_value = stream_silu_result(result)?;
+        let silu_value_q30 =
+            trueos_lfm25_cpu::f32_to_q30(silu_value).map_err(|_| Error::Arithmetic)?;
         gate.push(result.gate_q30);
         up.push(result.up_q30);
         silu.push(silu_value);
+        silu_q30.push(silu_value_q30);
 
         for (stage, vector, value, bound, max_abs) in [
             (Stage::Gate, 1usize, result.gate_q30, PROJECTION_BOUND, &mut gate_max_abs),
             (Stage::Up, 2usize, result.up_q30, PROJECTION_BOUND, &mut up_max_abs),
-            (Stage::Silu, 3usize, silu_value, SILU_BOUND, &mut silu_max_abs),
+            (Stage::Silu, 3usize, silu_value_q30, SILU_BOUND, &mut silu_max_abs),
         ] {
             let expected = golden_f32(vector, row)?;
             let error = q30_error(value, expected);
@@ -448,7 +452,7 @@ async fn run_streamed(
 
     let gate_sha256 = q30_vector_sha256(&gate);
     let up_sha256 = q30_vector_sha256(&up);
-    let silu_sha256 = q30_vector_sha256(&silu);
+    let silu_sha256 = q30_vector_sha256(&silu_q30);
     require_hash(Stage::Gate, gate_sha256, GATE_Q30_SHA256)?;
     require_hash(Stage::Up, up_sha256, UP_Q30_SHA256)?;
     require_hash(Stage::Silu, silu_sha256, SILU_Q30_SHA256)?;
@@ -462,7 +466,7 @@ async fn run_streamed(
         }
     }
 
-    let down_activation = quantize_q30_vector(&silu)?;
+    let down_activation = quantize_f32_vector(&silu)?;
     fpga_offload::lfm25_stream_load_activation(&down_activation)?;
     const WIDE_ROW_BYTES: usize = 144 * Q8_BLOCK_BYTES;
     for row in 0..1_024usize {
@@ -561,7 +565,7 @@ async fn run_layer_streamed(
     let gate_matrix = read_tensor(&image, gate_descriptor).await?;
     let up_matrix = read_tensor(&image, up_descriptor).await?;
     let down_matrix = read_tensor(&image, down_descriptor).await?;
-    let mut silu = try_i64_vec(4_608)?;
+    let mut silu = try_f32_vec(4_608)?;
     let mut down = try_i64_vec(FFN_OUTPUT_ELEMENTS)?;
 
     let before = fpga_offload::stats();
@@ -599,7 +603,7 @@ async fn run_layer_streamed(
         }
     }
 
-    let down_activation = quantize_q30_vector(&silu)?;
+    let down_activation = quantize_f32_vector(&silu)?;
     fpga_offload::lfm25_stream_load_activation(&down_activation)?;
     const WIDE_ROW_BYTES: usize = 144 * Q8_BLOCK_BYTES;
     for row in 0..FFN_OUTPUT_ELEMENTS {
@@ -643,14 +647,20 @@ async fn run_layer_streamed(
     })
 }
 
-fn stream_silu_result(result: crate::tga::Lfm25StreamResult) -> Result<i64, Error> {
+fn stream_silu_result(result: crate::tga::Lfm25StreamResult) -> Result<f32, Error> {
     match result.error_code {
         // Gate and up are the authoritative fixed-function projections. Use
         // the published Q30 values for the exact F32 activation on every row,
         // including rows for which the fixture-bounded hardware polynomial
         // reports success.
-        0 | 4 => trueos_lfm25_cpu::silu_mul_q30(result.gate_q30, result.up_q30)
-            .map_err(|_| Error::Arithmetic),
+        0 | 4 => {
+            const SCALE: f32 = (1u64 << 30) as f32;
+            trueos_lfm25_cpu::silu_mul_f32_pinned(
+                result.gate_q30 as f32 / SCALE,
+                result.up_q30 as f32 / SCALE,
+            )
+            .map_err(|_| Error::Arithmetic)
+        }
         code => Err(Error::Fpga(fpga_offload::Error::Device(code as i32))),
     }
 }

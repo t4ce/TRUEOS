@@ -63,6 +63,7 @@ pub(crate) struct PhysicalContextDescriptor {
 pub(crate) struct PhysicalSubmission {
     pub(crate) context: PhysicalContextHandle,
     pub(crate) serial: u64,
+    pub(crate) scheduler_publish_sequence: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
