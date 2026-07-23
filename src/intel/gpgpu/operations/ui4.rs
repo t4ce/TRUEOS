@@ -611,6 +611,9 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     let phase_started_tick = direct_rcs_now_tick();
     let forcewake_ok = direct_rcs_forcewake(dev);
     probe.forcewake_us = direct_rcs_elapsed_us_since(phase_started_tick);
+    if forcewake_ok {
+        probe.gpu_timestamp_frequency_hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
+    }
     let phase_started_tick = direct_rcs_now_tick();
     let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
     probe.state_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
@@ -777,13 +780,30 @@ pub(crate) fn poll_ui4_compositor_submission(
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
         return completion;
     };
-    pending.stats.probe.completion_polls =
-        pending.stats.probe.completion_polls.saturating_add(1);
+    pending.stats.probe.completion_polls = pending.stats.probe.completion_polls.saturating_add(1);
     let observed = direct_rcs_read_result_slot(state, pending.marker_slot);
     if observed == pending.marker_value {
         pending.stats.submit_ms = direct_rcs_elapsed_ms_since(pending.started_tick);
         pending.stats.probe.submit_to_marker_us =
             direct_rcs_elapsed_us_since(pending.admitted_tick);
+        if pending.kernel == "nv12-media-ytile-rgba8-frame" {
+            let pre =
+                direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT);
+            let post =
+                direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT);
+            pending.stats.probe.gpu_pre_walker_timestamp = pre;
+            pending.stats.probe.gpu_post_walker_timestamp = post;
+            let valid =
+                pre != 0 && post > pre && pending.stats.probe.gpu_timestamp_frequency_hz != 0;
+            pending.stats.probe.gpu_walker_timestamp_valid = valid;
+            if valid {
+                pending.stats.probe.gpu_walker_ticks = post - pre;
+                pending.stats.probe.gpu_walker_us = direct_rcs_timestamp_ticks_to_us(
+                    pending.stats.probe.gpu_walker_ticks,
+                    pending.stats.probe.gpu_timestamp_frequency_hz,
+                );
+            }
+        }
         runtime.pending = None;
         runtime.submit.pending = None;
         let completion = Ui4CompositorCompletion::Complete(pending.stats);
@@ -791,12 +811,18 @@ pub(crate) fn poll_ui4_compositor_submission(
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, true);
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: complete serial={} kernel={} descs={} walkers={} elapsed_ms={} poll=single\n",
+            "ui4/guc-compositor: complete serial={} kernel={} descs={} walkers={} elapsed_ms={} gpu_walker_us={} gpu_walker_ticks={} gpu_pre_timestamp={} gpu_post_timestamp={} gpu_timestamp_hz={} gpu_timestamp_valid={} poll=single\n",
             pending.submission.serial,
             pending.kernel,
             pending.stats.descs,
             pending.stats.walkers,
             pending.stats.submit_ms,
+            pending.stats.probe.gpu_walker_us,
+            pending.stats.probe.gpu_walker_ticks,
+            pending.stats.probe.gpu_pre_walker_timestamp,
+            pending.stats.probe.gpu_post_walker_timestamp,
+            pending.stats.probe.gpu_timestamp_frequency_hz,
+            pending.stats.probe.gpu_walker_timestamp_valid as u8,
         );
         return completion;
     }

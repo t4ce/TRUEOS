@@ -104,6 +104,7 @@ const PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH: u32 = 1 << 12;
 // the next GuC context.
 const PIPE_CONTROL_HDC_PIPELINE_FLUSH: u32 = 1 << 9;
 const PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
+const PIPE_CONTROL_POST_SYNC_WRITE_TIMESTAMP: u32 = 3 << 14;
 const PIPE_CONTROL_CS_STALL: u32 = 1 << 20;
 const PIPE_CONTROL_L3_FABRIC_FLUSH: u32 = 1 << 30;
 const PIPE_CONTROL_TLB_INVALIDATE: u32 = 1 << 18;
@@ -470,6 +471,14 @@ const SPIRIT_VFX_PRE_MARKER_SLOT: usize = 39;
 const SPIRIT_VFX_POST_MARKER_SLOT: usize = 38;
 const SPIRIT_VFX_PRE_MARKER: u32 = 0xC0DE_5F01;
 const SPIRIT_VFX_POST_MARKER: u32 = 0xC0DE_5F02;
+
+// Video-frame-only PIPE_CONTROL timestamp QWords. Each timestamp consumes two
+// naturally aligned DWORD result slots. They deliberately do not overlap the
+// shared UI4 completion cookie at slots 24-25.
+const UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT: usize = 40;
+const UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT: usize = 42;
+const _: () = assert!(UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT.is_multiple_of(2));
+const _: () = assert!(UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT.is_multiple_of(2));
 const SPIRIT_VFX_COMPLETION_TIMEOUT_MS: u64 = 1_000;
 const SPIRIT_VFX_CONTROL_MAGIC: u32 = 0x5356_4658;
 const SPIRIT_VFX_CONTROL_VERSION: u32 = 1;
@@ -556,6 +565,10 @@ const _: () = assert!(
         <= DIRECT_RCS_BATCH_BYTES
 );
 const DIRECT_RCS_RESULT_BYTES: usize = 4096;
+const _: () = assert!(
+    (UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT + 2) * core::mem::size_of::<u32>()
+        <= DIRECT_RCS_RESULT_BYTES
+);
 const DIRECT_RCS_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
 pub(crate) const DIRECT_RCS_PPGTT_LIMIT_BYTES: u64 =

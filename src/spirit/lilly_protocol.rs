@@ -10,17 +10,26 @@
 extern crate alloc;
 
 use alloc::string::String;
+use embassy_time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
-use super::lilly::{self, LillyResidentAnimation};
+use super::lilly::{self, LillyResidentAnimation, LillyResidentPart};
 
 const PACKAGE_RING_CAPACITY: usize = 32;
 const PACKAGE_VERSION: u8 = 1;
 const MAX_JSON_BYTES: usize = 4 * 1024;
 const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_TAG_BYTES: usize = 96;
-const DEFAULT_IDLE: &str = "idle.uncrossed.soft_blink";
+const IDLE_UNCROSSED_SOFT_BLINK: &str = "idle.uncrossed.soft_blink";
+const IDLE_CROSSED_SOFT_BLINK: &str = "idle.crossed.soft_blink";
+const IDLE_CONTROL_POLL_MS: u64 = 100;
+const IDLE_BLINK_AVERAGE_MS: u64 = 10_000;
+const IDLE_BLINK_WINDOW_MS: u64 = 5_000;
+const IDLE_ARMS_AVERAGE_MS: u64 = 30_000;
+const IDLE_ARMS_WINDOW_MS: u64 = 30_000;
+const _: () = assert!(IDLE_BLINK_WINDOW_MS <= IDLE_BLINK_AVERAGE_MS * 2);
+const _: () = assert!(IDLE_ARMS_WINDOW_MS <= IDLE_ARMS_AVERAGE_MS * 2);
 
 /// Straight RGBA modulation supplied by the producer. The eventual sprite
 /// compositor applies alpha while preserving the resident premultiplied-RGBA8
@@ -105,7 +114,7 @@ pub(crate) enum LillyProtocolError {
     CatalogInvariant,
 }
 
-/// One fully resolved clip for the presentation side. Its four resident GPU
+/// One fully resolved clip for the presentation side. Its resident GPU
 /// surfaces and timing come from the central helper; there is no per-animation
 /// playback code in the consumer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -115,6 +124,116 @@ pub(crate) struct LillyScheduledAnimation {
     /// newly queued behavior cannot be starved behind an infinite idle/talk.
     pub(crate) boundary_ms: u64,
     pub(crate) animation: LillyResidentAnimation,
+    static_frame: Option<LillyResidentPart>,
+}
+
+impl LillyScheduledAnimation {
+    pub(crate) fn frame_at_elapsed(self, elapsed_ms: u64) -> Option<LillyResidentPart> {
+        self.static_frame
+            .or_else(|| self.animation.frame_at_elapsed(elapsed_ms))
+    }
+}
+
+/// Resident idle policy. The steady state is one eyes-open frame; Tyche only
+/// chooses when an existing soft-blink clip runs and when the resident
+/// crossed/uncrossed posture changes.
+struct LillyIdleStrategy {
+    rng: crate::tyche::SoftRng,
+    active: bool,
+    crossed: bool,
+    next_blink: Instant,
+    next_arms_change: Instant,
+}
+
+impl LillyIdleStrategy {
+    fn new(now: Instant) -> Self {
+        let mut rng = crate::tyche::soft_rng();
+        let next_blink = now
+            + Duration::from_millis(centered_interval_ms(
+                &mut rng,
+                IDLE_BLINK_AVERAGE_MS,
+                IDLE_BLINK_WINDOW_MS,
+            ));
+        let next_arms_change = now
+            + Duration::from_millis(centered_interval_ms(
+                &mut rng,
+                IDLE_ARMS_AVERAGE_MS,
+                IDLE_ARMS_WINDOW_MS,
+            ));
+        Self {
+            rng,
+            active: true,
+            crossed: false,
+            next_blink,
+            next_arms_change,
+        }
+    }
+
+    fn resume(&mut self, now: Instant) {
+        if self.active {
+            return;
+        }
+        self.active = true;
+        self.next_blink = now
+            + Duration::from_millis(centered_interval_ms(
+                &mut self.rng,
+                IDLE_BLINK_AVERAGE_MS,
+                IDLE_BLINK_WINDOW_MS,
+            ));
+        self.next_arms_change = now
+            + Duration::from_millis(centered_interval_ms(
+                &mut self.rng,
+                IDLE_ARMS_AVERAGE_MS,
+                IDLE_ARMS_WINDOW_MS,
+            ));
+    }
+
+    fn schedule(
+        &mut self,
+        now: Instant,
+        rgba: SpiritRgba8,
+    ) -> Result<LillyScheduledAnimation, LillyProtocolError> {
+        self.resume(now);
+
+        if now >= self.next_arms_change {
+            self.crossed = !self.crossed;
+            let next_ms =
+                centered_interval_ms(&mut self.rng, IDLE_ARMS_AVERAGE_MS, IDLE_ARMS_WINDOW_MS);
+            self.next_arms_change = now + Duration::from_millis(next_ms);
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: idle strategy event=arms posture={} next_average_ms={} next_window_ms={}\n",
+                idle_posture_name(self.crossed),
+                IDLE_ARMS_AVERAGE_MS,
+                IDLE_ARMS_WINDOW_MS,
+            );
+        }
+
+        if now >= self.next_blink {
+            let next_ms =
+                centered_interval_ms(&mut self.rng, IDLE_BLINK_AVERAGE_MS, IDLE_BLINK_WINDOW_MS);
+            self.next_blink = now + Duration::from_millis(next_ms);
+            crate::log_info!(
+                target: "gfx";
+                "trueos-spirit: idle strategy event=soft-blink posture={} next_average_ms={} next_window_ms={}\n",
+                idle_posture_name(self.crossed),
+                IDLE_BLINK_AVERAGE_MS,
+                IDLE_BLINK_WINDOW_MS,
+            );
+            return resolve(idle_animation_key(self.crossed), rgba);
+        }
+
+        let until_blink_ms = self.next_blink.saturating_duration_since(now).as_millis();
+        let until_arms_ms = self
+            .next_arms_change
+            .saturating_duration_since(now)
+            .as_millis();
+        let boundary_ms = until_blink_ms
+            .min(until_arms_ms)
+            .min(IDLE_CONTROL_POLL_MS)
+            .max(1);
+        resolve_static_idle(idle_animation_key(self.crossed), rgba, boundary_ms)
+    }
 }
 
 struct SpiritPackageRing {
@@ -173,6 +292,7 @@ impl SpiritPackageRing {
 
 static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::new());
 static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
+static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 
 /// Queue one owned API package. Validation happens before publication, so the
 /// reader never encounters an unsupported schema or a bad animation tag.
@@ -273,13 +393,13 @@ pub(crate) fn stop_after_boundary() -> usize {
 ///
 /// Requests run directly in queue order. With no producer work, one neutral
 /// idle remains alive. This function is deliberately not a per-frame iterator:
-/// the renderer uses `animation.frames` and `frame_period_ms` for that cheap
-/// inner loop, then asks here again only when the clip is complete.
+/// the renderer uses the returned schedule for that cheap inner loop, then asks
+/// here again at its next control or clip boundary.
 #[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
     loop {
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
-            return resolve(DEFAULT_IDLE, *LAST_RGBA.lock());
+            return next_idle_animation(*LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
         let Some(gesture) = package.gesture else {
@@ -287,6 +407,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             // later gesture in the same reader turn can flow normally.
             continue;
         };
+        pause_idle_strategy();
         let animation = lilly::resident_animation(gesture.tag.as_str())
             .ok_or(LillyProtocolError::CatalogInvariant)?;
         *LAST_RGBA.lock() = gesture.rgba;
@@ -294,6 +415,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             rgba: gesture.rgba,
             boundary_ms: animation.cycle_duration_ms(),
             animation,
+            static_frame: None,
         });
     }
 }
@@ -329,5 +451,58 @@ fn resolve(
         rgba,
         boundary_ms: animation.cycle_duration_ms(),
         animation,
+        static_frame: None,
     })
+}
+
+fn resolve_static_idle(
+    tag: &'static str,
+    rgba: SpiritRgba8,
+    boundary_ms: u64,
+) -> Result<LillyScheduledAnimation, LillyProtocolError> {
+    let animation = lilly::resident_animation(tag).ok_or_else(|| {
+        if lilly::resident_frame_count() == 0 {
+            LillyProtocolError::AssetsNotReady
+        } else {
+            LillyProtocolError::CatalogInvariant
+        }
+    })?;
+    Ok(LillyScheduledAnimation {
+        rgba,
+        boundary_ms,
+        static_frame: Some(animation.frames[0]),
+        animation,
+    })
+}
+
+fn next_idle_animation(rgba: SpiritRgba8) -> Result<LillyScheduledAnimation, LillyProtocolError> {
+    let now = Instant::now();
+    let mut strategy = IDLE_STRATEGY.lock();
+    strategy
+        .get_or_insert_with(|| LillyIdleStrategy::new(now))
+        .schedule(now, rgba)
+}
+
+fn pause_idle_strategy() {
+    if let Some(strategy) = IDLE_STRATEGY.lock().as_mut() {
+        strategy.active = false;
+    }
+}
+
+fn centered_interval_ms(rng: &mut crate::tyche::SoftRng, average_ms: u64, window_ms: u64) -> u64 {
+    let lower_ms = average_ms.saturating_sub(window_ms / 2);
+    let offset_range = usize::try_from(window_ms.saturating_add(1)).unwrap_or(usize::MAX);
+    lower_ms.saturating_add(rng.usize_below(offset_range) as u64)
+}
+
+const fn idle_animation_key(crossed: bool) -> &'static str {
+    if crossed {
+        IDLE_CROSSED_SOFT_BLINK
+    } else {
+        IDLE_UNCROSSED_SOFT_BLINK
+    }
+}
+
+const fn idle_posture_name(crossed: bool) -> &'static str {
+    if crossed { "crossed" } else { "uncrossed" }
 }

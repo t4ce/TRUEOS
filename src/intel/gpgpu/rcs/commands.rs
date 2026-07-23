@@ -55,6 +55,33 @@ fn direct_rcs_push_pipe_control_post_sync_marker_at(
         && direct_rcs_push(batch, cursor, 0)
 }
 
+fn direct_rcs_push_pipe_control_timestamp_at(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    result_gpu: u64,
+    slot: usize,
+) -> bool {
+    // PIPE_CONTROL writes a 64-bit command-stream timestamp. CS_STALL makes
+    // the two samples ordered around the walker instead of merely describing
+    // when their memory transactions became visible.
+    if slot & 1 != 0 {
+        return false;
+    }
+    let dst = result_gpu + (slot as u64) * core::mem::size_of::<u32>() as u64;
+    direct_rcs_push(batch, cursor, PIPE_CONTROL_CMD)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            PIPE_CONTROL_FLUSH_ENABLE
+                | PIPE_CONTROL_CS_STALL
+                | PIPE_CONTROL_POST_SYNC_WRITE_TIMESTAMP,
+        )
+        && direct_rcs_push(batch, cursor, dst as u32)
+        && direct_rcs_push(batch, cursor, (dst >> 32) as u32)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+}
+
 fn direct_rcs_push_store_marker(
     batch: &mut [u32],
     cursor: &mut usize,
@@ -529,6 +556,72 @@ fn direct_rcs_read_result_slot(state: DirectRcsState, slot: usize) -> u32 {
     // tasks on the same executor core.
     super::dma_flush(marker, core::mem::size_of::<u32>());
     unsafe { core::ptr::read_volatile(marker as *const u32) }
+}
+
+fn direct_rcs_read_result_qword(state: DirectRcsState, slot: usize) -> u64 {
+    let offset = slot.saturating_mul(core::mem::size_of::<u32>());
+    if slot & 1 != 0 || offset + core::mem::size_of::<u64>() > DIRECT_RCS_RESULT_BYTES {
+        return 0;
+    }
+    let value = unsafe { state.result_virt.add(offset) };
+    super::dma_flush(value, core::mem::size_of::<u64>());
+    let low = unsafe { core::ptr::read_volatile(value as *const u32) };
+    let high =
+        unsafe { core::ptr::read_volatile(value.add(core::mem::size_of::<u32>()) as *const u32) };
+    u64::from(low) | (u64::from(high) << 32)
+}
+
+fn direct_rcs_timestamp_frequency_hz(dev: super::Dev) -> u32 {
+    const CTC_MODE_MMIO: usize = 0x0A26C;
+    const CTC_SOURCE_DIVIDE_LOGIC: u32 = 1;
+    const RPM_CONFIG0_MMIO: usize = 0x00D00;
+    const TIMESTAMP_OVERRIDE_MMIO: usize = 0x44074;
+
+    static CACHED_HZ: AtomicU32 = AtomicU32::new(0);
+    let cached = CACHED_HZ.load(Ordering::Acquire);
+    if cached != 0 {
+        return cached;
+    }
+
+    // Gen11+ command-stream clock selection, matching the hardware-owned
+    // CTC_MODE/RPM_CONFIG0 contract. TRUEOS owns this GT and never reprograms
+    // the clock source after initialization, so the resolved frequency can be
+    // cached for the lifetime of the boot.
+    let ctc_mode = super::mmio_read(dev, CTC_MODE_MMIO);
+    let frequency = if ctc_mode & CTC_SOURCE_DIVIDE_LOGIC != 0 {
+        let timestamp_override = super::mmio_read(dev, TIMESTAMP_OVERRIDE_MMIO);
+        let divider = (timestamp_override & 0x3FF).saturating_add(1);
+        let denominator = ((timestamp_override >> 12) & 0xF).saturating_add(1);
+        divider
+            .saturating_mul(1_000_000)
+            .saturating_add(1_000_000 / denominator)
+    } else {
+        let rpm_config = super::mmio_read(dev, RPM_CONFIG0_MMIO);
+        let crystal_hz = match (rpm_config >> 3) & 0x7 {
+            0 => 24_000_000,
+            1 => 19_200_000,
+            2 => 38_400_000,
+            3 => 25_000_000,
+            _ => 0,
+        };
+        let shift = (rpm_config >> 1) & 0x3;
+        crystal_hz >> (3 - shift)
+    };
+    if frequency != 0 {
+        CACHED_HZ.store(frequency, Ordering::Release);
+    }
+    frequency
+}
+
+fn direct_rcs_timestamp_ticks_to_us(ticks: u64, frequency_hz: u64) -> u64 {
+    if frequency_hz == 0 {
+        return 0;
+    }
+    ((ticks as u128)
+        .saturating_mul(1_000_000)
+        .saturating_add(u128::from(frequency_hz / 2))
+        / u128::from(frequency_hz))
+    .min(u128::from(u64::MAX)) as u64
 }
 
 fn direct_rcs_now_tick() -> u64 {

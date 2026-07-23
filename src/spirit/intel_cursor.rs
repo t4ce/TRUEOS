@@ -440,6 +440,60 @@ pub(super) fn spirit_cursor_poll(
     Ok(SpiritCursorFlipState::Visible { ctl, base, live })
 }
 
+/// Re-issue one cursor flip after its first bounded SURFLIVE wait expires.
+///
+/// The pending surface identity must still match the original arm. Rewriting
+/// the complete cursor contract followed by CUR_BASE gives hardware one
+/// explicit second latch opportunity without allocating, rendering, or
+/// advancing the public Spirit fence again.
+pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), SpiritCursorError> {
+    let channel_index = channel_index(flip.channel)?;
+    let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
+    let _ = pipe_dimensions(channel_index)?;
+    if !ensure_dbuf_power(dev, channel_index) {
+        return Err(SpiritCursorError::DbufNotReady);
+    }
+
+    let regs = cursor_regs(channel_index);
+    let state = SPIRIT_CURSOR_STATE.lock();
+    let channel_state = &state.channels[channel_index];
+    if flip.surface as usize >= SPIRIT_SURFACES_PER_CHANNEL
+        || channel_state.pending != Some(flip.surface)
+    {
+        return Err(SpiritCursorError::InvalidFrame);
+    }
+    let surface =
+        channel_state.surfaces[flip.surface as usize].ok_or(SpiritCursorError::HardwareNotReady)?;
+    let base = u32::try_from(surface.gpu).map_err(|_| SpiritCursorError::MappingFailed)?;
+    if base != flip.gpu {
+        return Err(SpiritCursorError::InvalidFrame);
+    }
+
+    write_if_changed(dev, regs.buf_cfg, cursor_ddb_cfg(channel_index));
+    write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
+    write_if_changed(dev, regs.wm_trans, 0);
+    write_if_changed(dev, regs.wm_sagv, 0);
+    write_if_changed(dev, regs.wm_sagv_trans, 0);
+    write_if_changed(dev, regs.sel_fetch_ctl, 0);
+    write_if_changed(dev, regs.ctl, cursor_ctl(dev.device_id));
+    crate::intel::mmio_write(dev, regs.base, base);
+    Ok(())
+}
+
+/// Drop only the software ownership of a failed pending flip. The render task
+/// stops immediately afterward, performs no further cursor-register writes,
+/// and never reuses the failed back buffer.
+pub(super) fn spirit_cursor_abandon(flip: SpiritCursorFlip) {
+    let Ok(channel_index) = channel_index(flip.channel) else {
+        return;
+    };
+    let mut state = SPIRIT_CURSOR_STATE.lock();
+    let channel_state = &mut state.channels[channel_index];
+    if channel_state.pending == Some(flip.surface) {
+        channel_state.pending = None;
+    }
+}
+
 pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCursorError> {
     let channel_index = channel_index(channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;

@@ -1771,7 +1771,7 @@ async fn h264_i_p_playback_probe_with_reader(
     );
     let conversion_probe = conversion_report.probe;
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: conversion-probe generation={} samples={} rcs_samples={} worker_avg_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_max_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_percentile_us=end_to_end_p50:{},p95:{},p99:{} rcs_avg_us=queue_prepare:{},queue_total:{},forcewake:{},state_map:{},ppgtt_init:{},kernel_map:{},source_map:{},destination_map:{},batch_encode:{},admission:{},submit_to_marker:{} rcs_max_us=queue_prepare:{},submit_to_marker:{} rcs_percentile_us=queue_prepare_p50:{},p95:{},p99:{},submit_to_marker_p50:{},p95:{},p99:{} completion_polls_avg={} completion_polls_max={} quantile_bucket_us={} clock=embassy-us marker_metric=accepted-guc-to-host-observed-post-marker scope=live-ordered-path\n",
+        "intel/hw_vid: conversion-probe generation={} samples={} rcs_samples={} worker_avg_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_max_us=queue_wait:{},bind_layout:{},rgba_acquire:{},surface_prepare:{},rcs_queue:{},rcs_completion:{},publish:{},end_to_end:{} worker_percentile_us=end_to_end_p50:{},p95:{},p99:{} rcs_avg_us=queue_prepare:{},queue_total:{},forcewake:{},state_map:{},ppgtt_init:{},kernel_map:{},source_map:{},destination_map:{},batch_encode:{},admission:{},submit_to_marker:{} rcs_max_us=queue_prepare:{},submit_to_marker:{} rcs_percentile_us=queue_prepare_p50:{},p95:{},p99:{},submit_to_marker_p50:{},p95:{},p99:{} gpu_walker=samples:{},avg_us:{},max_us:{},p50_us:{},p95_us:{},p99_us:{},timestamp_hz:{} completion_polls_avg={} completion_polls_max={} quantile_bucket_us={} clock=embassy-us+gpu-pipe-control marker_metric=accepted-guc-to-host-observed-post-marker gpu_metric=ordered-pre-walker-to-post-media-state-flush scope=live-ordered-path\n",
         conversion_report.generation,
         conversion_probe.samples,
         conversion_probe.rcs_samples,
@@ -1813,6 +1813,13 @@ async fn h264_i_p_playback_probe_with_reader(
         conversion_probe.p50_rcs_submit_to_marker_us,
         conversion_probe.p95_rcs_submit_to_marker_us,
         conversion_probe.p99_rcs_submit_to_marker_us,
+        conversion_probe.gpu_timestamp_samples,
+        conversion_probe.avg_gpu_walker_us,
+        conversion_probe.max_gpu_walker_us,
+        conversion_probe.p50_gpu_walker_us,
+        conversion_probe.p95_gpu_walker_us,
+        conversion_probe.p99_gpu_walker_us,
+        conversion_probe.gpu_timestamp_frequency_hz,
         conversion_probe.avg_completion_polls,
         conversion_probe.max_completion_polls,
         conversion_probe.quantile_bucket_us,

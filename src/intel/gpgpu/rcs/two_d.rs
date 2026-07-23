@@ -60,6 +60,12 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_PRE_MARKER,
     );
+    ok &= direct_rcs_push_pipe_control_timestamp_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT,
+    );
     ok &= direct_rcs_push_gpgpu_walker_2d(
         batch,
         &mut cursor,
@@ -71,6 +77,12 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_pipe_control_timestamp_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT,
+    );
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,

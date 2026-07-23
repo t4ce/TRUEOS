@@ -104,6 +104,13 @@ pub(crate) struct DecodedVideoConversionProbeReport {
     pub(crate) p99_rcs_submit_to_marker_us: u64,
     pub(crate) avg_completion_polls: u64,
     pub(crate) max_completion_polls: u64,
+    pub(crate) gpu_timestamp_samples: usize,
+    pub(crate) gpu_timestamp_frequency_hz: u64,
+    pub(crate) avg_gpu_walker_us: u64,
+    pub(crate) max_gpu_walker_us: u64,
+    pub(crate) p50_gpu_walker_us: u64,
+    pub(crate) p95_gpu_walker_us: u64,
+    pub(crate) p99_gpu_walker_us: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -266,6 +273,10 @@ struct DecodedVideoConversionProbeState {
     end_to_end_histogram: VideoConversionProbeHistogram,
     rcs_queue_prepare_histogram: VideoConversionProbeHistogram,
     rcs_submit_to_marker_histogram: VideoConversionProbeHistogram,
+    gpu_timestamp_samples: usize,
+    gpu_timestamp_frequency_hz: u64,
+    gpu_walker: VideoConversionProbeMetric,
+    gpu_walker_histogram: VideoConversionProbeHistogram,
     total_completion_polls: u64,
     max_completion_polls: u64,
 }
@@ -297,6 +308,10 @@ impl DecodedVideoConversionProbeState {
             end_to_end_histogram: VideoConversionProbeHistogram::new(),
             rcs_queue_prepare_histogram: VideoConversionProbeHistogram::new(),
             rcs_submit_to_marker_histogram: VideoConversionProbeHistogram::new(),
+            gpu_timestamp_samples: 0,
+            gpu_timestamp_frequency_hz: 0,
+            gpu_walker: VideoConversionProbeMetric::new(),
+            gpu_walker_histogram: VideoConversionProbeHistogram::new(),
             total_completion_polls: 0,
             max_completion_polls: 0,
         }
@@ -332,6 +347,16 @@ impl DecodedVideoConversionProbeState {
         self.rcs_submit_to_marker.record(rcs.submit_to_marker_us);
         self.rcs_submit_to_marker_histogram
             .record(rcs.submit_to_marker_us);
+        if rcs.gpu_walker_timestamp_valid {
+            if self.gpu_timestamp_samples == 0 {
+                self.gpu_timestamp_frequency_hz = rcs.gpu_timestamp_frequency_hz;
+            } else if self.gpu_timestamp_frequency_hz != rcs.gpu_timestamp_frequency_hz {
+                self.gpu_timestamp_frequency_hz = 0;
+            }
+            self.gpu_timestamp_samples = self.gpu_timestamp_samples.saturating_add(1);
+            self.gpu_walker.record(rcs.gpu_walker_us);
+            self.gpu_walker_histogram.record(rcs.gpu_walker_us);
+        }
         self.total_completion_polls = self
             .total_completion_polls
             .saturating_add(rcs.completion_polls);
@@ -407,6 +432,19 @@ impl DecodedVideoConversionProbeState {
                 self.total_completion_polls / rcs_samples as u64
             },
             max_completion_polls: self.max_completion_polls,
+            gpu_timestamp_samples: self.gpu_timestamp_samples,
+            gpu_timestamp_frequency_hz: self.gpu_timestamp_frequency_hz,
+            avg_gpu_walker_us: self.gpu_walker.average(self.gpu_timestamp_samples),
+            max_gpu_walker_us: self.gpu_walker.max_us,
+            p50_gpu_walker_us: self
+                .gpu_walker_histogram
+                .percentile(50, self.gpu_walker.max_us),
+            p95_gpu_walker_us: self
+                .gpu_walker_histogram
+                .percentile(95, self.gpu_walker.max_us),
+            p99_gpu_walker_us: self
+                .gpu_walker_histogram
+                .percentile(99, self.gpu_walker.max_us),
         }
     }
 }

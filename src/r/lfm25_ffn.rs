@@ -413,14 +413,15 @@ async fn run_streamed(
         let up_blocks = up_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
         let result =
             fpga_offload::lfm25_stream_gate_up_row(row as u32, gate_blocks, up_blocks).await?;
+        let silu_value = stream_silu_result(result)?;
         gate.push(result.gate_q30);
         up.push(result.up_q30);
-        silu.push(result.result_q30);
+        silu.push(silu_value);
 
         for (stage, vector, value, bound, max_abs) in [
             (Stage::Gate, 1usize, result.gate_q30, PROJECTION_BOUND, &mut gate_max_abs),
             (Stage::Up, 2usize, result.up_q30, PROJECTION_BOUND, &mut up_max_abs),
-            (Stage::Silu, 3usize, result.result_q30, SILU_BOUND, &mut silu_max_abs),
+            (Stage::Silu, 3usize, silu_value, SILU_BOUND, &mut silu_max_abs),
         ] {
             let expected = golden_f32(vector, row)?;
             let error = q30_error(value, expected);
@@ -576,7 +577,7 @@ async fn run_layer_streamed(
         let up_blocks = up_matrix.get(row_start..row_end).ok_or(Error::Tensor)?;
         let result =
             fpga_offload::lfm25_stream_gate_up_row(row as u32, gate_blocks, up_blocks).await?;
-        silu.push(result.result_q30);
+        silu.push(stream_silu_result(result)?);
         if row % 512 == 511 || row + 1 == 4_608 {
             progress(Progress {
                 stage: Stage::Gate,
@@ -640,6 +641,18 @@ async fn run_layer_streamed(
         },
         output_q30: down,
     })
+}
+
+fn stream_silu_result(result: crate::tga::Lfm25StreamResult) -> Result<i64, Error> {
+    match result.error_code {
+        0 => Ok(result.result_q30),
+        // ERROR_SILU means the persisted row-stream firmware rejected only
+        // its fixture-specific polynomial range. Gate and up were already
+        // fully computed and published before that guard fired.
+        4 => trueos_lfm25_cpu::silu_mul_q30(result.gate_q30, result.up_q30)
+            .map_err(|_| Error::Arithmetic),
+        code => Err(Error::Fpga(fpga_offload::Error::Device(code as i32))),
+    }
 }
 
 async fn preflight_gate_transition(

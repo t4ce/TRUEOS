@@ -738,10 +738,36 @@ pub fn f32_to_q30(value: f32) -> Result<i64, Error> {
     }
 }
 
+/// Evaluate the model's exact f32 `SiLU(gate) * up` from FPGA Q30
+/// projections and return Q30 for the downstream quantizer.
+///
+/// The persisted TRUEGA row streamer rejects values outside the narrow
+/// polynomial domain sealed by its original layer-0 fixture. Its gate and up
+/// projections are nevertheless complete at that terminal point, so only
+/// this activation needs CPU recovery.
+pub fn silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {
+    const SCALE: f32 = (1u64 << 30) as f32;
+    let gate = gate_q30 as f32 / SCALE;
+    let up = up_q30 as f32 / SCALE;
+    let sigmoid = 1.0 / (1.0 + libm::expf(-gate));
+    f32_to_q30(gate * sigmoid * up)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn silu_q30_covers_values_outside_the_sealed_fpga_polynomial_domain() {
+        const ONE_Q30: i64 = 1i64 << 30;
+        assert_eq!(silu_mul_q30(0, 3 * ONE_Q30), Ok(0));
+
+        let positive = silu_mul_q30(2 * ONE_Q30, ONE_Q30).unwrap();
+        let negative = silu_mul_q30(-2 * ONE_Q30, ONE_Q30).unwrap();
+        assert!((positive - 1_891_497_322).abs() <= 256);
+        assert!((negative + 255_986_326).abs() <= 256);
+    }
 
     #[test]
     fn q8_round_trip_is_finite_and_bounded() {

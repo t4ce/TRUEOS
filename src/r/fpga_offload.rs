@@ -782,7 +782,11 @@ pub async fn lfm25_stream_down_row(row: u32, weights: &[u8]) -> Result<i64, Erro
     )
     .map_err(map_transport_error)?;
     let result = execute_lfm25_stream_row(trueos_fpga_abi::LFM25_STREAM_MODE_DOWN, row).await?;
-    Ok(result.result_q30)
+    if result.error_code == 0 {
+        Ok(result.result_q30)
+    } else {
+        Err(Error::Device(result.error_code as i32))
+    }
 }
 
 async fn execute_lfm25_stream_row(
@@ -1210,6 +1214,16 @@ impl ActiveTransportJob {
                         crate::tga::read_lfm25_stream_result().map_err(map_transport_error)?;
                     match state {
                         trueos_fpga_abi::Lfm25StreamState::Complete if result.error_code == 0 => {
+                            Ok(result)
+                        }
+                        // The persisted row-stream milestone publishes valid
+                        // gate/up projections before its fixture-bounded SiLU
+                        // guard reports code 4. Preserve those results so the
+                        // model backend can recover only SiLU on the CPU.
+                        trueos_fpga_abi::Lfm25StreamState::Failed
+                            if request.mode == trueos_fpga_abi::LFM25_STREAM_MODE_GATE_UP_SILU
+                                && result.error_code == 4 =>
+                        {
                             Ok(result)
                         }
                         trueos_fpga_abi::Lfm25StreamState::Failed => {

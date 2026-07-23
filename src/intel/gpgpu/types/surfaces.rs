@@ -419,6 +419,15 @@ pub(crate) struct GpgpuSubmissionProbe {
     /// Accepted GuC admission through host observation of the post marker.
     pub(crate) submit_to_marker_us: u64,
     pub(crate) completion_polls: u64,
+    /// Command-stream timestamp frequency resolved from the Gen11+ GT clock
+    /// configuration for this boot.
+    pub(crate) gpu_timestamp_frequency_hz: u64,
+    /// Ordered PIPE_CONTROL timestamp delta around the video GPGPU walker.
+    pub(crate) gpu_pre_walker_timestamp: u64,
+    pub(crate) gpu_post_walker_timestamp: u64,
+    pub(crate) gpu_walker_ticks: u64,
+    pub(crate) gpu_walker_us: u64,
+    pub(crate) gpu_walker_timestamp_valid: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

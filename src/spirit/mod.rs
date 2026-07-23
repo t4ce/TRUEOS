@@ -33,6 +33,11 @@ const _: () = assert!(SPIRIT_WORKER_POOL_LIMIT <= SPIRIT_FENCE_COUNT);
 
 const SPIRIT_IDLE_POLL_MS: u64 = 16;
 const SPIRIT_FLIP_POLL_MS: u64 = 1;
+/// A cursor base update should become SURFLIVE on the next vblank. Give it
+/// roughly six 60 Hz vblanks before treating the missing latch as a Spirit
+/// application fault.
+const SPIRIT_SURFLIVE_TIMEOUT_MS: u64 = 100;
+const SPIRIT_SURFLIVE_MAX_RETRIES: u8 = 1;
 const SPIRIT_GPU_POLL_MS: u64 = 1;
 const SPIRIT_CURSOR_MOVE_RETRY_MS: u64 = 1;
 const SPIRIT_MOVE_PORTAL_PRE_MS: u64 = 350;
@@ -697,6 +702,8 @@ struct Inflight {
     frame: QueuedFrame,
     completes_fence: bool,
     polls: u32,
+    attempt_started: Instant,
+    retries: u8,
 }
 
 #[derive(Copy, Clone)]
@@ -1114,6 +1121,80 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 }
                 Ok(intel_cursor::SpiritCursorFlipState::Waiting { ctl, base, live }) => {
                     active.polls = active.polls.saturating_add(1);
+                    let now = Instant::now();
+                    let wait_ms = now
+                        .saturating_duration_since(active.attempt_started)
+                        .as_millis();
+                    if wait_ms >= SPIRIT_SURFLIVE_TIMEOUT_MS {
+                        if active.retries < SPIRIT_SURFLIVE_MAX_RETRIES {
+                            crate::log_warn!(
+                                target: "gfx";
+                                "trueos-spirit: cursor SURFLIVE timeout frame={} fence={} sequence={} pipe={} buffer={} attempt={} polls={} wait_ms={} timeout_ms={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X} action=reprogram-cursor-once\n",
+                                stream_queued_frames,
+                                fence_index,
+                                active.frame.lease.fence.sequence,
+                                pipe_name(id),
+                                active.frame.lease.surface.surface,
+                                active.retries.saturating_add(1),
+                                active.polls,
+                                wait_ms,
+                                SPIRIT_SURFLIVE_TIMEOUT_MS,
+                                ctl,
+                                base,
+                                active.frame.lease.surface.cursor_gpu,
+                                live,
+                            );
+                            match intel_cursor::spirit_cursor_retry_arm(active.flip) {
+                                Ok(()) => {
+                                    active.polls = 0;
+                                    active.attempt_started = now;
+                                    active.retries = active.retries.saturating_add(1);
+                                    inflight = Some(active);
+                                    Timer::after(Duration::from_millis(SPIRIT_FLIP_POLL_MS)).await;
+                                    continue;
+                                }
+                                Err(error) => {
+                                    stop_failed_cursor_flip(id, active);
+                                    crate::log_error!(
+                                        target: "gfx";
+                                        "trueos-spirit: cursor SURFLIVE retry failed frame={} fence={} sequence={} pipe={} buffer={} retries={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X} error={:?} action=stop-spirit-stream-no-more-retries\n",
+                                        stream_queued_frames,
+                                        fence_index,
+                                        active.frame.lease.fence.sequence,
+                                        pipe_name(id),
+                                        active.frame.lease.surface.surface,
+                                        active.retries.saturating_add(1),
+                                        ctl,
+                                        base,
+                                        active.frame.lease.surface.cursor_gpu,
+                                        live,
+                                        error,
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+
+                        stop_failed_cursor_flip(id, active);
+                        crate::log_error!(
+                            target: "gfx";
+                            "trueos-spirit: cursor SURFLIVE terminal failure frame={} fence={} sequence={} pipe={} buffer={} attempts={} polls={} wait_ms={} timeout_ms={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X} action=stop-spirit-stream-no-more-retries\n",
+                            stream_queued_frames,
+                            fence_index,
+                            active.frame.lease.fence.sequence,
+                            pipe_name(id),
+                            active.frame.lease.surface.surface,
+                            active.retries.saturating_add(1),
+                            active.polls,
+                            wait_ms,
+                            SPIRIT_SURFLIVE_TIMEOUT_MS,
+                            ctl,
+                            base,
+                            active.frame.lease.surface.cursor_gpu,
+                            live,
+                        );
+                        return;
+                    }
                     if spirit_should_trace_frame(stream_queued_frames)
                         && (active.polls == 1 || active.polls.is_multiple_of(1_000))
                     {
@@ -1192,7 +1273,6 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         .saturating_duration_since(package_started)
                         .as_millis();
                     scheduled
-                        .animation
                         .frame_at_elapsed(elapsed_ms)
                         .map(|part| part.surface)
                 });
@@ -1254,6 +1334,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     frame,
                     completes_fence,
                     polls: 0,
+                    attempt_started: Instant::now(),
+                    retries: 0,
                 });
             }
             Err(
@@ -1294,6 +1376,16 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             }
         }
     }
+}
+
+fn stop_failed_cursor_flip(id: SpiritFenceId, active: Inflight) {
+    intel_cursor::spirit_cursor_abandon(active.flip);
+    if active.completes_fence {
+        cancel_pending(active.frame.lease);
+    } else {
+        finish_rearm(id);
+    }
+    ACTIVE_FENCE_MASK.fetch_and(!(1u8 << id.0), Ordering::AcqRel);
 }
 
 fn matching_pending(
