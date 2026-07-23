@@ -119,13 +119,14 @@ overrides must match:
 42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
 ```
 
-The two Spirit VFX artifacts are hash-locked as one ordered two-walker batch.
-The background artifact currently implements `Radial aura` and `Nebula smoke`;
-the sprite artifact implements `Original / clean` and `Aura bloom`. Their
-ADL-S binary hashes are:
+The two Spirit VFX artifacts are hash-locked. Background-enabled submissions
+use one ordered two-walker batch; the clean default omits the background
+walker. The background artifact implements `Radial aura`, `Nebula smoke`, and
+`Portal vortex`; the sprite artifact implements `Original / clean` and
+`Aura bloom`. Their ADL-S binary hashes are:
 
 ```text
-spirit_vfx_background_rgba8.bin  cfe755a9f79f629a277cef05c95bd7a22561cb9b07414ac299ba7490779ac93e
+spirit_vfx_background_rgba8.bin  d21a1ea62f9ab6f1c869ffd35d1a598988acc6905cabbe163e4c2082188f0548
 spirit_vfx_sprite_rgba8.bin      7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33
 ```
 

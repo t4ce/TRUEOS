@@ -1,8 +1,8 @@
 // Spirit VFX procedural-alpha background pass for Intel Xe-LP / ADL-S.
 //
 // The dispatch is fixed at 256x256. It writes premultiplied BGRA8 bytes into
-// the exact Intel cursor backbuffer. Modes 1 and 4 intentionally retain the
-// names and parameter meanings of preview.html: Radial aura and Nebula smoke.
+// the exact Intel cursor backbuffer. Modes 1, 4, and 6 retain the preview.html
+// names: Radial aura, Nebula smoke, and Portal vortex.
 
 #define SPIRIT_VFX_SIZE 256u
 #define SPIRIT_VFX_CONTROL_MAGIC 0x53564658u // "SVFX"
@@ -165,6 +165,29 @@ __kernel void spirit_vfx_background_rgba8(
             * native_exp(-radius * radius * 3.2f);
         alpha = cloud * intensity;
         color_mix = vfx_clamp01(noise2);
+    } else if (background_id == 6u) {
+        // preview.html: Portal vortex. A rotating broken ring and soft inner
+        // veil remain behind Lilly while CUR_POS performs the actual jump.
+        float spin = time * speed * 1.8f;
+        float ripple = native_sin(angle * 7.0f - spin * 2.4f);
+        float ring_radius = 0.34f + ripple * 0.012f;
+        float ring_distance = fabs(radius - ring_radius);
+        float ring = native_exp(-ring_distance * ring_distance * 1450.0f);
+        float arc_wave = 0.5f + 0.5f * native_sin(
+            angle * 13.0f - spin * 3.1f + radius * 34.0f);
+        float arc2 = arc_wave * arc_wave;
+        float arcs = ring * arc2 * arc2;
+        float swirl_wave = 0.5f + 0.5f * native_sin(
+            angle * 5.0f - spin + radius * 42.0f);
+        float inner = (1.0f - smoothstep(0.08f, 0.34f, radius))
+            * (0.30f + 0.70f * swirl_wave);
+        float outer_glow = native_exp(-ring_distance * ring_distance * 120.0f)
+            * (1.0f - smoothstep(0.18f, 0.52f, radius));
+        alpha = (ring * 0.58f + arcs * 0.52f + inner * 0.18f
+            + outer_glow * 0.20f) * intensity;
+        color_mix = vfx_clamp01(
+            0.5f + 0.34f * native_sin(angle * 3.0f - spin)
+            + 0.16f * swirl_wave);
     }
 
     alpha = clamp(alpha * opacity, 0.0f, 0.96f);

@@ -35,6 +35,8 @@ const SPIRIT_IDLE_POLL_MS: u64 = 16;
 const SPIRIT_FLIP_POLL_MS: u64 = 1;
 const SPIRIT_GPU_POLL_MS: u64 = 1;
 const SPIRIT_CURSOR_MOVE_RETRY_MS: u64 = 1;
+const SPIRIT_MOVE_PORTAL_PRE_MS: u64 = 350;
+const SPIRIT_MOVE_PORTAL_POST_MS: u64 = 150;
 const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u64 = 60;
@@ -235,12 +237,14 @@ struct SpiritPosition {
 struct SpiritMoveRequest {
     position: SpiritPosition,
     sequence: u64,
+    portal_transition: bool,
 }
 
 impl SpiritMoveRequest {
     const CENTERED: Self = Self {
         position: SpiritPosition::CENTERED,
         sequence: 0,
+        portal_transition: false,
     };
 }
 
@@ -601,6 +605,7 @@ pub(crate) fn move_by(
         y_normalized: (state.position.y_normalized + delta_y_normalized).clamp(0.0, 1.0),
     };
     state.sequence = state.sequence.saturating_add(1).max(1);
+    state.portal_transition = true;
     let request = *state;
     drop(state);
     Ok(publish_move(id, request))
@@ -631,6 +636,7 @@ fn queue_move(id: SpiritFenceId, position: SpiritPosition) -> SpiritMoveFence {
     let mut state = MOVE_STATES[id.index()].lock();
     state.position = position;
     state.sequence = state.sequence.saturating_add(1).max(1);
+    state.portal_transition = true;
     let request = *state;
     drop(state);
     publish_move(id, request)
@@ -646,7 +652,9 @@ fn publish_move(id: SpiritFenceId, request: SpiritMoveRequest) -> SpiritMoveFenc
 }
 
 fn resignal_current_move(id: SpiritFenceId) {
-    MOVE_SIGNALS[id.index()].signal(*MOVE_STATES[id.index()].lock());
+    let mut request = *MOVE_STATES[id.index()].lock();
+    request.portal_transition = MOVE_APPLIED[id.index()].load(Ordering::Acquire) < request.sequence;
+    MOVE_SIGNALS[id.index()].signal(request);
 }
 
 fn active_spirit_fence() -> Option<SpiritFenceId> {
@@ -769,55 +777,84 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
         while let Some(latest) = MOVE_SIGNALS[id.index()].try_take() {
             request = latest;
         }
-        match intel_cursor::spirit_cursor_move(id.0, request.position.cursor_frame()) {
-            Ok((x, y)) => {
-                deferred = 0;
-                MOVE_APPLIED[id.index()].store(request.sequence, Ordering::Release);
-                if request.sequence <= 30 || request.sequence.is_multiple_of(600) {
-                    crate::log_trace!(
-                        target: "gfx";
-                        "trueos-spirit: cursor move applied fence={} pipe={} move_sequence={} pos={}x{} normalized={:.5},{:.5} owner=spirit-cursor-task\n",
-                        id.index(),
-                        pipe_name(id),
-                        request.sequence,
-                        x,
-                        y,
-                        request.position.x_normalized,
-                        request.position.y_normalized,
-                    );
-                }
-                request = MOVE_SIGNALS[id.index()].wait().await;
-            }
-            Err(
-                error @ (intel_cursor::SpiritCursorError::HardwareNotReady
-                | intel_cursor::SpiritCursorError::PipeInactive
-                | intel_cursor::SpiritCursorError::DbufNotReady),
-            ) => {
-                deferred = deferred.saturating_add(1);
-                if deferred == 1 || deferred.is_multiple_of(1_000) {
-                    crate::log_warn!(
-                        target: "gfx";
-                        "trueos-spirit: cursor move deferred fence={} pipe={} move_sequence={} retries={} error={:?}\n",
-                        id.index(),
-                        pipe_name(id),
-                        request.sequence,
-                        deferred,
-                        error,
-                    );
-                }
-                Timer::after(Duration::from_millis(SPIRIT_CURSOR_MOVE_RETRY_MS)).await;
-            }
-            Err(error) => {
-                crate::log_error!(
-                    target: "gfx";
-                    "trueos-spirit: cursor move rejected fence={} move_sequence={} error={:?} action=drop-invalid-request\n",
-                    id.index(),
-                    request.sequence,
-                    error,
-                );
-                request = MOVE_SIGNALS[id.index()].wait().await;
+
+        // Sequence zero is the boot-time centered state, not a caller-issued
+        // move. Every real request gets the fixed portal transition while
+        // retaining the API's existing latest-wins destination semantics.
+        let portal_transition = request.portal_transition && request.sequence != 0;
+        if portal_transition {
+            spirit_vfx::set_move_portal_transition(true);
+            Timer::after(Duration::from_millis(SPIRIT_MOVE_PORTAL_PRE_MS)).await;
+            while let Some(latest) = MOVE_SIGNALS[id.index()].try_take() {
+                request = latest;
             }
         }
+
+        let applied = loop {
+            while let Some(latest) = MOVE_SIGNALS[id.index()].try_take() {
+                request = latest;
+            }
+            match intel_cursor::spirit_cursor_move(id.0, request.position.cursor_frame()) {
+                Ok((x, y)) => {
+                    deferred = 0;
+                    MOVE_APPLIED[id.index()].store(request.sequence, Ordering::Release);
+                    if request.sequence <= 30 || request.sequence.is_multiple_of(600) {
+                        crate::log_trace!(
+                            target: "gfx";
+                            "trueos-spirit: cursor move applied fence={} pipe={} move_sequence={} pos={}x{} normalized={:.5},{:.5} owner=spirit-cursor-task transition={} pre_ms={} post_ms={}\n",
+                            id.index(),
+                            pipe_name(id),
+                            request.sequence,
+                            x,
+                            y,
+                            request.position.x_normalized,
+                            request.position.y_normalized,
+                            portal_transition,
+                            u64::from(portal_transition) * SPIRIT_MOVE_PORTAL_PRE_MS,
+                            u64::from(portal_transition) * SPIRIT_MOVE_PORTAL_POST_MS,
+                        );
+                    }
+                    break true;
+                }
+                Err(
+                    error @ (intel_cursor::SpiritCursorError::HardwareNotReady
+                    | intel_cursor::SpiritCursorError::PipeInactive
+                    | intel_cursor::SpiritCursorError::DbufNotReady),
+                ) => {
+                    deferred = deferred.saturating_add(1);
+                    if deferred == 1 || deferred.is_multiple_of(1_000) {
+                        crate::log_warn!(
+                            target: "gfx";
+                            "trueos-spirit: cursor move deferred fence={} pipe={} move_sequence={} retries={} error={:?}\n",
+                            id.index(),
+                            pipe_name(id),
+                            request.sequence,
+                            deferred,
+                            error,
+                        );
+                    }
+                    Timer::after(Duration::from_millis(SPIRIT_CURSOR_MOVE_RETRY_MS)).await;
+                }
+                Err(error) => {
+                    crate::log_error!(
+                        target: "gfx";
+                        "trueos-spirit: cursor move rejected fence={} move_sequence={} error={:?} action=drop-invalid-request\n",
+                        id.index(),
+                        request.sequence,
+                        error,
+                    );
+                    break false;
+                }
+            }
+        };
+
+        if portal_transition && applied {
+            Timer::after(Duration::from_millis(SPIRIT_MOVE_PORTAL_POST_MS)).await;
+        }
+        if portal_transition {
+            spirit_vfx::set_move_portal_transition(false);
+        }
+        request = MOVE_SIGNALS[id.index()].wait().await;
     }
 }
 

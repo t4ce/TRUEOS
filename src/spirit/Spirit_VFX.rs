@@ -3,13 +3,14 @@
 //! Names, ranges, and defaults mirror `preview.html`.  The control model is
 //! deliberately independent of the current 256x256 Intel cursor-plane backend:
 //! UI/service code may publish the complete panel now while GPU support grows
-//! one bounded effect at a time.  The first artifact contains `Radial aura` and
-//! `Nebula smoke`; unsupported selections currently resolve to transparent.
+//! one bounded effect at a time.  The first artifact contains `Radial aura`,
+//! `Nebula smoke`, and Spirit's movement-only `Portal vortex`; unsupported
+//! selections currently resolve to transparent.
 
 extern crate alloc;
 
 use alloc::{format, string::String};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
@@ -361,6 +362,7 @@ impl SpiritVfxBackgroundEffect {
         match self {
             Self::RadialAura => Some(1),
             Self::NebulaSmoke => Some(4),
+            Self::PortalVortex => Some(6),
             _ => None,
         }
     }
@@ -542,6 +544,18 @@ impl SpiritVfxAlphaBackground {
         intensity: 1.2,
         bg_color_a: SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF),
         bg_color_b: SpiritVfxRgb8::rgb(0x30, 0xC8, 0xFF),
+    };
+
+    /// Transient background selected by the existing Spirit move API. It is
+    /// deliberately not published into the user's persistent control panel.
+    const MOVE_PORTAL: Self = Self {
+        effect: SpiritVfxBackgroundEffect::PortalVortex,
+        opacity: 0.78,
+        scale: 1.0,
+        speed: 1.65,
+        intensity: 1.35,
+        bg_color_a: SpiritVfxRgb8::rgb(0x74, 0x45, 0xFF),
+        bg_color_b: SpiritVfxRgb8::rgb(0x36, 0xE4, 0xFF),
     };
 }
 
@@ -916,6 +930,7 @@ pub(super) struct SpiritVfxGpuSnapshot {
 
 static CONTROL_PANEL: Mutex<Option<SpiritVfxControlPanel>> = Mutex::new(None);
 static CONTROL_PANEL_REVISION: AtomicU64 = AtomicU64::new(1);
+static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL
@@ -930,6 +945,15 @@ pub(crate) fn publish_control_panel(mut panel: SpiritVfxControlPanel) -> u64 {
     panel.sanitize();
     *CONTROL_PANEL.lock() = Some(panel);
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// Temporarily replace only the background presented to the GPU. The movement
+/// state machine owns this bit; persistent UI/VFX settings are restored
+/// automatically when the transition ends.
+pub(super) fn set_move_portal_transition(active: bool) {
+    if MOVE_PORTAL_ACTIVE.swap(active, Ordering::AcqRel) != active {
+        CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 /// Set an absolute Spirit sprite rotation. Any finite number of turns is
@@ -971,7 +995,11 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
-    let background = panel.alpha_background;
+    let background = if MOVE_PORTAL_ACTIVE.load(Ordering::Acquire) {
+        SpiritVfxAlphaBackground::MOVE_PORTAL
+    } else {
+        panel.alpha_background
+    };
     SpiritVfxGpuSnapshot {
         revision,
         background_mode: background.effect.artifact_mode().unwrap_or(0),

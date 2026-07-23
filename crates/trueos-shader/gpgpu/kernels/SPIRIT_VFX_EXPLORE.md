@@ -14,8 +14,9 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
    inter-walker cache dependency. The sprite pass starts from transparent and
    presents only the current immutable Lilly RGBA frame.
 2. If enabled, `spirit_vfx_background_rgba8` writes every pixel first. It
-   supports UI background IDs 1 (`Radial aura`) and 4 (`Nebula smoke`), followed
-   by the media-state/HDC dependency before the sprite walker.
+   supports UI background IDs 1 (`Radial aura`), 4 (`Nebula smoke`), and 6
+   (`Portal vortex`), followed by the media-state/HDC dependency before the
+   sprite walker.
 3. The sprite pass supports shader IDs 0 (`Original / clean`) and 1
    (`Aura bloom`); unsupported sprite effects deliberately use the clean pass.
 4. The GuC post-sync marker releases Spirit's GPU producer latch. Only then can
@@ -59,10 +60,14 @@ pixel while retaining the complete generic scale API for later presentation.
 
 Spirit is an AP1 task pair. The VFX task owns GuC submissions, the producer
 latch, and `CUR_BASE`; `spirit_cursor_task` exclusively owns `CUR_POS`. Calls to
-`move_to()` and `move_by()` publish into a latest-wins Embassy signal, so motion
-bursts coalesce and never wait for a shader frame, buffer flip, UI4 compositor,
-or UI4 software-cursor cadence. The returned `SpiritMoveFence` can optionally
-prove that request or a newer superseding position has been programmed.
+`move_to()` and `move_by()` publish into a latest-wins Embassy signal. A real
+move temporarily overrides only the GPU background with `Portal vortex`, waits
+350 ms at the current position, programs the latest requested `CUR_POS`, keeps
+the portal behind Lilly at the destination for 150 ms, and then restores the
+persistent VFX panel state. The boot-time centered state bypasses the
+transition. There is no position interpolation, UI4 dependency, or new movement
+API. The returned `SpiritMoveFence` can optionally prove that request or a newer
+superseding position has been programmed.
 
 The task is still instantiated only for the active pool limit of one. Its API
 is fence/pipe-indexed so increasing the existing Spirit pool limit later creates
@@ -93,7 +98,7 @@ points validate magic/version and their own surface dimensions.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 44,672 | 2 | 64 | 96 | `cfe755a9f79f629a277cef05c95bd7a22561cb9b07414ac299ba7490779ac93e` |
+| `spirit_vfx_background_rgba8.bin` | 48,056 | 2 | 64 | 96 | `d21a1ea62f9ab6f1c869ffd35d1a598988acc6905cabbe163e4c2082188f0548` |
 | `spirit_vfx_sprite_rgba8.bin` | 73,728 | 3 | 96 | 96 | `7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33` |
 
 Both artifacts use text offset `0x40` within their own zebin. The clean default

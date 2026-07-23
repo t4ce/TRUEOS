@@ -141,6 +141,15 @@ module truega_lfm25_shortconv_token_slot (
         && (layer_state_valid[layer_slot_i]
             ? token_position_i == layer_next_position[layer_slot_i]
             : token_position_i == 32'd0);
+    // Arora V 138K BSRAM does not implement read-before-write mode.  Keep the
+    // recurrent state port in the vendor's documented normal-mode template:
+    // the registered read and the write are explicitly mutually exclusive.
+    wire state_memory_read = (state == ST_ROW_START)
+        && layer_state_valid[active_layer];
+    wire state_memory_write = (state == ST_WAIT_CHANNEL)
+        && channel_done && !channel_error
+        && !(abort_i && active_command);
+    wire state_memory_enable = state_memory_read || state_memory_write;
     wire activation_accept = activation_valid_i && activation_ready_o;
     wire row_accept = row_valid_i && row_ready_o;
     wire output_accept = output_valid_o && output_ready_i;
@@ -227,6 +236,113 @@ module truega_lfm25_shortconv_token_slot (
         .samples_accepted_o(quant_samples), .q8_block_o(quant_block)
     );
 
+    // Registered normal-mode read port.  This is deliberately separate from
+    // the write process below: combining an unconditional read with a
+    // conditional write makes Gowin infer WRITE_MODE=read-before-write, which
+    // is illegal for the GW5AST-138B BSRAM primitive.
+    always @(posedge clk) begin
+        if (!reset_n) begin
+            state_oldest <= 64'sd0;
+            state_newest <= 64'sd0;
+        end else if ((state == ST_ROW_START)
+                     && !layer_state_valid[active_layer]) begin
+            state_oldest <= 64'sd0;
+            state_newest <= 64'sd0;
+        end else if (state_memory_enable && !state_memory_write) begin
+            case (active_layer)
+                4'd0: begin
+                    state_oldest <= state_oldest_memory_0[channel_index];
+                    state_newest <= state_newest_memory_0[channel_index];
+                end
+                4'd1: begin
+                    state_oldest <= state_oldest_memory_1[channel_index];
+                    state_newest <= state_newest_memory_1[channel_index];
+                end
+                4'd2: begin
+                    state_oldest <= state_oldest_memory_2[channel_index];
+                    state_newest <= state_newest_memory_2[channel_index];
+                end
+                4'd3: begin
+                    state_oldest <= state_oldest_memory_3[channel_index];
+                    state_newest <= state_newest_memory_3[channel_index];
+                end
+                4'd4: begin
+                    state_oldest <= state_oldest_memory_4[channel_index];
+                    state_newest <= state_newest_memory_4[channel_index];
+                end
+                4'd5: begin
+                    state_oldest <= state_oldest_memory_5[channel_index];
+                    state_newest <= state_newest_memory_5[channel_index];
+                end
+                4'd6: begin
+                    state_oldest <= state_oldest_memory_6[channel_index];
+                    state_newest <= state_newest_memory_6[channel_index];
+                end
+                4'd7: begin
+                    state_oldest <= state_oldest_memory_7[channel_index];
+                    state_newest <= state_newest_memory_7[channel_index];
+                end
+                4'd8: begin
+                    state_oldest <= state_oldest_memory_8[channel_index];
+                    state_newest <= state_newest_memory_8[channel_index];
+                end
+                default: begin
+                    state_oldest <= state_oldest_memory_9[channel_index];
+                    state_newest <= state_newest_memory_9[channel_index];
+                end
+            endcase
+        end
+    end
+
+    // Normal-mode write port.  Memory contents remain intentionally
+    // unreset; layer_state_valid supplies logical zero state after reset.
+    always @(posedge clk) begin
+        if (state_memory_enable && state_memory_write) begin
+            case (active_layer)
+                4'd0: begin
+                    state_oldest_memory_0[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_0[state_read_channel] <= channel_state_newest;
+                end
+                4'd1: begin
+                    state_oldest_memory_1[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_1[state_read_channel] <= channel_state_newest;
+                end
+                4'd2: begin
+                    state_oldest_memory_2[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_2[state_read_channel] <= channel_state_newest;
+                end
+                4'd3: begin
+                    state_oldest_memory_3[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_3[state_read_channel] <= channel_state_newest;
+                end
+                4'd4: begin
+                    state_oldest_memory_4[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_4[state_read_channel] <= channel_state_newest;
+                end
+                4'd5: begin
+                    state_oldest_memory_5[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_5[state_read_channel] <= channel_state_newest;
+                end
+                4'd6: begin
+                    state_oldest_memory_6[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_6[state_read_channel] <= channel_state_newest;
+                end
+                4'd7: begin
+                    state_oldest_memory_7[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_7[state_read_channel] <= channel_state_newest;
+                end
+                4'd8: begin
+                    state_oldest_memory_8[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_8[state_read_channel] <= channel_state_newest;
+                end
+                default: begin
+                    state_oldest_memory_9[state_read_channel] <= channel_state_oldest;
+                    state_newest_memory_9[state_read_channel] <= channel_state_newest;
+                end
+            endcase
+        end
+    end
+
     always @(posedge clk) begin
         if (!reset_n) begin
             state <= ST_IDLE;
@@ -237,8 +353,6 @@ module truega_lfm25_shortconv_token_slot (
             channel_index <= 10'd0;
             output_block_index <= 5'd0;
             activation_block <= 272'd0;
-            state_oldest <= 64'sd0;
-            state_newest <= 64'sd0;
             state_read_channel <= 10'd0;
             layer_state_valid <= 10'd0;
             layer_state_poisoned <= 10'd0;
@@ -342,53 +456,6 @@ module truega_lfm25_shortconv_token_slot (
                     triplet_start <= 1'b1;
                     activation_block <= activation_memory[0];
                     state_read_channel <= channel_index;
-                    if (!layer_state_valid[active_layer]) begin
-                        state_oldest <= 64'sd0;
-                        state_newest <= 64'sd0;
-                    end else begin
-                        case (active_layer)
-                            4'd0: begin
-                                state_oldest <= state_oldest_memory_0[channel_index];
-                                state_newest <= state_newest_memory_0[channel_index];
-                            end
-                            4'd1: begin
-                                state_oldest <= state_oldest_memory_1[channel_index];
-                                state_newest <= state_newest_memory_1[channel_index];
-                            end
-                            4'd2: begin
-                                state_oldest <= state_oldest_memory_2[channel_index];
-                                state_newest <= state_newest_memory_2[channel_index];
-                            end
-                            4'd3: begin
-                                state_oldest <= state_oldest_memory_3[channel_index];
-                                state_newest <= state_newest_memory_3[channel_index];
-                            end
-                            4'd4: begin
-                                state_oldest <= state_oldest_memory_4[channel_index];
-                                state_newest <= state_newest_memory_4[channel_index];
-                            end
-                            4'd5: begin
-                                state_oldest <= state_oldest_memory_5[channel_index];
-                                state_newest <= state_newest_memory_5[channel_index];
-                            end
-                            4'd6: begin
-                                state_oldest <= state_oldest_memory_6[channel_index];
-                                state_newest <= state_newest_memory_6[channel_index];
-                            end
-                            4'd7: begin
-                                state_oldest <= state_oldest_memory_7[channel_index];
-                                state_newest <= state_newest_memory_7[channel_index];
-                            end
-                            4'd8: begin
-                                state_oldest <= state_oldest_memory_8[channel_index];
-                                state_newest <= state_newest_memory_8[channel_index];
-                            end
-                            default: begin
-                                state_oldest <= state_oldest_memory_9[channel_index];
-                                state_newest <= state_newest_memory_9[channel_index];
-                            end
-                        endcase
-                    end
                     state <= ST_ROW_FEED;
                 end
 
@@ -434,49 +501,8 @@ module truega_lfm25_shortconv_token_slot (
                             done_o <= 1'b1;
                             error_o <= 1'b1;
                         end else begin
-                            // Committed only after all channel arithmetic succeeds.
-                            case (active_layer)
-                                4'd0: begin
-                                    state_oldest_memory_0[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_0[channel_index] <= channel_state_newest;
-                                end
-                                4'd1: begin
-                                    state_oldest_memory_1[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_1[channel_index] <= channel_state_newest;
-                                end
-                                4'd2: begin
-                                    state_oldest_memory_2[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_2[channel_index] <= channel_state_newest;
-                                end
-                                4'd3: begin
-                                    state_oldest_memory_3[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_3[channel_index] <= channel_state_newest;
-                                end
-                                4'd4: begin
-                                    state_oldest_memory_4[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_4[channel_index] <= channel_state_newest;
-                                end
-                                4'd5: begin
-                                    state_oldest_memory_5[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_5[channel_index] <= channel_state_newest;
-                                end
-                                4'd6: begin
-                                    state_oldest_memory_6[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_6[channel_index] <= channel_state_newest;
-                                end
-                                4'd7: begin
-                                    state_oldest_memory_7[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_7[channel_index] <= channel_state_newest;
-                                end
-                                4'd8: begin
-                                    state_oldest_memory_8[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_8[channel_index] <= channel_state_newest;
-                                end
-                                default: begin
-                                    state_oldest_memory_9[channel_index] <= channel_state_oldest;
-                                    state_newest_memory_9[channel_index] <= channel_state_newest;
-                                end
-                            endcase
+                            // The dedicated normal-mode RAM process commits
+                            // the state on this same successful retire edge.
                             channels_retired_o <= channels_retired_o + 11'd1;
                             quant_sample <= channel_y;
                             quant_sample_valid <= 1'b1;
