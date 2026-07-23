@@ -2,9 +2,10 @@
 //!
 //! Producers enqueue owned, JSON-compatible Spirit packages. Text and gesture
 //! are independent optional fields; producers never enqueue archive paths,
-//! numbered frames, posture changes, or return-to-idle clips. The single reader
+//! numbered frames, posture changes, or transition rules. The single reader
 //! calls [`next_animation`] only when it is ready to begin another complete
-//! four-frame clip. That boundary is the state-machine clock.
+//! four-frame clip. That boundary is also where a replacement timeline takes
+//! effect.
 
 extern crate alloc;
 
@@ -12,17 +13,14 @@ use alloc::string::String;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
-use super::lilly::{self, LillyPose, LillyResidentAnimation};
+use super::lilly::{self, LillyResidentAnimation};
 
 const PACKAGE_RING_CAPACITY: usize = 32;
 const PACKAGE_VERSION: u8 = 1;
 const MAX_JSON_BYTES: usize = 4 * 1024;
 const MAX_TEXT_BYTES: usize = 2 * 1024;
 const MAX_TAG_BYTES: usize = 96;
-const CROSSED_IDLE: &str = "idle.crossed.soft_blink";
-const UNCROSSED_IDLE: &str = "idle.uncrossed.soft_blink";
-const CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
-const UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
+const DEFAULT_IDLE: &str = "idle.uncrossed.soft_blink";
 
 /// Straight RGBA modulation supplied by the producer. The eventual sprite
 /// compositor applies alpha while preserving the resident premultiplied-RGBA8
@@ -107,20 +105,12 @@ pub(crate) enum LillyProtocolError {
     CatalogInvariant,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LillySequenceSource {
-    Requested,
-    AutomaticTransition,
-    AutomaticIdle,
-}
-
 /// One fully resolved clip for the presentation side. Its four resident GPU
 /// surfaces and timing come from the central helper; there is no per-animation
 /// playback code in the consumer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyScheduledAnimation {
     pub(crate) rgba: SpiritRgba8,
-    pub(crate) source: LillySequenceSource,
     /// The sequencer boundary. Even a catalog `Loop` yields after one cycle so
     /// newly queued behavior cannot be starved behind an infinite idle/talk.
     pub(crate) boundary_ms: u64,
@@ -160,35 +150,45 @@ impl SpiritPackageRing {
         self.len -= 1;
         Some((package, self.len))
     }
-}
 
-struct LillySequenceState {
-    current_pose: LillyPose,
-    pending_after_transition: Option<SpiritGesture>,
-    return_idle: Option<SpiritRgba8>,
-    last_rgba: SpiritRgba8,
-}
+    fn clear(&mut self) -> usize {
+        let removed = self.len;
+        while self.pop().is_some() {}
+        self.read = 0;
+        self.write = 0;
+        removed
+    }
 
-impl LillySequenceState {
-    const fn new() -> Self {
-        Self {
-            // The split static still is the deterministic cold/fallback pose.
-            current_pose: LillyPose::CrossedArms,
-            pending_after_transition: None,
-            return_idle: None,
-            last_rgba: SpiritRgba8::WHITE,
+    fn replace(&mut self, packages: &[SpiritPackage]) -> Result<usize, LillyProtocolError> {
+        if packages.len() > PACKAGE_RING_CAPACITY {
+            return Err(LillyProtocolError::RingFull);
         }
+        self.clear();
+        for package in packages {
+            self.push(package.clone())?;
+        }
+        Ok(self.len)
     }
 }
 
 static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::new());
-static SEQUENCE: Mutex<LillySequenceState> = Mutex::new(LillySequenceState::new());
+static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 
 /// Queue one owned API package. Validation happens before publication, so the
 /// reader never encounters an unsupported schema or a bad animation tag.
 #[allow(dead_code)]
 pub(crate) fn enqueue_package(package: SpiritPackage) -> Result<usize, LillyProtocolError> {
-    validate_package(&package)?;
+    if let Err(error) = validate_package(&package) {
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: package rejected version={} text_present={} gesture={:?} error={:?} action=drop\n",
+            package.version,
+            package.text.is_some(),
+            package.gesture.as_ref().map(|gesture| gesture.tag.as_str()),
+            error,
+        );
+        return Err(error);
+    }
     PACKAGE_RING.lock().push(package)
 }
 
@@ -251,35 +251,35 @@ pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(Some(String::from(text)), None))
 }
 
-pub(super) fn has_queued_packages() -> bool {
-    PACKAGE_RING.lock().len != 0
+/// Atomically discard queued work and install the next timeline. The active
+/// clip is already owned by the presentation worker, so it finishes normally;
+/// these packages become visible when that worker asks at the next boundary.
+#[allow(dead_code)]
+pub(crate) fn replace_timeline(packages: &[SpiritPackage]) -> Result<usize, LillyProtocolError> {
+    for package in packages {
+        validate_package(package)?;
+    }
+    PACKAGE_RING.lock().replace(packages)
+}
+
+/// Finish the active clip, then fall back to the default idle. This is an empty
+/// timeline replacement and never interrupts a frame set in progress.
+#[allow(dead_code)]
+pub(crate) fn stop_after_boundary() -> usize {
+    PACKAGE_RING.lock().clear()
 }
 
 /// Resolve the next whole clip at an animation boundary.
 ///
-/// A pose-changing transition and a posture-matched idle are automatically
-/// inserted around producer requests. With no producer work, the matching idle
-/// remains alive. This function is deliberately not a per-frame iterator: the
-/// renderer uses `animation.frames` and `frame_period_ms` for that cheap inner
-/// loop, then asks here again only when the clip is complete.
+/// Requests run directly in queue order. With no producer work, one neutral
+/// idle remains alive. This function is deliberately not a per-frame iterator:
+/// the renderer uses `animation.frames` and `frame_period_ms` for that cheap
+/// inner loop, then asks here again only when the clip is complete.
 #[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
-    let mut sequence = SEQUENCE.lock();
-
-    if let Some(gesture) = sequence.pending_after_transition.take() {
-        return schedule_requested(&mut sequence, gesture);
-    }
-    if let Some(rgba) = sequence.return_idle.take() {
-        return resolve(idle_for(sequence.current_pose), rgba, LillySequenceSource::AutomaticIdle);
-    }
-
     loop {
         let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
-            return resolve(
-                idle_for(sequence.current_pose),
-                sequence.last_rgba,
-                LillySequenceSource::AutomaticIdle,
-            );
+            return resolve(DEFAULT_IDLE, *LAST_RGBA.lock());
         };
         log_drained_package(&package, ring_remaining);
         let Some(gesture) = package.gesture else {
@@ -287,51 +287,15 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             // later gesture in the same reader turn can flow normally.
             continue;
         };
-        let requested = lilly::resident_animation(gesture.tag.as_str())
+        let animation = lilly::resident_animation(gesture.tag.as_str())
             .ok_or(LillyProtocolError::CatalogInvariant)?;
-        if requested.entry_pose != sequence.current_pose {
-            let transition_tag = transition_for(sequence.current_pose, requested.entry_pose)
-                .ok_or(LillyProtocolError::CatalogInvariant)?;
-            let transition = lilly::resident_animation(transition_tag)
-                .ok_or(LillyProtocolError::CatalogInvariant)?;
-            if transition.entry_pose != sequence.current_pose
-                || transition.exit_pose != requested.entry_pose
-            {
-                return Err(LillyProtocolError::CatalogInvariant);
-            }
-            let rgba = gesture.rgba;
-            sequence.pending_after_transition = Some(gesture);
-            sequence.current_pose = transition.exit_pose;
-            sequence.last_rgba = rgba;
-            return Ok(LillyScheduledAnimation {
-                rgba,
-                source: LillySequenceSource::AutomaticTransition,
-                boundary_ms: transition.cycle_duration_ms(),
-                animation: transition,
-            });
-        }
-        return schedule_requested(&mut sequence, gesture);
+        *LAST_RGBA.lock() = gesture.rgba;
+        return Ok(LillyScheduledAnimation {
+            rgba: gesture.rgba,
+            boundary_ms: animation.cycle_duration_ms(),
+            animation,
+        });
     }
-}
-
-fn schedule_requested(
-    sequence: &mut LillySequenceState,
-    gesture: SpiritGesture,
-) -> Result<LillyScheduledAnimation, LillyProtocolError> {
-    let animation = lilly::resident_animation(gesture.tag.as_str())
-        .ok_or(LillyProtocolError::CatalogInvariant)?;
-    if animation.entry_pose != sequence.current_pose {
-        return Err(LillyProtocolError::CatalogInvariant);
-    }
-    sequence.current_pose = animation.exit_pose;
-    sequence.return_idle = Some(gesture.rgba);
-    sequence.last_rgba = gesture.rgba;
-    Ok(LillyScheduledAnimation {
-        rgba: gesture.rgba,
-        source: LillySequenceSource::Requested,
-        boundary_ms: animation.cycle_duration_ms(),
-        animation,
-    })
 }
 
 fn log_drained_package(package: &SpiritPackage, ring_remaining: usize) {
@@ -353,7 +317,6 @@ fn log_drained_package(package: &SpiritPackage, ring_remaining: usize) {
 fn resolve(
     tag: &'static str,
     rgba: SpiritRgba8,
-    source: LillySequenceSource,
 ) -> Result<LillyScheduledAnimation, LillyProtocolError> {
     let animation = lilly::resident_animation(tag).ok_or_else(|| {
         if lilly::resident_frame_count() == 0 {
@@ -364,23 +327,7 @@ fn resolve(
     })?;
     Ok(LillyScheduledAnimation {
         rgba,
-        source,
         boundary_ms: animation.cycle_duration_ms(),
         animation,
     })
-}
-
-const fn idle_for(pose: LillyPose) -> &'static str {
-    match pose {
-        LillyPose::CrossedArms => CROSSED_IDLE,
-        LillyPose::UncrossedArms => UNCROSSED_IDLE,
-    }
-}
-
-const fn transition_for(from: LillyPose, to: LillyPose) -> Option<&'static str> {
-    match (from, to) {
-        (LillyPose::CrossedArms, LillyPose::UncrossedArms) => Some(UNCROSS_ARMS_TRANSITION),
-        (LillyPose::UncrossedArms, LillyPose::CrossedArms) => Some(CROSS_ARMS_TRANSITION),
-        _ => None,
-    }
 }

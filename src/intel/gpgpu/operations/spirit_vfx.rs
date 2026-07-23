@@ -175,7 +175,7 @@ fn spirit_vfx_write_control(
         );
         core::ptr::write_volatile(
             dwords.add(13),
-            spirit_vfx_bounded(control.sprite_scale, 0.35, 1.55, 0.9).to_bits(),
+            spirit_vfx_bounded(control.sprite_scale, 0.35, 1.55, 0.5).to_bits(),
         );
         core::ptr::write_volatile(
             dwords.add(14),
@@ -242,9 +242,15 @@ pub(crate) fn submit_spirit_vfx_frame(
     EXECUTION_RCS_DETACHED_TAG.store(tag, Ordering::Release);
     *SPIRIT_VFX_PENDING.lock() = Some(SpiritVfxPending { handle, submitted });
     if spirit_vfx_trace_frame(submitted.frame) {
+        let walkers = 1 + u32::from(submitted.background_mode != 0);
+        let dependency = if submitted.background_mode == 0 {
+            "none/clean-lilly"
+        } else {
+            "hdc-flush+invalidate"
+        };
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit-vfx accepted tag={} frame={} revision={} background={} shader={} src={}x{}@0x{:X} dst=0x{:X} walkers=2 dependency=hdc-flush+invalidate owner=spirit-worker wait=detached\n",
+            "intel/gpgpu: spirit-vfx accepted tag={} frame={} revision={} background={} shader={} src={}x{}@0x{:X} dst=0x{:X} walkers={} dependency={} owner=spirit-worker wait=detached\n",
             tag,
             submitted.frame,
             submitted.revision,
@@ -254,6 +260,8 @@ pub(crate) fn submit_spirit_vfx_frame(
             submitted.source.height,
             submitted.source.gpu,
             submitted.dst.gpu,
+            walkers,
+            dependency,
         );
     }
     Some(handle)
@@ -326,7 +334,11 @@ fn submit_spirit_vfx_batch(
     }
     let started_tick = direct_rcs_now_tick();
     let dev = super::claimed_device()?;
-    let background_upload = upload_spirit_vfx_background_rgba8_kernel()?;
+    let background_upload = if matches!(control.background_mode, 1 | 4) {
+        Some(upload_spirit_vfx_background_rgba8_kernel()?)
+    } else {
+        None
+    };
     let sprite_upload = upload_spirit_vfx_sprite_rgba8_kernel()?;
     let state = execution_rcs_state_once(dev)?;
     let runtime = spirit_vfx_runtime_once()?;
@@ -336,13 +348,14 @@ fn submit_spirit_vfx_batch(
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    let background_ok = match background_upload {
+        Some(upload) => {
+            direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
+        }
+        None => true,
+    };
     let kernels_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(
-            state,
-            background_upload.gpu,
-            background_upload.phys,
-            background_upload.mapped_bytes,
-        )
+        && background_ok
         && direct_rcs_map_ppgtt_kernel(
             state,
             sprite_upload.gpu,

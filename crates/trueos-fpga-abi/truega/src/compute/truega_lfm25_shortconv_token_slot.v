@@ -86,26 +86,46 @@ module truega_lfm25_shortconv_token_slot (
     // this as 10,240x64 makes Gowin select its 16K-deep BSRAM geometry and
     // wastes almost half of every primitive.  The explicit banks preserve the
     // exact ten-layer state while mapping each 1,024x64 bank densely.
-    reg signed [63:0] state_oldest_memory_0 [0:1023];
-    reg signed [63:0] state_oldest_memory_1 [0:1023];
-    reg signed [63:0] state_oldest_memory_2 [0:1023];
-    reg signed [63:0] state_oldest_memory_3 [0:1023];
-    reg signed [63:0] state_oldest_memory_4 [0:1023];
-    reg signed [63:0] state_oldest_memory_5 [0:1023];
-    reg signed [63:0] state_oldest_memory_6 [0:1023];
-    reg signed [63:0] state_oldest_memory_7 [0:1023];
-    reg signed [63:0] state_oldest_memory_8 [0:1023];
-    reg signed [63:0] state_oldest_memory_9 [0:1023];
-    reg signed [63:0] state_newest_memory_0 [0:1023];
-    reg signed [63:0] state_newest_memory_1 [0:1023];
-    reg signed [63:0] state_newest_memory_2 [0:1023];
-    reg signed [63:0] state_newest_memory_3 [0:1023];
-    reg signed [63:0] state_newest_memory_4 [0:1023];
-    reg signed [63:0] state_newest_memory_5 [0:1023];
-    reg signed [63:0] state_newest_memory_6 [0:1023];
-    reg signed [63:0] state_newest_memory_7 [0:1023];
-    reg signed [63:0] state_newest_memory_8 [0:1023];
-    reg signed [63:0] state_newest_memory_9 [0:1023];
+    reg signed [63:0] state_oldest_memory_0 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_1 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_2 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_3 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_4 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_5 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_6 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_7 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_8 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_oldest_memory_9 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_0 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_1 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_2 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_3 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_4 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_5 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_6 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_7 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_8 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] state_newest_memory_9 [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
     reg signed [63:0] state_oldest;
     reg signed [63:0] state_newest;
     reg [9:0] state_read_channel;

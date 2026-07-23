@@ -240,14 +240,31 @@ module truega_lfm25_fixed_decode_datapath (
     wire scalar_to_norm = scalar_busy
         && (scalar_mode == 1 || scalar_mode == 2);
     wire scalar_to_tail = scalar_busy && scalar_mode == 3;
+    wire scalar_to_short_coeff = scalar_busy && scalar_mode == 4;
     wire scalar_to_attn = scalar_busy && scalar_mode == 7;
     wire scalar_ready = scalar_to_norm ? norm_feed_ready
         : scalar_to_tail ? tail_norm_feed_ready
+        : scalar_to_short_coeff ? 1'b1
         : scalar_to_attn ? attn_norm_feed_ready : 1'b0;
     wire scalar_accept = scalar_busy && scalar_ready;
 
-    reg [15:0] shortconv_coeff [0:3071];
-    integer coeff_i;
+    // The coefficient package is host-visible as 96 64-byte stages, but the
+    // causal circuit consumes one {oldest,newest,current} triplet per channel.
+    // Scalarizing each accepted stage permits three dense single-write BSRAM
+    // banks instead of a 32-write-port array flattened into ~49K flip-flops.
+    reg [15:0] shortconv_coeff_oldest [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg [15:0] shortconv_coeff_newest [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg [15:0] shortconv_coeff_current [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg [15:0] shortconv_kernel_oldest;
+    reg [15:0] shortconv_kernel_newest;
+    reg [15:0] shortconv_kernel_current;
+    wire [11:0] scalar_coeff_linear = {scalar_stage, 5'd0}
+        + scalar_index;
+    wire [9:0] scalar_coeff_channel = scalar_coeff_linear / 3;
+    wire [1:0] scalar_coeff_field = scalar_coeff_linear % 3;
     reg [271:0] triplet_b;
     reg [271:0] triplet_c;
     reg [271:0] ffn_weight0;
@@ -271,7 +288,7 @@ module truega_lfm25_fixed_decode_datapath (
             0: feed_stage_ready_o = owner == OWNER_DIRECT
                 && direct_embedding_ready;
             1, 2, 3, 7: feed_stage_ready_o = !scalar_busy;
-            4: feed_stage_ready_o = owner == OWNER_SHORT;
+            4: feed_stage_ready_o = owner == OWNER_SHORT && !scalar_busy;
             5: feed_stage_ready_o = owner == OWNER_SHORT
                 && (feed_bank_i < 2 || short_triplet_ready);
             6: feed_stage_ready_o = owner == OWNER_SHORT
@@ -367,9 +384,9 @@ module truega_lfm25_fixed_decode_datapath (
         .triplet_channel_o(), .triplet_block_o(),
         .triplet_b_q8_block_i(triplet_b), .triplet_c_q8_block_i(triplet_c),
         .triplet_x_q8_block_i(feed_payload_i[271:0]),
-        .kernel_oldest_bf16_i(shortconv_coeff[feed_item_i * 3]),
-        .kernel_newest_bf16_i(shortconv_coeff[feed_item_i * 3 + 1]),
-        .kernel_current_bf16_i(shortconv_coeff[feed_item_i * 3 + 2]),
+        .kernel_oldest_bf16_i(shortconv_kernel_oldest),
+        .kernel_newest_bf16_i(shortconv_kernel_newest),
+        .kernel_current_bf16_i(shortconv_kernel_current),
         .projection_weight_valid_i(feed_stage_valid_i && feed_mode_i == 6),
         .projection_weight_ready_o(short_projection_ready),
         .projection_weight_row_o(), .projection_weight_block_o(),
@@ -696,7 +713,7 @@ module truega_lfm25_fixed_decode_datapath (
             0: feed_item_effect_done_o = direct_result_valid;
             1, 2: feed_item_effect_done_o = norm_join_result_valid;
             3: feed_item_effect_done_o = tail_norm_result_valid;
-            4: feed_item_effect_done_o = 1'b1;
+            4: feed_item_effect_done_o = scalar_busy == 0;
             5: feed_item_effect_done_o = short_channels > finished_item;
             6: feed_item_effect_done_o = finished_item == 1023
                 ? short_join_result_valid : short_rows > finished_item;
@@ -733,6 +750,9 @@ module truega_lfm25_fixed_decode_datapath (
             scalar_bank <= 0;
             scalar_stage <= 0;
             scalar_payload <= 0;
+            shortconv_kernel_oldest <= 0;
+            shortconv_kernel_newest <= 0;
+            shortconv_kernel_current <= 0;
             triplet_b <= 0;
             triplet_c <= 0;
             ffn_weight0 <= 0;
@@ -777,9 +797,20 @@ module truega_lfm25_fixed_decode_datapath (
                     && !(owner == OWNER_TAIL && active_operation == 8))
                 owner <= OWNER_NONE;
 
+            // Registered reads give the three coefficient banks their single
+            // synchronous read ports. current_item is stable for many payload
+            // read cycles before the first triplet stage can be accepted.
+            shortconv_kernel_oldest
+                <= shortconv_coeff_oldest[feed_item_i[9:0]];
+            shortconv_kernel_newest
+                <= shortconv_coeff_newest[feed_item_i[9:0]];
+            shortconv_kernel_current
+                <= shortconv_coeff_current[feed_item_i[9:0]];
+
             if (feed_stage_accept
                     && (feed_mode_i == 1 || feed_mode_i == 2
-                        || feed_mode_i == 3 || feed_mode_i == 7)) begin
+                        || feed_mode_i == 3 || feed_mode_i == 4
+                        || feed_mode_i == 7)) begin
                 scalar_busy <= 1;
                 scalar_index <= 0;
                 scalar_mode <= feed_mode_i;
@@ -787,16 +818,21 @@ module truega_lfm25_fixed_decode_datapath (
                 scalar_stage <= feed_stage_i;
                 scalar_payload <= feed_payload_i;
             end else if (scalar_accept) begin
+                if (scalar_to_short_coeff) begin
+                    case (scalar_coeff_field)
+                        2'd0: shortconv_coeff_oldest[scalar_coeff_channel]
+                            <= scalar_bf16;
+                        2'd1: shortconv_coeff_newest[scalar_coeff_channel]
+                            <= scalar_bf16;
+                        default: shortconv_coeff_current[scalar_coeff_channel]
+                            <= scalar_bf16;
+                    endcase
+                end
                 if (scalar_index == 31)
                     scalar_busy <= 0;
                 else
                     scalar_index <= scalar_index + 1'b1;
             end
-
-            if (feed_stage_accept && feed_mode_i == 4)
-                for (coeff_i = 0; coeff_i < 32; coeff_i = coeff_i + 1)
-                    shortconv_coeff[feed_stage_i * 32 + coeff_i]
-                        <= feed_payload_i[coeff_i * 16 +: 16];
             if (feed_stage_accept && feed_mode_i == 5 && feed_bank_i == 0)
                 triplet_b <= feed_payload_i[271:0];
             if (feed_stage_accept && feed_mode_i == 5 && feed_bank_i == 1)

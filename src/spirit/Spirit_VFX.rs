@@ -43,7 +43,7 @@ const fn slider(
 }
 
 pub(crate) const TRANSFORM_CONTROLS: [SpiritVfxSliderSpec; 4] = [
-    slider("Scale", 0.35, 1.55, 0.01, 0.9, "x"),
+    slider("Scale", 0.35, 1.55, 0.01, 0.5, "x"),
     slider("Position X", -0.35, 0.35, 0.005, 0.0, ""),
     slider("Position Y", -0.35, 0.35, 0.005, 0.0, ""),
     slider("Rotation", -360.0, 360.0, 0.5, 180.0, "deg"),
@@ -488,7 +488,9 @@ pub(crate) struct SpiritVfxTransform {
 impl Default for SpiritVfxTransform {
     fn default() -> Self {
         Self {
-            scale: 0.9,
+            // Lilly frames are 128x128 inside Spirit's 256x256 hardware
+            // cursor allocation, so 0.5 is a native-pixel 1:1 presentation.
+            scale: 0.5,
             position_x: 0.0,
             position_y: 0.0,
             // Lilly's resident PNG convention is opposite to the cursor
@@ -608,20 +610,15 @@ impl SpiritVfxControlPanel {
         Self::default()
     }
 
-    /// Live Spirit starts with one of the two compiled procedural layers.
+    /// Live Spirit starts as the unmodified Lilly presentation. Procedural
+    /// background and sprite effects remain available through the same panel.
     pub(crate) fn spirit_live_default() -> Self {
-        let mut panel = Self::default();
-        panel.alpha_background = SpiritVfxAlphaBackground::NEBULA_SMOKE;
-        panel.sprite_shader.effect = SpiritVfxEffect::AuraBloom;
-        panel.sprite_shader.parameters = [12.0, 1.15, 1.2, 0.18];
-        panel.sprite_shader.fx_color_a = SpiritVfxRgb8::rgb(0x8D, 0x6C, 0xFF);
-        panel.sprite_shader.fx_color_b = SpiritVfxRgb8::rgb(0x5E, 0xE7, 0xFF);
-        panel
+        Self::default()
     }
 
     fn sanitize(&mut self) {
         self.sprite = self.sprite.min(3);
-        self.transform.scale = bounded(self.transform.scale, 0.35, 1.55, 0.9);
+        self.transform.scale = bounded(self.transform.scale, 0.35, 1.55, 0.5);
         self.transform.position_x = bounded(self.transform.position_x, -0.35, 0.35, 0.0);
         self.transform.position_y = bounded(self.transform.position_y, -0.35, 0.35, 0.0);
         self.transform.rotation_degrees =

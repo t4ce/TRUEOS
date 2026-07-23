@@ -50,3 +50,13 @@ compute_sources=("$RTL_DIR"/*.v)
   "$RTL_DIR/truega_lfm25_fixed_decode_controller_production_tb.sv"
 "$VVP" "${vvp_args[@]}" \
   "$STAGE_DIR/fixed_decode_controller_production.vvp"
+
+# The shortconv kernel package keeps its unchanged 96x64-byte BAR shape, but
+# is internally scalarized into three dense 1Kx16 coefficient banks.
+"$IVERILOG" "${iverilog_base_args[@]}" -g2012 \
+  -s truega_lfm25_fixed_decode_datapath_coeff_tb \
+  -o "$STAGE_DIR/fixed_decode_datapath_coeff.vvp" \
+  "${compute_sources[@]}" \
+  "$RTL_DIR/truega_lfm25_fixed_decode_datapath_coeff_tb.sv"
+"$VVP" "${vvp_args[@]}" \
+  "$STAGE_DIR/fixed_decode_datapath_coeff.vvp"

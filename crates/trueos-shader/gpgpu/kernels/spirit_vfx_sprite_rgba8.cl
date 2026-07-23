@@ -11,6 +11,7 @@
 #define VFX_CTRL_MAGIC              0u
 #define VFX_CTRL_VERSION            1u
 #define VFX_CTRL_TIME_F32           4u
+#define VFX_CTRL_BACKGROUND_ID      3u
 #define VFX_CTRL_SCALE_F32         13u
 #define VFX_CTRL_ROTATION_F32      14u
 #define VFX_CTRL_ALPHA_CUTOFF_F32  15u
@@ -192,7 +193,7 @@ __kernel void spirit_vfx_sprite_rgba8(
         cosine * point.x - sine * point.y,
         sine * point.x + cosine * point.y);
     float scale = clamp(
-        vfx_finite_or(as_float(control[VFX_CTRL_SCALE_F32]), 0.9f),
+        vfx_finite_or(as_float(control[VFX_CTRL_SCALE_F32]), 0.5f),
         0.35f,
         1.55f);
     float2 local_uv = point / max(0.001f, scale) + 0.5f;
@@ -236,7 +237,12 @@ __kernel void spirit_vfx_sprite_rgba8(
 
     uint dst_pitch_pixels = control[VFX_CTRL_DST_PITCH] >> 2;
     uint dst_index = y * dst_pitch_pixels + x;
-    float4 background = vfx_unpack_bgra8_premultiplied(dst_bgra[dst_index]);
+    // Background mode zero is the default Lilly-only path. It deliberately
+    // ignores the old backbuffer contents, allowing the host to omit the
+    // procedural-background walker without retaining stale pixels.
+    float4 background = control[VFX_CTRL_BACKGROUND_ID] == 0u
+        ? (float4)(0.0f)
+        : vfx_unpack_bgra8_premultiplied(dst_bgra[dst_index]);
     float4 composed = vfx_over(background, sprite);
 
     // This is deliberately the final operation over the complete cursor

@@ -843,7 +843,7 @@ pub(crate) async fn spirit_worker_task(worker_index: u8) {
     WORKER_FENCE_BINDINGS[worker_index as usize].store(id.0, Ordering::Release);
     let lilly_ready = worker_index != 0 || lilly::prepare_resident_once();
     crate::log!(
-        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-spirit-vfx-background+sprite->spirit-cursor-backbuffer->cur-base producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
+        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-spirit-vfx-optional-background+sprite->spirit-cursor-backbuffer->cur-base default=clean-lilly/one-walker producer_release=guc-post-sync display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
         worker_index,
         id.index(),
         pipe_name(id),
@@ -908,19 +908,13 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut package_next_boundary = Instant::now();
     let mut package_started = Instant::now();
     let mut package_active: Option<lilly_protocol::LillyScheduledAnimation> = None;
-    let mut package_reader_idle = true;
     let mut package_reader_failures = 0u32;
     loop {
         let package_now = Instant::now();
-        if id == SpiritFenceId::FENCE_0
-            && (package_now >= package_next_boundary
-                || (package_reader_idle && lilly_protocol::has_queued_packages()))
-        {
+        if id == SpiritFenceId::FENCE_0 && package_now >= package_next_boundary {
             match lilly_protocol::next_animation() {
                 Ok(scheduled) => {
                     package_reader_failures = 0;
-                    package_reader_idle =
-                        scheduled.source == lilly_protocol::LillySequenceSource::AutomaticIdle;
                     package_next_boundary = package_now
                         + Duration::from_millis(scheduled.boundary_ms.max(SPIRIT_IDLE_POLL_MS));
                     package_started = package_now;
@@ -936,7 +930,6 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                             error,
                         );
                     }
-                    package_reader_idle = true;
                     package_next_boundary = package_now + Duration::from_millis(SPIRIT_RETRY_MS);
                 }
             }
@@ -1146,7 +1139,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
-                                "trueos-spirit: vfx stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous artifacts=background+sprite\n",
+                                "trueos-spirit: vfx stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=gpu-only cpu-gate=0 producer-release=guc-post-sync display-release=surflive mode=continuous artifacts=optional-background+sprite default=clean-lilly\n",
                                 stream_queued_frames,
                                 producing.submission.frame(),
                                 producing.submission.tag(),

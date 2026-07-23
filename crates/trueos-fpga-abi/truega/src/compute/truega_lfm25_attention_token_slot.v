@@ -93,12 +93,26 @@ module truega_lfm25_attention_token_slot #(
     reg [16:0] valid_positions [0:5];
     integer reset_index;
 
-    reg signed [63:0] q_raw [0:1023];
-    reg signed [63:0] k_raw [0:511];
-    reg signed [63:0] v_raw [0:511];
-    reg signed [63:0] q_rotated [0:1023];
-    reg signed [63:0] k_rotated [0:511];
-    reg signed [63:0] attention [0:1023];
+    reg signed [63:0] q_raw [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] k_raw [0:511]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] v_raw [0:511]
+        /* synthesis syn_ramstyle="block_ram" */;
+    // RoPE emits the low and high half of a head in the same cycle.  Separate
+    // physical banks retain the exact logical vectors while giving each RAM a
+    // single write address; a flat array would require two writes and Gowin
+    // would implement roughly 98K bits as flip-flops.
+    reg signed [63:0] q_rotated_lo [0:511]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] q_rotated_hi [0:511]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] k_rotated_lo [0:255]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] k_rotated_hi [0:255]
+        /* synthesis syn_ramstyle="block_ram" */;
+    reg signed [63:0] attention [0:1023]
+        /* synthesis syn_ramstyle="block_ram" */;
     reg signed [63:0] q_weight [0:63];
     reg signed [63:0] k_weight [0:63];
     reg signed [63:0] rope_cos [0:31];
@@ -145,6 +159,16 @@ module truega_lfm25_attention_token_slot #(
         ? cache_write_index - 11'd512 : cache_write_index[9:0];
     wire [2:0] cache_write_head = cache_write_vector_index[8:6];
     wire [5:0] cache_write_element = cache_write_vector_index[5:0];
+    wire [7:0] k_rotated_read_address = {
+        cache_write_vector_index[8:6], cache_write_vector_index[4:0]};
+    wire signed [63:0] k_rotated_read = cache_write_vector_index[5]
+        ? k_rotated_hi[k_rotated_read_address]
+        : k_rotated_lo[k_rotated_read_address];
+    wire [8:0] q_rotated_read_address = {
+        attention_head, current_element[4:0]};
+    wire signed [63:0] q_rotated_read = current_element[5]
+        ? q_rotated_hi[q_rotated_read_address]
+        : q_rotated_lo[q_rotated_read_address];
 
     reg [16:0] cache_address_position;
     reg [2:0] cache_address_head;
@@ -448,11 +472,15 @@ module truega_lfm25_attention_token_slot #(
                                 error_o <= 1'b1; state <= ST_IDLE;
                             end else begin
                                 if (current_key) begin
-                                    k_rotated[current_head * 64 + current_pair] <= pair_y_lo;
-                                    k_rotated[current_head * 64 + current_pair + 32] <= pair_y_hi;
+                                    k_rotated_lo[{current_head[2:0], current_pair}]
+                                        <= pair_y_lo;
+                                    k_rotated_hi[{current_head[2:0], current_pair}]
+                                        <= pair_y_hi;
                                 end else begin
-                                    q_rotated[current_head * 64 + current_pair] <= pair_y_lo;
-                                    q_rotated[current_head * 64 + current_pair + 32] <= pair_y_hi;
+                                    q_rotated_lo[{current_head[3:0], current_pair}]
+                                        <= pair_y_lo;
+                                    q_rotated_hi[{current_head[3:0], current_pair}]
+                                        <= pair_y_hi;
                                 end
                                 if (current_pair == 5'd31) begin
                                     if ((!current_key && current_head == 5'd15)
@@ -479,7 +507,7 @@ module truega_lfm25_attention_token_slot #(
                     ST_CACHE_LOAD: begin
                         cache_write_q30 <= cache_write_value_kind
                             ? v_raw[cache_write_vector_index]
-                            : k_rotated[cache_write_vector_index];
+                            : k_rotated_read;
                         state <= ST_CACHE_WRITE;
                     end
                     ST_CACHE_WRITE: begin
@@ -505,8 +533,7 @@ module truega_lfm25_attention_token_slot #(
                     end
                     ST_K_READ_REQ: begin
                         if (selected_cache_ready) begin
-                            dot_query_q30 <= q_rotated[
-                                attention_head * 64 + current_element];
+                            dot_query_q30 <= q_rotated_read;
                             state <= ST_K_READ_WAIT;
                         end
                     end

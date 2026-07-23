@@ -28,7 +28,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
-- `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl`: TrueOS-Spirit's continuous 60 Hz cursor-plane producer; one GuC batch runs the procedural alpha background and then source-over composites the current resident Lilly RGBA frame into the exact premultiplied-BGRA cursor backbuffer
+- `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl`: TrueOS-Spirit's continuous 60 Hz cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
 - `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
 
@@ -126,7 +126,7 @@ ADL-S binary hashes are:
 
 ```text
 spirit_vfx_background_rgba8.bin  cfe755a9f79f629a277cef05c95bd7a22561cb9b07414ac299ba7490779ac93e
-spirit_vfx_sprite_rgba8.bin      18ba9e74adb8adb798ff7d4b73b835c7f657093ca4ceebf759207896630d3bd1
+spirit_vfx_sprite_rgba8.bin      7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33
 ```
 
 The exact control-page, UI JSON, artifact, and display-release contracts are

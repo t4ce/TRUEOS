@@ -8,7 +8,7 @@ use spin::Mutex;
 
 const LILLY_ARCHIVE_7Z: &[u8] = include_bytes!("../../tools/Lilly.7z");
 const LILLY_CATALOG: &str = include_str!("../../tools/Lilly.catalog");
-const LILLY_EXPECTED_ASSETS: usize = 72;
+const LILLY_EXPECTED_ASSETS: usize = 68;
 const LILLY_PARTS_PER_ASSET: usize = 4;
 const LILLY_EXPECTED_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_PARTS_PER_ASSET;
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1A\n";
@@ -38,27 +38,8 @@ pub(crate) enum LillyPlayback {
 
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LillyPose {
-    CrossedArms,
-    UncrossedArms,
-}
-
-/// The four archive members are usually animation frames. The one exception,
-/// `static.crossed_arms`, is a 2x2 grid of 64x64 tiles for one 128x128 still.
-#[allow(dead_code)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum LillyAssetKind {
-    Animation {
-        playback: LillyPlayback,
-        frame_period_ms: u16,
-    },
-    TileGrid2x2,
-}
-
-#[allow(dead_code)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentPart {
-    /// Meaning within the asset, such as `mouth_wide` or `top_left`.
+    /// Meaning within the animation, such as `mouth_wide` or `raise_fists`.
     pub(crate) semantic: &'static str,
     pub(crate) surface: LillyResidentFrame,
 }
@@ -68,9 +49,8 @@ pub(crate) struct LillyResidentPart {
 pub(crate) struct LillyResidentAsset {
     /// Stable semantic identity, such as `talk.calm.crossed`.
     pub(crate) key: &'static str,
-    pub(crate) kind: LillyAssetKind,
-    pub(crate) entry_pose: LillyPose,
-    pub(crate) exit_pose: LillyPose,
+    pub(crate) playback: LillyPlayback,
+    pub(crate) frame_period_ms: u16,
     pub(crate) parts: [LillyResidentPart; LILLY_PARTS_PER_ASSET],
 }
 
@@ -84,16 +64,14 @@ impl LillyResidentAsset {
 }
 
 /// Uniform view of one ordinary four-frame animation. Callers do not need
-/// clip-specific code: the catalog supplies cadence, playback, pose, and the
-/// semantic names of all four frames.
+/// clip-specific code: the catalog supplies cadence, playback, and the semantic
+/// names of all four frames.
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentAnimation {
     pub(crate) key: &'static str,
     pub(crate) playback: LillyPlayback,
     pub(crate) frame_period_ms: u16,
-    pub(crate) entry_pose: LillyPose,
-    pub(crate) exit_pose: LillyPose,
     pub(crate) frames: [LillyResidentPart; LILLY_PARTS_PER_ASSET],
 }
 
@@ -137,9 +115,8 @@ struct LillyResidentAssets {
 struct LillyCatalogEntry {
     key: &'static str,
     directory: &'static str,
-    kind: LillyAssetKind,
-    entry_pose: LillyPose,
-    exit_pose: LillyPose,
+    playback: LillyPlayback,
+    frame_period_ms: u16,
     parts: [&'static str; LILLY_PARTS_PER_ASSET],
 }
 
@@ -187,19 +164,9 @@ pub(super) fn prepare_resident_once() -> bool {
     };
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: first-job complete job=lilly-resident-assets frames={} semantic_assets={} animated_clips={} tiled_stills={} rgba_bytes=0x{:X} mapped_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} ppgtt=render pat=0 cache=wb cpu_uploads=1 persistent=1\n",
+        "trueos-spirit: first-job complete job=lilly-resident-assets frames={} animations={} rgba_bytes=0x{:X} mapped_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} ppgtt=render pat=0 cache=wb cpu_uploads=1 persistent=1\n",
         assets.frames.len(),
         assets.semantic_assets.len(),
-        assets
-            .semantic_assets
-            .iter()
-            .filter(|asset| matches!(asset.kind, LillyAssetKind::Animation { .. }))
-            .count(),
-        assets
-            .semantic_assets
-            .iter()
-            .filter(|asset| matches!(asset.kind, LillyAssetKind::TileGrid2x2))
-            .count(),
         assets.rgba_bytes,
         assets.allocation.storage_bytes(),
         assets.allocation.storage_phys(),
@@ -241,25 +208,14 @@ pub(crate) fn resident_part(key: &str, semantic: &str) -> Option<LillyResidentFr
     resident_asset(key)?.part(semantic)
 }
 
-/// Resolve any normal animation through one central path. Tiled stills are
-/// intentionally rejected because treating quadrants as temporal frames would
-/// produce corrupt presentation.
+/// Resolve an animation through one central path.
 #[allow(dead_code)]
 pub(crate) fn resident_animation(key: &str) -> Option<LillyResidentAnimation> {
     let asset = resident_asset(key)?;
-    let LillyAssetKind::Animation {
-        playback,
-        frame_period_ms,
-    } = asset.kind
-    else {
-        return None;
-    };
     Some(LillyResidentAnimation {
         key: asset.key,
-        playback,
-        frame_period_ms,
-        entry_pose: asset.entry_pose,
-        exit_pose: asset.exit_pose,
+        playback: asset.playback,
+        frame_period_ms: asset.frame_period_ms,
         frames: asset.parts,
     })
 }
@@ -407,9 +363,6 @@ fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
             .ok_or(LillyLoadError::Catalog("missing-period"))?
             .parse::<u16>()
             .map_err(|_| LillyLoadError::Catalog("bad-period"))?;
-        let pose_name = fields
-            .next()
-            .ok_or(LillyLoadError::Catalog("missing-pose"))?;
         let part_names = fields
             .next()
             .ok_or(LillyLoadError::Catalog("missing-parts"))?;
@@ -431,23 +384,12 @@ fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
             return Err(LillyLoadError::Catalog("duplicate-identity"));
         }
 
-        let kind = match kind_name {
-            "loop" if period != 0 => LillyAssetKind::Animation {
-                playback: LillyPlayback::Loop,
-                frame_period_ms: period,
-            },
-            "once" if period != 0 => LillyAssetKind::Animation {
-                playback: LillyPlayback::Once,
-                frame_period_ms: period,
-            },
-            "once_hold" if period != 0 => LillyAssetKind::Animation {
-                playback: LillyPlayback::OnceHold,
-                frame_period_ms: period,
-            },
-            "tile_2x2" if period == 0 => LillyAssetKind::TileGrid2x2,
+        let playback = match kind_name {
+            "loop" if period != 0 => LillyPlayback::Loop,
+            "once" if period != 0 => LillyPlayback::Once,
+            "once_hold" if period != 0 => LillyPlayback::OnceHold,
             _ => return Err(LillyLoadError::Catalog("bad-kind-or-period")),
         };
-        let (entry_pose, exit_pose) = parse_pose(pose_name)?;
 
         let mut names = part_names.split(',');
         let parts = [
@@ -476,9 +418,8 @@ fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
         catalog.push(LillyCatalogEntry {
             key,
             directory,
-            kind,
-            entry_pose,
-            exit_pose,
+            playback,
+            frame_period_ms: period,
             parts,
         });
     }
@@ -486,16 +427,6 @@ fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
         return Err(LillyLoadError::Catalog("asset-count"));
     }
     Ok(catalog)
-}
-
-fn parse_pose(value: &str) -> Result<(LillyPose, LillyPose), LillyLoadError> {
-    match value {
-        "crossed" => Ok((LillyPose::CrossedArms, LillyPose::CrossedArms)),
-        "uncrossed" => Ok((LillyPose::UncrossedArms, LillyPose::UncrossedArms)),
-        "crossed>uncrossed" => Ok((LillyPose::CrossedArms, LillyPose::UncrossedArms)),
-        "uncrossed>crossed" => Ok((LillyPose::UncrossedArms, LillyPose::CrossedArms)),
-        _ => Err(LillyLoadError::Catalog("bad-pose")),
-    }
 }
 
 fn is_semantic_key(value: &str) -> bool {
@@ -533,12 +464,8 @@ fn validate_catalog(
                     .is_some_and(|(directory, _)| directory == catalog_entry.directory)
             })
             .ok_or(LillyLoadError::Catalog("catalog-asset-missing"))?;
-        let expected_dimensions = match catalog_entry.kind {
-            LillyAssetKind::Animation { .. } => (128, 128),
-            LillyAssetKind::TileGrid2x2 => (64, 64),
-        };
         for part in archive_asset {
-            if png_ihdr_dimensions(part.bytes.as_slice())? != expected_dimensions {
+            if png_ihdr_dimensions(part.bytes.as_slice())? != (128, 128) {
                 return Err(LillyLoadError::Catalog("layout-dimensions"));
             }
         }
@@ -561,9 +488,8 @@ fn build_semantic_assets(
             .ok_or(LillyLoadError::Catalog("resident-asset-missing"))?;
         assets.push(LillyResidentAsset {
             key: catalog_entry.key,
-            kind: catalog_entry.kind,
-            entry_pose: catalog_entry.entry_pose,
-            exit_pose: catalog_entry.exit_pose,
+            playback: catalog_entry.playback,
+            frame_period_ms: catalog_entry.frame_period_ms,
             parts: [
                 LillyResidentPart {
                     semantic: catalog_entry.parts[0],
@@ -650,7 +576,7 @@ fn png_ihdr_dimensions(bytes: &[u8]) -> Result<(u32, u32), LillyLoadError> {
 
 fn validate_dimensions(width: u32, height: u32) -> Result<(), LillyLoadError> {
     match (width, height) {
-        (64, 64) | (128, 128) => Ok(()),
+        (128, 128) => Ok(()),
         _ => Err(LillyLoadError::ArchiveShape),
     }
 }
