@@ -1028,7 +1028,7 @@ const IDLE_AURA_STRENGTH: f32 = 2.5;
 // Spirit's 256x256 cursor allocation. The control-page scale dword remains for
 // the stable kernel ABI, but the live Spirit path does not let individual
 // effects or the move transition grow beyond this footprint.
-const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 0.9;
+const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = 1.2;
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL

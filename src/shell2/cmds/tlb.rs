@@ -2628,8 +2628,20 @@ fn append_pmu_dump(out: &mut String) {
     writeln!(out, "gpgpu_submit_seq={}", gpu.submit_seq).unwrap();
     writeln!(
         out,
-        "gpgpu_rcs head=0x{:08X} tail=0x{:08X} acthd=0x{:08X}",
-        gpu.ring_head, gpu.ring_tail, gpu.acthd
+        "gpgpu_rcs head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X} acthd=0x{:08X}",
+        gpu.ring_head, gpu.ring_tail, gpu.ring_start, gpu.ring_ctl, gpu.acthd
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "gpgpu_rcs mode=0x{:08X} mi_mode=0x{:08X} context_control=0x{:08X} execlist_control=0x{:08X}",
+        gpu.mode, gpu.mi_mode, gpu.context_control, gpu.execlist_control
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "gpgpu_rcs execlist_status=0x{:08X}:0x{:08X} instdone=0x{:08X} instps=0x{:08X}",
+        gpu.execlist_status_hi, gpu.execlist_status_lo, gpu.instdone, gpu.instps
     )
     .unwrap();
     writeln!(
@@ -2638,6 +2650,146 @@ fn append_pmu_dump(out: &mut String) {
         gpu.ipeir, gpu.ipehr, gpu.eir
     )
     .unwrap();
+    writeln!(out).unwrap();
+}
+
+fn append_intel_gpu_dump(out: &mut String) {
+    writeln!(out, "=== Intel Display Engine ===").unwrap();
+    out.push_str(&crate::intel::display_diagnostic_snapshot_text());
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== Intel Copy Engine BCS0 ===").unwrap();
+    writeln!(
+        out,
+        "capture_policy=read-only register snapshot (no copy probe or engine reset)"
+    )
+    .unwrap();
+    let copy = crate::intel::copy_engine_activity_snapshot();
+    writeln!(
+        out,
+        "available={} guc_lane_busy={} submit_counter={}",
+        yes_no(copy.available),
+        yes_no(copy.guc_lane_busy),
+        copy.submit_counter
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X} acthd=0x{:08X}",
+        copy.head, copy.tail, copy.start, copy.ctl, copy.acthd
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "mode=0x{:08X} mi_mode=0x{:08X} context_control=0x{:08X} execlist_control=0x{:08X}",
+        copy.mode, copy.mi_mode, copy.context_control, copy.execlist_control
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "execlist_status=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
+        copy.execlist_status_hi,
+        copy.execlist_status_lo,
+        copy.ipeir,
+        copy.ipehr,
+        copy.eir
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== Intel Media Engine VCS0 ===").unwrap();
+    writeln!(
+        out,
+        "capture_policy=read-only forcewake/register snapshot (no media submission or engine reset)"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "kickoff_ran={} decode_ran={}",
+        yes_no(crate::intel::xelp_media2_ngin::kickoff_ran()),
+        yes_no(crate::intel::xelp_media2_ngin::decode_ran())
+    )
+    .unwrap();
+    match crate::intel::xelp_media2_ngin::diagnostic_snapshot() {
+        Some(snapshot) => writeln!(out, "{:#?}", snapshot).unwrap(),
+        None => writeln!(out, "Intel media engine unavailable").unwrap(),
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== Intel GuC Physical Scheduler ===").unwrap();
+    writeln!(
+        out,
+        "guc_ready={} submission_ready={}",
+        yes_no(crate::intel::guc_ready()),
+        yes_no(crate::intel::guc_submission_ready())
+    )
+    .unwrap();
+    let status = crate::intel::guc_submission::scheduler_status();
+    writeln!(
+        out,
+        "capacity={} registered={} enabled={} submissions={} registrations={} deregistrations={} failures={}",
+        status.capacity,
+        status.registered,
+        status.enabled,
+        status.submissions,
+        status.registrations,
+        status.deregistrations,
+        status.failures
+    )
+    .unwrap();
+    let contexts = crate::intel::guc_submission::context_status();
+    if contexts.is_empty() {
+        writeln!(out, "contexts=none").unwrap();
+    } else {
+        for context in contexts {
+            writeln!(
+                out,
+                "context id={} token=0x{:016X} engine={:?} enabled={} hwlrca=0x{:08X}:0x{:08X} submissions={}",
+                context.context_id,
+                context.token.raw(),
+                context.engine,
+                yes_no(context.enabled),
+                context.hwlrca_hi,
+                context.hwlrca_lo,
+                context.submissions
+            )
+            .unwrap();
+        }
+    }
+    if let Some(device) = crate::gpu::physical::physical_device() {
+        let info = device.adapter_info();
+        let physical_status = device.scheduler_status();
+        writeln!(
+            out,
+            "physical_adapter name={} vid={:04X} did={:04X} rev={:02X} render_compute={} copy={} guc_submission={} ready={}",
+            info.name,
+            info.vendor_id,
+            info.device_id,
+            info.revision_id,
+            yes_no(info.render_compute),
+            yes_no(info.copy),
+            yes_no(info.guc_submission),
+            yes_no(device.ready())
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "physical_scheduler capacity={} registered={} enabled={} submissions={} registrations={} deregistrations={} failures={}",
+            physical_status.context_capacity,
+            physical_status.registered_contexts,
+            physical_status.enabled_contexts,
+            physical_status.submissions,
+            physical_status.registrations,
+            physical_status.deregistrations,
+            physical_status.failures
+        )
+        .unwrap();
+    } else {
+        writeln!(out, "physical_adapter=unavailable").unwrap();
+    }
     writeln!(out).unwrap();
 }
 
@@ -2979,6 +3131,7 @@ pub(crate) async fn build_dump_text() -> String {
 
     append_microcode_dump(&mut out);
     append_pmu_dump(&mut out);
+    append_intel_gpu_dump(&mut out);
     append_power_dump(&mut out);
 
     writeln!(out, "=== ACPI Tables ===").unwrap();

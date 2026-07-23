@@ -340,6 +340,14 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
     self::display::physical_extent_pixels(width_mm, height_mm)
 }
 
+pub(crate) fn display_diagnostic_snapshot_text() -> alloc::string::String {
+    self::display::diagnostic_snapshot_text()
+}
+
+pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySnapshot {
+    self::blt::activity_snapshot()
+}
+
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, PrimaryPlaneSource,
     RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,

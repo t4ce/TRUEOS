@@ -45,10 +45,10 @@ Only normalized grid Param 1 moves, following a two-second
 `[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
 authored palette.
 
-All procedural backgrounds use a fixed live presentation scale of `0.9`. This
-keeps the complete set, including the transient move portal, slightly inside
-Spirit's 256x256 hardware-cursor allocation. The move transition continues to
-ramp speed and intensity, but no longer grows its spatial footprint.
+All procedural backgrounds use a fixed live presentation scale of `1.2`. This
+applies uniformly to the complete set, including the transient move portal.
+The move transition continues to ramp speed and intensity, but no longer grows
+its spatial footprint.
 
 ## Preview-compatible control interface
 
