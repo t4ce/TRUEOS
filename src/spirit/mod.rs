@@ -19,6 +19,7 @@ use spin::Mutex;
 
 mod intel_cursor;
 mod lilly;
+mod lilly_cursor;
 pub(crate) mod lilly_protocol;
 #[allow(dead_code)]
 #[path = "Spirit_VFX.rs"]
@@ -771,9 +772,19 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
         .try_take()
         .unwrap_or_else(|| *MOVE_STATES[id.index()].lock());
     let mut deferred = 0u32;
+    let mut lilly_cursor_failures = 0u32;
+    if let Err(error) = lilly_cursor::register_once() {
+        lilly_cursor_failures = 1;
+        crate::log_warn!(
+            target: "gfx";
+            "trueos-spirit: Lilly vcursor registration deferred tag=Spirit/Lilly failures={} error={:?}\n",
+            lilly_cursor_failures,
+            error,
+        );
+    }
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: cursor task online worker={} fence={} pipe={} carrier_slot={} expected_carrier_slot={} execution=exclusive-latest-state register_owner=cur-pos render_loop=decoupled ui4_cursor_path=decoupled\n",
+        "trueos-spirit: cursor task online worker={} fence={} pipe={} carrier_slot={} expected_carrier_slot={} execution=exclusive-latest-state register_owner=cur-pos render_loop=decoupled ui4_cursor_path=Spirit/Lilly-vcursor-tagged\n",
         worker_index,
         id.index(),
         pipe_name(id),
@@ -806,6 +817,34 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
                 Ok((x, y)) => {
                     deferred = 0;
                     MOVE_APPLIED[id.index()].store(request.sequence, Ordering::Release);
+                    if request.sequence != 0
+                        && let Some((screen_width, screen_height)) =
+                            crate::intel::complete_scanout_pipeline_dimensions(id.index())
+                    {
+                        match lilly_cursor::queue_initial_outline_once(
+                            x,
+                            y,
+                            intel_cursor::SPIRIT_CURSOR_DIM,
+                            screen_width,
+                            screen_height,
+                        ) {
+                            Ok(_) => lilly_cursor_failures = 0,
+                            Err(error) => {
+                                lilly_cursor_failures = lilly_cursor_failures.saturating_add(1);
+                                if lilly_cursor_failures == 1
+                                    || lilly_cursor_failures.is_power_of_two()
+                                {
+                                    crate::log_warn!(
+                                        target: "gfx";
+                                        "trueos-spirit: Lilly vcursor outline deferred tag=Spirit/Lilly move_sequence={} failures={} error={:?}\n",
+                                        request.sequence,
+                                        lilly_cursor_failures,
+                                        error,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if request.sequence <= 30 || request.sequence.is_multiple_of(600) {
                         crate::log_trace!(
                             target: "gfx";

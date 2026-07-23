@@ -456,6 +456,12 @@ fn signal_visual_change() {
 pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {
     use crate::graphics::primitives::Rgba8;
 
+    if source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR
+        && let Some(color) = crate::r::mouse_motion_service::cursor_visual_color(source.slot_id)
+    {
+        return color;
+    }
+
     const COLORS: [Rgba8; 16] = [
         Rgba8::new(255, 64, 64, 255),
         Rgba8::new(32, 168, 255, 255),

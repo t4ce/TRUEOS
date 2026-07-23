@@ -47,8 +47,13 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
-    let mut ok =
-        direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
+    let mut ok = direct_rcs_push_pipe_control_timestamp_at(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_BATCH_ENTER_TIMESTAMP_SLOT,
+    );
+    ok &= direct_rcs_push_gpgpu_dispatch_prologue(batch, &mut cursor, upload, state.gpu_va.batch);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, COPY_RECT_IDD_BYTES as u32);
@@ -83,10 +88,11 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
         state.gpu_va.result,
         UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT,
     );
-    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
+    ok &= direct_rcs_push_gpgpu_dispatch_timestamped_epilogue(
         batch,
         &mut cursor,
         state.gpu_va.result,
+        UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         SPRITE_QUAD_WORKLIST_POST_MARKER,
     );

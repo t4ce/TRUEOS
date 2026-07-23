@@ -704,6 +704,35 @@ fn direct_rcs_push_gpgpu_dispatch_epilogue(
         && direct_rcs_push(batch, cursor, MI_NOOP)
 }
 
+fn direct_rcs_push_gpgpu_dispatch_timestamped_epilogue(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    result_gpu: u64,
+    release_timestamp_slot: usize,
+    post_marker_slot: usize,
+    post_marker: u32,
+) -> bool {
+    // Preserve the production release fence exactly, then timestamp the point
+    // at which its HDC/L3 drain has retired before issuing the completion
+    // marker observed by the host.
+    direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_FLUSH_BITS)
+        && direct_rcs_push_pipe_control_timestamp_at(
+            batch,
+            cursor,
+            result_gpu,
+            release_timestamp_slot,
+        )
+        && direct_rcs_push_pipe_control_post_sync_marker_at(
+            batch,
+            cursor,
+            result_gpu,
+            post_marker_slot,
+            post_marker,
+        )
+        && direct_rcs_push(batch, cursor, MI_BATCH_BUFFER_END)
+        && direct_rcs_push(batch, cursor, MI_NOOP)
+}
+
 fn direct_rcs_encode_rgba8_scanout_release_batch(state: DirectRcsState) -> bool {
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);

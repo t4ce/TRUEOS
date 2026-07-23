@@ -552,7 +552,7 @@ pub unsafe extern "C" fn trueos_cabi_mouse_motion_cursor_request(
         Ok(label) => label,
         Err(error) => return error,
     };
-    match request_cursor(mouse_motion_principal(), label) {
+    match request_cursor(mouse_motion_principal(), label, None) {
         Ok(cursor) => {
             unsafe {
                 *out_cursor = v::vinput::MouseMotionCursorInfo {

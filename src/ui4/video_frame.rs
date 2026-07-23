@@ -111,6 +111,24 @@ pub(crate) struct DecodedVideoConversionProbeReport {
     pub(crate) p50_gpu_walker_us: u64,
     pub(crate) p95_gpu_walker_us: u64,
     pub(crate) p99_gpu_walker_us: u64,
+    pub(crate) gpu_phase_samples: usize,
+    pub(crate) avg_gpu_pre_submit_to_batch_us: u64,
+    pub(crate) max_gpu_pre_submit_to_batch_us: u64,
+    pub(crate) p50_gpu_pre_submit_to_batch_us: u64,
+    pub(crate) p95_gpu_pre_submit_to_batch_us: u64,
+    pub(crate) avg_gpu_batch_to_walker_us: u64,
+    pub(crate) max_gpu_batch_to_walker_us: u64,
+    pub(crate) p50_gpu_batch_to_walker_us: u64,
+    pub(crate) p95_gpu_batch_to_walker_us: u64,
+    pub(crate) avg_gpu_walker_to_release_us: u64,
+    pub(crate) max_gpu_walker_to_release_us: u64,
+    pub(crate) p50_gpu_walker_to_release_us: u64,
+    pub(crate) p95_gpu_walker_to_release_us: u64,
+    pub(crate) avg_gpu_release_to_observe_us: u64,
+    pub(crate) max_gpu_release_to_observe_us: u64,
+    pub(crate) p50_gpu_release_to_observe_us: u64,
+    pub(crate) p95_gpu_release_to_observe_us: u64,
+    pub(crate) avg_gpu_pre_submit_to_observe_us: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -277,6 +295,16 @@ struct DecodedVideoConversionProbeState {
     gpu_timestamp_frequency_hz: u64,
     gpu_walker: VideoConversionProbeMetric,
     gpu_walker_histogram: VideoConversionProbeHistogram,
+    gpu_phase_samples: usize,
+    gpu_pre_submit_to_batch: VideoConversionProbeMetric,
+    gpu_pre_submit_to_batch_histogram: VideoConversionProbeHistogram,
+    gpu_batch_to_walker: VideoConversionProbeMetric,
+    gpu_batch_to_walker_histogram: VideoConversionProbeHistogram,
+    gpu_walker_to_release: VideoConversionProbeMetric,
+    gpu_walker_to_release_histogram: VideoConversionProbeHistogram,
+    gpu_release_to_observe: VideoConversionProbeMetric,
+    gpu_release_to_observe_histogram: VideoConversionProbeHistogram,
+    gpu_pre_submit_to_observe: VideoConversionProbeMetric,
     total_completion_polls: u64,
     max_completion_polls: u64,
 }
@@ -312,6 +340,16 @@ impl DecodedVideoConversionProbeState {
             gpu_timestamp_frequency_hz: 0,
             gpu_walker: VideoConversionProbeMetric::new(),
             gpu_walker_histogram: VideoConversionProbeHistogram::new(),
+            gpu_phase_samples: 0,
+            gpu_pre_submit_to_batch: VideoConversionProbeMetric::new(),
+            gpu_pre_submit_to_batch_histogram: VideoConversionProbeHistogram::new(),
+            gpu_batch_to_walker: VideoConversionProbeMetric::new(),
+            gpu_batch_to_walker_histogram: VideoConversionProbeHistogram::new(),
+            gpu_walker_to_release: VideoConversionProbeMetric::new(),
+            gpu_walker_to_release_histogram: VideoConversionProbeHistogram::new(),
+            gpu_release_to_observe: VideoConversionProbeMetric::new(),
+            gpu_release_to_observe_histogram: VideoConversionProbeHistogram::new(),
+            gpu_pre_submit_to_observe: VideoConversionProbeMetric::new(),
             total_completion_polls: 0,
             max_completion_polls: 0,
         }
@@ -356,6 +394,26 @@ impl DecodedVideoConversionProbeState {
             self.gpu_timestamp_samples = self.gpu_timestamp_samples.saturating_add(1);
             self.gpu_walker.record(rcs.gpu_walker_us);
             self.gpu_walker_histogram.record(rcs.gpu_walker_us);
+        }
+        if rcs.gpu_phase_timestamps_valid {
+            self.gpu_phase_samples = self.gpu_phase_samples.saturating_add(1);
+            self.gpu_pre_submit_to_batch
+                .record(rcs.gpu_pre_submit_to_batch_us);
+            self.gpu_pre_submit_to_batch_histogram
+                .record(rcs.gpu_pre_submit_to_batch_us);
+            self.gpu_batch_to_walker.record(rcs.gpu_batch_to_walker_us);
+            self.gpu_batch_to_walker_histogram
+                .record(rcs.gpu_batch_to_walker_us);
+            self.gpu_walker_to_release
+                .record(rcs.gpu_walker_to_release_us);
+            self.gpu_walker_to_release_histogram
+                .record(rcs.gpu_walker_to_release_us);
+            self.gpu_release_to_observe
+                .record(rcs.gpu_release_to_observe_us);
+            self.gpu_release_to_observe_histogram
+                .record(rcs.gpu_release_to_observe_us);
+            self.gpu_pre_submit_to_observe
+                .record(rcs.gpu_pre_submit_to_observe_us);
         }
         self.total_completion_polls = self
             .total_completion_polls
@@ -445,6 +503,48 @@ impl DecodedVideoConversionProbeState {
             p99_gpu_walker_us: self
                 .gpu_walker_histogram
                 .percentile(99, self.gpu_walker.max_us),
+            gpu_phase_samples: self.gpu_phase_samples,
+            avg_gpu_pre_submit_to_batch_us: self
+                .gpu_pre_submit_to_batch
+                .average(self.gpu_phase_samples),
+            max_gpu_pre_submit_to_batch_us: self.gpu_pre_submit_to_batch.max_us,
+            p50_gpu_pre_submit_to_batch_us: self
+                .gpu_pre_submit_to_batch_histogram
+                .percentile(50, self.gpu_pre_submit_to_batch.max_us),
+            p95_gpu_pre_submit_to_batch_us: self
+                .gpu_pre_submit_to_batch_histogram
+                .percentile(95, self.gpu_pre_submit_to_batch.max_us),
+            avg_gpu_batch_to_walker_us: self.gpu_batch_to_walker.average(self.gpu_phase_samples),
+            max_gpu_batch_to_walker_us: self.gpu_batch_to_walker.max_us,
+            p50_gpu_batch_to_walker_us: self
+                .gpu_batch_to_walker_histogram
+                .percentile(50, self.gpu_batch_to_walker.max_us),
+            p95_gpu_batch_to_walker_us: self
+                .gpu_batch_to_walker_histogram
+                .percentile(95, self.gpu_batch_to_walker.max_us),
+            avg_gpu_walker_to_release_us: self
+                .gpu_walker_to_release
+                .average(self.gpu_phase_samples),
+            max_gpu_walker_to_release_us: self.gpu_walker_to_release.max_us,
+            p50_gpu_walker_to_release_us: self
+                .gpu_walker_to_release_histogram
+                .percentile(50, self.gpu_walker_to_release.max_us),
+            p95_gpu_walker_to_release_us: self
+                .gpu_walker_to_release_histogram
+                .percentile(95, self.gpu_walker_to_release.max_us),
+            avg_gpu_release_to_observe_us: self
+                .gpu_release_to_observe
+                .average(self.gpu_phase_samples),
+            max_gpu_release_to_observe_us: self.gpu_release_to_observe.max_us,
+            p50_gpu_release_to_observe_us: self
+                .gpu_release_to_observe_histogram
+                .percentile(50, self.gpu_release_to_observe.max_us),
+            p95_gpu_release_to_observe_us: self
+                .gpu_release_to_observe_histogram
+                .percentile(95, self.gpu_release_to_observe.max_us),
+            avg_gpu_pre_submit_to_observe_us: self
+                .gpu_pre_submit_to_observe
+                .average(self.gpu_phase_samples),
         }
     }
 }

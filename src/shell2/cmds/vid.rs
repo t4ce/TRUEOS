@@ -276,7 +276,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} conversion_max_outstanding={} probe_avg_us=end_to_end:{},queue_wait:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{},publish:{} probe_p95_us=end_to_end:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{} gpu_timestamp_samples={} gpu_timestamp_hz={} completion_polls_avg={} mode_transitions={} engine_resets={}",
+                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} conversion_max_outstanding={} probe_avg_us=end_to_end:{},queue_wait:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{},publish:{} probe_p95_us=end_to_end:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{} gpu_timestamp_samples={} gpu_timestamp_hz={} gpu_phase_avg_us=pre_submit_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{} gpu_phase_samples={} completion_polls_avg={} mode_transitions={} engine_resets={}",
                     lap,
                     report.attempted,
                     report.retired,
@@ -307,6 +307,11 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
                     report.conversion_probe.p95_gpu_walker_us,
                     report.conversion_probe.gpu_timestamp_samples,
                     report.conversion_probe.gpu_timestamp_frequency_hz,
+                    report.conversion_probe.avg_gpu_pre_submit_to_batch_us,
+                    report.conversion_probe.avg_gpu_batch_to_walker_us,
+                    report.conversion_probe.avg_gpu_walker_to_release_us,
+                    report.conversion_probe.avg_gpu_release_to_observe_us,
+                    report.conversion_probe.gpu_phase_samples,
                     report.conversion_probe.avg_completion_polls,
                     report.mode_transitions,
                     report.engine_resets,

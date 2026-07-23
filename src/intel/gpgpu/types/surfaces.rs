@@ -422,12 +422,28 @@ pub(crate) struct GpgpuSubmissionProbe {
     /// Command-stream timestamp frequency resolved from the Gen11+ GT clock
     /// configuration for this boot.
     pub(crate) gpu_timestamp_frequency_hz: u64,
-    /// Ordered PIPE_CONTROL timestamp delta around the video GPGPU walker.
+    /// Host and PIPE_CONTROL samples from the same 36-bit RCS timestamp
+    /// domain, ordered across the complete video submission.
+    pub(crate) gpu_host_pre_submit_timestamp: u64,
+    pub(crate) gpu_batch_enter_timestamp: u64,
     pub(crate) gpu_pre_walker_timestamp: u64,
     pub(crate) gpu_post_walker_timestamp: u64,
+    pub(crate) gpu_post_release_timestamp: u64,
+    pub(crate) gpu_host_observe_timestamp: u64,
+    pub(crate) gpu_pre_submit_to_batch_ticks: u64,
+    pub(crate) gpu_pre_submit_to_batch_us: u64,
+    pub(crate) gpu_batch_to_walker_ticks: u64,
+    pub(crate) gpu_batch_to_walker_us: u64,
     pub(crate) gpu_walker_ticks: u64,
     pub(crate) gpu_walker_us: u64,
+    pub(crate) gpu_walker_to_release_ticks: u64,
+    pub(crate) gpu_walker_to_release_us: u64,
+    pub(crate) gpu_release_to_observe_ticks: u64,
+    pub(crate) gpu_release_to_observe_us: u64,
+    pub(crate) gpu_pre_submit_to_observe_ticks: u64,
+    pub(crate) gpu_pre_submit_to_observe_us: u64,
     pub(crate) gpu_walker_timestamp_valid: bool,
+    pub(crate) gpu_phase_timestamps_valid: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

@@ -135,6 +135,7 @@ struct CursorRecord {
     capability: MouseControlCursor,
     principal: MouseControlPrincipal,
     label: String<MAX_LABEL_BYTES>,
+    visual_color: Option<crate::graphics::primitives::Rgba8>,
     x: i32,
     y: i32,
     buttons_down: u32,
@@ -157,6 +158,7 @@ impl MouseControlStation {
         &mut self,
         principal: MouseControlPrincipal,
         label: &str,
+        visual_color: Option<crate::graphics::primitives::Rgba8>,
     ) -> Result<MouseControlCursor, MouseControlError> {
         if self
             .cursors
@@ -191,6 +193,7 @@ impl MouseControlStation {
                 capability,
                 principal,
                 label: stored_label,
+                visual_color,
                 x: (width / 2) as i32,
                 y: (height / 2) as i32,
                 buttons_down: 0,
@@ -199,11 +202,12 @@ impl MouseControlStation {
             })
             .map_err(|_| MouseControlError::Capacity)?;
         crate::log_info!(target: "input";
-            "mouse-control: cursor allocated handle={} slot={} principal={:?} label={} policy=mediated\n",
+            "mouse-control: cursor allocated handle={} slot={} principal={:?} label={} visual_color={:?} policy=mediated\n",
             handle,
             slot_id,
             principal,
-            label
+            label,
+            visual_color,
         );
         Ok(capability)
     }
@@ -430,8 +434,20 @@ static STATION: Mutex<MouseControlStation> = Mutex::new(MouseControlStation::new
 pub(crate) fn request_cursor(
     principal: MouseControlPrincipal,
     label: &str,
+    visual_color: Option<crate::graphics::primitives::Rgba8>,
 ) -> Result<MouseControlCursor, MouseControlError> {
-    STATION.lock().request(principal, label)
+    STATION.lock().request(principal, label, visual_color)
+}
+
+/// Resolve presentation metadata for one mediated vCursor without exposing
+/// its capability or command queue to UI4.
+pub(crate) fn cursor_visual_color(slot_id: u32) -> Option<crate::graphics::primitives::Rgba8> {
+    STATION
+        .lock()
+        .cursors
+        .iter()
+        .find(|cursor| cursor.capability.slot_id == slot_id)
+        .and_then(|cursor| cursor.visual_color)
 }
 
 pub(crate) fn release_cursor(

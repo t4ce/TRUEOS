@@ -161,7 +161,6 @@ pub(crate) fn queue_ui4_compositor_layers(
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
-
     let started_tick = direct_rcs_now_tick();
     if !direct_rcs_submit_batch_with_runtime(
         dev,
@@ -682,6 +681,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             dst.bytes,
         );
     }
+    probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
     let started_tick = direct_rcs_now_tick();
     if !direct_rcs_submit_batch_with_runtime(
         dev,
@@ -783,25 +783,82 @@ pub(crate) fn poll_ui4_compositor_submission(
     pending.stats.probe.completion_polls = pending.stats.probe.completion_polls.saturating_add(1);
     let observed = direct_rcs_read_result_slot(state, pending.marker_slot);
     if observed == pending.marker_value {
+        let host_observe = super::claimed_device()
+            .map(direct_rcs_read_render_timestamp)
+            .unwrap_or(0);
         pending.stats.submit_ms = direct_rcs_elapsed_ms_since(pending.started_tick);
         pending.stats.probe.submit_to_marker_us =
             direct_rcs_elapsed_us_since(pending.admitted_tick);
         if pending.kernel == "nv12-media-ytile-rgba8-frame" {
+            let batch_enter =
+                direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_BATCH_ENTER_TIMESTAMP_SLOT);
             let pre =
                 direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_PRE_WALKER_TIMESTAMP_SLOT);
             let post =
                 direct_rcs_read_result_qword(state, UI4_VIDEO_FRAME_GPU_POST_WALKER_TIMESTAMP_SLOT);
+            let post_release = direct_rcs_read_result_qword(
+                state,
+                UI4_VIDEO_FRAME_GPU_POST_RELEASE_TIMESTAMP_SLOT,
+            );
+            pending.stats.probe.gpu_batch_enter_timestamp = batch_enter;
             pending.stats.probe.gpu_pre_walker_timestamp = pre;
             pending.stats.probe.gpu_post_walker_timestamp = post;
-            let valid =
-                pre != 0 && post > pre && pending.stats.probe.gpu_timestamp_frequency_hz != 0;
-            pending.stats.probe.gpu_walker_timestamp_valid = valid;
-            if valid {
-                pending.stats.probe.gpu_walker_ticks = post - pre;
-                pending.stats.probe.gpu_walker_us = direct_rcs_timestamp_ticks_to_us(
-                    pending.stats.probe.gpu_walker_ticks,
-                    pending.stats.probe.gpu_timestamp_frequency_hz,
-                );
+            pending.stats.probe.gpu_post_release_timestamp = post_release;
+            pending.stats.probe.gpu_host_observe_timestamp = host_observe;
+            let frequency_hz = pending.stats.probe.gpu_timestamp_frequency_hz;
+            if let Some((ticks, us)) = direct_rcs_timestamp_interval_us(pre, post, frequency_hz) {
+                pending.stats.probe.gpu_walker_ticks = ticks;
+                pending.stats.probe.gpu_walker_us = us;
+                pending.stats.probe.gpu_walker_timestamp_valid = true;
+            }
+            let submit_to_batch = direct_rcs_timestamp_interval_us(
+                pending.stats.probe.gpu_host_pre_submit_timestamp,
+                batch_enter,
+                frequency_hz,
+            );
+            let batch_to_walker = direct_rcs_timestamp_interval_us(batch_enter, pre, frequency_hz);
+            let walker_to_release =
+                direct_rcs_timestamp_interval_us(post, post_release, frequency_hz);
+            let release_to_observe =
+                direct_rcs_timestamp_interval_us(post_release, host_observe, frequency_hz);
+            let submit_to_observe = direct_rcs_timestamp_interval_us(
+                pending.stats.probe.gpu_host_pre_submit_timestamp,
+                host_observe,
+                frequency_hz,
+            );
+            if let (
+                Some((submit_to_batch_ticks, submit_to_batch_us)),
+                Some((batch_to_walker_ticks, batch_to_walker_us)),
+                Some((walker_to_release_ticks, walker_to_release_us)),
+                Some((release_to_observe_ticks, release_to_observe_us)),
+                Some((submit_to_observe_ticks, submit_to_observe_us)),
+            ) = (
+                submit_to_batch,
+                batch_to_walker,
+                walker_to_release,
+                release_to_observe,
+                submit_to_observe,
+            ) {
+                let phase_sum_ticks = submit_to_batch_ticks
+                    .saturating_add(batch_to_walker_ticks)
+                    .saturating_add(pending.stats.probe.gpu_walker_ticks)
+                    .saturating_add(walker_to_release_ticks)
+                    .saturating_add(release_to_observe_ticks);
+                if pending.stats.probe.gpu_walker_timestamp_valid
+                    && phase_sum_ticks == submit_to_observe_ticks
+                {
+                    pending.stats.probe.gpu_pre_submit_to_batch_ticks = submit_to_batch_ticks;
+                    pending.stats.probe.gpu_pre_submit_to_batch_us = submit_to_batch_us;
+                    pending.stats.probe.gpu_batch_to_walker_ticks = batch_to_walker_ticks;
+                    pending.stats.probe.gpu_batch_to_walker_us = batch_to_walker_us;
+                    pending.stats.probe.gpu_walker_to_release_ticks = walker_to_release_ticks;
+                    pending.stats.probe.gpu_walker_to_release_us = walker_to_release_us;
+                    pending.stats.probe.gpu_release_to_observe_ticks = release_to_observe_ticks;
+                    pending.stats.probe.gpu_release_to_observe_us = release_to_observe_us;
+                    pending.stats.probe.gpu_pre_submit_to_observe_ticks = submit_to_observe_ticks;
+                    pending.stats.probe.gpu_pre_submit_to_observe_us = submit_to_observe_us;
+                    pending.stats.probe.gpu_phase_timestamps_valid = true;
+                }
             }
         }
         runtime.pending = None;
@@ -811,18 +868,33 @@ pub(crate) fn poll_ui4_compositor_submission(
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, true);
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: complete serial={} kernel={} descs={} walkers={} elapsed_ms={} gpu_walker_us={} gpu_walker_ticks={} gpu_pre_timestamp={} gpu_post_timestamp={} gpu_timestamp_hz={} gpu_timestamp_valid={} poll=single\n",
+            "ui4/guc-compositor: complete serial={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} poll=single\n",
             pending.submission.serial,
             pending.kernel,
             pending.stats.descs,
             pending.stats.walkers,
             pending.stats.submit_ms,
+            pending.stats.probe.gpu_pre_submit_to_batch_us,
+            pending.stats.probe.gpu_batch_to_walker_us,
             pending.stats.probe.gpu_walker_us,
+            pending.stats.probe.gpu_walker_to_release_us,
+            pending.stats.probe.gpu_release_to_observe_us,
+            pending.stats.probe.gpu_pre_submit_to_observe_us,
+            pending.stats.probe.gpu_pre_submit_to_batch_ticks,
+            pending.stats.probe.gpu_batch_to_walker_ticks,
             pending.stats.probe.gpu_walker_ticks,
+            pending.stats.probe.gpu_walker_to_release_ticks,
+            pending.stats.probe.gpu_release_to_observe_ticks,
+            pending.stats.probe.gpu_pre_submit_to_observe_ticks,
+            pending.stats.probe.gpu_host_pre_submit_timestamp,
+            pending.stats.probe.gpu_batch_enter_timestamp,
             pending.stats.probe.gpu_pre_walker_timestamp,
             pending.stats.probe.gpu_post_walker_timestamp,
+            pending.stats.probe.gpu_post_release_timestamp,
+            pending.stats.probe.gpu_host_observe_timestamp,
             pending.stats.probe.gpu_timestamp_frequency_hz,
             pending.stats.probe.gpu_walker_timestamp_valid as u8,
+            pending.stats.probe.gpu_phase_timestamps_valid as u8,
         );
         return completion;
     }

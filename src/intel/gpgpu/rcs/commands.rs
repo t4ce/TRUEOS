@@ -568,7 +568,46 @@ fn direct_rcs_read_result_qword(state: DirectRcsState, slot: usize) -> u64 {
     let low = unsafe { core::ptr::read_volatile(value as *const u32) };
     let high =
         unsafe { core::ptr::read_volatile(value.add(core::mem::size_of::<u32>()) as *const u32) };
-    u64::from(low) | (u64::from(high) << 32)
+    (u64::from(low) | (u64::from(high) << 32)) & DIRECT_RCS_TIMESTAMP_MASK
+}
+
+fn direct_rcs_read_render_timestamp(dev: super::Dev) -> u64 {
+    const RCS_TIMESTAMP_LOW_MMIO: usize = 0x2358;
+    const RCS_TIMESTAMP_HIGH_MMIO: usize = 0x235C;
+
+    // The Gen12 engine timestamp is 36 bits. Read upper-lower-upper so a
+    // rollover of the low DWORD cannot splice two different counter epochs.
+    let mut upper = super::mmio_read(dev, RCS_TIMESTAMP_HIGH_MMIO);
+    for _ in 0..3 {
+        let lower = super::mmio_read(dev, RCS_TIMESTAMP_LOW_MMIO);
+        let next_upper = super::mmio_read(dev, RCS_TIMESTAMP_HIGH_MMIO);
+        if next_upper == upper {
+            return (u64::from(upper) << 32 | u64::from(lower)) & DIRECT_RCS_TIMESTAMP_MASK;
+        }
+        upper = next_upper;
+    }
+    let lower = super::mmio_read(dev, RCS_TIMESTAMP_LOW_MMIO);
+    (u64::from(upper) << 32 | u64::from(lower)) & DIRECT_RCS_TIMESTAMP_MASK
+}
+
+fn direct_rcs_timestamp_delta_ticks(start: u64, end: u64) -> Option<u64> {
+    if start == 0 || end == 0 {
+        return None;
+    }
+    let delta = end.wrapping_sub(start) & DIRECT_RCS_TIMESTAMP_MASK;
+    // Any phase in this probe is bounded to one second in normal operation
+    // and to the one-second compositor timeout on failure. Half a 36-bit
+    // epoch is roughly thirty minutes at 19.2 MHz, so a larger modular delta
+    // proves that these were not an ordered pair from the same frame.
+    (delta != 0 && delta < (1u64 << (DIRECT_RCS_TIMESTAMP_BITS - 1))).then_some(delta)
+}
+
+fn direct_rcs_timestamp_interval_us(start: u64, end: u64, frequency_hz: u64) -> Option<(u64, u64)> {
+    if frequency_hz == 0 {
+        return None;
+    }
+    let ticks = direct_rcs_timestamp_delta_ticks(start, end)?;
+    Some((ticks, direct_rcs_timestamp_ticks_to_us(ticks, frequency_hz)))
 }
 
 fn direct_rcs_timestamp_frequency_hz(dev: super::Dev) -> u32 {
