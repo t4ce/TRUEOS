@@ -23,6 +23,9 @@ const ARENA_BYTES: usize = 4 * 1024 * 1024;
 
 const BATCH_OFFSET: usize = 0x0000_0000;
 const BATCH_BYTES: usize = 64 * 1024;
+const PRIMARY_BATCH_BYTES: usize = 4096;
+const CODEC_BATCH_OFFSET: usize = PRIMARY_BATCH_BYTES;
+const CODEC_BATCH_BYTES: usize = BATCH_BYTES - CODEC_BATCH_OFFSET;
 const RESULT_OFFSET: usize = 0x0001_0000;
 const RESULT_BYTES: usize = 4096;
 const SOURCE_OFFSET: usize = 0x0002_0000;
@@ -42,6 +45,7 @@ const BSP_ROWSTORE_OFFSET: usize = 0x0035_0000;
 const SCRATCH_BYTES: usize = 64 * 1024;
 
 const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
+const CODEC_BATCH_GPU: u64 = BATCH_GPU + CODEC_BATCH_OFFSET as u64;
 const RESULT_GPU: u64 = ARENA_GPU + RESULT_OFFSET as u64;
 const SOURCE_GPU: u64 = ARENA_GPU + SOURCE_OFFSET as u64;
 const RECON_GPU: u64 = ARENA_GPU + RECON_OFFSET as u64;
@@ -57,12 +61,15 @@ const BSP_ROWSTORE_GPU: u64 = ARENA_GPU + BSP_ROWSTORE_OFFSET as u64;
 const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
 const EXPECTED_CODEC_PACKETS: usize = 34;
-const EXPECTED_BATCH_BYTES: usize = 2_340;
+const EXPECTED_BATCH_BYTES: usize = 2_320;
+const EXPECTED_PRIMARY_BATCH_BYTES: usize = 40;
 
 const _: () = {
     assert!(RING_GPU % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(CONTEXT_GPU % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(ARENA_GPU % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(CODEC_BATCH_OFFSET + CODEC_BATCH_BYTES == BATCH_BYTES);
+    assert!(EXPECTED_PRIMARY_BATCH_BYTES <= PRIMARY_BATCH_BYTES);
     assert!(BATCH_OFFSET + BATCH_BYTES <= RESULT_OFFSET);
     assert!(RESULT_OFFSET + RESULT_BYTES <= SOURCE_OFFSET);
     assert!(SOURCE_OFFSET + SOURCE_BYTES <= RECON_OFFSET);
@@ -439,6 +446,8 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) source_i420_fnv1a32: u32,
     pub(crate) source_nv12_fnv1a32: u32,
     pub(crate) batch_bytes: usize,
+    pub(crate) primary_batch_bytes: usize,
+    pub(crate) ring_bytes: usize,
     pub(crate) codec_packets: usize,
     pub(crate) serial: u64,
     pub(crate) hwlrca_lo: u32,
@@ -471,6 +480,8 @@ impl AvcEncodeProbeReport {
         source_i420_fnv1a32: 0,
         source_nv12_fnv1a32: 0,
         batch_bytes: 0,
+        primary_batch_bytes: 0,
+        ring_bytes: 0,
         codec_packets: 0,
         serial: 0,
         hwlrca_lo: 0,
@@ -530,7 +541,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return deferred(AvcEncodeProbeFailure::TransportProbeUnavailable);
     }
 
-    let lane = match media::try_acquire_vcs0_lane() {
+    let lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC) {
         Ok(lane) => lane,
         Err(media::MediaVcs0LaneAcquireError::Busy) => {
             return deferred(AvcEncodeProbeFailure::LaneBusy);
@@ -592,7 +603,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     report.source_i420_fnv1a32 = fnv1a32(i420);
     report.source_nv12_fnv1a32 = fnv1a32(source);
 
-    let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET) };
+    let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) };
     let Some((batch_bytes, codec_packets)) = build_idr_batch(batch_virt) else {
         return fail(report, AvcEncodeProbeFailure::BatchBuild, started_ns);
     };
@@ -601,6 +612,22 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     report.batch_bytes = batch_bytes;
     report.codec_packets = codec_packets;
 
+    let primary_batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET) };
+    let Some(primary_batch_bytes) = media::build_primary_second_level_return_words(
+        primary_batch_virt,
+        PRIMARY_BATCH_BYTES,
+        RESULT_GPU,
+        CODEC_BATCH_GPU,
+        COMPLETE_MARKER,
+        lane.mode(),
+    ) else {
+        return fail(report, AvcEncodeProbeFailure::BatchBuild, started_ns);
+    };
+    if primary_batch_bytes != EXPECTED_PRIMARY_BATCH_BYTES {
+        return fail(report, AvcEncodeProbeFailure::BatchBuild, started_ns);
+    }
+    report.primary_batch_bytes = primary_batch_bytes;
+
     let Some(ring_tail_bytes) = media::build_ring_batch_start_words(
         backing.ring_virt,
         RING_BYTES,
@@ -608,9 +635,11 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         RESULT_GPU,
         KICKOFF_MARKER,
         BATCH_GPU,
+        lane.mode(),
     ) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
+    report.ring_bytes = ring_tail_bytes;
     let Some(ring_ctl) = media::ring_ctl_value_for_size(RING_BYTES) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
@@ -766,7 +795,7 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             batch_virt.cast::<u32>(),
-            BATCH_BYTES / core::mem::size_of::<u32>(),
+            CODEC_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
     batch.fill(0);
@@ -844,20 +873,10 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     ) {
         return None;
     }
-    let flush = media::begin_batch_packet(
-        batch,
-        &mut idx,
-        5,
-        // VD_PIPELINE_FLUSH immediately above already waits for MFX/VDEnc and
-        // flushes the VDEnc pipeline. Combining another video-pipeline cache
-        // invalidate with this post-sync write parks VCS0 on Xe_LPM+ even
-        // though the coded frame and status registers are complete. Keep this
-        // final command as the ordered memory completion fence only.
-        media::MI_FLUSH_DW | media::MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
-    )?;
-    media::packet_write_addr64(batch, flush, 1, RESULT_GPU + media::MEDIA_RESULT_COMPLETE_SLOT);
-    batch[flush + 3] = COMPLETE_MARKER;
-    batch[flush + 4] = 0;
+    // This is a second-level codec batch. Its MI_BATCH_BUFFER_END returns to
+    // the primary ring, which writes COMPLETE_MARKER only after the return.
+    // Xe_LPM+ parks on a post-sync MI_FLUSH_DW appended directly after this
+    // AVC pipeline even though the codec output and status registers are done.
     if idx.saturating_add(3) > batch.len() {
         return None;
     }

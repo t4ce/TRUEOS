@@ -182,7 +182,7 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
         return deferred(GucVcs0ProbeFailure::GucTransportUnavailable);
     }
 
-    let lane = match media::try_acquire_vcs0_lane() {
+    let lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::TRANSPORT_PROBE_GUC) {
         Ok(lane) => lane,
         Err(media::MediaVcs0LaneAcquireError::Busy) => {
             if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
@@ -248,6 +248,7 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
         PROBE_RESULT_GPU,
         KICKOFF_MARKER,
         PROBE_BATCH_GPU,
+        lane.mode(),
     ) else {
         return fail(report, GucVcs0ProbeFailure::ContextBuild, started_ns);
     };

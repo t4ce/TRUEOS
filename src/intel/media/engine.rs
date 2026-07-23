@@ -75,6 +75,7 @@ pub(super) const MI_ARB_CHECK: u32 = 0x0280_0000;
 pub(super) const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
 const MI_BATCH_PPGTT: u32 = 1 << 8;
+const MI_BATCH_SECOND_LEVEL: u32 = 1 << 22;
 pub(super) const MI_NOOP: u32 = 0;
 pub(super) const MI_FORCE_WAKEUP: u32 = 29 << 23;
 pub(super) const MI_FORCE_WAKEUP_MFX_WELL: u32 = (1 << 9) | (0x300 << 16);
@@ -143,8 +144,6 @@ static MEDIA_DECODE_RAN: AtomicBool = AtomicBool::new(false);
 static MEDIA_OUTPUT_SURFACE_PROBES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEDIA_KICKOFF_STATE: Mutex<Option<MediaKickoffState>> = Mutex::new(None);
 static MEDIA_BACKING: Mutex<Option<MediaBitstreamBacking>> = Mutex::new(None);
-static MEDIA_VCS0_LANE_BUSY: AtomicBool = AtomicBool::new(false);
-static MEDIA_VCS0_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // Unlike the original fixed low-address page table, this root can accept a
 // leased UI4 SFC target before submission and remove it after retirement.
 // The root physical address remains stable for the lifetime of the VDBOX
@@ -152,46 +151,132 @@ static MEDIA_VCS0_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static MEDIA_PPGTT: Mutex<Option<crate::intel::ppgtt::SparsePpgtt>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum MediaVcs0CodecMode {
+    TransportProbe,
+    AvcDecode,
+    JpegDecode,
+    AvcEncode,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum MediaVcs0SubmissionOwner {
+    Execlists,
+    Guc,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum MediaVcs0BatchLevel {
+    FirstLevel,
+    SecondLevelReturn,
+}
+
+/// Complete execution contract selected before a VCS0 job mutates context or
+/// engine state. Codec mode, scheduler owner, and completion topology are kept
+/// together so encode/decode paths cannot accidentally inherit one another's
+/// submission assumptions.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct MediaVcs0JobMode {
+    pub(super) codec: MediaVcs0CodecMode,
+    pub(super) owner: MediaVcs0SubmissionOwner,
+    pub(super) batch_level: MediaVcs0BatchLevel,
+}
+
+impl MediaVcs0JobMode {
+    pub(super) const TRANSPORT_PROBE_GUC: Self = Self {
+        codec: MediaVcs0CodecMode::TransportProbe,
+        owner: MediaVcs0SubmissionOwner::Guc,
+        batch_level: MediaVcs0BatchLevel::FirstLevel,
+    };
+    pub(super) const AVC_DECODE_EXECLISTS: Self = Self {
+        codec: MediaVcs0CodecMode::AvcDecode,
+        owner: MediaVcs0SubmissionOwner::Execlists,
+        batch_level: MediaVcs0BatchLevel::FirstLevel,
+    };
+    pub(super) const JPEG_DECODE_EXECLISTS: Self = Self {
+        codec: MediaVcs0CodecMode::JpegDecode,
+        owner: MediaVcs0SubmissionOwner::Execlists,
+        batch_level: MediaVcs0BatchLevel::FirstLevel,
+    };
+    pub(super) const AVC_ENCODE_GUC: Self = Self {
+        codec: MediaVcs0CodecMode::AvcEncode,
+        owner: MediaVcs0SubmissionOwner::Guc,
+        batch_level: MediaVcs0BatchLevel::SecondLevelReturn,
+    };
+}
+
+#[derive(Copy, Clone)]
+struct MediaVcs0ExecutionState {
+    active: Option<MediaVcs0JobMode>,
+    quarantined: Option<MediaVcs0JobMode>,
+    generation: u64,
+}
+
+impl MediaVcs0ExecutionState {
+    const EMPTY: Self = Self {
+        active: None,
+        quarantined: None,
+        generation: 0,
+    };
+}
+
+static MEDIA_VCS0_EXECUTION: Mutex<MediaVcs0ExecutionState> =
+    Mutex::new(MediaVcs0ExecutionState::EMPTY);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum MediaVcs0LaneAcquireError {
     Busy,
     Quarantined,
 }
 
-/// Exclusive ownership of VCS0 across the legacy decode path and the GuC
-/// transport probe. A timed-out GuC submission consumes this guard with
-/// `quarantine`, deliberately preventing a different transport from touching
-/// an engine whose context may still be live.
+/// Exclusive ownership of the generic VCS0 execution state. A timed-out job
+/// consumes this guard with `quarantine`, deliberately preventing a different
+/// mode or transport from touching an engine whose context may still be live.
 pub(super) struct MediaVcs0LaneGuard {
+    mode: MediaVcs0JobMode,
+    generation: u64,
     release_on_drop: bool,
 }
 
 impl MediaVcs0LaneGuard {
     pub(super) fn quarantine(mut self) {
-        MEDIA_VCS0_LANE_QUARANTINED.store(true, Ordering::Release);
+        let mut state = MEDIA_VCS0_EXECUTION.lock();
+        if state.generation == self.generation && state.active == Some(self.mode) {
+            state.quarantined = Some(self.mode);
+        }
         self.release_on_drop = false;
+    }
+
+    pub(super) const fn mode(&self) -> MediaVcs0JobMode {
+        self.mode
     }
 }
 
 impl Drop for MediaVcs0LaneGuard {
     fn drop(&mut self) {
         if self.release_on_drop {
-            MEDIA_VCS0_LANE_BUSY.store(false, Ordering::Release);
+            let mut state = MEDIA_VCS0_EXECUTION.lock();
+            if state.generation == self.generation && state.active == Some(self.mode) {
+                state.active = None;
+            }
         }
     }
 }
 
-pub(super) fn try_acquire_vcs0_lane() -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
-    if MEDIA_VCS0_LANE_QUARANTINED.load(Ordering::Acquire) {
+pub(super) fn try_acquire_vcs0_lane(
+    mode: MediaVcs0JobMode,
+) -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
+    let mut state = MEDIA_VCS0_EXECUTION.lock();
+    if state.quarantined.is_some() {
         return Err(MediaVcs0LaneAcquireError::Quarantined);
     }
-    MEDIA_VCS0_LANE_BUSY
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| MediaVcs0LaneAcquireError::Busy)?;
-    if MEDIA_VCS0_LANE_QUARANTINED.load(Ordering::Acquire) {
-        MEDIA_VCS0_LANE_BUSY.store(false, Ordering::Release);
-        return Err(MediaVcs0LaneAcquireError::Quarantined);
+    if state.active.is_some() {
+        return Err(MediaVcs0LaneAcquireError::Busy);
     }
+    state.generation = state.generation.wrapping_add(1).max(1);
+    state.active = Some(mode);
     Ok(MediaVcs0LaneGuard {
+        mode,
+        generation: state.generation,
         release_on_drop: true,
     })
 }
@@ -2321,12 +2406,16 @@ pub(super) fn build_ring_batch_start_words(
     result_gpu_addr: u64,
     prelaunch_marker: u32,
     batch_gpu_addr: u64,
+    _mode: MediaVcs0JobMode,
 ) -> Option<usize> {
-    if ring_virt.is_null() || ring_offset + 40 > ring_bytes {
+    let ring_dwords = 10;
+    let ring_job_bytes = ring_dwords * core::mem::size_of::<u32>();
+    if ring_virt.is_null() || ring_offset.checked_add(ring_job_bytes)? > ring_bytes {
         return None;
     }
     let base = unsafe { ring_virt.add(ring_offset) };
-    let dwords = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, 10) };
+    let dwords = unsafe { core::slice::from_raw_parts_mut(base as *mut u32, ring_dwords) };
+    dwords.fill(MI_NOOP);
     dwords[0] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT;
     dwords[1] = (result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) as u32;
     dwords[2] = ((result_gpu_addr + MEDIA_RESULT_KICKOFF_SLOT) >> 32) as u32;
@@ -2335,9 +2424,40 @@ pub(super) fn build_ring_batch_start_words(
     dwords[5] = batch_gpu_addr as u32;
     dwords[6] = (batch_gpu_addr >> 32) as u32;
     dwords[7] = MI_ARB_CHECK;
-    dwords[8] = MI_NOOP;
-    dwords[9] = MI_NOOP;
-    Some(ring_offset + 40)
+    Some(ring_offset + ring_job_bytes)
+}
+
+/// Build a first-level trampoline for a codec secondary. The ring enters this
+/// primary as a normal first-level batch; MI_BATCH_BUFFER_START then selects
+/// the codec batch's second-level storage. MI_BATCH_BUFFER_END in the codec
+/// batch returns here, so the marker proves both codec completion and the
+/// architectural batch-level return before the primary itself ends.
+pub(super) fn build_primary_second_level_return_words(
+    primary_virt: *mut u8,
+    primary_bytes: usize,
+    result_gpu_addr: u64,
+    second_level_gpu_addr: u64,
+    return_marker: u32,
+    mode: MediaVcs0JobMode,
+) -> Option<usize> {
+    if mode.batch_level != MediaVcs0BatchLevel::SecondLevelReturn
+        || primary_virt.is_null()
+        || primary_bytes < 40
+    {
+        return None;
+    }
+    let dwords = unsafe { core::slice::from_raw_parts_mut(primary_virt.cast::<u32>(), 10) };
+    dwords.fill(MI_NOOP);
+    dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT | MI_BATCH_SECOND_LEVEL;
+    dwords[1] = second_level_gpu_addr as u32;
+    dwords[2] = (second_level_gpu_addr >> 32) as u32;
+    dwords[3] = MI_ARB_CHECK;
+    dwords[4] = MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT;
+    dwords[5] = (result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) as u32;
+    dwords[6] = ((result_gpu_addr + MEDIA_RESULT_COMPLETE_SLOT) >> 32) as u32;
+    dwords[7] = return_marker;
+    dwords[8] = MI_BATCH_BUFFER_END;
+    Some(40)
 }
 
 pub(super) fn ring_ctl_value_for_size(size: usize) -> Option<u32> {
