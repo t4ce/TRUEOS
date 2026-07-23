@@ -10,7 +10,6 @@ use crate::disc::block::{self, DeviceHandle};
 use crate::shell2::CommandSessionInputResult;
 use crate::shell2::shell2_cmd::{CommandSessionKind, ParseOutcome};
 
-const FORMAT_STATUS_TIMEOUT_MS: u64 = 5_000;
 const FORMAT_OPERATION_TIMEOUT_MS: u64 =
     crate::allcaps::storage::USB_MASS_UAS_IO_TIMEOUT_MS.saturating_add(5_000);
 
@@ -21,35 +20,14 @@ pub(crate) fn print_format_disk_table(io: &'static dyn ShellBackend2) {
 
 fn print_target_summary(io: &'static dyn ShellBackend2, disk: DeviceHandle, prefix: &str) {
     let info = disk.info();
-    let (status, err) = crate::wait::spawn_and_wait_local(async move {
-        match with_timeout(
-            EmbassyDuration::from_millis(FORMAT_STATUS_TIMEOUT_MS),
-            crate::r::disc::detect::detect_physical_disk_detail(disk),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_timeout) => {
-                (crate::r::disc::detect::DiscStatus::Unknown, Some(block::Error::Timeout))
-            }
-        }
-    });
-
     let msg = alloc::format!(
-        "{prefix}: target id={} ({}) blocks={} bs={} writable={} label={:?} status={}{}",
+        "{prefix}: target id={} ({}) blocks={} bs={} writable={} label={:?}",
         info.id.raw(),
         info.id,
         info.block_count,
         info.block_size,
         info.writable,
         info.label,
-        status.short(),
-        match (&status, err) {
-            (crate::r::disc::detect::DiscStatus::Unknown, Some(err)) => {
-                alloc::format!(" err={:?}", err)
-            }
-            _ => String::new(),
-        }
     );
     print_shell_line(io, msg.as_str());
 }

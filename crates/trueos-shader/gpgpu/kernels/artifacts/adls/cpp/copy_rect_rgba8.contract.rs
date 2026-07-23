@@ -10,8 +10,8 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
     target: GpgpuKernelTarget {
         label: "adls",
         pci_device_ids: &[0x4680],
-        revision_min: 0,
-        revision_max: 255,
+        revision_min: 12,
+        revision_max: 12,
     },
     ze_info_major: 1,
     ze_info_minor: 64,

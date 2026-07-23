@@ -90,13 +90,11 @@ fn stop_text(stop: &trueos_fs::RawLogStop) -> String {
     }
 }
 
-fn scan(
+async fn scan(
     disk: DeviceHandle,
     max_records: usize,
 ) -> Result<Option<trueos_fs::RawLogScan>, block::Error> {
-    crate::wait::spawn_and_wait_local(async move {
-        crate::r::fs::trueosfs::raw_log_scan_async(disk, max_records).await
-    })
+    crate::r::fs::trueosfs::raw_log_scan_async(disk, max_records).await
 }
 
 pub(crate) fn try_parse_as(
@@ -129,61 +127,71 @@ pub(crate) fn try_parse_as(
         }
     };
 
-    let info = disk.info();
-    let scan = match scan(disk, max_records) {
-        Ok(Some(scan)) => scan,
-        Ok(None) => {
-            print_shell_line(io, format!("{command}: disk has no TRUEOSFS placement").as_str());
-            return ParseOutcome::Handled;
-        }
-        Err(err) => {
-            print_shell_line(io, format!("{command}: scan failed: {err:?}").as_str());
-            return ParseOutcome::Handled;
-        }
-    };
+    let command = String::from(command);
+    crate::wait::spawn_local_detached(async move {
+        let info = disk.info();
+        let scan = match scan(disk, max_records).await {
+            Ok(Some(scan)) => scan,
+            Ok(None) => {
+                print_shell_line(
+                    io,
+                    format!("{}: disk has no TRUEOSFS placement", command).as_str(),
+                );
+                return;
+            }
+            Err(err) => {
+                print_shell_line(
+                    io,
+                    format!("{}: scan failed: {err:?}", command).as_str(),
+                );
+                return;
+            }
+        };
 
-    print_shell_line(
-        io,
-        format!(
-            "{command}: disk={} ({}) bs={} data_lba={} log_head_rel={} checkpoint_rel={} records={} stop={}",
-            info.id.raw(),
-            info.id,
-            scan.block_size,
-            scan.data_lba,
-            scan.superblock.log_head_rel_blocks,
-            scan.superblock.checkpoint_rel_blocks,
-            scan.records.len(),
-            stop_text(&scan.stop)
+        print_shell_line(
+            io,
+            format!(
+                "{}: disk={} ({}) bs={} data_lba={} log_head_rel={} checkpoint_rel={} records={} stop={}",
+                command,
+                info.id.raw(),
+                info.id,
+                scan.block_size,
+                scan.data_lba,
+                scan.superblock.log_head_rel_blocks,
+                scan.superblock.checkpoint_rel_blocks,
+                scan.records.len(),
+                stop_text(&scan.stop)
+            )
+            .as_str(),
+        );
+
+        let headers = ["FileID", "Rel", "Blocks", "Kind", "Data", "Name", "Extra"];
+        let table = super::tlb_helper::TlbTable::with_width(
+            &headers,
+            line_width_for_backend(io).saturating_sub(2),
         )
-        .as_str(),
-    );
-
-    let headers = ["FileID", "Rel", "Blocks", "Kind", "Data", "Name", "Extra"];
-    let table = super::tlb_helper::TlbTable::with_width(
-        &headers,
-        line_width_for_backend(io).saturating_sub(2),
-    )
-    .with_max_col_widths(&[8, 8, 6, 4, 8, 0, 18]);
-    table.emit_header(|text| print_shell_line(io, text));
-    for record in scan.records.iter() {
-        let id = format!("{:08x}", record.entry_lba);
-        let rel = format!("{}", record.rel_blocks);
-        let blocks = format!("{}", record.blocks);
-        let data = format!("{}", record.data_len);
-        let name = name_text(record.name.as_slice());
-        let extra = extra_text(record);
-        let row = [
-            id.as_str(),
-            rel.as_str(),
-            blocks.as_str(),
-            kind_text(record.kind),
-            data.as_str(),
-            name.as_str(),
-            extra.as_str(),
-        ];
-        table.emit_row(&row, |text| print_shell_line(io, text));
-    }
-    table.emit_footer(|text| print_shell_line(io, text));
+        .with_max_col_widths(&[8, 8, 6, 4, 8, 0, 18]);
+        table.emit_header(|text| print_shell_line(io, text));
+        for record in scan.records.iter() {
+            let id = format!("{:08x}", record.entry_lba);
+            let rel = format!("{}", record.rel_blocks);
+            let blocks = format!("{}", record.blocks);
+            let data = format!("{}", record.data_len);
+            let name = name_text(record.name.as_slice());
+            let extra = extra_text(record);
+            let row = [
+                id.as_str(),
+                rel.as_str(),
+                blocks.as_str(),
+                kind_text(record.kind),
+                data.as_str(),
+                name.as_str(),
+                extra.as_str(),
+            ];
+            table.emit_row(&row, |text| print_shell_line(io, text));
+        }
+        table.emit_footer(|text| print_shell_line(io, text));
+    });
 
     ParseOutcome::Handled
 }

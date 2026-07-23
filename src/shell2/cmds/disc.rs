@@ -77,39 +77,45 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     }
 
     let label = alloc::format!("ramdisc-{}mb", size_bytes / (1024 * 1024));
-    let out: Result<_, alloc::string::String> = crate::wait::spawn_and_wait_local(async move {
-        let disk =
-            crate::r::disc::ramdisk::create_trueos_public(size_bytes, RAMDISK_BLOCK_SIZE, label)
+    // Ramdisk creation formats and mounts TRUEOSFS, so it must yield to the
+    // BSP executor instead of synchronously waiting inside the Shell2 task.
+    crate::wait::spawn_local_detached(async move {
+        let out: Result<_, alloc::string::String> = async {
+            let disk =
+                crate::r::disc::ramdisk::create_trueos_public(size_bytes, RAMDISK_BLOCK_SIZE, label)
+                    .await
+                    .map_err(|err| alloc::format!("create/format failed: {:?}", err))?;
+
+            crate::r::fs::trueosfs::mount_root_async(disk)
                 .await
-                .map_err(|err| alloc::format!("create/format failed: {:?}", err))?;
+                .map_err(|err| alloc::format!("mount failed: {:?}", err))?;
 
-        crate::r::fs::trueosfs::mount_root_async(disk)
-            .await
-            .map_err(|err| alloc::format!("mount failed: {:?}", err))?;
+            Ok(disk)
+        }
+        .await;
 
-        Ok(disk)
+        match out {
+            Ok(disk) => {
+                let info = disk.info();
+                let ready =
+                    crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+                print_shell_line(
+                    io,
+                    alloc::format!(
+                        "disc ramdisc: ready id={} ({}) size={} bytes trueosfs=1 root_mounted={}",
+                        info.id.raw(),
+                        info.id,
+                        size_bytes,
+                        ready as u8
+                    )
+                    .as_str(),
+                );
+            }
+            Err(msg) => {
+                print_shell_line(io, alloc::format!("disc ramdisc: {}", msg).as_str());
+            }
+        }
     });
-
-    match out {
-        Ok(disk) => {
-            let info = disk.info();
-            let ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
-            print_shell_line(
-                io,
-                alloc::format!(
-                    "disc ramdisc: ready id={} ({}) size={} bytes trueosfs=1 root_mounted={}",
-                    info.id.raw(),
-                    info.id,
-                    size_bytes,
-                    ready as u8
-                )
-                .as_str(),
-            );
-        }
-        Err(msg) => {
-            print_shell_line(io, alloc::format!("disc ramdisc: {}", msg).as_str());
-        }
-    }
 
     ParseOutcome::Handled
 }

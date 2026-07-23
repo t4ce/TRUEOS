@@ -352,8 +352,8 @@
       "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
     },
     "profile": {
-      "path": "tools/intel-gpu-bakery/profiles/adls.json",
-      "sha256": "25ec0abbdf27a51df74a4508bbbba8768431bddaefd671b5eced32318d395925"
+      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
+      "sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6"
     },
     "publication_policy": {
       "expected_kernels": [
@@ -426,7 +426,7 @@
         }
       ],
       "frontend": "clang-clcpp",
-      "profile_sha256": "25ec0abbdf27a51df74a4508bbbba8768431bddaefd671b5eced32318d395925",
+      "profile_sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6",
       "schema_version": 1,
       "tools": {
         "clang": {
@@ -473,7 +473,7 @@
     },
     "toolchain_lock": {
       "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
-      "sha256": "d20e2ec602abb65d65a2c40c51facd3189c6ee5891ebb4551c56fdb60eaf4ba8"
+      "sha256": "27ad3211d327aeba76fd7fa913ba603f23782b06a4b00c25af4ae72eba85c0e6"
     }
   },
   "rust_symbols": {
@@ -502,8 +502,8 @@
     "pci_device_ids": [
       18048
     ],
-    "revision_max": 255,
-    "revision_min": 0
+    "revision_max": 12,
+    "revision_min": 12
   },
   "variant": "cpp"
 }

@@ -832,6 +832,7 @@ mod tests {
     #[test]
     fn adls_policy_does_not_admit_adln_or_rpl() {
         assert!(GPGPU_ADLS_4680_TARGET.supports(0x4680, 0));
+        assert!(GPGPU_ADLS_4680_TARGET.supports(0x4680, u8::MAX));
         assert!(!GPGPU_ADLS_4680_TARGET.supports(0x46D1, 0));
         assert!(!GPGPU_ADLS_4680_TARGET.supports(0xA780, 0));
     }
@@ -941,17 +942,32 @@ mod tests {
         assert!(
             COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .target
-                .supports(0x4680, 0)
+                .supports(0x4680, 0x0C)
         );
         assert!(
             !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .target
-                .supports(0x46D1, 0)
+                .supports(0x4680, 0x00)
         );
         assert!(
             !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .target
-                .supports(0xA780, 0)
+                .supports(0x4680, 0x0B)
+        );
+        assert!(
+            !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0x4680, 0x0D)
+        );
+        assert!(
+            !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0x46D1, 0x0C)
+        );
+        assert!(
+            !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0xA780, 0x0C)
         );
     }
 }

@@ -517,6 +517,11 @@ fn digest_hex(digest: &[u8; 32]) -> String {
 mod runtime_admission_tests {
     use super::*;
 
+    #[cfg(not(feature = "intel_gpu_cpp_aot"))]
+    const SELECTED_ADLS_REVISION: u8 = 0;
+    #[cfg(feature = "intel_gpu_cpp_aot")]
+    const SELECTED_ADLS_REVISION: u8 = 0x0C;
+
     fn artifact_without_contract(target: GpgpuKernelTarget) -> GpgpuKernelArtifact {
         GpgpuKernelArtifact::new(
             COPY_RECT_RGBA8_ADLS_ARTIFACT.name,
@@ -552,7 +557,7 @@ mod runtime_admission_tests {
             verified: true,
             bin_sha256: artifact.bin_sha256,
             device_id: 0x4680,
-            revision_id: 0,
+            revision_id: SELECTED_ADLS_REVISION,
             abi_schema_version: artifact
                 .abi_contract
                 .map(|contract| contract.schema_version),
@@ -565,7 +570,7 @@ mod runtime_admission_tests {
             admit_kernel_artifact_bytes(
                 COPY_RECT_RGBA8_ADLS_ARTIFACT,
                 0x4680,
-                0,
+                SELECTED_ADLS_REVISION,
                 COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
             ),
             Ok(COPY_RECT_RGBA8_ADLS_ARTIFACT.bin_sha256)
@@ -578,7 +583,7 @@ mod runtime_admission_tests {
             admit_kernel_artifact_bytes(
                 COPY_RECT_RGBA8_ADLS_ARTIFACT,
                 0x46D1,
-                0,
+                SELECTED_ADLS_REVISION,
                 COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
             ),
             Err(GpgpuArtifactAdmissionError::UnsupportedPciDevice)
@@ -595,6 +600,22 @@ mod runtime_admission_tests {
             admit_kernel_artifact_bytes(artifact, 0x4680, 0, artifact.bin),
             Err(GpgpuArtifactAdmissionError::UnsupportedRevision)
         );
+    }
+
+    #[cfg(feature = "intel_gpu_cpp_aot")]
+    #[test]
+    fn cpp_admission_rejects_adjacent_adls_revisions() {
+        for revision_id in [0x0B, 0x0D] {
+            assert_eq!(
+                admit_kernel_artifact_bytes(
+                    COPY_RECT_RGBA8_ADLS_ARTIFACT,
+                    0x4680,
+                    revision_id,
+                    COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
+                ),
+                Err(GpgpuArtifactAdmissionError::UnsupportedRevision)
+            );
+        }
     }
 
     #[test]
@@ -650,7 +671,7 @@ mod runtime_admission_tests {
     #[test]
     fn resident_reload_reuse_requires_exact_admitted_identity() {
         let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;
-        let dev = test_dev(0x4680, 0);
+        let dev = test_dev(0x4680, SELECTED_ADLS_REVISION);
         let upload = resident_upload(artifact);
         assert!(resident_upload_matches(
             upload,
@@ -674,7 +695,7 @@ mod runtime_admission_tests {
         assert!(!resident_upload_matches(
             upload,
             artifact,
-            test_dev(0x4680, 1),
+            test_dev(0x4680, SELECTED_ADLS_REVISION.wrapping_add(1)),
             upload.gpu,
             artifact.bin.len(),
             artifact.bin_sha256,
@@ -705,7 +726,12 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(invalid_contract, 0x4680, 0, invalid_contract.bin),
+            admit_kernel_artifact_bytes(
+                invalid_contract,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                invalid_contract.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::InvalidAbiContract(
                 GpgpuKernelAbiContractError::UnsupportedSimdWidth
             ))
@@ -716,22 +742,26 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(wrong_name, 0x4680, 0, wrong_name.bin),
+            admit_kernel_artifact_bytes(
+                wrong_name,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                wrong_name.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::ContractKernelNameMismatch)
         );
 
-        const NARROW_TARGET: GpgpuKernelTarget = GpgpuKernelTarget {
-            label: "adls",
-            pci_device_ids: &[0x4680],
-            revision_min: 0,
-            revision_max: 254,
-        };
         let wrong_target = GpgpuKernelArtifact {
-            target_policy: NARROW_TARGET,
+            target_policy: GPGPU_ADLS_4680_TARGET,
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(wrong_target, 0x4680, 0, wrong_target.bin),
+            admit_kernel_artifact_bytes(
+                wrong_target,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                wrong_target.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::ContractTargetMismatch)
         );
 
@@ -744,7 +774,12 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(wrong_contract_zebin, 0x4680, 0, wrong_contract_zebin.bin,),
+            admit_kernel_artifact_bytes(
+                wrong_contract_zebin,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                wrong_contract_zebin.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::ContractZebinHashMismatch)
         );
 
@@ -753,7 +788,12 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(wrong_spirv, 0x4680, 0, wrong_spirv.bin),
+            admit_kernel_artifact_bytes(
+                wrong_spirv,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                wrong_spirv.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch)
         );
 
@@ -766,7 +806,12 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(wrong_contract_elf, 0x4680, 0, wrong_contract_elf.bin),
+            admit_kernel_artifact_bytes(
+                wrong_contract_elf,
+                0x4680,
+                SELECTED_ADLS_REVISION,
+                wrong_contract_elf.bin,
+            ),
             Err(GpgpuArtifactAdmissionError::ContractElfMismatch(
                 "contract-elf-entry-range-mismatch"
             ))

@@ -39,6 +39,8 @@ tools/intel-gpu-bakery/bake_adls_cpp_copy_rect.sh
 
 The wrapper:
 
+- selects the dedicated `8086:4680` revision `0x0c` C++ proof profile without
+  narrowing the shared legacy ADL-S profile;
 - checks executable versions and SHA-256 values, resolved dynamic compiler
   libraries, the complete Clang resource-tree digest, and ocloc/IGC resources
   against `toolchains/adls-cpp-proof.lock.json`;
@@ -63,6 +65,7 @@ compiler output and metadata, a maintainer can generate a candidate lock with:
 python3 -B tools/intel-gpu-bakery/bake.py \
   --source crates/trueos-shader/gpgpu/kernels/copy_rect_rgba8.clcpp \
   --artifact-name copy_rect_rgba8 \
+  --profile tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json \
   --variant cpp \
   --abi-reference-bin crates/trueos-shader/gpgpu/kernels/artifacts/adls/copy_rect_rgba8.bin \
   --expect-kernel copy_rect_rgba8 \

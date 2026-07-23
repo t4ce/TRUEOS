@@ -85,11 +85,15 @@ the resident allocation; it does not allocate/remap the same GPU VA and leak
 the prior DMA object. Replacing a resident image needs a future quiescent
 retirement protocol.
 
-The initial target is PCI-device exact but revision-broad: ADL-S device
-`0x4680`, revisions `0x00..0xff`. Hardware evidence covers the tested
-stepping; narrowing promotion to that revision remains an explicit policy
-choice. ADL-N and Raptor Lake require their own bake profile and checked
-artifact instead of inheriting ADL-S by family resemblance.
+The first C++ opt-in is exact to the physical TestRig identity: ADL-S device
+`0x4680`, revision `0x0c`, at BDF `00:02.0`. Its dedicated
+`adls-4680-r0c-cpp.json` profile is compiled into the generated contract, so
+the C++ artifact is rejected on every other revision even if the PCI device ID
+matches. The shared legacy ADL-S target remains unchanged and revision-broad;
+this narrowing applies only when `intel_gpu_cpp_aot` selects the generated C++
+contract. ADL-N, Raptor Lake, and other ADL-S steppings require their own
+reviewed profile and checked artifact instead of inheriting compatibility by
+family resemblance.
 
 ### 3. First opt-in and hardware promotion
 
@@ -145,8 +149,8 @@ bare-metal copy probe must cover:
 Deleting the C fallback requires a second build using the legacy artifact and
 equal destination results for the same cases.
 
-Build with `make iso-cpp-aot`, boot that image on the exact ADL-S `0x4680`
-machine, and run:
+Build with `make iso-cpp-aot`, boot that image on the exact TestRig
+(`00:02.0`, `8086:4680`, revision `0x0c`), and run:
 
 ```text
 gpgpu probe copy-rect
@@ -154,6 +158,7 @@ gpgpu probe copy-rect
 
 Promotion requires the summary to contain
 `ok=1 reboot_required=0 frontend=cpp-for-opencl feature_enabled=1 verified=1
+device=00:02.0-0x4680-r0C
 hash=b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
 cases=4/4 retired=4 passed=4 first_failure=none`; every case must report
 `submitted=1 retired=1 ok=1` and markers
@@ -296,7 +301,7 @@ temporary copies and treat published artifacts as immutable inputs.
 - `llvm-spirv` based on LLVM `21.0.0git`
 - Intel IGC `libigc.so.2.30.0+0`
 - the matching `ocloc` package
-- target PCI device `0x4680`
+- target BDF `00:02.0`, PCI device `0x4680`, revision `0x0c`
 
 Developer-machine paths do not participate in the generated manifest or lock
 identity. The bakery accepts explicit tool paths/environment variables and
@@ -309,7 +314,7 @@ The first implementation intentionally leaves these decisions explicit:
 - whether source/SPIR-V should remain embedded in production kernel images or
   move to a detached provenance bundle;
 - how to sign and admit external artifact updates;
-- whether revisions should remain a range or become exact stepping entries;
+- how a later stepping earns its own exact profile and hardware evidence;
 - whether the bakery should move from a reviewed minimal environment to a
   fully containerized/hermetic compiler image;
 - when scratch and SLM programming become supported runtime capabilities;

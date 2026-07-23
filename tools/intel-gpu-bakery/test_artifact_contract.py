@@ -190,6 +190,13 @@ class ArtifactContractTests(unittest.TestCase):
         manifest = json.loads(
             (root / "copy_rect_rgba8.manifest.json").read_text(encoding="utf-8")
         )
+        self.assertEqual(manifest["target"]["pci_device_ids"], [0x4680])
+        self.assertEqual(manifest["target"]["revision_min"], 0x0C)
+        self.assertEqual(manifest["target"]["revision_max"], 0x0C)
+        self.assertEqual(
+            manifest["provenance"]["profile"]["path"],
+            "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
+        )
         input_paths = {record["path"] for record in manifest["source"]["inputs"]}
         self.assertIn(
             "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

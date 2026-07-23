@@ -171,7 +171,7 @@ fn cmd_net_icmp(
         return;
     }
 
-    crate::wait::spawn_and_wait_local(async move {
+    crate::wait::spawn_local_detached(async move {
         let ip_res = match device_index {
             Some(dev_idx) => {
                 crate::r::net::dns::resolve_ipv4_for_device(
@@ -299,7 +299,7 @@ fn cmd_net_irc(
         chan = Some(s);
     }
 
-    crate::wait::spawn_and_wait_local(async move {
+    crate::wait::spawn_local_detached(async move {
         use crate::r::net::cli::irc::{IRC_DEFAULT_PORT, IrcSession};
 
         let msg = alloc::format!("irc: connecting {}:{}", server.as_str(), IRC_DEFAULT_PORT);

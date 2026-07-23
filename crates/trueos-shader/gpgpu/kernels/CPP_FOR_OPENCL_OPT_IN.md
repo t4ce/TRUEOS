@@ -4,7 +4,9 @@
 
 `copy_rect_rgba8.clcpp` is a source-side opt-in twin of the production
 `copy_rect_rgba8.cl`. The OpenCL C source and its checked-in artifacts remain
-the default.
+the default. The first C++ artifact is admitted only on the physical TestRig
+identity `00:02.0`, `8086:4680`, revision `0x0c`; the legacy artifact's
+revision policy is unchanged.
 
 The stable side-by-side identity is:
 
@@ -182,4 +184,5 @@ Promotion should require:
    cases;
 4. a pinned Clang, `llvm-spirv`, IGC, and `ocloc` provenance record.
 
-The C source should remain the fallback until that hardware comparison passes.
+The C source should remain the fallback until that hardware comparison passes
+on `8086:4680` revision `0x0c`.
