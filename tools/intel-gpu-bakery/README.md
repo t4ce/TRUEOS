@@ -107,6 +107,20 @@ make intel-gpu-verify-linked-copy-cpp
 byte identity with the stripped/staged runtime ELF, and applies the same
 selected-present/legacy-absent scan to the extracted member.
 
+After booting that ISO on the physical `00:02.0`, `8086:4680`, revision
+`0x0c` TestRig, run `gpgpu probe copy-rect` and save the complete output. The
+host verifier turns that output into a strict promotion record:
+
+```sh
+make intel-gpu-verify-copy-cpp-hardware-log \
+  INTEL_GPU_CPP_PROBE_LOG=/path/to/copy-rect-probe.log
+```
+
+It requires the canonical C++ Zebin hash and exact successful summary plus all
+four source-defined case records. It rejects logs from another BDF, device,
+revision, frontend, feature, artifact source, or geometry, and rejects
+missing, duplicate, reordered, failed, or over-timeout cases.
+
 Existing artifacts can receive a contract without rebaking:
 
 ```sh

@@ -186,3 +186,10 @@ Promotion should require:
 
 The C source should remain the fallback until that hardware comparison passes
 on `8086:4680` revision `0x0c`.
+
+The complete physical transcript is checked on the host with:
+
+```sh
+make intel-gpu-verify-copy-cpp-hardware-log \
+  INTEL_GPU_CPP_PROBE_LOG=/path/to/copy-rect-probe.log
+```

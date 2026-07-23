@@ -59,15 +59,22 @@ pub fn resolve_ipv4_for_sync_abi_host(host: &str) -> Result<[u8; 4], DnsResolveE
         .resolve_device_index()
         .ok_or(DnsResolveError::NoNic)?;
     let host = String::from(host);
-    crate::wait::spawn_and_wait_local(async move {
-        super::dns::resolve_ipv4_for_device(
-            dev_idx,
-            host.as_str(),
-            super::dns::DnsConfig::for_profile(profile),
-        )
-        .await
-    })
-    .map_err(DnsResolveError::from)
+    // This function is synchronous only because the current Blueprint C ABI
+    // and guest vmcall ABI promise that shape. The carrier lane parks while a
+    // BSP task owns and polls the actual network future; never restore a local
+    // executor-polling bridge here.
+    match super::dns_request_broker::resolve_ipv4(dev_idx, host) {
+        Ok(result) => result,
+        Err(error) => {
+            crate::log_error!(target: "net";
+                "dns sync ABI: request rejected reason={:?} cpu={} executor_poll={}\n",
+                error,
+                crate::percpu::this_cpu().cpu_index(),
+                crate::percpu::in_executor_poll(),
+            );
+            Err(DnsResolveError::Runtime)
+        }
+    }
 }
 
 fn resolve_ipv4_for_sync_abi_guest_vmcall(host: &str) -> Result<[u8; 4], DnsResolveError> {

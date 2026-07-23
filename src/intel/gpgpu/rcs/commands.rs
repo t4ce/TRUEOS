@@ -296,7 +296,7 @@ fn direct_rcs_submit_batch_on_lane(
         return false;
     }
     let mut runtime = runtime.lock();
-    direct_rcs_submit_batch_with_runtime(dev, state, &mut runtime, client)
+    direct_rcs_submit_batch_with_runtime(dev, state, &mut runtime, client, false).is_some()
 }
 
 fn quarantine_direct_rcs_context(reason: &'static str) {
@@ -342,9 +342,10 @@ fn direct_rcs_submit_batch_with_runtime(
     state: DirectRcsState,
     runtime: &mut DirectRcsSubmitRuntime,
     client: crate::gpu::vgpu::KernelClient,
-) -> bool {
-    if runtime.pending.is_some() {
-        return false;
+    allow_queued: bool,
+) -> Option<crate::gpu::executor::KernelSubmission> {
+    if !allow_queued && runtime.pending.is_some() {
+        return None;
     }
     // The GuC owns one persistent logical context for the direct-RCS client.
     // Its ring must therefore be persistent as well: publishing the same tail
@@ -355,7 +356,7 @@ fn direct_rcs_submit_batch_with_runtime(
     let ring_tail_bytes =
         direct_rcs_append_ring_batch_start(state, old_tail_bytes, state.gpu_va.batch);
     let Some(ring_ctl) = direct_rcs_ring_ctl_value(DIRECT_RCS_RING_BYTES) else {
-        return false;
+        return None;
     };
     if !runtime.context_initialized {
         if !direct_rcs_init_lrc_context_image(
@@ -364,7 +365,7 @@ fn direct_rcs_submit_batch_with_runtime(
             ring_tail_bytes as u32,
             ring_ctl,
         ) {
-            return false;
+            return None;
         }
         runtime.context_initialized = true;
     } else {
@@ -382,8 +383,10 @@ fn direct_rcs_submit_batch_with_runtime(
     match crate::gpu::executor::submit_kernel_context(client, descriptor) {
         Ok(submission) => {
             runtime.ring_tail_bytes = ring_tail_bytes;
-            runtime.pending = Some(submission);
-            true
+            if !allow_queued {
+                runtime.pending = Some(submission);
+            }
+            Some(submission)
         }
         Err(error) => {
             // The entry was not admitted. Keep the software tail at the last
@@ -393,7 +396,7 @@ fn direct_rcs_submit_batch_with_runtime(
                 "gpgpu/vgpu: submit failed error={:?} submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
                 error
             );
-            false
+            None
         }
     }
 }

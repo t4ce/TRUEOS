@@ -2,7 +2,6 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
@@ -325,15 +324,6 @@ impl<T> CompletionCell<T> {
         core::future::poll_fn(|cx| self.poll_take(cx)).await
     }
 
-    pub fn join_blocking(&self) -> T {
-        loop {
-            if let Some(value) = self.try_take() {
-                return value;
-            }
-            self.wait.wait_for_event_blocking(0);
-        }
-    }
-
     pub fn join_blocking_parked(&self) -> T {
         loop {
             if let Some(value) = self.try_take() {
@@ -341,26 +331,6 @@ impl<T> CompletionCell<T> {
             }
             self.wait.wait_for_event_blocking_parked(0);
         }
-    }
-}
-
-pub struct LocalJoinHandle<T> {
-    completion: Arc<CompletionCell<T>>,
-}
-
-impl<T> Unpin for LocalJoinHandle<T> {}
-
-impl<T> LocalJoinHandle<T> {
-    pub fn join_blocking(self) -> T {
-        self.completion.join_blocking()
-    }
-}
-
-impl<T> Future for LocalJoinHandle<T> {
-    type Output = T;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().completion.poll_take(cx)
     }
 }
 
@@ -496,21 +466,4 @@ where
     F: Future<Output = ()> + 'static,
 {
     enqueue_local_job(Box::pin(fut));
-}
-
-/// Enqueue a non-Send future and return a handle that observes completion.
-pub fn spawn_local_join<F, T>(fut: F) -> LocalJoinHandle<T>
-where
-    F: Future<Output = T> + 'static,
-    T: 'static,
-{
-    let completion = Arc::new(CompletionCell::new());
-    let producer = completion.clone();
-
-    enqueue_local_job(Box::pin(async move {
-        let out = fut.await;
-        let _ = producer.complete(out);
-    }));
-
-    LocalJoinHandle { completion }
 }

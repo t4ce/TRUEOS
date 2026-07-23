@@ -46,7 +46,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     let damage_width = damage.width.min(dst.width - damage_x);
     let damage_height = damage.height.min(dst.height - damage_y);
     let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if runtime.pending.is_some() {
+    if !runtime.pending.is_empty() {
         return Err(Ui4CompositorSubmitError::Busy);
     }
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
@@ -162,25 +162,22 @@ pub(crate) fn queue_ui4_compositor_layers(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_with_runtime(
+    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
         crate::gpu::vgpu::KernelClient::Ui4Compositor,
-    ) {
+        true,
+    ) else {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    }
+    };
     let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
-    let gpu = runtime
-        .submit
-        .pending
-        .expect("accepted UI4 submission must have an executor token");
     let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.last_completion = None;
-    runtime.pending = Some(Ui4CompositorPending {
+    runtime.pending.push_back(Ui4CompositorPending {
         submission,
+        job_slot: 0,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -284,7 +281,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     }
 
     let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if runtime.pending.is_some() {
+    if !runtime.pending.is_empty() {
         return Err(Ui4CompositorSubmitError::Busy);
     }
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
@@ -350,25 +347,22 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     }
 
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_with_runtime(
+    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
         crate::gpu::vgpu::KernelClient::Ui4Compositor,
-    ) {
+        true,
+    ) else {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    }
+    };
     let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
-    let gpu = runtime
-        .submit
-        .pending
-        .expect("accepted UI4 alpha submission must have an executor token");
     let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.last_completion = None;
-    runtime.pending = Some(Ui4CompositorPending {
+    runtime.pending.push_back(Ui4CompositorPending {
         submission,
+        job_slot: 0,
         started_tick,
         admitted_tick,
         marker_slot: RECT_WORKLIST_POST_MARKER_SLOT,
@@ -424,7 +418,7 @@ fn queue_ui4_sprite_quad_runs(
     }
 
     let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if runtime.pending.is_some() {
+    if !runtime.pending.is_empty() {
         return Err(Ui4CompositorSubmitError::Busy);
     }
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
@@ -495,25 +489,22 @@ fn queue_ui4_sprite_quad_runs(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_with_runtime(
+    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
         crate::gpu::vgpu::KernelClient::Ui4Compositor,
-    ) {
+        true,
+    ) else {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    }
+    };
     let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
-    let gpu = runtime
-        .submit
-        .pending
-        .expect("accepted UI4 submission must have an executor token");
     let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.last_completion = None;
-    runtime.pending = Some(Ui4CompositorPending {
+    runtime.pending.push_back(Ui4CompositorPending {
         submission,
+        job_slot: 0,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -555,7 +546,6 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     let queue_started_tick = direct_rcs_now_tick();
     let mut probe = GpgpuSubmissionProbe::default();
-    let source_gpu = UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE;
     let destination_valid = content_width != 0
         && content_height != 0
         && content_dst_x
@@ -571,10 +561,28 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             .checked_add(content_height)
             .is_some_and(|bottom| bottom <= source.height);
     let layouts_valid = dst.is_valid() && source.is_valid();
-    let ranges_distinct = source.bytes <= UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES
-        && !gpu_ranges_overlap(source_gpu, source.bytes, dst.gpu, dst.bytes)
-        && !gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes);
-    if !destination_valid || !source_valid || !layouts_valid || !ranges_distinct {
+    if !destination_valid
+        || !source_valid
+        || !layouts_valid
+        || source.bytes > UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES
+        || gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes)
+    {
+        return Err(Ui4CompositorSubmitError::InvalidWorklist);
+    }
+
+    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    if runtime.pending.len() >= UI4_COMPOSITOR_RCS_JOB_SLOTS {
+        return Err(Ui4CompositorSubmitError::Busy);
+    }
+    let Some(job_slot) = (0..UI4_COMPOSITOR_RCS_JOB_SLOTS)
+        .find(|slot| runtime.pending.iter().all(|pending| pending.job_slot != *slot))
+    else {
+        return Err(Ui4CompositorSubmitError::Busy);
+    };
+    let source_gpu = UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
+        .checked_add((job_slot * UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES) as u64)
+        .ok_or(Ui4CompositorSubmitError::InvalidWorklist)?;
+    if gpu_ranges_overlap(source_gpu, source.bytes, dst.gpu, dst.bytes) {
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
     let params = Ui4Nv12Tile64ToRgba8FrameParams {
@@ -597,15 +605,13 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         source_x,
         source_y,
     };
-
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    if runtime.pending.is_some() {
-        return Err(Ui4CompositorSubmitError::Busy);
-    }
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let upload = upload_ui4_nv12_tile64_to_rgba8_frame_kernel()
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
-    let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let shared_state =
+        ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
+    let state =
+        direct_rcs_job_slot(shared_state, job_slot).ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
     let phase_started_tick = direct_rcs_now_tick();
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -614,13 +620,15 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         probe.gpu_timestamp_frequency_hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
     }
     let phase_started_tick = direct_rcs_now_tick();
-    let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
+    let mapped_ok =
+        forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, shared_state));
     probe.state_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if mapped_ok {
         runtime.state_mapped = true;
     }
     let phase_started_tick = direct_rcs_now_tick();
-    let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(state));
+    let ppgtt_ok =
+        mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(shared_state));
     probe.ppgtt_init_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if ppgtt_ok {
         runtime.ppgtt_initialized = true;
@@ -671,7 +679,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         crate::log_info!(target: "ui4";
             "ui4/guc-video-frame: submit-boundary attempt={} action=enter-guc-submit ppgtt_root=0x{:X} source_gpu=0x{:X} media_gpu=0x{:X} source_phys=0x{:X} source_bytes=0x{:X} source_pat=0 source_alias=compositor-owned destination_gpu=0x{:X} destination_phys=0x{:X} destination_bytes=0x{:X} destination_pat=3 bindings=3 base_alias=exact-destination pte_preflight=complete batch_ready=1 display_plane_writes=0 cpu_pixel_copy=0\n",
             submit_attempt,
-            state.ppgtt_phys,
+            shared_state.ppgtt_phys,
             source_gpu,
             source.gpu,
             source.phys,
@@ -683,31 +691,28 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     }
     probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
     let started_tick = direct_rcs_now_tick();
-    if !direct_rcs_submit_batch_with_runtime(
+    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
         crate::gpu::vgpu::KernelClient::Ui4Compositor,
-    ) {
+        true,
+    ) else {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    }
+    };
     let admitted_tick = direct_rcs_now_tick();
     probe.admission_us = direct_rcs_elapsed_us_since(started_tick);
     probe.queue_total_us = direct_rcs_elapsed_us_since(queue_started_tick);
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
-    let gpu = runtime
-        .submit
-        .pending
-        .expect("accepted UI4 submission must have an executor token");
     probe.guc_h2g_publish_sequence = gpu.physical_publish_sequence();
     if crate::intel::guc_ctb::h2g_sequence_consumed(probe.guc_h2g_publish_sequence) {
         probe.gpu_h2g_consumed_observe_timestamp = direct_rcs_read_render_timestamp(dev);
     }
     let submission = Ui4CompositorSubmission { serial, gpu };
-    runtime.last_completion = None;
-    runtime.pending = Some(Ui4CompositorPending {
+    runtime.pending.push_back(Ui4CompositorPending {
         submission,
+        job_slot,
         started_tick,
         admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
@@ -724,14 +729,19 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     });
     if log_submit_boundary {
         crate::log_info!(target: "ui4";
-            "ui4/guc-video-frame: submit-boundary attempt={} action=guc-submit-accepted serial={} next=completion-marker\n",
+            "ui4/guc-video-frame: submit-boundary attempt={} action=guc-submit-accepted serial={} job_slot={} queue_depth={} next=completion-marker\n",
             submit_attempt,
             serial,
+            job_slot,
+            runtime.pending.len(),
         );
     }
     crate::log_trace!(target: "ui4";
-        "ui4/guc-video-frame: queued serial={} native=media-ytile-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
+        "ui4/guc-video-frame: queued serial={} job_slot={} queue_depth={} queue_capacity={} native=media-ytile-nv12 output={}x{} content={}x{}@{},{} source={},{} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X} ppgtt=source-slot-private-alias-pat0-wb,dst-base-pat3-uc bindings=3 base_alias=exact-dst-same-pte display_plane_writes=0\n",
         serial,
+        job_slot,
+        runtime.pending.len(),
+        UI4_COMPOSITOR_RCS_JOB_SLOTS,
         dst.width,
         dst.height,
         content_width,
@@ -757,6 +767,20 @@ fn gpu_ranges_overlap(left: u64, left_bytes: usize, right: u64, right_bytes: usi
     left < right_end && right < left_end
 }
 
+fn remember_ui4_compositor_completion(
+    runtime: &mut Ui4CompositorRuntime,
+    submission: Ui4CompositorSubmission,
+    completion: Ui4CompositorCompletion,
+) {
+    runtime
+        .completions
+        .retain(|(retired, _)| *retired != submission);
+    runtime.completions.push_back((submission, completion));
+    while runtime.completions.len() > UI4_COMPOSITOR_RCS_JOB_SLOTS * 2 {
+        let _ = runtime.completions.pop_front();
+    }
+}
+
 /// Observe one compositor marker exactly once.  This function never spins.
 pub(crate) fn poll_ui4_compositor_submission(
     submission: Ui4CompositorSubmission,
@@ -764,22 +788,41 @@ pub(crate) fn poll_ui4_compositor_submission(
     const FAILURE_TIMEOUT_MS: u64 = 1_000;
 
     let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
-    let Some(mut pending) = runtime.pending else {
-        if let Some((retired, completion)) = runtime.last_completion
-            && retired == submission
-        {
-            return completion;
-        }
+    if let Some((_, completion)) = runtime
+        .completions
+        .iter()
+        .find(|(retired, _)| *retired == submission)
+    {
+        return *completion;
+    }
+    let Some(mut pending) = runtime.pending.front().copied() else {
         return Ui4CompositorCompletion::InvalidSubmission;
     };
     if pending.submission != submission {
-        return Ui4CompositorCompletion::InvalidSubmission;
+        return if runtime
+            .pending
+            .iter()
+            .any(|queued| queued.submission == submission)
+        {
+            // The RCS ring is ordered. A later slot cannot be retired ahead of
+            // its predecessor even if an observer happens to poll it first.
+            Ui4CompositorCompletion::Pending
+        } else {
+            Ui4CompositorCompletion::InvalidSubmission
+        };
     }
-    let Some(state) = *UI4_COMPOSITOR_RCS_STATE.lock() else {
-        runtime.pending = None;
-        runtime.submit.pending = None;
+    let Some(shared_state) = *UI4_COMPOSITOR_RCS_STATE.lock() else {
+        let _ = runtime.pending.pop_front();
         let completion = Ui4CompositorCompletion::Failed;
-        runtime.last_completion = Some((submission, completion));
+        remember_ui4_compositor_completion(&mut runtime, submission, completion);
+        drop(runtime);
+        let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
+        return completion;
+    };
+    let Some(state) = direct_rcs_job_slot(shared_state, pending.job_slot) else {
+        let _ = runtime.pending.pop_front();
+        let completion = Ui4CompositorCompletion::Failed;
+        remember_ui4_compositor_completion(&mut runtime, submission, completion);
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
         return completion;
@@ -898,15 +941,17 @@ pub(crate) fn poll_ui4_compositor_submission(
                 }
             }
         }
-        runtime.pending = None;
-        runtime.submit.pending = None;
+        let _ = runtime.pending.pop_front();
         let completion = Ui4CompositorCompletion::Complete(pending.stats);
-        runtime.last_completion = Some((submission, completion));
+        remember_ui4_compositor_completion(&mut runtime, submission, completion);
+        let remaining_depth = runtime.pending.len();
         drop(runtime);
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, true);
         crate::log_trace!(target: "ui4";
-            "ui4/guc-compositor: complete serial={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=single\n",
+            "ui4/guc-compositor: complete serial={} job_slot={} remaining_queue_depth={} kernel={} descs={} walkers={} elapsed_ms={} gpu_phase_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_phase_ticks=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker:{},walker_to_release:{},release_to_observe:{},pre_submit_to_observe:{} gpu_timestamps=host_pre_submit:{},h2g_consumed_observe:{},batch_enter:{},pre_walker:{},post_walker:{},post_release:{},host_observe:{} guc_h2g_publish_sequence={} gpu_timestamp_hz={} gpu_walker_valid={} gpu_phase_valid={} gpu_h2g_split_valid={} h2g_split_bounds=consume-upper+dispatch-lower poll=ordered-ring\n",
             pending.submission.serial,
+            pending.job_slot,
+            remaining_depth,
             pending.kernel,
             pending.stats.descs,
             pending.stats.walkers,
@@ -951,7 +996,9 @@ pub(crate) fn poll_ui4_compositor_submission(
         // that execution stopped.
         if !pending.overdue_logged {
             pending.overdue_logged = true;
-            runtime.pending = Some(pending);
+            if let Some(front) = runtime.pending.front_mut() {
+                *front = pending;
+            }
             drop(runtime);
             crate::log_error!(target: "ui4";
                 "ui4/guc-compositor: completion overdue serial={} observed=0x{:08X} want=0x{:08X} threshold_ms={} action=keep-pending-no-reuse cancellation=unavailable log=once\n",
@@ -963,7 +1010,9 @@ pub(crate) fn poll_ui4_compositor_submission(
         }
         return Ui4CompositorCompletion::Pending;
     }
-    runtime.pending = Some(pending);
+    if let Some(front) = runtime.pending.front_mut() {
+        *front = pending;
+    }
     Ui4CompositorCompletion::Pending
 }
 

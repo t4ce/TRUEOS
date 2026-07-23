@@ -660,20 +660,32 @@ const UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE: u64 = 0x01D0_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01D1_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE: u64 = 0x01D4_0000;
 const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
+// Two immutable job slots match the decoded-video lifetime budget: one RCS
+// conversion may execute while the following decoded picture remains queued.
+// Each slot owns a complete batch, result page, and 16 MiB source-alias
+// window. The ring and HWLRCA stay shared so both tails target one persistent
+// GuC context instead of repeatedly draining a one-job software lane.
+const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // The decoder's `gpu_addr` belongs to the media-engine address space. Never
-// borrow that number as an RCS PPGTT VA. One sequential video conversion owns
-// this compositor-private PAT0 alias until its GuC completion marker retires;
-// each new decoded picture may retarget the physical pages without changing
-// the alias's cache policy. The 16 MiB window matches the media output backing
-// and remains disjoint from both persistent font resources and UI4 RGBA VAs.
+// borrow that number as an RCS PPGTT VA. Each queued video conversion owns one
+// compositor-private PAT0 alias until its GuC completion marker retires, so a
+// following frame never retargets PTEs which an earlier batch can still read.
+// Each 16 MiB window matches the media output backing; the two-slot range stays
+// disjoint from both persistent font resources and UI4 RGBA VAs.
 const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
-    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
+    UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
+        + (UI4_COMPOSITOR_RCS_JOB_SLOTS * UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES) as u64
         <= crate::r::ui_surface::UI_SURFACE_GPU_BASE
 );
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
+const _: () = assert!(
+    UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE
+        + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_BATCH_BYTES) as u64
+        <= SCENE_AABB_RCS_GPU_VA_RING_BASE
+);
 
 const DIRECT_RCS_SMOKE_POLL_ITERS: usize = 262_144;
 const DIRECT_RCS_TIMEOUT_POLL_PAUSE_ITERS: usize = 64;

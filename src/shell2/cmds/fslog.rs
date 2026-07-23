@@ -140,10 +140,7 @@ pub(crate) fn try_parse_as(
                 return;
             }
             Err(err) => {
-                print_shell_line(
-                    io,
-                    format!("{}: scan failed: {err:?}", command).as_str(),
-                );
+                print_shell_line(io, format!("{}: scan failed: {err:?}", command).as_str());
                 return;
             }
         };

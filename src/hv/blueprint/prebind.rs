@@ -19,6 +19,11 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
         mask |= crate::r::readiness::NET_ANY_CONFIGURED
             | crate::r::readiness::NET_SOCKET_READY
             | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
+    } else if name == "trueos_cabi_dns_resolve_ipv4" {
+        // The ABI shape is synchronous, but its implementation is a parked
+        // AP/VM carrier request serviced by the BSP async secure-DNS stack.
+        mask |=
+            crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY;
     } else if name.starts_with("trueos_cabi_socket_")
         || name.starts_with("trueos_cabi_tun_")
         || name.starts_with("trueos_mio_")

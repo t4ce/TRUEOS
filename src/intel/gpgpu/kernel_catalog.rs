@@ -184,6 +184,10 @@ const _: () = assert!(COPY_RECT_RGBA8_CPP_ADLS_SPV.len() == 4_788);
 #[cfg(feature = "intel_gpu_cpp_aot")]
 const _: () = {
     let contract = COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(contract.target.pci_device_ids.len() == 1);
+    assert!(contract.target.pci_device_ids[0] == 0x4680);
+    assert!(contract.target.revision_min == 0x0C);
+    assert!(contract.target.revision_max == 0x0C);
     assert!(contract.simd_width == 16);
     assert!(contract.scratch_bytes == 0);
     assert!(contract.slm_bytes == 0);

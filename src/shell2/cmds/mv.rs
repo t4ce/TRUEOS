@@ -114,19 +114,11 @@ async fn list_dir(disk: DeviceHandle, path: &str) -> Result<Vec<String>, block::
         .collect())
 }
 
-async fn rename_file(
-    disk: DeviceHandle,
-    src: &str,
-    dst: &str,
-) -> Result<bool, block::Error> {
+async fn rename_file(disk: DeviceHandle, src: &str, dst: &str) -> Result<bool, block::Error> {
     crate::r::fs::trueosfs::file_rename_async(disk, src, dst).await
 }
 
-async fn rename_dir(
-    disk: DeviceHandle,
-    src: &str,
-    dst: &str,
-) -> Result<bool, block::Error> {
+async fn rename_dir(disk: DeviceHandle, src: &str, dst: &str) -> Result<bool, block::Error> {
     crate::r::fs::trueosfs::dir_rename_async(disk, src, dst).await
 }
 

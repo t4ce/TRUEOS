@@ -156,6 +156,19 @@ Build with `make iso-cpp-aot`, boot that image on the exact TestRig
 gpgpu probe copy-rect
 ```
 
+Save the complete summary and four case lines, then verify the transcript on
+the development host:
+
+```sh
+make intel-gpu-verify-copy-cpp-hardware-log \
+  INTEL_GPU_CPP_PROBE_LOG=/path/to/copy-rect-probe.log
+```
+
+The verifier rejects missing, duplicated, reordered, or contradictory output.
+It pins the BDF, PCI ID, revision, C++ feature/frontend, artifact identity and
+hash, all four case geometries and readback counts, both retirement markers,
+and the 250 ms submission timeout.
+
 Promotion requires the summary to contain
 `ok=1 reboot_required=0 frontend=cpp-for-opencl feature_enabled=1 verified=1
 device=00:02.0-0x4680-r0C
@@ -167,6 +180,21 @@ probe again. The lane is quarantined and reports `reboot_required=1`; recover
 the engine or reboot the machine first.
 
 ## Findings that changed the implementation
+
+### Revision exactness is runtime admission policy
+
+The tested `ocloc` interface accepts `-device 0x4680` but no revision argument
+from this profile. Consequently, changing the reviewed range from
+`0x00..0xff` to exact revision `0x0c` must not change LLVM bitcode, SPIR-V, or
+Zebin bytes. The dedicated C++ profile instead narrows the generated manifest
+and the Rust admission contract. The canonical two-root rebake confirmed the
+same SPIR-V and Zebin hashes; any code-byte drift during this policy-only
+change would have been treated as an unexpected compiler-input change.
+
+The physical transcript additionally pins BDF `00:02.0`. BDF is a TestRig
+identity check, while runtime artifact admission intentionally uses PCI device
+ID plus revision so slot enumeration is not confused with binary
+compatibility.
 
 ### Direct Clang SPIR-V was executable but metadata-incomplete
 

@@ -2,7 +2,7 @@
 //!
 //! GPU programs are still encoded by the hardware backend and scheduled by
 //! the physical GPU firmware. This layer owns the host-side async contract:
-//! one admitted job per virtual kernel queue, exact timeline retirement, and
+//! bounded admission per virtual kernel queue, exact timeline retirement, and
 //! waking Embassy tasks waiting on a GPU fence.
 
 extern crate alloc;
@@ -149,20 +149,32 @@ pub(crate) struct GpuExecutorStatus {
 static NEXT_WAITER_ID: AtomicU64 = AtomicU64::new(1);
 static EXECUTOR: Mutex<ExecutorState> = Mutex::new(ExecutorState::new());
 
-/// Admit one already-encoded kernel context. A kernel client has one ordered
-/// software lane, which gives the first executor version bounded backpressure
-/// and unambiguous per-point completion without growing a driver framework.
+const fn kernel_client_inflight_limit(client: KernelClient) -> usize {
+    match client {
+        // The compositor owns two immutable batch/result/source-alias slots on
+        // one ordered LRC ring. Keeping the next tail admitted is what prevents
+        // the context from repeatedly falling out of its residency window.
+        KernelClient::Ui4Compositor => 2,
+        _ => 1,
+    }
+}
+
+/// Admit one already-encoded kernel context. Each client remains an ordered
+/// software lane; only clients with independently owned job slots may have
+/// more than one exact timeline point outstanding.
 pub(crate) fn submit_kernel_context(
     client: KernelClient,
     descriptor: PhysicalContextDescriptor,
 ) -> Result<KernelSubmission, VgpuError> {
     {
         let mut executor = EXECUTOR.lock();
+        let client_inflight = executor
+            .inflight
+            .iter()
+            .filter(|entry| entry.submission.client == client)
+            .count();
         if executor.admitting.contains(&client)
-            || executor
-                .inflight
-                .iter()
-                .any(|entry| entry.submission.client == client)
+            || client_inflight >= kernel_client_inflight_limit(client)
         {
             return Err(VgpuError::Busy);
         }

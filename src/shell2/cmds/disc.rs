@@ -81,10 +81,13 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
     // BSP executor instead of synchronously waiting inside the Shell2 task.
     crate::wait::spawn_local_detached(async move {
         let out: Result<_, alloc::string::String> = async {
-            let disk =
-                crate::r::disc::ramdisk::create_trueos_public(size_bytes, RAMDISK_BLOCK_SIZE, label)
-                    .await
-                    .map_err(|err| alloc::format!("create/format failed: {:?}", err))?;
+            let disk = crate::r::disc::ramdisk::create_trueos_public(
+                size_bytes,
+                RAMDISK_BLOCK_SIZE,
+                label,
+            )
+            .await
+            .map_err(|err| alloc::format!("create/format failed: {:?}", err))?;
 
             crate::r::fs::trueosfs::mount_root_async(disk)
                 .await
@@ -97,8 +100,7 @@ fn create_ramdisc(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>
         match out {
             Ok(disk) => {
                 let info = disk.info();
-                let ready =
-                    crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+                let ready = crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
                 print_shell_line(
                     io,
                     alloc::format!(
