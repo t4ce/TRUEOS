@@ -11,7 +11,6 @@
 use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
@@ -748,7 +747,6 @@ static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
 static VIDEO_CONVERSION_STATE: Mutex<DecodedVideoConversionState> =
     Mutex::new(DecodedVideoConversionState::new());
-static VIDEO_CONVERSION_WORK: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static VIDEO_CONVERSION_LAST_ERROR_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 
 fn decoded_video_conversion_idle() -> bool {
@@ -857,7 +855,6 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
             }
         };
         if enqueued {
-            VIDEO_CONVERSION_WORK.signal(());
             return true;
         }
         log_video_conversion_backpressure("enqueue", playback_frame, report, worker_online);
@@ -955,8 +952,8 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
     );
     loop {
         let Some(request) = take_decoded_video_conversion_request() else {
-            // Signal has a single-waker contract. Two cooperative lanes poll
-            // this bounded queue instead of racing to replace its waiter.
+            // Both cooperative lanes poll the bounded queue. A single-waker
+            // signal would let one lane replace the other's waiter.
             Timer::after(Duration::from_millis(1)).await;
             continue;
         };
