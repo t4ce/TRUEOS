@@ -29,7 +29,6 @@ if [[ -n "$IVERILOG_BASE" ]]; then
 fi
 "$IVERILOG" "${iverilog_args[@]}" \
   "$RTL_DIR/truega_q8_0_dot32.v" \
-  "$RTL_DIR/truega_q8_0_scale_q30.v" \
   "$RTL_DIR/truega_q8_0_gemv.v" \
   "$RTL_DIR/truega_lfm25_q8_projection_row_engine.v" \
   "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \

@@ -74,6 +74,7 @@ module truega_lfm25_q8_projection_row_engine #(
     reg [4:0] activation_read_index;
     reg [271:0] activation_memory [0:31];
     reg [271:0] activation_read_data;
+    wire gemv_ready;
 
     wire parameter_contract_valid = ROW_COUNT == 512
         || ROW_COUNT == 1024 || ROW_COUNT == 2048
@@ -82,7 +83,7 @@ module truega_lfm25_q8_projection_row_engine #(
     assign start_ready_o = state == ST_IDLE && !state_reset_i;
     assign activation_ready_o = state == ST_LOAD_ACT;
     assign activation_block_index_o = activation_count[4:0];
-    assign weight_ready_o = state == ST_ROW_FEED;
+    assign weight_ready_o = state == ST_ROW_FEED && gemv_ready;
     assign weight_row_index_o = current_row;
     assign weight_block_index_o = current_block;
     assign result_valid_o = state == ST_ROW_OUTPUT;
@@ -112,6 +113,7 @@ module truega_lfm25_q8_projection_row_engine #(
         .clk(clk),
         .reset_n(gemv_reset_n),
         .valid_i(weight_accept && weight_sequence_valid),
+        .ready_o(gemv_ready),
         .row_first_i(weight_accept && weight_sequence_valid
             && current_block == 5'd0),
         .row_last_i(weight_accept && weight_sequence_valid

@@ -1,12 +1,14 @@
 // Spirit VFX procedural-alpha background pass for Intel Xe-LP / ADL-S.
 //
 // The dispatch is fixed at 256x256. It writes premultiplied BGRA8 bytes into
-// the exact Intel cursor backbuffer. Modes 1, 4, and 6 retain the preview.html
-// names: Radial aura, Nebula smoke, and Portal vortex.
+// the exact Intel cursor backbuffer. The selected preview.html modes retain
+// their original IDs 2 through 10, names, parameters, and two-color contract.
 
 #define SPIRIT_VFX_SIZE 256u
 #define SPIRIT_VFX_CONTROL_MAGIC 0x53564658u // "SVFX"
 #define SPIRIT_VFX_CONTROL_VERSION 1u
+#define VFX_PI  3.14159265359f
+#define VFX_TAU 6.28318530718f
 
 #define VFX_CTRL_MAGIC              0u
 #define VFX_CTRL_VERSION            1u
@@ -33,33 +35,50 @@ static inline float vfx_clamp01(float value)
     return clamp(value, 0.0f, 1.0f);
 }
 
-static inline uint vfx_hash(uint value)
+// All authored powers use non-negative bases and fixed integer exponents.
+// Keeping them multiply-only prevents IGC from introducing an implicit
+// constant surface and external pow helper into this two-BTI artifact.
+static inline float vfx_powi(float base, uint exponent)
 {
-    value ^= value >> 16;
-    value *= 0x7FEB352Du;
-    value ^= value >> 15;
-    value *= 0x846CA68Bu;
-    return value ^ (value >> 16);
+    float result = 1.0f;
+    while (exponent != 0u) {
+        if ((exponent & 1u) != 0u) {
+            result *= base;
+        }
+        base *= base;
+        exponent >>= 1;
+    }
+    return result;
 }
 
-static inline float vfx_hash21(int2 point)
+static inline float vfx_fract(float value)
 {
-    uint x = as_uint(point.x);
-    uint y = as_uint(point.y);
-    return (float)(vfx_hash(x ^ (y * 0x9E3779B9u)) & 0x00FFFFFFu)
-        * (1.0f / 16777215.0f);
+    return value - floor(value);
+}
+
+static inline float2 vfx_fract2(float2 value)
+{
+    return value - floor(value);
+}
+
+// Float hash and FBM intentionally match preview.html. Keeping the reference
+// hash makes the authored palettes and thresholds transfer predictably.
+static inline float vfx_hash21f(float2 point)
+{
+    point = vfx_fract2(point * (float2)(123.34f, 456.21f));
+    point += dot(point, point + 45.32f);
+    return vfx_fract(point.x * point.y);
 }
 
 static inline float vfx_noise21(float2 point)
 {
     float2 floored = floor(point);
-    int2 cell = (int2)((int)floored.x, (int)floored.y);
     float2 fraction = point - floored;
     fraction = fraction * fraction * (3.0f - 2.0f * fraction);
-    float a = vfx_hash21(cell);
-    float b = vfx_hash21(cell + (int2)(1, 0));
-    float c = vfx_hash21(cell + (int2)(0, 1));
-    float d = vfx_hash21(cell + (int2)(1, 1));
+    float a = vfx_hash21f(floored);
+    float b = vfx_hash21f(floored + (float2)(1.0f, 0.0f));
+    float c = vfx_hash21f(floored + (float2)(0.0f, 1.0f));
+    float d = vfx_hash21f(floored + (float2)(1.0f, 1.0f));
     return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
 }
 
@@ -144,17 +163,38 @@ __kernel void spirit_vfx_background_rgba8(
     float alpha = 0.0f;
     float color_mix = 0.0f;
     uint background_id = control[VFX_CTRL_BACKGROUND_ID];
-    if (background_id == 1u) {
-        // preview.html: Radial aura
-        float core = native_exp(-radius * radius * 8.5f);
-        float ray_wave = 0.5f + 0.5f * native_sin(
-            angle * 10.0f + time * speed + radius * 18.0f);
-        float ray_wave2 = ray_wave * ray_wave;
-        float ray_wave4 = ray_wave2 * ray_wave2;
-        float rays = ray_wave4 * ray_wave4 * native_exp(-radius * 5.0f);
-        float noise = vfx_fbm(point * 7.0f + time * speed * 0.08f);
-        alpha = (core * (0.55f + 0.45f * noise) + rays * 0.42f) * intensity;
-        color_mix = vfx_clamp01(radius * 2.4f + noise * 0.35f);
+    if (background_id == 2u) {
+        // preview.html: Energy ring
+        float ring_radius = 0.31f + 0.012f * native_sin(time * speed * 2.0f);
+        float ring = native_exp(-fabs(radius - ring_radius) * 85.0f);
+        float ring2 = native_exp(-fabs(radius - (ring_radius + 0.05f)) * 120.0f)
+            * 0.45f;
+        float arc_noise = vfx_fbm((float2)(angle * 2.0f, radius * 12.0f));
+        float arc_wave = 0.5f + 0.5f * native_sin(
+            angle * 9.0f - time * speed * 2.2f + arc_noise * 4.0f);
+        float arcs = vfx_powi(arc_wave, 10u);
+        alpha = (ring * (0.5f + 0.8f * arcs) + ring2) * intensity;
+        color_mix = 0.5f + 0.5f * native_sin(angle * 3.0f + time * speed);
+    } else if (background_id == 3u) {
+        // preview.html: Magic circle
+        float ring1 = native_exp(-fabs(radius - 0.32f) * 130.0f);
+        float ring2 = native_exp(-fabs(radius - 0.24f) * 160.0f) * 0.7f;
+        float spokes = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 12.0f), 28u)
+            * smoothstep(0.12f, 0.18f, radius)
+            * (1.0f - smoothstep(0.30f, 0.37f, radius));
+        float ticks = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 48.0f - time * speed * 0.35f),
+            36u)
+            * native_exp(-fabs(radius - 0.28f) * 42.0f);
+        float glyph_cell = floor((angle + VFX_PI) * (24.0f / VFX_TAU));
+        float glyph = step(
+            0.78f,
+            vfx_hash21f((float2)(glyph_cell, floor(time * 0.4f))))
+            * native_exp(-fabs(radius - 0.205f) * 90.0f) * 0.6f;
+        alpha = (ring1 + ring2 + spokes * 0.65f + ticks * 0.55f + glyph)
+            * intensity;
+        color_mix = 0.5f + 0.5f * native_sin(angle * 4.0f + radius * 20.0f);
     } else if (background_id == 4u) {
         // preview.html: Nebula smoke
         float noise = vfx_fbm(
@@ -163,31 +203,90 @@ __kernel void spirit_vfx_background_rgba8(
             point * 9.0f - (float2)(time * speed * 0.05f, time * speed * 0.09f));
         float cloud = smoothstep(0.32f, 0.82f, noise * 0.72f + noise2 * 0.38f)
             * native_exp(-radius * radius * 3.2f);
-        alpha = cloud * intensity;
+        // A broad allocation-space ramp makes the unbounded smoke merge into
+        // arbitrary scenes without exposing the square cursor-surface edge.
+        // The inner 60% remains untouched; the outer region fades linearly,
+        // ending in four fully transparent pixels on each side.
+        float edge_distance = min(
+            min(uv.x, 1.0f - uv.x),
+            min(uv.y, 1.0f - uv.y));
+        float edge_fade = vfx_clamp01(
+            (edge_distance - 0.015625f) * 5.4237288f);
+        alpha = cloud * edge_fade * intensity;
         color_mix = vfx_clamp01(noise2);
+    } else if (background_id == 5u) {
+        // preview.html: Cyber grid
+        float2 grid_point = point * 9.0f;
+        grid_point.y += time * speed * 0.55f;
+        float2 grid_vector = fabs(vfx_fract2(grid_point) - 0.5f);
+        float grid = 1.0f - smoothstep(
+            0.035f, 0.09f, min(grid_vector.x, grid_vector.y));
+        float radial_fade = 1.0f - smoothstep(0.08f, 0.52f, radius);
+        alpha = grid * 0.45f * radial_fade * intensity;
+        color_mix = vfx_fract(grid_point.x * 0.08f + grid_point.y * 0.05f);
     } else if (background_id == 6u) {
-        // preview.html: Portal vortex. A rotating broken ring and soft inner
-        // veil remain behind Lilly while CUR_POS performs the actual jump.
-        float spin = time * speed * 1.8f;
-        float ripple = native_sin(angle * 7.0f - spin * 2.4f);
-        float ring_radius = 0.34f + ripple * 0.012f;
-        float ring_distance = fabs(radius - ring_radius);
-        float ring = native_exp(-ring_distance * ring_distance * 1450.0f);
-        float arc_wave = 0.5f + 0.5f * native_sin(
-            angle * 13.0f - spin * 3.1f + radius * 34.0f);
-        float arc2 = arc_wave * arc_wave;
-        float arcs = ring * arc2 * arc2;
-        float swirl_wave = 0.5f + 0.5f * native_sin(
-            angle * 5.0f - spin + radius * 42.0f);
-        float inner = (1.0f - smoothstep(0.08f, 0.34f, radius))
-            * (0.30f + 0.70f * swirl_wave);
-        float outer_glow = native_exp(-ring_distance * ring_distance * 120.0f)
-            * (1.0f - smoothstep(0.18f, 0.52f, radius));
-        alpha = (ring * 0.58f + arcs * 0.52f + inner * 0.18f
-            + outer_glow * 0.20f) * intensity;
-        color_mix = vfx_clamp01(
-            0.5f + 0.34f * native_sin(angle * 3.0f - spin)
-            + 0.16f * swirl_wave);
+        // preview.html: Portal vortex
+        float swirl = angle + radius * 9.0f - time * speed * 1.6f;
+        float bands = vfx_powi(
+            0.5f + 0.5f * native_sin(swirl * 6.0f), 9u);
+        float mask = (1.0f - smoothstep(0.11f, 0.46f, radius))
+            * smoothstep(0.04f, 0.12f, radius);
+        alpha = bands * 0.55f * mask * intensity;
+        color_mix = 0.5f + 0.5f * native_sin(swirl * 2.0f);
+    } else if (background_id == 7u) {
+        // preview.html: Speed lines
+        float sector = floor((angle + VFX_PI) * (80.0f / VFX_TAU));
+        float random = vfx_hash21f((float2)(
+            sector, floor(time * speed * 2.0f)));
+        float line = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 80.0f),
+            34u) * step(0.55f, random);
+        float radial = smoothstep(0.08f, 0.18f, radius)
+            * (1.0f - smoothstep(0.18f, 0.62f, radius));
+        alpha = line * radial * (0.35f + random) * intensity;
+        color_mix = random;
+    } else if (background_id == 8u) {
+        // preview.html: Bokeh field. At scale=1 this is the exact uv*7 demo
+        // grid; expressing it through point also makes the Scale control live.
+        float2 bokeh_point = point * 7.0f + 3.5f;
+        bokeh_point.y -= time * speed * 0.23f;
+        float2 cell = floor(bokeh_point);
+        float2 cell_uv = vfx_fract2(bokeh_point) - 0.5f;
+        float2 offset = (float2)(
+            vfx_hash21f(cell) - 0.5f,
+            vfx_hash21f(cell + 7.3f) - 0.5f) * 0.55f;
+        float size = 0.08f + 0.2f * vfx_hash21f(cell + 13.0f);
+        float bubble = 1.0f - smoothstep(
+            size, size + 0.04f, length(cell_uv - offset));
+        float fade = 0.25f + 0.75f * vfx_hash21f(cell + 2.0f);
+        alpha = bubble * fade * intensity * 0.72f;
+        color_mix = vfx_hash21f(cell + 19.0f);
+    } else if (background_id == 9u) {
+        // preview.html: Water ripples
+        float wave = vfx_powi(
+            0.5f + 0.5f * native_sin(radius * 72.0f - time * speed * 4.0f),
+            14u);
+        float wave2 = vfx_powi(
+            0.5f + 0.5f * native_sin(radius * 42.0f + time * speed * 2.2f),
+            18u) * 0.45f;
+        float radial = smoothstep(0.06f, 0.14f, radius)
+            * (1.0f - smoothstep(0.18f, 0.56f, radius));
+        alpha = (wave + wave2) * radial * intensity * 0.8f;
+        color_mix = vfx_clamp01(radius * 2.0f);
+    } else if (background_id == 10u) {
+        // preview.html: Pixel burst
+        float angular_cell = floor((angle + VFX_PI) * (32.0f / VFX_TAU));
+        float radial_phase = radius * 12.0f - time * speed * 1.8f;
+        float radial_cell = floor(radial_phase);
+        float random = vfx_hash21f((float2)(angular_cell, radial_cell));
+        float phase = vfx_fract(radial_phase);
+        float cell = step(0.74f, random)
+            * step(0.18f, phase)
+            * step(phase, 0.78f);
+        float radial = smoothstep(0.08f, 0.16f, radius)
+            * (1.0f - smoothstep(0.15f, 0.58f, radius));
+        alpha = cell * radial * intensity;
+        color_mix = random;
     }
 
     alpha = clamp(alpha * opacity, 0.0f, 0.96f);

@@ -142,7 +142,7 @@ fn spirit_vfx_write_control(
         core::ptr::write_volatile(dwords.add(2), frame);
         core::ptr::write_volatile(
             dwords.add(3),
-            matches!(control.background_mode, 1 | 4 | 6)
+            matches!(control.background_mode, 2..=10)
                 .then_some(control.background_mode)
                 .unwrap_or(0),
         );
@@ -334,7 +334,7 @@ fn submit_spirit_vfx_batch(
     }
     let started_tick = direct_rcs_now_tick();
     let dev = super::claimed_device()?;
-    let background_upload = if matches!(control.background_mode, 1 | 4 | 6) {
+    let background_upload = if matches!(control.background_mode, 2..=10) {
         Some(upload_spirit_vfx_background_rgba8_kernel()?)
     } else {
         None

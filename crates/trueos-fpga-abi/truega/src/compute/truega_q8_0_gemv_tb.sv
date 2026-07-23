@@ -12,6 +12,7 @@ module truega_q8_0_gemv_tb;
     reg [15:0] weight_scale_f16_i = 16'd0;
     reg [255:0] activation_quants_i = 256'd0;
     reg [255:0] weight_quants_i = 256'd0;
+    wire ready_o;
     wire block_valid_o;
     wire signed [20:0] block_dot_o;
     wire signed [63:0] block_term_q30_o;
@@ -49,6 +50,7 @@ module truega_q8_0_gemv_tb;
         .clk(clk),
         .reset_n(reset_n),
         .valid_i(valid_i),
+        .ready_o(ready_o),
         .row_first_i(row_first_i),
         .row_last_i(row_last_i),
         .activation_scale_f16_i(activation_scale_f16_i),
@@ -143,6 +145,8 @@ module truega_q8_0_gemv_tb;
         repeat (4) @(negedge clk);
         reset_n = 1'b1;
         for (drive_index = 0; drive_index < vector_count; drive_index = drive_index + 1) begin
+            while (!ready_o)
+                @(negedge clk);
             @(negedge clk);
             valid_i = 1'b1;
             row_first_i = vector_first[drive_index];
@@ -151,9 +155,9 @@ module truega_q8_0_gemv_tb;
             weight_scale_f16_i = vector_weight_scale[drive_index];
             activation_quants_i = vector_activation_quants[drive_index];
             weight_quants_i = vector_weight_quants[drive_index];
-            // dot32 is intentionally serialized and ignores valid_i while a
-            // block is active. Present one pulse, then wait for its exact
-            // retirement before advancing the fixture index.
+            // The dot and exact sequential scale converter share one explicit
+            // busy interval. Present one accepted pulse, then wait for the
+            // scaled term to retire before advancing the fixture index.
             @(negedge clk);
             valid_i = 1'b0;
             while (!block_valid_o)
@@ -182,7 +186,7 @@ module truega_q8_0_gemv_tb;
     end
 
     initial begin
-        #100000;
+        #200000;
         $display("FAIL simulation timeout");
         $finish_and_return(1);
     end

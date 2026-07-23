@@ -47,7 +47,7 @@ run_tb truega_lfm25_rmsnorm_reduce_slot_tb \
 
 run_tb truega_lfm25_shortconv_triplet_row_slot_tb \
   "$RTL_DIR/truega_q8_0_dot32.v" \
-  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
   "$RTL_DIR/truega_q8_0_gemv.v" \
   "$RTL_DIR/truega_lfm25_shortconv_triplet_row_slot.v" \
   "$RTL_DIR/truega_lfm25_shortconv_triplet_row_slot_tb.sv"
@@ -77,7 +77,7 @@ run_tb truega_lfm25_residual_vector_slot_tb \
 
 run_tb truega_lfm25_shortconv_token_slot_tb \
   "$RTL_DIR/truega_q8_0_dot32.v" \
-  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
   "$RTL_DIR/truega_q8_0_gemv.v" \
   "$RTL_DIR/truega_lfm25_shortconv_triplet_row_slot.v" \
   "$RTL_DIR/truega_q30_mul_seq.v" \

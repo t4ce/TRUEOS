@@ -54,15 +54,20 @@ module truega_lfm25_shortconv_triplet_row_slot (
     wire b_scale_error;
     wire c_scale_error;
     wire x_scale_error;
+    wire b_gemv_ready;
+    wire c_gemv_ready;
+    wire x_gemv_ready;
 
     // truega_q8_0_gemv is intentionally serialized.  Hold the feeder until all
     // three lanes retire the current block so no accepted native block can be
     // overwritten or silently dropped.
-    assign feeder_ready_o = (state == ST_FEED) && !block_in_flight;
+    assign feeder_ready_o = (state == ST_FEED) && !block_in_flight
+        && b_gemv_ready && c_gemv_ready && x_gemv_ready;
     assign feeder_block_index_o = blocks_accepted_o[4:0];
 
     truega_q8_0_gemv b_gemv (
         .clk(clk), .reset_n(gemv_reset_n), .valid_i(feed_accept),
+        .ready_o(b_gemv_ready),
         .row_first_i(row_first), .row_last_i(row_last),
         .activation_scale_f16_i(feeder_activation_block_i[15:0]),
         .weight_scale_f16_i(feeder_b_weight_block_i[15:0]),
@@ -75,6 +80,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
 
     truega_q8_0_gemv c_gemv (
         .clk(clk), .reset_n(gemv_reset_n), .valid_i(feed_accept),
+        .ready_o(c_gemv_ready),
         .row_first_i(row_first), .row_last_i(row_last),
         .activation_scale_f16_i(feeder_activation_block_i[15:0]),
         .weight_scale_f16_i(feeder_c_weight_block_i[15:0]),
@@ -87,6 +93,7 @@ module truega_lfm25_shortconv_triplet_row_slot (
 
     truega_q8_0_gemv x_gemv (
         .clk(clk), .reset_n(gemv_reset_n), .valid_i(feed_accept),
+        .ready_o(x_gemv_ready),
         .row_first_i(row_first), .row_last_i(row_last),
         .activation_scale_f16_i(feeder_activation_block_i[15:0]),
         .weight_scale_f16_i(feeder_x_weight_block_i[15:0]),

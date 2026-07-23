@@ -33,7 +33,7 @@ fi
 
 sources=(
   "$RTL_DIR/truega_q8_0_dot32.v"
-  "$RTL_DIR/truega_q8_0_scale_q30.v"
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v"
   "$RTL_DIR/truega_q8_0_gemv.v"
   "$RTL_DIR/truega_lfm25_tied_lm_head_argmax_slot.v"
   "$RTL_DIR/truega_lfm25_tied_lm_head_argmax_slot_tb.sv"

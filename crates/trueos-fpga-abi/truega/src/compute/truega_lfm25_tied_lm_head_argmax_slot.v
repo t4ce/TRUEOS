@@ -68,13 +68,14 @@ module truega_lfm25_tied_lm_head_argmax_slot #(
     reg max_valid;
     reg [31:0] max_token;
     reg signed [63:0] max_score_q30;
+    wire gemv_ready;
 
     wire parameter_contract_valid = ROW_COUNT > 0 && ROW_COUNT <= 65536;
     assign state_reset_ready_o = state == ST_IDLE && !start_i;
     assign start_ready_o = state == ST_IDLE && !state_reset_i;
     assign activation_ready_o = state == ST_LOAD_ACT;
     assign activation_block_index_o = activation_count[4:0];
-    assign row_ready_o = state == ST_ROW_FEED;
+    assign row_ready_o = state == ST_ROW_FEED && gemv_ready;
     assign row_index_o = current_row;
     assign row_block_index_o = current_block;
 
@@ -96,6 +97,7 @@ module truega_lfm25_tied_lm_head_argmax_slot #(
         .clk(clk),
         .reset_n(gemv_reset_n),
         .valid_i(row_accept && row_sequence_valid),
+        .ready_o(gemv_ready),
         .row_first_i(row_accept && row_sequence_valid
             && current_block == 5'd0),
         .row_last_i(row_accept && row_sequence_valid

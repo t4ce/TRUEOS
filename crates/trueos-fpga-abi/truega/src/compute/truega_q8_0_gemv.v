@@ -4,6 +4,7 @@ module truega_q8_0_gemv (
     input  wire                 clk,
     input  wire                 reset_n,
     input  wire                 valid_i,
+    output wire                 ready_o,
     input  wire                 row_first_i,
     input  wire                 row_last_i,
     input  wire [15:0]          activation_scale_f16_i,
@@ -19,8 +20,11 @@ module truega_q8_0_gemv (
 );
     wire dot_valid;
     wire signed [20:0] dot;
+    wire scale_busy;
+    wire scale_done;
     wire signed [63:0] scaled_term;
     wire scale_error;
+    wire block_accept;
     reg block_active;
     reg block_first;
     reg block_last;
@@ -28,20 +32,31 @@ module truega_q8_0_gemv (
     reg [15:0] weight_scale;
     reg signed [63:0] accumulator;
 
+    assign ready_o = reset_n && !block_active && !scale_busy;
+    assign block_accept = valid_i && ready_o;
+
     truega_q8_0_dot32 dot32 (
         .clk(clk),
         .reset_n(reset_n),
-        .valid_i(valid_i),
+        .valid_i(block_accept),
         .activation_quants_i(activation_quants_i),
         .weight_quants_i(weight_quants_i),
         .valid_o(dot_valid),
         .dot_o(dot)
     );
 
-    truega_q8_0_scale_q30 scale_q30 (
+    // The exact scale conversion is deliberately multi-cycle.  Keeping the
+    // block busy through scale_done prevents the following block from
+    // replacing the latched row flags/scales before this term retires.
+    truega_q8_0_scale_q30_seq scale_q30 (
+        .clk(clk),
+        .reset_n(reset_n),
+        .start_i(dot_valid),
         .dot_i(dot),
         .activation_scale_f16_i(activation_scale),
         .weight_scale_f16_i(weight_scale),
+        .busy_o(scale_busy),
+        .done_o(scale_done),
         .term_q30_o(scaled_term),
         .scale_error_o(scale_error)
     );
@@ -61,7 +76,7 @@ module truega_q8_0_gemv (
             block_dot_o <= 21'sd0;
             block_term_q30_o <= 64'sd0;
         end else begin
-            if (valid_i && !block_active) begin
+            if (block_accept) begin
                 block_active <= 1'b1;
                 block_first <= row_first_i;
                 block_last <= row_last_i;
@@ -70,10 +85,13 @@ module truega_q8_0_gemv (
             end
 
             row_valid_o <= 1'b0;
-            block_valid_o <= dot_valid;
+            block_valid_o <= 1'b0;
             if (dot_valid) begin
-                block_active <= 1'b0;
                 block_dot_o <= dot;
+            end
+            if (scale_done) begin
+                block_active <= 1'b0;
+                block_valid_o <= 1'b1;
                 block_term_q30_o <= scaled_term;
                 if (scale_error)
                     scale_error_o <= 1'b1;

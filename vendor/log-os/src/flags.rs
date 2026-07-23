@@ -212,8 +212,8 @@ pub fn target_log_area(target: &str) -> LogArea {
         "gfx" | "intel" | "display" | "ui3" => LogArea::Gfx,
         "gpgpu" | "intel/gpgpu" | "opencl" | "intel/opencl" | "adls" => LogArea::Gpgpu,
         "render" | "intel/render" | "scratch" => LogArea::Render,
-        "media" | "intel/media" | "intel/media2" | "intel/media-encode" | "intel/hw_pic"
-        | "intel/hw_pic-stage" => LogArea::IntelMediaNgin,
+        "media" | "intel-media" | "intel/media" | "intel/media2" | "intel/media-encode"
+        | "intel/hw_pic" | "intel/hw_pic-stage" => LogArea::IntelMediaNgin,
         "hda" => LogArea::Hda,
         "audio" => LogArea::Apps,
         "hv" | "hyperv" | "hypervisor" => LogArea::Hv,
@@ -322,7 +322,9 @@ mod tests {
     }
 
     #[test]
-    fn routes_media_encode_to_intel_media_area() {
+    fn routes_media_aliases_to_intel_media_area() {
+        assert_eq!(target_log_area("intel-media"), LogArea::IntelMediaNgin);
+        assert_eq!(target_log_area("intel/media"), LogArea::IntelMediaNgin);
         assert_eq!(target_log_area("intel/media-encode"), LogArea::IntelMediaNgin);
     }
 }

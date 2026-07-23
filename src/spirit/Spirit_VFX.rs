@@ -2,10 +2,8 @@
 //!
 //! Names, ranges, and defaults mirror `preview.html`.  The control model is
 //! deliberately independent of the current 256x256 Intel cursor-plane backend:
-//! UI/service code may publish the complete panel now while GPU support grows
-//! one bounded effect at a time.  The first artifact contains `Radial aura`,
-//! `Nebula smoke`, and Spirit's movement-only `Portal vortex`; unsupported
-//! selections currently resolve to transparent.
+//! UI/service code publishes the complete panel while the 256x256 background
+//! artifact implements every named procedural layer from `preview.html`.
 
 extern crate alloc;
 
@@ -311,7 +309,6 @@ impl SpiritVfxEffect {
 pub(crate) enum SpiritVfxBackgroundEffect {
     #[default]
     Transparent = 0,
-    RadialAura = 1,
     EnergyRing = 2,
     MagicCircle = 3,
     NebulaSmoke = 4,
@@ -327,7 +324,6 @@ impl SpiritVfxBackgroundEffect {
     const fn from_id(id: u8) -> Option<Self> {
         match id {
             0 => Some(Self::Transparent),
-            1 => Some(Self::RadialAura),
             2 => Some(Self::EnergyRing),
             3 => Some(Self::MagicCircle),
             4 => Some(Self::NebulaSmoke),
@@ -344,7 +340,6 @@ impl SpiritVfxBackgroundEffect {
     pub(crate) const fn ui_name(self) -> &'static str {
         match self {
             Self::Transparent => "Transparent",
-            Self::RadialAura => "Radial aura",
             Self::EnergyRing => "Energy ring",
             Self::MagicCircle => "Magic circle",
             Self::NebulaSmoke => "Nebula smoke",
@@ -357,13 +352,20 @@ impl SpiritVfxBackgroundEffect {
         }
     }
 
-    /// OpenCL modes present in the first bounded Spirit VFX artifact.
+    /// Every retained procedural background is present in the bounded Spirit
+    /// OpenCL artifact under its original stable ID.
     pub(crate) const fn artifact_mode(self) -> Option<u32> {
         match self {
-            Self::RadialAura => Some(1),
+            Self::EnergyRing => Some(2),
+            Self::MagicCircle => Some(3),
             Self::NebulaSmoke => Some(4),
+            Self::CyberGrid => Some(5),
             Self::PortalVortex => Some(6),
-            _ => None,
+            Self::SpeedLines => Some(7),
+            Self::BokehField => Some(8),
+            Self::WaterRipples => Some(9),
+            Self::PixelBurst => Some(10),
+            Self::Transparent => None,
         }
     }
 }
@@ -550,12 +552,12 @@ impl SpiritVfxAlphaBackground {
     /// deliberately not published into the user's persistent control panel.
     const MOVE_PORTAL: Self = Self {
         effect: SpiritVfxBackgroundEffect::PortalVortex,
-        opacity: 0.78,
+        opacity: 0.70,
         scale: 1.0,
-        speed: 1.65,
-        intensity: 1.35,
-        bg_color_a: SpiritVfxRgb8::rgb(0x74, 0x45, 0xFF),
-        bg_color_b: SpiritVfxRgb8::rgb(0x36, 0xE4, 0xFF),
+        speed: 1.25,
+        intensity: 1.25,
+        bg_color_a: SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF),
+        bg_color_b: SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF),
     };
 }
 

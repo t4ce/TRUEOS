@@ -3,6 +3,7 @@ module truega_q8_0_gemv_standalone (
     input  wire                 clk,
     input  wire                 reset_n,
     input  wire                 valid_i,
+    output wire                 ready_o,
     input  wire                 row_first_i,
     input  wire                 row_last_i,
     input  wire [15:0]          activation_scale_f16_i,
@@ -20,6 +21,7 @@ module truega_q8_0_gemv_standalone (
         .clk(clk),
         .reset_n(reset_n),
         .valid_i(valid_i),
+        .ready_o(ready_o),
         .row_first_i(row_first_i),
         .row_last_i(row_last_i),
         .activation_scale_f16_i(activation_scale_f16_i),
@@ -34,4 +36,3 @@ module truega_q8_0_gemv_standalone (
         .scale_error_o(scale_error_o)
     );
 endmodule
-

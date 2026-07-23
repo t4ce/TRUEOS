@@ -33,7 +33,7 @@ if [[ -n "$IVERILOG_BASE" ]]; then
 fi
 "$IVERILOG" "${iverilog_args[@]}" \
   "$RTL_DIR/truega_q8_0_dot32.v" \
-  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
   "$RTL_DIR/truega_q8_0_gemv.v" \
   "$RTL_DIR/truega_q8_0_gemv_tb.sv"
 
@@ -49,7 +49,7 @@ if [[ -n "$IVERILOG_BASE" ]]; then
 fi
 "$IVERILOG" "${iverilog_args[@]}" \
   "$RTL_DIR/truega_q8_0_dot32.v" \
-  "$RTL_DIR/truega_q8_0_scale_q30.v" \
+  "$RTL_DIR/truega_q8_0_scale_q30_seq.v" \
   "$RTL_DIR/truega_q8_0_gemv.v" \
   "$RTL_DIR/truega_lfm25_gate_row_slot.v" \
   "$RTL_DIR/truega_lfm25_gate_row_slot_tb.sv"

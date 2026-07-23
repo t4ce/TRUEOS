@@ -84,7 +84,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
         Some(upload) => {
             upload.bin_sha256 == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256
                 && upload.gpu == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU
-                && upload.bytes >= 0x6C00
+                && upload.bytes >= 0x6100
         }
         None => true,
     };

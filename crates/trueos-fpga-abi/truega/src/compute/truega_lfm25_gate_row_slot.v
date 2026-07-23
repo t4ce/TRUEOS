@@ -43,6 +43,7 @@ module truega_lfm25_gate_row_slot #(
     wire gemv_row_valid;
     wire signed [63:0] gemv_row_q30;
     wire gemv_scale_error;
+    wire gemv_ready;
 
     // The dot product is intentionally serialized: a new native Q8_0 block
     // may be accepted only after the previous block has retired.  Keep that
@@ -50,13 +51,15 @@ module truega_lfm25_gate_row_slot #(
     // cannot advance and silently drop blocks while the GEMV is busy.
     assign feeder_ready_o = DIAGNOSTIC_ENABLE
                           && (state == STATE_FEED)
-                          && !block_in_flight;
+                          && !block_in_flight
+                          && gemv_ready;
     assign feeder_block_index_o = blocks_accepted_o[4:0];
 
     truega_q8_0_gemv gemv (
         .clk(clk),
         .reset_n(gemv_reset_n),
         .valid_i(feed_accept),
+        .ready_o(gemv_ready),
         .row_first_i(feed_accept && (blocks_accepted_o == 6'd0)),
         .row_last_i(feed_accept && (blocks_accepted_o == 6'd31)),
         .activation_scale_f16_i(feeder_activation_block_i[15:0]),

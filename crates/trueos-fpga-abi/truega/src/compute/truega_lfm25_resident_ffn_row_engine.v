@@ -99,6 +99,7 @@ module truega_lfm25_resident_ffn_row_engine (
     reg [5:0] gate_up_block_index;
     reg [7:0] down_block_index;
     reg down_block_in_flight;
+    wire down_gemv_ready;
 
     reg [271:0] activation_memory [0:31];
     // Keep this tiny 32-word scratch in registers so the much larger resident
@@ -213,7 +214,8 @@ module truega_lfm25_resident_ffn_row_engine (
 
     assign weight_ready_o = !poison_o && (
         (state == ST_GU_FEED && gate_feeder_ready && up_feeder_ready)
-        || (state == ST_DOWN_FEED && !down_block_in_flight));
+        || (state == ST_DOWN_FEED && !down_block_in_flight
+            && down_gemv_ready));
 
     reg silu_start;
     wire silu_busy;
@@ -259,7 +261,7 @@ module truega_lfm25_resident_ffn_row_engine (
     );
 
     wire down_feed_accept = state == ST_DOWN_FEED
-        && weight_valid_i && !down_block_in_flight
+        && weight_valid_i && !down_block_in_flight && down_gemv_ready
         && weight_block_index_i == down_block_index;
     wire down_block_valid;
     wire signed [20:0] down_block_dot;
@@ -272,6 +274,7 @@ module truega_lfm25_resident_ffn_row_engine (
         .clk(clk),
         .reset_n(reset_n && !clear_i && !poison_o),
         .valid_i(down_feed_accept),
+        .ready_o(down_gemv_ready),
         .row_first_i(down_feed_accept && down_block_index == 8'd0),
         .row_last_i(down_feed_accept && down_block_index == 8'd143),
         .activation_scale_f16_i(down_activation_read_data[15:0]),

@@ -14,9 +14,15 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
    inter-walker cache dependency. The sprite pass starts from transparent and
    presents only the current immutable Lilly RGBA frame.
 2. If enabled, `spirit_vfx_background_rgba8` writes every pixel first. It
-   supports UI background IDs 1 (`Radial aura`), 4 (`Nebula smoke`), and 6
-   (`Portal vortex`), followed by the media-state/HDC dependency before the
-   sprite walker.
+   supports the selected nine-mode UI background range under stable IDs 2
+   through 10: `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`,
+   `Portal vortex`, `Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel
+   burst`.
+   `Cyber grid` contains only its moving grid and `Portal vortex` only its
+   spiral arms; neither mode adds expanding circular bands. `Nebula smoke`
+   preserves an unaffected inner 60%, then uses a broad linear allocation-edge
+   alpha ramp terminating in four fully transparent border pixels.
+   The media-state/HDC dependency then precedes the sprite walker.
 3. The sprite pass supports shader IDs 0 (`Original / clean`) and 1
    (`Aura bloom`); unsupported sprite effects deliberately use the clean pass.
 4. The GuC post-sync marker releases Spirit's GPU producer latch. Only then can
@@ -104,7 +110,7 @@ points validate magic/version and their own surface dimensions.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 48,056 | 2 | 64 | 96 | `d21a1ea62f9ab6f1c869ffd35d1a598988acc6905cabbe163e4c2082188f0548` |
+| `spirit_vfx_background_rgba8.bin` | 54,472 | 2 | 64 | 96 | `527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f` |
 | `spirit_vfx_sprite_rgba8.bin` | 73,728 | 3 | 96 | 96 | `7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33` |
 
 Both artifacts use text offset `0x40` within their own zebin. The clean default
