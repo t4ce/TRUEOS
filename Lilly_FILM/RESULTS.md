@@ -45,3 +45,35 @@ ghost limbs, torn sleeves, and incomplete hands. FILM is useful only as a
 candidate large-motion proposal for a later hybrid; it is not a final-output
 replacement for RIFE.
 
+## Compute-heavy generic refinement
+
+The `stable` profile tests 12 direct proposals per midpoint: scales 1x, 2x, and
+4x, both endpoint orders, and horizontal mirror on/off. Black/white matte
+reconstruction makes that 24 FILM calls per generated frame. Their
+premultiplied colour median is combined with the original native-forward alpha
+coverage. There is still no recursive interpolation.
+
+| Frame set | Baseline RGB MAE | Stable RGB MAE | Baseline exact RGBA | Stable exact RGBA |
+| --- | ---: | ---: | ---: | ---: |
+| `Angry/fists` | 0.1737 | **0.1658** | 0.5245 | **0.5362** |
+| `Cry/crying-two-hands` | 0.0940 | **0.0841** | 0.6919 | **0.7105** |
+| `Happy/cheer` | 0.1289 | **0.1207** | 0.5456 | **0.5583** |
+| `Silly/silly-roar` | 0.0695 | **0.0686** | 0.6974 | **0.7113** |
+| `Taunt/taunt-tongue-out` | 0.0402 | **0.0377** | 0.7612 | **0.7740** |
+| `Waving/waving-excited` | 0.0534 | **0.0511** | 0.7053 | **0.7194** |
+| **Corpus mean** | 0.0933 | **0.0880** | 0.6543 | **0.6683** |
+
+RGB MAE and exact RGBA improve in all six sets. Alpha IoU (0.7862 corpus
+mean), alpha area ratio (0.9869), and edge F1 (0.5459) are identical to the
+baseline because `stable` deliberately retains its alpha estimate. Median or
+medoid aggregation of alpha was tested and made edge recovery less reliable.
+
+The complete six-set sequence plus held-out evaluation took 901.0 seconds on
+CPU, versus 9.9 seconds for the baseline. The large cost comes mainly from 2x
+and 4x spatial inference, not only the number of candidates.
+
+This is a safer generic FILM proposal, but not a quality approval: all six sets
+still fail the complete gate, and visual review still finds detached or missing
+hands on the hardest Cheer transitions. Animation-specific adaptation can be
+evaluated next without confusing its gain with this generic test-time
+consensus.

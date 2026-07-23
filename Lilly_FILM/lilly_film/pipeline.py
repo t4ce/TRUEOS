@@ -17,6 +17,7 @@ from .backend import FilmBackend
 
 QuantizeMode = Literal["pair", "none"]
 ColorMode = Literal["gray", "matte", "premultiplied"]
+RefinementMode = Literal["none", "stable", "median", "medoid"]
 QUALITY_GATE = {
     "minimum_alpha_iou": 0.85,
     "minimum_edge_f1_with_1px_tolerance": 0.70,
@@ -33,6 +34,7 @@ class InterpolationSettings:
     alpha_threshold: float = 0.4
     quantize: QuantizeMode = "pair"
     color_mode: ColorMode = "matte"
+    refinement: RefinementMode = "none"
 
 
 @dataclass(frozen=True)
@@ -44,8 +46,11 @@ class FrameReport:
     output: str
     width: int
     height: int
+    inference_candidates: int
     inference_calls: int
     inference_seconds: float
+    selected_candidate: str
+    mean_candidate_mae_to_consensus: float
     alpha_values: List[int]
     transparent_rgba_zero: bool
     opaque_colors_output: int
@@ -126,42 +131,51 @@ def _quantize_to_palette(rgb: np.ndarray, colors: np.ndarray) -> np.ndarray:
     return np.array(quantized.convert("RGB"), dtype=np.uint8, copy=True)
 
 
-def interpolate_pair(
+def _interpolate_candidate(
     backend: FilmBackend,
-    input_a: Path,
-    input_b: Path,
-    output: Path,
+    rgb0: np.ndarray,
+    rgb1: np.ndarray,
+    alpha0: np.ndarray,
+    alpha1: np.ndarray,
+    width: int,
+    height: int,
     settings: InterpolationSettings,
-) -> FrameReport:
-    rgba0 = load_rgba(input_a)
-    rgba1 = load_rgba(input_b)
-    validate_lilly_input(input_a, rgba0)
-    validate_lilly_input(input_b, rgba1)
-    if settings.work_scale not in {1, 2, 4}:
-        raise ValueError("work_scale must be one of 1, 2, or 4")
-    if not 0.0 < settings.alpha_threshold < 1.0:
-        raise ValueError("alpha_threshold must be strictly between 0 and 1")
+    work_scale: int,
+    reverse: bool,
+    flip: bool,
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """Return final-resolution premultiplied RGB, coverage, and inference time."""
 
-    height, width = rgba0.shape[:2]
-    work_size = (width * settings.work_scale, height * settings.work_scale)
-    nearest = Image.Resampling.NEAREST
-    alpha0 = rgba0[:, :, 3].astype(np.float32) / 255.0
-    alpha1 = rgba1[:, :, 3].astype(np.float32) / 255.0
-    rgb0 = rgba0[:, :, :3].astype(np.float32) / 255.0
-    rgb1 = rgba1[:, :, :3].astype(np.float32) / 255.0
+    candidate_rgb0, candidate_rgb1 = rgb0, rgb1
+    candidate_alpha0, candidate_alpha1 = alpha0, alpha1
+    candidate_timestep = settings.timestep
+    if reverse:
+        candidate_rgb0, candidate_rgb1 = rgb1, rgb0
+        candidate_alpha0, candidate_alpha1 = alpha1, alpha0
+        candidate_timestep = 1.0 - settings.timestep
+    if flip:
+        candidate_rgb0 = np.flip(candidate_rgb0, axis=1).copy()
+        candidate_rgb1 = np.flip(candidate_rgb1, axis=1).copy()
+        candidate_alpha0 = np.flip(candidate_alpha0, axis=1).copy()
+        candidate_alpha1 = np.flip(candidate_alpha1, axis=1).copy()
 
     if settings.color_mode == "gray":
-        color0 = rgb0 * alpha0[:, :, None] + np.float32(0.5) * (
-            1.0 - alpha0[:, :, None]
+        color0 = (
+            candidate_rgb0 * candidate_alpha0[:, :, None]
+            + np.float32(0.5) * (1.0 - candidate_alpha0[:, :, None])
         )
-        color1 = rgb1 * alpha1[:, :, None] + np.float32(0.5) * (
-            1.0 - alpha1[:, :, None]
+        color1 = (
+            candidate_rgb1 * candidate_alpha1[:, :, None]
+            + np.float32(0.5) * (1.0 - candidate_alpha1[:, :, None])
         )
     elif settings.color_mode in {"matte", "premultiplied"}:
-        color0 = rgb0 * alpha0[:, :, None]
-        color1 = rgb1 * alpha1[:, :, None]
+        color0 = candidate_rgb0 * candidate_alpha0[:, :, None]
+        color1 = candidate_rgb1 * candidate_alpha1[:, :, None]
     else:
         raise ValueError(f"unknown color mode: {settings.color_mode}")
+
+    work_size = (width * work_scale, height * work_scale)
+    nearest = Image.Resampling.NEAREST
     color0_work = (
         _resize_rgb(
             np.rint(color0 * 255.0).astype(np.uint8),
@@ -178,19 +192,25 @@ def interpolate_pair(
         ).astype(np.float32)
         / 255.0
     )
-    alpha0_work = _resize_float(alpha0, work_size, nearest)
-    alpha1_work = _resize_float(alpha1, work_size, nearest)
+    alpha0_work = _resize_float(candidate_alpha0, work_size, nearest)
+    alpha1_work = _resize_float(candidate_alpha1, work_size, nearest)
     alpha_rgb0 = np.repeat(alpha0_work[:, :, None], 3, axis=2)
     alpha_rgb1 = np.repeat(alpha1_work[:, :, None], 3, axis=2)
 
     color_work, color_seconds = backend.interpolate(
         color0_work,
         color1_work,
-        settings.timestep,
+        candidate_timestep,
     )
     if settings.color_mode == "matte":
-        white0 = rgb0 * alpha0[:, :, None] + (1.0 - alpha0[:, :, None])
-        white1 = rgb1 * alpha1[:, :, None] + (1.0 - alpha1[:, :, None])
+        white0 = (
+            candidate_rgb0 * candidate_alpha0[:, :, None]
+            + (1.0 - candidate_alpha0[:, :, None])
+        )
+        white1 = (
+            candidate_rgb1 * candidate_alpha1[:, :, None]
+            + (1.0 - candidate_alpha1[:, :, None])
+        )
         white0_work = (
             _resize_rgb(
                 np.rint(white0 * 255.0).astype(np.uint8),
@@ -210,7 +230,7 @@ def interpolate_pair(
         white_work, alpha_seconds = backend.interpolate(
             white0_work,
             white1_work,
-            settings.timestep,
+            candidate_timestep,
         )
         alpha_work = np.clip(
             1.0 - np.mean(white_work - color_work, axis=2),
@@ -221,26 +241,155 @@ def interpolate_pair(
         alpha_rgb_work, alpha_seconds = backend.interpolate(
             alpha_rgb0.astype(np.float32),
             alpha_rgb1.astype(np.float32),
-            settings.timestep,
+            candidate_timestep,
         )
         alpha_work = np.mean(alpha_rgb_work, axis=2).astype(np.float32)
 
+    if flip:
+        color_work = np.flip(color_work, axis=1).copy()
+        alpha_work = np.flip(alpha_work, axis=1).copy()
     color = _resize_float_rgb(
         color_work,
         (width, height),
         Image.Resampling.BOX,
     )
-    alpha_coverage = _resize_float(
-        alpha_work,
-        (width, height),
-        Image.Resampling.BOX,
-    )
+    alpha_coverage = np.clip(
+        _resize_float(
+            alpha_work,
+            (width, height),
+            Image.Resampling.BOX,
+        ),
+        0.0,
+        1.0,
+    ).astype(np.float32)
     if settings.color_mode in {"matte", "premultiplied"}:
-        straight_rgb = color / np.maximum(
-            alpha_coverage[:, :, None], np.float32(1e-4)
+        visible_rgb = color
+    else:
+        visible_rgb = color * alpha_coverage[:, :, None]
+    return (
+        np.clip(visible_rgb, 0.0, 1.0).astype(np.float32),
+        alpha_coverage,
+        color_seconds + alpha_seconds,
+    )
+
+
+def _select_refined_candidate(
+    candidate_stack: np.ndarray,
+    candidate_specs: Sequence[Tuple[int, bool, bool]],
+    refinement: RefinementMode,
+) -> Tuple[np.ndarray, str, float]:
+    """Select a candidate while keeping the stable mode's alpha invariant."""
+
+    consensus = np.median(candidate_stack, axis=0)
+    candidate_distances = np.mean(
+        np.abs(candidate_stack - consensus[None, ...]),
+        axis=(1, 2, 3),
+    )
+    mean_candidate_mae = float(np.mean(candidate_distances))
+    if refinement == "stable":
+        selected = np.dstack(
+            (consensus[:, :, :3], candidate_stack[0, :, :, 3])
+        )
+        selected_candidate = "median-visible-rgb,baseline-alpha"
+    elif refinement == "median":
+        selected = consensus
+        selected_candidate = "per-pixel-median"
+    elif refinement == "medoid":
+        selected_index = int(np.argmin(candidate_distances))
+        selected = candidate_stack[selected_index]
+        work_scale, reverse, flip = candidate_specs[selected_index]
+        selected_candidate = (
+            f"scale={work_scale},reverse={str(reverse).lower()},"
+            f"flip={str(flip).lower()}"
+        )
+    elif refinement == "none":
+        selected = candidate_stack[0]
+        selected_candidate = (
+            f"scale={candidate_specs[0][0]},reverse=false,flip=false"
         )
     else:
-        straight_rgb = color
+        raise ValueError(f"unknown refinement mode: {refinement}")
+    return selected, selected_candidate, mean_candidate_mae
+
+
+def interpolate_pair(
+    backend: FilmBackend,
+    input_a: Path,
+    input_b: Path,
+    output: Path,
+    settings: InterpolationSettings,
+) -> FrameReport:
+    rgba0 = load_rgba(input_a)
+    rgba1 = load_rgba(input_b)
+    validate_lilly_input(input_a, rgba0)
+    validate_lilly_input(input_b, rgba1)
+    if settings.work_scale not in {1, 2, 4}:
+        raise ValueError("work_scale must be one of 1, 2, or 4")
+    if not 0.0 < settings.alpha_threshold < 1.0:
+        raise ValueError("alpha_threshold must be strictly between 0 and 1")
+
+    height, width = rgba0.shape[:2]
+    alpha0 = rgba0[:, :, 3].astype(np.float32) / 255.0
+    alpha1 = rgba1[:, :, 3].astype(np.float32) / 255.0
+    rgb0 = rgba0[:, :, :3].astype(np.float32) / 255.0
+    rgb1 = rgba1[:, :, :3].astype(np.float32) / 255.0
+
+    if settings.refinement == "none":
+        candidate_specs = ((settings.work_scale, False, False),)
+    elif settings.refinement in {"stable", "median", "medoid"}:
+        refinement_scales = (
+            (1, 2, 4) if settings.refinement == "stable" else (1, 2)
+        )
+        candidate_specs = tuple(
+            (work_scale, reverse, flip)
+            for work_scale in refinement_scales
+            for reverse in (False, True)
+            for flip in (False, True)
+        )
+    else:
+        raise ValueError(f"unknown refinement mode: {settings.refinement}")
+
+    visible_candidates = []
+    alpha_candidates = []
+    inference_seconds = 0.0
+    for work_scale, reverse, flip in candidate_specs:
+        visible_rgb, alpha_coverage, candidate_seconds = _interpolate_candidate(
+            backend,
+            rgb0,
+            rgb1,
+            alpha0,
+            alpha1,
+            width,
+            height,
+            settings,
+            work_scale,
+            reverse,
+            flip,
+        )
+        visible_candidates.append(visible_rgb)
+        alpha_candidates.append(alpha_coverage)
+        inference_seconds += candidate_seconds
+
+    candidate_stack = np.concatenate(
+        (
+            np.stack(visible_candidates, axis=0),
+            np.stack(alpha_candidates, axis=0)[:, :, :, None],
+        ),
+        axis=3,
+    )
+    selected, selected_candidate, mean_candidate_mae = (
+        _select_refined_candidate(
+            candidate_stack,
+            candidate_specs,
+            settings.refinement,
+        )
+    )
+
+    visible_rgb = selected[:, :, :3]
+    alpha_coverage = selected[:, :, 3]
+    straight_rgb = visible_rgb / np.maximum(
+        alpha_coverage[:, :, None], np.float32(1e-4)
+    )
     rgb = np.rint(np.clip(straight_rgb, 0.0, 1.0) * 255.0).astype(np.uint8)
     alpha = np.where(
         alpha_coverage >= settings.alpha_threshold, 255, 0
@@ -269,8 +418,11 @@ def interpolate_pair(
         output=str(output.resolve()),
         width=width,
         height=height,
-        inference_calls=2,
-        inference_seconds=color_seconds + alpha_seconds,
+        inference_candidates=len(candidate_specs),
+        inference_calls=2 * len(candidate_specs),
+        inference_seconds=inference_seconds,
+        selected_candidate=selected_candidate,
+        mean_candidate_mae_to_consensus=mean_candidate_mae,
         alpha_values=alpha_values,
         transparent_rgba_zero=bool(
             np.all(output_rgba[output_rgba[:, :, 3] == 0] == 0)

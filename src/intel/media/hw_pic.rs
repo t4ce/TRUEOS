@@ -51,6 +51,8 @@ pub(crate) enum HwPicPixelFormat {
 pub(crate) struct HwPicTiming {
     pub queue_wait_us: u64,
     pub process_us: u64,
+    pub backend_mode_transition: bool,
+    pub backend_engine_reset: bool,
     pub backend_reset_us: u64,
     pub backend_zero_clear_us: u64,
     pub backend_zero_us: u64,
@@ -69,6 +71,8 @@ impl HwPicTiming {
         Self {
             queue_wait_us: 0,
             process_us: 0,
+            backend_mode_transition: false,
+            backend_engine_reset: false,
             backend_reset_us: 0,
             backend_zero_clear_us: 0,
             backend_zero_us: 0,
@@ -337,7 +341,7 @@ async fn hw_pic_service_inner() {
         output.timing.process_us =
             hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(process_start));
         hw_pic_info!(
-            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={} queue_us={} process_us={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} poll_iters={}\n",
+            "intel/hw_pic: output id={} codec={:?} status={:?} fmt={:?} size={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} virt=0x{:X} err={} queue_us={} process_us={} mode_transition={} engine_reset={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} poll_iters={}\n",
             output.id,
             output.codec,
             output.status,
@@ -355,6 +359,8 @@ async fn hw_pic_service_inner() {
             output.error_code,
             output.timing.queue_wait_us,
             output.timing.process_us,
+            output.timing.backend_mode_transition as u8,
+            output.timing.backend_engine_reset as u8,
             output.timing.backend_reset_us,
             output.timing.backend_zero_clear_us,
             output.timing.backend_zero_us,
@@ -1132,12 +1138,14 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
 
     hw_pic_info!(
-        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
+        "intel/hw_pic-stage: id={} stage=submit accepted=1 codec=h264 engine={} retired={} detail={} polls={} mode_transition={} engine_reset={} reset_us={} zero_clear_us={} zero_us={} scratch_zero_us={} output_clear_us={} missing_clear_us={} scratch_flush_us={} build_ctx_us={} poll_us={} post_us={} coded={}x{} pitch=0x{:X} surface_bytes=0x{:X} command_dwords={} batch_bytes=0x{:X} ring_bytes=0x{:X}\n",
         job.id,
         avc.engine_name,
         avc.retired as u8,
         avc.output_surface_detail as u8,
         avc.poll_iters,
+        avc.mode_transition as u8,
+        avc.engine_reset as u8,
         avc.reset_us,
         avc.zero_clear_us,
         avc.zero_us,
@@ -1332,6 +1340,8 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         virt_addr: output_virt_addr as usize,
         error_code: output_error,
         timing: HwPicTiming {
+            backend_mode_transition: avc.mode_transition,
+            backend_engine_reset: avc.engine_reset,
             backend_reset_us: avc.reset_us,
             backend_zero_clear_us: avc.zero_clear_us,
             backend_zero_us: avc.zero_us,

@@ -10,7 +10,9 @@ use embassy_time::{Duration, Timer};
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;
-const VCS0_PROBE_RETRY_LIMIT: usize = 20;
+// A foreground decode stream owns a session-level VCS0 reservation. Allow a
+// normal playback to drain instead of fitting this boot probe between frames.
+const VCS0_PROBE_RETRY_LIMIT: usize = 600;
 const ROOT_RETRY_MS: u64 = 1_000;
 
 static STATE: AtomicU8 = AtomicU8::new(H264EncodeProbeState::Waiting as u8);

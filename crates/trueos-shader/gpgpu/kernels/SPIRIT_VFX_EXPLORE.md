@@ -69,6 +69,12 @@ transition. There is no position interpolation, UI4 dependency, or new movement
 API. The returned `SpiritMoveFence` can optionally prove that request or a newer
 superseding position has been programmed.
 
+After the first boot-time cursor `SURFLIVE` proves centered Lilly is visible,
+the worker issues one ordinary `move_by()` call 512 pipe pixels to the right.
+The pixel distance is converted through the active pipe width and therefore
+exercises the same Portal transition and latest-wins movement path as any later
+caller.
+
 The task is still instantiated only for the active pool limit of one. Its API
 is fence/pipe-indexed so increasing the existing Spirit pool limit later creates
 the same independent render-plus-motion pair for additional hardware cursor

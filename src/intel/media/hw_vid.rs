@@ -10,6 +10,10 @@ const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
+const H264_VCS0_SESSION_WAIT_MS: u64 = 5_000;
+const H264_VCS0_SESSION_RETRY_MS: u64 = 1;
+const H264_FRAME_TIMEOUT_ERROR: i32 = -33;
+const H264_UI4_PRESENT_ERROR: i32 = -34;
 pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
@@ -79,7 +83,11 @@ impl H264PlaybackOptions {
 pub(crate) struct H264PlaybackReport {
     pub(crate) target_fps: u16,
     pub(crate) target_frame_ms: u64,
-    pub(crate) submitted: usize,
+    pub(crate) attempted: usize,
+    pub(crate) retired: usize,
+    pub(crate) presented: usize,
+    pub(crate) first_failure_frame: usize,
+    pub(crate) first_failure_error: i32,
     pub(crate) skipped_unsupported: usize,
     pub(crate) elapsed_ms: u64,
     pub(crate) effective_fps_x100: u64,
@@ -105,6 +113,8 @@ pub(crate) struct H264PlaybackReport {
     pub(crate) avg_present_us: u64,
     pub(crate) max_present_us: u64,
     pub(crate) avg_poll_iters: u64,
+    pub(crate) mode_transitions: usize,
+    pub(crate) engine_resets: usize,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -131,6 +141,8 @@ struct H264PlaybackTiming {
     total_present_ticks: u64,
     max_present_ticks: u64,
     total_poll_iters: u64,
+    mode_transitions: usize,
+    engine_resets: usize,
 }
 
 impl H264PlaybackTiming {
@@ -140,6 +152,12 @@ impl H264PlaybackTiming {
     }
 
     fn record_hw_pic_timing(&mut self, timing: crate::intel::hw_pic::HwPicTiming) {
+        if timing.backend_mode_transition {
+            self.mode_transitions = self.mode_transitions.saturating_add(1);
+        }
+        if timing.backend_engine_reset {
+            self.engine_resets = self.engine_resets.saturating_add(1);
+        }
         self.total_queue_us = self.total_queue_us.saturating_add(timing.queue_wait_us);
         self.total_process_us = self.total_process_us.saturating_add(timing.process_us);
         self.total_reset_us = self.total_reset_us.saturating_add(timing.backend_reset_us);
@@ -175,18 +193,22 @@ impl H264PlaybackTiming {
         self.max_present_ticks = self.max_present_ticks.max(ticks);
     }
 
-    fn avg_us(total_us: u64, submitted: usize) -> u64 {
-        if submitted == 0 {
+    fn avg_us(total_us: u64, attempted: usize) -> u64 {
+        if attempted == 0 {
             0
         } else {
-            total_us / submitted as u64
+            total_us / attempted as u64
         }
     }
 
     fn report(
         self,
         mode: H264PlaybackOptions,
-        submitted: usize,
+        attempted: usize,
+        retired: usize,
+        presented: usize,
+        first_failure_frame: usize,
+        first_failure_error: i32,
         skipped_unsupported: usize,
         playback_start: EmbassyInstant,
     ) -> H264PlaybackReport {
@@ -194,17 +216,21 @@ impl H264PlaybackTiming {
         let effective_fps_x100 = if elapsed_ms == 0 {
             0
         } else {
-            (submitted as u64).saturating_mul(100_000) / elapsed_ms
+            (presented as u64).saturating_mul(100_000) / elapsed_ms
         };
-        let avg_decode_us = if submitted == 0 {
+        let avg_decode_us = if attempted == 0 {
             0
         } else {
-            h264_ticks_to_micros(self.total_decode_ticks) / submitted as u64
+            h264_ticks_to_micros(self.total_decode_ticks) / attempted as u64
         };
         H264PlaybackReport {
             target_fps: mode.fps(),
             target_frame_ms: mode.frame_ms(),
-            submitted,
+            attempted,
+            retired,
+            presented,
+            first_failure_frame,
+            first_failure_error,
             skipped_unsupported,
             elapsed_ms,
             effective_fps_x100,
@@ -214,30 +240,63 @@ impl H264PlaybackTiming {
             avg_decode_us,
             max_decode_us: h264_ticks_to_micros(self.max_decode_ticks),
             max_late_ms: h264_ticks_to_millis(self.max_late_ticks),
-            avg_queue_us: Self::avg_us(self.total_queue_us, submitted),
-            avg_process_us: Self::avg_us(self.total_process_us, submitted),
-            avg_reset_us: Self::avg_us(self.total_reset_us, submitted),
-            avg_zero_clear_us: Self::avg_us(self.total_zero_clear_us, submitted),
-            avg_zero_us: Self::avg_us(self.total_zero_us, submitted),
-            avg_scratch_zero_us: Self::avg_us(self.total_scratch_zero_us, submitted),
-            avg_output_clear_us: Self::avg_us(self.total_output_clear_us, submitted),
-            avg_missing_clear_us: Self::avg_us(self.total_missing_clear_us, submitted),
-            avg_scratch_flush_us: Self::avg_us(self.total_scratch_flush_us, submitted),
-            avg_build_ctx_us: Self::avg_us(self.total_build_ctx_us, submitted),
-            avg_poll_us: Self::avg_us(self.total_poll_us, submitted),
+            avg_queue_us: Self::avg_us(self.total_queue_us, attempted),
+            avg_process_us: Self::avg_us(self.total_process_us, attempted),
+            avg_reset_us: Self::avg_us(self.total_reset_us, attempted),
+            avg_zero_clear_us: Self::avg_us(self.total_zero_clear_us, attempted),
+            avg_zero_us: Self::avg_us(self.total_zero_us, attempted),
+            avg_scratch_zero_us: Self::avg_us(self.total_scratch_zero_us, attempted),
+            avg_output_clear_us: Self::avg_us(self.total_output_clear_us, attempted),
+            avg_missing_clear_us: Self::avg_us(self.total_missing_clear_us, attempted),
+            avg_scratch_flush_us: Self::avg_us(self.total_scratch_flush_us, attempted),
+            avg_build_ctx_us: Self::avg_us(self.total_build_ctx_us, attempted),
+            avg_poll_us: Self::avg_us(self.total_poll_us, attempted),
             max_poll_us: self.max_poll_us,
-            avg_post_us: Self::avg_us(self.total_post_us, submitted),
-            avg_present_us: if submitted == 0 {
+            avg_post_us: Self::avg_us(self.total_post_us, attempted),
+            avg_present_us: if attempted == 0 {
                 0
             } else {
-                h264_ticks_to_micros(self.total_present_ticks) / submitted as u64
+                h264_ticks_to_micros(self.total_present_ticks) / attempted as u64
             },
             max_present_us: h264_ticks_to_micros(self.max_present_ticks),
-            avg_poll_iters: if submitted == 0 {
+            avg_poll_iters: if attempted == 0 {
                 0
             } else {
-                self.total_poll_iters / submitted as u64
+                self.total_poll_iters / attempted as u64
             },
+            mode_transitions: self.mode_transitions,
+            engine_resets: self.engine_resets,
+        }
+    }
+}
+
+async fn h264_reserve_vcs0_decode_session()
+-> Result<crate::intel::xelp_media2_ngin::MediaVcs0SessionGuard, &'static str> {
+    let started = EmbassyInstant::now();
+    let mut attempts = 0usize;
+    loop {
+        attempts = attempts.saturating_add(1);
+        match crate::intel::xelp_media2_ngin::try_reserve_avc_decode_session() {
+            Ok(session) => {
+                crate::log_info!(target: "intel-media";
+                    "intel/hw_vid: vcs0-session reserved=1 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback waited_ms={} attempts={}\n",
+                    session.generation(),
+                    started.elapsed().as_millis(),
+                    attempts,
+                );
+                return Ok(session);
+            }
+            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Busy)
+                if started.elapsed().as_millis() < H264_VCS0_SESSION_WAIT_MS =>
+            {
+                Timer::after_millis(H264_VCS0_SESSION_RETRY_MS).await;
+            }
+            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Busy) => {
+                return Err("VCS0 playback session reservation timed out");
+            }
+            Err(crate::intel::xelp_media2_ngin::MediaVcs0LaneAcquireError::Quarantined) => {
+                return Err("VCS0 playback session is quarantined");
+            }
         }
     }
 }
@@ -316,6 +375,8 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     }
 
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
+    let vcs0_session = h264_reserve_vcs0_decode_session().await?;
+    let vcs0_session_generation = vcs0_session.generation();
     let old_hw_pic_logging =
         crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
     let old_surface_probes =
@@ -327,7 +388,15 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
-    if report.submitted == 0 {
+    drop(vcs0_session);
+    crate::log_info!(target: "intel-media";
+        "intel/hw_vid: vcs0-session reserved=0 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback attempted={} retired={} presented={} release=stream-complete\n",
+        vcs0_session_generation,
+        report.attempted,
+        report.retired,
+        report.presented,
+    );
+    if report.presented == 0 {
         Err("TRUEOSFS video produced no decodable frames")
     } else {
         Ok(report)
@@ -350,7 +419,7 @@ pub(crate) async fn run_online_ui4_framed_video_playback()
         "online-ui4-framed-video",
     )
     .await?;
-    if report.submitted == 0 {
+    if report.presented == 0 {
         Err("online video produced no decodable frames")
     } else {
         Ok(report)
@@ -376,6 +445,8 @@ async fn run_media_url_playback(
         url
     );
 
+    let vcs0_session = h264_reserve_vcs0_decode_session().await?;
+    let vcs0_session_generation = vcs0_session.generation();
     let old_hw_pic_logging =
         crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
     let old_surface_probes =
@@ -388,6 +459,14 @@ async fn run_media_url_playback(
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
+    drop(vcs0_session);
+    crate::log_info!(target: "intel-media";
+        "intel/hw_vid: vcs0-session reserved=0 generation={} codec_mode=avc-decode submission_owner=execlists scope=playback attempted={} retired={} presented={} release=stream-complete\n",
+        vcs0_session_generation,
+        report.attempted,
+        report.retired,
+        report.presented,
+    );
     Ok(report)
 }
 
@@ -1431,7 +1510,11 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
     let mut p_seen = 0usize;
-    let mut submitted = 0usize;
+    let mut attempted = 0usize;
+    let mut retired = 0usize;
+    let mut presented = 0usize;
+    let mut first_failure_frame = 0usize;
+    let mut first_failure_error = 0i32;
     let mut skipped_unsupported_frames = 0usize;
     let mut skipped_missing_headers = 0usize;
     let mut last_sps: Option<Vec<u8>> = None;
@@ -1580,17 +1663,26 @@ async fn h264_i_p_playback_probe_with_reader(
             continue;
         }
 
-        submitted += 1;
+        attempted += 1;
         let decode_start = EmbassyInstant::now();
-        let _presented = h264_submit_wait_ui4_frame(
+        let outcome = h264_submit_wait_ui4_frame(
             "forward",
-            submitted,
+            attempted,
             idr_seen,
             &frame,
             mode.diagnostics(),
             Some(&mut playback_timing),
         )
         .await;
+        if outcome.retired {
+            retired = retired.saturating_add(1);
+        }
+        if outcome.presented {
+            presented = presented.saturating_add(1);
+        } else if first_failure_frame == 0 {
+            first_failure_frame = attempted;
+            first_failure_error = outcome.error_code;
+        }
         playback_timing.record_decode_ticks(
             EmbassyInstant::now()
                 .saturating_duration_since(decode_start)
@@ -1601,15 +1693,27 @@ async fn h264_i_p_playback_probe_with_reader(
     }
 
     h264_log_keyframe_summary(indexed_frames.as_slice(), stream_bytes);
-    let playback_report =
-        playback_timing.report(mode, submitted, skipped_unsupported_frames, playback_start);
+    let playback_report = playback_timing.report(
+        mode,
+        attempted,
+        retired,
+        presented,
+        first_failure_frame,
+        first_failure_error,
+        skipped_unsupported_frames,
+        playback_start,
+    );
 
     crate::log!(
-        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} submitted={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} reason={}\n",
+        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
-        submitted,
+        playback_report.attempted,
+        playback_report.retired,
+        playback_report.presented,
+        playback_report.first_failure_frame,
+        playback_report.first_failure_error,
         skipped_unsupported_frames,
         indexed_frames.len(),
         skipped_missing_headers,
@@ -1626,6 +1730,8 @@ async fn h264_i_p_playback_probe_with_reader(
         playback_report.max_late_ms,
         playback_report.avg_queue_us,
         playback_report.avg_process_us,
+        playback_report.mode_transitions,
+        playback_report.engine_resets,
         playback_report.avg_reset_us,
         playback_report.avg_zero_clear_us,
         playback_report.avg_zero_us,
@@ -1645,6 +1751,23 @@ async fn h264_i_p_playback_probe_with_reader(
     playback_report
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct H264FrameOutcome {
+    retired: bool,
+    presented: bool,
+    error_code: i32,
+}
+
+impl H264FrameOutcome {
+    const fn failed(error_code: i32) -> Self {
+        Self {
+            retired: false,
+            presented: false,
+            error_code,
+        }
+    }
+}
+
 async fn h264_submit_wait_ui4_frame(
     phase: &'static str,
     playback_frame: usize,
@@ -1652,7 +1775,7 @@ async fn h264_submit_wait_ui4_frame(
     encoded: &[u8],
     diagnostics: bool,
     mut timing: Option<&mut H264PlaybackTiming>,
-) -> bool {
+) -> H264FrameOutcome {
     if diagnostics {
         let before = crate::intel::hw_pic_snapshot();
         crate::log!(
@@ -1677,7 +1800,7 @@ async fn h264_submit_wait_ui4_frame(
                 stream_idr_index,
                 err
             );
-            return false;
+            return H264FrameOutcome::failed(err);
         }
     };
 
@@ -1694,14 +1817,15 @@ async fn h264_submit_wait_ui4_frame(
             after.outputs,
             after.service_started as u8
         );
-        return false;
+        return H264FrameOutcome::failed(H264_FRAME_TIMEOUT_ERROR);
     };
 
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_hw_pic_timing(output.timing);
     }
     let present_start = EmbassyInstant::now();
-    let stored = h264_present_probe_output(phase, playback_frame, stream_idr_index, &output).await;
+    let presented =
+        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output).await;
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_present_ticks(
             EmbassyInstant::now()
@@ -1729,11 +1853,25 @@ async fn h264_submit_wait_ui4_frame(
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
-            stored as u8,
+            presented as u8,
             output.error_code
         );
     }
-    stored
+    let retired = matches!(
+        output.status,
+        super::hw_pic::HwPicStatus::Ready | super::hw_pic::HwPicStatus::Streamed
+    );
+    H264FrameOutcome {
+        retired,
+        presented,
+        error_code: if presented {
+            0
+        } else if output.error_code != 0 {
+            output.error_code
+        } else {
+            H264_UI4_PRESENT_ERROR
+        },
+    }
 }
 
 async fn h264_present_probe_output(

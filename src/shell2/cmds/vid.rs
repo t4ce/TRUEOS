@@ -252,9 +252,13 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} submitted={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_present_us={}",
+                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_present_us={} mode_transitions={} engine_resets={}",
                     lap,
-                    report.submitted,
+                    report.attempted,
+                    report.retired,
+                    report.presented,
+                    report.first_failure_frame,
+                    report.first_failure_error,
                     report.skipped_unsupported,
                     report.target_fps,
                     report.elapsed_ms,
@@ -262,6 +266,8 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
                     report.effective_fps_x100 % 100,
                     report.avg_decode_us,
                     report.avg_present_us,
+                    report.mode_transitions,
+                    report.engine_resets,
                 )
                 .as_str(),
             ),

@@ -41,6 +41,15 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         choices=("gray", "matte", "premultiplied"),
         default="matte",
     )
+    parser.add_argument(
+        "--refinement",
+        choices=("none", "stable", "median", "medoid"),
+        default="none",
+        help=(
+            "generic scale/direction/mirror refinement; stable uses 12 "
+            "candidates while preserving baseline alpha"
+        ),
+    )
     _add_backend_options(parser)
 
 
@@ -51,6 +60,7 @@ def _settings(args: argparse.Namespace) -> InterpolationSettings:
         alpha_threshold=args.alpha_threshold,
         quantize=args.quantize,
         color_mode=args.color_mode,
+        refinement=args.refinement,
     )
 
 
@@ -135,6 +145,10 @@ def main() -> None:
                 {
                     "output_directory": report["output_directory"],
                     "evaluated_keyframes": len(report["evaluations"]),
+                    "inference_seconds": sum(
+                        item["prediction"]["inference_seconds"]
+                        for item in report["evaluations"]
+                    ),
                     "passes_quality_gate": report["passes_quality_gate"],
                     "mean_metrics": report["mean_metrics"],
                     "backend": report["backend"],

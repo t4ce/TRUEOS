@@ -204,19 +204,40 @@ impl MediaVcs0JobMode {
     };
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct MediaVcs0ActiveJob {
+    mode: MediaVcs0JobMode,
+    generation: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct MediaVcs0SessionReservation {
+    mode: MediaVcs0JobMode,
+    generation: u64,
+}
+
 #[derive(Copy, Clone)]
 struct MediaVcs0ExecutionState {
-    active: Option<MediaVcs0JobMode>,
+    active: Option<MediaVcs0ActiveJob>,
+    reservation: Option<MediaVcs0SessionReservation>,
     quarantined: Option<MediaVcs0JobMode>,
-    generation: u64,
+    last_completed: Option<MediaVcs0JobMode>,
+    next_generation: u64,
 }
 
 impl MediaVcs0ExecutionState {
     const EMPTY: Self = Self {
         active: None,
+        reservation: None,
         quarantined: None,
-        generation: 0,
+        last_completed: None,
+        next_generation: 0,
     };
+
+    fn allocate_generation(&mut self) -> u64 {
+        self.next_generation = self.next_generation.wrapping_add(1).max(1);
+        self.next_generation
+    }
 }
 
 static MEDIA_VCS0_EXECUTION: Mutex<MediaVcs0ExecutionState> =
@@ -234,13 +255,19 @@ pub(super) enum MediaVcs0LaneAcquireError {
 pub(super) struct MediaVcs0LaneGuard {
     mode: MediaVcs0JobMode,
     generation: u64,
+    requires_reactivation: bool,
+    completed: bool,
     release_on_drop: bool,
 }
 
 impl MediaVcs0LaneGuard {
     pub(super) fn quarantine(mut self) {
         let mut state = MEDIA_VCS0_EXECUTION.lock();
-        if state.generation == self.generation && state.active == Some(self.mode) {
+        let active = MediaVcs0ActiveJob {
+            mode: self.mode,
+            generation: self.generation,
+        };
+        if state.active == Some(active) {
             state.quarantined = Some(self.mode);
         }
         self.release_on_drop = false;
@@ -249,17 +276,77 @@ impl MediaVcs0LaneGuard {
     pub(super) const fn mode(&self) -> MediaVcs0JobMode {
         self.mode
     }
+
+    pub(super) const fn requires_reactivation(&self) -> bool {
+        self.requires_reactivation
+    }
+
+    /// Mark this job as the last known-good VCS0 mode. Callers do this only
+    /// after the completion marker has retired and any GuC context has been
+    /// destroyed. Merely dropping an acquired lane never proves completion.
+    pub(super) fn complete(&mut self) {
+        self.completed = true;
+    }
 }
 
 impl Drop for MediaVcs0LaneGuard {
     fn drop(&mut self) {
         if self.release_on_drop {
             let mut state = MEDIA_VCS0_EXECUTION.lock();
-            if state.generation == self.generation && state.active == Some(self.mode) {
+            let active = MediaVcs0ActiveJob {
+                mode: self.mode,
+                generation: self.generation,
+            };
+            if state.active == Some(active) {
+                state.last_completed = if self.completed {
+                    Some(self.mode)
+                } else {
+                    None
+                };
                 state.active = None;
             }
         }
     }
+}
+
+/// Stream-level ownership above individual VCS0 jobs. Matching jobs may enter
+/// the lane while this guard lives, but jobs with another codec or submission
+/// owner are deferred. This prevents a boot probe from fitting into the small
+/// gap between dependent AVC frames.
+pub(crate) struct MediaVcs0SessionGuard {
+    reservation: MediaVcs0SessionReservation,
+}
+
+impl MediaVcs0SessionGuard {
+    pub(crate) const fn generation(&self) -> u64 {
+        self.reservation.generation
+    }
+}
+
+impl Drop for MediaVcs0SessionGuard {
+    fn drop(&mut self) {
+        let mut state = MEDIA_VCS0_EXECUTION.lock();
+        if state.reservation == Some(self.reservation) {
+            state.reservation = None;
+        }
+    }
+}
+
+pub(crate) fn try_reserve_avc_decode_session()
+-> Result<MediaVcs0SessionGuard, MediaVcs0LaneAcquireError> {
+    let mut state = MEDIA_VCS0_EXECUTION.lock();
+    if state.quarantined.is_some() {
+        return Err(MediaVcs0LaneAcquireError::Quarantined);
+    }
+    if state.reservation.is_some() || state.active.is_some() {
+        return Err(MediaVcs0LaneAcquireError::Busy);
+    }
+    let reservation = MediaVcs0SessionReservation {
+        mode: MediaVcs0JobMode::AVC_DECODE_EXECLISTS,
+        generation: state.allocate_generation(),
+    };
+    state.reservation = Some(reservation);
+    Ok(MediaVcs0SessionGuard { reservation })
 }
 
 pub(super) fn try_acquire_vcs0_lane(
@@ -269,14 +356,24 @@ pub(super) fn try_acquire_vcs0_lane(
     if state.quarantined.is_some() {
         return Err(MediaVcs0LaneAcquireError::Quarantined);
     }
+    if state
+        .reservation
+        .map(|reservation| reservation.mode != mode)
+        .unwrap_or(false)
+    {
+        return Err(MediaVcs0LaneAcquireError::Busy);
+    }
     if state.active.is_some() {
         return Err(MediaVcs0LaneAcquireError::Busy);
     }
-    state.generation = state.generation.wrapping_add(1).max(1);
-    state.active = Some(mode);
+    let generation = state.allocate_generation();
+    let requires_reactivation = state.last_completed != Some(mode);
+    state.active = Some(MediaVcs0ActiveJob { mode, generation });
     Ok(MediaVcs0LaneGuard {
         mode,
-        generation: state.generation,
+        generation,
+        requires_reactivation,
+        completed: false,
         release_on_drop: true,
     })
 }

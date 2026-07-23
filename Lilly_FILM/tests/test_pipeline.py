@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from lilly_film.pipeline import prediction_metrics
+from lilly_film.pipeline import _select_refined_candidate, prediction_metrics
 
 
 class MetricTests(unittest.TestCase):
@@ -25,6 +25,27 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(metrics["alpha_area_ratio"], 0.0)
 
 
+class RefinementTests(unittest.TestCase):
+    def test_stable_uses_median_rgb_and_baseline_alpha(self):
+        candidates = np.array(
+            [
+                [[[0.0, 0.2, 0.4, 0.1]]],
+                [[[0.4, 0.6, 0.8, 0.9]]],
+                [[[0.2, 0.4, 0.6, 0.7]]],
+            ],
+            dtype=np.float32,
+        )
+        selected, label, _ = _select_refined_candidate(
+            candidates,
+            ((1, False, False), (1, True, False), (2, False, True)),
+            "stable",
+        )
+        np.testing.assert_allclose(
+            selected[0, 0],
+            np.array([0.2, 0.4, 0.6, 0.1], dtype=np.float32),
+        )
+        self.assertEqual(label, "median-visible-rgb,baseline-alpha")
+
+
 if __name__ == "__main__":
     unittest.main()
-

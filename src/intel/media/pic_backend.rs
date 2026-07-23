@@ -205,6 +205,8 @@ pub(super) struct MediaAvcSubmitProof {
     pub complete_value: u32,
     pub retired: bool,
     pub poll_iters: usize,
+    pub mode_transition: bool,
+    pub engine_reset: bool,
     pub reset_us: u64,
     pub zero_clear_us: u64,
     pub zero_us: u64,
@@ -1571,8 +1573,9 @@ pub(super) fn submit_avc_single_idr_batch(
     if missing_reference_surface_end > backing.output_surface_bytes {
         return None;
     }
-    let vcs0_lane =
+    let mut vcs0_lane =
         media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_DECODE_EXECLISTS).ok()?;
+    let mode_transition = vcs0_lane.requires_reactivation();
     let output_surface_gpu_addr = windows
         .output_surface_gpu_addr
         .saturating_add(output_surface_offset_bytes as u64);
@@ -1592,7 +1595,9 @@ pub(super) fn submit_avc_single_idr_batch(
     let complete_marker = kickoff_marker + 3;
 
     let reset_start = media_backend_now_ticks();
-    if avc_should_reset_media_engine() {
+    let session_reset = avc_should_reset_media_engine();
+    let engine_reset = mode_transition || session_reset;
+    if engine_reset {
         media::reset_media_engine(dev, engine, context_virt);
     }
     media::wake_media_engine_forcewake(dev, engine);
@@ -1890,7 +1895,7 @@ pub(super) fn submit_avc_single_idr_batch(
         media::sample_buffer_dword(backing.bitstream_virt, backing.bitstream_bytes, 0);
     let post_us = media_backend_elapsed_us(post_start);
 
-    Some(MediaAvcSubmitProof {
+    let proof = MediaAvcSubmitProof {
         engine_name: engine.name,
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
@@ -1916,6 +1921,8 @@ pub(super) fn submit_avc_single_idr_batch(
         complete_value,
         retired,
         poll_iters,
+        mode_transition,
+        engine_reset,
         reset_us,
         zero_clear_us,
         zero_us,
@@ -1959,7 +1966,11 @@ pub(super) fn submit_avc_single_idr_batch(
         bitstream_dword0,
         output_surface_signature,
         output_surface_nonzero_samples,
-    })
+    };
+    if retired {
+        vcs0_lane.complete();
+    }
+    Some(proof)
 }
 
 pub(super) fn submit_jpeg_smoke_batch(
@@ -1973,7 +1984,7 @@ pub(super) fn submit_jpeg_smoke_batch(
     if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
         return None;
     }
-    let vcs0_lane =
+    let mut vcs0_lane =
         media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::JPEG_DECODE_EXECLISTS).ok()?;
 
     let ring_virt = backing.ring_virt;
@@ -2249,7 +2260,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         ring_tail_bytes,
     );
 
-    Some(MediaJpegSmokeSubmitProof {
+    let proof = MediaJpegSmokeSubmitProof {
         engine_name: engine.name,
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
@@ -2360,5 +2371,9 @@ pub(super) fn submit_jpeg_smoke_batch(
             backing.bitstream_bytes,
             0,
         ),
-    })
+    };
+    if retired {
+        vcs0_lane.complete();
+    }
+    Some(proof)
 }

@@ -37,6 +37,7 @@ const SPIRIT_GPU_POLL_MS: u64 = 1;
 const SPIRIT_CURSOR_MOVE_RETRY_MS: u64 = 1;
 const SPIRIT_MOVE_PORTAL_PRE_MS: u64 = 350;
 const SPIRIT_MOVE_PORTAL_POST_MS: u64 = 150;
+const SPIRIT_BOOT_MOVE_RIGHT_PIXELS: u32 = 512;
 const SPIRIT_RETRY_MS: u64 = 50;
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u64 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u64 = 60;
@@ -941,6 +942,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut stream_cadence_phase = 0u64;
     let mut presentation_rate = SpiritPresentationRate::new();
     let mut stream_aborted = false;
+    let mut boot_move_queued = false;
     let mut arm_deferred_polls = 0u32;
     let mut package_next_boundary = Instant::now();
     let mut package_started = Instant::now();
@@ -1040,6 +1042,42 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
                         presentation_rate.observe_surflive(Instant::now());
+                        if !boot_move_queued {
+                            boot_move_queued = true;
+                            match crate::intel::complete_scanout_pipeline_dimensions(id.index()) {
+                                Some((width, _)) if width > 1 => {
+                                    let delta_x = f64::from(SPIRIT_BOOT_MOVE_RIGHT_PIXELS)
+                                        / f64::from(width - 1);
+                                    match move_by(id, delta_x, 0.0) {
+                                        Ok(move_fence) => crate::log_info!(
+                                            target: "gfx";
+                                            "trueos-spirit: boot move queued fence={} pipe={} move_sequence={} direction=right pixels={} delta_normalized={:.8} trigger=first-cursor-surflive transition=portal-350+150ms\n",
+                                            id.index(),
+                                            pipe_name(id),
+                                            move_fence.sequence,
+                                            SPIRIT_BOOT_MOVE_RIGHT_PIXELS,
+                                            delta_x,
+                                        ),
+                                        Err(error) => crate::log_warn!(
+                                            target: "gfx";
+                                            "trueos-spirit: boot move skipped fence={} pipe={} pixels={} error={:?}\n",
+                                            id.index(),
+                                            pipe_name(id),
+                                            SPIRIT_BOOT_MOVE_RIGHT_PIXELS,
+                                            error,
+                                        ),
+                                    }
+                                }
+                                dimensions => crate::log_warn!(
+                                    target: "gfx";
+                                    "trueos-spirit: boot move skipped fence={} pipe={} pixels={} dimensions={:?}\n",
+                                    id.index(),
+                                    pipe_name(id),
+                                    SPIRIT_BOOT_MOVE_RIGHT_PIXELS,
+                                    dimensions,
+                                ),
+                            }
+                        }
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
