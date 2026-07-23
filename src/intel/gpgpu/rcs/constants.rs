@@ -514,10 +514,16 @@ pub(crate) const PIXEL_PLASMA_FLAG_RINGS: u32 = 1 << 1;
 pub(crate) const PIXEL_PLASMA_FLAG_SCANLINE: u32 = 1 << 2;
 pub(crate) const PIXEL_PLASMA_FLAG_FIELD_PALETTE: u32 = 1 << 3;
 
-const COPY_RECT_PRE_MARKER_SLOT: usize = 5;
 const COPY_RECT_POST_MARKER_SLOT: usize = 4;
+// PIPE_CONTROL post-sync writes a QWord, so slot 5 is reserved for the high
+// DWORD of the completion cookie. Keep the diagnostic pre marker outside that
+// pair.
+const COPY_RECT_PRE_MARKER_SLOT: usize = 6;
 const COPY_RECT_PRE_MARKER: u32 = 0xC0DE_A701;
 const COPY_RECT_POST_MARKER: u32 = 0xC0DE_A702;
+const _: () = assert!(COPY_RECT_POST_MARKER_SLOT.is_multiple_of(2));
+const _: () = assert!(COPY_RECT_PRE_MARKER_SLOT != COPY_RECT_POST_MARKER_SLOT);
+const _: () = assert!(COPY_RECT_PRE_MARKER_SLOT != COPY_RECT_POST_MARKER_SLOT + 1);
 
 const CLEAR_RECT_IDD_OFFSET_BYTES: usize = 0x300;
 const CLEAR_RECT_BINDING_TABLE_OFFSET_BYTES: usize = 0x340;

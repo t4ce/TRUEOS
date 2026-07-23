@@ -4,7 +4,7 @@
 // allocation and host-only dependencies: the same generated contract is part
 // of the kernel image and is checked before any artifact reaches GGTT.
 
-pub(crate) const GPGPU_KERNEL_ABI_SCHEMA_VERSION: u16 = 1;
+pub(crate) const GPGPU_KERNEL_ABI_SCHEMA_VERSION: u16 = 2;
 
 pub(crate) const GPGPU_ADLS_4680_PCI_DEVICE_IDS: &[u16] = &[0x4680];
 
@@ -125,6 +125,32 @@ pub(crate) struct GpgpuArtifactPayloadArg {
     pub(crate) size_bytes: u32,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuArtifactImplicitArgKind {
+    GlobalIdOffset,
+    LocalSize,
+    EnqueuedLocalSize,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GpgpuArtifactImplicitPayloadArg {
+    pub(crate) kind: GpgpuArtifactImplicitArgKind,
+    pub(crate) offset_bytes: u32,
+    pub(crate) size_bytes: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuArtifactPerThreadArgKind {
+    LocalId,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GpgpuArtifactPerThreadPayloadArg {
+    pub(crate) kind: GpgpuArtifactPerThreadArgKind,
+    pub(crate) offset_bytes: u32,
+    pub(crate) size_bytes: u32,
+}
+
 /// ABI facts extracted from Zebin ELF and `.ze_info` by the offline bakery.
 ///
 /// The hashes bind these facts to immutable compiler outputs.  Runtime ELF
@@ -152,6 +178,8 @@ pub(crate) struct GpgpuKernelAbiContract {
     pub(crate) cross_thread_data_bytes: u32,
     pub(crate) per_thread_data_bytes: u32,
     pub(crate) bindings: &'static [GpgpuArtifactBinding],
+    pub(crate) implicit_payload_args: &'static [GpgpuArtifactImplicitPayloadArg],
+    pub(crate) per_thread_payload_args: &'static [GpgpuArtifactPerThreadPayloadArg],
     pub(crate) payload_args: &'static [GpgpuArtifactPayloadArg],
 }
 
@@ -228,7 +256,68 @@ impl GpgpuKernelAbiContract {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadData);
         }
 
+        // The current direct-RCS payload writer programs exactly these three
+        // implicit cross-thread records.  Offsets are part of the executable
+        // ABI, not descriptive metadata: reject additions or layout changes
+        // until the encoder grows the corresponding capability.
+        if self.implicit_payload_args.len() != 3 {
+            return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+        }
+        let mut implicit_kinds = 0u8;
         let mut index = 0;
+        while index < self.implicit_payload_args.len() {
+            let arg = self.implicit_payload_args[index];
+            let (expected_offset, expected_size, kind_bit) = match arg.kind {
+                GpgpuArtifactImplicitArgKind::GlobalIdOffset => (0, 12, 1),
+                GpgpuArtifactImplicitArgKind::LocalSize => (12, 12, 2),
+                GpgpuArtifactImplicitArgKind::EnqueuedLocalSize => (32, 12, 4),
+            };
+            if arg.offset_bytes != expected_offset
+                || arg.size_bytes != expected_size
+                || implicit_kinds & kind_bit != 0
+            {
+                return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+            }
+            implicit_kinds |= kind_bit;
+            let Some(end) = arg.offset_bytes.checked_add(arg.size_bytes) else {
+                return Err(GpgpuKernelAbiContractError::ImplicitPayloadOutOfBounds);
+            };
+            if end > self.cross_thread_data_bytes {
+                return Err(GpgpuKernelAbiContractError::ImplicitPayloadOutOfBounds);
+            }
+            let mut prior = 0;
+            while prior < index {
+                let other = self.implicit_payload_args[prior];
+                let Some(other_end) = other.offset_bytes.checked_add(other.size_bytes) else {
+                    return Err(GpgpuKernelAbiContractError::ImplicitPayloadOutOfBounds);
+                };
+                if arg.offset_bytes < other_end && other.offset_bytes < end {
+                    return Err(GpgpuKernelAbiContractError::OverlappingImplicitPayloadArgs);
+                }
+                prior += 1;
+            }
+            index += 1;
+        }
+        if implicit_kinds != 7 {
+            return Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload);
+        }
+
+        if self.per_thread_payload_args.len() != 1 {
+            return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
+        }
+        let per_thread = self.per_thread_payload_args[0];
+        if !matches!(per_thread.kind, GpgpuArtifactPerThreadArgKind::LocalId)
+            || per_thread.offset_bytes != 0
+            || per_thread.size_bytes != 96
+            || per_thread
+                .offset_bytes
+                .checked_add(per_thread.size_bytes)
+                .map_or(true, |end| end > self.per_thread_data_bytes)
+        {
+            return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
+        }
+
+        index = 0;
         while index < self.payload_args.len() {
             let arg = self.payload_args[index];
             if arg.size_bytes == 0 {
@@ -272,6 +361,21 @@ impl GpgpuKernelAbiContract {
             };
             if end > self.cross_thread_data_bytes {
                 return Err(GpgpuKernelAbiContractError::PayloadArgOutOfBounds);
+            }
+            let mut implicit_index = 0;
+            while implicit_index < self.implicit_payload_args.len() {
+                let implicit = self.implicit_payload_args[implicit_index];
+                let Some(implicit_end) =
+                    implicit.offset_bytes.checked_add(implicit.size_bytes)
+                else {
+                    return Err(GpgpuKernelAbiContractError::ImplicitPayloadOutOfBounds);
+                };
+                if arg.offset_bytes < implicit_end && implicit.offset_bytes < end {
+                    return Err(
+                        GpgpuKernelAbiContractError::ExplicitImplicitPayloadOverlap,
+                    );
+                }
+                implicit_index += 1;
             }
 
             let mut prior = 0;
@@ -341,6 +445,11 @@ pub(crate) enum GpgpuKernelAbiContractError {
     UnsupportedSlm,
     InvalidCrossThreadData,
     UnsupportedPerThreadData,
+    UnsupportedImplicitPayload,
+    ImplicitPayloadOutOfBounds,
+    OverlappingImplicitPayloadArgs,
+    ExplicitImplicitPayloadOverlap,
+    UnsupportedPerThreadPayload,
     InvalidPayloadArg,
     InvalidPointerSize,
     MissingPointerQualifier,
@@ -371,6 +480,19 @@ impl GpgpuKernelAbiContractError {
             Self::UnsupportedSlm => "contract-unsupported-slm",
             Self::InvalidCrossThreadData => "contract-invalid-cross-thread-data",
             Self::UnsupportedPerThreadData => "contract-unsupported-per-thread-data",
+            Self::UnsupportedImplicitPayload => "contract-unsupported-implicit-payload",
+            Self::ImplicitPayloadOutOfBounds => {
+                "contract-implicit-payload-out-of-bounds"
+            }
+            Self::OverlappingImplicitPayloadArgs => {
+                "contract-overlapping-implicit-payload-args"
+            }
+            Self::ExplicitImplicitPayloadOverlap => {
+                "contract-explicit-implicit-payload-overlap"
+            }
+            Self::UnsupportedPerThreadPayload => {
+                "contract-unsupported-per-thread-payload"
+            }
             Self::InvalidPayloadArg => "contract-invalid-payload-arg",
             Self::InvalidPointerSize => "contract-invalid-pointer-size",
             Self::MissingPointerQualifier => "contract-missing-pointer-qualifier",
@@ -664,6 +786,29 @@ mod tests {
         arg_index: 0,
         bti: 0,
     }];
+    const IMPLICIT_PAYLOAD_ARGS: &[GpgpuArtifactImplicitPayloadArg] = &[
+        GpgpuArtifactImplicitPayloadArg {
+            kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset,
+            offset_bytes: 0,
+            size_bytes: 12,
+        },
+        GpgpuArtifactImplicitPayloadArg {
+            kind: GpgpuArtifactImplicitArgKind::LocalSize,
+            offset_bytes: 12,
+            size_bytes: 12,
+        },
+        GpgpuArtifactImplicitPayloadArg {
+            kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize,
+            offset_bytes: 32,
+            size_bytes: 12,
+        },
+    ];
+    const PER_THREAD_PAYLOAD_ARGS: &[GpgpuArtifactPerThreadPayloadArg] =
+        &[GpgpuArtifactPerThreadPayloadArg {
+            kind: GpgpuArtifactPerThreadArgKind::LocalId,
+            offset_bytes: 0,
+            size_bytes: 96,
+        }];
     const CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
         schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
         kernel_name: "copy_rect_rgba8",
@@ -684,6 +829,8 @@ mod tests {
         cross_thread_data_bytes: 96,
         per_thread_data_bytes: 96,
         bindings: BINDINGS,
+        implicit_payload_args: IMPLICIT_PAYLOAD_ARGS,
+        per_thread_payload_args: PER_THREAD_PAYLOAD_ARGS,
         payload_args: PAYLOAD_ARGS,
     };
     const COPY_RECT_ELF_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
@@ -742,6 +889,39 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(GpgpuKernelAbiContractError::StatefulPointerWithoutBinding)
+        );
+    }
+
+    #[test]
+    fn contract_rejects_shifted_implicit_payload() {
+        const INVALID: &[GpgpuArtifactImplicitPayloadArg] = &[
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset,
+                offset_bytes: 4,
+                size_bytes: 12,
+            },
+            IMPLICIT_PAYLOAD_ARGS[1],
+            IMPLICIT_PAYLOAD_ARGS[2],
+        ];
+        let invalid = GpgpuKernelAbiContract {
+            implicit_payload_args: INVALID,
+            ..CONTRACT
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(GpgpuKernelAbiContractError::UnsupportedImplicitPayload)
+        );
+    }
+
+    #[test]
+    fn contract_rejects_unprogrammed_per_thread_payload() {
+        let invalid = GpgpuKernelAbiContract {
+            per_thread_payload_args: &[],
+            ..CONTRACT
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload)
         );
     }
 

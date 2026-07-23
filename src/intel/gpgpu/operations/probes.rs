@@ -287,6 +287,10 @@ pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
     result.artifact_sha256 = upload.bin_sha256;
 
     let _submit_guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    if direct_rcs_context_is_quarantined() {
+        result.fail_setup("direct-rcs-quarantined-reboot-required");
+        return result;
+    }
     let Some(state) = direct_rcs_state_once(dev) else {
         result.fail_setup("direct-rcs-state-allocation");
         return result;
@@ -463,9 +467,9 @@ fn run_copy_rect_probe_case(
     result.retired = result.post_marker == COPY_RECT_POST_MARKER;
     if !result.retired {
         result.first_failure = if result.pre_marker == COPY_RECT_PRE_MARKER {
-            "walker-not-retired"
+            "walker-not-retired-reboot-required"
         } else {
-            "batch-not-started"
+            "batch-not-started-reboot-required"
         };
         return result;
     }

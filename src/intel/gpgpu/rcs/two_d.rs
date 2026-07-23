@@ -361,15 +361,13 @@ fn direct_rcs_encode_resolve_tile64_msaa4_2d_batch(
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         COPY_RECT_POST_MARKER_SLOT,
         COPY_RECT_POST_MARKER,
     );
-    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
-    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
 
     if !ok {
         return false;
@@ -719,15 +717,13 @@ fn direct_rcs_finish_two_buffer_dispatch_batch(
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-    ok &= direct_rcs_push_store_marker(
+    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
         &mut cursor,
+        state.gpu_va.result,
         COPY_RECT_POST_MARKER_SLOT,
         COPY_RECT_POST_MARKER,
     );
-    ok &= direct_rcs_push(batch, &mut cursor, MI_BATCH_BUFFER_END);
-    ok &= direct_rcs_push(batch, &mut cursor, MI_NOOP);
     if !ok {
         return false;
     }

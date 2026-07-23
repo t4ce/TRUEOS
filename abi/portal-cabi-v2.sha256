@@ -24,4 +24,7 @@
 # The capability-backed mouse-motion, keyboard-control, and gamepad-control
 # calls are strictly additive. They expose mediated high-level programs without
 # changing the existing raw HID or selected-frame input contracts.
-1e791c726322f954fbb43e81ae51a12048a1712c809eec425c4e5abf4ec7d7dd
+# The SSH PTY bridge open, write, read, resize, and close calls are strictly
+# additive. They expose the existing Shell2 backend through an authenticated
+# transport without changing older Blueprint imports.
+75c54edf15c01321a3666bb6c1d1ddf26e46011661946deca97f7eb6c8aee65e

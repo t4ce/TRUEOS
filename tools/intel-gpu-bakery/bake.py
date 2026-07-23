@@ -266,10 +266,84 @@ def _compiler_libraries(paths: list[Path]) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: (item["name"], item["resolved_name"]))
 
 
-def _tool_record(path: Path, version: str) -> dict[str, Any]:
+def _dynamic_compiler_libraries(
+    path: Path, environment: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Hash compiler implementation libraries resolved for one tool.
+
+    Clang is commonly a small driver whose implementation lives in
+    libclang-cpp/libLLVM.  Hashing only the driver executable therefore does
+    not pin the frontend.  Keep the representation independent of install
+    paths while binding the actual files selected by the dynamic loader.
+    """
+
+    compiler_prefixes = (
+        "libclang",
+        "libLLVM",
+        "libLLVMSPIRV",
+        "libocloc",
+        "libigc",
+        "libigdfcl",
+        "libiga",
+        "libopencl-clang",
+    )
+    process = subprocess.run(
+        ["ldd", str(path.resolve())],
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise ContractError(
+            f"cannot resolve dynamic compiler libraries for {path.name}: "
+            f"exit={process.returncode} output={process.stdout.strip()!r}"
+        )
+
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw_line in process.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "=>" in line:
+            soname, raw_target = (item.strip() for item in line.split("=>", 1))
+            target = raw_target.split(" (", 1)[0].strip()
+            if target == "not found":
+                if soname.startswith(compiler_prefixes):
+                    raise ContractError(
+                        f"{path.name}: compiler dependency {soname} is not resolved"
+                    )
+                continue
+        else:
+            target = line.split(" (", 1)[0].strip()
+            soname = Path(target).name
+        if not soname.startswith(compiler_prefixes):
+            continue
+        resolved = Path(target).resolve()
+        if not resolved.is_file():
+            raise ContractError(
+                f"{path.name}: resolved compiler dependency is missing: {target}"
+            )
+        key = (soname, resolved.name)
+        records[key] = {
+            "soname": soname,
+            "resolved_name": resolved.name,
+            "sha256": sha256_file(resolved),
+            "size_bytes": resolved.stat().st_size,
+        }
+    return [records[key] for key in sorted(records)]
+
+
+def _tool_record(
+    path: Path, version: str, environment: dict[str, str]
+) -> dict[str, Any]:
     resolved = path.resolve()
     return {
         "executable_sha256": sha256_file(resolved),
+        "dynamic_compiler_libraries": _dynamic_compiler_libraries(
+            resolved, environment
+        ),
         "version": version,
     }
 
@@ -289,12 +363,15 @@ def _toolchain_fingerprint(
     tools: dict[str, Any] = {}
     if clang is not None:
         tools["clang"] = _tool_record(
-            clang, _version(clang, ["--version"], cwd=query_dir, environment=environment)
+            clang,
+            _version(clang, ["--version"], cwd=query_dir, environment=environment),
+            environment,
         )
     if llvm_spirv is not None:
         tools["llvm_spirv"] = _tool_record(
             llvm_spirv,
             _version(llvm_spirv, ["--version"], cwd=query_dir, environment=environment),
+            environment,
         )
     driver_version = _version(
         ocloc,
@@ -302,7 +379,7 @@ def _toolchain_fingerprint(
         cwd=query_dir,
         environment=environment,
     )
-    tools["ocloc"] = _tool_record(ocloc, driver_version)
+    tools["ocloc"] = _tool_record(ocloc, driver_version, environment)
     return {
         "schema_version": 1,
         "frontend": frontend,
@@ -318,6 +395,7 @@ def _lock_projection(fingerprint: dict[str, Any]) -> dict[str, Any]:
     # path-independent representation as the reviewed lock.
     tools = {
         name: {
+            "dynamic_compiler_libraries": value["dynamic_compiler_libraries"],
             "executable_sha256": value["executable_sha256"],
             "version": value["version"],
         }
@@ -575,6 +653,28 @@ def main(argv: list[str] | None = None) -> int:
     if frontend == "ocloc-cl" and source.suffix != ".cl":
         raise ContractError("ocloc-cl frontend requires a .cl source")
     variant = args.variant or ("cpp" if frontend == "clang-clcpp" else "legacy")
+    if frontend == "clang-clcpp" and args.publish_dir:
+        missing_gates = []
+        if not args.toolchain_lock:
+            missing_gates.append("--toolchain-lock")
+        if not args.repro_check:
+            missing_gates.append("--repro-check")
+        if missing_gates:
+            raise ContractError(
+                "publishing C++ artifacts requires "
+                + " and ".join(missing_gates)
+                + "; prepare a reviewed lock without --publish-dir first"
+            )
+        if variant == "cpp":
+            if not args.abi_reference_bin:
+                missing_gates.append("--abi-reference-bin")
+            if not args.expect_kernel:
+                missing_gates.append("--expect-kernel")
+            if missing_gates:
+                raise ContractError(
+                    "publishing the cpp ABI-twin variant requires "
+                    + " and ".join(missing_gates)
+                )
 
     ocloc_candidates = [
         REPO_ROOT / "bld/intel-tools/root/usr/bin/ocloc-26.05.1",
@@ -601,8 +701,14 @@ def main(argv: list[str] | None = None) -> int:
         library_paths=library_paths,
         profile_sha256=sha256_file(profile_path),
     )
+    toolchain_lock_record = None
     if args.toolchain_lock:
-        _verify_lock(args.toolchain_lock.expanduser().resolve(), fingerprint)
+        toolchain_lock_path = args.toolchain_lock.expanduser().resolve()
+        _verify_lock(toolchain_lock_path, fingerprint)
+        toolchain_lock_record = {
+            "path": repo_relative(toolchain_lock_path, REPO_ROOT),
+            "sha256": sha256_file(toolchain_lock_path),
+        }
 
     run_a = _build_once(
         frontend=frontend,
@@ -669,6 +775,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ABI reference: exact match with {reference_path}")
 
     source_inputs = input_records(run_a["inputs"], REPO_ROOT)
+    source_record_path = repo_relative(source, REPO_ROOT)
+    if not source_inputs or source_record_path not in {
+        record["path"] for record in source_inputs
+    }:
+        raise ContractError(
+            "compiler dependency capture did not retain the primary source input"
+        )
     replacements = {
         str(clang): "$CLANG" if clang else "",
         str(llvm_spirv): "$LLVM_SPIRV" if llvm_spirv else "",
@@ -684,7 +797,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = build_manifest(
         analysis=analysis,
         source={
-            "path": repo_relative(source, REPO_ROOT),
+            "path": source_record_path,
             "language": "C++ for OpenCL" if frontend == "clang-clcpp" else "OpenCL C",
             "inputs": source_inputs,
         },
@@ -710,11 +823,20 @@ def main(argv: list[str] | None = None) -> int:
             "backend": {"description": "Intel IGC through ocloc -spirv_input" if frontend == "clang-clcpp" else "Intel IGC through ocloc"},
             "commands": normalized_commands,
             "toolchain": fingerprint,
+            "toolchain_lock": toolchain_lock_record,
             "profile": {
                 "path": repo_relative(profile_path, REPO_ROOT),
                 "sha256": sha256_file(profile_path),
             },
             "reproducibility_check": "passed" if args.repro_check else "not-requested",
+            "publication_policy": (
+                {
+                    "name": "cpp-legacy-abi-twin-v1",
+                    "expected_kernels": sorted(args.expect_kernel),
+                }
+                if variant == "cpp"
+                else None
+            ),
         },
         abi_reference=abi_reference,
         rust_symbols=_rust_symbol_map(args.rust_symbol),

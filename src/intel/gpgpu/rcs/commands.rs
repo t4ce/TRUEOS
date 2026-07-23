@@ -303,6 +303,14 @@ fn quarantine_direct_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::SystemService, reason);
 }
 
+fn direct_rcs_state_reuse_permitted(quarantined: &AtomicBool) -> bool {
+    !quarantined.load(Ordering::Acquire)
+}
+
+fn direct_rcs_context_is_quarantined() -> bool {
+    !direct_rcs_state_reuse_permitted(&DIRECT_RCS_CONTEXT_QUARANTINED)
+}
+
 fn quarantine_execution_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
 }
@@ -441,7 +449,14 @@ fn direct_rcs_poll_result_slot(state: DirectRcsState, slot: usize, expected: u32
         }
         core::hint::spin_loop();
     }
-    complete_direct_rcs_submission(observed == expected);
+    let completed = observed == expected;
+    if !completed {
+        // The physical request is not cancelled by failing its software
+        // timeline. Poison the shared context before the submit lock can be
+        // released so no caller rewrites memory a late batch may still fetch.
+        quarantine_direct_rcs_context("completion-marker-unobserved-reboot-required");
+    }
+    complete_direct_rcs_submission(completed);
     observed
 }
 
@@ -530,7 +545,11 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane(
             direct_rcs_elapsed_ms_since(started),
         );
     }
-    complete_direct_rcs_submission_on_lane(lane, observed == expected);
+    let completed = observed == expected;
+    if !completed {
+        quarantine_direct_rcs_lane(lane, "completion-marker-timeout-reboot-required");
+    }
+    complete_direct_rcs_submission_on_lane(lane, completed);
     observed
 }
 
@@ -693,5 +712,58 @@ fn direct_rcs_elapsed_us_since(start_tick: u64) -> u64 {
         0
     } else {
         ((elapsed as u128).saturating_mul(1_000_000) / hz as u128) as u64
+    }
+}
+
+#[cfg(test)]
+mod direct_rcs_fail_closed_tests {
+    use super::*;
+
+    #[test]
+    fn quarantine_irreversibly_denies_shared_state_reuse() {
+        let quarantined = AtomicBool::new(false);
+        assert!(direct_rcs_state_reuse_permitted(&quarantined));
+
+        quarantined.store(true, Ordering::Release);
+        assert!(!direct_rcs_state_reuse_permitted(&quarantined));
+    }
+
+    #[test]
+    fn copy_rect_completion_is_an_ordered_non_overlapping_post_sync_qword() {
+        assert!(COPY_RECT_POST_MARKER_SLOT.is_multiple_of(2));
+        assert_ne!(COPY_RECT_PRE_MARKER_SLOT, COPY_RECT_POST_MARKER_SLOT);
+        assert_ne!(COPY_RECT_PRE_MARKER_SLOT, COPY_RECT_POST_MARKER_SLOT + 1);
+
+        let mut batch = [0u32; 16];
+        let mut cursor = 0usize;
+        assert!(direct_rcs_push_gpgpu_dispatch_epilogue(
+            &mut batch,
+            &mut cursor,
+            DIRECT_RCS_GPU_VA_RESULT_BASE,
+            COPY_RECT_POST_MARKER_SLOT,
+            COPY_RECT_POST_MARKER,
+        ));
+        assert_eq!(cursor, 14);
+
+        // Producer release: HDC pipeline drain plus the full cache-flush set.
+        assert_eq!(batch[0], PIPE_CONTROL_CMD | PIPE_CONTROL_HDC_PIPELINE_FLUSH);
+        assert_eq!(batch[1], PIPE_CONTROL_FLUSH_BITS);
+
+        // Ordered PIPE_CONTROL post-sync QWord, followed by batch retirement.
+        assert_eq!(batch[6], PIPE_CONTROL_CMD);
+        assert_eq!(
+            batch[7],
+            PIPE_CONTROL_FLUSH_ENABLE
+                | PIPE_CONTROL_CS_STALL
+                | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE
+        );
+        let marker_gpu = DIRECT_RCS_GPU_VA_RESULT_BASE
+            + (COPY_RECT_POST_MARKER_SLOT * core::mem::size_of::<u32>()) as u64;
+        assert_eq!(batch[8], marker_gpu as u32);
+        assert_eq!(batch[9], (marker_gpu >> 32) as u32);
+        assert_eq!(batch[10], COPY_RECT_POST_MARKER);
+        assert_eq!(batch[11], 0);
+        assert_eq!(batch[12], MI_BATCH_BUFFER_END);
+        assert_eq!(batch[13], MI_NOOP);
     }
 }

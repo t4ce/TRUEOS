@@ -3,7 +3,7 @@ fn upload_artifact(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
 ) -> Option<UploadedKernelArtifact> {
-    upload_artifact_from_sources(dev, artifact, gpu, false)
+    upload_artifact_from_sources(dev, artifact, gpu, false, None)
 }
 
 fn upload_artifact_from_sources(
@@ -11,6 +11,7 @@ fn upload_artifact_from_sources(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
     strict_runtime_artifact: bool,
+    reusable_upload: Option<UploadedKernelArtifact>,
 ) -> Option<UploadedKernelArtifact> {
     // `kfs::read_file` is a synchronous wrapper around a future queued on the
     // current executor. Calling it from an Embassy task cannot make progress:
@@ -39,6 +40,7 @@ fn upload_artifact_from_sources(
                     "fs",
                     path.as_str(),
                     spv_bytes,
+                    reusable_upload,
                 );
             }
             Ok(Some(_)) => {
@@ -52,7 +54,17 @@ fn upload_artifact_from_sources(
                     return None;
                 }
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if strict_runtime_artifact {
+                    crate::log_info!(
+                        target: "gpgpu";
+                        "intel/gpgpu: {} runtime artifact reload rejected reason=missing path={}\n",
+                        artifact.name,
+                        runtime_artifact_display_path(artifact)
+                    );
+                    return None;
+                }
+            }
             Err(err) => {
                 crate::log_info!(
                     target: "gpgpu";
@@ -104,6 +116,7 @@ fn upload_artifact_from_sources(
         "embedded",
         source_path,
         artifact.spv.len(),
+        None,
     )
 }
 
@@ -115,6 +128,7 @@ fn upload_artifact_bytes(
     source: &'static str,
     source_path: &str,
     spv_bytes: usize,
+    reusable_upload: Option<UploadedKernelArtifact>,
 ) -> Option<UploadedKernelArtifact> {
     let actual_sha256 = match admit_kernel_artifact_bytes(
         artifact,
@@ -149,6 +163,37 @@ fn upload_artifact_bytes(
             return None;
         }
     };
+    if let Some(upload) = reusable_upload {
+        if !resident_upload_matches(upload, artifact, dev, gpu, bin.len(), actual_sha256) {
+            crate::log_error!(
+                target: "gpgpu";
+                "intel/gpgpu: {} reload rejected reason=resident-metadata-mismatch source={} path={} resident_source={} resident_gpu=0x{:X} resident_phys=0x{:X} resident_bytes=0x{:X}\n",
+                artifact.name,
+                source,
+                source_path,
+                upload.source,
+                upload.gpu,
+                upload.phys,
+                upload.bytes,
+            );
+            return None;
+        }
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: {} reload reuse ok=1 input_source={} resident_source={} path={} device=0x{:04X} revision=0x{:02X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} sha256={}\n",
+            artifact.name,
+            source,
+            upload.source,
+            source_path,
+            upload.device_id,
+            upload.revision_id,
+            upload.phys,
+            upload.gpu,
+            upload.bytes,
+            digest_hex(&actual_sha256).as_str(),
+        );
+        return Some(upload);
+    }
     let mapped_bytes = align_up(bin.len(), super::WARM_ALIGN)?;
     let (phys, virt) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN)?;
     unsafe {
@@ -259,6 +304,30 @@ fn upload_artifact_bytes(
         sha256.as_str(),
     );
     Some(upload)
+}
+
+fn resident_upload_matches(
+    upload: UploadedKernelArtifact,
+    artifact: GpgpuKernelArtifact,
+    dev: super::Dev,
+    gpu: u64,
+    bin_bytes: usize,
+    admitted_sha256: [u8; 32],
+) -> bool {
+    upload.name == artifact.name
+        && upload.target == artifact.target
+        && upload.gpu == gpu
+        && upload.phys != 0
+        && upload.bytes == bin_bytes
+        && upload.mapped_bytes >= upload.bytes
+        && upload.verified
+        && upload.bin_sha256 == admitted_sha256
+        && upload.device_id == dev.device_id
+        && upload.revision_id == dev.revision_id
+        && upload.abi_schema_version
+            == artifact
+                .abi_contract
+                .map(|contract| contract.schema_version)
 }
 
 fn runtime_artifact_rel_path(artifact: GpgpuKernelArtifact, ext: &str) -> String {
@@ -436,4 +505,188 @@ fn digest_hex(digest: &[u8; 32]) -> String {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+#[cfg(test)]
+mod runtime_admission_tests {
+    use super::*;
+
+    fn artifact_without_contract(target: GpgpuKernelTarget) -> GpgpuKernelArtifact {
+        GpgpuKernelArtifact::new(
+            COPY_RECT_RGBA8_ADLS_ARTIFACT.name,
+            target,
+            COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
+            COPY_RECT_RGBA8_ADLS_ARTIFACT.spv,
+            COPY_RECT_RGBA8_ADLS_ARTIFACT.bin_sha256,
+            None,
+        )
+    }
+
+    fn test_dev(device_id: u16, revision_id: u8) -> super::super::Dev {
+        super::super::Dev {
+            bus: 0,
+            slot: 2,
+            function: 0,
+            device_id,
+            revision_id,
+            mmio: core::ptr::null_mut(),
+            mmio_len: 0,
+        }
+    }
+
+    fn resident_upload(artifact: GpgpuKernelArtifact) -> UploadedKernelArtifact {
+        UploadedKernelArtifact {
+            name: artifact.name,
+            target: artifact.target,
+            source: "embedded",
+            gpu: 0x0D20_0000,
+            phys: 0x0010_0000,
+            bytes: artifact.bin.len(),
+            mapped_bytes: artifact.bin.len().next_multiple_of(4096),
+            verified: true,
+            bin_sha256: artifact.bin_sha256,
+            device_id: 0x4680,
+            revision_id: 0,
+            abi_schema_version: artifact
+                .abi_contract
+                .map(|contract| contract.schema_version),
+        }
+    }
+
+    #[test]
+    fn admission_accepts_selected_copy_artifact_on_adls() {
+        assert_eq!(
+            admit_kernel_artifact_bytes(
+                COPY_RECT_RGBA8_ADLS_ARTIFACT,
+                0x4680,
+                0,
+                COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
+            ),
+            Ok(COPY_RECT_RGBA8_ADLS_ARTIFACT.bin_sha256)
+        );
+    }
+
+    #[test]
+    fn admission_rejects_wrong_device_and_revision() {
+        assert_eq!(
+            admit_kernel_artifact_bytes(
+                COPY_RECT_RGBA8_ADLS_ARTIFACT,
+                0x46D1,
+                0,
+                COPY_RECT_RGBA8_ADLS_ARTIFACT.bin,
+            ),
+            Err(GpgpuArtifactAdmissionError::UnsupportedPciDevice)
+        );
+
+        const REVISION_ONE_ONLY: GpgpuKernelTarget = GpgpuKernelTarget {
+            label: "adls",
+            pci_device_ids: &[0x4680],
+            revision_min: 1,
+            revision_max: 1,
+        };
+        let artifact = artifact_without_contract(REVISION_ONE_ONLY);
+        assert_eq!(
+            admit_kernel_artifact_bytes(artifact, 0x4680, 0, artifact.bin),
+            Err(GpgpuArtifactAdmissionError::UnsupportedRevision)
+        );
+    }
+
+    #[test]
+    fn admission_rejects_invalid_elf_empty_hash_and_hash_mismatch() {
+        let artifact = artifact_without_contract(GPGPU_ADLS_4680_TARGET);
+        assert_eq!(
+            admit_kernel_artifact_bytes(artifact, 0x4680, 0, b"not a Zebin"),
+            Err(GpgpuArtifactAdmissionError::InvalidElf("truncated-elf"))
+        );
+
+        let empty_hash = GpgpuKernelArtifact {
+            bin_sha256: [0; 32],
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(empty_hash, 0x4680, 0, empty_hash.bin),
+            Err(GpgpuArtifactAdmissionError::EmptyExpectedZebinHash)
+        );
+
+        let wrong_hash = GpgpuKernelArtifact {
+            bin_sha256: [0xA5; 32],
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_hash, 0x4680, 0, wrong_hash.bin),
+            Err(GpgpuArtifactAdmissionError::ZebinHashMismatch)
+        );
+    }
+
+    #[test]
+    fn resident_reload_reuse_requires_exact_admitted_identity() {
+        let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;
+        let dev = test_dev(0x4680, 0);
+        let upload = resident_upload(artifact);
+        assert!(resident_upload_matches(
+            upload,
+            artifact,
+            dev,
+            upload.gpu,
+            artifact.bin.len(),
+            artifact.bin_sha256,
+        ));
+        assert!(!resident_upload_matches(
+            UploadedKernelArtifact {
+                bin_sha256: [0xA5; 32],
+                ..upload
+            },
+            artifact,
+            dev,
+            upload.gpu,
+            artifact.bin.len(),
+            artifact.bin_sha256,
+        ));
+        assert!(!resident_upload_matches(
+            upload,
+            artifact,
+            test_dev(0x4680, 1),
+            upload.gpu,
+            artifact.bin.len(),
+            artifact.bin_sha256,
+        ));
+    }
+
+    #[cfg(feature = "intel_gpu_cpp_aot")]
+    #[test]
+    fn admission_rejects_contract_name_target_and_spirv_mismatch() {
+        let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;
+        let wrong_name = GpgpuKernelArtifact {
+            name: "copy_rect_rgba8_wrong",
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_name, 0x4680, 0, wrong_name.bin),
+            Err(GpgpuArtifactAdmissionError::ContractKernelNameMismatch)
+        );
+
+        const NARROW_TARGET: GpgpuKernelTarget = GpgpuKernelTarget {
+            label: "adls",
+            pci_device_ids: &[0x4680],
+            revision_min: 0,
+            revision_max: 254,
+        };
+        let wrong_target = GpgpuKernelArtifact {
+            target_policy: NARROW_TARGET,
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_target, 0x4680, 0, wrong_target.bin),
+            Err(GpgpuArtifactAdmissionError::ContractTargetMismatch)
+        );
+
+        let wrong_spirv = GpgpuKernelArtifact {
+            spv: b"not the contracted SPIR-V",
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_spirv, 0x4680, 0, wrong_spirv.bin),
+            Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch)
+        );
+    }
 }

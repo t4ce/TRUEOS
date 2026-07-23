@@ -1517,9 +1517,7 @@ pub unsafe extern "C" fn trueos_cabi_ssh_shell_read(
     out_ptr: *mut u8,
     out_cap: usize,
 ) -> isize {
-    if out_ptr.is_null()
-        || out_cap == 0
-        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    if out_ptr.is_null() || out_cap == 0 || crate::hv::current_hull_guest_context_vm_id().is_none()
     {
         return -1;
     }
@@ -1539,11 +1537,7 @@ pub unsafe extern "C" fn trueos_cabi_ssh_shell_read(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_ssh_shell_resize(
-    session: u32,
-    cols: u32,
-    rows: u32,
-) -> i32 {
+pub extern "C" fn trueos_cabi_ssh_shell_resize(session: u32, cols: u32, rows: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_none() {
         return -1;
     }
@@ -1565,11 +1559,8 @@ pub extern "C" fn trueos_cabi_ssh_shell_close(session: u32) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_none() {
         return -1;
     }
-    let (status, rc) = trueos_vm::vmcall::call(
-        trueos_vm::vmcall::OP_BP_SSH_SHELL_CLOSE,
-        u64::from(session),
-        0,
-    );
+    let (status, rc) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_SSH_SHELL_CLOSE, u64::from(session), 0);
     if status == trueos_vm::vmcall::STATUS_OK {
         rc as i64 as i32
     } else {

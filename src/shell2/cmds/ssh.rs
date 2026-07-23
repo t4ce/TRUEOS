@@ -49,10 +49,7 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let args: Vec<String> = rest
-        .split_whitespace()
-        .map(String::from)
-        .collect();
+    let args: Vec<String> = rest.split_whitespace().map(String::from).collect();
 
     if args.is_empty() {
         print_shell_line(io, "ssh: usage `ssh [user@]host[:port]`");

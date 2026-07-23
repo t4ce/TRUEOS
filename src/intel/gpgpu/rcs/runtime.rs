@@ -114,12 +114,27 @@ unsafe impl Send for DirectRcsState {}
 unsafe impl Sync for DirectRcsState {}
 
 fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if let Some(state) = *DIRECT_RCS_STATE.lock() {
+    // A timed-out system-service request can still fetch or execute the
+    // persistent batch after its software timeline has been failed. Never hand
+    // out the shared state again until reboot: callers would otherwise rewrite
+    // its batch, result page, PPGTT, or scratch allocations under that request.
+    if direct_rcs_context_is_quarantined() {
+        return None;
+    }
+
+    let mut state_slot = DIRECT_RCS_STATE.lock();
+    // Close the check/lock race for any caller that failed to take the ordinary
+    // submit lock. Normal callers already serialize quarantine and reuse with
+    // DIRECT_RCS_SUBMIT_LOCK.
+    if direct_rcs_context_is_quarantined() {
+        return None;
+    }
+    if let Some(state) = *state_slot {
         return Some(state);
     }
 
     let state = allocate_direct_rcs_state(DIRECT_RCS_GPU_VA)?;
-    *DIRECT_RCS_STATE.lock() = Some(state);
+    *state_slot = Some(state);
     Some(state)
 }
 

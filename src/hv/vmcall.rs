@@ -1988,11 +1988,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_SSH_SHELL_OPEN => {
-            let session = crate::shell2::backends::net_tcp::ssh_shell_open(
-                arg0 as usize,
-                arg1 as usize,
-            )
-            .map_or((-16i64) as u64, u64::from);
+            let session =
+                crate::shell2::backends::net_tcp::ssh_shell_open(arg0 as usize, arg1 as usize)
+                    .map_or((-16i64) as u64, u64::from);
             write_response(vm_id, seq, STATUS_OK, session, 0);
             DispatchOutcome::Resume
         }
@@ -2001,11 +1999,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let written = crate::shell2::backends::net_tcp::ssh_shell_write(
-                arg0 as u32,
-                data,
-            )
-            .map_or((-22i64) as u64, |written| written as u64);
+            let written = crate::shell2::backends::net_tcp::ssh_shell_write(arg0 as u32, data)
+                .map_or((-22i64) as u64, |written| written as u64);
             write_response(vm_id, seq, STATUS_OK, written, 0);
             DispatchOutcome::Resume
         }
@@ -2025,11 +2020,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SSH_SHELL_RESIZE => {
             let cols = (arg1 >> 32) as usize;
             let rows = (arg1 & 0xffff_ffff) as usize;
-            let ok = crate::shell2::backends::net_tcp::ssh_shell_resize(
-                arg0 as u32,
-                cols,
-                rows,
-            );
+            let ok = crate::shell2::backends::net_tcp::ssh_shell_resize(arg0 as u32, cols, rows);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-22i64) as u64 }, 0);
             DispatchOutcome::Resume
         }

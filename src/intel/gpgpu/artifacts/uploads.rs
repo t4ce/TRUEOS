@@ -482,6 +482,8 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
 pub(crate) fn reload_known_kernel_artifact(
     name: &str,
 ) -> Result<UploadedKernelArtifact, GpgpuArtifactReloadError> {
+    static RELOAD_LOCK: Mutex<()> = Mutex::new(());
+    let _reload_guard = RELOAD_LOCK.lock();
     let Some(slot) = known_artifact_slot(name) else {
         return Err(GpgpuArtifactReloadError::UnknownKernel);
     };
@@ -494,7 +496,10 @@ pub(crate) fn reload_known_kernel_artifact(
         return Err(GpgpuArtifactReloadError::NoClaimedDevice);
     };
 
-    let Some(upload) = upload_artifact_from_sources(dev, slot.artifact, slot.gpu, true) else {
+    let reusable_upload = *slot.upload.lock();
+    let Some(upload) =
+        upload_artifact_from_sources(dev, slot.artifact, slot.gpu, true, reusable_upload)
+    else {
         crate::log_info!(
             target: "gpgpu";
             "intel/gpgpu: {} reload failed reason=upload-failed previous=kept\n",

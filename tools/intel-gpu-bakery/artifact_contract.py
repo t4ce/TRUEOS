@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ELF_MACHINE_INTEL_GT = 0xCD
 
 
@@ -459,6 +459,7 @@ def _kernel_contract(
     pointer_metadata: dict[int, list[dict[str, Any]]] = {}
     pointer_addresses: dict[int, dict[str, Any]] = {}
     payload_args: list[dict[str, Any]] = []
+    implicit_payload_args: list[dict[str, Any]] = []
     cross_thread_end = 0
     for arg in raw_payload:
         offset = _integer(arg, "offset")
@@ -487,6 +488,17 @@ def _kernel_contract(
                     "address_space": str(arg.get("addrspace", "private")),
                 }
             )
+        else:
+            if not isinstance(arg_type, str) or not arg_type:
+                raise ContractError(f"kernel {name!r}: implicit payload lacks arg_type")
+            implicit = {
+                "arg_type": arg_type,
+                "offset": offset,
+                "size": size,
+            }
+            if "arg_index" in arg:
+                implicit["arg_index"] = _integer(arg, "arg_index")
+            implicit_payload_args.append(implicit)
 
     valid_access = {"readonly", "writeonly", "readwrite"}
     valid_modes = {"stateful", "stateless"}
@@ -571,6 +583,9 @@ def _kernel_contract(
             f"{sorted(dangling_addresses)}"
         )
     payload_args.sort(key=lambda arg: (arg["arg_index"], arg["kind"]))
+    implicit_payload_args.sort(
+        key=lambda arg: (arg["offset"], arg["arg_type"], arg.get("arg_index", -1))
+    )
     seen_args: set[int] = set()
     for arg in payload_args:
         index = arg["arg_index"]
@@ -602,6 +617,7 @@ def _kernel_contract(
         per_thread_args.append(
             {"arg_type": str(arg.get("arg_type", "")), "offset": offset, "size": size}
         )
+    per_thread_args.sort(key=lambda arg: (arg["offset"], arg["arg_type"]))
 
     return {
         "kernel_name": name,
@@ -624,11 +640,13 @@ def _kernel_contract(
         "grf_count": grf_count,
         "scratch_bytes": scratch_bytes,
         "slm_bytes": slm_bytes,
+        "execution_env": execution,
         # Cross-thread data is delivered as whole 32-byte GRFs.
         "cross_thread_data_bytes": _align_up(cross_thread_end, 32),
         "per_thread_data_bytes": per_thread_end,
         "bindings": bindings,
         "payload_args": payload_args,
+        "implicit_payload_args": implicit_payload_args,
         "per_thread_payload_args": per_thread_args,
         "source_arg_info": _source_arg_info(root, name),
         "user_attributes": kernel.get("user_attributes", {}),
@@ -705,10 +723,12 @@ def abi_projection(analysis: dict[str, Any]) -> dict[str, Any]:
                 "grf_count": kernel["grf_count"],
                 "scratch_bytes": kernel["scratch_bytes"],
                 "slm_bytes": kernel["slm_bytes"],
+                "execution_env": kernel["execution_env"],
                 "cross_thread_data_bytes": kernel["cross_thread_data_bytes"],
                 "per_thread_data_bytes": kernel["per_thread_data_bytes"],
                 "bindings": kernel["bindings"],
                 "payload_args": kernel["payload_args"],
+                "implicit_payload_args": kernel["implicit_payload_args"],
                 "per_thread_payload_args": kernel["per_thread_payload_args"],
                 "source_arg_info": kernel["source_arg_info"],
                 "user_attributes": kernel["user_attributes"],
@@ -725,6 +745,11 @@ def validate_constraints(
 ) -> None:
     for kernel in analysis["kernels"]:
         name = kernel["kernel_name"]
+        if kernel["ze_info_major"] != 1:
+            raise ContractError(
+                f"kernel {name!r}: unsupported .ze_info major "
+                f"{kernel['ze_info_major']}; reviewed major 1 is required"
+            )
         if kernel["text"]["entry_offset"] % 64 != 0:
             raise ContractError(
                 f"kernel {name!r}: entry offset {kernel['text']['entry_offset']} "
@@ -848,6 +873,40 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
             )
             for binding in kernel["bindings"]
         ]
+        implicit_lines = []
+        for arg in kernel["implicit_payload_args"]:
+            kind = {
+                "global_id_offset": "GpgpuArtifactImplicitArgKind::GlobalIdOffset",
+                "local_size": "GpgpuArtifactImplicitArgKind::LocalSize",
+                "enqueued_local_size": (
+                    "GpgpuArtifactImplicitArgKind::EnqueuedLocalSize"
+                ),
+            }.get(arg["arg_type"])
+            if kind is None:
+                raise ContractError(
+                    f"kernel {kernel_name!r}: unsupported direct-RCS implicit "
+                    f"payload {arg['arg_type']!r}"
+                )
+            implicit_lines.append(
+                "        GpgpuArtifactImplicitPayloadArg { "
+                f"kind: {kind}, offset_bytes: {arg['offset']}, "
+                f"size_bytes: {arg['size']} }},"
+            )
+        per_thread_lines = []
+        for arg in kernel["per_thread_payload_args"]:
+            kind = {
+                "local_id": "GpgpuArtifactPerThreadArgKind::LocalId",
+            }.get(arg["arg_type"])
+            if kind is None:
+                raise ContractError(
+                    f"kernel {kernel_name!r}: unsupported direct-RCS per-thread "
+                    f"payload {arg['arg_type']!r}"
+                )
+            per_thread_lines.append(
+                "        GpgpuArtifactPerThreadPayloadArg { "
+                f"kind: {kind}, offset_bytes: {arg['offset']}, "
+                f"size_bytes: {arg['size']} }},"
+            )
         output.extend(
             [
                 f"pub(crate) const {symbol}: GpgpuKernelAbiContract = "
@@ -879,6 +938,12 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
                 f"    per_thread_data_bytes: {kernel['per_thread_data_bytes']},",
                 "    bindings: &[",
                 *binding_lines,
+                "    ],",
+                "    implicit_payload_args: &[",
+                *implicit_lines,
+                "    ],",
+                "    per_thread_payload_args: &[",
+                *per_thread_lines,
                 "    ],",
                 "    payload_args: &[",
                 *payload_lines,
@@ -912,6 +977,19 @@ def build_manifest(
     }
 
 
+def _profile_target(profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "label": str(profile["label"]),
+        "ocloc_device": str(profile["device"]),
+        "pci_device_ids": [
+            int(value, 0) if isinstance(value, str) else int(value)
+            for value in profile["pci_device_ids"]
+        ],
+        "revision_min": int(profile["revision_min"]),
+        "revision_max": int(profile["revision_max"]),
+    }
+
+
 def verify_manifest(
     manifest_path: Path,
     bin_path: Path,
@@ -927,7 +1005,24 @@ def verify_manifest(
     actual = analyze_zebin(bin_path, spv_path)
     if actual != manifest.get("artifact"):
         raise ContractError(f"{manifest_path}: artifact facts/hashes are stale")
-    for record in manifest.get("source", {}).get("inputs", []):
+    source = manifest.get("source")
+    if not isinstance(source, dict):
+        raise ContractError(f"{manifest_path}: source provenance is missing")
+    source_path = source.get("path")
+    source_inputs = source.get("inputs")
+    if not isinstance(source_path, str) or not source_path:
+        raise ContractError(f"{manifest_path}: primary source path is missing")
+    if not isinstance(source_inputs, list) or not source_inputs:
+        raise ContractError(f"{manifest_path}: source input provenance is empty")
+    if source_path not in {
+        record.get("path") for record in source_inputs if isinstance(record, dict)
+    }:
+        raise ContractError(
+            f"{manifest_path}: primary source is absent from compiler inputs"
+        )
+    for record in source_inputs:
+        if not isinstance(record, dict):
+            raise ContractError(f"{manifest_path}: malformed source input record")
         raw_path = Path(record["path"])
         input_path = raw_path if raw_path.is_absolute() else repo_root / raw_path
         if not input_path.is_file():
@@ -948,12 +1043,86 @@ def verify_manifest(
         if not reference_path.is_file() or sha256_file(reference_path) != reference["sha256"]:
             raise ContractError(f"{manifest_path}: ABI reference is missing or changed")
         compare_abi(actual, analyze_zebin(reference_path), reference_path)
-    profile = manifest.get("provenance", {}).get("profile")
-    if profile:
-        raw_profile = Path(profile["path"])
-        profile_path = raw_profile if raw_profile.is_absolute() else repo_root / raw_profile
-        if not profile_path.is_file() or sha256_file(profile_path) != profile["sha256"]:
-            raise ContractError(f"{manifest_path}: bake profile is missing or changed")
+    provenance = manifest.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ContractError(f"{manifest_path}: provenance is missing")
+    profile_record = provenance.get("profile")
+    if not isinstance(profile_record, dict):
+        raise ContractError(f"{manifest_path}: bake profile record is missing")
+    raw_profile = Path(profile_record["path"])
+    profile_path = raw_profile if raw_profile.is_absolute() else repo_root / raw_profile
+    if not profile_path.is_file() or sha256_file(profile_path) != profile_record["sha256"]:
+        raise ContractError(f"{manifest_path}: bake profile is missing or changed")
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractError(f"{manifest_path}: cannot read bake profile: {error}") from error
+    if profile.get("schema_version") != 1:
+        raise ContractError(f"{manifest_path}: unsupported bake profile schema")
+    if manifest.get("target") != _profile_target(profile):
+        raise ContractError(f"{manifest_path}: target does not match bake profile")
+    constraints = profile.get("constraints")
+    if not isinstance(constraints, dict):
+        raise ContractError(f"{manifest_path}: bake profile constraints are missing")
+    validate_constraints(
+        actual,
+        expected_simd_width=int(constraints["simd_width"]),
+        max_scratch_bytes=int(constraints["max_scratch_bytes"]),
+        max_slm_bytes=int(constraints["max_slm_bytes"]),
+    )
+
+    toolchain = provenance.get("toolchain")
+    if not isinstance(toolchain, dict):
+        raise ContractError(f"{manifest_path}: toolchain provenance is missing")
+    if "tools" in toolchain:
+        if provenance.get("reproducibility_check") != "passed":
+            raise ContractError(
+                f"{manifest_path}: compiler-backed artifact lacks a passed "
+                "two-root reproducibility check"
+            )
+        if toolchain.get("profile_sha256") != profile_record["sha256"]:
+            raise ContractError(
+                f"{manifest_path}: toolchain fingerprint is not bound to bake profile"
+            )
+        lock_record = provenance.get("toolchain_lock")
+        if not isinstance(lock_record, dict):
+            raise ContractError(f"{manifest_path}: reviewed toolchain lock is missing")
+        raw_lock = Path(lock_record["path"])
+        lock_path = raw_lock if raw_lock.is_absolute() else repo_root / raw_lock
+        if not lock_path.is_file() or sha256_file(lock_path) != lock_record["sha256"]:
+            raise ContractError(f"{manifest_path}: toolchain lock is missing or changed")
+        try:
+            locked_toolchain = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ContractError(
+                f"{manifest_path}: cannot read toolchain lock: {error}"
+            ) from error
+        if locked_toolchain != toolchain:
+            raise ContractError(
+                f"{manifest_path}: toolchain provenance does not match reviewed lock"
+            )
+    if manifest.get("variant") == "cpp":
+        policy = provenance.get("publication_policy")
+        if not isinstance(policy, dict) or policy.get("name") != "cpp-legacy-abi-twin-v1":
+            raise ContractError(
+                f"{manifest_path}: cpp ABI-twin publication policy is missing"
+            )
+        expected_kernels = policy.get("expected_kernels")
+        actual_kernels = sorted(
+            kernel["kernel_name"] for kernel in actual["kernels"]
+        )
+        if (
+            not isinstance(expected_kernels, list)
+            or not expected_kernels
+            or expected_kernels != actual_kernels
+        ):
+            raise ContractError(
+                f"{manifest_path}: expected kernel set is missing or stale"
+            )
+        if not isinstance(reference, dict) or reference.get("result") != "exact-match":
+            raise ContractError(
+                f"{manifest_path}: cpp ABI twin lacks an exact ABI reference"
+            )
     rendered = render_rust_contracts(manifest)
     existing = contract_path.read_text(encoding="utf-8")
     if existing != rendered:
