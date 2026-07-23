@@ -606,9 +606,33 @@ fn spawn_ui4_window_broker_snapshot_service_task(spawner: Spawner) -> SpawnAttem
 }
 
 fn spawn_ui4_video_conversion_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        crate::ui4::ui4_video_conversion_service_task(worker_spawner.cpu_slot())
-    })
+    let Some(worker_spawner) = crate::workers::pick_background_spawner() else {
+        let _ = spawner;
+        return SpawnAttempt::Skipped;
+    };
+    let _ = spawner;
+    let mut spawned = 0usize;
+    for lane in 0..2u8 {
+        match crate::ui4::ui4_video_conversion_service_task(worker_spawner.cpu_slot(), lane) {
+            Ok(token) => {
+                worker_spawner.spawn(token);
+                spawned = spawned.saturating_add(1);
+            }
+            Err(error) if spawned == 0 => return SpawnAttempt::Failed(error),
+            Err(error) => crate::log_warn!(
+                target: "service";
+                "ui4 video-conversion lane spawn failed lane={} assigned_slot={} error={:?}\n",
+                lane,
+                worker_spawner.cpu_slot(),
+                error,
+            ),
+        }
+    }
+    if spawned == 0 {
+        SpawnAttempt::Skipped
+    } else {
+        SpawnAttempt::Spawned
+    }
 }
 
 fn spawn_gpgpu_ui4_preview_consumer_service_task(spawner: Spawner) -> SpawnAttempt {

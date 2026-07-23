@@ -11,6 +11,7 @@ extern crate alloc;
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use embassy_time::Instant;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
@@ -555,7 +556,7 @@ impl SpiritVfxAlphaBackground {
         effect: SpiritVfxBackgroundEffect::PortalVortex,
         opacity: 0.70,
         scale: 1.0,
-        speed: 1.25,
+        speed: 2.0,
         intensity: 1.25,
         bg_color_a: SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF),
         bg_color_b: SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF),
@@ -934,6 +935,7 @@ pub(super) struct SpiritVfxGpuSnapshot {
 static CONTROL_PANEL: Mutex<Option<SpiritVfxControlPanel>> = Mutex::new(None);
 static CONTROL_PANEL_REVISION: AtomicU64 = AtomicU64::new(1);
 static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
+static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL
@@ -954,6 +956,9 @@ pub(crate) fn publish_control_panel(mut panel: SpiritVfxControlPanel) -> u64 {
 /// state machine owns this bit; persistent UI/VFX settings are restored
 /// automatically when the transition ends.
 pub(super) fn set_move_portal_transition(active: bool) {
+    if active {
+        MOVE_PORTAL_STARTED_MS.store(Instant::now().as_millis(), Ordering::Release);
+    }
     if MOVE_PORTAL_ACTIVE.swap(active, Ordering::AcqRel) != active {
         CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
     }
@@ -998,8 +1003,16 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
-    let background = if MOVE_PORTAL_ACTIVE.load(Ordering::Acquire) {
-        SpiritVfxAlphaBackground::MOVE_PORTAL
+    let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
+    let background = if move_portal_active {
+        let elapsed_ms = Instant::now()
+            .as_millis()
+            .saturating_sub(MOVE_PORTAL_STARTED_MS.load(Ordering::Acquire));
+        let mut background = SpiritVfxAlphaBackground::MOVE_PORTAL;
+        let ramp = move_portal_ramp(elapsed_ms);
+        background.speed *= ramp;
+        background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
+        background
     } else {
         panel.alpha_background
     };
@@ -1023,6 +1036,19 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         shader_parameters: panel.sprite_shader.parameters,
         fx_color_a: panel.sprite_shader.fx_color_a.packed_rgb(),
         fx_color_b: panel.sprite_shader.fx_color_b.packed_rgb(),
+    }
+}
+
+fn move_portal_ramp(elapsed_ms: u64) -> f32 {
+    if elapsed_ms < super::SPIRIT_MOVE_PORTAL_RAMP_MS {
+        elapsed_ms as f32 / super::SPIRIT_MOVE_PORTAL_RAMP_MS as f32
+    } else if elapsed_ms < super::SPIRIT_MOVE_PORTAL_RAMP_MS + super::SPIRIT_MOVE_PORTAL_HOLD_MS {
+        1.0
+    } else if elapsed_ms < super::SPIRIT_MOVE_PORTAL_TOTAL_MS {
+        (super::SPIRIT_MOVE_PORTAL_TOTAL_MS - elapsed_ms) as f32
+            / super::SPIRIT_MOVE_PORTAL_RAMP_MS as f32
+    } else {
+        0.0
     }
 }
 

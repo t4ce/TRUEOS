@@ -134,7 +134,10 @@ struct FrameRecord {
     buffer_count: u8,
     front_buffer: Option<u8>,
     next_buffer: u8,
-    acquired: Option<AcquiredBuffer>,
+    // Producer leases are per backing allocation. Streaming triple buffers
+    // may therefore have one RCS write executing while the next immutable job
+    // is queued against a different allocation.
+    acquired: [Option<AcquiredBuffer>; 3],
     readers: [u16; 3],
     gpu_authored: [bool; 3],
     gpu_release: [Option<FrameGpuRelease>; 3],
@@ -152,7 +155,7 @@ impl FrameRecord {
             buffer_count: 0,
             front_buffer: None,
             next_buffer: 0,
-            acquired: None,
+            acquired: [None; 3],
             readers: [0; 3],
             gpu_authored: [false; 3],
             gpu_release: [None; 3],
@@ -169,7 +172,7 @@ impl FrameRecord {
         self.buffer_count = plan.buffering.count() as u8;
         self.front_buffer = None;
         self.next_buffer = 0;
-        self.acquired = None;
+        self.acquired = [None; 3];
         self.readers = [0; 3];
         self.gpu_authored = [false; 3];
         self.gpu_release = [None; 3];
@@ -267,7 +270,9 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
     let surfaces = {
         let mut pool = FRAME_POOL.lock();
         let frame = pool.checked_mut(handle)?;
-        if frame.acquired.is_some() || frame.readers.iter().any(|readers| *readers != 0) {
+        if frame.acquired.iter().any(Option::is_some)
+            || frame.readers.iter().any(|readers| *readers != 0)
+        {
             return Err(FramePoolError::Busy);
         }
         frame.active = false;
@@ -282,9 +287,6 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
 pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLease, FramePoolError> {
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(handle)?;
-    if frame.acquired.is_some() {
-        return Err(FramePoolError::Busy);
-    }
     if frame.buffer_count == 1 && frame.front_buffer.is_some() {
         return Err(FramePoolError::ImmutablePublished);
     }
@@ -294,6 +296,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
         .map(|offset| (frame.next_buffer + offset) % count)
         .find(|index| {
             (count == 1 || frame.front_buffer != Some(*index))
+                && frame.acquired[*index as usize].is_none()
                 && frame.readers[*index as usize] == 0
                 && frame.surfaces[*index as usize].is_some()
         })
@@ -307,7 +310,7 @@ pub(crate) fn acquire_frame_buffer(handle: FrameHandle) -> Result<FrameWriteLeas
         index,
         token: frame.next_token,
     };
-    frame.acquired = Some(acquired);
+    frame.acquired[index as usize] = Some(acquired);
     Ok(FrameWriteLease {
         frame: handle,
         buffer_index: index,
@@ -436,7 +439,7 @@ pub(crate) fn cancel_frame_buffer(lease: FrameWriteLease) -> Result<(), FramePoo
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
-    frame.acquired = None;
+    frame.acquired[lease.buffer_index as usize] = None;
     Ok(())
 }
 
@@ -635,7 +638,7 @@ fn publish_checked_frame(
     lease: FrameWriteLease,
 ) -> Result<PublishedFrame, FramePoolError> {
     frame.front_buffer = Some(lease.buffer_index);
-    frame.acquired = None;
+    frame.acquired[lease.buffer_index as usize] = None;
     frame.publish_serial = next_serial(frame.publish_serial);
     Ok(PublishedFrame {
         frame: lease.frame,
@@ -652,13 +655,13 @@ pub(crate) fn frame_snapshot(handle: FrameHandle) -> Result<FrameSnapshot, Frame
         plan: frame.plan,
         buffer_count: frame.buffer_count,
         front_buffer: frame.front_buffer,
-        writer_active: frame.acquired.is_some(),
+        writer_active: frame.acquired.iter().any(Option::is_some),
         publish_serial: frame.publish_serial,
     })
 }
 
 fn checked_lease(frame: &FrameRecord, lease: FrameWriteLease) -> Result<(), FramePoolError> {
-    match frame.acquired {
+    match frame.acquired[lease.buffer_index as usize] {
         Some(acquired) if acquired.index == lease.buffer_index && acquired.token == lease.token => {
             Ok(())
         }

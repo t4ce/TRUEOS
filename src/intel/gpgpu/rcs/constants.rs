@@ -665,7 +665,7 @@ const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
 // Each slot owns a complete batch, result page, and 16 MiB source-alias
 // window. The ring and HWLRCA stay shared so both tails target one persistent
 // GuC context instead of repeatedly draining a one-job software lane.
-const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
+pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // The decoder's `gpu_addr` belongs to the media-engine address space. Never
 // borrow that number as an RCS PPGTT VA. Each queued video conversion owns one
 // compositor-private PAT0 alias until its GuC completion marker retires, so a
