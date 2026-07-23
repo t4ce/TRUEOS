@@ -232,7 +232,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start source={} asset={} fps=60 loop={} frame_target={}x{} path=vd_box+guc_simd16+ui4_double_frame",
+            "vid: start source={} asset={} fps=60 loop={} frame_target={}x{} path=vd_box+guc_simd16+ui4_rgba_stream3",
             command.source.name(),
             command.source.asset(),
             command.loop_playback as u8,
@@ -276,7 +276,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} conversion_backpressure={} conversion_max_outstanding={} mode_transitions={} engine_resets={}",
+                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} conversion_max_outstanding={} mode_transitions={} engine_resets={}",
                     lap,
                     report.attempted,
                     report.retired,
@@ -292,6 +292,8 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
                     report.avg_present_us,
                     report.avg_conversion_us,
                     report.conversion_backpressure_events,
+                    report.conversion_rgba_buffer_wait_events,
+                    report.conversion_rcs_submit_wait_events,
                     report.conversion_max_outstanding,
                     report.mode_transitions,
                     report.engine_resets,

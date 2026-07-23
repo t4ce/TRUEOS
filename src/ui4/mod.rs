@@ -153,8 +153,8 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// become part of an application composition surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
 // Compatibility aliases for the parked linked-NV12 display-plane experiment.
-// Normal UI4 video is converted by the GuC into its exact double-buffered RGBA
-// Frame on slot 1; it never assigns decoder planes to either of these roles.
+// Normal UI4 video is converted by the GuC into an ordinary streaming RGBA
+// Frame on slot 1; decoder planes are never assigned to either of these roles.
 pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
 pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
 
@@ -387,7 +387,7 @@ pub(crate) enum FramePlanError {
     BaseColorRequiresPremultipliedRgba,
     VideoRequiresPremultipliedRgba,
     VideoRequiresStreamingCadence,
-    VideoRequiresDoubleBuffering,
+    VideoRequiresTripleBuffering,
     VideoExceedsPixelSoftCap,
     RenderSceneRequiresPremultipliedRgba,
     RenderSceneRequiresStreamingCadence,
@@ -419,8 +419,8 @@ impl FramePlan {
             if !matches!(spec.cadence, FrameCadence::Streaming) {
                 return Err(FramePlanError::VideoRequiresStreamingCadence);
             }
-            if !matches!(spec.buffering, FrameBuffering::Double) {
-                return Err(FramePlanError::VideoRequiresDoubleBuffering);
+            if !matches!(spec.buffering, FrameBuffering::Triple) {
+                return Err(FramePlanError::VideoRequiresTripleBuffering);
             }
             if !video_frame_extent_admitted(spec.width, spec.height) {
                 return Err(FramePlanError::VideoExceedsPixelSoftCap);
@@ -478,7 +478,7 @@ const _: () = {
         output: OutputId::from_slot(0).unwrap(),
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
-        buffering: FrameBuffering::Double,
+        buffering: FrameBuffering::Triple,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width: DEFAULT_FRAME_WIDTH,
         height: DEFAULT_FRAME_HEIGHT,
@@ -494,10 +494,10 @@ const _: () = {
     ));
     assert!(matches!(
         FramePlan::from_spec(FrameSpec {
-            buffering: FrameBuffering::Triple,
+            buffering: FrameBuffering::Double,
             ..admitted_video
         }),
-        Err(FramePlanError::VideoRequiresDoubleBuffering)
+        Err(FramePlanError::VideoRequiresTripleBuffering)
     ));
     assert!(matches!(
         FramePlan::from_spec(FrameSpec {

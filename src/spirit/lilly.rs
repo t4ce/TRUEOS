@@ -9,8 +9,8 @@ use spin::Mutex;
 const LILLY_ARCHIVE_7Z: &[u8] = include_bytes!("../../tools/Lilly.7z");
 const LILLY_CATALOG: &str = include_str!("../../tools/Lilly.catalog");
 const LILLY_EXPECTED_ASSETS: usize = 68;
-const LILLY_PARTS_PER_ASSET: usize = 4;
-const LILLY_EXPECTED_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_PARTS_PER_ASSET;
+const LILLY_FRAMES_PER_ASSET: usize = 7;
+const LILLY_EXPECTED_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_FRAMES_PER_ASSET;
 const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1A\n";
 const PNG_IHDR: &[u8; 4] = b"IHDR";
 const GPU_PAGE_BYTES: usize = 4096;
@@ -51,7 +51,7 @@ pub(crate) struct LillyResidentAsset {
     pub(crate) key: &'static str,
     pub(crate) playback: LillyPlayback,
     pub(crate) frame_period_ms: u16,
-    pub(crate) parts: [LillyResidentPart; LILLY_PARTS_PER_ASSET],
+    pub(crate) parts: [LillyResidentPart; LILLY_FRAMES_PER_ASSET],
 }
 
 #[allow(dead_code)]
@@ -63,22 +63,22 @@ impl LillyResidentAsset {
     }
 }
 
-/// Uniform view of one ordinary four-frame animation. Callers do not need
+/// Uniform view of one ordinary seven-frame animation. Callers do not need
 /// clip-specific code: the catalog supplies cadence, playback, and the semantic
-/// names of all four frames.
+/// names of all seven frames.
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentAnimation {
     pub(crate) key: &'static str,
     pub(crate) playback: LillyPlayback,
     pub(crate) frame_period_ms: u16,
-    pub(crate) frames: [LillyResidentPart; LILLY_PARTS_PER_ASSET],
+    pub(crate) frames: [LillyResidentPart; LILLY_FRAMES_PER_ASSET],
 }
 
 #[allow(dead_code)]
 impl LillyResidentAnimation {
     pub(crate) const fn cycle_duration_ms(self) -> u64 {
-        self.frame_period_ms as u64 * LILLY_PARTS_PER_ASSET as u64
+        self.frame_period_ms as u64 * LILLY_FRAMES_PER_ASSET as u64
     }
 
     /// Shared inner-loop helper for every clip. `Loop` wraps, `Once` ends, and
@@ -90,10 +90,10 @@ impl LillyResidentAnimation {
         }
         let frame = elapsed_ms / period;
         let index = match self.playback {
-            LillyPlayback::Loop => frame % LILLY_PARTS_PER_ASSET as u64,
-            LillyPlayback::Once if frame >= LILLY_PARTS_PER_ASSET as u64 => return None,
+            LillyPlayback::Loop => frame % LILLY_FRAMES_PER_ASSET as u64,
+            LillyPlayback::Once if frame >= LILLY_FRAMES_PER_ASSET as u64 => return None,
             LillyPlayback::Once => frame,
-            LillyPlayback::OnceHold => frame.min(LILLY_PARTS_PER_ASSET as u64 - 1),
+            LillyPlayback::OnceHold => frame.min(LILLY_FRAMES_PER_ASSET as u64 - 1),
         };
         Some(self.frames[index as usize])
     }
@@ -117,7 +117,7 @@ struct LillyCatalogEntry {
     directory: &'static str,
     playback: LillyPlayback,
     frame_period_ms: u16,
-    parts: [&'static str; LILLY_PARTS_PER_ASSET],
+    parts: [&'static str; LILLY_FRAMES_PER_ASSET],
 }
 
 #[derive(Debug)]
@@ -391,22 +391,16 @@ fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
             _ => return Err(LillyLoadError::Catalog("bad-kind-or-period")),
         };
 
-        let mut names = part_names.split(',');
-        let parts = [
-            names
-                .next()
-                .ok_or(LillyLoadError::Catalog("missing-part"))?,
-            names
-                .next()
-                .ok_or(LillyLoadError::Catalog("missing-part"))?,
-            names
-                .next()
-                .ok_or(LillyLoadError::Catalog("missing-part"))?,
-            names
-                .next()
-                .ok_or(LillyLoadError::Catalog("missing-part"))?,
-        ];
-        if names.next().is_some()
+        let mut parts = [""; LILLY_FRAMES_PER_ASSET];
+        let mut part_count = 0usize;
+        for part in part_names.split(',') {
+            let Some(slot) = parts.get_mut(part_count) else {
+                return Err(LillyLoadError::Catalog("bad-parts"));
+            };
+            *slot = part;
+            part_count += 1;
+        }
+        if part_count != LILLY_FRAMES_PER_ASSET
             || parts.iter().any(|part| !is_semantic_part(part))
             || parts
                 .iter()
@@ -449,7 +443,7 @@ fn validate_catalog(
     entries: &[crate::z7::SevenZEntry],
     catalog: &[LillyCatalogEntry],
 ) -> Result<(), LillyLoadError> {
-    for archive_asset in entries.chunks_exact(LILLY_PARTS_PER_ASSET) {
+    for archive_asset in entries.chunks_exact(LILLY_FRAMES_PER_ASSET) {
         let (directory, _) =
             split_frame_name(archive_asset[0].name.as_str()).ok_or(LillyLoadError::ArchiveShape)?;
         if !catalog.iter().any(|entry| entry.directory == directory) {
@@ -458,7 +452,7 @@ fn validate_catalog(
     }
     for catalog_entry in catalog {
         let archive_asset = entries
-            .chunks_exact(LILLY_PARTS_PER_ASSET)
+            .chunks_exact(LILLY_FRAMES_PER_ASSET)
             .find(|asset| {
                 split_frame_name(asset[0].name.as_str())
                     .is_some_and(|(directory, _)| directory == catalog_entry.directory)
@@ -480,7 +474,7 @@ fn build_semantic_assets(
     let mut assets = Vec::with_capacity(catalog.len());
     for catalog_entry in catalog {
         let source = frames
-            .chunks_exact(LILLY_PARTS_PER_ASSET)
+            .chunks_exact(LILLY_FRAMES_PER_ASSET)
             .find(|asset| {
                 split_frame_name(asset[0].name.as_str())
                     .is_some_and(|(directory, _)| directory == catalog_entry.directory)
@@ -490,24 +484,10 @@ fn build_semantic_assets(
             key: catalog_entry.key,
             playback: catalog_entry.playback,
             frame_period_ms: catalog_entry.frame_period_ms,
-            parts: [
-                LillyResidentPart {
-                    semantic: catalog_entry.parts[0],
-                    surface: source[0].surface,
-                },
-                LillyResidentPart {
-                    semantic: catalog_entry.parts[1],
-                    surface: source[1].surface,
-                },
-                LillyResidentPart {
-                    semantic: catalog_entry.parts[2],
-                    surface: source[2].surface,
-                },
-                LillyResidentPart {
-                    semantic: catalog_entry.parts[3],
-                    surface: source[3].surface,
-                },
-            ],
+            parts: core::array::from_fn(|index| LillyResidentPart {
+                semantic: catalog_entry.parts[index],
+                surface: source[index].surface,
+            }),
         });
     }
     Ok(assets)
@@ -517,7 +497,7 @@ fn validate_archive_shape(entries: &[crate::z7::SevenZEntry]) -> Result<(), Lill
     if entries.len() != LILLY_EXPECTED_FRAMES {
         return Err(LillyLoadError::ArchiveShape);
     }
-    for asset in entries.chunks_exact(LILLY_PARTS_PER_ASSET) {
+    for asset in entries.chunks_exact(LILLY_FRAMES_PER_ASSET) {
         let (expected_directory, first_index) =
             split_frame_name(asset[0].name.as_str()).ok_or(LillyLoadError::ArchiveShape)?;
         if first_index != 1 {
@@ -540,13 +520,14 @@ fn split_frame_name(name: &str) -> Option<(&str, u8)> {
     if !directory.ends_with("_frames") {
         return None;
     }
-    let index = match file {
-        "frame_01.png" => 1,
-        "frame_02.png" => 2,
-        "frame_03.png" => 3,
-        "frame_04.png" => 4,
-        _ => return None,
-    };
+    let number = file.strip_prefix("frame_")?.strip_suffix(".png")?;
+    if number.len() != 2 || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let index = number.parse::<u8>().ok()?;
+    if !(1..=LILLY_FRAMES_PER_ASSET as u8).contains(&index) {
+        return None;
+    }
     Some((directory, index))
 }
 

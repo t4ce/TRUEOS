@@ -1008,7 +1008,7 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                     (snapshot.plan.content, snapshot.plan.buffering),
                     (FrameContent::Image, super::FrameBuffering::Double)
                         | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-                        | (FrameContent::Video, super::FrameBuffering::Double)
+                        | (FrameContent::Video, super::FrameBuffering::Triple)
                 )
         }
     })

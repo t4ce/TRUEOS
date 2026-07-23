@@ -4,7 +4,7 @@
 //! are independent optional fields; producers never enqueue archive paths,
 //! numbered frames, posture changes, or transition rules. The single reader
 //! calls [`next_animation`] only when it is ready to begin another complete
-//! four-frame clip. That boundary is also where a replacement timeline takes
+//! seven-frame clip. That boundary is also where a replacement timeline takes
 //! effect.
 
 extern crate alloc;

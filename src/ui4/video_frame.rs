@@ -1,9 +1,10 @@
 //! UI4 ownership wrapper for decoded video.
 //!
-//! The decoder remains a native media-Y-tiled NV12 producer. One SIMD16 GuC dispatch
-//! writes an exact broker-owned RGBA backbuffer. GuC completion releases the
-//! decoder picture; UI4 publication transfers only the completed RGBA surface,
-//! whose display ownership independently ends at SURFLIVE.
+//! The decoder remains a native media-Y-tiled NV12 producer only until one
+//! SIMD16 GuC dispatch writes an exact broker-owned RGBA buffer. From that
+//! completion onward the broker, compositor, and display exchange RGBA only.
+//! The streaming Frame has distinct producer-write, broker-pending, and
+//! display-live allocations; display ownership independently ends at SURFLIVE.
 //! The older `Tile64` Rust/kernel symbol names are retained as an artifact ABI;
 //! the shader uses the proven 128x32 media Y-tile byte layout.
 
@@ -20,7 +21,7 @@ use super::{
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
     finish_window_session_with_request, gpgpu_rgba_surface, publish_gpgpu_video_frame_buffer,
-    publish_window_frame, take_owner_input_events,
+    publish_window_frame, take_owner_input_events, wait_frame_buffer_release,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -28,6 +29,8 @@ use super::{
 const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
+const VIDEO_RGBA_BUFFERING: FrameBuffering = FrameBuffering::Triple;
+const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 /// At most one conversion may execute while one decoded DPB surface waits.
 /// The current AVC path retains three references in four slots; the playback
 /// loop additionally drains this queue before every later IDR reuses slot 0.
@@ -59,6 +62,8 @@ pub(crate) struct DecodedVideoConversionReport {
     pub(crate) first_failure_frame: usize,
     pub(crate) first_failure_error: i32,
     pub(crate) backpressure_events: usize,
+    pub(crate) rgba_buffer_wait_events: usize,
+    pub(crate) rcs_submit_wait_events: usize,
     pub(crate) max_outstanding: usize,
     pub(crate) total_conversion_us: u64,
     pub(crate) max_conversion_us: u64,
@@ -92,6 +97,8 @@ struct DecodedVideoConversionState {
     first_failure_frame: usize,
     first_failure_error: i32,
     backpressure_events: usize,
+    rgba_buffer_wait_events: usize,
+    rcs_submit_wait_events: usize,
     max_outstanding: usize,
     total_conversion_ticks: u64,
     max_conversion_ticks: u64,
@@ -110,6 +117,8 @@ impl DecodedVideoConversionState {
             first_failure_frame: 0,
             first_failure_error: 0,
             backpressure_events: 0,
+            rgba_buffer_wait_events: 0,
+            rcs_submit_wait_events: 0,
             max_outstanding: 0,
             total_conversion_ticks: 0,
             max_conversion_ticks: 0,
@@ -131,6 +140,8 @@ impl DecodedVideoConversionState {
         self.first_failure_frame = 0;
         self.first_failure_error = 0;
         self.backpressure_events = 0;
+        self.rgba_buffer_wait_events = 0;
+        self.rcs_submit_wait_events = 0;
         self.max_outstanding = 0;
         self.total_conversion_ticks = 0;
         self.max_conversion_ticks = 0;
@@ -146,6 +157,8 @@ impl DecodedVideoConversionState {
             first_failure_frame: self.first_failure_frame,
             first_failure_error: self.first_failure_error,
             backpressure_events: self.backpressure_events,
+            rgba_buffer_wait_events: self.rgba_buffer_wait_events,
+            rcs_submit_wait_events: self.rcs_submit_wait_events,
             max_outstanding: self.max_outstanding,
             total_conversion_us: video_conversion_ticks_to_micros(self.total_conversion_ticks),
             max_conversion_us: video_conversion_ticks_to_micros(self.max_conversion_ticks),
@@ -256,7 +269,7 @@ fn log_video_conversion_backpressure(
     }
     crate::log_error!(
         target: "ui4";
-        "ui4 video-conversion backpressure generation={} phase={} playback_frame={} queued={} completed={} outstanding={} cap={} worker_online={} policy=wait-ordered-no-drop rate_limit_ms=10000\n",
+        "ui4 video-conversion backpressure generation={} phase={} playback_frame={} queued={} completed={} outstanding={} cap={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} worker_online={} policy=wait-ordered-no-drop rate_limit_ms=10000\n",
         report.generation,
         phase,
         playback_frame,
@@ -264,6 +277,9 @@ fn log_video_conversion_backpressure(
         report.completed,
         report.queued.saturating_sub(report.completed),
         VIDEO_CONVERSION_OUTSTANDING_CAP,
+        report.backpressure_events,
+        report.rgba_buffer_wait_events,
+        report.rcs_submit_wait_events,
         worker_online as u8,
     );
 }
@@ -408,10 +424,10 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32) {
     }
 }
 
-/// Reserve the decoded-video lifetime and ask UI4 for the exact
-/// double-buffered Frame/window before filesystem or decoder work begins. No
-/// placeholder is published: the first visible buffer remains a fully
-/// converted and GuC-released decoded picture.
+/// Reserve the decoded-video lifetime and ask UI4 for its streaming RGBA
+/// Frame/window before filesystem or decoder work begins. No placeholder is
+/// published: the first visible buffer remains a fully converted and
+/// GuC-released decoded picture.
 pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_height: u32) -> bool {
     if !super::video_frame_extent_admitted(desired_width, desired_height) {
         crate::log_warn!(
@@ -468,7 +484,7 @@ pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_heigh
     drop(slot);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player initialized owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame={} window={} requested={}x{} admitted={}x{} pixels={} softcap_pixels={} frame_buffers=2 broker_state=frame-window-ready placeholder_present=0\n",
+        "ui4 video-player initialized owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame={} window={} requested={}x{} admitted={}x{} pixels={} softcap_pixels={} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live broker_state=frame-window-ready placeholder_present=0\n",
         VIDEO_OWNER,
         stream.frame.raw(),
         stream.window.raw(),
@@ -478,6 +494,7 @@ pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_heigh
         stream.frame_height,
         u64::from(stream.frame_width) * u64::from(stream.frame_height),
         super::VIDEO_FRAME_MAX_PIXELS,
+        VIDEO_RGBA_BUFFER_COUNT,
     );
     true
 }
@@ -602,15 +619,21 @@ async fn convert_publish_decoded_nv12_stream_frame(
     ) else {
         return false;
     };
+    let mut rgba_buffer_wait_counted = false;
     let write = loop {
         match acquire_frame_buffer(stream.frame) {
             Ok(write) => break write,
             Err(super::FramePoolError::Busy) => {
-                // Double buffering intentionally applies display backpressure:
-                // one surface may be live while the other is the sole producer
-                // target. No decoder pixels are copied or published here.
+                // Buffer reuse is driven directly by the compositor releasing
+                // a non-front RGBA read lease after SURFLIVE. No decoder pixels
+                // are copied, replaced, or published while ownership is busy.
                 let (report, worker_online) = {
-                    let state = VIDEO_CONVERSION_STATE.lock();
+                    let mut state = VIDEO_CONVERSION_STATE.lock();
+                    if !rgba_buffer_wait_counted {
+                        state.rgba_buffer_wait_events =
+                            state.rgba_buffer_wait_events.saturating_add(1);
+                        rgba_buffer_wait_counted = true;
+                    }
                     (state.report(), state.online)
                 };
                 log_video_conversion_backpressure(
@@ -619,7 +642,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
                     report,
                     worker_online,
                 );
-                Timer::after(Duration::from_millis(1)).await;
+                wait_frame_buffer_release(stream.frame).await;
             }
             Err(error) => {
                 crate::log_warn!(target: "ui4";
@@ -671,6 +694,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
         return false;
     };
 
+    let mut rcs_submit_wait_counted = false;
     let submission = loop {
         match crate::intel::gpgpu::queue_ui4_video_frame_nv12_tile64_to_rgba8(
             native_source,
@@ -687,7 +711,12 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 // The dedicated Frame lease and decoder picture remain pinned
                 // until this GuC runtime accepts their exact handoff.
                 let (report, worker_online) = {
-                    let state = VIDEO_CONVERSION_STATE.lock();
+                    let mut state = VIDEO_CONVERSION_STATE.lock();
+                    if !rcs_submit_wait_counted {
+                        state.rcs_submit_wait_events =
+                            state.rcs_submit_wait_events.saturating_add(1);
+                        rcs_submit_wait_counted = true;
+                    }
                     (state.report(), state.online)
                 };
                 log_video_conversion_backpressure(
@@ -759,7 +788,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
     };
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} frame_buffers=2 plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
             sequence,
             source.decode_sequence,
             stream.frame.raw(),
@@ -781,6 +810,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
             layout.destination_y,
             source.gpu,
             destination.gpu,
+            VIDEO_RGBA_BUFFER_COUNT,
         );
     }
     true
@@ -813,7 +843,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     stream.pan_y,
                 )?;
                 crate::log_info!(target: "ui4";
-                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback=playing producer=guc-nv12-to-ui4-rgba8-frame attachment=none frame_buffers=2 plane_slot={} reason={}\n",
+                    "ui4 video-player source-bound frame={} window={} source={}x{} visible={}x{} viewport={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 playback=playing producer=guc-nv12-to-ui4-rgba8-frame attachment=none rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_slot={} reason={}\n",
                     stream.frame.raw(),
                     stream.window.raw(),
                     spec.coded_width,
@@ -828,6 +858,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
                     layout.source_y,
                     layout.destination_x,
                     layout.destination_y,
+                    VIDEO_RGBA_BUFFER_COUNT,
                     VIDEO_PLANE_SLOT,
                     reason,
                 );
@@ -941,10 +972,11 @@ fn create_stream(
     )?;
     crate::log_info!(
         target: "ui4";
-        "ui4 video-frame created owner={:?} frame={} window={} buffers=2 cadence=streaming frame_format=rgba8-premultiplied native_format=media-ytile-nv12 attachment=none source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_slot={} direct_import=after-compute-release plane_mutation=none\n",
+        "ui4 video-frame created owner={:?} frame={} window={} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live cadence=streaming frame_format=rgba8-premultiplied native_format=media-ytile-nv12 attachment=none source={} source_size={}x{} frame_size={}x{} source_crop={}x{}@{},{} destination={},{} scaling=none-1to1 placement={},{} z={} plane_slot={} direct_import=after-compute-release plane_mutation=none\n",
         VIDEO_OWNER,
         frame.raw(),
         window.raw(),
+        VIDEO_RGBA_BUFFER_COUNT,
         "media-ytile-nv12",
         spec.coded_width,
         spec.coded_height,
@@ -982,7 +1014,7 @@ fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::Fra
         output: VIDEO_OUTPUT,
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
-        buffering: FrameBuffering::Double,
+        buffering: VIDEO_RGBA_BUFFERING,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width,
         height,

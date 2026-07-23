@@ -117,6 +117,8 @@ pub(crate) struct H264PlaybackReport {
     pub(crate) conversion_queued: usize,
     pub(crate) conversion_completed: usize,
     pub(crate) conversion_backpressure_events: usize,
+    pub(crate) conversion_rgba_buffer_wait_events: usize,
+    pub(crate) conversion_rcs_submit_wait_events: usize,
     pub(crate) conversion_max_outstanding: usize,
     pub(crate) avg_conversion_us: u64,
     pub(crate) max_conversion_us: u64,
@@ -271,6 +273,8 @@ impl H264PlaybackTiming {
             conversion_queued: conversion.queued,
             conversion_completed: conversion.completed,
             conversion_backpressure_events: conversion.backpressure_events,
+            conversion_rgba_buffer_wait_events: conversion.rgba_buffer_wait_events,
+            conversion_rcs_submit_wait_events: conversion.rcs_submit_wait_events,
             conversion_max_outstanding: conversion.max_outstanding,
             avg_conversion_us: conversion.avg_conversion_us(),
             max_conversion_us: conversion.max_conversion_us,
@@ -429,7 +433,7 @@ pub(crate) async fn run_online_ui4_framed_video_playback()
     let _playback_guard = h264_try_begin_playback("shell-online-ui4-framed-video")?;
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     crate::log!(
-        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-double-frame\n",
+        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-rgba-stream3\n",
         H264_ONLINE_MEDIA_URL,
         UI4_FRAMED_VIDEO_FPS,
     );
@@ -1570,7 +1574,7 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-double-frame diagnostics={} noreset_lite={} stop=eos\n",
+        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-rgba-stream3 diagnostics={} noreset_lite={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
@@ -1749,7 +1753,7 @@ async fn h264_i_p_playback_probe_with_reader(
         first_failure_error = conversion_report.first_failure_error;
     }
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: conversion-drain generation={} queued={} completed={} published={} first_failure_frame={} first_failure_error={} backpressure_events={} max_outstanding={} avg_conversion_us={} max_conversion_us={} worker=independent-guc-rcs ordering=preserved drop=0\n",
+        "intel/hw_vid: conversion-drain generation={} queued={} completed={} published={} first_failure_frame={} first_failure_error={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} max_outstanding={} avg_conversion_us={} max_conversion_us={} worker=independent-guc-rcs rgba_buffers=3 rgba_ownership=producer-write+broker-pending+display-live ordering=preserved drop=0\n",
         conversion_report.generation,
         conversion_report.queued,
         conversion_report.completed,
@@ -1757,6 +1761,8 @@ async fn h264_i_p_playback_probe_with_reader(
         conversion_report.first_failure_frame,
         conversion_report.first_failure_error,
         conversion_report.backpressure_events,
+        conversion_report.rgba_buffer_wait_events,
+        conversion_report.rcs_submit_wait_events,
         conversion_report.max_outstanding,
         conversion_report.avg_conversion_us(),
         conversion_report.max_conversion_us,
@@ -1775,7 +1781,7 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_handoff_us={} max_handoff_us={} conversion_queued={} conversion_completed={} conversion_backpressure_events={} conversion_max_outstanding={} avg_conversion_us={} max_conversion_us={} avg_poll_iters={} reason={}\n",
+        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_handoff_us={} max_handoff_us={} conversion_queued={} conversion_completed={} conversion_handoff_wait_events={} conversion_rgba_buffer_wait_events={} conversion_rcs_submit_wait_events={} conversion_max_outstanding={} avg_conversion_us={} max_conversion_us={} avg_poll_iters={} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
@@ -1818,6 +1824,8 @@ async fn h264_i_p_playback_probe_with_reader(
         playback_report.conversion_queued,
         playback_report.conversion_completed,
         playback_report.conversion_backpressure_events,
+        playback_report.conversion_rgba_buffer_wait_events,
+        playback_report.conversion_rcs_submit_wait_events,
         playback_report.conversion_max_outstanding,
         playback_report.avg_conversion_us,
         playback_report.max_conversion_us,
@@ -1856,7 +1864,7 @@ async fn h264_submit_wait_ui4_frame(
     if diagnostics {
         let before = crate::intel::hw_pic_snapshot();
         crate::log!(
-            "intel/hw_vid: h264-frame submit phase={} playback_frame={} stream_idr={} bytes={} destination=ui4-double-frame pending={} outputs={} service_started={}\n",
+            "intel/hw_vid: h264-frame submit phase={} playback_frame={} stream_idr={} bytes={} destination=ui4-rgba-stream3 pending={} outputs={} service_started={}\n",
             phase,
             playback_frame,
             stream_idr_index,
@@ -1916,7 +1924,7 @@ async fn h264_submit_wait_ui4_frame(
 
     if diagnostics {
         crate::log!(
-            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-double-frame err={}\n",
+            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-rgba-stream3 err={}\n",
             phase,
             playback_frame,
             stream_idr_index,

@@ -575,8 +575,9 @@ pub(crate) fn publish_gpgpu_frame_buffer(
 }
 
 /// Publish one decoder-converted RGBA allocation. GuC completion proves the
-/// native NV12 source is no longer read; only this exact double-buffered Frame
-/// surface and its compute release cross the broker boundary.
+/// native NV12 source is no longer read; only this exact streaming Frame
+/// surface and its compute release cross the broker boundary. Triple ownership
+/// leaves one RGBA allocation writable while one is queued and one is live.
 pub(crate) fn publish_gpgpu_video_frame_buffer(
     lease: FrameWriteLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -587,7 +588,7 @@ pub(crate) fn publish_gpgpu_video_frame_buffer(
     let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::Video
         || frame.plan.cadence != super::FrameCadence::Streaming
-        || frame.plan.buffering != super::FrameBuffering::Double
+        || frame.plan.buffering != super::FrameBuffering::Triple
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
         || !super::video_frame_extent_admitted(frame.plan.width, frame.plan.height)
         || !frame.gpu_authored[index]
