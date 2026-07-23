@@ -51,7 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Extract /TRUEOS.elf from an ISO, prove byte identity with the "
-            "stripped runtime/staging ELF, then prove C++ selected and legacy absent."
+            "stripped runtime/staging ELF, then prove the requested artifact "
+            "is selected and the alternate artifact is absent."
         )
     )
     parser.add_argument("--runtime-elf", required=True, type=_existing_file)
@@ -69,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     staged_sha256 = _require_identical(
         args.runtime_elf, args.staged_elf, "ISO staging ELF"
     )
-    with tempfile.TemporaryDirectory(prefix="trueos-cpp-aot-verify-") as directory:
+    with tempfile.TemporaryDirectory(prefix="trueos-artifact-verify-") as directory:
         extracted = Path(directory) / "TRUEOS.elf"
         process = subprocess.run(
             [

@@ -85,7 +85,7 @@ the resident allocation; it does not allocate/remap the same GPU VA and leak
 the prior DMA object. Replacing a resident image needs a future quiescent
 retirement protocol.
 
-The first C++ opt-in is exact to the physical TestRig identity: ADL-S device
+The first C++ selection is exact to the physical TestRig identity: ADL-S device
 `0x4680`, revision `0x0c`, at BDF `00:02.0`. Its dedicated
 `adls-4680-r0c-cpp.json` profile is compiled into the generated contract, so
 the C++ artifact is rejected on every other revision even if the PCI device ID
@@ -95,15 +95,16 @@ contract. ADL-N, Raptor Lake, and other ADL-S steppings require their own
 reviewed profile and checked artifact instead of inheriting compatibility by
 family resemblance.
 
-### 3. First opt-in and hardware promotion
+### 3. First selection and hardware conformance
 
 `copy_rect_rgba8.clcpp` is the first source-side twin. It retains the existing
 entry symbol and argument order and uses a tiny freestanding header to prove
 that `constexpr`, namespaces, and templates remain compile-time facilities.
 
-The legacy OpenCL C artifact remains the default. The C++ pair lives under
-`kernels/artifacts/adls/cpp/` and is selected only by the
-`intel_gpu_cpp_aot` Cargo feature. Both frontends feed the same Rust payload,
+The C++ pair lives under `kernels/artifacts/adls/cpp/` and is selected by
+default in the normal Make product/development lane through the
+`intel_gpu_cpp_aot` Cargo feature. Direct Cargo builds remain legacy unless
+the feature is requested. Both frontends feed the same Rust payload,
 surface-state, interface-descriptor, walker, and GuC code.
 
 The host actions are deliberately separate:
@@ -115,12 +116,15 @@ make intel-gpu-bake-copy-cpp
 # Standard-library-only verification of the checked-in artifact and contract.
 make intel-gpu-verify-copy-cpp
 
-# Verifies first, then builds TRUEOS with the C++ artifact selected.
-make kernel-cpp-aot
+# Verifies first, builds TRUEOS with C++ selected, and scans the linked ELF.
+make kernel
 
 # Carries the same feature through the complete bootable ISO workflow, emits
-# bld/trueos-cpp-aot.iso, and verifies its extracted stripped runtime ELF.
-make iso-cpp-aot
+# canonical bld/trueos.iso, and verifies its extracted stripped runtime ELF.
+make iso
+
+# Isolated retained OpenCL C comparison/fallback.
+make iso-legacy-opencl-c
 ```
 
 The OpenCL-shaped bridge reports this boundary truthfully:
@@ -128,13 +132,15 @@ The OpenCL-shaped bridge reports this boundary truthfully:
 an already baked program, and `source_compile=false`, because no compiler is
 linked into or loaded by TRUEOS.
 
-`kernel-cpp-aot` additionally scans the final linked ELF for the complete
-selected Zebin and requires the complete legacy copy Zebin to be absent.
-`iso-cpp-aot` uses separate `-cpp-aot` artifact/staging/ISO paths, records the
-feature in `BUILD_INFO`, extracts `/TRUEOS.elf` from the completed ISO, proves
-it is byte-identical to the stripped runtime ELF, and repeats that scan. This
-guards the deployment boundary itself rather than inferring feature selection
-only from source-level `cfg` declarations.
+`kernel` scans the final linked ELF for the complete selected Zebin and
+requires the complete alternate copy Zebin to be absent. `iso` records the
+normalized selection and effective Cargo flags in `BUILD_INFO`, extracts
+`/TRUEOS.elf` from the completed ISO, proves it is byte-identical to the
+stripped runtime ELF, and repeats that scan. This guards the deployment
+boundary itself rather than inferring feature selection only from source-level
+`cfg` declarations. `kernel-cpp-aot` and `iso-cpp-aot` remain compatibility
+aliases; `INTEL_GPU_CPP_AOT=0` and `iso-legacy-opencl-c` provide the explicit
+fallback.
 
 Host-side ABI equivalence is necessary but not sufficient for promotion. The
 bare-metal copy probe must cover:
@@ -149,7 +155,7 @@ bare-metal copy probe must cover:
 Deleting the C fallback requires a second build using the legacy artifact and
 equal destination results for the same cases.
 
-Build with `make iso-cpp-aot`, boot that image on the exact TestRig
+Build with `make iso`, boot `bld/trueos.iso` on the exact TestRig
 (`00:02.0`, `8086:4680`, revision `0x0c`), and run:
 
 ```text
@@ -169,7 +175,7 @@ It pins the BDF, PCI ID, revision, C++ feature/frontend, artifact identity and
 hash, all four case geometries and readback counts, both retirement markers,
 and the 250 ms submission timeout.
 
-Promotion requires the summary to contain
+Hardware conformance requires the summary to contain
 `ok=1 reboot_required=0 frontend=cpp-for-opencl feature_enabled=1 verified=1
 device=00:02.0-0x4680-r0C
 hash=b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
@@ -180,6 +186,42 @@ probe again. The lane is quarantined and reports `reboot_required=1`; recover
 the engine or reboot the machine first.
 
 ## Findings that changed the implementation
+
+### The canonical Make lane must carry the selection
+
+The first physical TestRig transcript passed all four direct-RCS copy cases
+with `reboot_required=0`, but reported `frontend=opencl-c` and
+`feature_enabled=0`. The operator had correctly booted the newest ISO by
+timestamp: a later ordinary `bld/trueos.iso` build had superseded the separate
+`bld/trueos-cpp-aot.iso` test image. The result is useful legacy hardware
+baseline evidence, but its wrapped/truncated transport is not accepted by the
+strict C++ transcript verifier.
+
+The normal Make product/development lane therefore owns the staged selection:
+`INTEL_GPU_CPP_AOT` defaults to `1`, its effective Cargo flags are recorded
+directly in `BUILD_INFO`, and `make kernel`/`make iso` prove the selected
+artifact at the linked and packaged boundaries. `make iso` again produces the
+single canonical `bld/trueos.iso` consumed by the existing QEMU, provenance,
+release, and physical-development tooling. The legacy comparison uses
+`INTEL_GPU_CPP_AOT=0` or `make iso-legacy-opencl-c` and isolated output paths.
+
+The subsequent canonical-ISO run on the same TestRig reported
+`ok=1 reboot_required=0 frontend=cpp-for-opencl feature_enabled=1`. Each of
+`even-small`, `odd-small`, `even-multigroup`, and `odd-multigroup` reported
+`attempted=1 submitted=1 retired=1 ok=1`. This is the physical functional pass:
+the C++ frontend artifact was admitted, submitted through the direct-RCS/GuC
+path, retired, and matched the CPU oracle across all four geometries. The
+terminal copy was again wrapped and truncated, so it does not preserve the
+complete hash/device/marker/retirement fields required by
+`verify_probe_log.py`; an archival machine-verifiable transcript remains a
+separate evidence-quality task, not a functional failure.
+
+Cargo's global default feature set was deliberately not changed. This keeps
+direct Cargo behavior and its unrelated default features stable, avoids a
+brittle `--no-default-features` reconstruction for the fallback, and bounds
+the exact-r0C policy to the product lane being exercised. The compiler bakery
+also remains offline: ordinary builds run its standard-library-only verifier,
+not Clang, `llvm-spirv`, ocloc, or IGC.
 
 ### Revision exactness is runtime admission policy
 
@@ -350,4 +392,5 @@ The first implementation intentionally leaves these decisions explicit:
   documented compatibility set;
 - how much generated argument metadata should replace the existing OpenCL
   registry declarations;
-- when the C++ artifact becomes the default and the C fallback can be removed.
+- when the exact-r0C Make default can broaden to other devices or the retained
+  C fallback can be removed.

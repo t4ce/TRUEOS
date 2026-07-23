@@ -1,7 +1,8 @@
 # TRUEOS Intel GPU artifact bakery
 
-This is an **opt-in host tool**. It is not called by `build.rs` or an ordinary
-Cargo build. TRUEOS only embeds the resulting SPIR-V, Intel Zebin, and compact
+The compiler bakery is an **opt-in host tool**. It is not called by `build.rs`
+or an ordinary Cargo build. The normal Make lane runs only its compiler-free
+artifact verifier. TRUEOS embeds the resulting SPIR-V, Intel Zebin, and compact
 generated Rust contract; Clang, `llvm-spirv`, `ocloc`, IGC, and C++ are absent
 at runtime.
 
@@ -94,20 +95,29 @@ two-root reproducibility result, ABI-reference, publication policy, source,
 and transitive-header hashes; and regenerates the Rust contract in memory. It
 needs only the Python standard library.
 
-After linking a feature-selected kernel, the Make target also proves that the
-final TRUEOS ELF contains the complete C++ Zebin and no complete copy of the
-legacy copy Zebin:
+The normal `make kernel` lane selects C++ and proves that the final TRUEOS ELF
+contains the complete C++ Zebin and no complete copy of the legacy copy
+Zebin. The compatibility target remains available:
 
 ```sh
 make intel-gpu-verify-linked-copy-cpp
 ```
 
-`make iso-cpp-aot` goes one boundary further. It creates
-`bld/trueos-cpp-aot.iso`, extracts `/TRUEOS.elf` back from that ISO, requires
-byte identity with the stripped/staged runtime ELF, and applies the same
+`make iso` goes one boundary further. It creates the canonical
+`bld/trueos.iso`, extracts `/TRUEOS.elf` back from that ISO, requires byte
+identity with the stripped/staged runtime ELF, and applies the same
 selected-present/legacy-absent scan to the extracted member.
+`make iso-cpp-aot` is a compatibility alias for that canonical lane.
 
-After booting that ISO on the physical `00:02.0`, `8086:4680`, revision
+The retained comparison lane uses isolated outputs and reverses the byte-level
+selection proof:
+
+```sh
+make iso-legacy-opencl-c
+# bld/trueos-legacy-opencl-c.iso
+```
+
+After booting `bld/trueos.iso` on the physical `00:02.0`, `8086:4680`, revision
 `0x0c` TestRig, run `gpgpu probe copy-rect` and save the complete output. The
 host verifier turns that output into a strict promotion record:
 

@@ -1,16 +1,17 @@
-# C++ for OpenCL opt-in: `copy_rect_rgba8`
+# C++ for OpenCL production selection: `copy_rect_rgba8`
 
 ## Status and identity
 
-`copy_rect_rgba8.clcpp` is a source-side opt-in twin of the production
-`copy_rect_rgba8.cl`. The OpenCL C source and its checked-in artifacts remain
-the default. The first C++ artifact is admitted only on the physical TestRig
-identity `00:02.0`, `8086:4680`, revision `0x0c`; the legacy artifact's
-revision policy is unchanged.
+`copy_rect_rgba8.clcpp` is the source-side twin selected by the normal Make
+product/development lane. The OpenCL C source and checked-in artifacts remain
+an explicit comparison and fallback lane. Direct Cargo builds retain Cargo's
+legacy default unless `intel_gpu_cpp_aot` is requested. The C++ artifact is
+admitted only on the physical TestRig identity `00:02.0`, `8086:4680`,
+revision `0x0c`; the legacy artifact's revision policy is unchanged.
 
 The stable side-by-side identity is:
 
-| Layer | OpenCL C production | C++ opt-in |
+| Layer | Retained OpenCL C fallback | Make-default C++ selection |
 | --- | --- | --- |
 | source | `copy_rect_rgba8.cl` | `copy_rect_rgba8.clcpp` |
 | kernel entry | `copy_rect_rgba8` | `copy_rect_rgba8` |
@@ -152,10 +153,10 @@ matched exactly:
 `ocloc validate` decoded both as valid single-kernel binaries with two binding
 table entries and 96-byte cross-thread and per-thread payloads.
 
-The checked-in production Zebin has `.ze_info` version `1.70`; this local IGC
-emitted version `1.64`. Apart from that schema-version line, the checked-in C
-contract and the C++ contract were identical. This is a toolchain-version
-pinning concern, not an ABI difference.
+The retained checked-in OpenCL C Zebin has `.ze_info` version `1.70`; this
+local IGC emitted version `1.64`. Apart from that schema-version line, the
+checked-in C contract and the C++ contract were identical. This is a
+toolchain-version pinning concern, not an ABI difference.
 
 IGA disassembly also showed that the checked-in C artifact and the C++ artifact
 have the same Gen12 instruction stream through the end-of-thread send. The
@@ -171,11 +172,12 @@ The local validator emitted two non-fatal tool-version warnings:
 
 It still reported the binary as valid and decoded all contract fields above.
 
-## Remaining promotion gate
+## Hardware conformance and retained fallback
 
-This is enough to opt the artifact into a compile-time catalog path, but it is
-not yet permission to delete or overwrite the production OpenCL C artifact.
-Promotion should require:
+The normal Make lane now selects the C++ artifact so the ordinary
+`bld/trueos.iso` development workflow exercises the intended path. This is not
+permission to delete or overwrite the retained OpenCL C artifact. Wider
+promotion still requires:
 
 1. generated-manifest validation of every field in the table above;
 2. an ADL-S hardware copy test covering even and odd widths, non-zero
@@ -184,8 +186,8 @@ Promotion should require:
    cases;
 4. a pinned Clang, `llvm-spirv`, IGC, and `ocloc` provenance record.
 
-The C source should remain the fallback until that hardware comparison passes
-on `8086:4680` revision `0x0c`.
+The C source remains available through `INTEL_GPU_CPP_AOT=0` until that
+hardware comparison passes on `8086:4680` revision `0x0c`.
 
 The complete physical transcript is checked on the host with:
 

@@ -1,11 +1,12 @@
 # Intel GPGPU Kernels
 
-This directory holds the small OpenCL C kernels intended to become embedded
-Gen12/Alder Lake artifacts for TRUEOS.
+This directory holds the small OpenCL C and C++ for OpenCL kernels baked into
+embedded Gen12/Alder Lake artifacts for TRUEOS.
 
-`copy_rect_rgba8.clcpp` is the first non-production C++ for OpenCL opt-in. Its
-side-by-side artifact identity, exact offline frontend flags, ADL-S ABI
-comparison, and remaining hardware promotion gate are recorded in
+`copy_rect_rgba8.clcpp` is the first C++ for OpenCL source selected by the
+normal Make product/development lane. Its side-by-side artifact identity,
+exact offline frontend flags, ADL-S ABI comparison, and hardware conformance
+gate are recorded in
 [`CPP_FOR_OPENCL_OPT_IN.md`](CPP_FOR_OPENCL_OPT_IN.md).
 
 `copy_rect_rgba8.cl` is the first standalone graphics value target:
@@ -60,8 +61,15 @@ lease (opaque black outside the selected native viewport); it neither reads a
 display backbuffer nor programs a plane. The Alder Lake S artifact SHA-256 is
 `f33f0f2f531aa4df74b932fd519d5c096f9576b94c09cf1e20b742151092e0b5`.
 
-`artifacts/adls/copy_rect_rgba8.bin` is the current Alder Lake S build produced
-with Intel `ocloc`/IGC. Its SHA-256 is:
+`artifacts/adls/cpp/copy_rect_rgba8.bin` is the Make-default C++ for OpenCL
+Alder Lake S build produced with Intel `ocloc`/IGC. Its SHA-256 is:
+
+```text
+b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
+```
+
+`artifacts/adls/copy_rect_rgba8.bin` is the retained legacy OpenCL C
+comparison/fallback. Its SHA-256 is:
 
 ```text
 10866024aaffae96f92cfc25a5fb188ca421994789afbc4dba3ddc290bd583ab
