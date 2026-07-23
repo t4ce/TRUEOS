@@ -514,14 +514,3 @@ where
 
     LocalJoinHandle { completion }
 }
-
-/// Run a future on the async executor and wait synchronously for its result.
-///
-/// This accepts non-Send futures and must only be used on the single executor thread.
-pub fn spawn_and_wait_local<F, T>(fut: F) -> T
-where
-    F: Future<Output = T> + 'static,
-    T: 'static,
-{
-    spawn_local_join(fut).join_blocking()
-}

@@ -558,28 +558,24 @@ pub(crate) fn set_active_line_width(output_mask: u8, width: usize) {
     }
 }
 
-pub(crate) fn record_line_for_output(
-    output_mask: u8,
-    source: LineSource,
-    text: &str,
-) -> MatrixSlotId {
+pub(crate) fn record_line_for_output(output_mask: u8, text: &str) -> MatrixSlotId {
     let mut guard = state().lock();
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
-    push_line(&mut guard.slots[idx], source, text);
+    push_line(&mut guard.slots[idx], text);
     bump_slot_revision(&mut guard, idx);
     slot_id
 }
 
-pub(crate) fn record_line_in_default(source: LineSource, text: &str) {
+pub(crate) fn record_line_in_default(text: &str) {
     let default_id = default_slot_id();
-    record_line_in_slot(&default_id, source, text);
+    record_line_in_slot(&default_id, text);
 }
 
-pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, source: LineSource, text: &str) {
+pub(crate) fn record_line_in_slot(slot_id: &MatrixSlotId, text: &str) {
     let mut guard = state().lock();
     let idx = ensure_slot_index(&mut guard.slots, slot_id);
-    push_line(&mut guard.slots[idx], source, text);
+    push_line(&mut guard.slots[idx], text);
     bump_slot_revision(&mut guard, idx);
 }
 

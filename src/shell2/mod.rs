@@ -571,11 +571,11 @@ fn clock_bucket_and_text() -> (u64, HString<5>) {
 }
 
 pub(crate) fn print_shell_line(io: &dyn ShellIo2, text: &str) {
-    enqueue_transcript_line(io, LineSource::System, text);
+    enqueue_transcript_line(io, text);
 }
 
 pub(crate) fn print_native_line(io: &dyn ShellIo2, text: &str) {
-    enqueue_transcript_line(io, LineSource::Native, text);
+    enqueue_transcript_line(io, text);
 }
 
 fn same_backend_io(io: &dyn ShellIo2, target: &'static dyn ShellIo2) -> bool {
@@ -987,21 +987,21 @@ fn output_mask_for_io(io: &dyn ShellIo2) -> u8 {
     0
 }
 
-fn enqueue_transcript_line(io: &dyn ShellIo2, source: LineSource, text: &str) {
+fn enqueue_transcript_line(io: &dyn ShellIo2, text: &str) {
     let output_mask = output_mask_for_io(io);
     if output_mask == 0 {
         return;
     }
 
-    let _ = matrix::record_line_for_output(output_mask, source, text);
+    let _ = matrix::record_line_for_output(output_mask, text);
 }
 
 pub(crate) fn print_matrix_target_line(target: &MatrixTarget, line: &str) {
-    matrix::record_line_in_slot(&target.slot_id, LineSource::Native, line);
+    matrix::record_line_in_slot(&target.slot_id, line);
 }
 
 pub(crate) fn print_matrix_target_system_line(target: &MatrixTarget, line: &str) {
-    matrix::record_line_in_slot(&target.slot_id, LineSource::System, line);
+    matrix::record_line_in_slot(&target.slot_id, line);
 }
 
 pub(crate) fn raw_write_matrix_target(target: &MatrixTarget, bytes: &[u8]) -> usize {
@@ -1101,18 +1101,12 @@ fn appended_transcript_line<'a>(
     prev: &VecDeque<TranscriptEntry>,
     next: &'a VecDeque<TranscriptEntry>,
 ) -> Option<&'a TranscriptEntry> {
-    if transcript_prefers_chronological_layout(prev)
-        || transcript_prefers_chronological_layout(next)
-    {
-        return None;
-    }
-
     if next.len() != prev.len().saturating_add(1) {
         return None;
     }
 
     for (prev_entry, next_entry) in prev.iter().zip(next.iter()) {
-        if prev_entry.source != next_entry.source || prev_entry.text != next_entry.text {
+        if prev_entry.text != next_entry.text {
             return None;
         }
     }
@@ -1120,16 +1114,10 @@ fn appended_transcript_line<'a>(
     next.back()
 }
 
-fn transcript_prefers_chronological_layout(transcript: &VecDeque<TranscriptEntry>) -> bool {
-    transcript
-        .iter()
-        .any(|entry| matches!(entry.source, LineSource::Native))
-}
-
 fn record_user_line_for_active_slot(io: &'static dyn ShellBackend2, submitted: &str) {
     let output_mask = output_target_for_backend(io);
     let recorded = user_submission_for_recording(output_mask, submitted);
-    let _ = matrix::record_line_for_output(output_mask, LineSource::User, recorded);
+    let _ = matrix::record_line_for_output(output_mask, recorded);
 }
 
 fn user_submission_for_recording(output_mask: u8, submitted: &str) -> &str {
@@ -1174,7 +1162,7 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
     if submitted.starts_with("§§") {
         return;
     }
-    matrix::record_line_in_default(LineSource::User, submitted);
+    matrix::record_line_in_default(submitted);
     if submitted
         .strip_prefix('§')
         .and_then(|rest| rest.strip_suffix('§'))
@@ -1184,12 +1172,10 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
         for vm_id in vm_ids {
             match crate::hv::stop(vm_id) {
                 Ok(true) => matrix::record_line_in_default(
-                    LineSource::System,
                     alloc::format!("matrix: freed slot §{}§; vm{} stop requested", freed_id, vm_id)
                         .as_str(),
                 ),
                 Ok(false) => matrix::record_line_in_default(
-                    LineSource::System,
                     alloc::format!(
                         "matrix: freed slot §{}§; vm{} already stopped",
                         freed_id,
@@ -1198,7 +1184,6 @@ fn handle_matrix_operator(io: &'static dyn ShellBackend2, submitted: &str) {
                     .as_str(),
                 ),
                 Err(_) => matrix::record_line_in_default(
-                    LineSource::System,
                     alloc::format!("matrix: freed slot §{}§; vm{} stop failed", freed_id, vm_id)
                         .as_str(),
                 ),
@@ -1622,28 +1607,25 @@ fn handle_control_c(
     line: &mut HString<MAX_LINE>,
 ) -> VecDeque<TranscriptEntry> {
     let active_slot = matrix::active_slot_id(output_mask);
-    matrix::record_line_in_slot(&active_slot, LineSource::User, "^C");
+    matrix::record_line_in_slot(&active_slot, "^C");
     let (_, vm_id) = matrix::request_slot_interrupt(&active_slot);
     if let Some(vm_id) = vm_id {
         match crate::hv::stop(vm_id) {
             Ok(true) => {
                 matrix::record_line_in_slot(
                     &active_slot,
-                    LineSource::System,
                     alloc::format!("interrupt: vm{} stop requested", vm_id).as_str(),
                 );
             }
             Ok(false) => {
                 matrix::record_line_in_slot(
                     &active_slot,
-                    LineSource::System,
                     alloc::format!("interrupt: vm{} is not running", vm_id).as_str(),
                 );
             }
             Err(_) => {
                 matrix::record_line_in_slot(
                     &active_slot,
-                    LineSource::System,
                     alloc::format!("interrupt: vm{} stop failed", vm_id).as_str(),
                 );
             }
@@ -1772,7 +1754,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
                 last_chrome_state = chrome_state;
             }
             if let Some(entry) = appended_transcript_line(&transcript, &next_transcript) {
-                out.push_transcript_line(entry);
+                out.push_transcript_line(slot_content_top_row(output_mask), entry);
             } else {
                 render_active_slot_content(&out, output_mask, &next_transcript);
             }

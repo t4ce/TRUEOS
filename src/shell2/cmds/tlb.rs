@@ -9,7 +9,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 
-use super::super::{ShellBackend2, line_width_for_backend, print_shell_line};
+use super::super::{
+    MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
+    print_shell_line, set_matrix_target_active,
+};
 use super::tlb_helper::TlbTable;
 use crate::shell2::shell2_cmd::ParseOutcome;
 
@@ -1023,11 +1026,13 @@ fn print_menu(io: &'static dyn ShellBackend2) {
     table.emit_footer(|text| line(io, text));
 }
 
-fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
+#[embassy_executor::task(pool_size = 2)]
+async fn cmd_tlb_pci_task(target: MatrixTarget, io: &'static dyn ShellBackend2) {
     ensure_pci_devices_enumerated();
 
     let db = if crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED) {
-        crate::pci::pciids::load_sanitized_from_root_blocking()
+        crate::pci::pciids::load_sanitized_from_root_async()
+            .await
             .ok()
             .flatten()
     } else {
@@ -1084,6 +1089,21 @@ fn cmd_tlb_pci(io: &'static dyn ShellBackend2) {
                 &row.chip,
             ],
         );
+    }
+    set_matrix_target_active(&target, false);
+}
+
+fn cmd_tlb_pci(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+    // `pci.ids` lives on TRUEOSFS, so the complete table command must run as a
+    // native BSP future. Never restore the former blocking pciids loader here.
+    let target = matrix_target_for_backend(io);
+    set_matrix_target_active(&target, true);
+    match cmd_tlb_pci_task(target.clone(), io) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            line(io, "tlb pci: task unavailable");
+        }
     }
 }
 
@@ -2447,7 +2467,7 @@ fn cmd_tlb_x2apic(io: &'static dyn ShellBackend2) {
     }
 }
 
-pub(crate) fn build_dump_text() -> String {
+pub(crate) async fn build_dump_text() -> String {
     let mut out = String::new();
 
     writeln!(out, "=== Memory Map ===").unwrap();
@@ -2472,7 +2492,8 @@ pub(crate) fn build_dump_text() -> String {
 
     writeln!(out, "=== PCI Devices ===").unwrap();
     ensure_pci_devices_enumerated();
-    let db = crate::pci::pciids::load_sanitized_from_root_blocking()
+    let db = crate::pci::pciids::load_sanitized_from_root_async()
+        .await
         .ok()
         .flatten();
     writeln!(out, "{:30}  {:10}  {:6}  {:6}", "Name", "Address", "VID", "PID").unwrap();
@@ -2793,19 +2814,30 @@ pub(crate) async fn write_dump_bytes_to_default_path(
     }
 }
 
-fn cmd_tlb_dump(io: &'static dyn ShellBackend2) {
-    let out = build_dump_text();
+#[embassy_executor::task(pool_size = 2)]
+async fn cmd_tlb_dump_task(target: MatrixTarget, io: &'static dyn ShellBackend2) {
+    let out = build_dump_text().await;
     line(io, alloc::format!("Writing {} bytes to {}...", out.len(), DUMP_FILE_PATH).as_str());
 
     let out_bytes = out.into_bytes();
-    let result: Result<(), crate::disc::block::Error> =
-        crate::wait::spawn_and_wait_local(async move {
-            write_dump_bytes_to_default_path(&out_bytes).await
-        });
+    let result = write_dump_bytes_to_default_path(&out_bytes).await;
 
     match result {
         Ok(()) => line(io, "Success."),
         Err(err) => line(io, alloc::format!("Error writing file: {:?}", err).as_str()),
+    }
+    set_matrix_target_active(&target, false);
+}
+
+fn cmd_tlb_dump(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+    let target = matrix_target_for_backend(io);
+    set_matrix_target_active(&target, true);
+    match cmd_tlb_dump_task(target.clone(), io) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            line(io, "tlb dump: task unavailable");
+        }
     }
 }
 
@@ -3713,13 +3745,13 @@ fn ensure_no_args(
 }
 
 pub(crate) fn try_parse(
-    _spawner: &Spawner,
+    spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     args: &mut SplitWhitespace<'_>,
 ) -> ParseOutcome {
     match args.next() {
         None => print_menu(io),
-        Some("pci") if ensure_no_args(io, args, "tlb: usage `tlb pci`") => cmd_tlb_pci(io),
+        Some("pci") if ensure_no_args(io, args, "tlb: usage `tlb pci`") => cmd_tlb_pci(spawner, io),
         Some("pcibar") if ensure_no_args(io, args, "tlb: usage `tlb pcibar`") => {
             cmd_tlb_pci_bar(io)
         }
@@ -3742,7 +3774,9 @@ pub(crate) fn try_parse(
         Some("uefi") if ensure_no_args(io, args, "tlb: usage `tlb uefi`") => cmd_tlb_uefi(io),
         Some("x2apic") if ensure_no_args(io, args, "tlb: usage `tlb x2apic`") => cmd_tlb_x2apic(io),
         Some("usb") if ensure_no_args(io, args, "tlb: usage `tlb usb`") => cmd_tlb_usb(io),
-        Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => cmd_tlb_dump(io),
+        Some("dump") if ensure_no_args(io, args, "tlb: usage `tlb dump`") => {
+            cmd_tlb_dump(spawner, io)
+        }
         Some(_) => line(io, TLB_USAGE),
     }
     ParseOutcome::Handled

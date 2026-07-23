@@ -2,7 +2,9 @@ extern crate alloc;
 
 pub const PCI_IDS_KEY: &str = "trueos/pci/pci.ids";
 
-pub fn load_raw_from_root_blocking()
+/// Load the PCI name database without blocking the executor that services the
+/// underlying block device. Shell2 and other BSP callers must await this API.
+pub async fn load_raw_from_root_async()
 -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
     let mut last_err: Option<crate::disc::block::Error> = None;
 
@@ -12,9 +14,7 @@ pub fn load_raw_from_root_blocking()
         let Some(disk) = crate::disc::block::device_handle(root.disk_id) else {
             continue;
         };
-        match crate::wait::spawn_and_wait_local(async move {
-            crate::r::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await
-        }) {
+        match crate::r::fs::trueosfs::file_out_async(disk, PCI_IDS_KEY).await {
             Ok(Some(raw)) => return Ok(Some(raw)),
             Ok(None) => {}
             Err(e) => last_err = Some(e),
@@ -27,9 +27,9 @@ pub fn load_raw_from_root_blocking()
     Ok(None)
 }
 
-pub fn load_sanitized_from_root_blocking()
+pub async fn load_sanitized_from_root_async()
 -> Result<Option<alloc::vec::Vec<u8>>, crate::disc::block::Error> {
-    let Some(raw) = load_raw_from_root_blocking()? else {
+    let Some(raw) = load_raw_from_root_async().await? else {
         return Ok(None);
     };
     Ok(Some(sanitize_pci_ids(&raw)))

@@ -15,7 +15,10 @@ PROVENANCE_CLEAN_FLAG ?= --require-clean
 PROVENANCE_SOURCE_MANIFEST ?= git-commit
 START_BAREMETAL_LOG ?= 1
 RELEASE_BUMP_CNT ?= $(if $(CI),0,1)
-START_NET_SHELL_CONSOLE ?= $(if $(CI),0,1)
+# The recovery listener accepts one interactive owner at a time. Keep the
+# developer console opt-in so an ISO build cannot silently claim :4245 and
+# lock out a deliberate connection from another machine.
+START_NET_SHELL_CONSOLE ?= 0
 ISO_DIR := bld
 ISO_PATH := bld/trueos.iso
 ISO_BOOT_DIR := bld/iso-bootroot
