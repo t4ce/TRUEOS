@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "label": "adls",
+  "device": "0x4680",
+  "pci_device_ids": [
+    "0x4680"
+  ],
+  "revision_min": 0,
+  "revision_max": 255,
+  "constraints": {
+    "simd_width": 16,
+    "max_scratch_bytes": 0,
+    "max_slm_bytes": 0
+  },
+  "cpp": {
+    "clang_target": "spir64",
+    "standard": "CLC++",
+    "clang_options": [
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-cl-kernel-arg-info",
+      "-fno-discard-value-names",
+      "-fno-exceptions",
+      "-fno-rtti"
+    ],
+    "llvm_spirv_options": [
+      "--preserve-ocl-kernel-arg-type-metadata-through-string"
+    ]
+  }
+}

@@ -210,14 +210,44 @@ fn upload_artifact_bytes(
         .map(|source| source.len())
         .unwrap_or(0);
     let sha256 = digest_hex(&upload.bin_sha256);
+    let abi_entry = artifact
+        .abi_contract
+        .map(|contract| contract.entry_offset)
+        .unwrap_or(0);
+    let abi_simd = artifact
+        .abi_contract
+        .map(|contract| contract.simd_width)
+        .unwrap_or(0);
+    let abi_grfs = artifact
+        .abi_contract
+        .map(|contract| contract.grf_count)
+        .unwrap_or(0);
+    let abi_cross_thread = artifact
+        .abi_contract
+        .map(|contract| contract.cross_thread_data_bytes)
+        .unwrap_or(0);
+    let abi_per_thread = artifact
+        .abi_contract
+        .map(|contract| contract.per_thread_data_bytes)
+        .unwrap_or(0);
+    let abi_bindings = artifact
+        .abi_contract
+        .map(|contract| contract.bindings.len())
+        .unwrap_or(0);
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: {} upload ok=1 target={} device=0x{:04X} revision=0x{:02X} abi_schema={} source={} path={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} sha256={}\n",
+        "intel/gpgpu: {} upload ok=1 target={} device=0x{:04X} revision=0x{:02X} abi_schema={} entry=0x{:X} simd={} grfs={} cross_thread={} per_thread={} bindings={} source={} path={} source_bytes=0x{:X} spv_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} mapped=0x{:X} sha256={}\n",
         artifact.name,
         upload.target,
         upload.device_id,
         upload.revision_id,
         upload.abi_schema_version.unwrap_or(0),
+        abi_entry,
+        abi_simd,
+        abi_grfs,
+        abi_cross_thread,
+        abi_per_thread,
+        abi_bindings,
         upload.source,
         source_path,
         source_bytes,
@@ -343,7 +373,7 @@ pub(crate) fn admit_kernel_artifact_bytes(
         if sha256_digest(artifact.spv) != contract.spv_sha256 {
             return Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch);
         }
-        validate_contract_elf(bin, contract)
+        validate_kernel_contract_elf(bin, contract)
             .map_err(GpgpuArtifactAdmissionError::ContractElfMismatch)?;
     }
 
@@ -385,128 +415,12 @@ fn validate_kernel_artifact_bytes(bytes: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn validate_contract_elf(
-    bytes: &[u8],
-    contract: &GpgpuKernelAbiContract,
-) -> Result<(), &'static str> {
-    const ELF64_SECTION_HEADER_BYTES: usize = 64;
-    const SHN_XINDEX: usize = 0xFFFF;
-    const SHT_PROGBITS: u32 = 1;
-    const SHF_EXECINSTR: u64 = 1 << 2;
-
-    let section_table_offset =
-        usize::try_from(read_u64(bytes, 40).ok_or("contract-elf-missing-section-table")?)
-            .map_err(|_| "contract-elf-section-table-overflow")?;
-    let section_header_bytes =
-        read_u16(bytes, 58).ok_or("contract-elf-missing-section-table")? as usize;
-    let section_count = read_u16(bytes, 60).ok_or("contract-elf-missing-section-table")? as usize;
-    let section_names_index =
-        read_u16(bytes, 62).ok_or("contract-elf-missing-section-table")? as usize;
-    if section_header_bytes != ELF64_SECTION_HEADER_BYTES
-        || section_count == 0
-        || section_names_index == 0
-        || section_names_index == SHN_XINDEX
-        || section_names_index >= section_count
-    {
-        return Err("contract-elf-invalid-section-table");
-    }
-    let section_table_bytes = section_header_bytes
-        .checked_mul(section_count)
-        .ok_or("contract-elf-section-table-overflow")?;
-    let section_table_end = section_table_offset
-        .checked_add(section_table_bytes)
-        .ok_or("contract-elf-section-table-overflow")?;
-    if section_table_end > bytes.len() {
-        return Err("contract-elf-section-table-out-of-bounds");
-    }
-
-    let names_header =
-        section_header(bytes, section_table_offset, section_header_bytes, section_names_index)
-            .ok_or("contract-elf-string-table-out-of-bounds")?;
-    let names_offset =
-        usize::try_from(read_u64(names_header, 24).ok_or("contract-elf-invalid-string-table")?)
-            .map_err(|_| "contract-elf-string-table-overflow")?;
-    let names_bytes =
-        usize::try_from(read_u64(names_header, 32).ok_or("contract-elf-invalid-string-table")?)
-            .map_err(|_| "contract-elf-string-table-overflow")?;
-    let names_end = names_offset
-        .checked_add(names_bytes)
-        .ok_or("contract-elf-string-table-overflow")?;
-    let names = bytes
-        .get(names_offset..names_end)
-        .ok_or("contract-elf-string-table-out-of-bounds")?;
-
-    let mut matching_section = None;
-    let mut index = 1;
-    while index < section_count {
-        let header = section_header(bytes, section_table_offset, section_header_bytes, index)
-            .ok_or("contract-elf-section-header-out-of-bounds")?;
-        let name_offset =
-            read_u32(header, 0).ok_or("contract-elf-section-header-out-of-bounds")? as usize;
-        let Some(name) = elf_string(names, name_offset) else {
-            return Err("contract-elf-section-name-out-of-bounds");
-        };
-        if name == contract.text_section_name.as_bytes() {
-            if matching_section.is_some() {
-                return Err("contract-elf-duplicate-text-section");
-            }
-            matching_section = Some(header);
-        }
-        index += 1;
-    }
-
-    let header = matching_section.ok_or("contract-elf-text-section-missing")?;
-    if read_u32(header, 4) != Some(SHT_PROGBITS) {
-        return Err("contract-elf-text-section-wrong-type");
-    }
-    let flags = read_u64(header, 8).ok_or("contract-elf-invalid-text-section")?;
-    if flags & SHF_EXECINSTR == 0 {
-        return Err("contract-elf-text-section-not-executable");
-    }
-    let section_offset = read_u64(header, 24).ok_or("contract-elf-invalid-text-section")?;
-    let section_size = read_u64(header, 32).ok_or("contract-elf-invalid-text-section")?;
-    let section_end = section_offset
-        .checked_add(section_size)
-        .ok_or("contract-elf-text-section-overflow")?;
-    let entry_end = contract
-        .text_offset
-        .checked_add(contract.text_size)
-        .ok_or("contract-elf-text-range-overflow")?;
-    if contract.text_offset < section_offset || entry_end > section_end {
-        return Err("contract-elf-text-range-mismatch");
-    }
-    if usize::try_from(section_end).map_or(true, |end| end > bytes.len()) {
-        return Err("contract-elf-text-range-out-of-bounds");
-    }
-    Ok(())
-}
-
-fn section_header(
-    bytes: &[u8],
-    table_offset: usize,
-    entry_bytes: usize,
-    index: usize,
-) -> Option<&[u8]> {
-    let offset = table_offset.checked_add(entry_bytes.checked_mul(index)?)?;
-    bytes.get(offset..offset.checked_add(entry_bytes)?)
-}
-
-fn elf_string(bytes: &[u8], offset: usize) -> Option<&[u8]> {
-    let tail = bytes.get(offset..)?;
-    let end = tail.iter().position(|byte| *byte == 0)?;
-    tail.get(..end)
-}
-
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?))
 }
 
 fn sha256_digest(bytes: &[u8]) -> [u8; 32] {

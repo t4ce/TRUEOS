@@ -58,6 +58,7 @@ pub(crate) struct UploadedKernelArtifact {
 unsafe impl Send for UploadedKernelArtifact {}
 unsafe impl Sync for UploadedKernelArtifact {}
 
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::legacy_adls(
         COPY_RECT_RGBA8_KERNEL_NAME,
@@ -65,6 +66,20 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         COPY_RECT_RGBA8_ADLS_SPV,
         COPY_RECT_RGBA8_ADLS_BIN_SHA256,
     );
+
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_CPP_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
+    COPY_RECT_RGBA8_KERNEL_NAME,
+    COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
+    COPY_RECT_RGBA8_CPP_ADLS_BIN,
+    COPY_RECT_RGBA8_CPP_ADLS_SPV,
+    COPY_RECT_RGBA8_CPP_ADLS_BIN_SHA256,
+    Some(&COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT),
+);
+
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    COPY_RECT_RGBA8_CPP_ADLS_ARTIFACT;
 
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::legacy_adls(

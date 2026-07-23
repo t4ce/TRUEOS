@@ -1,5 +1,19 @@
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str = include_str!("kernels/copy_rect_rgba8.cl");
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
+    include_str!("kernels/copy_rect_rgba8.clcpp");
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
+pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
+    "src/intel/gpgpu/kernels/copy_rect_rgba8.cl";
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
+    "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
+pub(crate) const COPY_RECT_RGBA8_ARTIFACT_FRONTEND: &str = "opencl-c";
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_ARTIFACT_FRONTEND: &str = "cpp-for-opencl";
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME: &str = "resolve_tile64_msaa4_rgba8";
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/resolve_tile64_msaa4_rgba8.cl");
@@ -94,7 +108,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
 
 pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     match name {
-        COPY_RECT_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/copy_rect_rgba8.cl"),
+        COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
         RESOLVE_TILE64_MSAA4_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/resolve_tile64_msaa4_rgba8.cl")
         }
@@ -145,10 +159,83 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.bin");
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/copy_rect_rgba8.spv");
+#[cfg(feature = "intel_gpu_cpp_aot")]
+include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_CPP_ADLS_BIN: &[u8] =
+    include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_CPP_ADLS_SPV: &[u8] =
+    include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.spv");
+#[cfg(feature = "intel_gpu_cpp_aot")]
+pub(crate) const COPY_RECT_RGBA8_CPP_ADLS_BIN_SHA256: [u8; 32] =
+    COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+#[cfg(feature = "intel_gpu_cpp_aot")]
+const _: () = assert!(matches!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+#[cfg(feature = "intel_gpu_cpp_aot")]
+const _: () = assert!(COPY_RECT_RGBA8_CPP_ADLS_BIN.len() == 11_328);
+#[cfg(feature = "intel_gpu_cpp_aot")]
+const _: () = assert!(COPY_RECT_RGBA8_CPP_ADLS_SPV.len() == 4_788);
+#[cfg(feature = "intel_gpu_cpp_aot")]
+const _: () = {
+    let contract = COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(contract.simd_width == 16);
+    assert!(contract.scratch_bytes == 0);
+    assert!(contract.slm_bytes == 0);
+    assert!(contract.cross_thread_data_bytes == 96);
+    assert!(contract.per_thread_data_bytes == 96);
+    assert!(contract.bindings.len() == 2);
+    assert!(contract.bindings[0].arg_index == 0 && contract.bindings[0].bti == 0);
+    assert!(contract.bindings[1].arg_index == 1 && contract.bindings[1].bti == 1);
+    assert!(contract.payload_args.len() == 10);
+    assert!(contract.payload_args[0].arg_index == 0);
+    assert!(contract.payload_args[0].offset_bytes == 48);
+    assert!(contract.payload_args[0].size_bytes == 8);
+    assert!(matches!(
+        contract.payload_args[0].kind,
+        GpgpuArtifactArgKind::ByPointer
+    ));
+    assert!(matches!(
+        contract.payload_args[0].access,
+        GpgpuArtifactArgAccess::ReadOnly
+    ));
+    assert!(matches!(
+        contract.payload_args[0].address_mode,
+        GpgpuArtifactAddressMode::Stateful
+    ));
+    assert!(contract.payload_args[1].arg_index == 1);
+    assert!(contract.payload_args[1].offset_bytes == 56);
+    assert!(contract.payload_args[1].size_bytes == 8);
+    assert!(matches!(
+        contract.payload_args[1].kind,
+        GpgpuArtifactArgKind::ByPointer
+    ));
+    assert!(matches!(
+        contract.payload_args[1].access,
+        GpgpuArtifactArgAccess::ReadWrite
+    ));
+    assert!(matches!(
+        contract.payload_args[1].address_mode,
+        GpgpuArtifactAddressMode::Stateful
+    ));
+    let mut scalar = 2;
+    while scalar < contract.payload_args.len() {
+        assert!(contract.payload_args[scalar].arg_index as usize == scalar);
+        assert!(contract.payload_args[scalar].offset_bytes == 56 + scalar as u32 * 4);
+        assert!(contract.payload_args[scalar].size_bytes == 4);
+        assert!(matches!(
+            contract.payload_args[scalar].kind,
+            GpgpuArtifactArgKind::ByValue
+        ));
+        scalar += 1;
+    }
+};
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/resolve_tile64_msaa4_rgba8.bin");
 pub(crate) const RESOLVE_TILE64_MSAA4_RGBA8_ADLS_SPV: &[u8] =
@@ -243,6 +330,7 @@ const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() == 54_472);
 const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV.len() == 26_452);
 const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() == 547_392);
 const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV.len() == 82_384);
+#[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
     0xA4, 0x21, 0x99, 0x47, 0x89, 0xAF, 0xBC, 0x4D, 0xBA, 0x3D, 0xDC, 0x29, 0x0B, 0xD5, 0x83, 0xAB,

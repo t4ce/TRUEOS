@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Compatibility entry point for the opt-in host bakery.  This script is never
+# called by Cargo/build.rs: ordinary TRUEOS builds only consume checked-in
+# artifacts.
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 shader_root="$(cd "${script_dir}/.." && pwd)"
 
@@ -12,8 +16,33 @@ else
   trueos_root="${shader_root}"
 fi
 
+bakery="${trueos_root}/tools/intel-gpu-bakery/bake.py"
+profile="${BAKE_PROFILE:-${trueos_root}/tools/intel-gpu-bakery/profiles/adls.json}"
+python_bin="${PYTHON:-python3}"
+
+if [[ ! -f "${bakery}" ]]; then
+  echo "missing TRUEOS Intel GPU bakery: ${bakery}" >&2
+  exit 1
+fi
+
+# Advanced/single-source mode exposes the full bakery CLI, including the C++
+# side-by-side path:
+#
+#   bake_adls_artifacts.sh --source kernels/copy_rect_rgba8.clcpp \
+#     --artifact-name copy_rect_rgba8 --variant cpp \
+#     --publish-dir kernels/artifacts/adls/cpp --repro-check
+if [[ "$#" -gt 0 && "${1}" == --* ]]; then
+  exec "${python_bin}" "${bakery}" --profile "${profile}" "$@"
+fi
+
 device="${DEVICE:-0x4680}"
 target="${TARGET:-adls}"
+if [[ "${device}" != "0x4680" || "${target}" != "adls" ]]; then
+  echo "DEVICE/TARGET overrides require a matching BAKE_PROFILE JSON" >&2
+  echo "the bundled profile is pinned to target=adls device=0x4680" >&2
+  exit 1
+fi
+
 kernel_dir="${script_dir}/kernels"
 artifact_dir="${kernel_dir}/artifacts/${target}"
 build_root="${BUILD_ROOT:-${shader_root}/bld/intel-tools/bake/${target}}"
@@ -21,27 +50,11 @@ local_tool_root="${IGC_ROOT:-${trueos_root}/bld/intel-tools/root}"
 local_ocloc="${local_tool_root}/usr/bin/ocloc-26.05.1"
 local_libdir="${local_tool_root}/usr/lib/x86_64-linux-gnu"
 
-uses_local_toolchain=0
-if [[ -n "${OCLOC:-}" ]]; then
-  ocloc="${OCLOC}"
-elif [[ -x "${local_ocloc}" ]]; then
-  ocloc="${local_ocloc}"
-  uses_local_toolchain=1
-else
-  ocloc="$(command -v ocloc || true)"
+if [[ -z "${OCLOC:-}" && -x "${local_ocloc}" ]]; then
+  export OCLOC="${local_ocloc}"
 fi
-
-if [[ -z "${ocloc}" || ! -x "${ocloc}" ]]; then
-  echo "missing ocloc; set OCLOC=/path/to/ocloc or extract intel-ocloc into ${local_tool_root}" >&2
-  exit 1
-fi
-
-ld_library_path="${OCLOC_LD_LIBRARY_PATH:-}"
-if [[ -z "${ld_library_path}" && "${uses_local_toolchain}" -eq 1 && -d "${local_libdir}" ]]; then
-  ld_library_path="${local_libdir}"
-fi
-if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
-  ld_library_path="${ld_library_path:+${ld_library_path}:}${LD_LIBRARY_PATH}"
+if [[ -z "${OCLOC_LD_LIBRARY_PATH:-}" && -d "${local_libdir}" ]]; then
+  export OCLOC_LD_LIBRARY_PATH="${local_libdir}"
 fi
 
 if [[ "$#" -gt 0 ]]; then
@@ -56,33 +69,25 @@ else
   done < <(find "${kernel_dir}" -maxdepth 1 -type f -name '*.cl' | sort)
 fi
 
-mkdir -p "${build_root}" "${artifact_dir}"
+repro_args=()
+if [[ "${REPRO_CHECK:-0}" == "1" ]]; then
+  repro_args+=(--repro-check)
+fi
 
 for kernel in "${kernels[@]}"; do
   src="${kernel_dir}/${kernel}.cl"
-  out_dir="${build_root}/${kernel}"
-
   if [[ ! -f "${src}" ]]; then
     echo "missing source: ${src}" >&2
     exit 1
   fi
-
-  rm -rf "${out_dir}"
-  mkdir -p "${out_dir}"
   echo "bake ${target}/${kernel} device=${device}"
-  env LD_LIBRARY_PATH="${ld_library_path}" "${ocloc}" compile \
-    -file "${src}" \
-    -device "${device}" \
-    -64 \
-    -output "${kernel}" \
-    -out_dir "${out_dir}" \
-    -output_no_suffix \
-    -gen_file
-
-  env LD_LIBRARY_PATH="${ld_library_path}" "${ocloc}" validate \
-    -file "${out_dir}/${kernel}.bin"
-
-  cp "${out_dir}/${kernel}.bin" "${artifact_dir}/${kernel}.bin"
-  cp "${out_dir}/${kernel}.spv" "${artifact_dir}/${kernel}.spv"
-  sha256sum "${artifact_dir}/${kernel}.bin" "${artifact_dir}/${kernel}.spv"
+  "${python_bin}" "${bakery}" \
+    --source "${src}" \
+    --artifact-name "${kernel}" \
+    --frontend ocloc-cl \
+    --variant legacy \
+    --profile "${profile}" \
+    --publish-dir "${artifact_dir}" \
+    --build-root "${build_root}" \
+    "${repro_args[@]}"
 done

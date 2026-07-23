@@ -22,6 +22,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "gpgpu svg start [basic|curves|holes]");
     print_shell_line(io, "gpgpu svg status");
     print_shell_line(io, "gpgpu svg stop");
+    print_shell_line(io, "gpgpu probe copy-rect");
     print_shell_line(io, "gpgpu probe font-tessel [artifact|audit|flatten|mesh|all]");
 }
 
@@ -647,10 +648,83 @@ fn run_probe(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
         usage(io);
         return;
     };
-    if probe.eq_ignore_ascii_case("font-tessel") {
+    if probe.eq_ignore_ascii_case("copy-rect") {
+        if expect_no_more(io, args) {
+            run_copy_rect_probe(io);
+        }
+    } else if probe.eq_ignore_ascii_case("font-tessel") {
         run_font_tessel(io, args);
     } else {
         usage(io);
+    }
+}
+
+fn run_copy_rect_probe(io: &'static dyn ShellBackend2) {
+    let result = crate::intel::gpgpu::shell_copy_rect_rgba8_probe();
+    let hash = digest_hex(&result.artifact_sha256);
+    print_shell_line(
+        io,
+        alloc::format!(
+            "gpgpu probe copy-rect: ok={} frontend={} feature={} feature_enabled={} artifact={} artifact_source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} hash={} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}",
+            result.ok as u8,
+            result.frontend,
+            result.feature,
+            result.feature_enabled as u8,
+            result.artifact,
+            result.artifact_source,
+            result.artifact_target,
+            result.artifact_verified as u8,
+            result.pci_bus,
+            result.pci_slot,
+            result.pci_function,
+            result.device_id,
+            result.revision_id,
+            hash,
+            result.attempted_cases,
+            result.case_count,
+            result.retired_cases,
+            result.passed_cases,
+            result.first_failure_case,
+            result.first_failure,
+        )
+        .as_str(),
+    );
+    for case in result.cases.iter().take(result.case_count) {
+        print_shell_line(
+            io,
+            alloc::format!(
+                "gpgpu probe copy-rect case={}: attempted={} submitted={} retired={} ok={} src={}x{} pitch={} origin=({}, {}) dst={}x{} pitch={} origin=({}, {}) copy={}x{} checked_copy={} checked_guards={} checked_source={} markers=[0x{:08X},0x{:08X}] retire_ms={} first_failure={} failure_has_offset={} failure_offset=0x{:X} expected=0x{:08X} observed=0x{:08X}",
+                case.label,
+                case.attempted as u8,
+                case.submitted as u8,
+                case.retired as u8,
+                case.ok as u8,
+                case.src_width,
+                case.src_height,
+                case.src_pitch_bytes,
+                case.src_x,
+                case.src_y,
+                case.dst_width,
+                case.dst_height,
+                case.dst_pitch_bytes,
+                case.dst_x,
+                case.dst_y,
+                case.width,
+                case.height,
+                case.copied_pixels_checked,
+                case.guard_pixels_checked,
+                case.source_pixels_checked,
+                case.pre_marker,
+                case.post_marker,
+                case.retire_ms,
+                case.first_failure,
+                case.failure_byte_offset.is_some() as u8,
+                case.failure_byte_offset.unwrap_or(0),
+                case.expected,
+                case.observed,
+            )
+            .as_str(),
+        );
     }
 }
 

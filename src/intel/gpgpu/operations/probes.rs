@@ -1,3 +1,579 @@
+const COPY_RECT_PROBE_CASE_COUNT: usize = 4;
+const COPY_RECT_PROBE_HALF_BYTES: usize = CLEAR_RECT_TEST_BYTES / 2;
+const COPY_RECT_PROBE_HALF_PIXELS: usize = COPY_RECT_PROBE_HALF_BYTES / core::mem::size_of::<u32>();
+const COPY_RECT_PROBE_SRC_GPU: u64 = DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE;
+const COPY_RECT_PROBE_DST_GPU: u64 =
+    DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE + COPY_RECT_PROBE_HALF_BYTES as u64;
+
+const _: () = assert!(CLEAR_RECT_TEST_BYTES.is_multiple_of(2));
+const _: () = assert!(COPY_RECT_PROBE_HALF_BYTES.is_multiple_of(4096));
+const _: () = assert!(COPY_RECT_PROBE_SRC_GPU.is_multiple_of(4096));
+const _: () = assert!(COPY_RECT_PROBE_DST_GPU.is_multiple_of(4096));
+const _: () = assert!(
+    COPY_RECT_PROBE_DST_GPU + COPY_RECT_PROBE_HALF_BYTES as u64
+        <= DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE + CLEAR_RECT_TEST_BYTES as u64
+);
+
+#[derive(Copy, Clone, Debug)]
+struct CopyRectProbeCase {
+    label: &'static str,
+    src_width: u32,
+    src_height: u32,
+    src_pitch_bytes: u32,
+    dst_width: u32,
+    dst_height: u32,
+    dst_pitch_bytes: u32,
+    src_x: u32,
+    src_y: u32,
+    dst_x: u32,
+    dst_y: u32,
+    width: u32,
+    height: u32,
+}
+
+const COPY_RECT_PROBE_CASES: [CopyRectProbeCase; COPY_RECT_PROBE_CASE_COUNT] = [
+    CopyRectProbeCase {
+        label: "even-small",
+        src_width: 27,
+        src_height: 13,
+        src_pitch_bytes: 128,
+        dst_width: 25,
+        dst_height: 13,
+        dst_pitch_bytes: 112,
+        src_x: 3,
+        src_y: 2,
+        dst_x: 5,
+        dst_y: 4,
+        width: 8,
+        height: 3,
+    },
+    CopyRectProbeCase {
+        label: "odd-small",
+        src_width: 23,
+        src_height: 14,
+        src_pitch_bytes: 112,
+        dst_width: 29,
+        dst_height: 14,
+        dst_pitch_bytes: 128,
+        src_x: 4,
+        src_y: 3,
+        dst_x: 7,
+        dst_y: 5,
+        width: 7,
+        height: 4,
+    },
+    CopyRectProbeCase {
+        label: "even-multigroup",
+        src_width: 48,
+        src_height: 12,
+        src_pitch_bytes: 208,
+        dst_width: 46,
+        dst_height: 12,
+        dst_pitch_bytes: 192,
+        src_x: 7,
+        src_y: 2,
+        dst_x: 5,
+        dst_y: 3,
+        width: 34,
+        height: 2,
+    },
+    CopyRectProbeCase {
+        label: "odd-multigroup",
+        src_width: 44,
+        src_height: 12,
+        src_pitch_bytes: 192,
+        dst_width: 45,
+        dst_height: 12,
+        dst_pitch_bytes: 208,
+        src_x: 6,
+        src_y: 3,
+        dst_x: 7,
+        dst_y: 4,
+        width: 33,
+        height: 3,
+    },
+];
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuCopyRectProbeCaseResult {
+    pub(crate) label: &'static str,
+    pub(crate) attempted: bool,
+    pub(crate) submitted: bool,
+    pub(crate) retired: bool,
+    pub(crate) ok: bool,
+    pub(crate) src_width: u32,
+    pub(crate) src_height: u32,
+    pub(crate) src_pitch_bytes: u32,
+    pub(crate) dst_width: u32,
+    pub(crate) dst_height: u32,
+    pub(crate) dst_pitch_bytes: u32,
+    pub(crate) src_x: u32,
+    pub(crate) src_y: u32,
+    pub(crate) dst_x: u32,
+    pub(crate) dst_y: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) copied_pixels_checked: usize,
+    pub(crate) guard_pixels_checked: usize,
+    pub(crate) source_pixels_checked: usize,
+    pub(crate) pre_marker: u32,
+    pub(crate) post_marker: u32,
+    pub(crate) retire_ms: u64,
+    pub(crate) first_failure: &'static str,
+    pub(crate) failure_byte_offset: Option<usize>,
+    pub(crate) expected: u32,
+    pub(crate) observed: u32,
+}
+
+impl GpgpuCopyRectProbeCaseResult {
+    const EMPTY: Self = Self {
+        label: "not-configured",
+        attempted: false,
+        submitted: false,
+        retired: false,
+        ok: false,
+        src_width: 0,
+        src_height: 0,
+        src_pitch_bytes: 0,
+        dst_width: 0,
+        dst_height: 0,
+        dst_pitch_bytes: 0,
+        src_x: 0,
+        src_y: 0,
+        dst_x: 0,
+        dst_y: 0,
+        width: 0,
+        height: 0,
+        copied_pixels_checked: 0,
+        guard_pixels_checked: 0,
+        source_pixels_checked: 0,
+        pre_marker: 0,
+        post_marker: 0,
+        retire_ms: 0,
+        first_failure: "not-run",
+        failure_byte_offset: None,
+        expected: 0,
+        observed: 0,
+    };
+
+    const fn from_case(case: CopyRectProbeCase) -> Self {
+        Self {
+            label: case.label,
+            src_width: case.src_width,
+            src_height: case.src_height,
+            src_pitch_bytes: case.src_pitch_bytes,
+            dst_width: case.dst_width,
+            dst_height: case.dst_height,
+            dst_pitch_bytes: case.dst_pitch_bytes,
+            src_x: case.src_x,
+            src_y: case.src_y,
+            dst_x: case.dst_x,
+            dst_y: case.dst_y,
+            width: case.width,
+            height: case.height,
+            ..Self::EMPTY
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GpgpuCopyRectProbeResult {
+    pub(crate) ok: bool,
+    pub(crate) frontend: &'static str,
+    pub(crate) feature: &'static str,
+    pub(crate) feature_enabled: bool,
+    pub(crate) artifact: &'static str,
+    pub(crate) artifact_source: &'static str,
+    pub(crate) artifact_target: &'static str,
+    pub(crate) artifact_verified: bool,
+    pub(crate) artifact_sha256: [u8; 32],
+    pub(crate) pci_bus: u8,
+    pub(crate) pci_slot: u8,
+    pub(crate) pci_function: u8,
+    pub(crate) device_id: u16,
+    pub(crate) revision_id: u8,
+    pub(crate) case_count: usize,
+    pub(crate) attempted_cases: usize,
+    pub(crate) retired_cases: usize,
+    pub(crate) passed_cases: usize,
+    pub(crate) first_failure_case: &'static str,
+    pub(crate) first_failure: &'static str,
+    pub(crate) cases: [GpgpuCopyRectProbeCaseResult; COPY_RECT_PROBE_CASE_COUNT],
+}
+
+impl GpgpuCopyRectProbeResult {
+    fn new() -> Self {
+        let mut cases = [GpgpuCopyRectProbeCaseResult::EMPTY; COPY_RECT_PROBE_CASE_COUNT];
+        let mut index = 0;
+        while index < COPY_RECT_PROBE_CASE_COUNT {
+            cases[index] = GpgpuCopyRectProbeCaseResult::from_case(COPY_RECT_PROBE_CASES[index]);
+            index += 1;
+        }
+        Self {
+            ok: false,
+            frontend: COPY_RECT_RGBA8_ARTIFACT_FRONTEND,
+            feature: "intel_gpu_cpp_aot",
+            feature_enabled: cfg!(feature = "intel_gpu_cpp_aot"),
+            artifact: COPY_RECT_RGBA8_ADLS_ARTIFACT.name,
+            artifact_source: "unavailable",
+            artifact_target: COPY_RECT_RGBA8_ADLS_ARTIFACT.target,
+            artifact_verified: false,
+            artifact_sha256: COPY_RECT_RGBA8_ADLS_ARTIFACT.bin_sha256,
+            pci_bus: 0,
+            pci_slot: 0,
+            pci_function: 0,
+            device_id: 0,
+            revision_id: 0,
+            case_count: COPY_RECT_PROBE_CASE_COUNT,
+            attempted_cases: 0,
+            retired_cases: 0,
+            passed_cases: 0,
+            first_failure_case: "setup",
+            first_failure: "none",
+            cases,
+        }
+    }
+
+    fn fail_setup(&mut self, failure: &'static str) {
+        if self.first_failure == "none" {
+            self.first_failure = failure;
+        }
+    }
+
+    fn observe_case(&mut self, case: GpgpuCopyRectProbeCaseResult) {
+        self.attempted_cases += case.attempted as usize;
+        self.retired_cases += case.retired as usize;
+        self.passed_cases += case.ok as usize;
+        if self.first_failure == "none" && !case.ok {
+            self.first_failure_case = case.label;
+            self.first_failure = case.first_failure;
+        }
+    }
+}
+
+/// Exercise the selected `copy_rect_rgba8` artifact on the claimed Intel GPU.
+///
+/// The probe deliberately borrows the already-reserved 16 KiB direct-RCS
+/// clear-test VA window and splits it into two page-aligned halves. Holding the
+/// ordinary direct-RCS submit lock from CPU initialization through retirement
+/// and readback ensures no batch can remap those PPGTT leaves while the probe
+/// owns them. The full destination half is guard-checked, including row
+/// padding and bytes beyond the logical surface.
+pub(crate) fn shell_copy_rect_rgba8_probe() -> GpgpuCopyRectProbeResult {
+    let mut result = GpgpuCopyRectProbeResult::new();
+    if !DIRECT_RCS_ENABLED {
+        result.fail_setup("direct-rcs-disabled");
+        return result;
+    }
+
+    let Some(dev) = super::claimed_device() else {
+        result.fail_setup("no-claimed-device");
+        return result;
+    };
+    result.pci_bus = dev.bus;
+    result.pci_slot = dev.slot;
+    result.pci_function = dev.function;
+    result.device_id = dev.device_id;
+    result.revision_id = dev.revision_id;
+
+    let Some(upload) = upload_copy_rect_rgba8_kernel() else {
+        result.fail_setup("artifact-upload-rejected");
+        return result;
+    };
+    result.artifact = upload.name;
+    result.artifact_source = upload.source;
+    result.artifact_target = upload.target;
+    result.artifact_verified = upload.verified;
+    result.artifact_sha256 = upload.bin_sha256;
+
+    let _submit_guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(state) = direct_rcs_state_once(dev) else {
+        result.fail_setup("direct-rcs-state-allocation");
+        return result;
+    };
+
+    for (index, case) in COPY_RECT_PROBE_CASES.iter().copied().enumerate() {
+        let case_result = run_copy_rect_probe_case(dev, state, upload, case, index);
+        result.cases[index] = case_result;
+        result.observe_case(case_result);
+
+        // A submitted batch without a retired post marker may still own the
+        // scratch and batch allocations. Do not rewrite either for a later
+        // case. Pre-submit setup failures are likewise deterministic and do
+        // not become safer by retrying within the same shell invocation.
+        if !case_result.retired && !case_result.ok {
+            break;
+        }
+    }
+
+    result.ok = result.attempted_cases == result.case_count
+        && result.retired_cases == result.case_count
+        && result.passed_cases == result.case_count;
+    if result.ok {
+        result.first_failure_case = "none";
+        result.first_failure = "none";
+    }
+
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: copy-rect probe ok={} frontend={} feature={} feature_enabled={} artifact={} source={} target={} verified={} device={:02X}:{:02X}.{}-0x{:04X}-r{:02X} cases={}/{} retired={} passed={} first_failure_case={} first_failure={}\n",
+        result.ok as u8,
+        result.frontend,
+        result.feature,
+        result.feature_enabled as u8,
+        result.artifact,
+        result.artifact_source,
+        result.artifact_target,
+        result.artifact_verified as u8,
+        result.pci_bus,
+        result.pci_slot,
+        result.pci_function,
+        result.device_id,
+        result.revision_id,
+        result.attempted_cases,
+        result.case_count,
+        result.retired_cases,
+        result.passed_cases,
+        result.first_failure_case,
+        result.first_failure,
+    );
+    result
+}
+
+fn run_copy_rect_probe_case(
+    dev: super::Dev,
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    case: CopyRectProbeCase,
+    case_index: usize,
+) -> GpgpuCopyRectProbeCaseResult {
+    let mut result = GpgpuCopyRectProbeCaseResult::from_case(case);
+    result.attempted = true;
+    result.first_failure = "none";
+
+    let Some(src_phys) = state.clear_test_phys.checked_add(0) else {
+        result.first_failure = "source-physical-overflow";
+        return result;
+    };
+    let Some(dst_phys) = state
+        .clear_test_phys
+        .checked_add(COPY_RECT_PROBE_HALF_BYTES as u64)
+    else {
+        result.first_failure = "destination-physical-overflow";
+        return result;
+    };
+    let Some(src) = GpgpuRgba8Surface::new(
+        src_phys,
+        COPY_RECT_PROBE_SRC_GPU,
+        COPY_RECT_PROBE_HALF_BYTES,
+        case.src_width,
+        case.src_height,
+        case.src_pitch_bytes,
+    ) else {
+        result.first_failure = "source-surface-invalid";
+        return result;
+    };
+    let Some(dst) = GpgpuRgba8Surface::new(
+        dst_phys,
+        COPY_RECT_PROBE_DST_GPU,
+        COPY_RECT_PROBE_HALF_BYTES,
+        case.dst_width,
+        case.dst_height,
+        case.dst_pitch_bytes,
+    ) else {
+        result.first_failure = "destination-surface-invalid";
+        return result;
+    };
+    if !copy_rect_probe_case_in_bounds(case) {
+        result.first_failure = "case-out-of-bounds";
+        return result;
+    }
+
+    let src_virt = state.clear_test_virt as *mut u32;
+    let dst_virt = unsafe { state.clear_test_virt.add(COPY_RECT_PROBE_HALF_BYTES) as *mut u32 };
+    unsafe {
+        for pixel in 0..COPY_RECT_PROBE_HALF_PIXELS {
+            core::ptr::write_volatile(
+                src_virt.add(pixel),
+                copy_rect_probe_source(pixel, case_index),
+            );
+            core::ptr::write_volatile(
+                dst_virt.add(pixel),
+                copy_rect_probe_destination_guard(pixel, case_index),
+            );
+        }
+    }
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+
+    let params = CopyRectRgba8Params {
+        src_gpu: src.gpu,
+        dst_gpu: dst.gpu,
+        src_pitch_bytes: src.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
+        src_x: case.src_x,
+        src_y: case.src_y,
+        dst_x: case.dst_x,
+        dst_y: case.dst_y,
+        width: case.width,
+        height: case.height,
+    };
+    if !direct_rcs_forcewake(dev) {
+        result.first_failure = "forcewake";
+        return result;
+    }
+    if !direct_rcs_map_state(dev, state) {
+        result.first_failure = "state-map";
+        return result;
+    }
+    if !direct_rcs_init_ppgtt(state) {
+        result.first_failure = "ppgtt-init";
+        return result;
+    }
+    if !direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes) {
+        result.first_failure = "kernel-map";
+        return result;
+    }
+    if !direct_rcs_map_ppgtt_kernel(state, src.gpu, src.phys, src.bytes) {
+        result.first_failure = "source-map";
+        return result;
+    }
+    if !direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes) {
+        result.first_failure = "destination-map";
+        return result;
+    }
+    if !direct_rcs_encode_copy_rect_2d_batch(state, upload, params, src.bytes, dst.bytes) {
+        result.first_failure = "batch-encode";
+        return result;
+    }
+
+    let retire_started = direct_rcs_now_tick();
+    result.submitted = direct_rcs_submit_batch(dev, state);
+    if !result.submitted {
+        result.first_failure = "guc-submit";
+        return result;
+    }
+    result.post_marker = direct_rcs_poll_result_slot_timeout_ms(
+        state,
+        COPY_RECT_POST_MARKER_SLOT,
+        COPY_RECT_POST_MARKER,
+        COPY_RECT_2D_COMPLETION_TIMEOUT_MS,
+    );
+    result.retire_ms = direct_rcs_elapsed_ms_since(retire_started);
+    result.pre_marker = direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT);
+    result.retired = result.post_marker == COPY_RECT_POST_MARKER;
+    if !result.retired {
+        result.first_failure = if result.pre_marker == COPY_RECT_PRE_MARKER {
+            "walker-not-retired"
+        } else {
+            "batch-not-started"
+        };
+        return result;
+    }
+
+    // CLFLUSH is the established TRUEOS DMA readback primitive: after the
+    // ordered post marker it invalidates CPU cache lines before volatile reads.
+    super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
+
+    let copied_pixels = (case.width as usize).saturating_mul(case.height as usize);
+    result.copied_pixels_checked = copied_pixels;
+    result.guard_pixels_checked = COPY_RECT_PROBE_HALF_PIXELS.saturating_sub(copied_pixels);
+    result.source_pixels_checked = COPY_RECT_PROBE_HALF_PIXELS;
+
+    for pixel in 0..COPY_RECT_PROBE_HALF_PIXELS {
+        let copied_source = copy_rect_probe_copied_source_index(case, pixel);
+        let expected = copied_source.map_or_else(
+            || copy_rect_probe_destination_guard(pixel, case_index),
+            |source| copy_rect_probe_source(source, case_index),
+        );
+        let observed = unsafe { core::ptr::read_volatile(dst_virt.add(pixel)) };
+        if observed != expected {
+            result.first_failure = if copied_source.is_some() {
+                "copy-pixel-mismatch"
+            } else {
+                "guard-pixel-modified"
+            };
+            result.failure_byte_offset = Some(pixel * core::mem::size_of::<u32>());
+            result.expected = expected;
+            result.observed = observed;
+            return result;
+        }
+    }
+    for pixel in 0..COPY_RECT_PROBE_HALF_PIXELS {
+        let expected = copy_rect_probe_source(pixel, case_index);
+        let observed = unsafe { core::ptr::read_volatile(src_virt.add(pixel)) };
+        if observed != expected {
+            result.first_failure = "source-pixel-modified";
+            result.failure_byte_offset = Some(pixel * core::mem::size_of::<u32>());
+            result.expected = expected;
+            result.observed = observed;
+            return result;
+        }
+    }
+
+    result.ok = true;
+    result
+}
+
+fn copy_rect_probe_case_in_bounds(case: CopyRectProbeCase) -> bool {
+    case.width != 0
+        && case.height != 0
+        && case
+            .src_pitch_bytes
+            .is_multiple_of(core::mem::size_of::<u32>() as u32)
+        && case
+            .dst_pitch_bytes
+            .is_multiple_of(core::mem::size_of::<u32>() as u32)
+        && case
+            .src_x
+            .checked_add(case.width)
+            .is_some_and(|end| end <= case.src_width)
+        && case
+            .src_y
+            .checked_add(case.height)
+            .is_some_and(|end| end <= case.src_height)
+        && case
+            .dst_x
+            .checked_add(case.width)
+            .is_some_and(|end| end <= case.dst_width)
+        && case
+            .dst_y
+            .checked_add(case.height)
+            .is_some_and(|end| end <= case.dst_height)
+}
+
+fn copy_rect_probe_copied_source_index(
+    case: CopyRectProbeCase,
+    destination_index: usize,
+) -> Option<usize> {
+    let dst_pitch_pixels = case.dst_pitch_bytes as usize / core::mem::size_of::<u32>();
+    let src_pitch_pixels = case.src_pitch_bytes as usize / core::mem::size_of::<u32>();
+    let dst_y = destination_index / dst_pitch_pixels;
+    let dst_x = destination_index % dst_pitch_pixels;
+    let copy_x = dst_x.checked_sub(case.dst_x as usize)?;
+    let copy_y = dst_y.checked_sub(case.dst_y as usize)?;
+    if copy_x >= case.width as usize || copy_y >= case.height as usize {
+        return None;
+    }
+    (case.src_y as usize)
+        .checked_add(copy_y)?
+        .checked_mul(src_pitch_pixels)?
+        .checked_add(case.src_x as usize)?
+        .checked_add(copy_x)
+        .filter(|index| *index < COPY_RECT_PROBE_HALF_PIXELS)
+}
+
+fn copy_rect_probe_source(pixel: usize, case_index: usize) -> u32 {
+    0x5100_0000u32
+        ^ (case_index as u32).wrapping_mul(0x0110_0001)
+        ^ (pixel as u32).wrapping_mul(0x0001_0101)
+}
+
+fn copy_rect_probe_destination_guard(pixel: usize, case_index: usize) -> u32 {
+    0xA700_0000u32
+        ^ (case_index as u32).wrapping_mul(0x0011_1001)
+        ^ (pixel as u32).wrapping_mul(0x0001_0001)
+}
+
 pub(crate) fn activity_snapshot() -> GpgpuActivitySnapshot {
     let submit_seq = DIRECT_RCS_SUBMIT_COUNTER.load(Ordering::Relaxed);
     let Some(dev) = super::claimed_device() else {
@@ -417,4 +993,3 @@ fn rect_is_inside_mask(surface: GpgpuMask8Surface, rect: GpgpuRect) -> bool {
     let y2 = rect.y as i64 + rect.height as i64;
     x2 <= surface.width as i64 && y2 <= surface.height as i64
 }
-

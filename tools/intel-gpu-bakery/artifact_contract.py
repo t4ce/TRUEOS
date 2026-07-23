@@ -456,7 +456,7 @@ def _kernel_contract(
         _mapping(item, f"kernel {name} payload argument")
         for item in _list(kernel, "payload_arguments")
     ]
-    pointer_metadata: dict[int, dict[str, Any]] = {}
+    pointer_metadata: dict[int, list[dict[str, Any]]] = {}
     pointer_addresses: dict[int, dict[str, Any]] = {}
     payload_args: list[dict[str, Any]] = []
     cross_thread_end = 0
@@ -469,9 +469,7 @@ def _kernel_contract(
         arg_type = arg.get("arg_type")
         if arg_type == "arg_bypointer":
             index = _integer(arg, "arg_index")
-            if index in pointer_metadata:
-                raise ContractError(f"kernel {name!r}: duplicate pointer arg {index}")
-            pointer_metadata[index] = arg
+            pointer_metadata.setdefault(index, []).append(arg)
         elif arg_type == "buffer_address":
             index = _integer(arg, "arg_index")
             if index in pointer_addresses:
@@ -490,39 +488,87 @@ def _kernel_contract(
                 }
             )
 
-    if set(pointer_metadata) != set(pointer_addresses):
-        raise ContractError(
-            f"kernel {name!r}: pointer metadata/address mismatch: "
-            f"metadata={sorted(pointer_metadata)} addresses={sorted(pointer_addresses)}"
-        )
     valid_access = {"readonly", "writeonly", "readwrite"}
     valid_modes = {"stateful", "stateless"}
     for index in sorted(pointer_metadata):
-        metadata = pointer_metadata[index]
-        address = pointer_addresses[index]
-        access = str(metadata.get("access_type", "")).lower()
-        mode = str(metadata.get("addrmode", "")).lower()
-        address_space = str(metadata.get("addrspace", "")).lower()
-        if access not in valid_access:
-            raise ContractError(
-                f"kernel {name!r}: pointer arg {index} lacks a valid access_type "
-                f"(got {access!r}); metadata-preserving SPIR-V translation is required"
+        metadata_records = pointer_metadata[index]
+        representations = []
+        for metadata in metadata_records:
+            access = str(metadata.get("access_type", "")).lower()
+            mode = str(metadata.get("addrmode", "")).lower()
+            address_space = str(metadata.get("addrspace", "")).lower()
+            if access not in valid_access:
+                raise ContractError(
+                    f"kernel {name!r}: pointer arg {index} lacks a valid access_type "
+                    f"(got {access!r}); metadata-preserving SPIR-V translation is required"
+                )
+            if mode not in valid_modes:
+                raise ContractError(
+                    f"kernel {name!r}: pointer arg {index} lacks a valid addrmode "
+                    f"(got {mode!r})"
+                )
+            representations.append(
+                {
+                    "access": access,
+                    "address_mode": mode,
+                    "address_space": address_space,
+                    "offset_bytes": _integer(metadata, "offset"),
+                    "size_bytes": _integer(metadata, "size"),
+                }
             )
-        if mode not in valid_modes:
-            raise ContractError(
-                f"kernel {name!r}: pointer arg {index} lacks a valid addrmode "
-                f"(got {mode!r})"
+
+        # Some IGC artifacts expose a hybrid pointer twice: a zero-sized
+        # stateful representation (paired with a BTI) and an 8-byte stateless
+        # representation carrying the actual cross-thread address.  Prefer the
+        # explicit non-zero payload.  Pure stateful arguments instead obtain
+        # their payload offset from buffer_address.
+        explicit_payloads = [
+            (metadata, representation)
+            for metadata, representation in zip(
+                metadata_records, representations, strict=True
             )
+            if representation["size_bytes"] > 0
+        ]
+        if len(explicit_payloads) > 1:
+            raise ContractError(
+                f"kernel {name!r}: pointer arg {index} has ambiguous payloads"
+            )
+        if explicit_payloads:
+            address, chosen = explicit_payloads[0]
+        else:
+            if index not in pointer_addresses:
+                raise ContractError(
+                    f"kernel {name!r}: pointer arg {index} has no payload address"
+                )
+            address = pointer_addresses[index]
+            stateful = [
+                representation
+                for representation in representations
+                if representation["address_mode"] == "stateful"
+            ]
+            if len(stateful) != 1:
+                raise ContractError(
+                    f"kernel {name!r}: buffer_address arg {index} lacks one "
+                    "stateful pointer representation"
+                )
+            chosen = stateful[0]
         payload_args.append(
             {
                 "arg_index": index,
                 "kind": "by_pointer",
                 "offset_bytes": _integer(address, "offset"),
                 "size_bytes": _integer(address, "size"),
-                "access": access,
-                "address_mode": mode,
-                "address_space": address_space,
+                "access": chosen["access"],
+                "address_mode": chosen["address_mode"],
+                "address_space": chosen["address_space"],
+                "representations": representations,
             }
+        )
+    dangling_addresses = set(pointer_addresses).difference(pointer_metadata)
+    if dangling_addresses:
+        raise ContractError(
+            f"kernel {name!r}: buffer addresses lack pointer metadata: "
+            f"{sorted(dangling_addresses)}"
         )
     payload_args.sort(key=lambda arg: (arg["arg_index"], arg["kind"]))
     seen_args: set[int] = set()
@@ -679,6 +725,11 @@ def validate_constraints(
 ) -> None:
     for kernel in analysis["kernels"]:
         name = kernel["kernel_name"]
+        if kernel["text"]["entry_offset"] % 64 != 0:
+            raise ContractError(
+                f"kernel {name!r}: entry offset {kernel['text']['entry_offset']} "
+                "is not 64-byte aligned for the interface descriptor"
+            )
         if kernel["simd_width"] != expected_simd_width:
             raise ContractError(
                 f"kernel {name!r}: SIMD{kernel['simd_width']} violates "
@@ -754,7 +805,10 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
         f"// source: {manifest['source']['path']}",
         f"// frontend: {provenance['frontend']['description']}",
         f"// backend: {provenance['backend']['description']}",
-        f"// normalized commands: {stable_json(provenance['commands']).strip()}",
+        "// normalized commands: "
+        + json.dumps(
+            provenance["commands"], sort_keys=True, separators=(",", ":")
+        ),
         "",
     ]
     for kernel in artifact["kernels"]:
@@ -788,8 +842,10 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
                 f"access: {access}, address_mode: {address_mode} }},"
             )
         binding_lines = [
-            "        GpgpuArtifactBinding { "
-            f"arg_index: {binding['arg_index']}, bti: {binding['bti']} }},"
+            (
+                "        GpgpuArtifactBinding { "
+                f"arg_index: {binding['arg_index']}, bti: {binding['bti']} }},"
+            )
             for binding in kernel["bindings"]
         ]
         output.extend(
@@ -811,8 +867,10 @@ def render_rust_contracts(manifest: dict[str, Any]) -> str:
                 f"    zebin_sha256: {_rust_sha256(artifact['elf']['sha256'])},",
                 f"    spv_sha256: {_rust_sha256(artifact['spirv']['sha256'])},",
                 f"    text_section_name: {_rust_string(kernel['text']['section_name'])},",
-                f"    text_offset: {kernel['text']['entry_offset']},",
-                f"    text_size: {kernel['text']['entry_size']},",
+                f"    text_section_offset: {kernel['text']['section_offset']},",
+                f"    text_section_size: {kernel['text']['section_size']},",
+                f"    entry_offset: {kernel['text']['entry_offset']},",
+                f"    entry_size: {kernel['text']['entry_size']},",
                 f"    simd_width: {kernel['simd_width']},",
                 f"    grf_count: {kernel['grf_count']},",
                 f"    scratch_bytes: {kernel['scratch_bytes']},",
@@ -859,6 +917,7 @@ def verify_manifest(
     bin_path: Path,
     spv_path: Path,
     contract_path: Path,
+    repo_root: Path,
 ) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != SCHEMA_VERSION:
@@ -868,6 +927,33 @@ def verify_manifest(
     actual = analyze_zebin(bin_path, spv_path)
     if actual != manifest.get("artifact"):
         raise ContractError(f"{manifest_path}: artifact facts/hashes are stale")
+    for record in manifest.get("source", {}).get("inputs", []):
+        raw_path = Path(record["path"])
+        input_path = raw_path if raw_path.is_absolute() else repo_root / raw_path
+        if not input_path.is_file():
+            raise ContractError(f"{manifest_path}: recorded input is missing: {raw_path}")
+        actual_record = {
+            "path": record["path"],
+            "size_bytes": input_path.stat().st_size,
+            "sha256": sha256_file(input_path),
+        }
+        if actual_record != record:
+            raise ContractError(f"{manifest_path}: recorded input is stale: {raw_path}")
+    reference = manifest.get("abi_reference")
+    if reference:
+        raw_reference = Path(reference["path"])
+        reference_path = (
+            raw_reference if raw_reference.is_absolute() else repo_root / raw_reference
+        )
+        if not reference_path.is_file() or sha256_file(reference_path) != reference["sha256"]:
+            raise ContractError(f"{manifest_path}: ABI reference is missing or changed")
+        compare_abi(actual, analyze_zebin(reference_path), reference_path)
+    profile = manifest.get("provenance", {}).get("profile")
+    if profile:
+        raw_profile = Path(profile["path"])
+        profile_path = raw_profile if raw_profile.is_absolute() else repo_root / raw_profile
+        if not profile_path.is_file() or sha256_file(profile_path) != profile["sha256"]:
+            raise ContractError(f"{manifest_path}: bake profile is missing or changed")
     rendered = render_rust_contracts(manifest)
     existing = contract_path.read_text(encoding="utf-8")
     if existing != rendered:

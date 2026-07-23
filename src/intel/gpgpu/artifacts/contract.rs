@@ -141,8 +141,10 @@ pub(crate) struct GpgpuKernelAbiContract {
     pub(crate) zebin_sha256: [u8; 32],
     pub(crate) spv_sha256: [u8; 32],
     pub(crate) text_section_name: &'static str,
-    pub(crate) text_offset: u64,
-    pub(crate) text_size: u64,
+    pub(crate) text_section_offset: u64,
+    pub(crate) text_section_size: u64,
+    pub(crate) entry_offset: u64,
+    pub(crate) entry_size: u64,
     pub(crate) simd_width: u8,
     pub(crate) grf_count: u16,
     pub(crate) scratch_bytes: u32,
@@ -180,10 +182,20 @@ impl GpgpuKernelAbiContract {
         if !text_section_matches_kernel(self.text_section_name, self.kernel_name) {
             return Err(GpgpuKernelAbiContractError::InvalidTextSectionName);
         }
-        if self.text_offset < 64
-            || self.text_offset & 63 != 0
-            || self.text_size == 0
-            || self.text_offset.checked_add(self.text_size).is_none()
+        let Some(text_section_end) = self.text_section_offset.checked_add(self.text_section_size)
+        else {
+            return Err(GpgpuKernelAbiContractError::InvalidTextRange);
+        };
+        let Some(entry_end) = self.entry_offset.checked_add(self.entry_size) else {
+            return Err(GpgpuKernelAbiContractError::InvalidTextRange);
+        };
+        if self.text_section_offset < 64
+            || self.text_section_offset & 63 != 0
+            || self.text_section_size == 0
+            || self.entry_offset < self.text_section_offset
+            || self.entry_offset & 63 != 0
+            || self.entry_size == 0
+            || entry_end > text_section_end
         {
             return Err(GpgpuKernelAbiContractError::InvalidTextRange);
         }
@@ -358,6 +370,217 @@ impl GpgpuKernelAbiContractError {
     }
 }
 
+/// Prove that generated text-section and kernel-entry facts describe the
+/// admitted Zebin itself. Hash binding alone is not enough for RCS consumers:
+/// the interface descriptor needs the exact, aligned `STT_FUNC` file offset.
+pub(crate) fn validate_kernel_contract_elf(
+    bytes: &[u8],
+    contract: &GpgpuKernelAbiContract,
+) -> Result<(), &'static str> {
+    const ELF64_SECTION_HEADER_BYTES: usize = 64;
+    const SHN_XINDEX: usize = 0xFFFF;
+    const SHT_PROGBITS: u32 = 1;
+    const SHT_SYMTAB: u32 = 2;
+    const SHF_EXECINSTR: u64 = 1 << 2;
+    const ELF64_SYMBOL_BYTES: usize = 24;
+    const STT_FUNC: u8 = 2;
+
+    let section_table_offset = usize::try_from(
+        contract_elf_read_u64(bytes, 40).ok_or("contract-elf-missing-section-table")?,
+    )
+    .map_err(|_| "contract-elf-section-table-overflow")?;
+    let section_header_bytes =
+        contract_elf_read_u16(bytes, 58).ok_or("contract-elf-missing-section-table")? as usize;
+    let section_count =
+        contract_elf_read_u16(bytes, 60).ok_or("contract-elf-missing-section-table")? as usize;
+    let section_names_index =
+        contract_elf_read_u16(bytes, 62).ok_or("contract-elf-missing-section-table")? as usize;
+    if section_header_bytes != ELF64_SECTION_HEADER_BYTES
+        || section_count == 0
+        || section_names_index == 0
+        || section_names_index == SHN_XINDEX
+        || section_names_index >= section_count
+    {
+        return Err("contract-elf-invalid-section-table");
+    }
+    let section_table_bytes = section_header_bytes
+        .checked_mul(section_count)
+        .ok_or("contract-elf-section-table-overflow")?;
+    let section_table_end = section_table_offset
+        .checked_add(section_table_bytes)
+        .ok_or("contract-elf-section-table-overflow")?;
+    if section_table_end > bytes.len() {
+        return Err("contract-elf-section-table-out-of-bounds");
+    }
+
+    let names_header = contract_elf_section_header(
+        bytes,
+        section_table_offset,
+        section_header_bytes,
+        section_names_index,
+    )
+    .ok_or("contract-elf-string-table-out-of-bounds")?;
+    let names = contract_elf_section_bytes(bytes, names_header)
+        .ok_or("contract-elf-string-table-out-of-bounds")?;
+
+    let mut matching_section = None;
+    let mut index = 1;
+    while index < section_count {
+        let header =
+            contract_elf_section_header(bytes, section_table_offset, section_header_bytes, index)
+                .ok_or("contract-elf-section-header-out-of-bounds")?;
+        let name_offset = contract_elf_read_u32(header, 0)
+            .ok_or("contract-elf-section-header-out-of-bounds")? as usize;
+        let Some(name) = contract_elf_string(names, name_offset) else {
+            return Err("contract-elf-section-name-out-of-bounds");
+        };
+        if name == contract.text_section_name.as_bytes() {
+            if matching_section.is_some() {
+                return Err("contract-elf-duplicate-text-section");
+            }
+            matching_section = Some((index, header));
+        }
+        index += 1;
+    }
+
+    let (text_section_index, header) =
+        matching_section.ok_or("contract-elf-text-section-missing")?;
+    if contract_elf_read_u32(header, 4) != Some(SHT_PROGBITS) {
+        return Err("contract-elf-text-section-wrong-type");
+    }
+    let flags = contract_elf_read_u64(header, 8).ok_or("contract-elf-invalid-text-section")?;
+    if flags & SHF_EXECINSTR == 0 {
+        return Err("contract-elf-text-section-not-executable");
+    }
+    let section_offset =
+        contract_elf_read_u64(header, 24).ok_or("contract-elf-invalid-text-section")?;
+    let section_size =
+        contract_elf_read_u64(header, 32).ok_or("contract-elf-invalid-text-section")?;
+    if section_offset != contract.text_section_offset || section_size != contract.text_section_size
+    {
+        return Err("contract-elf-text-section-range-mismatch");
+    }
+    let section_end = section_offset
+        .checked_add(section_size)
+        .ok_or("contract-elf-text-section-overflow")?;
+    if usize::try_from(section_end).map_or(true, |end| end > bytes.len()) {
+        return Err("contract-elf-text-range-out-of-bounds");
+    }
+
+    let mut matching_symbol = None;
+    index = 1;
+    while index < section_count {
+        let symbol_header =
+            contract_elf_section_header(bytes, section_table_offset, section_header_bytes, index)
+                .ok_or("contract-elf-section-header-out-of-bounds")?;
+        if contract_elf_read_u32(symbol_header, 4) != Some(SHT_SYMTAB) {
+            index += 1;
+            continue;
+        }
+        let entry_bytes = usize::try_from(
+            contract_elf_read_u64(symbol_header, 56).ok_or("contract-elf-invalid-symtab")?,
+        )
+        .map_err(|_| "contract-elf-invalid-symtab")?;
+        let symbols = contract_elf_section_bytes(bytes, symbol_header)
+            .ok_or("contract-elf-symtab-out-of-bounds")?;
+        if entry_bytes != ELF64_SYMBOL_BYTES || symbols.len() % entry_bytes != 0 {
+            return Err("contract-elf-invalid-symtab");
+        }
+        let string_table_index =
+            contract_elf_read_u32(symbol_header, 40).ok_or("contract-elf-invalid-symtab")? as usize;
+        if string_table_index >= section_count {
+            return Err("contract-elf-invalid-symbol-string-table");
+        }
+        let string_header = contract_elf_section_header(
+            bytes,
+            section_table_offset,
+            section_header_bytes,
+            string_table_index,
+        )
+        .ok_or("contract-elf-invalid-symbol-string-table")?;
+        let symbol_names = contract_elf_section_bytes(bytes, string_header)
+            .ok_or("contract-elf-symbol-string-table-out-of-bounds")?;
+
+        let mut symbol_offset = 0;
+        while symbol_offset < symbols.len() {
+            let symbol = symbols
+                .get(symbol_offset..symbol_offset + entry_bytes)
+                .ok_or("contract-elf-invalid-symbol")?;
+            let name_offset =
+                contract_elf_read_u32(symbol, 0).ok_or("contract-elf-invalid-symbol")? as usize;
+            let info = *symbol.get(4).ok_or("contract-elf-invalid-symbol")?;
+            let symbol_section =
+                contract_elf_read_u16(symbol, 6).ok_or("contract-elf-invalid-symbol")? as usize;
+            let name = contract_elf_string(symbol_names, name_offset)
+                .ok_or("contract-elf-symbol-name-out-of-bounds")?;
+            if info & 0x0F == STT_FUNC
+                && symbol_section == text_section_index
+                && name == contract.kernel_name.as_bytes()
+            {
+                if matching_symbol.is_some() {
+                    return Err("contract-elf-duplicate-kernel-symbol");
+                }
+                let value =
+                    contract_elf_read_u64(symbol, 8).ok_or("contract-elf-invalid-symbol")?;
+                let size =
+                    contract_elf_read_u64(symbol, 16).ok_or("contract-elf-invalid-symbol")?;
+                let entry_offset = section_offset
+                    .checked_add(value)
+                    .ok_or("contract-elf-entry-offset-overflow")?;
+                matching_symbol = Some((entry_offset, size));
+            }
+            symbol_offset += entry_bytes;
+        }
+        index += 1;
+    }
+
+    let (entry_offset, entry_size) = matching_symbol.ok_or("contract-elf-kernel-symbol-missing")?;
+    if entry_offset != contract.entry_offset || entry_size != contract.entry_size {
+        return Err("contract-elf-entry-range-mismatch");
+    }
+    let entry_end = entry_offset
+        .checked_add(entry_size)
+        .ok_or("contract-elf-entry-range-overflow")?;
+    if entry_offset < section_offset || entry_end > section_end {
+        return Err("contract-elf-entry-out-of-bounds");
+    }
+    Ok(())
+}
+
+fn contract_elf_section_header(
+    bytes: &[u8],
+    table_offset: usize,
+    entry_bytes: usize,
+    index: usize,
+) -> Option<&[u8]> {
+    let offset = table_offset.checked_add(entry_bytes.checked_mul(index)?)?;
+    bytes.get(offset..offset.checked_add(entry_bytes)?)
+}
+
+fn contract_elf_string(bytes: &[u8], offset: usize) -> Option<&[u8]> {
+    let tail = bytes.get(offset..)?;
+    let end = tail.iter().position(|byte| *byte == 0)?;
+    tail.get(..end)
+}
+
+fn contract_elf_section_bytes<'a>(bytes: &'a [u8], header: &[u8]) -> Option<&'a [u8]> {
+    let offset = usize::try_from(contract_elf_read_u64(header, 24)?).ok()?;
+    let size = usize::try_from(contract_elf_read_u64(header, 32)?).ok()?;
+    bytes.get(offset..offset.checked_add(size)?)
+}
+
+fn contract_elf_read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_le_bytes(bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?))
+}
+
+fn contract_elf_read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
+}
+
+fn contract_elf_read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?))
+}
+
 const fn digest_is_zero(digest: &[u8; 32]) -> bool {
     let mut index = 0;
     while index < digest.len() {
@@ -397,6 +620,11 @@ const fn text_section_matches_kernel(section_name: &str, kernel_name: &str) -> b
 mod tests {
     use super::*;
 
+    include!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
+
+    const COPY_RECT_ZEBIN: &[u8] = include_bytes!("../kernels/artifacts/adls/copy_rect_rgba8.bin");
+    const COPY_RECT_CPP_ZEBIN: &[u8] =
+        include_bytes!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
     const HASH: [u8; 32] = [0xA5; 32];
     const PAYLOAD_ARGS: &[GpgpuArtifactPayloadArg] = &[
         GpgpuArtifactPayloadArg {
@@ -429,8 +657,10 @@ mod tests {
         zebin_sha256: HASH,
         spv_sha256: HASH,
         text_section_name: ".text.copy_rect_rgba8",
-        text_offset: 64,
-        text_size: 128,
+        text_section_offset: 64,
+        text_section_size: 128,
+        entry_offset: 64,
+        entry_size: 128,
         simd_width: 16,
         grf_count: 128,
         scratch_bytes: 0,
@@ -439,6 +669,11 @@ mod tests {
         per_thread_data_bytes: 96,
         bindings: BINDINGS,
         payload_args: PAYLOAD_ARGS,
+    };
+    const COPY_RECT_ELF_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+        text_section_size: 896,
+        entry_size: 712,
+        ..CONTRACT
     };
 
     #[test]
@@ -480,5 +715,45 @@ mod tests {
             ..CONTRACT
         };
         assert_eq!(invalid.validate(), Err(GpgpuKernelAbiContractError::MissingPointerQualifier));
+    }
+
+    #[test]
+    fn elf_contract_matches_exact_text_section_and_func_symbol() {
+        assert_eq!(validate_kernel_contract_elf(COPY_RECT_ZEBIN, &COPY_RECT_ELF_CONTRACT), Ok(()));
+        let wrong_entry = GpgpuKernelAbiContract {
+            entry_size: COPY_RECT_ELF_CONTRACT.entry_size + 1,
+            ..COPY_RECT_ELF_CONTRACT
+        };
+        assert_eq!(
+            validate_kernel_contract_elf(COPY_RECT_ZEBIN, &wrong_entry),
+            Err("contract-elf-entry-range-mismatch")
+        );
+    }
+
+    #[test]
+    fn generated_cpp_contract_is_runtime_admissible() {
+        assert_eq!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(()));
+        assert_eq!(
+            validate_kernel_contract_elf(
+                COPY_RECT_CPP_ZEBIN,
+                &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
+            ),
+            Ok(())
+        );
+        assert!(
+            COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0x4680, 0)
+        );
+        assert!(
+            !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0x46D1, 0)
+        );
+        assert!(
+            !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+                .target
+                .supports(0xA780, 0)
+        );
     }
 }
