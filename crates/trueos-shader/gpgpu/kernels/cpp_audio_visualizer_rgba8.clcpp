@@ -66,13 +66,15 @@ TRUEOS_AUDIO_VIZ_INLINE float waveform(
     float position,
     uint channel)
 {
-    const uint index = min(
-        static_cast<uint>(saturate(position) * static_cast<float>(waveform_count - 1u)),
-        waveform_count - 1u);
-    return clamp(
-        audio_float(snapshot, waveform_base + index * 2u + min(channel, 1u), 0.0f),
-        -1.0f,
-        1.0f);
+    const float scaled = saturate(position) * static_cast<float>(waveform_count - 1u);
+    const uint left = min(static_cast<uint>(scaled), waveform_count - 1u);
+    const uint right = min(left + 1u, waveform_count - 1u);
+    const uint lane = min(channel, 1u);
+    const float a =
+        audio_float(snapshot, waveform_base + left * 2u + lane, 0.0f);
+    const float b =
+        audio_float(snapshot, waveform_base + right * 2u + lane, 0.0f);
+    return clamp(mix(a, b, scaled - static_cast<float>(left)), -1.0f, 1.0f);
 }
 
 TRUEOS_AUDIO_VIZ_INLINE float spectrum(
@@ -178,9 +180,9 @@ TRUEOS_AUDIO_VIZ_INLINE float3 render_instrument(
         smoothstep(upper_height, upper_height + 0.014f, normalized.y);
     const float3 spectral_color = palette(0.88f - normalized.x * 0.52f + centroid * 0.18f);
     color += spectral_color
-        * (lower_fill * (0.035f + band_x * 0.34f) + lower_edge * 0.72f);
+        * (lower_fill * (0.006f + band_x * 0.070f) + lower_edge * 0.72f);
     color += spectral_color.zxy
-        * (upper_fill * (0.018f + band_x * 0.17f) + upper_edge * 0.35f);
+        * (upper_fill * (0.004f + band_x * 0.040f) + upper_edge * 0.35f);
 
     // Independent left/right waveform ribbons.
     const float left_path = -0.19f + wave_l * (0.08f + rms_l * 0.19f);

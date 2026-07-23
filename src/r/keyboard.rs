@@ -581,9 +581,6 @@ mod tests {
 
     #[test]
     fn print_screen_boot_usage_maps_to_named_key() {
-        assert_eq!(
-            hid_boot_keycode_to_named_key(0x46),
-            Some(KEYBOARD_KEY_PRINT_SCREEN)
-        );
+        assert_eq!(hid_boot_keycode_to_named_key(0x46), Some(KEYBOARD_KEY_PRINT_SCREEN));
     }
 }

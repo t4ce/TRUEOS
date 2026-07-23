@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "f55e1956d2c452498ac14dd0ea6668ead7950867dd2e76c181e5eb6dd5ab3139",
-      "size_bytes": 73512,
+      "sha256": "951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19",
+      "size_bytes": 77592,
       "type": "relocatable",
-      "ze_info_section_offset": 68584,
+      "ze_info_section_offset": 72664,
       "ze_info_section_size": 4091
     },
     "kernels": [
@@ -228,13 +228,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 14088,
+          "entry_size": 14520,
           "section_alignment": 0,
           "section_name": ".text.cpp_audio_visualizer_rgba8",
           "section_offset": 64,
-          "section_size": 14272,
-          "sha256": "818c09d85ab0158b3ff054dda888f1bddbe14b90e481df7824ea5f1dd6a72328",
-          "symbol_size": 14088,
+          "section_size": 14656,
+          "sha256": "2cd41769c8ac22508c1e0e0316bf374827931e7100655ffa96de235e66a0d7b7",
+          "symbol_size": 14520,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -250,10 +250,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 14408,
-      "embedded_section_size": 54104,
-      "sha256": "d0636f8b46e51e0fd26969b6918bd67c0a83df1b567faca30043be110b2ec249",
-      "size_bytes": 54104
+      "embedded_section_offset": 14792,
+      "embedded_section_size": 57800,
+      "sha256": "548a2917924e80c4ce77f4fa6b5b5e754a4ad84976bb707823e603ad6750bc97",
+      "size_bytes": 57800
     }
   },
   "provenance": {
@@ -452,8 +452,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp",
-        "sha256": "be3703e370432caf6fd44835080695927073980ed9f65ae794b22c19a9e6a128",
-        "size_bytes": 12331
+        "sha256": "edf0b5f878ed8d11cc7b3c8bd823e5389c76e02906a5b6815743e79df0d2a87c",
+        "size_bytes": 12576
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",

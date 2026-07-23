@@ -535,10 +535,7 @@ const CPP_DEMO_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     args: CPP_DEMO_ARGS,
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &[
-        "shell2:cpp",
-        "ui4::gpgpu_preview_consumer_service_task",
-    ],
+    consumers: &["shell2:cpp", "ui4::gpgpu_preview_consumer_service_task"],
 };
 
 const FONT_OUTLINE_MESH_ARGS: &[KernelCallArg<'_>] = &[

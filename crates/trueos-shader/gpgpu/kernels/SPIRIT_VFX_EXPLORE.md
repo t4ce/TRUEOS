@@ -35,6 +35,21 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
 There is no UI4 publish, framebuffer composition, CPU pixel pass, or synchronous
 issuer spin in this chain.
 
+Lilly's idle sequencer transiently selects `Aura bloom` (Sprite shader ID 1)
+without replacing the persistent control-panel selection. The selection occurs
+once on idle entry and remains continuous across blink, posture, and control
+poll boundaries; the prior panel shader returns at the next non-idle gesture.
+Only normalized grid Param 1 moves, following a two-second
+`-0.3 -> 0 -> -0.3` loop. The complete normalized grid setting
+`[-0.3..0..-0.3, +1, -1, -1]` maps to the kernel parameters
+`[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
+authored palette.
+
+All procedural backgrounds use a fixed live presentation scale of `0.9`. This
+keeps the complete set, including the transient move portal, slightly inside
+Spirit's 256x256 hardware-cursor allocation. The move transition continues to
+ramp speed and intensity, but no longer grows its spatial footprint.
+
 ## Preview-compatible control interface
 
 `src/spirit/Spirit_VFX.rs` mirrors all preview labels, ranges, defaults, effect

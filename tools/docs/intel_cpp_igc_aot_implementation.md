@@ -22,7 +22,7 @@ load or link any of them. C++ templates and types disappear during the offline
 bake; no C++ runtime, standard library, exception runtime, RTTI, allocator,
 NEO, or OpenCL loader is part of the TRUEOS runtime.
 
-## Four milestones
+## Milestones
 
 ### 1. Reproducible bakery and generated contract
 
@@ -249,6 +249,40 @@ UHD 770. Shell2 adds `cpp spirit`: all `9 × 16` combinations can be selected
 with authored defaults and palettes while the live Spirit worker continues to
 own submission and presentation. Detailed visual and TestRig commands live in
 `crates/trueos-shader/gpgpu/kernels/SPIRIT_CPP_REPASS.md`.
+
+### 6. One live-audio kernel becomes a resizable UI4 instrument
+
+`cpp_audio_visualizer_rgba8.clcpp` deliberately moves away from a grid of
+small variants. One C++/IGC entry composes waveform ribbons, a stereo
+phase-scope field, logarithmic spectrum architecture, circular waveform
+prism, bass bloom, onset rings, and sparse high-frequency particles.
+
+The source signal is not a second playback client. An allocation-free atomic
+ring observes the exact interleaved 48 kHz stereo s16 slice after software
+mix/limit and immediately before the existing HDA DMA copy. The speaker
+samples are unchanged. The UI4 producer performs one ordinary 2048-point
+mid/side FFT outside the HDA callback and uploads a bounded 4096-byte snapshot
+containing 128 samples per channel, 64 bands, and twelve features.
+
+PrismQ/QFT was rejected for this streaming lane: a 16-qubit state represents
+65,536 amplitudes, adds about 1.37 seconds of 48 kHz input span, and offers no
+advantage for a classical PCM spectrum. The existing Symphonia radix-2 FFT is
+smaller, deterministic, and already part of the kernel build.
+
+The render remains one GPU dispatch. Each x lane writes two adjacent pixels,
+so a maximized 2560x1440 window launches 1,843,200 lanes—exactly half the
+ordinary per-pixel walker count. The default cadence is 50 ms rather than a
+stress-test refresh target. C++ preview windows now use UI4 application
+interaction; maximize and restore notifications replace the double-buffered
+Frame at the actual extent and the kernel derives aspect from every launch.
+
+The final exact-r0C artifact is 77,592 bytes, SIMD16, 128 GRFs, zero
+scratch/SLM, with SHA-256
+`951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19`.
+It is required by linked and packaged ELF verification. Shell2 exposes
+`cpp audio`, `cpp status`, and `cpp stop`; detailed ABI and physical promotion
+steps live in
+`crates/trueos-shader/gpgpu/kernels/CPP_AUDIO_VISUALIZER.md`.
 
 ## Findings that changed the implementation
 

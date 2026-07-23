@@ -497,15 +497,18 @@ fn resolve_static_idle(
 fn next_idle_animation(rgba: SpiritRgba8) -> Result<LillyScheduledAnimation, LillyProtocolError> {
     let now = Instant::now();
     let mut strategy = IDLE_STRATEGY.lock();
-    strategy
+    let scheduled = strategy
         .get_or_insert_with(|| LillyIdleStrategy::new(now))
-        .schedule(now, rgba)
+        .schedule(now, rgba)?;
+    super::spirit_vfx::set_idle_sprite_shader(true);
+    Ok(scheduled)
 }
 
 fn pause_idle_strategy() {
     if let Some(strategy) = IDLE_STRATEGY.lock().as_mut() {
         strategy.active = false;
     }
+    super::spirit_vfx::set_idle_sprite_shader(false);
 }
 
 fn centered_interval_ms(rng: &mut crate::tyche::SoftRng, average_ms: u64, window_ms: u64) -> u64 {

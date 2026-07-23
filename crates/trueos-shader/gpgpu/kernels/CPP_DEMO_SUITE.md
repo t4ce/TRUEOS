@@ -14,6 +14,9 @@ output ABI, one resident upload, and five scalar-selected workloads:
 
 `gallery` is the default and divides one UI4 surface into four panels. The
 other commands give each workload the complete resizable window.
+The separate `cpp audio` mode uses its own single audiovisual artifact and the
+same resize lifecycle; see
+[`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
 
 ```text
 cpp
@@ -21,6 +24,7 @@ cpp aurora
 cpp julia
 cpp sdf
 cpp voronoi
+cpp audio
 cpp list
 cpp status
 cpp stop
@@ -29,8 +33,9 @@ cpp stop
 The longer form controls lifetime and publication cadence:
 
 ```text
-cpp start [gallery|aurora|julia|sdf|voronoi] [duration_ms] [cadence_ms] [publish_every]
+cpp start [gallery|aurora|julia|sdf|voronoi|audio] [duration_ms] [cadence_ms] [publish_every]
 cpp start gallery 0 33 1
+cpp start audio 0 50 1
 ```
 
 The default lifetime is 30 seconds. A duration of zero runs until `cpp stop`.

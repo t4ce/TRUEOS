@@ -104,6 +104,28 @@ make intel-gpu-verify-cpp-artifacts
 The source and runtime workload map are documented in
 `crates/trueos-shader/gpgpu/kernels/CPP_DEMO_SUITE.md`.
 
+## Native C++ audiovisual publication
+
+The live PCM instrument is a second `cpp-native-aot-v1` publication with one
+expected entry and no legacy ABI reference:
+
+```sh
+tools/intel-gpu-bakery/bake_adls_cpp_audio_visualizer.sh
+# or
+make intel-gpu-bake-audio-visualizer-cpp
+```
+
+It publishes
+`cpp_audio_visualizer_rgba8.{bin,spv,manifest.json,contract.rs}`. The standard
+compiler-free verifier reparses and regenerates its complete two-BTI,
+eight-argument contract with the other C++ artifacts. Linked and packaged ELF
+verification requires this complete Zebin independently of the selected copy
+frontend.
+
+The PCM boundary, snapshot layout, half-width walker, UI4 resize lifecycle,
+and TestRig procedure are documented in
+`crates/trueos-shader/gpgpu/kernels/CPP_AUDIO_VISUALIZER.md`.
+
 ## Spirit C++ ABI-twin suite
 
 Spirit publishes both of its existing kernel ABIs through C++ for OpenCL:
@@ -144,8 +166,8 @@ needs only the Python standard library.
 
 The normal `make kernel` lane selects the C++ copy implementation and proves
 that the final TRUEOS ELF contains its complete Zebin, no complete copy of the
-legacy copy Zebin, plus the independently required native C++ demo and both
-Spirit C++ Zebins. The
+legacy copy Zebin, plus the independently required native C++ demo,
+audiovisual instrument, and both Spirit C++ Zebins. The
 compatibility target remains available:
 
 ```sh

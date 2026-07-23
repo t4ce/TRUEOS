@@ -3,7 +3,7 @@ use crate::pci::mmio;
 use crate::limine;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub mod acpi;  
+pub mod acpi;
 // pub mod acpi_uefi;  asdasd
 
 const EFI_SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249; // "IBI SYST"

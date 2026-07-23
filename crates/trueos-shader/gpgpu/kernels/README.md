@@ -15,6 +15,13 @@ through the dedicated `cpp` command. Its workload map, ABI, publication policy,
 and TestRig procedure are recorded in
 [`CPP_DEMO_SUITE.md`](CPP_DEMO_SUITE.md).
 
+`cpp_audio_visualizer_rgba8.clcpp` is the single-kernel live audiovisual
+instrument behind `cpp audio`. It consumes a compact FFT/PCM snapshot from an
+allocation-free pre-HDA tee and composes waveform, phase, spectrum, prism,
+onset, bass, and particle ideas into one resizable UI4 surface. Its audio
+boundary, 50% horizontal-pair walker shape, ABI, and TestRig procedure are in
+[`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
+
 `spirit_vfx_background_rgba8.clcpp` and
 `spirit_vfx_sprite_rgba8.clcpp` are exact-ABI C++ repasses of Spirit's retained
 9-background and 16-sprite collections. They preserve the established
@@ -47,6 +54,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
 - `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, and Voronoi modes; available through the dedicated `cpp` Shell2 command
+- `cpp_audio_visualizer_rgba8.clcpp`: one exact-target C++/IGC audiovisual composition driven by the final 48 kHz stereo HDA-bound mix, a 2048-point mid/side FFT, 64 bands, and 128-point channel waveforms; available through `cpp audio`
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
 - `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency; the retained `.cl` sources are its reviewed semantic and ABI references
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
@@ -87,6 +95,13 @@ artifact for exact target `8086:4680`, revision `0x0c`. Its SHA-256 is:
 
 ```text
 19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
+```
+
+`artifacts/adls/cpp/cpp_audio_visualizer_rgba8.bin` is the unconditional
+single-kernel audiovisual artifact for that same exact target. Its SHA-256 is:
+
+```text
+951e0cb30b42a755812b00eb0c3871f52c765ee74295dc3cb48b84f8361c1b19
 ```
 
 The two unconditional Spirit C++/IGC artifacts are exact ABI twins of the

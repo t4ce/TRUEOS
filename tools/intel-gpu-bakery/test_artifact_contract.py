@@ -209,6 +209,7 @@ class ArtifactContractTests(unittest.TestCase):
             [path.name for path in manifests],
             [
                 "copy_rect_rgba8.manifest.json",
+                "cpp_audio_visualizer_rgba8.manifest.json",
                 "cpp_demo_rgba8.manifest.json",
                 "spirit_vfx_background_rgba8.manifest.json",
                 "spirit_vfx_sprite_rgba8.manifest.json",
@@ -332,6 +333,60 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(kernel["per_thread_data_bytes"], 96)
         self.assertEqual(kernel["scratch_bytes"], 0)
         self.assertEqual(kernel["slm_bytes"], 0)
+
+    def test_cpp_audio_visualizer_has_reviewed_single_kernel_policy(self) -> None:
+        root = ARTIFACT_ROOT / "cpp"
+        manifest = json.loads(
+            (root / "cpp_audio_visualizer_rgba8.manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(manifest["variant"], "cpp-native")
+        self.assertIsNone(manifest["abi_reference"])
+        self.assertEqual(
+            manifest["provenance"]["publication_policy"],
+            {
+                "name": "cpp-native-aot-v1",
+                "expected_kernels": ["cpp_audio_visualizer_rgba8"],
+            },
+        )
+        self.assertEqual(manifest["target"]["pci_device_ids"], [0x4680])
+        self.assertEqual(manifest["target"]["revision_min"], 0x0C)
+        self.assertEqual(manifest["target"]["revision_max"], 0x0C)
+        analysis = analyze_zebin(
+            root / "cpp_audio_visualizer_rgba8.bin",
+            root / "cpp_audio_visualizer_rgba8.spv",
+        )
+        self.assertEqual(
+            [kernel["kernel_name"] for kernel in analysis["kernels"]],
+            ["cpp_audio_visualizer_rgba8"],
+        )
+        kernel = analysis["kernels"][0]
+        self.assertEqual(kernel["simd_width"], 16)
+        self.assertEqual(kernel["cross_thread_data_bytes"], 96)
+        self.assertEqual(kernel["per_thread_data_bytes"], 96)
+        self.assertEqual(kernel["scratch_bytes"], 0)
+        self.assertEqual(kernel["slm_bytes"], 0)
+        self.assertEqual(
+            kernel["bindings"],
+            [{"arg_index": 0, "bti": 0}, {"arg_index": 1, "bti": 1}],
+        )
+        self.assertEqual(
+            [
+                (arg["arg_index"], arg["kind"], arg["offset_bytes"], arg["size_bytes"])
+                for arg in kernel["payload_args"]
+            ],
+            [
+                (0, "by_pointer", 48, 8),
+                (1, "by_pointer", 56, 8),
+                (2, "by_value", 64, 4),
+                (3, "by_value", 68, 4),
+                (4, "by_value", 72, 4),
+                (5, "by_value", 76, 4),
+                (6, "by_value", 80, 4),
+                (7, "by_value", 84, 4),
+            ],
+        )
 
     def test_cpp_publication_gates_cannot_be_removed_from_manifest(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
