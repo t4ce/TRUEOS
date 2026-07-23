@@ -1,0 +1,414 @@
+{
+  "abi_reference": {
+    "path": "crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_sprite_rgba8.bin",
+    "result": "exact-match",
+    "sha256": "f1264ac062d5645c8d4da55e1585ee22c56cfb7a341d28407d3b934e97821ddc"
+  },
+  "artifact": {
+    "elf": {
+      "class": 64,
+      "endianness": "little",
+      "machine": 205,
+      "sha256": "2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac",
+      "size_bytes": 656728,
+      "type": "relocatable",
+      "ze_info_section_offset": 653112,
+      "ze_info_section_size": 2787
+    },
+    "kernels": [
+      {
+        "bindings": [
+          {
+            "arg_index": 0,
+            "bti": 0
+          },
+          {
+            "arg_index": 1,
+            "bti": 1
+          },
+          {
+            "arg_index": 2,
+            "bti": 2
+          }
+        ],
+        "cross_thread_data_bytes": 96,
+        "execution_env": {
+          "eu_thread_count": 7,
+          "grf_count": 128,
+          "has_no_stateless_write": true,
+          "simd_size": 16,
+          "subgroup_independent_forward_progress": true
+        },
+        "grf_count": 128,
+        "implicit_payload_args": [
+          {
+            "arg_type": "global_id_offset",
+            "offset": 0,
+            "size": 12
+          },
+          {
+            "arg_type": "local_size",
+            "offset": 12,
+            "size": 12
+          },
+          {
+            "arg_type": "enqueued_local_size",
+            "offset": 32,
+            "size": 12
+          }
+        ],
+        "kernel_name": "spirit_vfx_sprite_rgba8",
+        "payload_args": [
+          {
+            "access": "readonly",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 0,
+            "kind": "by_pointer",
+            "offset_bytes": 48,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readonly",
+            "address_mode": "stateless",
+            "address_space": "global",
+            "arg_index": 1,
+            "kind": "by_pointer",
+            "offset_bytes": 56,
+            "representations": [
+              {
+                "access": "readonly",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              },
+              {
+                "access": "readonly",
+                "address_mode": "stateless",
+                "address_space": "global",
+                "offset_bytes": 56,
+                "size_bytes": 8
+              }
+            ],
+            "size_bytes": 8
+          },
+          {
+            "access": "readwrite",
+            "address_mode": "stateful",
+            "address_space": "global",
+            "arg_index": 2,
+            "kind": "by_pointer",
+            "offset_bytes": 64,
+            "representations": [
+              {
+                "access": "readwrite",
+                "address_mode": "stateful",
+                "address_space": "global",
+                "offset_bytes": 0,
+                "size_bytes": 0
+              }
+            ],
+            "size_bytes": 8
+          }
+        ],
+        "per_thread_data_bytes": 96,
+        "per_thread_payload_args": [
+          {
+            "arg_type": "local_id",
+            "offset": 0,
+            "size": 96
+          }
+        ],
+        "scratch_bytes": 0,
+        "simd_width": 16,
+        "slm_bytes": 0,
+        "source_arg_info": [
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 0,
+            "name": "src_rgba",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 1,
+            "name": "control",
+            "type_name": "uint*;8",
+            "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__global",
+            "index": 2,
+            "name": "dst_bgra",
+            "type_name": "uint*;8",
+            "type_qualifiers": "NONE"
+          }
+        ],
+        "text": {
+          "entry_offset": 64,
+          "entry_size": 501616,
+          "section_alignment": 0,
+          "section_name": ".text.spirit_vfx_sprite_rgba8",
+          "section_offset": 64,
+          "section_size": 501760,
+          "sha256": "d8959faf97791f34dc869b4c8832bc71a3434cc4ef29c675d5c79bd05a686f94",
+          "symbol_size": 501616,
+          "symbol_value": 0
+        },
+        "user_attributes": {
+          "intel_reqd_sub_group_size": 16,
+          "intel_reqd_workgroup_walk_order": [
+            0,
+            1,
+            2
+          ]
+        },
+        "ze_info_major": 1,
+        "ze_info_minor": 64
+      }
+    ],
+    "spirv": {
+      "embedded_section_offset": 501896,
+      "embedded_section_size": 151144,
+      "sha256": "c0226908a1e9ba110cddfbec99586772b0d5d936d3033e1783544c709b19f38a",
+      "size_bytes": 151144
+    }
+  },
+  "provenance": {
+    "backend": {
+      "description": "Intel IGC through ocloc -spirv_input"
+    },
+    "commands": [
+      [
+        "$CLANG",
+        "--target=spir64",
+        "-x",
+        "clcpp",
+        "-cl-std=CLC++",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wdate-time",
+        "-cl-kernel-arg-info",
+        "-fno-discard-value-names",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-MMD",
+        "-MF",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.d",
+        "-MT",
+        "spirit_vfx_sprite_rgba8.bc",
+        "-emit-llvm",
+        "-c",
+        "spirit_vfx_sprite_rgba8.clcpp",
+        "-o",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.bc"
+      ],
+      [
+        "$LLVM_SPIRV",
+        "--preserve-ocl-kernel-arg-type-metadata-through-string",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.bc",
+        "-o",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.spv"
+      ],
+      [
+        "$OCLOC",
+        "compile",
+        "-file",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.spv",
+        "-spirv_input",
+        "-device",
+        "0x4680",
+        "-64",
+        "-output",
+        "spirit_vfx_sprite_rgba8",
+        "-out_dir",
+        "$OUT_DIR",
+        "-output_no_suffix",
+        "-gen_file"
+      ],
+      [
+        "$OCLOC",
+        "validate",
+        "-file",
+        "$OUT_DIR/spirit_vfx_sprite_rgba8.bin"
+      ]
+    ],
+    "frontend": {
+      "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
+    },
+    "profile": {
+      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
+      "sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6"
+    },
+    "publication_policy": {
+      "expected_kernels": [
+        "spirit_vfx_sprite_rgba8"
+      ],
+      "name": "cpp-legacy-abi-twin-v1"
+    },
+    "reproducibility_check": "passed",
+    "toolchain": {
+      "compiler_libraries": [
+        {
+          "aliases": [
+            "igc2/NOTICES.txt"
+          ],
+          "name": "igc2/NOTICES.txt",
+          "resolved_name": "NOTICES.txt",
+          "sha256": "3c9d5dffed3faf89159e3cc714c5512dee5e9c554faf57a5b00823f4356e2cf9",
+          "size_bytes": 29813
+        },
+        {
+          "aliases": [
+            "libiga64.so",
+            "libiga64.so.2",
+            "libiga64.so.2.30.0+0"
+          ],
+          "name": "libiga64.so",
+          "resolved_name": "libiga64.so.2.30.0+0",
+          "sha256": "995a0a884635f646571baec65e0875c834ec9d8578695ea7745b2a8db67b95e5",
+          "size_bytes": 3622752
+        },
+        {
+          "aliases": [
+            "libigc.so",
+            "libigc.so.2",
+            "libigc.so.2.30.0+0"
+          ],
+          "name": "libigc.so",
+          "resolved_name": "libigc.so.2.30.0+0",
+          "sha256": "364b5fc477bbd0e0feb3251dce0f0bb1302f95d12f696e5e56d942a27f03e6b0",
+          "size_bytes": 92251800
+        },
+        {
+          "aliases": [
+            "libigdfcl.so",
+            "libigdfcl.so.2",
+            "libigdfcl.so.2.30.0+0"
+          ],
+          "name": "libigdfcl.so",
+          "resolved_name": "libigdfcl.so.2.30.0+0",
+          "sha256": "73c884854e8524831cb847a2f1beef5e5de9845498213c5c6592c2e4fdc0222d",
+          "size_bytes": 2246232
+        },
+        {
+          "aliases": [
+            "libocloc.so"
+          ],
+          "name": "libocloc.so",
+          "resolved_name": "libocloc.so",
+          "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+          "size_bytes": 2456288
+        },
+        {
+          "aliases": [
+            "libopencl-clang.so.16"
+          ],
+          "name": "libopencl-clang.so.16",
+          "resolved_name": "libopencl-clang.so.16",
+          "sha256": "efceb7dc85e7f002e782a6189d79ad2d76221a982b39277fbe4fb60356d81b4c",
+          "size_bytes": 114866240
+        }
+      ],
+      "frontend": "clang-clcpp",
+      "profile_sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6",
+      "schema_version": 1,
+      "tools": {
+        "clang": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libLLVM.so.21.1",
+              "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+              "size_bytes": 138567144,
+              "soname": "libLLVM.so.21.1"
+            },
+            {
+              "resolved_name": "libclang-cpp.so.21.1",
+              "sha256": "ff79833fd7e7707f3c715e9518f9edcec7371800ec22062c81d155fec3ad0daa",
+              "size_bytes": 60307904,
+              "soname": "libclang-cpp.so.21.1"
+            }
+          ],
+          "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
+          "resource_tree": {
+            "file_count": 405,
+            "size_bytes": 65550014,
+            "tree_sha256": "79459e49c99a7dff653b1d1c3a3b331afc282aac5d5ce62668f6e964973d6b91"
+          },
+          "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
+        },
+        "llvm_spirv": {
+          "dynamic_compiler_libraries": [],
+          "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
+          "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
+        },
+        "ocloc": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libocloc.so",
+              "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+              "size_bytes": 2456288,
+              "soname": "libocloc.so"
+            }
+          ],
+          "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
+          "version": "25.31.034666"
+        }
+      }
+    },
+    "toolchain_lock": {
+      "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
+      "sha256": "27ad3211d327aeba76fd7fa913ba603f23782b06a4b00c25af4ae72eba85c0e6"
+    }
+  },
+  "rust_symbols": {
+    "spirit_vfx_sprite_rgba8": "SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT"
+  },
+  "schema_version": 2,
+  "source": {
+    "inputs": [
+      {
+        "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",
+        "sha256": "1d8844eeaea238b758b0b2889d591af37b34df2c038ba0fb2177871130059612",
+        "size_bytes": 1334
+      },
+      {
+        "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl",
+        "sha256": "856034e291144f09637bbbd39d35732089fbdaf6e4ded67eba5eea1a8741e508",
+        "size_bytes": 41771
+      },
+      {
+        "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp",
+        "sha256": "3d73f892b83be47e7091a7291e79ae45bbe153a080b439832a2e7cdd8b2701cb",
+        "size_bytes": 409
+      }
+    ],
+    "language": "C++ for OpenCL",
+    "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp"
+  },
+  "target": {
+    "label": "adls",
+    "ocloc_device": "0x4680",
+    "pci_device_ids": [
+      18048
+    ],
+    "revision_max": 12,
+    "revision_min": 12
+  },
+  "variant": "cpp"
+}

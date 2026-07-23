@@ -5,8 +5,9 @@ TRUEOS. It is a GPU replay, not a CPU rewrite:
 
 1. `7z` extracts all seven frames of the fixed `idle.crossed.soft_blink` asset
    directly from `tools/Lilly.7z`.
-2. The host OpenCL compiler consumes the production
-   `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl` sources.
+2. By default, the host OpenCL compiler consumes the retained
+   `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl` reference
+   sources. Environment-selected C++ SPIR-V exercises the production repass.
 3. Every display tick renders the nine selected procedural backgrounds in
    stable ID order, 2 through 10.
 4. Each cell uses the kernel's `256x256`, local `16x1` dispatch and exact
@@ -37,6 +38,17 @@ A static PNG of the same nine-cell grid remains available for comparisons:
 
 ```sh
 make -C tools/spirit-vfx-offline render TIME=2.25
+```
+
+Set `SPIRIT_VFX_BACKGROUND_SPV` and `SPIRIT_VFX_SPRITE_SPV` to replay the
+published C++ for OpenCL artifacts through `clCreateProgramWithIL` instead of
+compiling the legacy sources. This is the visual-review lane used for the
+Spirit C++ repass:
+
+```sh
+SPIRIT_VFX_BACKGROUND_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv \
+SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
+make -C tools/spirit-vfx-offline render
 ```
 
 The host dependencies are an OpenCL ICD loader/runtime, `libpng`, `7z`, and

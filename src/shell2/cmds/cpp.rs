@@ -18,6 +18,8 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
     print_shell_line(io, "cpp stop");
+    print_shell_line(io, "cpp spirit [status|list|clean]");
+    print_shell_line(io, "cpp spirit show <background_id> <shader_id>");
 }
 
 fn parse_mode(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
@@ -178,6 +180,10 @@ fn print_list(io: &'static dyn ShellBackend2) {
         io,
         "cpp suite: source=cpp_demo_rgba8.clcpp frontend=cpp-for-opencl backend=intel-igc-aot build_time_only=1 exact_target=8086:4680-r0C",
     );
+    print_shell_line(
+        io,
+        "cpp spirit: two ABI-twin C++ artifacts preserve the live Spirit cursor-plane path; use \"cpp spirit list\"",
+    );
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
@@ -222,11 +228,149 @@ fn print_status(io: &'static dyn ShellBackend2) {
 }
 
 fn artifact_hash() -> String {
+    format_hash(crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.bin_sha256)
+}
+
+fn format_hash(hash: [u8; 32]) -> String {
     let mut out = String::with_capacity(64);
-    for byte in crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.bin_sha256 {
+    for byte in hash {
         let _ = write!(out, "{byte:02x}");
     }
     out
+}
+
+fn print_spirit_list(io: &'static dyn ShellBackend2) {
+    print_shell_line(
+        io,
+        "cpp spirit backgrounds: 0=transparent 2=energy-ring 3=magic-circle 4=nebula-smoke 5=cyber-grid 6=portal-vortex 7=speed-lines 8=bokeh-field 9=water-ripples 10=pixel-burst",
+    );
+    print_shell_line(
+        io,
+        "cpp spirit shaders 0-7: 0=original-clean 1=aura-bloom 2=neon-edge 3=fire-rim 4=ice-shimmer 5=hologram 6=rgb-glitch 7=dissolve",
+    );
+    print_shell_line(
+        io,
+        "cpp spirit shaders 8-15: 8=ghost-trail 9=electric-arc 10=rainbow-prism 11=hit-flash 12=pixel-wave 13=toon-ink 14=liquid-warp 15=dream-bloom",
+    );
+    print_shell_line(
+        io,
+        "cpp spirit example: \"cpp spirit show 3 9\" = magic-circle + electric-arc",
+    );
+}
+
+fn print_spirit_status(io: &'static dyn ShellBackend2) {
+    let (revision, panel) = crate::spirit::spirit_vfx::control_panel_snapshot();
+    let background_upload = crate::intel::gpgpu::spirit_vfx_background_rgba8_upload_status();
+    let sprite_upload = crate::intel::gpgpu::spirit_vfx_sprite_rgba8_upload_status();
+    print_shell_line(
+        io,
+        alloc::format!(
+            "cpp spirit status: revision={} background={}({}) shader={}({}) frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 target=8086:4680-r0C background_resident={} background_verified={} background_gpu=0x{:X} background_sha256={} sprite_resident={} sprite_verified={} sprite_gpu=0x{:X} sprite_sha256={} walkers=clean:1/effect:2 presentation=spirit-cursor-plane",
+            revision,
+            panel.alpha_background.effect as u8,
+            panel.alpha_background.effect.ui_name(),
+            panel.sprite_shader.effect as u8,
+            panel.sprite_shader.effect.ui_name(),
+            background_upload.is_some() as u8,
+            background_upload.is_some_and(|artifact| artifact.verified) as u8,
+            background_upload.map(|artifact| artifact.gpu).unwrap_or(0),
+            format_hash(
+                crate::intel::gpgpu::SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_ARTIFACT
+                    .bin_sha256,
+            ),
+            sprite_upload.is_some() as u8,
+            sprite_upload.is_some_and(|artifact| artifact.verified) as u8,
+            sprite_upload.map(|artifact| artifact.gpu).unwrap_or(0),
+            format_hash(
+                crate::intel::gpgpu::SPIRIT_VFX_SPRITE_RGBA8_ADLS_ARTIFACT
+                    .bin_sha256,
+            ),
+        )
+        .as_str(),
+    );
+}
+
+fn select_spirit(io: &'static dyn ShellBackend2, background_id: u8, shader_id: u8) {
+    match crate::spirit::spirit_vfx::select_cpp_repass(background_id, shader_id) {
+        Ok(revision) => {
+            let (_, panel) = crate::spirit::spirit_vfx::control_panel_snapshot();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cpp spirit show: applied=1 revision={} background={}({}) shader={}({}) params=authored-defaults colors=authored-palette frontend=cpp-for-opencl runtime_compiler=0 presentation=live-spirit",
+                    revision,
+                    panel.alpha_background.effect as u8,
+                    panel.alpha_background.effect.ui_name(),
+                    panel.sprite_shader.effect as u8,
+                    panel.sprite_shader.effect.ui_name(),
+                )
+                .as_str(),
+            );
+        }
+        Err(reason) => print_shell_line(
+            io,
+            alloc::format!(
+                "cpp spirit show: applied=0 background={} shader={} reason={reason:?}",
+                background_id,
+                shader_id,
+            )
+            .as_str(),
+        ),
+    }
+}
+
+fn parse_spirit_ids(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(background) = args.next().and_then(|raw| raw.parse::<u8>().ok()) else {
+        usage(io);
+        return;
+    };
+    let Some(shader) = args.next().and_then(|raw| raw.parse::<u8>().ok()) else {
+        usage(io);
+        return;
+    };
+    if expect_no_more(io, args) {
+        select_spirit(io, background, shader);
+    }
+}
+
+fn spirit(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
+    let Some(command) = args.next() else {
+        select_spirit(io, 3, 9);
+        return;
+    };
+    if command.eq_ignore_ascii_case("list") {
+        if expect_no_more(io, args) {
+            print_spirit_list(io);
+        }
+    } else if command.eq_ignore_ascii_case("status") {
+        if expect_no_more(io, args) {
+            print_spirit_status(io);
+        }
+    } else if command.eq_ignore_ascii_case("clean") {
+        if expect_no_more(io, args) {
+            let revision = crate::spirit::spirit_vfx::reset_cpp_repass();
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "cpp spirit clean: applied=1 revision={} background=0 shader=0",
+                    revision,
+                )
+                .as_str(),
+            );
+        }
+    } else if command.eq_ignore_ascii_case("show") {
+        parse_spirit_ids(io, args);
+    } else if let Ok(background) = command.parse::<u8>() {
+        let Some(shader) = args.next().and_then(|raw| raw.parse::<u8>().ok()) else {
+            usage(io);
+            return;
+        };
+        if expect_no_more(io, args) {
+            select_spirit(io, background, shader);
+        }
+    } else {
+        usage(io);
+    }
 }
 
 pub(crate) fn try_parse(
@@ -269,6 +413,8 @@ pub(crate) fn try_parse(
                 print_shell_line(io, "cpp stop: queued=0 reason=no-cpp-demo-active");
             }
         }
+    } else if command.eq_ignore_ascii_case("spirit") {
+        spirit(io, args);
     } else if let Some(preset) = parse_mode(command) {
         start(io, preset, args);
     } else {

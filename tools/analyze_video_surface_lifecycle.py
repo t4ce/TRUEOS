@@ -90,9 +90,20 @@ def summarize_frame(frame: int, events: dict[str, list[dict[str, object]]]) -> N
     busy = [record for record in acquisitions if record.get("busy") == 1]
     waits_us = [float(record["wait_us"]) for record in busy]
 
+    # A same-surface geometry/opacity transaction retains and releases another
+    # lease on the same allocation; that successful API release does not make
+    # the allocation producer-reusable. Count only a SURFLIVE replacement
+    # whose old and new buffers differ.
+    replacement_events = [
+        record
+        for record in surflive
+        if int(record.get("previous_frame", 0)) == frame
+        and int(record.get("previous_buffer", 255)) != 255
+        and int(record["previous_buffer"]) != int(record["buffer"])
+    ]
     release_times: dict[int, list[int]] = defaultdict(list)
-    for record in releases:
-        release_times[int(record["buffer"])].append(int(record["observed_ns"]))
+    for record in replacement_events:
+        release_times[int(record["previous_buffer"])].append(int(record["observed_ns"]))
     for times in release_times.values():
         times.sort()
 
@@ -144,8 +155,16 @@ def summarize_frame(frame: int, events: dict[str, list[dict[str, object]]]) -> N
         (int(record["buffer"]), int(record["frame_serial"])): int(record["observed_ns"])
         for record in publications
     }
-    publish_to_surflive_us: list[float] = []
+    unique_surflive: list[dict[str, object]] = []
+    seen_publish_serials: set[int] = set()
     for record in surflive:
+        publish_serial = int(record["publish_serial"])
+        if publish_serial == 0 or publish_serial in seen_publish_serials:
+            continue
+        seen_publish_serials.add(publish_serial)
+        unique_surflive.append(record)
+    publish_to_surflive_us: list[float] = []
+    for record in unique_surflive:
         key = (int(record["buffer"]), int(record["publish_serial"]))
         published_ns = publication_times.get(key)
         if published_ns is not None:
@@ -153,14 +172,14 @@ def summarize_frame(frame: int, events: dict[str, list[dict[str, object]]]) -> N
                 (int(record["observed_ns"]) - published_ns) / 1_000
             )
 
-    transaction_us = [float(record["transaction_us"]) for record in surflive]
-    pre_flip_us = [float(record["pre_flip_us"]) for record in surflive]
-    flip_wait_us = [float(record["flip_wait_us"]) for record in surflive]
-    flip_polls = [float(record["flip_polls"]) for record in surflive]
+    transaction_us = [float(record["transaction_us"]) for record in unique_surflive]
+    pre_flip_us = [float(record["pre_flip_us"]) for record in unique_surflive]
+    flip_wait_us = [float(record["flip_wait_us"]) for record in unique_surflive]
+    flip_polls = [float(record["flip_polls"]) for record in unique_surflive]
     coupled_batches = sum(
         int(record.get("batch_planes", 0)) > 1
         or int(record.get("batch_guc_jobs", 0)) > 0
-        for record in surflive
+        for record in unique_surflive
     )
 
     print(f"frame={frame}")
@@ -184,8 +203,9 @@ def summarize_frame(frame: int, events: dict[str, list[dict[str, object]]]) -> N
         + (" ".join(f"{key}:{count}" for key, count in blocker_shapes.most_common()) or "none")
     )
     print(
-        f"  display publications={len(publications)} surflive={len(surflive)} "
-        f"releases={len(releases)} coupled_batches={coupled_batches} "
+        f"  display publications={len(publications)} unique_surflive={len(unique_surflive)} "
+        f"effective_replacements={len(replacement_events)} raw_releases={len(releases)} "
+        f"coupled_batches={coupled_batches} "
         f"{metric('publish_to_surflive', publish_to_surflive_us)}"
     )
     print(

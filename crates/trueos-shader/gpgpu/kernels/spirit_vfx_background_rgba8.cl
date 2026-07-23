@@ -117,6 +117,167 @@ static inline uint vfx_pack_bgra8_premultiplied(float3 color, float alpha)
     return (ai << 24) | (r << 16) | (g << 8) | b;
 }
 
+#if defined(TRUEOS_SPIRIT_CPP_REPASS)
+// The C++ publication keeps the original nine compositions as its semantic
+// base, then gives each one a deliberately small, mode-specific detail layer.
+// Templates make those layers compile-time authored without adding a kernel
+// argument, runtime table, or C++ runtime dependency.
+struct SpiritCppBackgroundLayer {
+    float alpha;
+    float color_mix;
+};
+
+template <uint Mode>
+static inline SpiritCppBackgroundLayer vfx_cpp_background_layer(
+    float2 uv,
+    float2 point,
+    float radius,
+    float angle,
+    float time,
+    float speed)
+{
+    static_assert(Mode >= 2u && Mode <= 10u, "unsupported Spirit background mode");
+    const float animated_time = time * speed;
+    const float radial_mask = 1.0f - smoothstep(0.34f, 0.57f, radius);
+    float detail = 0.0f;
+    float color_phase = 0.5f;
+
+    if constexpr (Mode == 2u) {
+        // Counter-rotating energy beads and a hairline inner corona.
+        const float orbit = native_exp(-fabs(radius - 0.274f) * 210.0f);
+        const float beads = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 18.0f + animated_time * 3.1f),
+            22u);
+        const float corona = native_exp(-fabs(radius - 0.337f) * 260.0f);
+        detail = orbit * beads * 0.72f + corona * 0.24f;
+        color_phase = 0.5f + 0.5f * native_sin(angle * 5.0f - animated_time * 1.4f);
+    } else if constexpr (Mode == 3u) {
+        // Two rotating rune belts sharpen the existing magic-circle grammar.
+        const float belt = native_exp(-fabs(radius - 0.354f) * 240.0f);
+        const float runes = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 36.0f + animated_time * 0.8f),
+            30u);
+        const float inner_belt = native_exp(-fabs(radius - 0.176f) * 210.0f);
+        const float counter = vfx_powi(
+            0.5f + 0.5f * native_sin(angle * 20.0f - animated_time * 1.1f),
+            24u);
+        detail = belt * runes * 0.62f + inner_belt * counter * 0.48f;
+        color_phase = 0.5f + 0.5f * native_cos(angle * 6.0f + animated_time * 0.3f);
+    } else if constexpr (Mode == 4u) {
+        // Sparse star-seed glints sit inside the smoke instead of flattening it.
+        const float2 star_cell = floor(point * 42.0f);
+        const float star_hash = vfx_hash21f(star_cell);
+        const float star = step(0.955f, star_hash)
+            * vfx_powi(
+                0.5f + 0.5f * native_sin(animated_time * 2.0f + star_hash * VFX_TAU),
+                12u);
+        const float edge_distance = min(
+            min(uv.x, 1.0f - uv.x),
+            min(uv.y, 1.0f - uv.y));
+        detail = star * radial_mask
+            * vfx_clamp01((edge_distance - 0.015625f) * 5.4237288f) * 0.52f;
+        color_phase = star_hash;
+    } else if constexpr (Mode == 5u) {
+        // Pulsing circuit intersections add hierarchy to the moving grid.
+        const float2 grid = point * 9.0f + (float2)(0.0f, animated_time * 0.55f);
+        const float2 cell = floor(grid);
+        const float2 cell_uv = fabs(vfx_fract2(grid) - 0.5f);
+        const float node = 1.0f - smoothstep(0.045f, 0.105f, max(cell_uv.x, cell_uv.y));
+        const float node_hash = vfx_hash21f(cell);
+        const float pulse = vfx_powi(
+            0.5f + 0.5f * native_sin(animated_time * 2.4f + node_hash * VFX_TAU),
+            8u);
+        detail = node * step(0.62f, node_hash) * pulse * radial_mask * 0.68f;
+        color_phase = node_hash;
+    } else if constexpr (Mode == 6u) {
+        // A thin event-horizon rim and travelling spiral sparks deepen the portal.
+        const float aperture = native_exp(-fabs(radius - 0.105f) * 250.0f);
+        const float spiral = angle * 8.0f + radius * 74.0f - animated_time * 5.2f;
+        const float sparks = vfx_powi(0.5f + 0.5f * native_sin(spiral), 28u)
+            * (1.0f - smoothstep(0.12f, 0.43f, radius));
+        detail = aperture * 0.46f + sparks * 0.36f;
+        color_phase = 0.5f + 0.5f * native_sin(spiral * 0.31f);
+    } else if constexpr (Mode == 7u) {
+        // Bright comet heads travel out along a subset of the speed rays.
+        const float sector = floor((angle + VFX_PI) * (80.0f / VFX_TAU));
+        const float ray_hash = vfx_hash21f((float2)(sector, 31.0f));
+        const float travel = vfx_fract(animated_time * (0.32f + ray_hash * 0.42f) + ray_hash);
+        const float head_radius = 0.11f + travel * 0.38f;
+        const float head = native_exp(-fabs(radius - head_radius) * 145.0f);
+        const float ray = vfx_powi(
+            0.5f + 0.5f * native_cos(angle * 80.0f),
+            38u);
+        detail = head * ray * step(0.52f, ray_hash) * 0.82f;
+        color_phase = ray_hash;
+    } else if constexpr (Mode == 8u) {
+        // A crisp specular pin turns each soft bokeh disc into a light volume.
+        const float2 grid = point * 7.0f + 3.5f
+            - (float2)(0.0f, animated_time * 0.23f);
+        const float2 cell = floor(grid);
+        const float2 cell_uv = vfx_fract2(grid) - 0.5f;
+        const float2 offset = (float2)(
+            vfx_hash21f(cell) - 0.5f,
+            vfx_hash21f(cell + 7.3f) - 0.5f) * 0.55f;
+        const float glint = 1.0f - smoothstep(
+            0.018f,
+            0.052f,
+            length(cell_uv - offset + (float2)(0.055f, 0.055f)));
+        detail = glint * 0.72f;
+        color_phase = vfx_hash21f(cell + 19.0f);
+    } else if constexpr (Mode == 9u) {
+        // Angular caustic breaks keep the concentric ripples from reading flat.
+        const float caustic = vfx_powi(
+            0.5f + 0.5f * native_sin(
+                radius * 96.0f - animated_time * 5.1f
+                    + native_sin(angle * 7.0f) * 2.1f),
+            24u);
+        const float band = smoothstep(0.08f, 0.15f, radius)
+            * (1.0f - smoothstep(0.20f, 0.55f, radius));
+        detail = caustic * band * 0.54f;
+        color_phase = 0.5f + 0.5f * native_cos(angle * 3.0f - animated_time);
+    } else {
+        // Mode 10: smaller counter-phase chips enrich the pixel burst.
+        const float angular_cell = floor((angle + VFX_PI) * (48.0f / VFX_TAU));
+        const float radial_phase = radius * 17.0f + animated_time * 1.25f;
+        const float radial_cell = floor(radial_phase);
+        const float chip_hash = vfx_hash21f((float2)(angular_cell, radial_cell));
+        const float phase = vfx_fract(radial_phase);
+        const float chip = step(0.82f, chip_hash)
+            * step(0.28f, phase) * step(phase, 0.62f);
+        detail = chip * smoothstep(0.10f, 0.17f, radius)
+            * (1.0f - smoothstep(0.20f, 0.55f, radius)) * 0.72f;
+        color_phase = chip_hash;
+    }
+    return SpiritCppBackgroundLayer {
+        clamp(detail, 0.0f, 0.9f),
+        vfx_clamp01(color_phase),
+    };
+}
+
+static inline SpiritCppBackgroundLayer vfx_cpp_background_dispatch(
+    uint mode,
+    float2 uv,
+    float2 point,
+    float radius,
+    float angle,
+    float time,
+    float speed)
+{
+    switch (mode) {
+        case 2u: return vfx_cpp_background_layer<2u>(uv, point, radius, angle, time, speed);
+        case 3u: return vfx_cpp_background_layer<3u>(uv, point, radius, angle, time, speed);
+        case 4u: return vfx_cpp_background_layer<4u>(uv, point, radius, angle, time, speed);
+        case 5u: return vfx_cpp_background_layer<5u>(uv, point, radius, angle, time, speed);
+        case 6u: return vfx_cpp_background_layer<6u>(uv, point, radius, angle, time, speed);
+        case 7u: return vfx_cpp_background_layer<7u>(uv, point, radius, angle, time, speed);
+        case 8u: return vfx_cpp_background_layer<8u>(uv, point, radius, angle, time, speed);
+        case 9u: return vfx_cpp_background_layer<9u>(uv, point, radius, angle, time, speed);
+        case 10u: return vfx_cpp_background_layer<10u>(uv, point, radius, angle, time, speed);
+        default: return SpiritCppBackgroundLayer { 0.0f, 0.5f };
+    }
+}
+#endif
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void spirit_vfx_background_rgba8(
     __global const uint *control,
@@ -289,6 +450,22 @@ __kernel void spirit_vfx_background_rgba8(
         alpha = cell * radial * intensity;
         color_mix = random;
     }
+
+#if defined(TRUEOS_SPIRIT_CPP_REPASS)
+    const SpiritCppBackgroundLayer cpp_layer = vfx_cpp_background_dispatch(
+        background_id,
+        uv,
+        point,
+        radius,
+        angle,
+        time,
+        speed);
+    alpha += cpp_layer.alpha * intensity;
+    color_mix = mix(
+        color_mix,
+        cpp_layer.color_mix,
+        vfx_clamp01(cpp_layer.alpha * 0.72f));
+#endif
 
     alpha = clamp(alpha * opacity, 0.0f, 0.96f);
     float3 color = mix(

@@ -18,6 +18,7 @@ use super::{
 };
 
 const MAX_FRAMES: usize = 64;
+const FRAME_BUFFER_CAPACITY: usize = super::FrameBuffering::Quad.count();
 
 /// Coalesced notification for the single supported streaming producer.  The
 /// frame handle lets an awakened producer ignore releases belonging to another
@@ -128,7 +129,7 @@ pub(crate) struct FrameBufferOwnershipProbe {
     pub(crate) front_buffer: Option<u8>,
     pub(crate) acquired_mask: u8,
     pub(crate) reader_mask: u8,
-    pub(crate) readers: [u16; 3],
+    pub(crate) readers: [u16; FRAME_BUFFER_CAPACITY],
 }
 
 #[derive(Copy, Clone)]
@@ -142,17 +143,17 @@ struct FrameRecord {
     generation: u32,
     active: bool,
     plan: FramePlan,
-    surfaces: [Option<UiSurfaceHandle>; 3],
+    surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
     buffer_count: u8,
     front_buffer: Option<u8>,
     next_buffer: u8,
-    // Producer leases are per backing allocation. Streaming triple buffers
-    // may therefore have one RCS write executing while the next immutable job
-    // is queued against a different allocation.
-    acquired: [Option<AcquiredBuffer>; 3],
-    readers: [u16; 3],
-    gpu_authored: [bool; 3],
-    gpu_release: [Option<FrameGpuRelease>; 3],
+    // Producer leases are per backing allocation. A streaming video bridge can
+    // therefore retain the live and pending-display allocations while one RCS
+    // write executes and the next immutable job waits on another allocation.
+    acquired: [Option<AcquiredBuffer>; FRAME_BUFFER_CAPACITY],
+    readers: [u16; FRAME_BUFFER_CAPACITY],
+    gpu_authored: [bool; FRAME_BUFFER_CAPACITY],
+    gpu_release: [Option<FrameGpuRelease>; FRAME_BUFFER_CAPACITY],
     next_token: u64,
     publish_serial: u64,
 }
@@ -163,20 +164,24 @@ impl FrameRecord {
             generation,
             active: false,
             plan: EMPTY_PLAN,
-            surfaces: [None; 3],
+            surfaces: [None; FRAME_BUFFER_CAPACITY],
             buffer_count: 0,
             front_buffer: None,
             next_buffer: 0,
-            acquired: [None; 3],
-            readers: [0; 3],
-            gpu_authored: [false; 3],
-            gpu_release: [None; 3],
+            acquired: [None; FRAME_BUFFER_CAPACITY],
+            readers: [0; FRAME_BUFFER_CAPACITY],
+            gpu_authored: [false; FRAME_BUFFER_CAPACITY],
+            gpu_release: [None; FRAME_BUFFER_CAPACITY],
             next_token: 0,
             publish_serial: 0,
         }
     }
 
-    fn activate(&mut self, plan: FramePlan, surfaces: [Option<UiSurfaceHandle>; 3]) {
+    fn activate(
+        &mut self,
+        plan: FramePlan,
+        surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
+    ) {
         self.generation = next_generation(self.generation);
         self.active = true;
         self.plan = plan;
@@ -184,10 +189,10 @@ impl FrameRecord {
         self.buffer_count = plan.buffering.count() as u8;
         self.front_buffer = None;
         self.next_buffer = 0;
-        self.acquired = [None; 3];
-        self.readers = [0; 3];
-        self.gpu_authored = [false; 3];
-        self.gpu_release = [None; 3];
+        self.acquired = [None; FRAME_BUFFER_CAPACITY];
+        self.readers = [0; FRAME_BUFFER_CAPACITY];
+        self.gpu_authored = [false; FRAME_BUFFER_CAPACITY];
+        self.gpu_release = [None; FRAME_BUFFER_CAPACITY];
         self.next_token = 0;
         self.publish_serial = 0;
     }
@@ -243,7 +248,7 @@ pub(crate) fn create_frame(spec: FrameSpec) -> Result<FrameHandle, FramePoolErro
     let plan = FramePlan::from_spec(spec).map_err(FramePoolError::InvalidPlan)?;
     let format = surface_format(plan.format).ok_or(FramePoolError::UnsupportedFormat)?;
     let count = plan.buffering.count();
-    let mut surfaces = [None; 3];
+    let mut surfaces = [None; FRAME_BUFFER_CAPACITY];
     for surface in surfaces.iter_mut().take(count) {
         match ui_surface::create_surface(plan.width, plan.height, format) {
             Ok(handle) => *surface = Some(handle),
@@ -290,7 +295,7 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
         frame.active = false;
         frame.front_buffer = None;
         frame.buffer_count = 0;
-        core::mem::replace(&mut frame.surfaces, [None; 3])
+        core::mem::replace(&mut frame.surfaces, [None; FRAME_BUFFER_CAPACITY])
     };
     destroy_surfaces(surfaces);
     Ok(())
@@ -615,8 +620,8 @@ pub(crate) fn publish_gpgpu_frame_buffer(
 
 /// Publish one decoder-converted RGBA allocation. GuC completion proves the
 /// native NV12 source is no longer read; only this exact streaming Frame
-/// surface and its compute release cross the broker boundary. Triple ownership
-/// leaves one RGBA allocation writable while one is queued and one is live.
+/// surface and its compute release cross the broker boundary. Four allocations
+/// cover live scanout, its pending replacement, and both immutable RCS slots.
 pub(crate) fn publish_gpgpu_video_frame_buffer(
     lease: FrameWriteLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -627,7 +632,7 @@ pub(crate) fn publish_gpgpu_video_frame_buffer(
     let index = lease.buffer_index as usize;
     if frame.plan.content != FrameContent::Video
         || frame.plan.cadence != super::FrameCadence::Streaming
-        || frame.plan.buffering != super::FrameBuffering::Triple
+        || frame.plan.buffering != super::FrameBuffering::Quad
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
         || !super::video_frame_extent_admitted(frame.plan.width, frame.plan.height)
         || !frame.gpu_authored[index]
@@ -713,7 +718,7 @@ fn surface_format(format: ScanoutFormat) -> Option<UiSurfaceFormat> {
     }
 }
 
-fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; 3]) {
+fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY]) {
     for surface in surfaces.into_iter().flatten() {
         let _ = ui_surface::destroy_surface(surface);
     }
@@ -724,7 +729,7 @@ fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; 3]) {
 /// zeroed backing buffer when the consumer requested an opaque or translucent
 /// base color.
 fn initialize_rgba_surfaces(
-    surfaces: [Option<UiSurfaceHandle>; 3],
+    surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
     count: usize,
     color: PremultipliedRgba8,
 ) -> bool {

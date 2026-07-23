@@ -220,6 +220,36 @@ linked and ISO-extracted runtime ELF independently of which copy frontend the
 comparison lane selects. Detailed commands and TestRig coverage live in
 `crates/trueos-shader/gpgpu/kernels/CPP_DEMO_SUITE.md`.
 
+### 5. Spirit becomes an ABI-preserving C++ visual suite
+
+The next application step reuses Spirit's already-proven cursor-plane
+architecture instead of introducing another presentation path.
+`spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp` compile
+the retained compositions as exact ABI twins, then enable C++-only templated
+secondary-detail layers. All stable effect IDs, the 32-dword control page,
+binding counts, payload sizes, one/two-walker selection, ordered dependency,
+GuC post-sync release, and `CUR_SURFLIVE` proof remain unchanged.
+
+The C++ background is 98,384 bytes with SHA-256
+`de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848`.
+The C++ sprite is 656,728 bytes with SHA-256
+`2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac`.
+Both are exact to `8086:4680` revision `0x0c`, SIMD16, 128 GRFs, and zero
+scratch/SLM.
+
+Their larger instruction images required moving the sprite mapping from
+`0x0D440000` to `0x0D450000` and the independent demo mapping to
+`0x0D600000`; the background remains at `0x0D430000`. The two-walker sprite
+entry is consequently relative `0x20040`. Compile-time constants and runtime
+hash/byte checks bind these layout facts.
+
+The host offline tools can now consume the published SPIR-V directly through
+`clCreateProgramWithIL`, allowing reference/C++ PNG comparison on the actual
+UHD 770. Shell2 adds `cpp spirit`: all `9 × 16` combinations can be selected
+with authored defaults and palettes while the live Spirit worker continues to
+own submission and presentation. Detailed visual and TestRig commands live in
+`crates/trueos-shader/gpgpu/kernels/SPIRIT_CPP_REPASS.md`.
+
 ## Findings that changed the implementation
 
 ### General math can expand the loader contract

@@ -18,7 +18,6 @@ pub(crate) mod opencl;
 pub(crate) mod ppgtt;
 pub(crate) mod render;
 pub(crate) mod shader;
-pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod types;
 mod uc_fw;
@@ -30,7 +29,6 @@ pub(crate) use self::blt::{
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;
-pub(crate) use self::media::sfc_cmd as xelp_media_sfc;
 pub(crate) use self::media::xelp_media2_ngin;
 pub(crate) use self::media::xelp_media2_ngin_hw_pic;
 

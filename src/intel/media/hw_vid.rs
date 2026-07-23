@@ -435,9 +435,10 @@ pub(crate) async fn run_online_ui4_framed_video_playback()
     let _playback_guard = h264_try_begin_playback("shell-online-ui4-framed-video")?;
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     crate::log!(
-        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-rgba-stream3\n",
+        "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-rgba-stream rgba_buffers={}\n",
         H264_ONLINE_MEDIA_URL,
         UI4_FRAMED_VIDEO_FPS,
+        crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
     );
     let report = run_media_url_playback(
         H264_ONLINE_MEDIA_URL,
@@ -1576,13 +1577,14 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-rgba-stream3 diagnostics={} noreset_lite={} stop=eos\n",
+        "intel/hw_vid: h264-playback start bytes={} fps={} frame_ms={} frame_ticks={} subset=idr-plus-p source={} path={} mode=memory-annexb presentation=ui4-rgba-stream rgba_buffers={} diagnostics={} noreset_lite={} stop=eos\n",
         stream_bytes,
         mode.fps(),
         mode.frame_ms(),
         frame_period.as_ticks(),
         source,
         path,
+        crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
         mode.diagnostics() as u8,
         mode.noreset_lite() as u8,
     );
@@ -1755,7 +1757,7 @@ async fn h264_i_p_playback_probe_with_reader(
         first_failure_error = conversion_report.first_failure_error;
     }
     crate::log_info!(target: "intel-media";
-        "intel/hw_vid: conversion-drain generation={} queued={} completed={} published={} first_failure_frame={} first_failure_error={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} max_outstanding={} avg_conversion_us={} max_conversion_us={} worker=independent-guc-rcs rgba_buffers=3 rgba_ownership=producer-write+broker-pending+display-live ordering=preserved drop=0\n",
+        "intel/hw_vid: conversion-drain generation={} queued={} completed={} published={} first_failure_frame={} first_failure_error={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} max_outstanding={} avg_conversion_us={} max_conversion_us={} worker=independent-guc-rcs rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live ordering=preserved drop=0\n",
         conversion_report.generation,
         conversion_report.queued,
         conversion_report.completed,
@@ -1768,6 +1770,7 @@ async fn h264_i_p_playback_probe_with_reader(
         conversion_report.max_outstanding,
         conversion_report.avg_conversion_us(),
         conversion_report.max_conversion_us,
+        crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
     );
     let conversion_probe = conversion_report.probe;
     crate::log_info!(target: "intel-media";
@@ -1948,11 +1951,12 @@ async fn h264_submit_wait_ui4_frame(
     if diagnostics {
         let before = crate::intel::hw_pic_snapshot();
         crate::log!(
-            "intel/hw_vid: h264-frame submit phase={} playback_frame={} stream_idr={} bytes={} destination=ui4-rgba-stream3 pending={} outputs={} service_started={}\n",
+            "intel/hw_vid: h264-frame submit phase={} playback_frame={} stream_idr={} bytes={} destination=ui4-rgba-stream rgba_buffers={} pending={} outputs={} service_started={}\n",
             phase,
             playback_frame,
             stream_idr_index,
             encoded.len(),
+            crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
             before.pending,
             before.outputs,
             before.service_started as u8
@@ -2008,7 +2012,7 @@ async fn h264_submit_wait_ui4_frame(
 
     if diagnostics {
         crate::log!(
-            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-rgba-stream3 err={}\n",
+            "intel/hw_vid: h264-frame output phase={} playback_frame={} stream_idr={} id={} codec={:?} status={:?} fmt={:?} decoded={}x{} visible={}x{} pitch=0x{:X} uv=0x{:X} bytes=0x{:X} gpu=0x{:X} phys=0x{:X} stored={} destination=ui4-rgba-stream rgba_buffers={} err={}\n",
             phase,
             playback_frame,
             stream_idr_index,
@@ -2026,6 +2030,7 @@ async fn h264_submit_wait_ui4_frame(
             output.gpu_addr,
             output.phys_addr,
             presentation_queued as u8,
+            crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
             output.error_code
         );
     }

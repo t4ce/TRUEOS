@@ -104,6 +104,26 @@ make intel-gpu-verify-cpp-artifacts
 The source and runtime workload map are documented in
 `crates/trueos-shader/gpgpu/kernels/CPP_DEMO_SUITE.md`.
 
+## Spirit C++ ABI-twin suite
+
+Spirit publishes both of its existing kernel ABIs through C++ for OpenCL:
+
+```sh
+tools/intel-gpu-bakery/bake_adls_cpp_spirit.sh
+# or
+make intel-gpu-bake-spirit-cpp
+```
+
+The paired bake compiles twice, checks the reviewed toolchain lock, and
+requires exact ABI equality against the retained OpenCL C background and
+sprite Zebins before publishing. The runtime selects both C++ images
+unconditionally; the legacy images remain build-time comparison references.
+`make kernel` and `make iso` require both complete Spirit C++ Zebins in the
+linked and packaged ELF alongside the native C++ demo.
+
+The visual and physical review procedure is documented in
+`crates/trueos-shader/gpgpu/kernels/SPIRIT_CPP_REPASS.md`.
+
 ## Compiler-free checks
 
 CI and ordinary development machines do not need compiler tools:
@@ -124,7 +144,8 @@ needs only the Python standard library.
 
 The normal `make kernel` lane selects the C++ copy implementation and proves
 that the final TRUEOS ELF contains its complete Zebin, no complete copy of the
-legacy copy Zebin, and the independently required native C++ demo Zebin. The
+legacy copy Zebin, plus the independently required native C++ demo and both
+Spirit C++ Zebins. The
 compatibility target remains available:
 
 ```sh

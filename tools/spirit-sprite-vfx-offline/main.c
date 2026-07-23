@@ -73,6 +73,11 @@ extern cl_program clCreateProgramWithSource(
     const char **,
     const size_t *,
     cl_int *);
+extern cl_program clCreateProgramWithIL(
+    cl_context,
+    const void *,
+    size_t,
+    cl_int *);
 extern cl_int clBuildProgram(
     cl_program,
     cl_uint,
@@ -479,16 +484,32 @@ static cl_platform_id choose_platform(void)
 static cl_program build_program(
     cl_context context,
     cl_device_id device,
-    const char *path)
+    const char *source_path,
+    const char *spirv_path)
 {
     size_t source_length = 0;
-    char *source = read_text_file(path, &source_length);
+    char *source = read_text_file(
+        spirv_path != NULL ? spirv_path : source_path,
+        &source_length);
     cl_int error = CL_SUCCESS;
-    const char *sources[] = {source};
-    cl_program program = clCreateProgramWithSource(
-        context, 1, sources, &source_length, &error);
-    check_cl(error, "clCreateProgramWithSource");
-    error = clBuildProgram(program, 1, &device, "-cl-std=CL1.2", NULL, NULL);
+    cl_program program = NULL;
+    if (spirv_path != NULL) {
+        program = clCreateProgramWithIL(
+            context, source, source_length, &error);
+        check_cl(error, "clCreateProgramWithIL");
+    } else {
+        const char *sources[] = {source};
+        program = clCreateProgramWithSource(
+            context, 1, sources, &source_length, &error);
+        check_cl(error, "clCreateProgramWithSource");
+    }
+    error = clBuildProgram(
+        program,
+        1,
+        &device,
+        spirv_path != NULL ? NULL : "-cl-std=CL1.2",
+        NULL,
+        NULL);
     if (error != CL_SUCCESS) {
         size_t log_length = 0;
         clGetProgramBuildInfo(
@@ -1375,7 +1396,9 @@ int main(int argc, char **argv)
     check_cl(error, "clCreateContext");
     cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
     check_cl(error, "clCreateCommandQueue");
-    cl_program program = build_program(context, device, SPRITE_SOURCE);
+    const char *sprite_spirv = getenv("SPIRIT_VFX_SPRITE_SPV");
+    cl_program program =
+        build_program(context, device, SPRITE_SOURCE, sprite_spirv);
     cl_kernel kernel =
         clCreateKernel(program, "spirit_vfx_sprite_rgba8", &error);
     check_cl(error, "clCreateKernel");
@@ -1430,6 +1453,9 @@ int main(int argc, char **argv)
 
     printf("  platform: %s\n", platform_name);
     printf("  device:   %s\n", device_name);
+    printf(
+        "  frontend: %s\n",
+        sprite_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source");
     if (panel_mode) {
         run_panel(
             queue,
@@ -1478,7 +1504,7 @@ int main(int argc, char **argv)
         printf("\n");
         printf(
             "  dispatch: sixteen 256x256 cells, local 16x1, "
-            "production OpenCL source\n");
+            "selected GPU program\n");
         printf("  time:     %.3f s\n", time);
         printf("  output:   %s\n", output);
     }

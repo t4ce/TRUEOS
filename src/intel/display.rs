@@ -139,11 +139,11 @@ const UI4_SLOT0_OVERLAY_GPU_BASE: u64 =
     INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE;
 // Published UI4 buffers keep producer-owned PPGTT addresses. Direct scanout
 // imports each producer surface into a display-owned GGTT alias. Keep enough
-// aliases for the deepest UI4 buffering contract so a triple-buffered scene
+// aliases for the deepest UI4 buffering contract so a four-buffer video bridge
 // reaches a steady state with one stable mapping per render target. SURF and
 // SURFLIVE still protect queued/live aliases; remapping is only a fallback for
 // a genuinely new allocation (for example after resize or frame teardown).
-const UI4_DIRECT_SCANOUT_ALIAS_COUNT: usize = crate::ui4::FrameBuffering::Triple.count();
+const UI4_DIRECT_SCANOUT_ALIAS_COUNT: usize = crate::ui4::FrameBuffering::Quad.count();
 const UI4_DIRECT_SCANOUT_GPU_BASE: u64 = 0x5000_0000;
 // Match the trusted UI-surface maximum so a 4K RGBA frame remains eligible.
 const UI4_DIRECT_SCANOUT_GPU_STRIDE: u64 = 0x0200_0000;
@@ -8465,7 +8465,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         mapping.phys == source.phys && mapping.byte_len == source.byte_len
     };
     let alias_index = aliases_from_next()
-        // Stable mappings are the normal triple-buffered path. Never choose a
+        // Stable mappings are the normal multi-buffered path. Never choose a
         // live/queued alias even when it already names the requested bytes.
         .find(|index| {
             alias_is_idle(*index) && pool.mappings[*index].is_some_and(mapping_matches_source)

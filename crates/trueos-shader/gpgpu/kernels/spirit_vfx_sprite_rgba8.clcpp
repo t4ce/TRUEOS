@@ -1,0 +1,10 @@
+// TRUEOS Spirit sprite suite through the C++ for OpenCL / IGC pipeline.
+//
+// The retained OpenCL C source is also the single-source semantic baseline.
+// TRUEOS_SPIRIT_CPP_REPASS enables the C++-only authored layers in that source
+// while preserving the existing kernel symbol and argument ABI.
+
+#include "include/trueos_clcpp.hpp"
+
+#define TRUEOS_SPIRIT_CPP_REPASS 1
+#include "spirit_vfx_sprite_rgba8.cl"

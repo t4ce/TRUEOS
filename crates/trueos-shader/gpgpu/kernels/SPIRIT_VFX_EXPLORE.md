@@ -1,6 +1,7 @@
 # Spirit VFX two-layer contract
 
-Spirit replaces the Lab256 visual with two bounded OpenCL artifacts while
+Spirit replaces the Lab256 visual with two bounded C++ for OpenCL/IGC
+artifacts while
 retaining the already-proven Embassy, GuC, GPU producer-fence, and Intel cursor
 plane path. The worker pool remains `pool_size = 1`; the other three logical
 Spirit fence/pipe channels remain reserved for later activation.
@@ -42,7 +43,7 @@ the exact `preview.html::configObject()` object shape:
 
 ```text
 version, sourceLayout, sprite
-transform { scale, x, y, rotationRadians, alphaCutoff, sampling }
+transform { x, y, rotationRadians, alphaCutoff, sampling }
 shader { id, name, params[4], colorA, colorB }
 background { id, name, params[4], colorA, colorB }
 particles { type, layer, params[4], color, additive }
@@ -61,9 +62,10 @@ for the shader's `[-2π, 2π]` safety range. Lilly defaults to 180 degrees throu
 this same transform, correcting its resident-art orientation without a private
 flip mode.
 
-Lilly's resident frames are 128x128, so the default transform scale is `0.5`
-of the 256x256 cursor allocation. That preserves one source pixel per displayed
-pixel while retaining the complete generic scale API for later presentation.
+Lilly's resident frames are 128x128 and Spirit owns their fixed architectural
+mapping into the 256x256 cursor allocation. The former mutable sprite-scale
+control is absent from the UI model; control dword 13 remains reserved at
+`1.0` solely to preserve the proven kernel ABI.
 
 ## Independent cursor movement
 
@@ -111,9 +113,9 @@ points validate magic/version and their own surface dimensions.
 
 `tools/spirit-vfx-offline` renders the retained nine procedural backgrounds.
 `tools/spirit-sprite-vfx-offline` independently renders the complete 16-mode
-Sprite shader set as a 4x4 grid. Both tools compile and dispatch the production
-OpenCL sources on a host GPU; neither carries a CPU or duplicate shader
-implementation.
+Sprite shader set as a 4x4 grid. Both tools can compile the OpenCL C reference
+or dispatch the published C++ SPIR-V through `clCreateProgramWithIL` on a host
+GPU; neither carries a CPU or duplicate shader implementation.
 
 ## Baked ADL-S artifacts
 
@@ -121,12 +123,15 @@ implementation.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 54,472 | 2 | 64 | 96 | `527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f` |
-| `spirit_vfx_sprite_rgba8.bin` | 547,392 | 3 | 96 | 96 | `f1264ac062d5645c8d4da55e1585ee22c56cfb7a341d28407d3b934e97821ddc` |
+| `spirit_vfx_background_rgba8.bin` | 98,384 | 2 | 64 | 96 | `de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848` |
+| `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
 
-Both artifacts use text offset `0x40` within their own zebin. The clean default
-maps only the sprite at `0x0D440000`, uses that mapping as the instruction base,
+Both artifacts use text offset `0x40` within their own Zebin. The clean default
+maps only the sprite at `0x0D450000`, uses that mapping as the instruction base,
 and addresses its entry at relative offset `0x40`. With a procedural background
 enabled, the runtime additionally maps it at `0x0D430000`, selects that mapping
 as the shared instruction base, and addresses the sprite at relative offset
-`0x10040`.
+`0x20040`.
+
+The full C++ visual map and physical `cpp spirit` selector are documented in
+[`SPIRIT_CPP_REPASS.md`](SPIRIT_CPP_REPASS.md).

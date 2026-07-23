@@ -97,7 +97,7 @@ pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
-    begin_decoded_nv12_conversion_batch, begin_shell_decoded_video_player,
+    VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch, begin_shell_decoded_video_player,
     enqueue_decoded_nv12_stream_frame, stop_decoded_nv12_stream, ui4_video_conversion_service_task,
     wait_decoded_nv12_conversion_idle,
 };
@@ -219,6 +219,7 @@ pub(crate) enum FrameBuffering {
     Single = 1,
     Double = 2,
     Triple = 3,
+    Quad = 4,
 }
 
 impl FrameBuffering {
@@ -390,7 +391,7 @@ pub(crate) enum FramePlanError {
     BaseColorRequiresPremultipliedRgba,
     VideoRequiresPremultipliedRgba,
     VideoRequiresStreamingCadence,
-    VideoRequiresTripleBuffering,
+    VideoRequiresQuadBuffering,
     VideoExceedsPixelSoftCap,
     RenderSceneRequiresPremultipliedRgba,
     RenderSceneRequiresStreamingCadence,
@@ -422,8 +423,8 @@ impl FramePlan {
             if !matches!(spec.cadence, FrameCadence::Streaming) {
                 return Err(FramePlanError::VideoRequiresStreamingCadence);
             }
-            if !matches!(spec.buffering, FrameBuffering::Triple) {
-                return Err(FramePlanError::VideoRequiresTripleBuffering);
+            if !matches!(spec.buffering, FrameBuffering::Quad) {
+                return Err(FramePlanError::VideoRequiresQuadBuffering);
             }
             if !video_frame_extent_admitted(spec.width, spec.height) {
                 return Err(FramePlanError::VideoExceedsPixelSoftCap);
@@ -462,6 +463,7 @@ const _: () = {
     assert!(FrameBuffering::Single.count() == 1);
     assert!(FrameBuffering::Double.count() == 2);
     assert!(FrameBuffering::Triple.count() == 3);
+    assert!(FrameBuffering::Quad.count() == 4);
     assert!(matches!(
         ScanoutFormat::Rgba8888Premultiplied.plane(),
         PlaneAssignment::AlphaOverlay { slot: 1 }
@@ -481,7 +483,7 @@ const _: () = {
         output: OutputId::from_slot(0).unwrap(),
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
-        buffering: FrameBuffering::Triple,
+        buffering: FrameBuffering::Quad,
         format: ScanoutFormat::Rgba8888Premultiplied,
         width: DEFAULT_FRAME_WIDTH,
         height: DEFAULT_FRAME_HEIGHT,
@@ -500,7 +502,7 @@ const _: () = {
             buffering: FrameBuffering::Double,
             ..admitted_video
         }),
-        Err(FramePlanError::VideoRequiresTripleBuffering)
+        Err(FramePlanError::VideoRequiresQuadBuffering)
     ));
     assert!(matches!(
         FramePlan::from_spec(FrameSpec {

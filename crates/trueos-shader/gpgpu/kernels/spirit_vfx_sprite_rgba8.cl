@@ -307,6 +307,193 @@ static inline float vfx_erode_alpha(
     return result;
 }
 
+#if defined(TRUEOS_SPIRIT_CPP_REPASS)
+// A restrained couture pass shared by all fifteen authored Sprite effects.
+// The original effect remains the large-form composition. C++ templates add a
+// mode-specific animated filament, edge chroma, and sparse micro-highlight so
+// every selection gains definition at cursor scale without changing its four
+// controls or the clean mode.
+struct SpiritCppSpriteEdges {
+    float outer;
+    float inner;
+};
+
+static inline SpiritCppSpriteEdges vfx_cpp_sprite_edges(
+    __global const uint *src_rgba,
+    __global const uint *control,
+    float2 local_uv,
+    float2 texel,
+    float base_alpha)
+{
+    const float radius = 1.35f;
+    const float left = vfx_sample_sprite(
+        src_rgba, control, local_uv - (float2)(texel.x * radius, 0.0f)).w;
+    const float right = vfx_sample_sprite(
+        src_rgba, control, local_uv + (float2)(texel.x * radius, 0.0f)).w;
+    const float top = vfx_sample_sprite(
+        src_rgba, control, local_uv + (float2)(0.0f, texel.y * radius)).w;
+    const float bottom = vfx_sample_sprite(
+        src_rgba, control, local_uv - (float2)(0.0f, texel.y * radius)).w;
+    const float neighbour_max = max(max(left, right), max(top, bottom));
+    const float neighbour_min = min(min(left, right), min(top, bottom));
+    return SpiritCppSpriteEdges {
+        max(0.0f, neighbour_max - base_alpha),
+        max(0.0f, base_alpha - neighbour_min),
+    };
+}
+
+template <uint Mode>
+static inline float4 vfx_cpp_sprite_layer(
+    SpiritCppSpriteEdges edges,
+    float2 local_uv,
+    float time,
+    float3 color_a,
+    float3 color_b)
+{
+    static_assert(Mode >= 1u && Mode <= 15u, "unsupported Spirit sprite mode");
+    const float2 centered = local_uv - 0.5f;
+    const float angle = atan2(centered.y, centered.x);
+    const float radius = native_sqrt(max(dot(centered, centered), 1.0e-8f));
+
+    float frequency = 7.0f;
+    float velocity = 1.0f;
+    float sharpness = 18.0f;
+    float outer_strength = 0.28f;
+    float inner_strength = 0.12f;
+    float color_phase = 0.5f;
+    float micro = 0.0f;
+
+    if constexpr (Mode == 1u || Mode == 15u) {
+        // Aura and dream: slow pearlescent contour with breathing motes.
+        frequency = Mode == 1u ? 6.0f : 5.0f;
+        velocity = Mode == 1u ? 0.72f : -0.48f;
+        sharpness = 20.0f;
+        outer_strength = 0.34f;
+        inner_strength = 0.10f;
+        const float cell_hash = vfx_hash21f(
+            floor(local_uv * 48.0f) + (float2)((float)Mode, 9.0f));
+        micro = step(0.965f, cell_hash)
+            * vfx_powi(
+                0.5f + 0.5f * native_sin(time * 1.7f + cell_hash * VFX_TAU),
+                12u)
+            * (1.0f - smoothstep(0.36f, 0.72f, radius)) * 0.12f;
+    } else if constexpr (Mode == 2u || Mode == 4u || Mode == 9u) {
+        // Neon, ice, electric: a fast double-frequency energy filament.
+        frequency = Mode == 9u ? 17.0f : (Mode == 4u ? 12.0f : 9.0f);
+        velocity = Mode == 4u ? -1.25f : 2.15f;
+        sharpness = Mode == 9u ? 30.0f : 24.0f;
+        outer_strength = Mode == 9u ? 0.48f : 0.39f;
+        inner_strength = 0.16f;
+        const float fork = vfx_powi(
+            0.5f + 0.5f * native_sin(
+                (local_uv.x - local_uv.y) * frequency * VFX_TAU
+                    - time * velocity * 0.77f),
+            24u);
+        micro = edges.outer * fork * 0.22f;
+    } else if constexpr (Mode == 3u || Mode == 7u || Mode == 11u) {
+        // Fire, dissolve, impact: hotter, asymmetric travelling sparks.
+        frequency = Mode == 3u ? 11.0f : 14.0f;
+        velocity = Mode == 11u ? 3.4f : 1.8f;
+        sharpness = 26.0f;
+        outer_strength = 0.42f;
+        inner_strength = 0.14f;
+        const float2 spark_cell = floor(
+            (local_uv + (float2)(0.0f, time * 0.045f * velocity)) * 72.0f);
+        const float spark_hash = vfx_hash21f(
+            spark_cell + (float2)((float)Mode * 3.0f, 17.0f));
+        micro = step(0.974f, spark_hash)
+            * smoothstep(0.08f, 0.44f, radius)
+            * (1.0f - smoothstep(0.44f, 0.72f, radius)) * 0.18f;
+    } else if constexpr (Mode == 5u || Mode == 6u || Mode == 12u) {
+        // Hologram, RGB glitch, pixel wave: quantized signal highlights.
+        frequency = Mode == 5u ? 13.0f : 19.0f;
+        velocity = Mode == 6u ? 3.1f : 1.45f;
+        sharpness = 32.0f;
+        outer_strength = 0.30f;
+        inner_strength = 0.18f;
+        const float scan = vfx_fract(
+            local_uv.y * (Mode == 5u ? 96.0f : 64.0f) - time * velocity);
+        const float packet = step(0.90f, scan)
+            * step(0.68f, vfx_hash21f((float2)(
+                floor(local_uv.y * 64.0f),
+                floor(time * velocity * 7.0f) + (float)Mode)));
+        micro = packet * (edges.outer + edges.inner * 0.45f) * 0.28f;
+    } else if constexpr (Mode == 8u || Mode == 10u || Mode == 14u) {
+        // Ghost, prism, liquid: broad counter-rotating spectral arcs.
+        frequency = Mode == 10u ? 8.0f : 6.0f;
+        velocity = Mode == 8u ? -0.82f : 0.92f;
+        sharpness = 16.0f;
+        outer_strength = 0.35f;
+        inner_strength = 0.13f;
+        const float spectral = 0.5f + 0.5f * native_cos(
+            angle * 3.0f - radius * 18.0f + time * velocity);
+        color_phase = spectral;
+        micro = edges.outer * vfx_powi(spectral, 14u) * 0.16f;
+    } else {
+        // Toon ink: a sparse cel-animation highlight that respects the ink rim.
+        static_assert(Mode == 13u, "unhandled Spirit sprite mode");
+        frequency = 5.0f;
+        velocity = 0.38f;
+        sharpness = 28.0f;
+        outer_strength = 0.20f;
+        inner_strength = 0.10f;
+        const float hatch = vfx_powi(
+            0.5f + 0.5f * native_sin(
+                (local_uv.x + local_uv.y) * 18.0f * VFX_TAU - time),
+            30u);
+        micro = edges.inner * hatch * 0.10f;
+    }
+
+    const float phase = 0.5f + 0.5f * native_sin(
+        angle * frequency
+            + (local_uv.y - local_uv.x) * frequency * 1.7f
+            + time * velocity);
+    const float filament = native_exp(
+        native_log(max(phase, 1.0e-5f)) * sharpness);
+    if constexpr (!(Mode == 8u || Mode == 10u || Mode == 14u)) {
+        color_phase = 0.5f + 0.5f * native_sin(
+            angle * 2.0f + time * velocity * 0.31f + (float)Mode);
+    }
+
+    const float alpha = clamp(
+        edges.outer * (0.035f + filament * outer_strength)
+            + edges.inner * filament * inner_strength
+            + micro,
+        0.0f,
+        0.58f);
+    const float3 accent = mix(color_a, color_b, vfx_clamp01(color_phase));
+    return vfx_layer(accent, alpha);
+}
+
+static inline float4 vfx_cpp_sprite_dispatch(
+    uint mode,
+    SpiritCppSpriteEdges edges,
+    float2 local_uv,
+    float time,
+    float3 color_a,
+    float3 color_b)
+{
+    switch (mode) {
+        case 1u: return vfx_cpp_sprite_layer<1u>(edges, local_uv, time, color_a, color_b);
+        case 2u: return vfx_cpp_sprite_layer<2u>(edges, local_uv, time, color_a, color_b);
+        case 3u: return vfx_cpp_sprite_layer<3u>(edges, local_uv, time, color_a, color_b);
+        case 4u: return vfx_cpp_sprite_layer<4u>(edges, local_uv, time, color_a, color_b);
+        case 5u: return vfx_cpp_sprite_layer<5u>(edges, local_uv, time, color_a, color_b);
+        case 6u: return vfx_cpp_sprite_layer<6u>(edges, local_uv, time, color_a, color_b);
+        case 7u: return vfx_cpp_sprite_layer<7u>(edges, local_uv, time, color_a, color_b);
+        case 8u: return vfx_cpp_sprite_layer<8u>(edges, local_uv, time, color_a, color_b);
+        case 9u: return vfx_cpp_sprite_layer<9u>(edges, local_uv, time, color_a, color_b);
+        case 10u: return vfx_cpp_sprite_layer<10u>(edges, local_uv, time, color_a, color_b);
+        case 11u: return vfx_cpp_sprite_layer<11u>(edges, local_uv, time, color_a, color_b);
+        case 12u: return vfx_cpp_sprite_layer<12u>(edges, local_uv, time, color_a, color_b);
+        case 13u: return vfx_cpp_sprite_layer<13u>(edges, local_uv, time, color_a, color_b);
+        case 14u: return vfx_cpp_sprite_layer<14u>(edges, local_uv, time, color_a, color_b);
+        case 15u: return vfx_cpp_sprite_layer<15u>(edges, local_uv, time, color_a, color_b);
+        default: return (float4)(0.0f);
+    }
+}
+#endif
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void spirit_vfx_sprite_rgba8(
     __global const uint *src_rgba,
@@ -762,6 +949,26 @@ __kernel void spirit_vfx_sprite_rgba8(
             vfx_over(soft, vfx_premultiply(echo)),
             vfx_premultiply(body));
     }
+
+#if defined(TRUEOS_SPIRIT_CPP_REPASS)
+    if (shader_id != 0u) {
+        const SpiritCppSpriteEdges cpp_edges = vfx_cpp_sprite_edges(
+            src_rgba,
+            control,
+            local_uv,
+            texel,
+            base.w);
+        sprite = vfx_over(
+            sprite,
+            vfx_cpp_sprite_dispatch(
+                shader_id,
+                cpp_edges,
+                local_uv,
+                time,
+                color_a,
+                color_b));
+    }
+#endif
 
     uint dst_pitch_pixels = control[VFX_CTRL_DST_PITCH] >> 2;
     uint dst_index = y * dst_pitch_pixels + x;

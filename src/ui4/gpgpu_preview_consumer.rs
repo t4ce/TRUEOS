@@ -833,7 +833,7 @@ const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str
         FramePoolError::InvalidPlan(FramePlanError::VideoRequiresStreamingCadence) => {
             "frame-create-invalid-plan-video-cadence"
         }
-        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresTripleBuffering) => {
+        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresQuadBuffering) => {
             "frame-create-invalid-plan-video-buffering"
         }
         FramePoolError::InvalidPlan(FramePlanError::VideoExceedsPixelSoftCap) => {

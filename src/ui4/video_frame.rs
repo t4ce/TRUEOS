@@ -28,13 +28,13 @@ use super::{
 const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
-const VIDEO_RGBA_BUFFERING: FrameBuffering = FrameBuffering::Triple;
-const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
+const VIDEO_RGBA_BUFFERING: FrameBuffering = FrameBuffering::Quad;
+pub(crate) const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 /// Two ordered conversions may occupy the immutable RCS job slots at once.
 /// The current AVC path retains three references in four slots; the playback
 /// loop additionally drains this queue before every later IDR reuses slot 0.
 const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = crate::intel::gpgpu::UI4_COMPOSITOR_RCS_JOB_SLOTS;
-const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 1);
+const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 2);
 const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
 const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US: u64 = 250;
@@ -1232,13 +1232,15 @@ async fn convert_publish_decoded_nv12_stream_frame(
         .map_or(u8::MAX, |index| index);
     let start_acquired_mask = ownership_at_first_busy.map_or(0, |state| state.acquired_mask);
     let start_reader_mask = ownership_at_first_busy.map_or(0, |state| state.reader_mask);
-    let start_readers = ownership_at_first_busy.map_or([0u16; 3], |state| state.readers);
+    let start_readers =
+        ownership_at_first_busy.map_or([0u16; VIDEO_RGBA_BUFFER_COUNT], |state| state.readers);
     let end_front = ownership_after_acquire
         .and_then(|state| state.front_buffer)
         .map_or(u8::MAX, |index| index);
     let end_acquired_mask = ownership_after_acquire.map_or(0, |state| state.acquired_mask);
     let end_reader_mask = ownership_after_acquire.map_or(0, |state| state.reader_mask);
-    let end_readers = ownership_after_acquire.map_or([0u16; 3], |state| state.readers);
+    let end_readers =
+        ownership_after_acquire.map_or([0u16; VIDEO_RGBA_BUFFER_COUNT], |state| state.readers);
     crate::log_trace!(target: "ui4";
         "ui4 video-surface-lifecycle event=rgba-acquired playback_frame={} decode_seq={} frame={} buffer={} busy={} wait_us={} observed_ns={} start_buffers={} start_front={} start_acquired_mask=0x{:X} start_reader_mask=0x{:X} start_readers={:?} end_front={} end_acquired_mask=0x{:X} end_reader_mask=0x{:X} end_readers={:?} probe=lock-consistent-snapshots ownership_unchanged=1\n",
         playback_frame,

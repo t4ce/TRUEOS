@@ -50,6 +50,14 @@ pub(crate) fn cpp_demo_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *CPP_DEMO_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn spirit_vfx_background_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD.lock()
+}
+
+pub(crate) fn spirit_vfx_sprite_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
+    *SPIRIT_VFX_SPRITE_RGBA8_UPLOAD.lock()
+}
+
 pub(crate) fn font_outline_mesh_upload_status() -> Option<UploadedKernelArtifact> {
     *FONT_OUTLINE_MESH_UPLOAD.lock()
 }

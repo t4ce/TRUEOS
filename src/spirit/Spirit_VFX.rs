@@ -218,7 +218,7 @@ pub(crate) enum SpiritVfxEffect {
 }
 
 impl SpiritVfxEffect {
-    const fn from_id(id: u8) -> Option<Self> {
+    pub(crate) const fn from_id(id: u8) -> Option<Self> {
         match id {
             0 => Some(Self::OriginalClean),
             1 => Some(Self::AuraBloom),
@@ -302,6 +302,59 @@ impl SpiritVfxEffect {
             Self::DreamBloom => &DREAM_BLOOM_CONTROLS,
         }
     }
+
+    pub(crate) const fn demo_colors(self) -> (SpiritVfxRgb8, SpiritVfxRgb8) {
+        match self {
+            Self::OriginalClean => {
+                (SpiritVfxRgb8::rgb(0x9A, 0x7C, 0xFF), SpiritVfxRgb8::rgb(0x5E, 0xE7, 0xFF))
+            }
+            Self::AuraBloom => {
+                (SpiritVfxRgb8::rgb(0x8D, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0x5E, 0xE7, 0xFF))
+            }
+            Self::NeonEdge => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x53, 0xD1), SpiritVfxRgb8::rgb(0x5E, 0xE7, 0xFF))
+            }
+            Self::FireRim => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x4D, 0x2E), SpiritVfxRgb8::rgb(0xFF, 0xD3, 0x5A))
+            }
+            Self::IceShimmer => {
+                (SpiritVfxRgb8::rgb(0x70, 0xEA, 0xFF), SpiritVfxRgb8::rgb(0xD7, 0xFB, 0xFF))
+            }
+            Self::Hologram => {
+                (SpiritVfxRgb8::rgb(0x36, 0xE7, 0xFF), SpiritVfxRgb8::rgb(0x85, 0x6C, 0xFF))
+            }
+            Self::RgbGlitch => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x3F, 0x9F), SpiritVfxRgb8::rgb(0x39, 0xF4, 0xFF))
+            }
+            Self::Dissolve => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x6A, 0x2B), SpiritVfxRgb8::rgb(0xFF, 0xE6, 0x6E))
+            }
+            Self::GhostTrail => {
+                (SpiritVfxRgb8::rgb(0xB5, 0x96, 0xFF), SpiritVfxRgb8::rgb(0x59, 0xED, 0xFF))
+            }
+            Self::ElectricArc => {
+                (SpiritVfxRgb8::rgb(0x7B, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0xD8, 0xFB, 0xFF))
+            }
+            Self::RainbowPrism => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x5C, 0xCF), SpiritVfxRgb8::rgb(0x58, 0xEA, 0xFF))
+            }
+            Self::HitFlash => {
+                (SpiritVfxRgb8::rgb(0xFF, 0xFF, 0xFF), SpiritVfxRgb8::rgb(0xFF, 0x4F, 0x76))
+            }
+            Self::PixelWave => {
+                (SpiritVfxRgb8::rgb(0xA8, 0x79, 0xFF), SpiritVfxRgb8::rgb(0x50, 0xE7, 0xFF))
+            }
+            Self::ToonInk => {
+                (SpiritVfxRgb8::rgb(0x3B, 0x27, 0x4F), SpiritVfxRgb8::rgb(0xD9, 0x4D, 0xFF))
+            }
+            Self::LiquidWarp => {
+                (SpiritVfxRgb8::rgb(0x57, 0xF0, 0xDE), SpiritVfxRgb8::rgb(0x8D, 0x6C, 0xFF))
+            }
+            Self::DreamBloom => {
+                (SpiritVfxRgb8::rgb(0xFF, 0x8D, 0xDD), SpiritVfxRgb8::rgb(0x7D, 0xE8, 0xFF))
+            }
+        }
+    }
 }
 
 #[repr(u8)]
@@ -322,7 +375,7 @@ pub(crate) enum SpiritVfxBackgroundEffect {
 }
 
 impl SpiritVfxBackgroundEffect {
-    const fn from_id(id: u8) -> Option<Self> {
+    pub(crate) const fn from_id(id: u8) -> Option<Self> {
         match id {
             0 => Some(Self::Transparent),
             2 => Some(Self::EnergyRing),
@@ -367,6 +420,41 @@ impl SpiritVfxBackgroundEffect {
             Self::WaterRipples => Some(9),
             Self::PixelBurst => Some(10),
             Self::Transparent => None,
+        }
+    }
+
+    pub(crate) const fn demo_style(self) -> (f32, SpiritVfxRgb8, SpiritVfxRgb8) {
+        match self {
+            Self::Transparent => {
+                (1.0, SpiritVfxRgb8::rgb(0x6F, 0x4C, 0xFF), SpiritVfxRgb8::rgb(0x4D, 0xE7, 0xFF))
+            }
+            Self::EnergyRing => {
+                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x4D, 0xB8), SpiritVfxRgb8::rgb(0x60, 0xED, 0xFF))
+            }
+            Self::MagicCircle => {
+                (1.0, SpiritVfxRgb8::rgb(0x8D, 0x68, 0xFF), SpiritVfxRgb8::rgb(0x6C, 0xF2, 0xFF))
+            }
+            Self::NebulaSmoke => {
+                (1.1, SpiritVfxRgb8::rgb(0x88, 0x3D, 0xFF), SpiritVfxRgb8::rgb(0x30, 0xC8, 0xFF))
+            }
+            Self::CyberGrid => {
+                (1.1, SpiritVfxRgb8::rgb(0x7F, 0x5D, 0xFF), SpiritVfxRgb8::rgb(0x42, 0xEA, 0xFF))
+            }
+            Self::PortalVortex => {
+                (1.0, SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF), SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF))
+            }
+            Self::SpeedLines => {
+                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x4F, 0x8D), SpiritVfxRgb8::rgb(0xFF, 0xE8, 0x6B))
+            }
+            Self::BokehField => {
+                (1.0, SpiritVfxRgb8::rgb(0xFF, 0x8E, 0xDC), SpiritVfxRgb8::rgb(0x75, 0xEA, 0xFF))
+            }
+            Self::WaterRipples => {
+                (1.0, SpiritVfxRgb8::rgb(0x4F, 0x8D, 0xFF), SpiritVfxRgb8::rgb(0x6E, 0xFF, 0xE4))
+            }
+            Self::PixelBurst => {
+                (1.0, SpiritVfxRgb8::rgb(0xB0, 0x6C, 0xFF), SpiritVfxRgb8::rgb(0x5D, 0xEE, 0xFF))
+            }
         }
     }
 }
@@ -755,6 +843,8 @@ pub(crate) enum SpiritVfxControlError {
     NonFiniteRotation,
     NegativeRotationDelta,
     NonFiniteEdgeFade,
+    InvalidBackgroundMode,
+    InvalidShaderMode,
 }
 
 impl SpiritVfxUiConfig {
@@ -938,6 +1028,51 @@ pub(crate) fn publish_control_panel(mut panel: SpiritVfxControlPanel) -> u64 {
     panel.sanitize();
     *CONTROL_PANEL.lock() = Some(panel);
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// Select one stable C++ Spirit combination with the authored demo defaults.
+/// This is intentionally a control-panel publication, so the live 60 Hz task
+/// observes it without changing ownership, walker shape, or cursor lifecycle.
+pub(crate) fn select_cpp_repass(
+    background_id: u8,
+    shader_id: u8,
+) -> Result<u64, SpiritVfxControlError> {
+    let background = SpiritVfxBackgroundEffect::from_id(background_id)
+        .ok_or(SpiritVfxControlError::InvalidBackgroundMode)?;
+    let shader =
+        SpiritVfxEffect::from_id(shader_id).ok_or(SpiritVfxControlError::InvalidShaderMode)?;
+    let mut panel = control_panel_snapshot().1;
+    let (scale, bg_color_a, bg_color_b) = background.demo_style();
+    panel.alpha_background = SpiritVfxAlphaBackground {
+        effect: background,
+        opacity: if background == SpiritVfxBackgroundEffect::Transparent {
+            0.0
+        } else {
+            0.82
+        },
+        scale,
+        speed: 1.0,
+        intensity: 1.0,
+        bg_color_a,
+        bg_color_b,
+    };
+
+    let mut parameters = [0.0; 4];
+    for (value, spec) in parameters.iter_mut().zip(shader.controls().iter()) {
+        *value = spec.default;
+    }
+    let (fx_color_a, fx_color_b) = shader.demo_colors();
+    panel.sprite_shader = SpiritVfxSpriteShader {
+        effect: shader,
+        parameters,
+        fx_color_a,
+        fx_color_b,
+    };
+    Ok(publish_control_panel(panel))
+}
+
+pub(crate) fn reset_cpp_repass() -> u64 {
+    publish_control_panel(SpiritVfxControlPanel::spirit_live_default())
 }
 
 /// Temporarily replace only the background presented to the GPU. The movement

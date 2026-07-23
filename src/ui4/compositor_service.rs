@@ -814,6 +814,7 @@ fn queue_async_plane(
                             super::FrameBuffering::Single => "single",
                             super::FrameBuffering::Double => "double",
                             super::FrameBuffering::Triple => "triple",
+                            super::FrameBuffering::Quad => "quad",
                         },
                         !COMPUTE_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel),
                     ),
@@ -1009,7 +1010,7 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                     (snapshot.plan.content, snapshot.plan.buffering),
                     (FrameContent::Image, super::FrameBuffering::Double)
                         | (FrameContent::BlueprintScene, super::FrameBuffering::Triple)
-                        | (FrameContent::Video, super::FrameBuffering::Triple)
+                        | (FrameContent::Video, super::FrameBuffering::Quad)
                 )
         }
     })

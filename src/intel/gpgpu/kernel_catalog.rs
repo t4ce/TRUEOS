@@ -72,10 +72,14 @@ pub(crate) const LAB256_MULTIPHASE_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/lab256_multiphase.cl");
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME: &str = "spirit_vfx_background_rgba8";
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.cl");
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp");
+pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp";
 pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME: &str = "spirit_vfx_sprite_rgba8";
 pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl");
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp");
+pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp";
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
@@ -155,12 +159,8 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         LAB256_MULTIPHASE_KERNEL_NAME => {
             Some("crates/trueos-shader/gpgpu/kernels/lab256_multiphase.cl")
         }
-        SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => {
-            Some("crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.cl")
-        }
-        SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => {
-            Some("crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.cl")
-        }
+        SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_BACKGROUND_RGBA8_SOURCE_PATH),
+        SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME => Some(SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH),
         _ => None,
     }
 }
@@ -317,7 +317,9 @@ pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/pixel_plasma_rgba8.bin");
 pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/pixel_plasma_rgba8.spv");
-include!("../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs");
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
+);
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.bin"
 );
@@ -326,10 +328,7 @@ pub(crate) const CPP_DEMO_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
 );
 pub(crate) const CPP_DEMO_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(
-    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
-    Ok(())
-));
+const _: () = assert!(matches!(CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () = {
     let contract = CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT;
     assert!(contract.target.pci_device_ids.len() == 1);
@@ -367,22 +366,56 @@ pub(crate) const LAB256_MULTIPHASE_ADLS_SPV: &[u8] = include_bytes!(
 );
 const _: () = assert!(LAB256_MULTIPHASE_ADLS_BIN.len() == 52_632);
 const _: () = assert!(LAB256_MULTIPHASE_ADLS_SPV.len() == 28_884);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.contract.rs"
+);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.contract.rs"
+);
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_background_rgba8.bin"
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.bin"
 );
 pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_background_rgba8.spv"
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv"
 );
 pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_sprite_rgba8.bin"
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin"
 );
 pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
-    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/spirit_vfx_sprite_rgba8.spv"
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv"
 );
-const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() == 54_472);
-const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV.len() == 26_452);
-const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() == 547_392);
-const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV.len() == 82_384);
+pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
+    SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
+    SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() == 98_384);
+const _: () = assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() == 656_728);
+const _: () = {
+    let background = SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    let sprite = SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(matches!(background.validate(), Ok(())));
+    assert!(matches!(sprite.validate(), Ok(())));
+    assert!(background.target.pci_device_ids.len() == 1);
+    assert!(background.target.pci_device_ids[0] == 0x4680);
+    assert!(background.target.revision_min == 0x0C);
+    assert!(background.target.revision_max == 0x0C);
+    assert!(background.simd_width == 16);
+    assert!(background.scratch_bytes == 0);
+    assert!(background.slm_bytes == 0);
+    assert!(background.cross_thread_data_bytes == 64);
+    assert!(background.per_thread_data_bytes == 96);
+    assert!(background.bindings.len() == 2);
+    assert!(sprite.target.pci_device_ids.len() == 1);
+    assert!(sprite.target.pci_device_ids[0] == 0x4680);
+    assert!(sprite.target.revision_min == 0x0C);
+    assert!(sprite.target.revision_max == 0x0C);
+    assert!(sprite.simd_width == 16);
+    assert!(sprite.scratch_bytes == 0);
+    assert!(sprite.slm_bytes == 0);
+    assert!(sprite.cross_thread_data_bytes == 96);
+    assert!(sprite.per_thread_data_bytes == 96);
+    assert!(sprite.bindings.len() == 3);
+};
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
     0x10, 0x86, 0x60, 0x24, 0xAA, 0xFF, 0xAE, 0x96, 0xF9, 0x2C, 0xFC, 0x25, 0xA5, 0xFB, 0x18, 0x8C,
@@ -461,12 +494,4 @@ pub(crate) const SCENE_AABB_ADLS_BIN_SHA256: [u8; 32] = [
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] = [
     0x6F, 0x51, 0xFF, 0x13, 0x4F, 0x9F, 0x1F, 0xA2, 0x2C, 0xC2, 0x13, 0xD2, 0x48, 0x18, 0xA6, 0x7D,
     0x75, 0x93, 0xBC, 0x98, 0x24, 0x1C, 0xE9, 0x2E, 0xCD, 0xA9, 0x8E, 0x50, 0xC2, 0x92, 0x96, 0xD2,
-];
-pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0x52, 0x70, 0x42, 0xD3, 0x0F, 0xDF, 0xEA, 0xF1, 0x11, 0xD4, 0x91, 0xB9, 0x49, 0x7A, 0xD7, 0xD6,
-    0xF0, 0xFB, 0x5C, 0x51, 0x36, 0x9D, 0xA2, 0x96, 0x8A, 0x53, 0xB8, 0x53, 0x44, 0xDA, 0x75, 0x2F,
-];
-pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256: [u8; 32] = [
-    0xF1, 0x26, 0x4A, 0xC0, 0x62, 0xD5, 0x64, 0x5C, 0x8D, 0x4D, 0xA5, 0x5E, 0x15, 0x85, 0xEE, 0x22,
-    0xC5, 0x6C, 0xFB, 0x7A, 0x34, 0x1D, 0x28, 0x40, 0x7D, 0x3B, 0x93, 0x4E, 0x97, 0x82, 0x1D, 0xDC,
 ];

@@ -19,10 +19,22 @@ const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU: u64 = 0x0D40_0000;
 const SCENE_AABB_ADLS_GPU: u64 = 0x0D41_0000;
 const LAB256_MULTIPHASE_ADLS_GPU: u64 = 0x0D42_0000;
 const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
-const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D44_0000;
-// The large Spirit sprite image extends through 0x0D4C_xxxx. Keep the C++
-// demo at the next 64 KiB boundary so resident kernel mappings never overlap.
-const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D4D_0000;
+// The C++ background is larger than its OpenCL C ABI reference. Give both
+// Spirit images dedicated, non-overlapping instruction windows.
+const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D45_0000;
+// The C++ Spirit sprite image extends through 0x0D4F_xxxx. Keep the standalone
+// demo comfortably outside Spirit's shared instruction-base window.
+const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
+const _: () = {
+    assert!(
+        SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
+            <= SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
+    );
+    assert!(
+        SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU + SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() as u64
+            <= CPP_DEMO_RGBA8_ADLS_GPU
+    );
+};
 #[cfg(not(feature = "intel_gpu_cpp_aot"))]
 pub(crate) const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 #[cfg(feature = "intel_gpu_cpp_aot")]
@@ -45,8 +57,7 @@ const GLYPH_MASK_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SKYBOX_SAMPLE_RGB565_TEXT_OFFSET_BYTES: u64 = 0x40;
 const CHART_SINE_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
 const PIXEL_PLASMA_RGBA8_TEXT_OFFSET_BYTES: u64 = 0x40;
-const CPP_DEMO_RGBA8_TEXT_OFFSET_BYTES: u64 =
-    CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
+const CPP_DEMO_RGBA8_TEXT_OFFSET_BYTES: u64 = CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FONT_OUTLINE_MESH_TEXT_OFFSET_BYTES: u64 = 0x40;
 const SCENE_AABB_TEXT_OFFSET_BYTES: u64 = 0x40;
 const LAB256_STEP_TEXT_OFFSET_BYTES: u64 = 0x0040;
@@ -54,10 +65,12 @@ const LAB256_REDUCE_TEXT_OFFSET_BYTES: u64 = 0x1540;
 const LAB256_COMPOSITE_TEXT_OFFSET_BYTES: u64 = 0x1BC0;
 const _: () = assert!(LAB256_STEP_TEXT_OFFSET_BYTES < LAB256_REDUCE_TEXT_OFFSET_BYTES);
 const _: () = assert!(LAB256_REDUCE_TEXT_OFFSET_BYTES < LAB256_COMPOSITE_TEXT_OFFSET_BYTES);
-const SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES: u64 = 0x0040;
+const SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES: u64 =
+    SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 // Both artifacts share one instruction-base window in the two-walker batch.
-const SPIRIT_VFX_SPRITE_TEXT_OFFSET_BYTES: u64 =
-    SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU - SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + 0x0040;
+const SPIRIT_VFX_SPRITE_TEXT_OFFSET_BYTES: u64 = SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
+    - SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU
+    + SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 
 const RCS_RING_BASE: usize = 0x0000_2000;
 const RCS_RING_TAIL: usize = RCS_RING_BASE + 0x30;
@@ -365,8 +378,7 @@ const CPP_DEMO_CROSS_THREAD_BYTES: usize =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
 const CPP_DEMO_PER_THREAD_BYTES: usize =
     CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
-const CPP_DEMO_INDIRECT_BYTES: usize =
-    CPP_DEMO_CROSS_THREAD_BYTES + CPP_DEMO_PER_THREAD_BYTES;
+const CPP_DEMO_INDIRECT_BYTES: usize = CPP_DEMO_CROSS_THREAD_BYTES + CPP_DEMO_PER_THREAD_BYTES;
 const CPP_DEMO_PRE_MARKER_SLOT: usize = 41;
 const CPP_DEMO_POST_MARKER_SLOT: usize = 40;
 const CPP_DEMO_PRE_MARKER: u32 = 0xC0DE_C901;

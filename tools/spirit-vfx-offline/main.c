@@ -58,6 +58,7 @@ extern cl_command_queue clCreateCommandQueue(cl_context, cl_device_id,
                                              cl_command_queue_properties, cl_int *);
 extern cl_program clCreateProgramWithSource(cl_context, cl_uint, const char **, const size_t *,
                                             cl_int *);
+extern cl_program clCreateProgramWithIL(cl_context, const void *, size_t, cl_int *);
 extern cl_int clBuildProgram(cl_program, cl_uint, const cl_device_id *, const char *,
                              void (*)(cl_program, void *), void *);
 extern cl_int clGetProgramBuildInfo(cl_program, cl_device_id, cl_uint, size_t, void *, size_t *);
@@ -309,23 +310,46 @@ static cl_platform_id choose_platform(void) {
     return NULL;
 }
 
-static cl_program build_program(cl_context context, cl_device_id device, const char *path) {
+static cl_program build_program(
+    cl_context context,
+    cl_device_id device,
+    const char *source_path,
+    const char *spirv_path)
+{
     size_t source_length = 0;
-    char *source = read_text_file(path, &source_length);
-    const char *sources[] = {source};
-    const size_t lengths[] = {source_length};
+    char *source = read_text_file(
+        spirv_path != NULL ? spirv_path : source_path,
+        &source_length);
     cl_int error = CL_SUCCESS;
-    cl_program program = clCreateProgramWithSource(context, 1, sources, lengths, &error);
-    check_cl(error, "clCreateProgramWithSource");
+    cl_program program = NULL;
+    if (spirv_path != NULL) {
+        program = clCreateProgramWithIL(context, source, source_length, &error);
+        check_cl(error, "clCreateProgramWithIL");
+    } else {
+        const char *sources[] = {source};
+        const size_t lengths[] = {source_length};
+        program = clCreateProgramWithSource(context, 1, sources, lengths, &error);
+        check_cl(error, "clCreateProgramWithSource");
+    }
 
-    error = clBuildProgram(program, 1, &device, "-cl-std=CL1.2", NULL, NULL);
+    error = clBuildProgram(
+        program,
+        1,
+        &device,
+        spirv_path != NULL ? NULL : "-cl-std=CL1.2",
+        NULL,
+        NULL);
     if (error != CL_SUCCESS) {
         size_t log_bytes = 0;
         clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_bytes);
         char *log = calloc(log_bytes + 1, 1);
         if (log != NULL) {
             clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, log_bytes, log, NULL);
-            fprintf(stderr, "OpenCL build log for %s:\n%s\n", path, log);
+            fprintf(
+                stderr,
+                "OpenCL build log for %s:\n%s\n",
+                spirv_path != NULL ? spirv_path : source_path,
+                log);
             free(log);
         }
         check_cl(error, "clBuildProgram");
@@ -798,8 +822,12 @@ int main(int argc, char **argv) {
     cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
     check_cl(error, "clCreateCommandQueue");
 
-    cl_program background_program = build_program(context, device, BACKGROUND_SOURCE);
-    cl_program sprite_program = build_program(context, device, SPRITE_SOURCE);
+    const char *background_spirv = getenv("SPIRIT_VFX_BACKGROUND_SPV");
+    const char *sprite_spirv = getenv("SPIRIT_VFX_SPRITE_SPV");
+    cl_program background_program =
+        build_program(context, device, BACKGROUND_SOURCE, background_spirv);
+    cl_program sprite_program =
+        build_program(context, device, SPRITE_SOURCE, sprite_spirv);
     cl_kernel background_kernel =
         clCreateKernel(background_program, "spirit_vfx_background_rgba8", &error);
     check_cl(error, "clCreateKernel(background)");
@@ -844,6 +872,10 @@ int main(int argc, char **argv) {
 
     printf("  platform: %s\n", platform_name);
     printf("  device:   %s\n", device_name);
+    printf(
+        "  frontend: background=%s sprite=%s\n",
+        background_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source",
+        sprite_spirv != NULL ? "C++ SPIR-V" : "OpenCL C source");
     if (panel_mode) {
         run_panel(queue, background_kernel, sprite_kernel, control_buffer, source_buffers,
                   cursor_buffer, cursor_grid, &asset);
@@ -867,7 +899,8 @@ int main(int argc, char **argv) {
                    mode_name((ReplayMode)(mode + REPLAY_FIRST_ID)));
         }
         printf("\n");
-        printf("  dispatch: nine 256x256 cells, local 16x1, production OpenCL sources\n");
+        printf(
+            "  dispatch: nine 256x256 cells, local 16x1, selected GPU programs\n");
         printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds, control[2]);
         printf("  output:   %s\n", output_path);
     }

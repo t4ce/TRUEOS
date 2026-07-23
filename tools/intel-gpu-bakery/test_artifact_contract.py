@@ -74,7 +74,18 @@ class ArtifactContractTests(unittest.TestCase):
             catalog,
             flags=re.DOTALL,
         )
-        binaries = sorted(ARTIFACT_ROOT.glob("*.bin"))
+        # Spirit keeps its two legacy binaries solely as ABI references for
+        # the unconditionally selected C++ repass. They are no longer embedded
+        # through literal legacy catalog hash declarations.
+        abi_reference_only = {
+            "spirit_vfx_background_rgba8.bin",
+            "spirit_vfx_sprite_rgba8.bin",
+        }
+        binaries = sorted(
+            binary
+            for binary in ARTIFACT_ROOT.glob("*.bin")
+            if binary.name not in abi_reference_only
+        )
         self.assertEqual(len(declarations), len(binaries))
         observed_names = set()
         for stem, byte_source in declarations:
@@ -121,6 +132,19 @@ class ArtifactContractTests(unittest.TestCase):
             ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.spv",
         )
         self.assertEqual(abi_projection(cpp), abi_projection(legacy))
+
+    def test_cpp_and_legacy_spirit_abis_are_exactly_equal(self) -> None:
+        for stem in (
+            "spirit_vfx_background_rgba8",
+            "spirit_vfx_sprite_rgba8",
+        ):
+            with self.subTest(artifact=stem):
+                legacy = analyze_zebin(ARTIFACT_ROOT / f"{stem}.bin")
+                cpp = analyze_zebin(
+                    ARTIFACT_ROOT / "cpp" / f"{stem}.bin",
+                    ARTIFACT_ROOT / "cpp" / f"{stem}.spv",
+                )
+                self.assertEqual(abi_projection(cpp), abi_projection(legacy))
 
     def test_abi_projection_detects_implicit_payload_drift(self) -> None:
         cpp = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
@@ -183,7 +207,12 @@ class ArtifactContractTests(unittest.TestCase):
         manifests = sorted(root.glob("*.manifest.json"))
         self.assertEqual(
             [path.name for path in manifests],
-            ["copy_rect_rgba8.manifest.json", "cpp_demo_rgba8.manifest.json"],
+            [
+                "copy_rect_rgba8.manifest.json",
+                "cpp_demo_rgba8.manifest.json",
+                "spirit_vfx_background_rgba8.manifest.json",
+                "spirit_vfx_sprite_rgba8.manifest.json",
+            ],
         )
         for manifest_path in manifests:
             stem = manifest_path.name.removesuffix(".manifest.json")
@@ -230,6 +259,48 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertRegex(resource_tree["tree_sha256"], r"^[0-9a-f]{64}$")
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
+
+    def test_spirit_cpp_repass_has_two_reviewed_abi_twins(self) -> None:
+        root = ARTIFACT_ROOT / "cpp"
+        expected = {
+            "spirit_vfx_background_rgba8": (2, 64),
+            "spirit_vfx_sprite_rgba8": (3, 96),
+        }
+        for stem, (binding_count, cross_thread_bytes) in expected.items():
+            with self.subTest(artifact=stem):
+                manifest = json.loads(
+                    (root / f"{stem}.manifest.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(manifest["variant"], "cpp")
+                self.assertEqual(manifest["abi_reference"]["result"], "exact-match")
+                input_paths = {
+                    record["path"] for record in manifest["source"]["inputs"]
+                }
+                self.assertIn(
+                    f"crates/trueos-shader/gpgpu/kernels/{stem}.clcpp",
+                    input_paths,
+                )
+                self.assertIn(
+                    f"crates/trueos-shader/gpgpu/kernels/{stem}.cl",
+                    input_paths,
+                )
+                self.assertIn(
+                    "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",
+                    input_paths,
+                )
+                analysis = analyze_zebin(
+                    root / f"{stem}.bin",
+                    root / f"{stem}.spv",
+                )
+                kernel = analysis["kernels"][0]
+                self.assertEqual(len(kernel["bindings"]), binding_count)
+                self.assertEqual(
+                    kernel["cross_thread_data_bytes"],
+                    cross_thread_bytes,
+                )
+                self.assertEqual(kernel["per_thread_data_bytes"], 96)
+                self.assertEqual(kernel["scratch_bytes"], 0)
+                self.assertEqual(kernel["slm_bytes"], 0)
 
     def test_cpp_native_demo_has_reviewed_standalone_policy(self) -> None:
         root = ARTIFACT_ROOT / "cpp"

@@ -1,8 +1,9 @@
 # Spirit Sprite shader OpenCL comparison grid
 
 This folder maps the complete `preview.html` **3 · Sprite shader** collection
-through the production `spirit_vfx_sprite_rgba8.cl` kernel. It is not a CPU
-approximation and contains no duplicate shader math.
+through the retained `spirit_vfx_sprite_rgba8.cl` reference or the production
+C++ SPIR-V. It is not a CPU approximation and contains no duplicate shader
+math.
 
 The live renderer:
 
@@ -41,6 +42,14 @@ time or output path when comparing temporal modes:
 ```sh
 make -C tools/spirit-sprite-vfx-offline render \
   TIME=0.75 OUTPUT=bld/spirit-sprite-vfx-grid-075.png
+```
+
+The published C++ repass can be replayed directly as SPIR-V on the Intel host
+driver, without recompiling the OpenCL C source:
+
+```sh
+SPIRIT_VFX_SPRITE_SPV=crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv \
+make -C tools/spirit-sprite-vfx-offline render
 ```
 
 The dependencies are an OpenCL ICD loader/runtime, `libpng`, `7z`,

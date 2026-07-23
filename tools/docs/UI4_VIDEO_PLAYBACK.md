@@ -24,7 +24,7 @@ and overwhelmingly avoid a second slow scheduler admission.
 | UI producer | `present_decoded_nv12_stream_frame` converts the retired decoder surface into an acquired UI4 RGBA buffer | GuC/RCS owns the conversion interval |
 | Window/display | UI4 Frame pool, window broker, compositor direct import, plane flip, and SURFLIVE | UI4 owns publication and display lifetime |
 
-Loop mode retains the UI4 session and triple-buffered Frame between laps. Each lap independently acquires/releases the media playback guard and restarts its selected source. A non-looping command closes after one lap.
+Loop mode retains the UI4 session and four-buffer video Frame between laps. Each lap independently acquires/releases the media playback guard and restarts its selected source. A non-looping command closes after one lap.
 
 Surf browser video references are deliberately dropped at the asset boundary with `no-forward-no-present`. The abandoned browser candidate queue, SABR probes, Innertube resolver, and browser decoder ingress were removed; browser playback will be designed separately later.
 
@@ -57,14 +57,14 @@ embedded H.264 Annex-B access unit
      tested crop: 768x512 at source 576,284
      BT.601 limited-range conversion, opaque alpha
   -> exact acquired UI4 linear premultiplied-RGBA8 backbuffer (PAT3)
-     768x512, pitch 3072, three-buffer Frame ring
+     768x512, pitch 3072, four-buffer Frame bridge
   -> Frame publication + broker window serial/damage
   -> compositor display-GGTT direct import
   -> slot-1 plane flip at the display boundary
   -> SURFLIVE confirms scanout and releases the previous buffer
 ```
 
-There is no CPU pixel conversion or full-frame CPU copy after decode. The CPU still parses the compressed stream, builds requests, and observes completion. The decoder DPB source ring and the three UI4 RGBA presentation buffers are different lifetimes: GuC completion releases the NV12 input; SURFLIVE releases the prior RGBA display buffer.
+There is no CPU pixel conversion or full-frame CPU copy after decode. The CPU still parses the compressed stream, builds requests, and observes completion. The decoder DPB source ring and the four UI4 RGBA presentation buffers are different lifetimes: GuC completion releases the NV12 input; SURFLIVE releases the prior RGBA display buffer.
 
 Older Rust/kernel artifact symbols still contain `Tile64` for baked ABI compatibility. The proven VDBOX byte layout is the legacy 128x32 media Y-tile swizzle; human-facing logs now say `media-ytile-nv12` to avoid repeating that bring-up mistake.
 
@@ -92,10 +92,13 @@ cooperative lanes on the same selected worker AP and gates broker publication
 by request order.
 
 The queue depth deliberately remains two. It matches the decoder lifetime
-budget already enforced by `VIDEO_CONVERSION_OUTSTANDING_CAP`, needs only the
-two non-live allocations in the triple-buffered RGBA Frame, and fits exactly
-below `UI_SURFACE_GPU_BASE` with two 16 MiB source-alias windows. Increasing it
-is therefore an ownership-policy change, not a tuning constant.
+budget already enforced by `VIDEO_CONVERSION_OUTSTANDING_CAP` and fits exactly
+below `UI_SURFACE_GPU_BASE` with two 16 MiB source-alias windows. The RGBA
+bridge has four allocations because the steady-state ownership overlap is
+larger than the producer queue alone: one allocation can be display-live, a
+second retained as the compositor's pending replacement, and two more back
+the immutable RCS jobs. Increasing the RCS queue is therefore an
+ownership-policy change, not a tuning constant.
 
 The encoder no longer clears the shared RCS ring when preparing a video batch.
 Only its selected batch and result page are cleared. A following frame can
@@ -181,6 +184,32 @@ its old display lease. That wait is intentionally charged to the conversion
 worker's `rgba_acquire` phase. It is distinct from both the 10-11 ms
 pre-batch-entry delay and the negligible bookkeeping after observed SURFLIVE.
 
+The latest three fast consecutive 200-frame laps made this overlap decisive.
+The three-buffer build blocked 137, 140, and 122 acquisitions (399/600,
+66.5%). Of those waits, 371 matched an effective different-surface SURFLIVE
+replacement. They spent a weighted 21.434 ms from wait start to that release,
+then only 0.825 ms from release to successful acquisition. Every blocked
+acquisition began with ownership mask `0x7`: all three allocations were
+genuinely occupied. Only 71, 77, and 65 frames reached RCS queue depth two;
+the depth-two slow-admission counts were 4, 1, and 1, versus 53, 58, and 54
+for depth-one admissions. The display lease overlap was draining the ordered
+ring and re-exposing the scheduler admission cost.
+
+The fourth allocation is consequently a measured bridge, not a deeper RCS
+queue or an extra decoder surface. It permits the display-live surface, the
+compositor-retained pending replacement, and both immutable RCS slots to
+coexist. If a later trace can occupy all four because presentation itself
+cannot keep pace, the next policy is explicit latest-frame replacement/drop,
+not another blind buffer.
+
+The first four-buffer hardware validation closed that prediction. In the
+retained third 200-frame lap, `rgba_acquire` fell to zero, all 200 conversions
+completed and published without failure, and the conversion worker averaged
+12.050 ms with a 23 ms maximum. End-to-end worker time averaged 13.045 ms and
+playback completed in 3422 ms at 58.44 fps. The remaining variance is the
+known depth-one RCS admission shape (`pre_submit_to_batch` average 7.174 ms,
+p50 3.5 ms, p95 17.5 ms), not SURFLIVE allocation starvation.
+
 The `ui4 video-surface-lifecycle` probe resolves that wait without changing
 the lease contract:
 
@@ -192,24 +221,28 @@ published
 surflive-observed
   -> replacement/previous buffers, pre-flip time, hardware flip wait, polls
 display-release
-  -> exact old buffer made eligible for producer reuse
+  -> raw read-lease release result for diagnostics
 ```
 
 Run `tools/analyze_video_surface_lifecycle.py <bare-metal-log>` after a
 capture. For every blocked acquisition it derives the wait-start timestamp and
-matches the exact acquired buffer's display release. `wait_start_to_release`
-is real display-lifetime backpressure; `release_to_acquire` is worker
-notification/poll latency. `no_display_release_in_wait` means another state
-change made a buffer eligible, normally a front-buffer rotation rather than a
-SURFLIVE release. The initial ownership masks distinguish a display reader
-from the other producer lane and the protected front buffer. The same report
-splits publication-to-SURFLIVE into compositor `pre_flip` and hardware
-`flip_wait`, and identifies a video flip coupled to another plane or GuC job.
+matches the exact acquired buffer to an effective SURFLIVE replacement. A
+same-surface geometry/opacity transaction can retain and release another lease
+without making that allocation reusable, so the analyzer deduplicates
+SURFLIVE by publication serial and excludes same-buffer transitions from the
+effective release count. `wait_start_to_release` is real display-lifetime
+backpressure; `release_to_acquire` is worker notification/poll latency.
+`no_display_release_in_wait` means another state change made a buffer eligible,
+normally a front-buffer rotation rather than a SURFLIVE release. The initial
+ownership masks distinguish a display reader from the other producer lane and
+the protected front buffer. The same report splits
+publication-to-SURFLIVE into compositor `pre_flip` and hardware `flip_wait`,
+and identifies a video flip coupled to another plane or GuC job.
 
 ## Lifecycle
 
 1. Shell2 reserves the singleton UI4 video lifetime. No Frame/window is allocated yet.
-2. The first successful decoded picture creates a `Video + Streaming + Triple + Rgba8888Premultiplied` Frame and its broker window.
+2. The first successful decoded picture creates a `Video + Streaming + Quad + Rgba8888Premultiplied` Frame and its broker window.
 3. Each conversion lane acquires a distinct non-live RGBA buffer and submits one immutable SIMD16 GuC job slot.
 4. The persistent RCS ring retires markers in order; broker publication also waits for the request's exact order turn.
 5. UI4 retains the exact published allocation; replacement SURFLIVE supplies display backpressure and releases the older buffer.
@@ -224,7 +257,7 @@ The RAII `VidUi4Session` is the close guarantee: even an early return from the s
 - The SIMD16 cross-thread payload must leave bytes `0..12` as zero global-ID offsets; writing width/height there makes valid-looking submissions execute no useful pixels.
 - PPGTT source aliasing and cache policy are part of the ABI. The decoder address, compositor source alias, exact destination mapping, GuC release, and SURFLIVE release must be logged as one ownership chain.
 - CPU `CLFLUSH`/`MFENCE` is not the final render-to-display handoff and must not return as a per-frame pixel walk.
-- Two queued producer jobs require triple buffering: one RGBA allocation may be display-live while two exact per-buffer producer leases back the RCS slots. Decoder reference/DPB slots remain separate.
+- Two queued producer jobs require four video allocations once display ownership is counted completely: one display-live, one compositor-retained pending replacement, and two exact per-buffer producer leases for the RCS slots. Decoder reference/DPB slots remain separate.
 - A successful close animation is a useful architectural test: it proves the window went through the broker/UI4 lifecycle rather than an old direct-present side path.
 
 ## Natural next features
@@ -239,6 +272,6 @@ The RAII `VidUi4Session` is the close guarantee: even an early return from the s
 
 ## Evidence
 
-- Hardware log: `bld/baremetal-logs/trueos-baremetal.1.log`
+- Hardware log: `bld/baremetal-logs/trueos-baremetal.0.log`
 - Final recorded montage: `bld/baremetal-logs/film/Rig_Cam_10HH_47MM_26SS.jpg`
 - Core implementation: `src/shell2/cmds/vid.rs`, `src/intel/media/hw_vid.rs`, `src/intel/media/hw_pic.rs`, `src/ui4/video_frame.rs`, `src/intel/gpgpu/operations/ui4.rs`

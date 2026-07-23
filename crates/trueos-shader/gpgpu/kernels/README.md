@@ -15,6 +15,13 @@ through the dedicated `cpp` command. Its workload map, ABI, publication policy,
 and TestRig procedure are recorded in
 [`CPP_DEMO_SUITE.md`](CPP_DEMO_SUITE.md).
 
+`spirit_vfx_background_rgba8.clcpp` and
+`spirit_vfx_sprite_rgba8.clcpp` are exact-ABI C++ repasses of Spirit's retained
+9-background and 16-sprite collections. They preserve the established
+two-walker cursor-plane path while adding compile-time-specialized secondary
+detail. The design, visual replay, hashes, and TestRig commands are recorded in
+[`SPIRIT_CPP_REPASS.md`](SPIRIT_CPP_REPASS.md).
+
 `copy_rect_rgba8.cl` is the first standalone graphics value target:
 
 - source: linear RGBA8
@@ -41,7 +48,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
 - `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, and Voronoi modes; available through the dedicated `cpp` Shell2 command
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
-- `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl`: TrueOS-Spirit's continuous 60 Hz cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
+- `spirit_vfx_background_rgba8.clcpp` and `spirit_vfx_sprite_rgba8.clcpp`: TrueOS-Spirit's continuous 60 Hz C++/IGC cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency; the retained `.cl` sources are its reviewed semantic and ABI references
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
 - `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
 
@@ -80,6 +87,14 @@ artifact for exact target `8086:4680`, revision `0x0c`. Its SHA-256 is:
 
 ```text
 19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
+```
+
+The two unconditional Spirit C++/IGC artifacts are exact ABI twins of the
+retained OpenCL C binaries:
+
+```text
+artifacts/adls/cpp/spirit_vfx_background_rgba8.bin  de5f6c0837da5d7d0fc52e2a5a97acbdc652d02caf6d853303128d7c562ee848
+artifacts/adls/cpp/spirit_vfx_sprite_rgba8.bin      2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac
 ```
 
 `artifacts/adls/copy_rect_rgba8.bin` is the retained legacy OpenCL C
@@ -146,13 +161,14 @@ overrides must match:
 42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
 ```
 
-The two Spirit VFX artifacts are hash-locked. Background-enabled submissions
+The two retained Spirit VFX artifacts are hash-locked ABI references for the
+C++ repass. Background-enabled submissions
 use one ordered two-walker batch; the clean default omits the background
 walker. The background artifact implements the selected nine-mode set:
 `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`, `Portal vortex`,
 `Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel burst`. The sprite
 artifact implements the complete stable ID 0–15 preview set from
-`Original / clean` through `Dream bloom`. Their ADL-S binary hashes are:
+`Original / clean` through `Dream bloom`. Their legacy ADL-S binary hashes are:
 
 ```text
 spirit_vfx_background_rgba8.bin  527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f
