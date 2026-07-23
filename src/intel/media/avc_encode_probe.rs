@@ -541,7 +541,8 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
         return deferred(AvcEncodeProbeFailure::TransportProbeUnavailable);
     }
 
-    let mut lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC) {
+    let mut lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_ENCODE_GUC, None)
+    {
         Ok(lane) => lane,
         Err(media::MediaVcs0LaneAcquireError::Busy) => {
             return deferred(AvcEncodeProbeFailure::LaneBusy);

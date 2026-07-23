@@ -125,6 +125,7 @@ struct HwPicJob {
     id: u32,
     codec: HwPicCodec,
     submitted_tick: u64,
+    vcs0_session_generation: Option<u64>,
     encoded: Vec<u8>,
 }
 
@@ -236,7 +237,11 @@ fn hw_pic_ticks_to_micros(ticks: u64) -> u64 {
     ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
 }
 
-pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
+fn submit_encoded_with_vcs0_session(
+    codec: HwPicCodec,
+    encoded: &[u8],
+    vcs0_session_generation: Option<u64>,
+) -> Result<u32, i32> {
     if encoded.is_empty() {
         return Err(-3);
     }
@@ -250,6 +255,7 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
         id,
         codec,
         submitted_tick: hw_pic_now_ticks(),
+        vcs0_session_generation,
         encoded: encoded.to_vec(),
     });
     drop(pending);
@@ -258,12 +264,19 @@ pub(crate) fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i
     Ok(id)
 }
 
+fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
+    submit_encoded_with_vcs0_session(codec, encoded, None)
+}
+
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded(HwPicCodec::Jpeg, encoded)
 }
 
-pub(crate) fn submit_h264(encoded: &[u8]) -> Result<u32, i32> {
-    submit_encoded(HwPicCodec::H264, encoded)
+pub(crate) fn submit_h264_in_vcs0_session(
+    encoded: &[u8],
+    vcs0_session_generation: u64,
+) -> Result<u32, i32> {
+    submit_encoded_with_vcs0_session(HwPicCodec::H264, encoded, Some(vcs0_session_generation))
 }
 
 pub(crate) fn set_detailed_logging_enabled(enabled: bool) -> bool {
@@ -1132,6 +1145,7 @@ fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         output_slot_offset,
         missing_ref_offset,
         job.id,
+        job.vcs0_session_generation,
     ) else {
         log_stage(job.id, "submit", false, "media-avc-single-i-or-p-batch-failed", -24);
         return failed_output(&job, -24);

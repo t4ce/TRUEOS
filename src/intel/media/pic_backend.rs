@@ -1555,6 +1555,7 @@ pub(super) fn submit_avc_single_idr_batch(
     output_surface_offset_bytes: usize,
     missing_reference_surface_offset_bytes: usize,
     submit_token: u32,
+    vcs0_session_generation: Option<u64>,
 ) -> Option<MediaAvcSubmitProof> {
     if bitstream_bytes == 0
         || bitstream_bytes > backing.bitstream_bytes
@@ -1573,8 +1574,11 @@ pub(super) fn submit_avc_single_idr_batch(
     if missing_reference_surface_end > backing.output_surface_bytes {
         return None;
     }
-    let mut vcs0_lane =
-        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::AVC_DECODE_EXECLISTS).ok()?;
+    let mut vcs0_lane = media::try_acquire_vcs0_lane(
+        media::MediaVcs0JobMode::AVC_DECODE_EXECLISTS,
+        vcs0_session_generation,
+    )
+    .ok()?;
     let mode_transition = vcs0_lane.requires_reactivation();
     let output_surface_gpu_addr = windows
         .output_surface_gpu_addr
@@ -1985,7 +1989,7 @@ pub(super) fn submit_jpeg_smoke_batch(
         return None;
     }
     let mut vcs0_lane =
-        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::JPEG_DECODE_EXECLISTS).ok()?;
+        media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::JPEG_DECODE_EXECLISTS, None).ok()?;
 
     let ring_virt = backing.ring_virt;
     let context_virt = backing.context_virt;

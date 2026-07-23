@@ -589,8 +589,7 @@ pub(crate) fn publish_gpgpu_video_frame_buffer(
         || frame.plan.cadence != super::FrameCadence::Streaming
         || frame.plan.buffering != super::FrameBuffering::Double
         || frame.plan.format != ScanoutFormat::Rgba8888Premultiplied
-        || frame.plan.width != super::DEFAULT_FRAME_WIDTH
-        || frame.plan.height != super::DEFAULT_FRAME_HEIGHT
+        || !super::video_frame_extent_admitted(frame.plan.width, frame.plan.height)
         || !frame.gpu_authored[index]
     {
         return Err(FramePoolError::ProducerReleaseRequired);

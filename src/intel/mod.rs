@@ -906,8 +906,11 @@ pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
     self::hw_pic::submit_jpeg(encoded)
 }
 
-pub(crate) fn hw_pic_submit_h264(encoded: &[u8]) -> Result<u32, i32> {
-    self::hw_pic::submit_h264(encoded)
+pub(crate) fn hw_pic_submit_h264_in_vcs0_session(
+    encoded: &[u8],
+    vcs0_session_generation: u64,
+) -> Result<u32, i32> {
+    self::hw_pic::submit_h264_in_vcs0_session(encoded, vcs0_session_generation)
 }
 
 pub(crate) async fn hw_pic_wait_output_for_id(

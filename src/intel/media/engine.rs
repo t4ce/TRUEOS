@@ -351,17 +351,19 @@ pub(crate) fn try_reserve_avc_decode_session()
 
 pub(super) fn try_acquire_vcs0_lane(
     mode: MediaVcs0JobMode,
+    session_generation: Option<u64>,
 ) -> Result<MediaVcs0LaneGuard, MediaVcs0LaneAcquireError> {
     let mut state = MEDIA_VCS0_EXECUTION.lock();
     if state.quarantined.is_some() {
         return Err(MediaVcs0LaneAcquireError::Quarantined);
     }
-    if state
-        .reservation
-        .map(|reservation| reservation.mode != mode)
-        .unwrap_or(false)
-    {
-        return Err(MediaVcs0LaneAcquireError::Busy);
+    match (state.reservation, session_generation) {
+        (Some(reservation), Some(generation))
+            if reservation.mode == mode && reservation.generation == generation => {}
+        (None, None) => {}
+        _ => {
+            return Err(MediaVcs0LaneAcquireError::Busy);
+        }
     }
     if state.active.is_some() {
         return Err(MediaVcs0LaneAcquireError::Busy);

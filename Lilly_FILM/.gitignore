@@ -1,6 +1,0 @@
-.runtime/
-.venv/
-*.egg-info/
-__pycache__/
-outputs/
-

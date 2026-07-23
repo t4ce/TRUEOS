@@ -105,21 +105,67 @@ static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
 
-/// Reserve the decoded-video lifetime without allocating or publishing pixels.
-/// The exact double-buffered Frame is created only when the decoder supplies
-/// its first real source. This keeps all DMA allocation and PPGTT work on the
-/// producer handoff side of the TRUEOSFS/decode boundary.
-pub(crate) fn begin_shell_decoded_video_player() -> bool {
+/// Reserve the decoded-video lifetime and ask UI4 for the exact
+/// double-buffered Frame/window before filesystem or decoder work begins. No
+/// placeholder is published: the first visible buffer remains a fully
+/// converted and GuC-released decoded picture.
+pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_height: u32) -> bool {
+    if !super::video_frame_extent_admitted(desired_width, desired_height) {
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 video-player frame request rejected requested={}x{} pixels={} softcap_pixels={} reason=decoded-video-pixel-softcap\n",
+            desired_width,
+            desired_height,
+            u64::from(desired_width) * u64::from(desired_height),
+            super::VIDEO_FRAME_MAX_PIXELS,
+        );
+        return false;
+    }
     if VIDEO_LIFECYCLE_RESERVED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return false;
     }
+    let requested_spec = DecodedVideoFrameSpec {
+        coded_width: desired_width,
+        coded_height: desired_height,
+        visible_width: desired_width,
+        visible_height: desired_height,
+    };
+    let Some(stream) = create_stream(requested_spec, desired_width, desired_height) else {
+        VIDEO_LIFECYCLE_RESERVED.store(false, Ordering::Release);
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 video-player frame request rejected requested={}x{} pixels={} softcap_pixels={} reason=broker-frame-window-create-failed\n",
+            desired_width,
+            desired_height,
+            u64::from(desired_width) * u64::from(desired_height),
+            super::VIDEO_FRAME_MAX_PIXELS,
+        );
+        return false;
+    };
+    let mut slot = VIDEO_STREAM.lock();
+    if slot.is_some() {
+        drop(slot);
+        cleanup_uninstalled_stream(stream);
+        VIDEO_LIFECYCLE_RESERVED.store(false, Ordering::Release);
+        return false;
+    }
+    *slot = Some(stream);
+    drop(slot);
     crate::log_info!(
         target: "ui4";
-        "ui4 video-player lifetime reserved owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame=deferred window=deferred broker_state=deferred-until-first-decoded-frame rgba_ring_allocation=deferred placeholder_present=0\n",
+        "ui4 video-player initialized owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame={} window={} requested={}x{} admitted={}x{} pixels={} softcap_pixels={} frame_buffers=2 broker_state=frame-window-ready placeholder_present=0\n",
         VIDEO_OWNER,
+        stream.frame.raw(),
+        stream.window.raw(),
+        desired_width,
+        desired_height,
+        stream.frame_width,
+        stream.frame_height,
+        u64::from(stream.frame_width) * u64::from(stream.frame_height),
+        super::VIDEO_FRAME_MAX_PIXELS,
     );
     true
 }
@@ -454,7 +500,7 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
             return Some(*stream);
         }
     }
-    let stream = create_stream(spec)?;
+    let stream = create_stream(spec, spec.visible_width, spec.visible_height)?;
     let mut slot = VIDEO_STREAM.lock();
     if let Some(existing) = *slot {
         drop(slot);
@@ -500,10 +546,15 @@ pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
     }
 }
 
-fn create_stream(spec: DecodedVideoFrameSpec) -> Option<VideoStream> {
-    let frame_width = super::DEFAULT_FRAME_WIDTH;
-    let frame_height = super::DEFAULT_FRAME_HEIGHT;
-    let frame = create_video_frame().ok()?;
+fn create_stream(
+    spec: DecodedVideoFrameSpec,
+    frame_width: u32,
+    frame_height: u32,
+) -> Option<VideoStream> {
+    if !spec.valid() || !super::video_frame_extent_admitted(frame_width, frame_height) {
+        return None;
+    }
+    let frame = create_video_frame(frame_width, frame_height).ok()?;
     let session = match begin_window_session(VIDEO_OWNER) {
         Ok(session) => session,
         Err(_) => {
@@ -591,15 +642,15 @@ fn create_stream(spec: DecodedVideoFrameSpec) -> Option<VideoStream> {
     })
 }
 
-fn create_video_frame() -> Result<FrameHandle, super::FramePoolError> {
+fn create_video_frame(width: u32, height: u32) -> Result<FrameHandle, super::FramePoolError> {
     create_frame(FrameSpec {
         output: VIDEO_OUTPUT,
         content: FrameContent::Video,
         cadence: FrameCadence::Streaming,
         buffering: FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
-        width: super::DEFAULT_FRAME_WIDTH,
-        height: super::DEFAULT_FRAME_HEIGHT,
+        width,
+        height,
         // The SIMD16 producer overwrites every pixel, including opaque-black
         // letterbox regions, before this allocation can be published.
         base_color: None,

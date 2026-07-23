@@ -182,22 +182,22 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
         return deferred(GucVcs0ProbeFailure::GucTransportUnavailable);
     }
 
-    let mut lane = match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::TRANSPORT_PROBE_GUC)
-    {
-        Ok(lane) => lane,
-        Err(media::MediaVcs0LaneAcquireError::Busy) => {
-            if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
-                return snapshot();
+    let mut lane =
+        match media::try_acquire_vcs0_lane(media::MediaVcs0JobMode::TRANSPORT_PROBE_GUC, None) {
+            Ok(lane) => lane,
+            Err(media::MediaVcs0LaneAcquireError::Busy) => {
+                if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
+                    return snapshot();
+                }
+                return deferred(GucVcs0ProbeFailure::LaneBusy);
             }
-            return deferred(GucVcs0ProbeFailure::LaneBusy);
-        }
-        Err(media::MediaVcs0LaneAcquireError::Quarantined) => {
-            if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
-                return snapshot();
+            Err(media::MediaVcs0LaneAcquireError::Quarantined) => {
+                if STATE.load(Ordering::Acquire) != GucVcs0ProbeState::NotRun as u8 {
+                    return snapshot();
+                }
+                return deferred(GucVcs0ProbeFailure::LaneQuarantined);
             }
-            return deferred(GucVcs0ProbeFailure::LaneQuarantined);
-        }
-    };
+        };
     if STATE
         .compare_exchange(
             GucVcs0ProbeState::NotRun as u8,

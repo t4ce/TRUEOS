@@ -15,6 +15,8 @@ const H264_VCS0_SESSION_RETRY_MS: u64 = 1;
 const H264_FRAME_TIMEOUT_ERROR: i32 = -33;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
 pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
+pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH: u32 = 1_920;
+pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT: u32 = 1_080;
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
@@ -383,8 +385,14 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let report =
-        h264_i_p_playback_probe_annexb_bytes(annexb, "trueosfs-root-annexb", path, options).await;
+    let report = h264_i_p_playback_probe_annexb_bytes(
+        annexb,
+        "trueosfs-root-annexb",
+        path,
+        options,
+        vcs0_session_generation,
+    )
+    .await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
@@ -453,9 +461,14 @@ async fn run_media_url_playback(
         crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
     let old_noreset_lite =
         crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
-    let report =
-        h264_i_p_playback_probe_annexb_bytes(annexb, "media-url-mp4-avc1", playback_path, options)
-            .await;
+    let report = h264_i_p_playback_probe_annexb_bytes(
+        annexb,
+        "media-url-mp4-avc1",
+        playback_path,
+        options,
+        vcs0_session_generation,
+    )
+    .await;
     crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
     crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
     crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
@@ -1489,6 +1502,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
+    vcs0_session_generation: u64,
 ) -> H264PlaybackReport {
     let stream_bytes = bytes.len() as u64;
     let reader = H264NalReader::Memory(H264MemoryNalReader::new(bytes, source));
@@ -1497,7 +1511,15 @@ async fn h264_i_p_playback_probe_annexb_bytes(
         source,
         stream_bytes,
     );
-    h264_i_p_playback_probe_with_reader(reader, stream_bytes, source, path, mode).await
+    h264_i_p_playback_probe_with_reader(
+        reader,
+        stream_bytes,
+        source,
+        path,
+        mode,
+        vcs0_session_generation,
+    )
+    .await
 }
 
 async fn h264_i_p_playback_probe_with_reader(
@@ -1506,6 +1528,7 @@ async fn h264_i_p_playback_probe_with_reader(
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
+    vcs0_session_generation: u64,
 ) -> H264PlaybackReport {
     let mut nal_count = 0usize;
     let mut idr_seen = 0usize;
@@ -1671,6 +1694,7 @@ async fn h264_i_p_playback_probe_with_reader(
             idr_seen,
             &frame,
             mode.diagnostics(),
+            vcs0_session_generation,
             Some(&mut playback_timing),
         )
         .await;
@@ -1774,6 +1798,7 @@ async fn h264_submit_wait_ui4_frame(
     stream_idr_index: usize,
     encoded: &[u8],
     diagnostics: bool,
+    vcs0_session_generation: u64,
     mut timing: Option<&mut H264PlaybackTiming>,
 ) -> H264FrameOutcome {
     if diagnostics {
@@ -1790,7 +1815,10 @@ async fn h264_submit_wait_ui4_frame(
         );
     }
 
-    let id = match crate::intel::hw_pic_submit_h264(encoded) {
+    let id = match crate::intel::hw_pic_submit_h264_in_vcs0_session(
+        encoded,
+        vcs0_session_generation,
+    ) {
         Ok(id) => id,
         Err(err) => {
             crate::log!(

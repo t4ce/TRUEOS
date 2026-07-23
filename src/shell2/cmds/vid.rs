@@ -41,6 +41,16 @@ impl VidSource {
             Self::Online => "fixed-mp4-download-demux-decode",
         }
     }
+
+    const fn desired_frame_extent(&self) -> (u32, u32) {
+        match self {
+            Self::TrueosFs(_) => (
+                crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH,
+                crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT,
+            ),
+            Self::Online => (crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT),
+        }
+    }
 }
 
 struct VidUi4Session {
@@ -48,8 +58,8 @@ struct VidUi4Session {
 }
 
 impl VidUi4Session {
-    fn begin() -> Option<Self> {
-        crate::ui4::begin_shell_decoded_video_player().then_some(Self { active: true })
+    fn begin(width: u32, height: u32) -> Option<Self> {
+        crate::ui4::begin_shell_decoded_video_player(width, height).then_some(Self { active: true })
     }
 
     fn close(mut self) -> bool {
@@ -211,28 +221,35 @@ fn usage(io: &'static dyn ShellBackend2) {
 
 #[embassy_executor::task(pool_size = 1)]
 async fn vid_task(target: MatrixTarget, command: VidCommand) {
+    let (frame_width, frame_height) = command.source.desired_frame_extent();
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "vid: start source={} asset={} fps=60 loop={} path=vd_box+guc_simd16+ui4_double_frame",
+            "vid: start source={} asset={} fps=60 loop={} frame_target={}x{} path=vd_box+guc_simd16+ui4_double_frame",
             command.source.name(),
             command.source.asset(),
             command.loop_playback as u8,
+            frame_width,
+            frame_height,
         )
         .as_str(),
     );
-    let Some(ui4_session) = VidUi4Session::begin() else {
+    let Some(ui4_session) = VidUi4Session::begin(frame_width, frame_height) else {
         print_matrix_target_line(
             &target,
-            "vid: UI4 video lifetime is already owned by another playback task",
+            "vid: UI4 video frame/window request rejected or already owned",
         );
         set_matrix_target_active(&target, false);
         return;
     };
     crate::log_info!(
         target: "ui4";
-        "shell2/vid: stage=ui4-lifetime-reserved source={} next={} frame-allocation=deferred-until-first-decoded-frame\n",
+        "shell2/vid: stage=ui4-frame-window-ready source={} requested={}x{} pixel_budget={} softcap_pixels={} next={} frame-allocation=broker-init placeholder_present=0\n",
         command.source.name(),
+        frame_width,
+        frame_height,
+        u64::from(frame_width) * u64::from(frame_height),
+        crate::ui4::VIDEO_FRAME_MAX_PIXELS,
         command.source.next_stage(),
     );
 

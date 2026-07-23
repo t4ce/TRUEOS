@@ -820,7 +820,7 @@ const fn preview_frame_create_error_label(error: FramePoolError) -> &'static str
         FramePoolError::InvalidPlan(FramePlanError::VideoRequiresDoubleBuffering) => {
             "frame-create-invalid-plan-video-buffering"
         }
-        FramePoolError::InvalidPlan(FramePlanError::VideoRequiresDefaultExtent) => {
+        FramePoolError::InvalidPlan(FramePlanError::VideoExceedsPixelSoftCap) => {
             "frame-create-invalid-plan-video-extent"
         }
         FramePoolError::InvalidPlan(FramePlanError::RenderSceneRequiresPremultipliedRgba) => {

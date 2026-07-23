@@ -140,6 +140,9 @@ pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 5;
 /// size with an external application.
 pub(crate) const DEFAULT_FRAME_WIDTH: u32 = 768;
 pub(crate) const DEFAULT_FRAME_HEIGHT: u32 = 512;
+/// Temporary decoded-video allocation ceiling. Video producers may choose any
+/// aspect ratio, but one broker Frame may not exceed a 2560x1440 pixel budget.
+pub(crate) const VIDEO_FRAME_MAX_PIXELS: u64 = 2_560 * 1_440;
 pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;
@@ -384,7 +387,7 @@ pub(crate) enum FramePlanError {
     VideoRequiresPremultipliedRgba,
     VideoRequiresStreamingCadence,
     VideoRequiresDoubleBuffering,
-    VideoRequiresDefaultExtent,
+    VideoExceedsPixelSoftCap,
     RenderSceneRequiresPremultipliedRgba,
     RenderSceneRequiresStreamingCadence,
     RenderSceneRequiresTripleBuffering,
@@ -418,8 +421,8 @@ impl FramePlan {
             if !matches!(spec.buffering, FrameBuffering::Double) {
                 return Err(FramePlanError::VideoRequiresDoubleBuffering);
             }
-            if spec.width != DEFAULT_FRAME_WIDTH || spec.height != DEFAULT_FRAME_HEIGHT {
-                return Err(FramePlanError::VideoRequiresDefaultExtent);
+            if !video_frame_extent_admitted(spec.width, spec.height) {
+                return Err(FramePlanError::VideoExceedsPixelSoftCap);
             }
         }
         if let FrameContent::RenderScene3d = spec.content {
@@ -443,6 +446,12 @@ impl FramePlan {
             base_color: spec.base_color,
         })
     }
+}
+
+pub(crate) const fn video_frame_extent_admitted(width: u32, height: u32) -> bool {
+    width != 0
+        && height != 0
+        && (width as u64).saturating_mul(height as u64) <= VIDEO_FRAME_MAX_PIXELS
 }
 
 const _: () = {
@@ -491,10 +500,19 @@ const _: () = {
     ));
     assert!(matches!(
         FramePlan::from_spec(FrameSpec {
-            width: DEFAULT_FRAME_WIDTH - 1,
+            width: 2_560,
+            height: 1_440,
             ..admitted_video
         }),
-        Err(FramePlanError::VideoRequiresDefaultExtent)
+        Ok(_)
+    ));
+    assert!(matches!(
+        FramePlan::from_spec(FrameSpec {
+            width: 2_560,
+            height: 1_441,
+            ..admitted_video
+        }),
+        Err(FramePlanError::VideoExceedsPixelSoftCap)
     ));
     let admitted_resident_scene = FrameSpec {
         content: FrameContent::RenderScene3d,
