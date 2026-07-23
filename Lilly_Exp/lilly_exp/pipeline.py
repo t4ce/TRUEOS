@@ -113,8 +113,9 @@ def _quantize_to_palette(rgb: np.ndarray, colors: np.ndarray) -> np.ndarray:
     if len(colors) == 0 or len(colors) > 256:
         return rgb
     palette = Image.new("P", (1, 1))
-    values = colors.astype(np.uint8).reshape(-1).tolist()
-    values.extend([0] * (768 - len(values)))
+    padded = np.repeat(colors[-1:, :], 256, axis=0).astype(np.uint8)
+    padded[: len(colors)] = colors
+    values = padded.reshape(-1).tolist()
     palette.putpalette(values)
     quantized = Image.fromarray(rgb, mode="RGB").quantize(
         palette=palette,
@@ -327,4 +328,3 @@ def interpolate_sequence(
     )
     write_previews(output_frames, output_dir)
     return report
-
