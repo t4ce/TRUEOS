@@ -9,6 +9,12 @@ exact offline frontend flags, ADL-S ABI comparison, and hardware conformance
 gate are recorded in
 [`CPP_FOR_OPENCL_OPT_IN.md`](CPP_FOR_OPENCL_OPT_IN.md).
 
+`cpp_demo_rgba8.clcpp` is the first native C++/IGC application kernel rather
+than an ABI twin. One resident entry exposes five Shell2/UI4 generative modes
+through the dedicated `cpp` command. Its workload map, ABI, publication policy,
+and TestRig procedure are recorded in
+[`CPP_DEMO_SUITE.md`](CPP_DEMO_SUITE.md).
+
 `copy_rect_rgba8.cl` is the first standalone graphics value target:
 
 - source: linear RGBA8
@@ -33,6 +39,7 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
+- `cpp_demo_rgba8.clcpp`: one exact-target C++ for OpenCL/IGC application kernel with gallery, aurora, Julia-set, signed-distance, and Voronoi modes; available through the dedicated `cpp` Shell2 command
 - `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
 - `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl`: TrueOS-Spirit's continuous 60 Hz cursor-plane producer; the default clean-Lilly batch dispatches only the sprite presentation walker, while enabling a procedural background adds the background walker and ordered source-over dependency
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
@@ -66,6 +73,13 @@ Alder Lake S build produced with Intel `ocloc`/IGC. Its SHA-256 is:
 
 ```text
 b36d1c7742003591a5074663d81a4162412618ae425c47d30be6d068ee144a25
+```
+
+`artifacts/adls/cpp/cpp_demo_rgba8.bin` is the unconditional C++/IGC demo
+artifact for exact target `8086:4680`, revision `0x0c`. Its SHA-256 is:
+
+```text
+19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
 ```
 
 `artifacts/adls/copy_rect_rgba8.bin` is the retained legacy OpenCL C

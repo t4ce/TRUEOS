@@ -180,13 +180,21 @@ class ArtifactContractTests(unittest.TestCase):
 
     def test_published_manifest_and_generated_rust_are_current(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
-        verify_manifest(
-            root / "copy_rect_rgba8.manifest.json",
-            root / "copy_rect_rgba8.bin",
-            root / "copy_rect_rgba8.spv",
-            root / "copy_rect_rgba8.contract.rs",
-            REPO_ROOT,
+        manifests = sorted(root.glob("*.manifest.json"))
+        self.assertEqual(
+            [path.name for path in manifests],
+            ["copy_rect_rgba8.manifest.json", "cpp_demo_rgba8.manifest.json"],
         )
+        for manifest_path in manifests:
+            stem = manifest_path.name.removesuffix(".manifest.json")
+            with self.subTest(artifact=stem):
+                verify_manifest(
+                    manifest_path,
+                    root / f"{stem}.bin",
+                    root / f"{stem}.spv",
+                    root / f"{stem}.contract.rs",
+                    REPO_ROOT,
+                )
         manifest = json.loads(
             (root / "copy_rect_rgba8.manifest.json").read_text(encoding="utf-8")
         )
@@ -223,6 +231,37 @@ class ArtifactContractTests(unittest.TestCase):
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
 
+    def test_cpp_native_demo_has_reviewed_standalone_policy(self) -> None:
+        root = ARTIFACT_ROOT / "cpp"
+        manifest = json.loads(
+            (root / "cpp_demo_rgba8.manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["variant"], "cpp-native")
+        self.assertIsNone(manifest["abi_reference"])
+        self.assertEqual(
+            manifest["provenance"]["publication_policy"],
+            {
+                "name": "cpp-native-aot-v1",
+                "expected_kernels": ["cpp_demo_rgba8"],
+            },
+        )
+        self.assertEqual(manifest["target"]["pci_device_ids"], [0x4680])
+        self.assertEqual(manifest["target"]["revision_min"], 0x0C)
+        self.assertEqual(manifest["target"]["revision_max"], 0x0C)
+        analysis = analyze_zebin(
+            root / "cpp_demo_rgba8.bin", root / "cpp_demo_rgba8.spv"
+        )
+        self.assertEqual(
+            [kernel["kernel_name"] for kernel in analysis["kernels"]],
+            ["cpp_demo_rgba8"],
+        )
+        kernel = analysis["kernels"][0]
+        self.assertEqual(kernel["simd_width"], 16)
+        self.assertEqual(kernel["cross_thread_data_bytes"], 128)
+        self.assertEqual(kernel["per_thread_data_bytes"], 96)
+        self.assertEqual(kernel["scratch_bytes"], 0)
+        self.assertEqual(kernel["slm_bytes"], 0)
+
     def test_cpp_publication_gates_cannot_be_removed_from_manifest(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         manifest_path = root / "copy_rect_rgba8.manifest.json"
@@ -256,6 +295,47 @@ class ArtifactContractTests(unittest.TestCase):
                             root / "copy_rect_rgba8.bin",
                             root / "copy_rect_rgba8.spv",
                             root / "copy_rect_rgba8.contract.rs",
+                            REPO_ROOT,
+                        )
+
+    def test_cpp_native_publication_gates_cannot_be_removed(self) -> None:
+        root = ARTIFACT_ROOT / "cpp"
+        manifest_path = root / "cpp_demo_rgba8.manifest.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        mutations = {
+            "source inputs": lambda value: value["source"].update(inputs=[]),
+            "unexpected ABI reference": lambda value: value.update(
+                abi_reference={"result": "exact-match"}
+            ),
+            "reproducibility": lambda value: value["provenance"].update(
+                reproducibility_check="not-requested"
+            ),
+            "toolchain": lambda value: value["provenance"].update(
+                toolchain={"status": "unavailable"}, toolchain_lock=None
+            ),
+            "expected kernels": lambda value: value["provenance"][
+                "publication_policy"
+            ].update(expected_kernels=[]),
+            "policy": lambda value: value["provenance"][
+                "publication_policy"
+            ].update(name="unreviewed"),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for label, mutate in mutations.items():
+                with self.subTest(gate=label):
+                    changed = copy.deepcopy(original)
+                    mutate(changed)
+                    candidate = Path(directory) / f"{label.replace(' ', '-')}.json"
+                    candidate.write_text(
+                        json.dumps(changed, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ContractError):
+                        verify_manifest(
+                            candidate,
+                            root / "cpp_demo_rgba8.bin",
+                            root / "cpp_demo_rgba8.spv",
+                            root / "cpp_demo_rgba8.contract.rs",
                             REPO_ROOT,
                         )
 

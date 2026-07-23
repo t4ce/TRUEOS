@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the selected copy Zebin in the stripped ELF packaged by an ISO."""
+"""Verify selected and required Intel Zebins in the ELF packaged by an ISO."""
 
 from __future__ import annotations
 
@@ -11,7 +11,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from verify_linked import LinkedArtifactError, verify_linked_image
+from verify_linked import (
+    LinkedArtifactError,
+    verify_linked_image,
+    verify_required_artifacts,
+)
 
 
 class PackagedArtifactError(RuntimeError):
@@ -60,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--iso", required=True, type=_existing_file)
     parser.add_argument("--selected-bin", required=True, type=_existing_file)
     parser.add_argument("--forbidden-bin", required=True, type=_existing_file)
+    parser.add_argument(
+        "--required-bin",
+        action="append",
+        default=[],
+        type=_existing_file,
+        help="additional artifact that must occur in the packaged ELF; repeatable",
+    )
     parser.add_argument("--xorriso", default="xorriso")
     args = parser.parse_args(argv)
 
@@ -99,12 +110,17 @@ def main(argv: list[str] | None = None) -> int:
         selected_sha256, selected_count, forbidden_sha256 = verify_linked_image(
             extracted, args.selected_bin, args.forbidden_bin
         )
+        required = verify_required_artifacts(extracted, args.required_bin)
+        required_text = ",".join(
+            f"{path.name}:{digest}:{count}" for path, digest, count in required
+        )
 
     print(
         f"packaged artifact verified: iso={args.iso} member=/TRUEOS.elf "
         f"runtime_sha256={staged_sha256} iso_member_sha256={iso_sha256} "
         f"selected_sha256={selected_sha256} selected_occurrences={selected_count} "
-        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0"
+        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0 "
+        f"required={required_text or 'none'}"
     )
     return 0
 

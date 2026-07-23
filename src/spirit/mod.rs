@@ -542,7 +542,6 @@ fn submit_spirit_vfx_frame(
         background_color_b: snapshot.color_b,
         position_x: snapshot.position_x,
         position_y: snapshot.position_y,
-        sprite_scale: snapshot.sprite_scale,
         rotation_radians: snapshot.rotation_radians,
         alpha_cutoff: snapshot.alpha_cutoff,
         edge_fade_pixels: snapshot.edge_fade_pixels,

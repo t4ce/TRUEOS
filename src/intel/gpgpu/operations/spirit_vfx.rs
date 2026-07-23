@@ -13,7 +13,6 @@ pub(crate) struct SpiritVfxControl {
     pub(crate) background_color_b: u32,
     pub(crate) position_x: f32,
     pub(crate) position_y: f32,
-    pub(crate) sprite_scale: f32,
     pub(crate) rotation_radians: f32,
     pub(crate) alpha_cutoff: f32,
     pub(crate) edge_fade_pixels: f32,
@@ -194,10 +193,9 @@ fn spirit_vfx_write_control(
             dwords.add(12),
             spirit_vfx_bounded(control.position_y, -0.35, 0.35, 0.0).to_bits(),
         );
-        core::ptr::write_volatile(
-            dwords.add(13),
-            spirit_vfx_bounded(control.sprite_scale, 0.35, 1.55, 0.5).to_bits(),
-        );
+        // Spirit's Lilly presentation scale is architectural, not a mutable
+        // VFX parameter. Keep dword 13 for the kernel ABI, but lock its value.
+        core::ptr::write_volatile(dwords.add(13), 1.0f32.to_bits());
         core::ptr::write_volatile(
             dwords.add(14),
             spirit_vfx_bounded(

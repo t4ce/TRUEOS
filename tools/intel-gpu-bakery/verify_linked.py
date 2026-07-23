@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove that a linked TRUEOS image contains only the selected copy Zebin."""
+"""Prove the selected and required Intel Zebins in a linked TRUEOS image."""
 
 from __future__ import annotations
 
@@ -61,6 +61,27 @@ def verify_linked_image(
     return _sha256(selected), selected_count, _sha256(forbidden)
 
 
+def verify_required_artifacts(
+    elf: Path, required_bins: list[Path]
+) -> list[tuple[Path, str, int]]:
+    records: list[tuple[Path, str, int]] = []
+    with elf.open("rb") as image_file:
+        with mmap.mmap(image_file.fileno(), 0, access=mmap.ACCESS_READ) as image:
+            for required_bin in required_bins:
+                required = required_bin.read_bytes()
+                if not required:
+                    raise LinkedArtifactError(
+                        f"required artifact must be non-empty: {required_bin}"
+                    )
+                count = _occurrences(image, required)
+                if count == 0:
+                    raise LinkedArtifactError(
+                        f"{elf}: required artifact is absent ({required_bin})"
+                    )
+                records.append((required_bin, _sha256(required), count))
+    return records
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -71,16 +92,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--elf", required=True, type=_existing_file)
     parser.add_argument("--selected-bin", required=True, type=_existing_file)
     parser.add_argument("--forbidden-bin", required=True, type=_existing_file)
+    parser.add_argument(
+        "--required-bin",
+        action="append",
+        default=[],
+        type=_existing_file,
+        help="additional artifact that must occur in the linked image; repeatable",
+    )
     args = parser.parse_args(argv)
 
     selected_sha256, selected_count, forbidden_sha256 = verify_linked_image(
         args.elf, args.selected_bin, args.forbidden_bin
     )
+    required = verify_required_artifacts(args.elf, args.required_bin)
+    required_text = ",".join(
+        f"{path.name}:{digest}:{count}" for path, digest, count in required
+    )
 
     print(
         f"linked artifact verified: elf={args.elf} "
         f"selected_sha256={selected_sha256} selected_occurrences={selected_count} "
-        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0"
+        f"forbidden_sha256={forbidden_sha256} forbidden_occurrences=0 "
+        f"required={required_text or 'none'}"
     )
     return 0
 

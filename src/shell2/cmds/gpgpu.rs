@@ -158,7 +158,12 @@ const fn preview_surface_count(preset: crate::ui4::GpgpuPreviewPreset) -> usize 
         | crate::ui4::GpgpuPreviewPreset::Mandelbrot
         | crate::ui4::GpgpuPreviewPreset::Chart
         | crate::ui4::GpgpuPreviewPreset::Plasma
-        | crate::ui4::GpgpuPreviewPreset::Lab256 => 1,
+        | crate::ui4::GpgpuPreviewPreset::Lab256
+        | crate::ui4::GpgpuPreviewPreset::CppGallery
+        | crate::ui4::GpgpuPreviewPreset::CppAurora
+        | crate::ui4::GpgpuPreviewPreset::CppJulia
+        | crate::ui4::GpgpuPreviewPreset::CppSdf
+        | crate::ui4::GpgpuPreviewPreset::CppVoronoi => 1,
     }
 }
 

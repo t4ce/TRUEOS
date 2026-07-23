@@ -1,9 +1,10 @@
 //! Shell-controlled GPGPU live previews backed exclusively by UI4 frames.
 //!
 //! This is a trusted kernel app beside the permanent UI4 compositor. It
-//! owns frame/window lifetime and compute cadence. The three compute demos are
-//! admitted through one broker session onto dedicated universal-plane slots;
-//! display pipe programming remains exclusively compositor-owned.
+//! owns frame/window lifetime and compute cadence. The compute trio is admitted
+//! through one broker session onto dedicated universal-plane slots; standalone
+//! C++/IGC demos reuse the same exact-surface publication lifecycle on slot 1.
+//! Display pipe programming remains exclusively compositor-owned.
 
 use alloc::vec::Vec;
 
@@ -51,6 +52,11 @@ pub(crate) enum GpgpuPreviewPreset {
     Chart,
     Plasma,
     Lab256,
+    CppGallery,
+    CppAurora,
+    CppJulia,
+    CppSdf,
+    CppVoronoi,
 }
 
 impl GpgpuPreviewPreset {
@@ -63,6 +69,11 @@ impl GpgpuPreviewPreset {
             Self::Chart => "chart",
             Self::Plasma => "plasma",
             Self::Lab256 => "lab256",
+            Self::CppGallery => "cpp-gallery",
+            Self::CppAurora => "cpp-aurora",
+            Self::CppJulia => "cpp-julia",
+            Self::CppSdf => "cpp-sdf",
+            Self::CppVoronoi => "cpp-voronoi",
         }
     }
 
@@ -83,6 +94,11 @@ impl GpgpuPreviewPreset {
             Self::Chart => "slot2-direct",
             Self::Plasma => "slot3-direct",
             Self::Lab256 => "slot1-alpha-256x256",
+            Self::CppGallery
+            | Self::CppAurora
+            | Self::CppJulia
+            | Self::CppSdf
+            | Self::CppVoronoi => "slot1-direct",
         }
     }
 }
@@ -960,7 +976,12 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         | GpgpuPreviewPreset::Mandelbrot
         | GpgpuPreviewPreset::Chart
         | GpgpuPreviewPreset::Plasma
-        | GpgpuPreviewPreset::Lab256 => match gpu_release {
+        | GpgpuPreviewPreset::Lab256
+        | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
@@ -1263,6 +1284,35 @@ fn dispatch_preview_kernel(
                 error: "lab256-dispatch-failed",
             }
         }
+        GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => {
+            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
+            let mode = match preview.config.preset {
+                GpgpuPreviewPreset::CppGallery => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
+                GpgpuPreviewPreset::CppAurora => crate::intel::gpgpu::CPP_DEMO_MODE_AURORA,
+                GpgpuPreviewPreset::CppJulia => crate::intel::gpgpu::CPP_DEMO_MODE_JULIA,
+                GpgpuPreviewPreset::CppSdf => crate::intel::gpgpu::CPP_DEMO_MODE_SDF,
+                GpgpuPreviewPreset::CppVoronoi => crate::intel::gpgpu::CPP_DEMO_MODE_VORONOI,
+                _ => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
+            };
+            let seed = (preview.request_serial as u32)
+                .rotate_left(13)
+                .wrapping_add(0xC0DE_C901);
+            let result =
+                crate::intel::gpgpu::cpp_demo_rgba8_surface_full(surface, seconds, mode, seed);
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: mode,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                release: result.release,
+                error: "cpp-demo-dispatch-failed",
+            }
+        }
     }
 }
 
@@ -1271,7 +1321,12 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::All
         | GpgpuPreviewPreset::Mandelbrot
         | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma => "pipe-control+post-marker-exact-surface",
+        | GpgpuPreviewPreset::Plasma
+        | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             "clflush-mfence-before-publish"
@@ -1287,6 +1342,11 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
             "guc-compute-single"
         }
+        GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => "guc-cpp-demo-single",
     }
 }
 
@@ -1295,7 +1355,14 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         GpgpuPreviewPreset::All | GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
         }
-        GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
+        GpgpuPreviewPreset::Mandelbrot
+        | GpgpuPreviewPreset::Chart
+        | GpgpuPreviewPreset::Plasma
+        | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => {
             WindowPlane::Universal(preview_plane_slot(preset) as u8)
         }
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
@@ -1309,6 +1376,11 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Chart => "ui4-direct-slot2",
         GpgpuPreviewPreset::Plasma => "ui4-direct-slot3",
         GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
+        GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => "ui4-cpp-demo-slot1",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
 }
@@ -1699,11 +1771,26 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         GpgpuPreviewPreset::All
         | GpgpuPreviewPreset::Static
         | GpgpuPreviewPreset::Static30
-        | GpgpuPreviewPreset::Lab256 => None,
+        | GpgpuPreviewPreset::Lab256
+        | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppAurora
+        | GpgpuPreviewPreset::CppJulia
+        | GpgpuPreviewPreset::CppSdf
+        | GpgpuPreviewPreset::CppVoronoi => None,
     }
 }
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
+    if matches!(
+        preset,
+        GpgpuPreviewPreset::CppGallery
+            | GpgpuPreviewPreset::CppAurora
+            | GpgpuPreviewPreset::CppJulia
+            | GpgpuPreviewPreset::CppSdf
+            | GpgpuPreviewPreset::CppVoronoi
+    ) {
+        return 1;
+    }
     match compute_preview_index(preset) {
         Some(index) => index + 1,
         None => super::ALPHA_OVERLAY_PLANE_SLOT,
@@ -1734,7 +1821,8 @@ const fn next_serial(serial: u64) -> u64 {
 mod tests {
     use super::{
         FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
-        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, preview_extent, preview_frame_create_error_label,
+        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
+        preview_frame_create_error_label, preview_plane_slot,
     };
 
     #[test]
@@ -1743,6 +1831,23 @@ mod tests {
             preview_extent(GpgpuPreviewPreset::Lab256),
             (LAB256_PREVIEW_SIZE, LAB256_PREVIEW_SIZE)
         );
+    }
+
+    #[test]
+    fn cpp_modes_share_the_resizable_slot1_application_surface() {
+        let modes = [
+            GpgpuPreviewPreset::CppGallery,
+            GpgpuPreviewPreset::CppAurora,
+            GpgpuPreviewPreset::CppJulia,
+            GpgpuPreviewPreset::CppSdf,
+            GpgpuPreviewPreset::CppVoronoi,
+        ];
+        for mode in modes {
+            assert_eq!(preview_extent(mode), (PREVIEW_WIDTH, PREVIEW_HEIGHT));
+            assert_eq!(preview_plane_slot(mode), 1);
+            assert_eq!(mode.buffering_label(), "double");
+            assert_eq!(mode.plane_layout_label(), "slot1-direct");
+        }
     }
 
     #[test]

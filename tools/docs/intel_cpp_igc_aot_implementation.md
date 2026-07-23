@@ -22,7 +22,7 @@ load or link any of them. C++ templates and types disappear during the offline
 bake; no C++ runtime, standard library, exception runtime, RTTI, allocator,
 NEO, or OpenCL loader is part of the TRUEOS runtime.
 
-## Three milestones
+## Four milestones
 
 ### 1. Reproducible bakery and generated contract
 
@@ -185,7 +185,57 @@ cases=4/4 retired=4 passed=4 first_failure=none`; every case must report
 probe again. The lane is quarantined and reports `reboot_required=1`; recover
 the engine or reboot the machine first.
 
+### 4. Native C++ application kernel and Shell2 surface
+
+`cpp_demo_rgba8.clcpp` is the first C++ publication that is not a legacy ABI
+twin. The bakery labels it `variant=cpp-native` under reviewed policy
+`cpp-native-aot-v1`: an artificial legacy reference is forbidden, while the
+toolchain lock, complete input hashes, exact kernel set, `ocloc validate`,
+sibling/embedded SPIR-V identity, generated contract, and two-root
+reproducibility gates remain required.
+
+One stable SIMD16 entry exposes five scalar-selected Shell2/UI4 modes:
+`gallery`, `aurora`, `julia`, `sdf`, and `voronoi`. The dedicated advertised
+F4 command is `cpp`; `cpp` starts the four-panel gallery, direct mode names
+start full-window workloads, and `cpp status`/`cpp stop` use the existing
+on-demand preview service. The kernel is uploaded once, while time, mode, seed,
+and destination facts are ordinary launch payload values.
+
+The runtime uses the same serialized direct-RCS/GuC service lane and exact
+surface-release boundary as the established UI4 compute producers. A dispatch
+must retire marker `0xC0DEC902` before UI4 receives the release token. Accepted
+timeouts quarantine the context and retain the write lease. C++/Clang/IGC
+remain absent at runtime.
+
+The native demo contract is exact to `8086:4680` revision `0x0c`, SIMD16,
+128 GRFs, zero scratch/SLM, 128 cross-thread bytes, 96 local-ID bytes, and one
+read/write stateful BTI. The Zebin hash is:
+
+```text
+19f7067fa19ba34a640d1f3d67de3df82d29f484700a274bc4bb31c4b00b7009
+```
+
+`make kernel` and `make iso` now require this complete native Zebin in the
+linked and ISO-extracted runtime ELF independently of which copy frontend the
+comparison lane selects. Detailed commands and TestRig coverage live in
+`crates/trueos-shader/gpgpu/kernels/CPP_DEMO_SUITE.md`.
+
 ## Findings that changed the implementation
+
+### General math can expand the loader contract
+
+The first C++ demo bake used ordinary `sin`, `cos`, `exp`, `log`, and `pow`.
+IGC emitted a valid main kernel, but also added an internal callable support
+entry, symbol table, global constants, and constant/private base payloads.
+Those records describe a wider runtime linker/global-data contract than
+TRUEOS direct-RCS currently supports, so the bakery correctly rejected the
+unexpected kernel set instead of weakening inspection.
+
+The demo now uses OpenCL `native_*` operations plus explicit vector helpers.
+The resulting reproducible Zebin contains exactly `cpp_demo_rgba8` and needs
+no auxiliary global-data loader. This is a reviewed source constraint; future
+support for general math should deliberately add and test those loader
+capabilities rather than silently allowlist the compiler helper.
 
 ### The canonical Make lane must carry the selection
 

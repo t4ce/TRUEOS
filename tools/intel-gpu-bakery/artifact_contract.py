@@ -1045,7 +1045,15 @@ def verify_manifest(
         if actual_record != record:
             raise ContractError(f"{manifest_path}: recorded input is stale: {raw_path}")
     reference = manifest.get("abi_reference")
-    if reference:
+    if reference is not None:
+        if (
+            not isinstance(reference, dict)
+            or not isinstance(reference.get("path"), str)
+            or not reference["path"]
+            or not isinstance(reference.get("sha256"), str)
+            or not isinstance(reference.get("result"), str)
+        ):
+            raise ContractError(f"{manifest_path}: malformed ABI reference record")
         raw_reference = Path(reference["path"])
         reference_path = (
             raw_reference if raw_reference.is_absolute() else repo_root / raw_reference

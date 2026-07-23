@@ -43,8 +43,7 @@ const fn slider(
     }
 }
 
-pub(crate) const TRANSFORM_CONTROLS: [SpiritVfxSliderSpec; 4] = [
-    slider("Scale", 0.35, 1.55, 0.01, 0.5, "x"),
+pub(crate) const TRANSFORM_CONTROLS: [SpiritVfxSliderSpec; 3] = [
     slider("Position X", -0.35, 0.35, 0.005, 0.0, ""),
     slider("Position Y", -0.35, 0.35, 0.005, 0.0, ""),
     slider("Rotation", -360.0, 360.0, 0.5, 180.0, "deg"),
@@ -485,7 +484,6 @@ impl SpiritVfxRgb8 {
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct SpiritVfxTransform {
-    pub(crate) scale: f32,
     pub(crate) position_x: f32,
     pub(crate) position_y: f32,
     pub(crate) rotation_degrees: f32,
@@ -494,9 +492,6 @@ pub(crate) struct SpiritVfxTransform {
 impl Default for SpiritVfxTransform {
     fn default() -> Self {
         Self {
-            // Lilly frames are 128x128 inside Spirit's 256x256 hardware
-            // cursor allocation, so 0.5 is a native-pixel 1:1 presentation.
-            scale: 0.5,
             position_x: 0.0,
             position_y: 0.0,
             // Lilly's resident PNG convention is opposite to the cursor
@@ -636,7 +631,6 @@ impl SpiritVfxControlPanel {
 
     fn sanitize(&mut self) {
         self.sprite = self.sprite.min(3);
-        self.transform.scale = bounded(self.transform.scale, 0.35, 1.55, 0.5);
         self.transform.position_x = bounded(self.transform.position_x, -0.35, 0.35, 0.0);
         self.transform.position_y = bounded(self.transform.position_y, -0.35, 0.35, 0.0);
         self.transform.rotation_degrees =
@@ -688,10 +682,8 @@ impl Default for SpiritVfxControlPanel {
     }
 }
 
-/// Wire contract emitted by `preview.html::configObject()`.  This adapter is
-/// intentionally separate from the compact in-kernel panel: its one-based
-/// sprite number, radians, duplicated effect names, CSS colors, and output
-/// object remain byte-for-byte compatible at the JSON field-name level.
+/// JSON-facing control contract. Architectural presentation properties such as
+/// Lilly's fixed hardware scale are intentionally absent.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SpiritVfxUiConfig {
@@ -708,7 +700,6 @@ pub(crate) struct SpiritVfxUiConfig {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SpiritVfxUiTransform {
-    pub(crate) scale: f32,
     pub(crate) x: f32,
     pub(crate) y: f32,
     pub(crate) rotation_radians: f32,
@@ -776,7 +767,6 @@ impl SpiritVfxUiConfig {
             source_layout: String::from("2x2"),
             sprite: panel.sprite + 1,
             transform: SpiritVfxUiTransform {
-                scale: panel.transform.scale,
                 x: panel.transform.position_x,
                 y: panel.transform.position_y,
                 rotation_radians: panel.transform.rotation_degrees.to_radians(),
@@ -856,7 +846,6 @@ impl SpiritVfxUiConfig {
         let mut panel = SpiritVfxControlPanel {
             sprite: self.sprite - 1,
             transform: SpiritVfxTransform {
-                scale: self.transform.scale,
                 position_x: self.transform.x,
                 position_y: self.transform.y,
                 rotation_degrees: self.transform.rotation_radians.to_degrees(),
@@ -921,7 +910,6 @@ pub(super) struct SpiritVfxGpuSnapshot {
     pub(super) color_b: u32,
     pub(super) position_x: f32,
     pub(super) position_y: f32,
-    pub(super) sprite_scale: f32,
     pub(super) rotation_radians: f32,
     pub(super) alpha_cutoff: f32,
     pub(super) edge_fade_pixels: f32,
@@ -1010,6 +998,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             .saturating_sub(MOVE_PORTAL_STARTED_MS.load(Ordering::Acquire));
         let mut background = SpiritVfxAlphaBackground::MOVE_PORTAL;
         let ramp = move_portal_ramp(elapsed_ms);
+        background.scale = 0.25 + (background.scale - 0.25) * ramp;
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
@@ -1027,7 +1016,6 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         color_b: background.bg_color_b.packed_rgb(),
         position_x: panel.transform.position_x,
         position_y: panel.transform.position_y,
-        sprite_scale: panel.transform.scale,
         rotation_radians: panel.transform.rotation_degrees.to_radians(),
         alpha_cutoff: panel.alpha_cutoff,
         edge_fade_pixels: panel.edge_fade_pixels,

@@ -77,6 +77,33 @@ python3 -B tools/intel-gpu-bakery/bake.py \
 Review both the candidate lock and generated artifact/manifest before
 replacing the repository lock.
 
+## Native C++ demo publication
+
+The copy proof uses `variant=cpp` and must be an exact ABI twin of a reviewed
+legacy artifact. New C++ application kernels use the separate
+`variant=cpp-native` / `cpp-native-aot-v1` policy: there is no artificial
+legacy ABI reference, but all toolchain-lock, dependency, exact-kernel-set,
+two-root reproducibility, SPIR-V identity, parser, and `ocloc validate` gates
+remain mandatory.
+
+The canonical native demo bake is:
+
+```sh
+tools/intel-gpu-bakery/bake_adls_cpp_demo.sh
+# or
+make intel-gpu-bake-cpp-demo
+```
+
+It publishes `cpp_demo_rgba8.{bin,spv,manifest.json,contract.rs}` beside the
+copy artifact. The normal compiler-free check audits both:
+
+```sh
+make intel-gpu-verify-cpp-artifacts
+```
+
+The source and runtime workload map are documented in
+`crates/trueos-shader/gpgpu/kernels/CPP_DEMO_SUITE.md`.
+
 ## Compiler-free checks
 
 CI and ordinary development machines do not need compiler tools:
@@ -95,9 +122,10 @@ two-root reproducibility result, ABI-reference, publication policy, source,
 and transitive-header hashes; and regenerates the Rust contract in memory. It
 needs only the Python standard library.
 
-The normal `make kernel` lane selects C++ and proves that the final TRUEOS ELF
-contains the complete C++ Zebin and no complete copy of the legacy copy
-Zebin. The compatibility target remains available:
+The normal `make kernel` lane selects the C++ copy implementation and proves
+that the final TRUEOS ELF contains its complete Zebin, no complete copy of the
+legacy copy Zebin, and the independently required native C++ demo Zebin. The
+compatibility target remains available:
 
 ```sh
 make intel-gpu-verify-linked-copy-cpp
@@ -106,7 +134,8 @@ make intel-gpu-verify-linked-copy-cpp
 `make iso` goes one boundary further. It creates the canonical
 `bld/trueos.iso`, extracts `/TRUEOS.elf` back from that ISO, requires byte
 identity with the stripped/staged runtime ELF, and applies the same
-selected-present/legacy-absent scan to the extracted member.
+selected-present/legacy-absent plus native-demo-required scan to the extracted
+member.
 `make iso-cpp-aot` is a compatibility alias for that canonical lane.
 
 The retained comparison lane uses isolated outputs and reverses the byte-level
