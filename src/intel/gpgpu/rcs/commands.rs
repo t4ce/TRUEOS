@@ -553,3 +553,13 @@ fn direct_rcs_elapsed_ms_since(start_tick: u64) -> u64 {
         elapsed.saturating_mul(1000) / hz
     }
 }
+
+fn direct_rcs_elapsed_us_since(start_tick: u64) -> u64 {
+    let elapsed = direct_rcs_now_tick().saturating_sub(start_tick);
+    let hz = embassy_time_driver::TICK_HZ;
+    if hz == 0 {
+        0
+    } else {
+        ((elapsed as u128).saturating_mul(1_000_000) / hz as u128) as u64
+    }
+}

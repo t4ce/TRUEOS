@@ -171,6 +171,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     ) {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
     }
+    let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
     let gpu = runtime
@@ -182,6 +183,7 @@ pub(crate) fn queue_ui4_compositor_layers(
     runtime.pending = Some(Ui4CompositorPending {
         submission,
         started_tick,
+        admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: UI4_COMPOSE_LAYERS_POST_MARKER,
         kernel: "ui4-compose-layers",
@@ -190,6 +192,7 @@ pub(crate) fn queue_ui4_compositor_layers(
             walkers: 1,
             submits: 1,
             submit_ms: 0,
+            probe: GpgpuSubmissionProbe::default(),
         },
         overdue_logged: false,
     });
@@ -356,6 +359,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     ) {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
     }
+    let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
     let gpu = runtime
@@ -367,6 +371,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
     runtime.pending = Some(Ui4CompositorPending {
         submission,
         started_tick,
+        admitted_tick,
         marker_slot: RECT_WORKLIST_POST_MARKER_SLOT,
         marker_value: ALPHA_BLEND_WORKLIST_POST_MARKER,
         kernel: "blueprint-alpha-rects",
@@ -375,6 +380,7 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
             walkers: rect_worklist_walker_count(descriptors.len()),
             submits: 1,
             submit_ms: 0,
+            probe: GpgpuSubmissionProbe::default(),
         },
         overdue_logged: false,
     });
@@ -498,6 +504,7 @@ fn queue_ui4_sprite_quad_runs(
     ) {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
     }
+    let admitted_tick = direct_rcs_now_tick();
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
     let gpu = runtime
@@ -509,6 +516,7 @@ fn queue_ui4_sprite_quad_runs(
     runtime.pending = Some(Ui4CompositorPending {
         submission,
         started_tick,
+        admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
         kernel,
@@ -517,6 +525,7 @@ fn queue_ui4_sprite_quad_runs(
             walkers: total_descs,
             submits: 1,
             submit_ms: 0,
+            probe: GpgpuSubmissionProbe::default(),
         },
         overdue_logged: false,
     });
@@ -545,6 +554,8 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     source_x: u32,
     source_y: u32,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
+    let queue_started_tick = direct_rcs_now_tick();
+    let mut probe = GpgpuSubmissionProbe::default();
     let source_gpu = UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE;
     let destination_valid = content_width != 0
         && content_height != 0
@@ -597,20 +608,33 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         .ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let state = ui4_compositor_rcs_state_once(dev).ok_or(Ui4CompositorSubmitError::Unavailable)?;
 
+    let phase_started_tick = direct_rcs_now_tick();
     let forcewake_ok = direct_rcs_forcewake(dev);
+    probe.forcewake_us = direct_rcs_elapsed_us_since(phase_started_tick);
+    let phase_started_tick = direct_rcs_now_tick();
     let mapped_ok = forcewake_ok && (runtime.state_mapped || direct_rcs_map_state(dev, state));
+    probe.state_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if mapped_ok {
         runtime.state_mapped = true;
     }
+    let phase_started_tick = direct_rcs_now_tick();
     let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(state));
+    probe.ppgtt_init_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if ppgtt_ok {
         runtime.ppgtt_initialized = true;
     }
+    let phase_started_tick = direct_rcs_now_tick();
     let kernel_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+    probe.kernel_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
+    let phase_started_tick = direct_rcs_now_tick();
     let source_ok =
         kernel_ok && direct_rcs_map_ppgtt_kernel(state, source_gpu, source.phys, source.bytes);
+    probe.source_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
+    let phase_started_tick = direct_rcs_now_tick();
     let dst_ok = source_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
+    probe.destination_map_us = direct_rcs_elapsed_us_since(phase_started_tick);
+    let phase_started_tick = direct_rcs_now_tick();
     let batch_ok = dst_ok
         && direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
             state,
@@ -619,6 +643,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             source.bytes,
             dst.bytes,
         );
+    probe.batch_encode_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if !batch_ok {
         crate::log_error!(target: "ui4";
             "ui4/guc-video-frame: queue rejected forcewake={} state={} ppgtt={} kernel={} source={} dst={} batch={} source_gpu=0x{:X} media_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -635,6 +660,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         );
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
+    probe.queue_prepare_us = direct_rcs_elapsed_us_since(queue_started_tick);
     let submit_attempt = UI4_VIDEO_FRAME_SUBMIT_ATTEMPTS
         .fetch_add(1, Ordering::AcqRel)
         .saturating_add(1);
@@ -662,6 +688,9 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     ) {
         return Err(Ui4CompositorSubmitError::SubmissionRejected);
     }
+    let admitted_tick = direct_rcs_now_tick();
+    probe.admission_us = direct_rcs_elapsed_us_since(started_tick);
+    probe.queue_total_us = direct_rcs_elapsed_us_since(queue_started_tick);
     runtime.next_serial = runtime.next_serial.wrapping_add(1).max(1);
     let serial = runtime.next_serial;
     let gpu = runtime
@@ -673,6 +702,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     runtime.pending = Some(Ui4CompositorPending {
         submission,
         started_tick,
+        admitted_tick,
         marker_slot: SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT,
         marker_value: SPRITE_QUAD_WORKLIST_POST_MARKER,
         kernel: "nv12-media-ytile-rgba8-frame",
@@ -681,6 +711,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
             walkers: 1,
             submits: 1,
             submit_ms: 0,
+            probe,
         },
         overdue_logged: false,
     });
@@ -746,9 +777,13 @@ pub(crate) fn poll_ui4_compositor_submission(
         let _ = crate::gpu::executor::complete_kernel_submission(submission.gpu, false);
         return completion;
     };
+    pending.stats.probe.completion_polls =
+        pending.stats.probe.completion_polls.saturating_add(1);
     let observed = direct_rcs_read_result_slot(state, pending.marker_slot);
     if observed == pending.marker_value {
         pending.stats.submit_ms = direct_rcs_elapsed_ms_since(pending.started_tick);
+        pending.stats.probe.submit_to_marker_us =
+            direct_rcs_elapsed_us_since(pending.admitted_tick);
         runtime.pending = None;
         runtime.submit.pending = None;
         let completion = Ui4CompositorCompletion::Complete(pending.stats);
@@ -786,6 +821,7 @@ pub(crate) fn poll_ui4_compositor_submission(
         }
         return Ui4CompositorCompletion::Pending;
     }
+    runtime.pending = Some(pending);
     Ui4CompositorCompletion::Pending
 }
 

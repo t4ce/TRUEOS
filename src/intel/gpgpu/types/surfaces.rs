@@ -403,11 +403,31 @@ pub(crate) struct GpgpuSubmitStats {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct GpgpuSubmissionProbe {
+    /// Entry into the queue function through a fully encoded, DMA-visible batch.
+    pub(crate) queue_prepare_us: u64,
+    /// Entry into the queue function through accepted GuC admission.
+    pub(crate) queue_total_us: u64,
+    pub(crate) forcewake_us: u64,
+    pub(crate) state_map_us: u64,
+    pub(crate) ppgtt_init_us: u64,
+    pub(crate) kernel_map_us: u64,
+    pub(crate) source_map_us: u64,
+    pub(crate) destination_map_us: u64,
+    pub(crate) batch_encode_us: u64,
+    pub(crate) admission_us: u64,
+    /// Accepted GuC admission through host observation of the post marker.
+    pub(crate) submit_to_marker_us: u64,
+    pub(crate) completion_polls: u64,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpgpuWorklistSubmitStats {
     pub(crate) descs: usize,
     pub(crate) walkers: usize,
     pub(crate) submits: usize,
     pub(crate) submit_ms: u64,
+    pub(crate) probe: GpgpuSubmissionProbe,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

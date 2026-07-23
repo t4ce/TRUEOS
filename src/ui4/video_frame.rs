@@ -37,6 +37,8 @@ const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = 2;
 const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
 const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
+const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US: u64 = 250;
+const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS: usize = 128;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -53,6 +55,57 @@ pub(crate) struct DecodedNv12Source {
     pub(crate) uv_offset: usize,
 }
 
+/// Bounded live-path probe for the ordered decode-to-publication architecture.
+/// It submits no diagnostic GPU work and allocates nothing per frame: samples
+/// are taken only at existing ownership transitions and folded into fixed
+/// histograms after the request completes.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DecodedVideoConversionProbeReport {
+    pub(crate) samples: usize,
+    pub(crate) rcs_samples: usize,
+    pub(crate) quantile_bucket_us: u64,
+    pub(crate) avg_queue_wait_us: u64,
+    pub(crate) max_queue_wait_us: u64,
+    pub(crate) avg_end_to_end_us: u64,
+    pub(crate) max_end_to_end_us: u64,
+    pub(crate) p50_end_to_end_us: u64,
+    pub(crate) p95_end_to_end_us: u64,
+    pub(crate) p99_end_to_end_us: u64,
+    pub(crate) avg_bind_layout_us: u64,
+    pub(crate) max_bind_layout_us: u64,
+    pub(crate) avg_rgba_acquire_us: u64,
+    pub(crate) max_rgba_acquire_us: u64,
+    pub(crate) avg_surface_prepare_us: u64,
+    pub(crate) max_surface_prepare_us: u64,
+    pub(crate) avg_rcs_queue_us: u64,
+    pub(crate) max_rcs_queue_us: u64,
+    pub(crate) avg_rcs_completion_us: u64,
+    pub(crate) max_rcs_completion_us: u64,
+    pub(crate) avg_publish_us: u64,
+    pub(crate) max_publish_us: u64,
+    pub(crate) avg_rcs_queue_prepare_us: u64,
+    pub(crate) max_rcs_queue_prepare_us: u64,
+    pub(crate) p50_rcs_queue_prepare_us: u64,
+    pub(crate) p95_rcs_queue_prepare_us: u64,
+    pub(crate) p99_rcs_queue_prepare_us: u64,
+    pub(crate) avg_rcs_queue_total_us: u64,
+    pub(crate) avg_rcs_forcewake_us: u64,
+    pub(crate) avg_rcs_state_map_us: u64,
+    pub(crate) avg_rcs_ppgtt_init_us: u64,
+    pub(crate) avg_rcs_kernel_map_us: u64,
+    pub(crate) avg_rcs_source_map_us: u64,
+    pub(crate) avg_rcs_destination_map_us: u64,
+    pub(crate) avg_rcs_batch_encode_us: u64,
+    pub(crate) avg_rcs_admission_us: u64,
+    pub(crate) avg_rcs_submit_to_marker_us: u64,
+    pub(crate) max_rcs_submit_to_marker_us: u64,
+    pub(crate) p50_rcs_submit_to_marker_us: u64,
+    pub(crate) p95_rcs_submit_to_marker_us: u64,
+    pub(crate) p99_rcs_submit_to_marker_us: u64,
+    pub(crate) avg_completion_polls: u64,
+    pub(crate) max_completion_polls: u64,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DecodedVideoConversionReport {
     pub(crate) generation: u64,
@@ -67,6 +120,7 @@ pub(crate) struct DecodedVideoConversionReport {
     pub(crate) max_outstanding: usize,
     pub(crate) total_conversion_us: u64,
     pub(crate) max_conversion_us: u64,
+    pub(crate) probe: DecodedVideoConversionProbeReport,
 }
 
 impl DecodedVideoConversionReport {
@@ -83,7 +137,278 @@ impl DecodedVideoConversionReport {
 struct DecodedVideoConversionRequest {
     generation: u64,
     playback_frame: usize,
+    enqueued_tick: u64,
     source: DecodedNv12Source,
+}
+
+#[derive(Copy, Clone, Default)]
+struct VideoConversionProbeMetric {
+    total_us: u64,
+    max_us: u64,
+}
+
+impl VideoConversionProbeMetric {
+    const fn new() -> Self {
+        Self {
+            total_us: 0,
+            max_us: 0,
+        }
+    }
+
+    fn record(&mut self, value_us: u64) {
+        self.total_us = self.total_us.saturating_add(value_us);
+        self.max_us = self.max_us.max(value_us);
+    }
+
+    const fn average(self, samples: usize) -> u64 {
+        if samples == 0 {
+            0
+        } else {
+            self.total_us / samples as u64
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct VideoConversionProbeHistogram {
+    buckets: [u32; VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS],
+    overflow: u32,
+    samples: u64,
+}
+
+impl VideoConversionProbeHistogram {
+    const fn new() -> Self {
+        Self {
+            buckets: [0; VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS],
+            overflow: 0,
+            samples: 0,
+        }
+    }
+
+    fn record(&mut self, value_us: u64) {
+        self.samples = self.samples.saturating_add(1);
+        let bucket = (value_us / VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US) as usize;
+        if let Some(count) = self.buckets.get_mut(bucket) {
+            *count = count.saturating_add(1);
+        } else {
+            self.overflow = self.overflow.saturating_add(1);
+        }
+    }
+
+    fn percentile(&self, percent: u64, overflow_value_us: u64) -> u64 {
+        if self.samples == 0 {
+            return 0;
+        }
+        let rank = self.samples.saturating_mul(percent).saturating_add(99) / 100;
+        let mut observed = 0u64;
+        for (index, count) in self.buckets.iter().enumerate() {
+            observed = observed.saturating_add(u64::from(*count));
+            if observed >= rank {
+                return (index as u64 + 1)
+                    .saturating_mul(VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US);
+            }
+        }
+        overflow_value_us
+    }
+}
+
+#[derive(Copy, Clone, Default)]
+struct DecodedVideoConversionProbeSample {
+    queue_wait_us: u64,
+    end_to_end_us: u64,
+    bind_layout_us: u64,
+    rgba_acquire_us: u64,
+    surface_prepare_us: u64,
+    rcs_queue_us: u64,
+    rcs_completion_us: u64,
+    publish_us: u64,
+    rcs: Option<crate::intel::gpgpu::GpgpuSubmissionProbe>,
+}
+
+#[derive(Copy, Clone)]
+struct DecodedVideoConversionOutcome {
+    published: bool,
+    probe: DecodedVideoConversionProbeSample,
+}
+
+impl DecodedVideoConversionProbeSample {
+    const fn finish(self, published: bool) -> DecodedVideoConversionOutcome {
+        DecodedVideoConversionOutcome {
+            published,
+            probe: self,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct DecodedVideoConversionProbeState {
+    samples: usize,
+    rcs_samples: usize,
+    queue_wait: VideoConversionProbeMetric,
+    end_to_end: VideoConversionProbeMetric,
+    bind_layout: VideoConversionProbeMetric,
+    rgba_acquire: VideoConversionProbeMetric,
+    surface_prepare: VideoConversionProbeMetric,
+    rcs_queue: VideoConversionProbeMetric,
+    rcs_completion: VideoConversionProbeMetric,
+    publish: VideoConversionProbeMetric,
+    rcs_queue_prepare: VideoConversionProbeMetric,
+    rcs_queue_total: VideoConversionProbeMetric,
+    rcs_forcewake: VideoConversionProbeMetric,
+    rcs_state_map: VideoConversionProbeMetric,
+    rcs_ppgtt_init: VideoConversionProbeMetric,
+    rcs_kernel_map: VideoConversionProbeMetric,
+    rcs_source_map: VideoConversionProbeMetric,
+    rcs_destination_map: VideoConversionProbeMetric,
+    rcs_batch_encode: VideoConversionProbeMetric,
+    rcs_admission: VideoConversionProbeMetric,
+    rcs_submit_to_marker: VideoConversionProbeMetric,
+    end_to_end_histogram: VideoConversionProbeHistogram,
+    rcs_queue_prepare_histogram: VideoConversionProbeHistogram,
+    rcs_submit_to_marker_histogram: VideoConversionProbeHistogram,
+    total_completion_polls: u64,
+    max_completion_polls: u64,
+}
+
+impl DecodedVideoConversionProbeState {
+    const fn new() -> Self {
+        Self {
+            samples: 0,
+            rcs_samples: 0,
+            queue_wait: VideoConversionProbeMetric::new(),
+            end_to_end: VideoConversionProbeMetric::new(),
+            bind_layout: VideoConversionProbeMetric::new(),
+            rgba_acquire: VideoConversionProbeMetric::new(),
+            surface_prepare: VideoConversionProbeMetric::new(),
+            rcs_queue: VideoConversionProbeMetric::new(),
+            rcs_completion: VideoConversionProbeMetric::new(),
+            publish: VideoConversionProbeMetric::new(),
+            rcs_queue_prepare: VideoConversionProbeMetric::new(),
+            rcs_queue_total: VideoConversionProbeMetric::new(),
+            rcs_forcewake: VideoConversionProbeMetric::new(),
+            rcs_state_map: VideoConversionProbeMetric::new(),
+            rcs_ppgtt_init: VideoConversionProbeMetric::new(),
+            rcs_kernel_map: VideoConversionProbeMetric::new(),
+            rcs_source_map: VideoConversionProbeMetric::new(),
+            rcs_destination_map: VideoConversionProbeMetric::new(),
+            rcs_batch_encode: VideoConversionProbeMetric::new(),
+            rcs_admission: VideoConversionProbeMetric::new(),
+            rcs_submit_to_marker: VideoConversionProbeMetric::new(),
+            end_to_end_histogram: VideoConversionProbeHistogram::new(),
+            rcs_queue_prepare_histogram: VideoConversionProbeHistogram::new(),
+            rcs_submit_to_marker_histogram: VideoConversionProbeHistogram::new(),
+            total_completion_polls: 0,
+            max_completion_polls: 0,
+        }
+    }
+
+    fn record(&mut self, sample: DecodedVideoConversionProbeSample) {
+        self.samples = self.samples.saturating_add(1);
+        self.queue_wait.record(sample.queue_wait_us);
+        self.end_to_end.record(sample.end_to_end_us);
+        self.end_to_end_histogram.record(sample.end_to_end_us);
+        self.bind_layout.record(sample.bind_layout_us);
+        self.rgba_acquire.record(sample.rgba_acquire_us);
+        self.surface_prepare.record(sample.surface_prepare_us);
+        self.rcs_queue.record(sample.rcs_queue_us);
+        self.rcs_completion.record(sample.rcs_completion_us);
+        self.publish.record(sample.publish_us);
+        let Some(rcs) = sample.rcs else {
+            return;
+        };
+        self.rcs_samples = self.rcs_samples.saturating_add(1);
+        self.rcs_queue_prepare.record(rcs.queue_prepare_us);
+        self.rcs_queue_prepare_histogram
+            .record(rcs.queue_prepare_us);
+        self.rcs_queue_total.record(rcs.queue_total_us);
+        self.rcs_forcewake.record(rcs.forcewake_us);
+        self.rcs_state_map.record(rcs.state_map_us);
+        self.rcs_ppgtt_init.record(rcs.ppgtt_init_us);
+        self.rcs_kernel_map.record(rcs.kernel_map_us);
+        self.rcs_source_map.record(rcs.source_map_us);
+        self.rcs_destination_map.record(rcs.destination_map_us);
+        self.rcs_batch_encode.record(rcs.batch_encode_us);
+        self.rcs_admission.record(rcs.admission_us);
+        self.rcs_submit_to_marker.record(rcs.submit_to_marker_us);
+        self.rcs_submit_to_marker_histogram
+            .record(rcs.submit_to_marker_us);
+        self.total_completion_polls = self
+            .total_completion_polls
+            .saturating_add(rcs.completion_polls);
+        self.max_completion_polls = self.max_completion_polls.max(rcs.completion_polls);
+    }
+
+    fn report(&self) -> DecodedVideoConversionProbeReport {
+        let samples = self.samples;
+        let rcs_samples = self.rcs_samples;
+        DecodedVideoConversionProbeReport {
+            samples,
+            rcs_samples,
+            quantile_bucket_us: VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US,
+            avg_queue_wait_us: self.queue_wait.average(samples),
+            max_queue_wait_us: self.queue_wait.max_us,
+            avg_end_to_end_us: self.end_to_end.average(samples),
+            max_end_to_end_us: self.end_to_end.max_us,
+            p50_end_to_end_us: self
+                .end_to_end_histogram
+                .percentile(50, self.end_to_end.max_us),
+            p95_end_to_end_us: self
+                .end_to_end_histogram
+                .percentile(95, self.end_to_end.max_us),
+            p99_end_to_end_us: self
+                .end_to_end_histogram
+                .percentile(99, self.end_to_end.max_us),
+            avg_bind_layout_us: self.bind_layout.average(samples),
+            max_bind_layout_us: self.bind_layout.max_us,
+            avg_rgba_acquire_us: self.rgba_acquire.average(samples),
+            max_rgba_acquire_us: self.rgba_acquire.max_us,
+            avg_surface_prepare_us: self.surface_prepare.average(samples),
+            max_surface_prepare_us: self.surface_prepare.max_us,
+            avg_rcs_queue_us: self.rcs_queue.average(samples),
+            max_rcs_queue_us: self.rcs_queue.max_us,
+            avg_rcs_completion_us: self.rcs_completion.average(samples),
+            max_rcs_completion_us: self.rcs_completion.max_us,
+            avg_publish_us: self.publish.average(samples),
+            max_publish_us: self.publish.max_us,
+            avg_rcs_queue_prepare_us: self.rcs_queue_prepare.average(rcs_samples),
+            max_rcs_queue_prepare_us: self.rcs_queue_prepare.max_us,
+            p50_rcs_queue_prepare_us: self
+                .rcs_queue_prepare_histogram
+                .percentile(50, self.rcs_queue_prepare.max_us),
+            p95_rcs_queue_prepare_us: self
+                .rcs_queue_prepare_histogram
+                .percentile(95, self.rcs_queue_prepare.max_us),
+            p99_rcs_queue_prepare_us: self
+                .rcs_queue_prepare_histogram
+                .percentile(99, self.rcs_queue_prepare.max_us),
+            avg_rcs_queue_total_us: self.rcs_queue_total.average(rcs_samples),
+            avg_rcs_forcewake_us: self.rcs_forcewake.average(rcs_samples),
+            avg_rcs_state_map_us: self.rcs_state_map.average(rcs_samples),
+            avg_rcs_ppgtt_init_us: self.rcs_ppgtt_init.average(rcs_samples),
+            avg_rcs_kernel_map_us: self.rcs_kernel_map.average(rcs_samples),
+            avg_rcs_source_map_us: self.rcs_source_map.average(rcs_samples),
+            avg_rcs_destination_map_us: self.rcs_destination_map.average(rcs_samples),
+            avg_rcs_batch_encode_us: self.rcs_batch_encode.average(rcs_samples),
+            avg_rcs_admission_us: self.rcs_admission.average(rcs_samples),
+            avg_rcs_submit_to_marker_us: self.rcs_submit_to_marker.average(rcs_samples),
+            max_rcs_submit_to_marker_us: self.rcs_submit_to_marker.max_us,
+            p50_rcs_submit_to_marker_us: self
+                .rcs_submit_to_marker_histogram
+                .percentile(50, self.rcs_submit_to_marker.max_us),
+            p95_rcs_submit_to_marker_us: self
+                .rcs_submit_to_marker_histogram
+                .percentile(95, self.rcs_submit_to_marker.max_us),
+            p99_rcs_submit_to_marker_us: self
+                .rcs_submit_to_marker_histogram
+                .percentile(99, self.rcs_submit_to_marker.max_us),
+            avg_completion_polls: if rcs_samples == 0 {
+                0
+            } else {
+                self.total_completion_polls / rcs_samples as u64
+            },
+            max_completion_polls: self.max_completion_polls,
+        }
+    }
 }
 
 struct DecodedVideoConversionState {
@@ -102,6 +427,7 @@ struct DecodedVideoConversionState {
     max_outstanding: usize,
     total_conversion_ticks: u64,
     max_conversion_ticks: u64,
+    probe: DecodedVideoConversionProbeState,
 }
 
 impl DecodedVideoConversionState {
@@ -122,6 +448,7 @@ impl DecodedVideoConversionState {
             max_outstanding: 0,
             total_conversion_ticks: 0,
             max_conversion_ticks: 0,
+            probe: DecodedVideoConversionProbeState::new(),
         }
     }
 
@@ -145,6 +472,7 @@ impl DecodedVideoConversionState {
         self.max_outstanding = 0;
         self.total_conversion_ticks = 0;
         self.max_conversion_ticks = 0;
+        self.probe = DecodedVideoConversionProbeState::new();
         true
     }
 
@@ -162,6 +490,7 @@ impl DecodedVideoConversionState {
             max_outstanding: self.max_outstanding,
             total_conversion_us: video_conversion_ticks_to_micros(self.total_conversion_ticks),
             max_conversion_us: video_conversion_ticks_to_micros(self.max_conversion_ticks),
+            probe: self.probe.report(),
         }
     }
 }
@@ -321,6 +650,7 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
                 state.queue.push_back(DecodedVideoConversionRequest {
                     generation,
                     playback_frame,
+                    enqueued_tick: Instant::now().as_ticks(),
                     source,
                 });
                 state.queued = state.queued.saturating_add(1);
@@ -377,13 +707,13 @@ fn take_decoded_video_conversion_request() -> Option<DecodedVideoConversionReque
 
 fn complete_decoded_video_conversion(
     request: DecodedVideoConversionRequest,
-    published: bool,
+    outcome: DecodedVideoConversionOutcome,
     elapsed_ticks: u64,
 ) {
     let mut state = VIDEO_CONVERSION_STATE.lock();
     if state.generation == request.generation {
         state.completed = state.completed.saturating_add(1);
-        if published {
+        if outcome.published {
             state.published = state.published.saturating_add(1);
         } else if state.first_failure_frame == 0 {
             state.first_failure_frame = request.playback_frame;
@@ -391,6 +721,7 @@ fn complete_decoded_video_conversion(
         }
         state.total_conversion_ticks = state.total_conversion_ticks.saturating_add(elapsed_ticks);
         state.max_conversion_ticks = state.max_conversion_ticks.max(elapsed_ticks);
+        state.probe.record(outcome.probe);
     }
     state.active = false;
 }
@@ -414,13 +745,17 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32) {
             continue;
         };
         let started = Instant::now();
-        let published =
+        let mut outcome =
             convert_publish_decoded_nv12_stream_frame(request.source, request.playback_frame).await;
-        complete_decoded_video_conversion(
-            request,
-            published,
-            Instant::now().saturating_duration_since(started).as_ticks(),
+        let finished = Instant::now();
+        let elapsed_ticks = finished.saturating_duration_since(started).as_ticks();
+        outcome.probe.queue_wait_us = video_conversion_ticks_to_micros(
+            started.as_ticks().saturating_sub(request.enqueued_tick),
         );
+        outcome.probe.end_to_end_us = video_conversion_ticks_to_micros(
+            finished.as_ticks().saturating_sub(request.enqueued_tick),
+        );
+        complete_decoded_video_conversion(request, outcome, elapsed_ticks);
     }
 }
 
@@ -595,10 +930,14 @@ fn reap_retired_video_frames() {
 async fn convert_publish_decoded_nv12_stream_frame(
     source: DecodedNv12Source,
     playback_frame: usize,
-) -> bool {
+) -> DecodedVideoConversionOutcome {
     let reason = "independent-rcs-worker";
+    let mut probe = DecodedVideoConversionProbeSample::default();
+    let bind_layout_started = Instant::now();
     if !valid_source(source) {
-        return false;
+        probe.bind_layout_us =
+            video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
+        return probe.finish(false);
     }
     // Shell-driven playback owns the same application window as boot playback;
     // drain its broker queue at frame cadence so move/resize/pan never depends
@@ -607,7 +946,9 @@ async fn convert_publish_decoded_nv12_stream_frame(
     let Some(stream) =
         bind_decoded_source_stream(DecodedVideoFrameSpec::from_nv12_source(source), reason)
     else {
-        return false;
+        probe.bind_layout_us =
+            video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
+        return probe.finish(false);
     };
     let Some(layout) = native_viewport_layout(
         stream.visible_width,
@@ -617,8 +958,14 @@ async fn convert_publish_decoded_nv12_stream_frame(
         stream.pan_x,
         stream.pan_y,
     ) else {
-        return false;
+        probe.bind_layout_us =
+            video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
+        return probe.finish(false);
     };
+    probe.bind_layout_us =
+        video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
+
+    let rgba_acquire_started = Instant::now();
     let mut rgba_buffer_wait_counted = false;
     let write = loop {
         match acquire_frame_buffer(stream.frame) {
@@ -648,10 +995,16 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 crate::log_warn!(target: "ui4";
                     "ui4 video-frame acquire failed reason={} error={:?}\n", reason, error,
                 );
-                return false;
+                probe.rgba_acquire_us =
+                    video_conversion_ticks_to_micros(rgba_acquire_started.elapsed().as_ticks());
+                return probe.finish(false);
             }
         }
     };
+    probe.rgba_acquire_us =
+        video_conversion_ticks_to_micros(rgba_acquire_started.elapsed().as_ticks());
+
+    let surface_prepare_started = Instant::now();
     let destination = match gpgpu_rgba_surface(write) {
         Ok(surface) => surface,
         Err(error) => {
@@ -660,21 +1013,27 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 "ui4 video-frame destination unavailable frame={} buffer={} error={:?} reason={}\n",
                 stream.frame.raw(), write.buffer_index, error, reason,
             );
-            return false;
+            probe.surface_prepare_us =
+                video_conversion_ticks_to_micros(surface_prepare_started.elapsed().as_ticks());
+            return probe.finish(false);
         }
     };
     let pitch_bytes = match u32::try_from(source.pitch_bytes) {
         Ok(pitch) => pitch,
         Err(_) => {
             let _ = cancel_frame_buffer(write);
-            return false;
+            probe.surface_prepare_us =
+                video_conversion_ticks_to_micros(surface_prepare_started.elapsed().as_ticks());
+            return probe.finish(false);
         }
     };
     let uv_offset = match u32::try_from(source.uv_offset) {
         Ok(offset) => offset,
         Err(_) => {
             let _ = cancel_frame_buffer(write);
-            return false;
+            probe.surface_prepare_us =
+                video_conversion_ticks_to_micros(surface_prepare_started.elapsed().as_ticks());
+            return probe.finish(false);
         }
     };
     let Some(native_source) = crate::intel::gpgpu::GpgpuNv12Tile64Surface::new(
@@ -691,9 +1050,14 @@ async fn convert_publish_decoded_nv12_stream_frame(
             "ui4 video-frame native source rejected frame={} decode_seq={} media_gpu=0x{:X} reason={}\n",
             stream.frame.raw(), source.decode_sequence, source.gpu, reason,
         );
-        return false;
+        probe.surface_prepare_us =
+            video_conversion_ticks_to_micros(surface_prepare_started.elapsed().as_ticks());
+        return probe.finish(false);
     };
+    probe.surface_prepare_us =
+        video_conversion_ticks_to_micros(surface_prepare_started.elapsed().as_ticks());
 
+    let rcs_queue_started = Instant::now();
     let mut rcs_submit_wait_counted = false;
     let submission = loop {
         match crate::intel::gpgpu::queue_ui4_video_frame_nv12_tile64_to_rgba8(
@@ -733,18 +1097,23 @@ async fn convert_publish_decoded_nv12_stream_frame(
                     "ui4 video-frame GuC queue failed frame={} buffer={} decode_seq={} error={:?} reason={}\n",
                     stream.frame.raw(), write.buffer_index, source.decode_sequence, error, reason,
                 );
-                return false;
+                probe.rcs_queue_us =
+                    video_conversion_ticks_to_micros(rcs_queue_started.elapsed().as_ticks());
+                return probe.finish(false);
             }
         }
     };
+    probe.rcs_queue_us = video_conversion_ticks_to_micros(rcs_queue_started.elapsed().as_ticks());
+
+    let rcs_completion_started = Instant::now();
     let mut completion_failure_logged = false;
-    let (release, submit_ms) = loop {
+    let (release, stats) = loop {
         match crate::intel::gpgpu::poll_ui4_video_frame_submission(submission, destination) {
             crate::intel::gpgpu::Ui4VideoFrameCompletion::Pending => {
                 Timer::after(Duration::from_millis(1)).await;
             }
             crate::intel::gpgpu::Ui4VideoFrameCompletion::Complete { stats, release } => {
-                break (release, stats.submit_ms);
+                break (release, stats);
             }
             crate::intel::gpgpu::Ui4VideoFrameCompletion::Failed => {
                 // An accepted request has no cancellation proof. Keep the NV12
@@ -761,8 +1130,14 @@ async fn convert_publish_decoded_nv12_stream_frame(
             }
         }
     };
+    probe.rcs_completion_us =
+        video_conversion_ticks_to_micros(rcs_completion_started.elapsed().as_ticks());
+    probe.rcs = Some(stats.probe);
+    let submit_ms = stats.submit_ms;
+
     // From this point onward the decoder source is no longer referenced by any
     // queued GPU command. Only the completed RGBA allocation crosses into UI4.
+    let publish_started = Instant::now();
     let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     let published = match publish_gpgpu_video_frame_buffer(write, release) {
         Ok(published) => published,
@@ -772,7 +1147,9 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 "ui4 video-frame GPU publish failed frame={} buffer={} error={:?} reason={}\n",
                 stream.frame.raw(), write.buffer_index, error, reason,
             );
-            return false;
+            probe.publish_us =
+                video_conversion_ticks_to_micros(publish_started.elapsed().as_ticks());
+            return probe.finish(false);
         }
     };
     let window_serial = match publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL) {
@@ -783,9 +1160,12 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 stream.frame.raw(), stream.window.raw(), error, reason,
             );
             let _ = stop_decoded_nv12_stream("window-publish-failed");
-            return false;
+            probe.publish_us =
+                video_conversion_ticks_to_micros(publish_started.elapsed().as_ticks());
+            return probe.finish(false);
         }
     };
+    probe.publish_us = video_conversion_ticks_to_micros(publish_started.elapsed().as_ticks());
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
             "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
@@ -813,7 +1193,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
             VIDEO_RGBA_BUFFER_COUNT,
         );
     }
-    true
+    probe.finish(true)
 }
 
 fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Option<VideoStream> {
