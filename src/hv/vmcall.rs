@@ -490,6 +490,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         hvwarnf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
+    if matches!(
+        op,
+        OP_BP_SSH_SHELL_OPEN
+            | OP_BP_SSH_SHELL_WRITE
+            | OP_BP_SSH_SHELL_READ
+            | OP_BP_SSH_SHELL_RESIZE
+            | OP_BP_SSH_SHELL_CLOSE
+    ) && !crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_APP_ARCHIVE")
+        .is_some_and(|archive| archive.rsplit('/').next() == Some("sshd.bp"))
+    {
+        hvwarnf(format_args!("hv: vm{} denied privileged SSH shell bridge", vm_id));
+        write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+        return DispatchOutcome::Resume;
+    }
     match op {
         OP_PRESERVE => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
@@ -1988,9 +2002,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_SSH_SHELL_OPEN => {
-            let session =
-                crate::shell2::backends::net_tcp::ssh_shell_open(arg0 as usize, arg1 as usize)
-                    .map_or((-16i64) as u64, u64::from);
+            let session = crate::shell2::backends::net_tcp::ssh_shell_open(
+                vm_id,
+                arg0 as usize,
+                arg1 as usize,
+            )
+            .map_or((-16i64) as u64, u64::from);
             write_response(vm_id, seq, STATUS_OK, session, 0);
             DispatchOutcome::Resume
         }
@@ -1999,8 +2016,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let written = crate::shell2::backends::net_tcp::ssh_shell_write(arg0 as u32, data)
-                .map_or((-22i64) as u64, |written| written as u64);
+            let written =
+                crate::shell2::backends::net_tcp::ssh_shell_write(vm_id, arg0 as u32, data)
+                    .map_or((-22i64) as u64, |written| written as u64);
             write_response(vm_id, seq, STATUS_OK, written, 0);
             DispatchOutcome::Resume
         }
@@ -2011,7 +2029,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg1 as usize).min(PAYLOAD_CAP);
             let output = unsafe { &mut (&mut (*page).payload)[..cap] };
-            match crate::shell2::backends::net_tcp::ssh_shell_read(arg0 as u32, output) {
+            match crate::shell2::backends::net_tcp::ssh_shell_read(vm_id, arg0 as u32, output) {
                 Some(read) => write_response(vm_id, seq, STATUS_OK, read as u64, read as u32),
                 None => write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0),
             }
@@ -2020,12 +2038,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SSH_SHELL_RESIZE => {
             let cols = (arg1 >> 32) as usize;
             let rows = (arg1 & 0xffff_ffff) as usize;
-            let ok = crate::shell2::backends::net_tcp::ssh_shell_resize(arg0 as u32, cols, rows);
+            let ok =
+                crate::shell2::backends::net_tcp::ssh_shell_resize(vm_id, arg0 as u32, cols, rows);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-22i64) as u64 }, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SSH_SHELL_CLOSE => {
-            let ok = crate::shell2::backends::net_tcp::ssh_shell_close(arg0 as u32);
+            let ok = crate::shell2::backends::net_tcp::ssh_shell_close(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, if ok { 0 } else { (-22i64) as u64 }, 0);
             DispatchOutcome::Resume
         }

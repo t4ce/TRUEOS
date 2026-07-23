@@ -42,6 +42,14 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
         GpgpuArtifactBinding { arg_index: 0, bti: 0 },
         GpgpuArtifactBinding { arg_index: 1, bti: 1 },
     ],
+    implicit_payload_args: &[
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset, offset_bytes: 0, size_bytes: 12 },
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::LocalSize, offset_bytes: 12, size_bytes: 12 },
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize, offset_bytes: 32, size_bytes: 12 },
+    ],
+    per_thread_payload_args: &[
+        GpgpuArtifactPerThreadPayloadArg { kind: GpgpuArtifactPerThreadArgKind::LocalId, offset_bytes: 0, size_bytes: 96 },
+    ],
     payload_args: &[
         GpgpuArtifactPayloadArg { arg_index: 0, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 48, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadOnly, address_mode: GpgpuArtifactAddressMode::Stateful },
         GpgpuArtifactPayloadArg { arg_index: 1, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 56, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadWrite, address_mode: GpgpuArtifactAddressMode::Stateful },

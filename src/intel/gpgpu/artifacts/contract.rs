@@ -306,13 +306,16 @@ impl GpgpuKernelAbiContract {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
         }
         let per_thread = self.per_thread_payload_args[0];
+        let Some(per_thread_end) = per_thread
+            .offset_bytes
+            .checked_add(per_thread.size_bytes)
+        else {
+            return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
+        };
         if !matches!(per_thread.kind, GpgpuArtifactPerThreadArgKind::LocalId)
             || per_thread.offset_bytes != 0
             || per_thread.size_bytes != 96
-            || per_thread
-                .offset_bytes
-                .checked_add(per_thread.size_bytes)
-                .map_or(true, |end| end > self.per_thread_data_bytes)
+            || per_thread_end > self.per_thread_data_bytes
         {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
         }

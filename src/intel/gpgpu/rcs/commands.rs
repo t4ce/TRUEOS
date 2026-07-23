@@ -311,6 +311,10 @@ fn direct_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&DIRECT_RCS_CONTEXT_QUARANTINED)
 }
 
+fn execution_rcs_context_is_quarantined() -> bool {
+    !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
+}
+
 fn quarantine_execution_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Execution, reason);
 }

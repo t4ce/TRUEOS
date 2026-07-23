@@ -66,14 +66,37 @@
   "schema_version": 1,
   "tools": {
     "clang": {
+      "dynamic_compiler_libraries": [
+        {
+          "resolved_name": "libLLVM.so.21.1",
+          "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+          "size_bytes": 138567144,
+          "soname": "libLLVM.so.21.1"
+        },
+        {
+          "resolved_name": "libclang-cpp.so.21.1",
+          "sha256": "ff79833fd7e7707f3c715e9518f9edcec7371800ec22062c81d155fec3ad0daa",
+          "size_bytes": 60307904,
+          "soname": "libclang-cpp.so.21.1"
+        }
+      ],
       "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
-      "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-21/bin"
+      "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
     },
     "llvm_spirv": {
+      "dynamic_compiler_libraries": [],
       "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
       "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
     },
     "ocloc": {
+      "dynamic_compiler_libraries": [
+        {
+          "resolved_name": "libocloc.so",
+          "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+          "size_bytes": 2456288,
+          "soname": "libocloc.so"
+        }
+      ],
       "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
       "version": "25.31.034666"
     }

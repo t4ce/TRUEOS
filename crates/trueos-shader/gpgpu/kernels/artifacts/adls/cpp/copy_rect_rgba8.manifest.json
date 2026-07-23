@@ -28,7 +28,32 @@
           }
         ],
         "cross_thread_data_bytes": 96,
+        "execution_env": {
+          "disable_mid_thread_preemption": true,
+          "eu_thread_count": 7,
+          "grf_count": 128,
+          "has_no_stateless_write": true,
+          "simd_size": 16,
+          "subgroup_independent_forward_progress": true
+        },
         "grf_count": 128,
+        "implicit_payload_args": [
+          {
+            "arg_type": "global_id_offset",
+            "offset": 0,
+            "size": 12
+          },
+          {
+            "arg_type": "local_size",
+            "offset": 12,
+            "size": 12
+          },
+          {
+            "arg_type": "enqueued_local_size",
+            "offset": 32,
+            "size": 12
+          }
+        ],
         "kernel_name": "copy_rect_rgba8",
         "payload_args": [
           {
@@ -257,6 +282,8 @@
       }
     ],
     "spirv": {
+      "embedded_section_offset": 1032,
+      "embedded_section_size": 4788,
       "sha256": "668be1d0bb57cb84b00beb7bc54dc63d3d11f59f6aa792c54b326afeab66228a",
       "size_bytes": 4788
     }
@@ -327,6 +354,12 @@
       "path": "tools/intel-gpu-bakery/profiles/adls.json",
       "sha256": "0906bebf89f71d287a2a25c5cfd70682f83abdd859908b0ea0cd802905cddee6"
     },
+    "publication_policy": {
+      "expected_kernels": [
+        "copy_rect_rgba8"
+      ],
+      "name": "cpp-legacy-abi-twin-v1"
+    },
     "reproducibility_check": "passed",
     "toolchain": {
       "compiler_libraries": [
@@ -396,24 +429,51 @@
       "schema_version": 1,
       "tools": {
         "clang": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libLLVM.so.21.1",
+              "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+              "size_bytes": 138567144,
+              "soname": "libLLVM.so.21.1"
+            },
+            {
+              "resolved_name": "libclang-cpp.so.21.1",
+              "sha256": "ff79833fd7e7707f3c715e9518f9edcec7371800ec22062c81d155fec3ad0daa",
+              "size_bytes": 60307904,
+              "soname": "libclang-cpp.so.21.1"
+            }
+          ],
           "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
-          "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-21/bin"
+          "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
         },
         "llvm_spirv": {
+          "dynamic_compiler_libraries": [],
           "executable_sha256": "b4eb2c129fcad0fa301d3624be3cd298daca6bbdc83b83b251e62217a6be49c4",
           "version": "LLVM (http://llvm.org/):\n  LLVM version 21.0.0git\n  Optimized build with assertions."
         },
         "ocloc": {
+          "dynamic_compiler_libraries": [
+            {
+              "resolved_name": "libocloc.so",
+              "sha256": "d1e9ac0a406b123cc78a42e926e99faa30f74656bdfeb41e351225c108a8b177",
+              "size_bytes": 2456288,
+              "soname": "libocloc.so"
+            }
+          ],
           "executable_sha256": "a32b2551706458e01a855e14e974674a38102ec83b42586931b2b09f78cbb384",
           "version": "25.31.034666"
         }
       }
+    },
+    "toolchain_lock": {
+      "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
+      "sha256": "c2fc88f60685eca3d306fc4fb3b928dfb846c7a36ee39a7f2711dbf42d8a1386"
     }
   },
   "rust_symbols": {
     "copy_rect_rgba8": "COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "source": {
     "inputs": [
       {

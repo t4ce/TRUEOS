@@ -482,6 +482,9 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
 pub(crate) fn reload_known_kernel_artifact(
     name: &str,
 ) -> Result<UploadedKernelArtifact, GpgpuArtifactReloadError> {
+    // A first reload may need one allocation; later exact-byte reloads reuse
+    // it. Serialize explicit reload callers so two first reloads cannot both
+    // observe an empty slot and allocate the same GPU VA concurrently.
     static RELOAD_LOCK: Mutex<()> = Mutex::new(());
     let _reload_guard = RELOAD_LOCK.lock();
     let Some(slot) = known_artifact_slot(name) else {

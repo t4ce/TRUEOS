@@ -190,6 +190,40 @@ const _: () = {
     assert!(contract.slm_bytes == 0);
     assert!(contract.cross_thread_data_bytes == 96);
     assert!(contract.per_thread_data_bytes == 96);
+    assert!(contract.implicit_payload_args.len() == 3);
+    assert!(matches!(
+        contract.implicit_payload_args[0].kind,
+        GpgpuArtifactImplicitArgKind::GlobalIdOffset
+    ));
+    assert!(
+        contract.implicit_payload_args[0].offset_bytes == 0
+            && contract.implicit_payload_args[0].size_bytes == 12
+    );
+    assert!(matches!(
+        contract.implicit_payload_args[1].kind,
+        GpgpuArtifactImplicitArgKind::LocalSize
+    ));
+    assert!(
+        contract.implicit_payload_args[1].offset_bytes == 12
+            && contract.implicit_payload_args[1].size_bytes == 12
+    );
+    assert!(matches!(
+        contract.implicit_payload_args[2].kind,
+        GpgpuArtifactImplicitArgKind::EnqueuedLocalSize
+    ));
+    assert!(
+        contract.implicit_payload_args[2].offset_bytes == 32
+            && contract.implicit_payload_args[2].size_bytes == 12
+    );
+    assert!(contract.per_thread_payload_args.len() == 1);
+    assert!(matches!(
+        contract.per_thread_payload_args[0].kind,
+        GpgpuArtifactPerThreadArgKind::LocalId
+    ));
+    assert!(
+        contract.per_thread_payload_args[0].offset_bytes == 0
+            && contract.per_thread_payload_args[0].size_bytes == 96
+    );
     assert!(contract.bindings.len() == 2);
     assert!(contract.bindings[0].arg_index == 0 && contract.bindings[0].bti == 0);
     assert!(contract.bindings[1].arg_index == 1 && contract.bindings[1].bti == 1);

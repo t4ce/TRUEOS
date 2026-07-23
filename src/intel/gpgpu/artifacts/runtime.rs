@@ -164,6 +164,12 @@ fn upload_artifact_bytes(
         }
     };
     if let Some(upload) = reusable_upload {
+        // External artifacts are currently an exact-byte allowlist, not a
+        // signed update channel. Once the filesystem bytes pass admission, a
+        // matching resident upload already contains the only permitted image.
+        // Reuse it instead of remapping the same GPU VA and leaking the prior
+        // DMA allocation. A metadata mismatch fails closed until a future
+        // quiescent replacement protocol can retire the old mapping safely.
         if !resident_upload_matches(upload, artifact, dev, gpu, bin.len(), actual_sha256) {
             crate::log_error!(
                 target: "gpgpu";
@@ -592,8 +598,31 @@ mod runtime_admission_tests {
     }
 
     #[test]
-    fn admission_rejects_invalid_elf_empty_hash_and_hash_mismatch() {
+    fn admission_rejects_invalid_policy_label_elf_and_hashes() {
         let artifact = artifact_without_contract(GPGPU_ADLS_4680_TARGET);
+        let invalid_policy = GpgpuKernelArtifact {
+            target_policy: GpgpuKernelTarget {
+                label: "",
+                ..GPGPU_ADLS_4680_TARGET
+            },
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(invalid_policy, 0x4680, 0, invalid_policy.bin),
+            Err(GpgpuArtifactAdmissionError::InvalidTargetPolicy(
+                GpgpuKernelTargetError::EmptyLabel
+            ))
+        );
+
+        let wrong_label = GpgpuKernelArtifact {
+            target: "not-adls",
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_label, 0x4680, 0, wrong_label.bin),
+            Err(GpgpuArtifactAdmissionError::TargetLabelMismatch)
+        );
+
         assert_eq!(
             admit_kernel_artifact_bytes(artifact, 0x4680, 0, b"not a Zebin"),
             Err(GpgpuArtifactAdmissionError::InvalidElf("truncated-elf"))
@@ -650,12 +679,38 @@ mod runtime_admission_tests {
             artifact.bin.len(),
             artifact.bin_sha256,
         ));
+        assert!(!resident_upload_matches(
+            UploadedKernelArtifact {
+                mapped_bytes: upload.bytes.saturating_sub(1),
+                ..upload
+            },
+            artifact,
+            dev,
+            upload.gpu,
+            artifact.bin.len(),
+            artifact.bin_sha256,
+        ));
     }
 
     #[cfg(feature = "intel_gpu_cpp_aot")]
     #[test]
-    fn admission_rejects_contract_name_target_and_spirv_mismatch() {
+    fn admission_rejects_invalid_contract_and_contract_identity_mismatches() {
         let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;
+        const INVALID_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+            simd_width: 32,
+            ..COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+        };
+        let invalid_contract = GpgpuKernelArtifact {
+            abi_contract: Some(&INVALID_CONTRACT),
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(invalid_contract, 0x4680, 0, invalid_contract.bin),
+            Err(GpgpuArtifactAdmissionError::InvalidAbiContract(
+                GpgpuKernelAbiContractError::UnsupportedSimdWidth
+            ))
+        );
+
         let wrong_name = GpgpuKernelArtifact {
             name: "copy_rect_rgba8_wrong",
             ..artifact
@@ -680,6 +735,19 @@ mod runtime_admission_tests {
             Err(GpgpuArtifactAdmissionError::ContractTargetMismatch)
         );
 
+        const WRONG_ZEBIN_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+            zebin_sha256: [0xA5; 32],
+            ..COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+        };
+        let wrong_contract_zebin = GpgpuKernelArtifact {
+            abi_contract: Some(&WRONG_ZEBIN_CONTRACT),
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_contract_zebin, 0x4680, 0, wrong_contract_zebin.bin,),
+            Err(GpgpuArtifactAdmissionError::ContractZebinHashMismatch)
+        );
+
         let wrong_spirv = GpgpuKernelArtifact {
             spv: b"not the contracted SPIR-V",
             ..artifact
@@ -687,6 +755,21 @@ mod runtime_admission_tests {
         assert_eq!(
             admit_kernel_artifact_bytes(wrong_spirv, 0x4680, 0, wrong_spirv.bin),
             Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch)
+        );
+
+        const WRONG_ELF_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+            entry_size: COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_size + 1,
+            ..COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+        };
+        let wrong_contract_elf = GpgpuKernelArtifact {
+            abi_contract: Some(&WRONG_ELF_CONTRACT),
+            ..artifact
+        };
+        assert_eq!(
+            admit_kernel_artifact_bytes(wrong_contract_elf, 0x4680, 0, wrong_contract_elf.bin),
+            Err(GpgpuArtifactAdmissionError::ContractElfMismatch(
+                "contract-elf-entry-range-mismatch"
+            ))
         );
     }
 }

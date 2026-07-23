@@ -656,6 +656,14 @@ def _kernel_contract(
 def analyze_zebin(bin_path: Path, spv_path: Path | None = None) -> dict[str, Any]:
     zebin = Zebin.load(bin_path)
     ze_info = zebin.one_section(".ze_info")
+    embedded_spirv = None
+    if spv_path is not None:
+        embedded_spirv = zebin.one_section(".spv")
+        sibling_spirv = spv_path.read_bytes()
+        if sibling_spirv != embedded_spirv.data:
+            raise ContractError(
+                f"{spv_path}: sibling SPIR-V does not match the Zebin .spv section"
+            )
     try:
         ze_text = ze_info.data.decode("utf-8", errors="strict").rstrip("\0")
     except UnicodeDecodeError as error:
@@ -702,6 +710,8 @@ def analyze_zebin(bin_path: Path, spv_path: Path | None = None) -> dict[str, Any
             {
                 "size_bytes": spv_path.stat().st_size,
                 "sha256": sha256_file(spv_path),
+                "embedded_section_offset": embedded_spirv.offset,
+                "embedded_section_size": embedded_spirv.size,
             }
             if spv_path is not None
             else None
@@ -1074,6 +1084,14 @@ def verify_manifest(
     toolchain = provenance.get("toolchain")
     if not isinstance(toolchain, dict):
         raise ContractError(f"{manifest_path}: toolchain provenance is missing")
+    if manifest.get("variant") == "cpp" and (
+        toolchain.get("frontend") != "clang-clcpp"
+        or not isinstance(toolchain.get("tools"), dict)
+        or not toolchain["tools"]
+    ):
+        raise ContractError(
+            f"{manifest_path}: cpp artifact lacks a complete clang-clcpp fingerprint"
+        )
     if "tools" in toolchain:
         if provenance.get("reproducibility_check") != "passed":
             raise ContractError(
@@ -1101,7 +1119,11 @@ def verify_manifest(
             raise ContractError(
                 f"{manifest_path}: toolchain provenance does not match reviewed lock"
             )
-    if manifest.get("variant") == "cpp":
+    if toolchain.get("frontend") == "clang-clcpp":
+        if manifest.get("variant") != "cpp":
+            raise ContractError(
+                f"{manifest_path}: clang-clcpp publication has an unreviewed variant"
+            )
         policy = provenance.get("publication_policy")
         if not isinstance(policy, dict) or policy.get("name") != "cpp-legacy-abi-twin-v1":
             raise ContractError(

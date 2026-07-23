@@ -3,16 +3,20 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
 from artifact_contract import (
+    ContractError,
     abi_projection,
     analyze_zebin,
     parse_ze_info_yaml,
+    validate_constraints,
     verify_manifest,
 )
 
@@ -75,6 +79,18 @@ class ArtifactContractTests(unittest.TestCase):
         self.assertEqual(kernel["simd_width"], 16)
         self.assertEqual(kernel["cross_thread_data_bytes"], 96)
         self.assertEqual(kernel["per_thread_data_bytes"], 96)
+        self.assertEqual(
+            kernel["implicit_payload_args"],
+            [
+                {"arg_type": "global_id_offset", "offset": 0, "size": 12},
+                {"arg_type": "local_size", "offset": 12, "size": 12},
+                {"arg_type": "enqueued_local_size", "offset": 32, "size": 12},
+            ],
+        )
+        self.assertEqual(
+            kernel["per_thread_payload_args"],
+            [{"arg_type": "local_id", "offset": 0, "size": 96}],
+        )
 
     def test_cpp_and_legacy_copy_abis_are_exactly_equal(self) -> None:
         legacy = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")
@@ -83,6 +99,12 @@ class ArtifactContractTests(unittest.TestCase):
             ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.spv",
         )
         self.assertEqual(abi_projection(cpp), abi_projection(legacy))
+
+    def test_abi_projection_detects_implicit_payload_drift(self) -> None:
+        cpp = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
+        changed = copy.deepcopy(cpp)
+        changed["kernels"][0]["implicit_payload_args"][1]["offset"] += 4
+        self.assertNotEqual(abi_projection(changed), abi_projection(cpp))
 
     def test_pointer_qualifiers_survive_cpp_translation(self) -> None:
         cpp = analyze_zebin(ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin")
@@ -118,6 +140,22 @@ class ArtifactContractTests(unittest.TestCase):
         )
         self.assertEqual(parsed["version"], "1.999")
 
+    def test_constraint_gate_rejects_unreviewed_ze_info_major(self) -> None:
+        analysis = analyze_zebin(ARTIFACT_ROOT / "copy_rect_rgba8.bin")
+        analysis["kernels"][0]["ze_info_major"] = 2
+        with self.assertRaisesRegex(ContractError, r"unsupported \.ze_info major 2"):
+            validate_constraints(analysis, 16, 0, 0)
+
+    def test_sibling_spirv_must_match_embedded_zebin_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            mismatched = Path(directory) / "copy_rect_rgba8.spv"
+            mismatched.write_bytes(b"not the embedded SPIR-V")
+            with self.assertRaisesRegex(ContractError, "does not match"):
+                analyze_zebin(
+                    ARTIFACT_ROOT / "cpp" / "copy_rect_rgba8.bin",
+                    mismatched,
+                )
+
     def test_published_manifest_and_generated_rust_are_current(self) -> None:
         root = ARTIFACT_ROOT / "cpp"
         verify_manifest(
@@ -137,8 +175,54 @@ class ArtifactContractTests(unittest.TestCase):
         )
         for tool in manifest["provenance"]["toolchain"]["tools"].values():
             self.assertNotIn("path", tool)
+        clang_dependencies = {
+            record["soname"]
+            for record in manifest["provenance"]["toolchain"]["tools"]["clang"][
+                "dynamic_compiler_libraries"
+            ]
+        }
+        self.assertTrue(
+            any(name.startswith("libclang-cpp") for name in clang_dependencies)
+        )
+        self.assertTrue(any(name.startswith("libLLVM") for name in clang_dependencies))
         serialized = json.dumps(manifest, sort_keys=True)
         self.assertNotIn(str(REPO_ROOT.parent), serialized)
+
+    def test_cpp_publication_gates_cannot_be_removed_from_manifest(self) -> None:
+        root = ARTIFACT_ROOT / "cpp"
+        manifest_path = root / "copy_rect_rgba8.manifest.json"
+        original = json.loads(manifest_path.read_text(encoding="utf-8"))
+        mutations = {
+            "source inputs": lambda value: value["source"].update(inputs=[]),
+            "ABI reference": lambda value: value.update(abi_reference=None),
+            "reproducibility": lambda value: value["provenance"].update(
+                reproducibility_check="not-requested"
+            ),
+            "toolchain": lambda value: value["provenance"].update(
+                toolchain={"status": "unavailable"}, toolchain_lock=None
+            ),
+            "expected kernels": lambda value: value["provenance"][
+                "publication_policy"
+            ].update(expected_kernels=[]),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for label, mutate in mutations.items():
+                with self.subTest(gate=label):
+                    changed = copy.deepcopy(original)
+                    mutate(changed)
+                    candidate = Path(directory) / f"{label.replace(' ', '-')}.json"
+                    candidate.write_text(
+                        json.dumps(changed, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ContractError):
+                        verify_manifest(
+                            candidate,
+                            root / "copy_rect_rgba8.bin",
+                            root / "copy_rect_rgba8.spv",
+                            root / "copy_rect_rgba8.contract.rs",
+                            REPO_ROOT,
+                        )
 
 
 if __name__ == "__main__":

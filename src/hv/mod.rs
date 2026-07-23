@@ -2382,6 +2382,7 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) {
+    crate::shell2::backends::net_tcp::ssh_shell_release_owner(vm_id);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }

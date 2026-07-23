@@ -339,12 +339,15 @@ def _tool_record(
     path: Path, version: str, environment: dict[str, str]
 ) -> dict[str, Any]:
     resolved = path.resolve()
+    stable_version = "\n".join(
+        line for line in version.splitlines() if not line.startswith("InstalledDir:")
+    )
     return {
         "executable_sha256": sha256_file(resolved),
         "dynamic_compiler_libraries": _dynamic_compiler_libraries(
             resolved, environment
         ),
-        "version": version,
+        "version": stable_version,
     }
 
 
@@ -654,6 +657,11 @@ def main(argv: list[str] | None = None) -> int:
         raise ContractError("ocloc-cl frontend requires a .cl source")
     variant = args.variant or ("cpp" if frontend == "clang-clcpp" else "legacy")
     if frontend == "clang-clcpp" and args.publish_dir:
+        if variant != "cpp":
+            raise ContractError(
+                "published clang-clcpp artifacts must use the reviewed cpp "
+                "ABI-twin variant"
+            )
         missing_gates = []
         if not args.toolchain_lock:
             missing_gates.append("--toolchain-lock")
@@ -665,16 +673,15 @@ def main(argv: list[str] | None = None) -> int:
                 + " and ".join(missing_gates)
                 + "; prepare a reviewed lock without --publish-dir first"
             )
-        if variant == "cpp":
-            if not args.abi_reference_bin:
-                missing_gates.append("--abi-reference-bin")
-            if not args.expect_kernel:
-                missing_gates.append("--expect-kernel")
-            if missing_gates:
-                raise ContractError(
-                    "publishing the cpp ABI-twin variant requires "
-                    + " and ".join(missing_gates)
-                )
+        if not args.abi_reference_bin:
+            missing_gates.append("--abi-reference-bin")
+        if not args.expect_kernel:
+            missing_gates.append("--expect-kernel")
+        if missing_gates:
+            raise ContractError(
+                "publishing the cpp ABI-twin variant requires "
+                + " and ".join(missing_gates)
+            )
 
     ocloc_candidates = [
         REPO_ROOT / "bld/intel-tools/root/usr/bin/ocloc-26.05.1",

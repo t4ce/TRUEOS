@@ -123,9 +123,9 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     }
 
     let mut state_slot = DIRECT_RCS_STATE.lock();
-    // Close the check/lock race for any caller that failed to take the ordinary
-    // submit lock. Normal callers already serialize quarantine and reuse with
-    // DIRECT_RCS_SUBMIT_LOCK.
+    // Catch quarantine published while this accessor waited for the state
+    // slot. The submit lock remains the serialization contract that prevents a
+    // new quarantine from racing the remainder of a normal call.
     if direct_rcs_context_is_quarantined() {
         return None;
     }
@@ -139,15 +139,24 @@ fn direct_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
 }
 
 fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0 {
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
+        || execution_rcs_context_is_quarantined()
+    {
         return None;
     }
-    if let Some(state) = *EXECUTION_RCS_STATE.lock() {
+
+    let mut state_slot = EXECUTION_RCS_STATE.lock();
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
+        || execution_rcs_context_is_quarantined()
+    {
+        return None;
+    }
+    if let Some(state) = *state_slot {
         return Some(state);
     }
 
     let state = allocate_direct_rcs_state(EXECUTION_RCS_GPU_VA)?;
-    *EXECUTION_RCS_STATE.lock() = Some(state);
+    *state_slot = Some(state);
     Some(state)
 }
 
