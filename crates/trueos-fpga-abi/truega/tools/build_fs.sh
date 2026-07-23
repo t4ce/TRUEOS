@@ -39,8 +39,11 @@ GOWIN_IDE_DIR="$(cd "$(dirname "$GOWIN_SH")/.." && pwd)"
 GOWIN_LIB="$GOWIN_IDE_DIR/lib"
 SYSTEM_FREETYPE="/lib/x86_64-linux-gnu/libfreetype.so.6"
 PROJECT_FILE="$PROJECT_DIR/min_pci_led.gprj"
-PLACE_OPTION="${TRUEGA_PLACE_OPTION:-4}"
-ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-0}"
+# The joined decode image exposed a Gowin option-4 placer crash in libgowin
+# and non-convergence in the default router at high utilization.  The default
+# placer plus the vendor's faster router are stable for this fixed topology.
+PLACE_OPTION="${TRUEGA_PLACE_OPTION:-0}"
+ROUTE_OPTION="${TRUEGA_ROUTE_OPTION:-2}"
 CLOCK_CONVERSION="${TRUEGA_CLOCK_CONVERSION:-1}"
 CLOCK_ROUTE_ORDER="${TRUEGA_CLOCK_ROUTE_ORDER:-1}"
 ROUTE_MAXFAN="${TRUEGA_ROUTE_MAXFAN:-23}"

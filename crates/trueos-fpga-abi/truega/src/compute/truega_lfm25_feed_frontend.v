@@ -92,7 +92,13 @@ module truega_lfm25_feed_frontend (
 
     // 3 * 144 * 64 bytes.  No reset branch writes this array.
     reg [31:0] payload_memory [0:TOTAL_WORDS-1];
-    reg [63:0] stage_byte_mask [0:TOTAL_SLOTS-1];
+    // Byte masks only exist for physically readable payload slots.  The full
+    // 432-slot validity vector below still records writes to unused high
+    // bank-1/2 slots, so an extra high-slot write still makes the exact count
+    // fail (or leaves a required slot absent during validation).  Keeping
+    // unreachable masks would synthesize 224 * 64 needless state bits and a
+    // very large selection network.
+    reg [63:0] stage_byte_mask [0:TOTAL_PAYLOAD_SLOTS-1];
     reg [TOTAL_SLOTS-1:0] stage_slot_valid;
     reg [8:0] stage_valid_count;
 
@@ -172,6 +178,7 @@ module truega_lfm25_feed_frontend (
     reg [7:0] validation_stages;
     reg [63:0] validation_needed_byte_mask;
     integer validation_linear;
+    integer validation_payload_linear;
 
     function automatic [63:0] byte_mask_for_count;
         input [15:0] count;
@@ -314,6 +321,14 @@ module truega_lfm25_feed_frontend (
     always @* begin
         validation_linear = validation_bank * STAGING_SLOTS
             + validation_slot;
+        validation_payload_linear = validation_slot;
+        case (validation_bank)
+            2'd1: validation_payload_linear = STAGING_BANK1_BASE
+                + validation_slot;
+            2'd2: validation_payload_linear = STAGING_BANK2_BASE
+                + validation_slot;
+            default: begin end
+        endcase
     end
 
     assign payload_read_ready_o = item_valid_o && !poisoned_o;
@@ -444,7 +459,7 @@ module truega_lfm25_feed_frontend (
 
             if (validation_active) begin
                 if (!stage_slot_valid[validation_linear]
-                        || (stage_byte_mask[validation_linear]
+                        || (stage_byte_mask[validation_payload_linear]
                             & validation_needed_byte_mask)
                             != validation_needed_byte_mask) begin
                     validation_active <= 1'b0;
@@ -514,12 +529,14 @@ module truega_lfm25_feed_frontend (
                                     <= bar2_write_data_i[byte_index * 8 +: 8];
                     if (!stage_slot_valid[write_slot_linear]) begin
                         stage_slot_valid[write_slot_linear] <= 1'b1;
-                        stage_byte_mask[write_slot_linear] <= write_byte_bits;
+                        if (write_payload_slot_in_range)
+                            stage_byte_mask[write_payload_slot_linear]
+                                <= write_byte_bits;
                         stage_valid_count <= stage_valid_count + 1'b1;
-                    end else begin
-                        stage_byte_mask[write_slot_linear]
-                            <= stage_byte_mask[write_slot_linear] | write_byte_bits;
-                    end
+                    end else if (write_payload_slot_in_range)
+                        stage_byte_mask[write_payload_slot_linear]
+                            <= stage_byte_mask[write_payload_slot_linear]
+                                | write_byte_bits;
                 end else if (commit_header_hit) begin
                     for (byte_index = 0; byte_index < 4;
                          byte_index = byte_index + 1) begin

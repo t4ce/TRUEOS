@@ -96,8 +96,9 @@ pub(crate) use input_broker::{
 pub(crate) use screenshot::ui4_screenshot_service_task;
 pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use video_frame::{
-    DecodedNv12Source, begin_shell_decoded_video_player, present_decoded_nv12_stream_frame,
-    stop_decoded_nv12_stream,
+    DecodedNv12Source, DecodedVideoConversionReport, begin_decoded_nv12_conversion_batch,
+    begin_shell_decoded_video_player, enqueue_decoded_nv12_stream_frame, stop_decoded_nv12_stream,
+    ui4_video_conversion_service_task, wait_decoded_nv12_conversion_idle,
 };
 
 pub(crate) use window_broker::{

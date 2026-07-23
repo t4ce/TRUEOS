@@ -7,10 +7,11 @@
 //! The older `Tile64` Rust/kernel symbol names are retained as an artifact ABI;
 //! the shader uses the proven 128x32 media Y-tile byte layout.
 
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::{
@@ -27,6 +28,12 @@ use super::{
 const VIDEO_OWNER: WindowOwner = WindowOwner::VIDEO_PLAYER;
 const VIDEO_OUTPUT: OutputId = OutputId::from_slot(0).unwrap();
 const VIDEO_PLANE_SLOT: usize = super::ALPHA_OVERLAY_PLANE_SLOT;
+/// At most one conversion may execute while one decoded DPB surface waits.
+/// The current AVC path retains three references in four slots; the playback
+/// loop additionally drains this queue before every later IDR reuses slot 0.
+const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = 2;
+const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
+const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
@@ -41,6 +48,109 @@ pub(crate) struct DecodedNv12Source {
     pub(crate) visible_height: u32,
     pub(crate) pitch_bytes: usize,
     pub(crate) uv_offset: usize,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DecodedVideoConversionReport {
+    pub(crate) generation: u64,
+    pub(crate) queued: usize,
+    pub(crate) completed: usize,
+    pub(crate) published: usize,
+    pub(crate) first_failure_frame: usize,
+    pub(crate) first_failure_error: i32,
+    pub(crate) backpressure_events: usize,
+    pub(crate) max_outstanding: usize,
+    pub(crate) total_conversion_us: u64,
+    pub(crate) max_conversion_us: u64,
+}
+
+impl DecodedVideoConversionReport {
+    pub(crate) const fn avg_conversion_us(self) -> u64 {
+        if self.completed == 0 {
+            0
+        } else {
+            self.total_conversion_us / self.completed as u64
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct DecodedVideoConversionRequest {
+    generation: u64,
+    playback_frame: usize,
+    source: DecodedNv12Source,
+}
+
+struct DecodedVideoConversionState {
+    generation: u64,
+    online: bool,
+    active: bool,
+    queue: VecDeque<DecodedVideoConversionRequest>,
+    queued: usize,
+    completed: usize,
+    published: usize,
+    first_failure_frame: usize,
+    first_failure_error: i32,
+    backpressure_events: usize,
+    max_outstanding: usize,
+    total_conversion_ticks: u64,
+    max_conversion_ticks: u64,
+}
+
+impl DecodedVideoConversionState {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            online: false,
+            active: false,
+            queue: VecDeque::new(),
+            queued: 0,
+            completed: 0,
+            published: 0,
+            first_failure_frame: 0,
+            first_failure_error: 0,
+            backpressure_events: 0,
+            max_outstanding: 0,
+            total_conversion_ticks: 0,
+            max_conversion_ticks: 0,
+        }
+    }
+
+    fn outstanding(&self) -> usize {
+        self.queued.saturating_sub(self.completed)
+    }
+
+    fn reset_batch(&mut self) -> bool {
+        if self.active || !self.queue.is_empty() || self.outstanding() != 0 {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1).max(1);
+        self.queued = 0;
+        self.completed = 0;
+        self.published = 0;
+        self.first_failure_frame = 0;
+        self.first_failure_error = 0;
+        self.backpressure_events = 0;
+        self.max_outstanding = 0;
+        self.total_conversion_ticks = 0;
+        self.max_conversion_ticks = 0;
+        true
+    }
+
+    fn report(&self) -> DecodedVideoConversionReport {
+        DecodedVideoConversionReport {
+            generation: self.generation,
+            queued: self.queued,
+            completed: self.completed,
+            published: self.published,
+            first_failure_frame: self.first_failure_frame,
+            first_failure_error: self.first_failure_error,
+            backpressure_events: self.backpressure_events,
+            max_outstanding: self.max_outstanding,
+            total_conversion_us: video_conversion_ticks_to_micros(self.total_conversion_ticks),
+            max_conversion_us: video_conversion_ticks_to_micros(self.max_conversion_ticks),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -104,6 +214,199 @@ static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
+static VIDEO_CONVERSION_STATE: Mutex<DecodedVideoConversionState> =
+    Mutex::new(DecodedVideoConversionState::new());
+static VIDEO_CONVERSION_WORK: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+static VIDEO_CONVERSION_LAST_ERROR_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+
+fn decoded_video_conversion_idle() -> bool {
+    let state = VIDEO_CONVERSION_STATE.lock();
+    !state.active && state.queue.is_empty() && state.outstanding() == 0
+}
+
+fn video_conversion_ticks_to_micros(ticks: u64) -> u64 {
+    ((ticks as u128).saturating_mul(1_000_000) / embassy_time::TICK_HZ.max(1) as u128) as u64
+}
+
+fn should_log_video_conversion_error() -> bool {
+    let now = Instant::now().as_ticks().max(1);
+    loop {
+        let previous = VIDEO_CONVERSION_LAST_ERROR_LOG_TICK.load(Ordering::Acquire);
+        if previous != 0 && now.saturating_sub(previous) < VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS
+        {
+            return false;
+        }
+        if VIDEO_CONVERSION_LAST_ERROR_LOG_TICK
+            .compare_exchange_weak(previous, now, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn log_video_conversion_backpressure(
+    phase: &str,
+    playback_frame: usize,
+    report: DecodedVideoConversionReport,
+    worker_online: bool,
+) {
+    if !should_log_video_conversion_error() {
+        return;
+    }
+    crate::log_error!(
+        target: "ui4";
+        "ui4 video-conversion backpressure generation={} phase={} playback_frame={} queued={} completed={} outstanding={} cap={} worker_online={} policy=wait-ordered-no-drop rate_limit_ms=10000\n",
+        report.generation,
+        phase,
+        playback_frame,
+        report.queued,
+        report.completed,
+        report.queued.saturating_sub(report.completed),
+        VIDEO_CONVERSION_OUTSTANDING_CAP,
+        worker_online as u8,
+    );
+}
+
+/// Start a fresh accounting batch without changing the broker Frame/window.
+/// Loop playback calls this only after the prior batch drained completely.
+pub(crate) fn begin_decoded_nv12_conversion_batch() -> bool {
+    let mut state = VIDEO_CONVERSION_STATE.lock();
+    let reset = state.reset_batch();
+    if reset {
+        crate::log_info!(
+            target: "ui4";
+            "ui4 video-conversion batch generation={} worker=independent-rcs ordered=1 outstanding_cap={} no_drop=1 idr_drain=1 worker_online={}\n",
+            state.generation,
+            VIDEO_CONVERSION_OUTSTANDING_CAP,
+            state.online as u8,
+        );
+    }
+    reset
+}
+
+/// Hand one decoder-retired NV12 surface to the independent RCS conversion
+/// worker. Capacity is deliberately bounded; saturation waits and reports an
+/// error at most once per ten seconds, never discarding or replacing a frame.
+pub(crate) async fn enqueue_decoded_nv12_stream_frame(
+    source: DecodedNv12Source,
+    playback_frame: usize,
+) -> bool {
+    if !valid_source(source) || !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut backpressure_counted = false;
+    loop {
+        let (enqueued, report, worker_online) = {
+            let mut state = VIDEO_CONVERSION_STATE.lock();
+            let outstanding = state.outstanding();
+            if outstanding < VIDEO_CONVERSION_OUTSTANDING_CAP {
+                let generation = state.generation;
+                state.queue.push_back(DecodedVideoConversionRequest {
+                    generation,
+                    playback_frame,
+                    source,
+                });
+                state.queued = state.queued.saturating_add(1);
+                state.max_outstanding = state.max_outstanding.max(state.outstanding());
+                (true, state.report(), state.online)
+            } else {
+                if !backpressure_counted {
+                    state.backpressure_events = state.backpressure_events.saturating_add(1);
+                    backpressure_counted = true;
+                }
+                (false, state.report(), state.online)
+            }
+        };
+        if enqueued {
+            VIDEO_CONVERSION_WORK.signal(());
+            return true;
+        }
+        log_video_conversion_backpressure("enqueue", playback_frame, report, worker_online);
+        Timer::after(Duration::from_millis(1)).await;
+        if !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
+            return false;
+        }
+    }
+}
+
+/// Wait for all conversion requests in the current batch. This is used at IDR
+/// reuse boundaries and once at EOS; it does not reset cumulative accounting.
+pub(crate) async fn wait_decoded_nv12_conversion_idle() -> DecodedVideoConversionReport {
+    loop {
+        let (idle, report, worker_online) = {
+            let state = VIDEO_CONVERSION_STATE.lock();
+            (
+                !state.active && state.queue.is_empty() && state.outstanding() == 0,
+                state.report(),
+                state.online,
+            )
+        };
+        if idle {
+            return report;
+        }
+        if !worker_online {
+            log_video_conversion_backpressure("drain-worker-offline", 0, report, worker_online);
+        }
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
+fn take_decoded_video_conversion_request() -> Option<DecodedVideoConversionRequest> {
+    let mut state = VIDEO_CONVERSION_STATE.lock();
+    let request = state.queue.pop_front()?;
+    state.active = true;
+    Some(request)
+}
+
+fn complete_decoded_video_conversion(
+    request: DecodedVideoConversionRequest,
+    published: bool,
+    elapsed_ticks: u64,
+) {
+    let mut state = VIDEO_CONVERSION_STATE.lock();
+    if state.generation == request.generation {
+        state.completed = state.completed.saturating_add(1);
+        if published {
+            state.published = state.published.saturating_add(1);
+        } else if state.first_failure_frame == 0 {
+            state.first_failure_frame = request.playback_frame;
+            state.first_failure_error = VIDEO_CONVERSION_PRESENT_ERROR;
+        }
+        state.total_conversion_ticks = state.total_conversion_ticks.saturating_add(elapsed_ticks);
+        state.max_conversion_ticks = state.max_conversion_ticks.max(elapsed_ticks);
+    }
+    state.active = false;
+}
+
+#[embassy_executor::task(pool_size = 1)]
+pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32) {
+    {
+        let mut state = VIDEO_CONVERSION_STATE.lock();
+        state.online = true;
+    }
+    crate::log_info!(
+        target: "ui4";
+        "ui4 video-conversion worker online producer=decoded-nv12 consumer=broker-rgba engine=guc-rcs assigned_slot={} current_slot={} ordered=1 outstanding_cap={} no_drop=1 backpressure=wait error_rate_limit_ms=10000\n",
+        worker_slot,
+        crate::percpu::current_slot(),
+        VIDEO_CONVERSION_OUTSTANDING_CAP,
+    );
+    loop {
+        let Some(request) = take_decoded_video_conversion_request() else {
+            VIDEO_CONVERSION_WORK.wait().await;
+            continue;
+        };
+        let started = Instant::now();
+        let published =
+            convert_publish_decoded_nv12_stream_frame(request.source, request.playback_frame).await;
+        complete_decoded_video_conversion(
+            request,
+            published,
+            Instant::now().saturating_duration_since(started).as_ticks(),
+        );
+    }
+}
 
 /// Reserve the decoded-video lifetime and ask UI4 for the exact
 /// double-buffered Frame/window before filesystem or decoder work begins. No
@@ -118,6 +421,15 @@ pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_heigh
             desired_height,
             u64::from(desired_width) * u64::from(desired_height),
             super::VIDEO_FRAME_MAX_PIXELS,
+        );
+        return false;
+    }
+    if !decoded_video_conversion_idle() {
+        crate::log_warn!(
+            target: "ui4";
+            "ui4 video-player frame request rejected requested={}x{} reason=prior-conversion-batch-not-drained\n",
+            desired_width,
+            desired_height,
         );
         return false;
     }
@@ -258,13 +570,16 @@ fn reap_retired_video_frames() {
         .retain(|frame| matches!(destroy_frame(*frame), Err(super::FramePoolError::Busy)));
 }
 
-/// Convert one decoder picture into an exact UI4 RGBA backbuffer. The function
-/// returns after the GuC read of NV12 has retired and the RGBA publication is
-/// visible to the broker; it deliberately does not wait for display SURFLIVE.
-pub(crate) async fn present_decoded_nv12_stream_frame(
+/// Worker-side conversion of one decoder picture into an exact UI4 RGBA
+/// backbuffer. The caller is the dedicated RCS service, never the VDBOX
+/// playback loop. It returns after the GuC read of NV12 has retired and the
+/// RGBA publication is visible to the broker; display SURFLIVE remains
+/// independently owned by UI4.
+async fn convert_publish_decoded_nv12_stream_frame(
     source: DecodedNv12Source,
-    reason: &str,
+    playback_frame: usize,
 ) -> bool {
+    let reason = "independent-rcs-worker";
     if !valid_source(source) {
         return false;
     }
@@ -294,6 +609,16 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
                 // Double buffering intentionally applies display backpressure:
                 // one surface may be live while the other is the sole producer
                 // target. No decoder pixels are copied or published here.
+                let (report, worker_online) = {
+                    let state = VIDEO_CONVERSION_STATE.lock();
+                    (state.report(), state.online)
+                };
+                log_video_conversion_backpressure(
+                    "frame-buffer-busy",
+                    playback_frame,
+                    report,
+                    worker_online,
+                );
                 Timer::after(Duration::from_millis(1)).await;
             }
             Err(error) => {
@@ -361,6 +686,16 @@ pub(crate) async fn present_decoded_nv12_stream_frame(
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
                 // The dedicated Frame lease and decoder picture remain pinned
                 // until this GuC runtime accepts their exact handoff.
+                let (report, worker_online) = {
+                    let state = VIDEO_CONVERSION_STATE.lock();
+                    (state.report(), state.online)
+                };
+                log_video_conversion_backpressure(
+                    "guc-rcs-submit-busy",
+                    playback_frame,
+                    report,
+                    worker_online,
+                );
                 Timer::after(Duration::from_millis(1)).await;
             }
             Err(error) => {

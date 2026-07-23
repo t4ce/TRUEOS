@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import numpy as np
 from PIL import Image
@@ -36,6 +39,7 @@ class InterpolationSettings:
     inference_scale: float = 1.0
     blend_mode: Literal["temporal-alpha", "rife"] = "rife"
     ensemble: EnsembleMode = "medoid"
+    face_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,8 @@ class FrameReport:
     inference_candidates: int
     inference_seconds: float
     selected_candidate: str
+    face_region_bounds: list[int] | None
+    changed_pixels_outside_face: int | None
     settings: dict[str, object]
 
 
@@ -65,6 +71,37 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _source_frames(input_dir: Path) -> list[Path]:
+    sources = sorted(input_dir.glob("frame_*.png"))
+    names = [source.name for source in sources]
+    four_frame_names = [f"frame_{index:02d}.png" for index in range(1, 5)]
+    seven_frame_names = [f"frame_{index:02d}.png" for index in range(1, 8)]
+    if names == four_frame_names:
+        return sources
+    if names == seven_frame_names:
+        return sources[::2]
+    else:
+        raise ValueError(
+            f"{input_dir} must contain an exact four-frame or seven-frame "
+            f"canonical layout; found {names}"
+        )
+
+
+def discover_frame_sets(input_root: Path) -> list[Path]:
+    frame_dirs = sorted(
+        {
+            frame.parent
+            for frame in input_root.rglob("frame_*.png")
+            if frame.is_file()
+        }
+    )
+    if not frame_dirs:
+        raise ValueError(f"{input_root} contains no frame_*.png sets")
+    for frame_dir in frame_dirs:
+        _source_frames(frame_dir)
+    return frame_dirs
 
 
 def load_rgba(path: Path) -> np.ndarray:
@@ -166,6 +203,35 @@ def _finalize_interpolated(
 
     rgb[alpha == 0] = 0
     return np.dstack((rgb, alpha))
+
+
+def _face_region_mask(width: int, height: int) -> np.ndarray:
+    """Return Lilly's conservative inner-face mask at canonical coordinates."""
+
+    if (width, height) != (128, 128):
+        raise ValueError("the Lilly face mask requires 128x128 frames")
+    y, x = np.ogrid[:height, :width]
+    ellipse = ((x - 64.0) / 20.0) ** 2 + ((y - 56.0) / 15.0) ** 2 <= 1.0
+    return ellipse & (y >= 43) & (y <= 69)
+
+
+def _composite_face_only(
+    generated: np.ndarray, carrier: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply generated RGB only inside the face while preserving carrier alpha."""
+
+    if generated.shape != carrier.shape:
+        raise ValueError("generated and carrier frames must have matching shapes")
+    height, width = carrier.shape[:2]
+    face_mask = _face_region_mask(width, height)
+    replace = (
+        face_mask
+        & (carrier[:, :, 3] == 255)
+        & (generated[:, :, 3] == 255)
+    )
+    result = carrier.copy()
+    result[:, :, :3][replace] = generated[:, :, :3][replace]
+    return result, face_mask
 
 
 def interpolate_pair(
@@ -272,9 +338,21 @@ def interpolate_pair(
             )
             selected_candidate = "per-pixel-median"
         else:
+            if settings.face_only:
+                face_mask = _face_region_mask(width, height)
+                face_mask_work = _resize_float(
+                    face_mask.astype(np.float32),
+                    work_size,
+                    Image.Resampling.NEAREST,
+                ) >= 0.5
+                medoid_values = candidate_stack[:, face_mask_work, :]
+                median_values = candidate_median[face_mask_work, :]
+            else:
+                medoid_values = candidate_stack
+                median_values = candidate_median
             distances = np.mean(
-                np.abs(candidate_stack - candidate_median[None, ...]),
-                axis=(1, 2, 3),
+                np.abs(medoid_values - median_values[None, ...]),
+                axis=tuple(range(1, medoid_values.ndim)),
             )
             selected_index = int(np.argmin(distances))
             output_rgba = _finalize_interpolated(
@@ -285,6 +363,23 @@ def interpolate_pair(
                 f"background={background_value},"
                 f"reverse={str(reverse).lower()},flip={str(flip).lower()}"
             )
+
+    face_region_bounds = None
+    changed_pixels_outside_face = None
+    if settings.face_only:
+        output_rgba, face_mask = _composite_face_only(output_rgba, rgba0)
+        face_y, face_x = np.nonzero(face_mask)
+        face_region_bounds = [
+            int(face_x.min()),
+            int(face_y.min()),
+            int(face_x.max() + 1),
+            int(face_y.max() + 1),
+        ]
+        changed_pixels_outside_face = int(
+            np.count_nonzero(
+                np.any(output_rgba[~face_mask] != rgba0[~face_mask], axis=1)
+            )
+        )
 
     output.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(output_rgba, mode="RGBA").save(output, format="PNG")
@@ -312,6 +407,8 @@ def interpolate_pair(
         inference_candidates=len(candidates),
         inference_seconds=inference_seconds,
         selected_candidate=selected_candidate,
+        face_region_bounds=face_region_bounds,
+        changed_pixels_outside_face=changed_pixels_outside_face,
         settings=asdict(settings),
     )
     if report.alpha_values not in ([0, 255], [255]):
@@ -378,9 +475,7 @@ def interpolate_sequence(
     settings: InterpolationSettings,
     loop: bool,
 ) -> dict[str, object]:
-    sources = sorted(input_dir.glob("frame_*.png"))
-    if len(sources) != 4:
-        raise ValueError(f"{input_dir} must contain exactly four frame_*.png files")
+    sources = _source_frames(input_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -423,6 +518,207 @@ def interpolate_sequence(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     write_previews(output_frames, output_dir)
+    return report
+
+
+def interpolate_library(
+    backend: RifeBackend,
+    input_root: Path,
+    output_root: Path,
+    settings: InterpolationSettings,
+    progress: Callable[[int, int, Path], None] | None = None,
+) -> dict[str, object]:
+    """Generate mirrored seven-frame sets for an entire Lilly asset tree."""
+
+    input_root = input_root.resolve()
+    output_root = output_root.resolve()
+    frame_sets = discover_frame_sets(input_root)
+    if output_root.exists() and any(output_root.iterdir()):
+        raise FileExistsError(f"output directory is not empty: {output_root}")
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict[str, object]] = []
+    total = len(frame_sets)
+    for index, source_dir in enumerate(frame_sets, start=1):
+        relative_dir = source_dir.relative_to(input_root)
+        if progress is not None:
+            progress(index, total, relative_dir)
+        result = interpolate_sequence(
+            backend,
+            source_dir,
+            output_root / relative_dir,
+            settings,
+            loop=False,
+        )
+        results.append(
+            {
+                "relative_directory": str(relative_dir),
+                "source_directory": str(source_dir),
+                "output_directory": result["output_directory"],
+                "frames": result["frames"],
+            }
+        )
+
+    report = {
+        "input_root": str(input_root),
+        "output_root": str(output_root),
+        "frame_set_count": total,
+        "generated_frame_count": sum(len(item["frames"]) for item in results),
+        "inference_seconds": sum(
+            frame["inference_seconds"]
+            for item in results
+            for frame in item["frames"]
+        ),
+        "settings": asdict(settings),
+        "backend": asdict(backend.info),
+        "sets": results,
+    }
+    (output_root / "library-report.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    return report
+
+
+def promote_library(
+    staging_root: Path,
+    target_root: Path,
+    apply: bool = False,
+) -> dict[str, object]:
+    """Validate and atomically replace canonical frame directories from staging."""
+
+    staging_root = staging_root.resolve()
+    target_root = target_root.resolve()
+    library_report_path = staging_root / "library-report.json"
+    if not library_report_path.is_file():
+        raise FileNotFoundError(f"missing staging manifest: {library_report_path}")
+    library_report = json.loads(library_report_path.read_text(encoding="utf-8"))
+    if Path(library_report["input_root"]).resolve() != target_root:
+        raise ValueError(
+            "staging manifest input root does not match promotion target: "
+            f"{library_report['input_root']} != {target_root}"
+        )
+    settings = library_report["settings"]
+    if not settings.get("face_only"):
+        raise ValueError("refusing to promote a non-face-only staging manifest")
+    if settings.get("work_scale") != 16 or settings.get("ensemble") != "medoid":
+        raise ValueError("promotion requires the 16x medoid HighSettings profile")
+
+    target_sets = discover_frame_sets(target_root)
+    target_relatives = {path.relative_to(target_root) for path in target_sets}
+    manifest_relatives = {
+        Path(item["relative_directory"]) for item in library_report["sets"]
+    }
+    if target_relatives != manifest_relatives:
+        raise ValueError("staging and target frame-set layouts do not match")
+
+    expected_stage_names = [f"frame_{index:02d}.png" for index in range(1, 8)]
+    original_output_positions = (1, 3, 5, 7)
+    preflight: list[tuple[Path, Path]] = []
+    original_hashes: dict[str, list[str]] = {}
+    refreshed_hashes: dict[str, list[str]] = {}
+    for item in library_report["sets"]:
+        relative = Path(item["relative_directory"])
+        target_dir = target_root / relative
+        staged_dir = staging_root / relative
+        staged_frames = sorted(staged_dir.glob("frame_*.png"))
+        if [path.name for path in staged_frames] != expected_stage_names:
+            raise ValueError(f"invalid staged frame layout: {staged_dir}")
+
+        current_sources = _source_frames(target_dir)
+        allowed_current_names = {path.name for path in target_dir.glob("frame_*.png")}
+        unexpected = [
+            path
+            for path in target_dir.iterdir()
+            if not path.is_file() or path.name not in allowed_current_names
+        ]
+        if unexpected:
+            raise ValueError(
+                f"target frame directory contains non-frame entries: {unexpected}"
+            )
+
+        source_hashes = [sha256_file(path) for path in current_sources]
+        staged_original_hashes = [
+            sha256_file(staged_dir / f"frame_{position:02d}.png")
+            for position in original_output_positions
+        ]
+        if source_hashes != staged_original_hashes:
+            raise ValueError(f"staged originals do not match target: {relative}")
+
+        for staged_frame in staged_frames:
+            rgba = load_rgba(staged_frame)
+            validate_lilly_input(staged_frame, rgba)
+            if not np.all(rgba[rgba[:, :, 3] == 0] == 0):
+                raise ValueError(
+                    f"staged frame has nonzero transparent RGB: {staged_frame}"
+                )
+        for frame_report in item["frames"]:
+            if (
+                frame_report["inference_candidates"] != 12
+                or frame_report["changed_pixels_outside_face"] != 0
+                or frame_report["face_region_bounds"] != [44, 43, 85, 70]
+                or not frame_report["transparent_rgba_zero"]
+            ):
+                raise ValueError(f"staged invariant failure: {relative}")
+
+        relative_key = str(relative)
+        original_hashes[relative_key] = source_hashes
+        refreshed_hashes[relative_key] = [
+            sha256_file(path) for path in staged_frames
+        ]
+        preflight.append((staged_dir, target_dir))
+
+    promoted = 0
+    if apply:
+        swaps: list[tuple[Path, Path]] = []
+        try:
+            for staged_dir, target_dir in preflight:
+                temporary_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{target_dir.name}.refresh-",
+                        dir=target_dir.parent,
+                    )
+                )
+                for frame_name in expected_stage_names:
+                    shutil.copy2(staged_dir / frame_name, temporary_dir / frame_name)
+                previous_dir = target_dir.parent / (
+                    f".{target_dir.name}.before-refresh-{uuid.uuid4().hex}"
+                )
+                os.replace(target_dir, previous_dir)
+                try:
+                    os.replace(temporary_dir, target_dir)
+                except BaseException:
+                    os.replace(previous_dir, target_dir)
+                    shutil.rmtree(temporary_dir, ignore_errors=True)
+                    raise
+                swaps.append((target_dir, previous_dir))
+                promoted += 1
+        except BaseException:
+            for target_dir, previous_dir in reversed(swaps):
+                failed_dir = target_dir.parent / (
+                    f".{target_dir.name}.failed-refresh-{uuid.uuid4().hex}"
+                )
+                os.replace(target_dir, failed_dir)
+                os.replace(previous_dir, target_dir)
+                shutil.rmtree(failed_dir, ignore_errors=True)
+            raise
+        for _, previous_dir in swaps:
+            shutil.rmtree(previous_dir)
+
+    report = {
+        "staging_root": str(staging_root),
+        "target_root": str(target_root),
+        "checked_frame_sets": len(preflight),
+        "promoted_frame_sets": promoted,
+        "applied": apply,
+        "settings": settings,
+        "backend": library_report["backend"],
+        "original_hashes": original_hashes,
+        "refreshed_hashes": refreshed_hashes,
+    }
+    report_name = "promotion-report.json" if apply else "promotion-preflight.json"
+    (staging_root / report_name).write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
     return report
 
 
@@ -506,9 +802,7 @@ def evaluate_sequence(
 ) -> dict[str, object]:
     """Predict held-out keyframes from their two temporal neighbours."""
 
-    sources = sorted(input_dir.glob("frame_*.png"))
-    if len(sources) != 4:
-        raise ValueError(f"{input_dir} must contain exactly four frame_*.png files")
+    sources = _source_frames(input_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)

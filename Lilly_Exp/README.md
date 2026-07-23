@@ -22,7 +22,7 @@ cd Lilly_Exp
 
 `setup.sh` creates `.venv`, installs the Python package, checks out the pinned
 Practical-RIFE source under `.runtime`, and downloads its 4.25 checkpoint. It
-does not modify `../tools/Lilly`.
+does not modify the canonical `../../Lilly/Lilly` asset tree.
 
 ## Waving-smile experiment
 
@@ -30,7 +30,7 @@ Generate the three internal midpoints:
 
 ```bash
 ./run.sh sequence \
-  ../tools/Lilly/Waving/waving-smile_frames \
+  ../../Lilly/Lilly/Waving/waving-smile_frames \
   outputs/waving-smile
 ```
 
@@ -38,7 +38,7 @@ Generate the three internal midpoints plus the loop-closing midpoint:
 
 ```bash
 ./run.sh sequence \
-  ../tools/Lilly/Waving/waving-smile_frames \
+  ../../Lilly/Lilly/Waving/waving-smile_frames \
   outputs/waving-smile-loop \
   --loop
 ```
@@ -63,8 +63,8 @@ Original frames are copied byte-for-byte. Each output directory also contains
 
 ```bash
 ./run.sh pair \
-  ../tools/Lilly/Waving/waving-smile_frames/frame_01.png \
-  ../tools/Lilly/Waving/waving-smile_frames/frame_02.png \
+  ../../Lilly/Lilly/Waving/waving-smile_frames/frame_01.png \
+  ../../Lilly/Lilly/Waving/waving-smile_frames/frame_02.png \
   outputs/wave-01-02.png
 ```
 
@@ -83,6 +83,7 @@ Useful tuning switches:
 --ensemble medoid      default: most representative of 12 intact candidates
 --ensemble median      combine the robust middle result per working pixel
 --ensemble none        fast single-pass mode
+--face-only            change only the inner face; preserve the carrier body
 ```
 
 The defaults favor canonical pixel-art output: box-filtered reduction followed
@@ -99,6 +100,58 @@ the intact candidate nearest to their consensus. `median` combines the robust
 middle result per working pixel instead. Use `--ensemble none` for the original
 fast single-pass behavior.
 
+## Face-only HighSettings
+
+For the uniform seven-frame playback design—four untouched sources plus exactly
+three generated facial states—use:
+
+```bash
+./run.sh sequence \
+  ../../Lilly/Lilly/Waving/waving-smile_frames \
+  outputs/HighSettings/waving-smile \
+  --face-only \
+  --work-scale 16
+```
+
+Do not pass `--loop`: that would intentionally add an eighth, loop-closing
+midpoint. Each generated frame uses the preceding canonical frame as its body
+carrier. RIFE selection is scored only inside the conservative inner-face mask;
+the carrier alpha and every pixel outside that mask remain exact.
+
+Generate the complete mirrored asset tree with one model load:
+
+```bash
+./run.sh library \
+  ../../Lilly/Lilly \
+  outputs/HighSettings/library-staging \
+  --face-only \
+  --work-scale 16
+```
+
+The library command accepts only exact canonical four-frame layouts, or existing
+seven-frame refresh layouts whose original frames are at positions 1/3/5/7. It
+writes seven-frame sets under the same relative paths and records every source
+hash, selected candidate, and invariant in `library-report.json`. It never
+alters the input tree.
+
+After reviewing and backing up the canonical tree, preflight and promote the
+staged frames directly into the existing frame directories:
+
+```bash
+./run.sh promote \
+  outputs/HighSettings/library-staging \
+  ../../Lilly/Lilly
+
+./run.sh promote \
+  outputs/HighSettings/library-staging \
+  ../../Lilly/Lilly \
+  --apply
+```
+
+Promotion refuses mismatched source hashes, noncanonical directory contents,
+invalid RGBA/alpha, or a non-HighSettings manifest. Each frame directory is
+swapped atomically, and a failed multi-directory operation is rolled back.
+
 ## Held-out accuracy check
 
 Before trusting a model or setting across the library, predict the existing
@@ -106,7 +159,7 @@ middle keyframes from their two neighbours:
 
 ```bash
 ./run.sh evaluate \
-  ../tools/Lilly/Waving/waving-smile_frames \
+  ../../Lilly/Lilly/Waving/waving-smile_frames \
   outputs/evaluate-waving-smile \
   --loop
 ```
@@ -134,4 +187,4 @@ Every generated canonical frame must pass these invariants:
 
 This tool establishes technical validity, not artistic approval. Fingers, eyes,
 mouths, hair tips, and loop closure still need visual review before a frame is
-promoted into `tools/Lilly`.
+promoted into the canonical Lilly repository.

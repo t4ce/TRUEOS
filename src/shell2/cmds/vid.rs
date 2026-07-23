@@ -42,13 +42,20 @@ impl VidSource {
         }
     }
 
-    const fn desired_frame_extent(&self) -> (u32, u32) {
+    fn desired_frame_extent(&self) -> (u32, u32) {
         match self {
-            Self::TrueosFs(_) => (
-                crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH,
-                crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT,
-            ),
-            Self::Online => (crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT),
+            Self::TrueosFs(path)
+                if path.as_str()
+                    == crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_DEFAULT_PATH =>
+            {
+                (
+                    crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH,
+                    crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT,
+                )
+            }
+            Self::TrueosFs(_) | Self::Online => {
+                (crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT)
+            }
         }
     }
 }
@@ -269,7 +276,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_present_us={} mode_transitions={} engine_resets={}",
+                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} conversion_backpressure={} conversion_max_outstanding={} mode_transitions={} engine_resets={}",
                     lap,
                     report.attempted,
                     report.retired,
@@ -283,6 +290,9 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
                     report.effective_fps_x100 % 100,
                     report.avg_decode_us,
                     report.avg_present_us,
+                    report.avg_conversion_us,
+                    report.conversion_backpressure_events,
+                    report.conversion_max_outstanding,
                     report.mode_transitions,
                     report.engine_resets,
                 )

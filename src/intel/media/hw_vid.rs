@@ -1,4 +1,4 @@
-use alloc::{format, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
@@ -114,6 +114,12 @@ pub(crate) struct H264PlaybackReport {
     pub(crate) avg_post_us: u64,
     pub(crate) avg_present_us: u64,
     pub(crate) max_present_us: u64,
+    pub(crate) conversion_queued: usize,
+    pub(crate) conversion_completed: usize,
+    pub(crate) conversion_backpressure_events: usize,
+    pub(crate) conversion_max_outstanding: usize,
+    pub(crate) avg_conversion_us: u64,
+    pub(crate) max_conversion_us: u64,
     pub(crate) avg_poll_iters: u64,
     pub(crate) mode_transitions: usize,
     pub(crate) engine_resets: usize,
@@ -213,6 +219,7 @@ impl H264PlaybackTiming {
         first_failure_error: i32,
         skipped_unsupported: usize,
         playback_start: EmbassyInstant,
+        conversion: crate::ui4::DecodedVideoConversionReport,
     ) -> H264PlaybackReport {
         let elapsed_ms = playback_start.elapsed().as_millis();
         let effective_fps_x100 = if elapsed_ms == 0 {
@@ -261,6 +268,12 @@ impl H264PlaybackTiming {
                 h264_ticks_to_micros(self.total_present_ticks) / attempted as u64
             },
             max_present_us: h264_ticks_to_micros(self.max_present_ticks),
+            conversion_queued: conversion.queued,
+            conversion_completed: conversion.completed,
+            conversion_backpressure_events: conversion.backpressure_events,
+            conversion_max_outstanding: conversion.max_outstanding,
+            avg_conversion_us: conversion.avg_conversion_us(),
+            max_conversion_us: conversion.max_conversion_us,
             avg_poll_iters: if attempted == 0 {
                 0
             } else {
@@ -1535,7 +1548,6 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut p_seen = 0usize;
     let mut attempted = 0usize;
     let mut retired = 0usize;
-    let mut presented = 0usize;
     let mut first_failure_frame = 0usize;
     let mut first_failure_error = 0i32;
     let mut skipped_unsupported_frames = 0usize;
@@ -1630,6 +1642,11 @@ async fn h264_i_p_playback_probe_with_reader(
         stopped_at
     );
 
+    if !crate::ui4::begin_decoded_nv12_conversion_batch() {
+        crate::log_error!(
+            "intel/hw_vid: conversion-batch accepted=0 reason=prior-batch-not-idle action=ordered-wait-no-drop\n"
+        );
+    }
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
     for unit in access_units {
@@ -1686,6 +1703,17 @@ async fn h264_i_p_playback_probe_with_reader(
             continue;
         }
 
+        if unit.nal_type == 5 && attempted != 0 {
+            let drained = crate::ui4::wait_decoded_nv12_conversion_idle().await;
+            crate::log_info!(target: "intel-media";
+                "intel/hw_vid: conversion-idr-boundary drained=1 generation={} before_frame={} queued={} completed={} published={} source_slot_reuse=avc-idr-slot0\n",
+                drained.generation,
+                attempted.saturating_add(1),
+                drained.queued,
+                drained.completed,
+                drained.published,
+            );
+        }
         attempted += 1;
         let decode_start = EmbassyInstant::now();
         let outcome = h264_submit_wait_ui4_frame(
@@ -1701,9 +1729,7 @@ async fn h264_i_p_playback_probe_with_reader(
         if outcome.retired {
             retired = retired.saturating_add(1);
         }
-        if outcome.presented {
-            presented = presented.saturating_add(1);
-        } else if first_failure_frame == 0 {
+        if !outcome.presentation_queued && first_failure_frame == 0 {
             first_failure_frame = attempted;
             first_failure_error = outcome.error_code;
         }
@@ -1716,6 +1742,25 @@ async fn h264_i_p_playback_probe_with_reader(
             .await;
     }
 
+    let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle().await;
+    let presented = conversion_report.published;
+    if first_failure_frame == 0 && conversion_report.first_failure_frame != 0 {
+        first_failure_frame = conversion_report.first_failure_frame;
+        first_failure_error = conversion_report.first_failure_error;
+    }
+    crate::log_info!(target: "intel-media";
+        "intel/hw_vid: conversion-drain generation={} queued={} completed={} published={} first_failure_frame={} first_failure_error={} backpressure_events={} max_outstanding={} avg_conversion_us={} max_conversion_us={} worker=independent-guc-rcs ordering=preserved drop=0\n",
+        conversion_report.generation,
+        conversion_report.queued,
+        conversion_report.completed,
+        conversion_report.published,
+        conversion_report.first_failure_frame,
+        conversion_report.first_failure_error,
+        conversion_report.backpressure_events,
+        conversion_report.max_outstanding,
+        conversion_report.avg_conversion_us(),
+        conversion_report.max_conversion_us,
+    );
     h264_log_keyframe_summary(indexed_frames.as_slice(), stream_bytes);
     let playback_report = playback_timing.report(
         mode,
@@ -1726,10 +1771,11 @@ async fn h264_i_p_playback_probe_with_reader(
         first_failure_error,
         skipped_unsupported_frames,
         playback_start,
+        conversion_report,
     );
 
     crate::log!(
-        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_present_us={} max_present_us={} avg_poll_iters={} reason={}\n",
+        "intel/hw_vid: h264-playback done nals={} idr_seen={} p_seen={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} indexed_frames={} missing_headers={} stopped_at=0x{:X} target_fps={} target_frame_ms={} elapsed_ms={} effective_fps_x100={} waited_frames={} late_frames={} total_wait_ms={} avg_decode_us={} max_decode_us={} max_late_ms={} avg_queue_us={} avg_process_us={} mode_transitions={} engine_resets={} avg_reset_us={} avg_zero_clear_us={} avg_zero_us={} avg_scratch_zero_us={} avg_output_clear_us={} avg_missing_clear_us={} avg_scratch_flush_us={} avg_build_ctx_us={} avg_poll_us={} max_poll_us={} avg_post_us={} avg_handoff_us={} max_handoff_us={} conversion_queued={} conversion_completed={} conversion_backpressure_events={} conversion_max_outstanding={} avg_conversion_us={} max_conversion_us={} avg_poll_iters={} reason={}\n",
         nal_count,
         idr_seen,
         p_seen,
@@ -1769,6 +1815,12 @@ async fn h264_i_p_playback_probe_with_reader(
         playback_report.avg_post_us,
         playback_report.avg_present_us,
         playback_report.max_present_us,
+        playback_report.conversion_queued,
+        playback_report.conversion_completed,
+        playback_report.conversion_backpressure_events,
+        playback_report.conversion_max_outstanding,
+        playback_report.avg_conversion_us,
+        playback_report.max_conversion_us,
         playback_report.avg_poll_iters,
         "eos"
     );
@@ -1778,7 +1830,7 @@ async fn h264_i_p_playback_probe_with_reader(
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct H264FrameOutcome {
     retired: bool,
-    presented: bool,
+    presentation_queued: bool,
     error_code: i32,
 }
 
@@ -1786,7 +1838,7 @@ impl H264FrameOutcome {
     const fn failed(error_code: i32) -> Self {
         Self {
             retired: false,
-            presented: false,
+            presentation_queued: false,
             error_code,
         }
     }
@@ -1852,8 +1904,8 @@ async fn h264_submit_wait_ui4_frame(
         timing.record_hw_pic_timing(output.timing);
     }
     let present_start = EmbassyInstant::now();
-    let presented =
-        h264_present_probe_output(phase, playback_frame, stream_idr_index, &output).await;
+    let presentation_queued =
+        h264_queue_probe_output(phase, playback_frame, stream_idr_index, &output).await;
     if let Some(timing) = timing.as_deref_mut() {
         timing.record_present_ticks(
             EmbassyInstant::now()
@@ -1881,7 +1933,7 @@ async fn h264_submit_wait_ui4_frame(
             output.byte_len,
             output.gpu_addr,
             output.phys_addr,
-            presented as u8,
+            presentation_queued as u8,
             output.error_code
         );
     }
@@ -1891,8 +1943,8 @@ async fn h264_submit_wait_ui4_frame(
     );
     H264FrameOutcome {
         retired,
-        presented,
-        error_code: if presented {
+        presentation_queued,
+        error_code: if presentation_queued {
             0
         } else if output.error_code != 0 {
             output.error_code
@@ -1902,7 +1954,7 @@ async fn h264_submit_wait_ui4_frame(
     }
 }
 
-async fn h264_present_probe_output(
+async fn h264_queue_probe_output(
     phase: &str,
     playback_frame: usize,
     stream_idr_index: usize,
@@ -1938,10 +1990,6 @@ async fn h264_present_probe_output(
         && output.byte_len != 0
         && output.virt_addr != 0
     {
-        let reason = format!(
-            "h264-decoded-nv12:{}:frame{}:idr{}:id{}",
-            phase, playback_frame, stream_idr_index, output.id
-        );
         let source = crate::ui4::DecodedNv12Source {
             decode_sequence: u64::from(output.id),
             gpu: output.gpu_addr,
@@ -1957,7 +2005,7 @@ async fn h264_present_probe_output(
         };
         if !H264_UI4_HANDOFF_CHECKPOINT_LOGGED.swap(true, Ordering::AcqRel) {
             crate::log!(
-                "intel/hw_vid: checkpoint stage=decode-retired-ui4-handoff phase={} playback_frame={} id={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} decoded={}x{} visible={}x{} action=acquire-ui4-frame\n",
+                "intel/hw_vid: checkpoint stage=decode-retired-ui4-handoff phase={} playback_frame={} id={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} decoded={}x{} visible={}x{} action=enqueue-independent-rcs-worker\n",
                 phase,
                 playback_frame,
                 output.id,
@@ -1970,13 +2018,13 @@ async fn h264_present_probe_output(
                 output.visible_height,
             );
         }
-        let ui4_presented =
-            crate::ui4::present_decoded_nv12_stream_frame(source, reason.as_str()).await;
-        if ui4_presented {
+        let ui4_queued =
+            crate::ui4::enqueue_decoded_nv12_stream_frame(source, playback_frame).await;
+        if ui4_queued {
             return true;
         }
         crate::log!(
-            "intel/hw_vid: h264-present ui4 failed phase={} playback_frame={} stream_idr={} id={} action=drop-frame fallback=none\n",
+            "intel/hw_vid: h264-present ui4 failed phase={} playback_frame={} stream_idr={} id={} action=reject-handoff drop=0 fallback=none\n",
             phase,
             playback_frame,
             stream_idr_index,
