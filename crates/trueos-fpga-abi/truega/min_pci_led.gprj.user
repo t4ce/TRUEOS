@@ -3,15 +3,14 @@
 <UserConfig>
     <Version>1.0</Version>
     <FlowState>
-        <Process ID="Synthesis" State="2"/>
-        <Process ID="Pnr" State="2"/>
-        <Process ID="Gao" State="2"/>
+        <Process ID="Synthesis" State="3"/>
+        <Process ID="Pnr" State="4"/>
+        <Process ID="Gao" State="4"/>
         <Process ID="Rtl_Gao" State="2"/>
         <Process ID="Gvio" State="0"/>
         <Process ID="Place" State="2"/>
     </FlowState>
     <ResultFileList>
-        <ResultFile ResultFileType="RES.netlist" ResultFilePath="impl/gwsynthesis/min_pci_led.vg"/>
         <ResultFile ResultFileType="RES.pnr.bitstream" ResultFilePath="impl/pnr/min_pci_led.fs"/>
         <ResultFile ResultFileType="RES.pnr.pin.rpt" ResultFilePath="impl/pnr/min_pci_led.pin.html"/>
         <ResultFile ResultFileType="RES.pnr.posp.bin" ResultFilePath="impl/pnr/min_pci_led.db"/>
@@ -20,8 +19,6 @@
         <ResultFile ResultFileType="RES.pnr.timing.paths" ResultFilePath="impl/pnr/min_pci_led.timing_paths"/>
         <ResultFile ResultFileType="RES.pnr.timing.rpt" ResultFilePath="impl/pnr/min_pci_led.tr.html"/>
         <ResultFile ResultFileType="RES.serdes.csr" ResultFilePath="src/serdes/serdes.csr"/>
-        <ResultFile ResultFileType="RES.syn.report" ResultFilePath="impl/gwsynthesis/min_pci_led_syn.rpt.html"/>
-        <ResultFile ResultFileType="RES.syn.resource" ResultFilePath="impl/gwsynthesis/min_pci_led_syn_rsc.xml"/>
     </ResultFileList>
     <Ui></Ui>
     <FpUi></FpUi>

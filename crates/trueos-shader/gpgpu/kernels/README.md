@@ -27,7 +27,8 @@ The next embedded API seed artifacts are compiled for focused UI/GPGPU bring-up:
 - `mandel64_worklist_rgba8.cl`: clipped 64x4 Mandelbrot row-band descriptors; each descriptor can either mirror across the real axis or compute an unmirrored viewport
 - `chart_sine_rgba8.cl`: full-frame analytical 2D scope plot with grid, axes, border, anti-aliased sine line, and optional glow; available as the `gpgpu preview start chart` arbitrary-surface UI4 compute node
 - `pixel_plasma_rgba8.cl`: full-frame procedural scalar-field pixel kernel with a FluidX3D-inspired scientific palette, vignette, radial interference, and scanlines; available as the `gpgpu preview start plasma` arbitrary-surface UI4 compute node
-- `lab256_multiphase.cl`: hash-locked 256x256 three-entry artifact wired as TrueOS-Spirit's continuous 60 Hz cursor-plane producer and as the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple with stronger internal contrast and exact zero-alpha exterior, a separately composited broad desaturated Gray-Scott trail injected only while the physical pointer overlaps Spirit's moving screen rectangle and drained at three percent per frame, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
+- `lab256_multiphase.cl`: hash-locked 256x256 three-entry experimental artifact retained for the live `gpgpu test lab256` Shell2/UI4 preview through the vGPU/GuC GPGPU lane; it contains a centered grayscale smoke ripple, Gray-Scott pointer trail, compact GPU telemetry, and one half-second CUR_SURFLIVE-rate status dot
+- `spirit_vfx_background_rgba8.cl` and `spirit_vfx_sprite_rgba8.cl`: TrueOS-Spirit's continuous 60 Hz cursor-plane producer; one GuC batch runs the procedural alpha background and then source-over composites the current resident Lilly RGBA frame into the exact premultiplied-BGRA cursor backbuffer
 - `font_outline_mesh.cl`: allowlisted Skrifa outline consumer used by `gpgpu probe font-tessel`; it audits the packed command stream, flattens quadratic/cubic curves, and emits indexed contour-stroke triangles without CPU geometry math
 - `font_outline_coverage_r8.cl`: production Skrifa-afterpath consumer; it evaluates non-zero winding plus nearest-edge distance in final mask-pixel coordinates and writes reusable fractional R8 coverage with bounded low-ppem optical bias
 
@@ -117,6 +118,19 @@ overrides must match:
 ```text
 42fb1dd0568bb244c44f87d146e036a72df60cb811715c370ec959de6d3af893
 ```
+
+The two Spirit VFX artifacts are hash-locked as one ordered two-walker batch.
+The background artifact currently implements `Radial aura` and `Nebula smoke`;
+the sprite artifact implements `Original / clean` and `Aura bloom`. Their
+ADL-S binary hashes are:
+
+```text
+spirit_vfx_background_rgba8.bin  cfe755a9f79f629a277cef05c95bd7a22561cb9b07414ac299ba7490779ac93e
+spirit_vfx_sprite_rgba8.bin      18ba9e74adb8adb798ff7d4b73b835c7f657093ca4ceebf759207896630d3bd1
+```
+
+The exact control-page, UI JSON, artifact, and display-release contracts are
+recorded in [`SPIRIT_VFX_EXPLORE.md`](SPIRIT_VFX_EXPLORE.md).
 
 `artifacts/adls/font_outline_mesh.bin` is the allowlisted first font-geometry
 compute build. Its input records are eight dwords: opcode, up to six IEEE-754

@@ -102,6 +102,7 @@ pub(super) struct SpiritCursorFrame {
 /// CUR_POS programming. Keeping this beside the cursor-plane geometry avoids
 /// treating a global desktop coordinate as an always-valid 256x256 shader
 /// coordinate.
+#[allow(dead_code)]
 pub(super) fn spirit_cursor_local_point(
     channel: u8,
     frame: SpiritCursorFrame,
@@ -321,18 +322,33 @@ pub(super) fn spirit_cursor_flush_cpu(
     Ok(())
 }
 
-pub(super) fn spirit_cursor_arm(
-    access: SpiritCursorSurfaceAccess,
+/// Program only CUR_POS for Spirit's selected pipe. The dedicated movement
+/// task is the sole caller; frame production and CUR_BASE flips never write
+/// this register after ownership has been split.
+pub(super) fn spirit_cursor_move(
+    channel: u8,
     frame: SpiritCursorFrame,
-) -> Result<SpiritCursorFlip, SpiritCursorError> {
+) -> Result<(i32, i32), SpiritCursorError> {
     if !frame.x_normalized.is_finite() || !frame.y_normalized.is_finite() {
         return Err(SpiritCursorError::InvalidFrame);
     }
+    let channel_index = channel_index(channel)?;
+    let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
+    let (scanout_width, scanout_height) = pipe_dimensions(channel_index)?;
+    let x = normalized_cursor_to_px(frame.x_normalized, scanout_width);
+    let y = normalized_cursor_to_px(frame.y_normalized, scanout_height);
+    write_if_changed(dev, cursor_regs(channel_index).pos, cursor_pos_reg_value(x, y));
+    Ok((x, y))
+}
+
+pub(super) fn spirit_cursor_arm(
+    access: SpiritCursorSurfaceAccess,
+) -> Result<SpiritCursorFlip, SpiritCursorError> {
     spirit_cursor_prepare(access.channel)?;
 
     let channel_index = channel_index(access.channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
-    let (scanout_width, scanout_height) = pipe_dimensions(channel_index)?;
+    let _ = pipe_dimensions(channel_index)?;
     if !ensure_dbuf_power(dev, channel_index) {
         return Err(SpiritCursorError::DbufNotReady);
     }
@@ -353,15 +369,13 @@ pub(super) fn spirit_cursor_arm(
         return Err(SpiritCursorError::InvalidFrame);
     }
 
-    let x = normalized_cursor_to_px(frame.x_normalized, scanout_width);
-    let y = normalized_cursor_to_px(frame.y_normalized, scanout_height);
-    let pos = cursor_pos_reg_value(x, y);
     let ctl = cursor_ctl(dev.device_id);
     let buf_cfg = cursor_ddb_cfg(channel_index);
     let base = u32::try_from(surface.gpu).map_err(|_| SpiritCursorError::MappingFailed)?;
 
-    // Spirit owns the complete cursor-plane contract. CUR_BASE is deliberately
-    // last: that write arms CTL/POS and the new surface for the next vblank.
+    // Frame production owns CUR_BASE but never CUR_POS. CUR_BASE is
+    // deliberately last: it arms CTL and the new surface for the next vblank
+    // without coupling motion to this render/flip cadence.
     write_if_changed(dev, regs.buf_cfg, buf_cfg);
     write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
     write_if_changed(dev, regs.wm_trans, 0);
@@ -369,19 +383,16 @@ pub(super) fn spirit_cursor_arm(
     write_if_changed(dev, regs.wm_sagv_trans, 0);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
     write_if_changed(dev, regs.ctl, ctl);
-    write_if_changed(dev, regs.pos, pos);
     crate::intel::mmio_write(dev, regs.base, base);
 
     channel_state.pending = Some(access.surface);
     let was_visible = channel_state.visible;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: arm fence={} pipe={} buffer={} pos={}x{} ctl=0x{:08X} base=0x{:08X} ddb=0x{:08X} first={}\n",
+        "trueos-spirit: arm fence={} pipe={} buffer={} pos_owner=spirit-cursor-task ctl=0x{:08X} base=0x{:08X} ddb=0x{:08X} first={}\n",
         access.channel,
         PIPES[channel_index].name,
         access.surface,
-        x,
-        y,
         ctl,
         base,
         buf_cfg,

@@ -511,26 +511,40 @@ fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     };
 
-    let mut spawned = 0usize;
+    let mut spawned_combos = 0usize;
     for fence in 0..crate::spirit::SPIRIT_WORKER_POOL_LIMIT {
-        match crate::spirit::spirit_worker_task(fence as u8) {
-            Ok(token) => {
-                ap1_spawner.spawn(token);
-                spawned = spawned.saturating_add(1);
-            }
-            Err(error) if spawned == 0 => return SpawnAttempt::Failed(error),
+        let render_token = match crate::spirit::spirit_worker_task(fence as u8) {
+            Ok(token) => token,
+            Err(error) if spawned_combos == 0 => return SpawnAttempt::Failed(error),
             Err(error) => {
                 crate::log_warn!(
                     target: "service";
-                    "trueos-spirit: worker spawn failed fence={} error={:?}\n",
+                    "trueos-spirit: render worker spawn failed fence={} error={:?}\n",
                     fence,
                     error,
                 );
+                continue;
             }
-        }
+        };
+        let cursor_token = match crate::spirit::spirit_cursor_task(fence as u8) {
+            Ok(token) => token,
+            Err(error) if spawned_combos == 0 => return SpawnAttempt::Failed(error),
+            Err(error) => {
+                crate::log_warn!(
+                    target: "service";
+                    "trueos-spirit: cursor worker spawn failed fence={} error={:?}\n",
+                    fence,
+                    error,
+                );
+                continue;
+            }
+        };
+        ap1_spawner.spawn(render_token);
+        ap1_spawner.spawn(cursor_token);
+        spawned_combos = spawned_combos.saturating_add(1);
     }
 
-    if spawned == 0 {
+    if spawned_combos == 0 {
         SpawnAttempt::Skipped
     } else {
         SpawnAttempt::Spawned

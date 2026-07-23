@@ -24,6 +24,7 @@ include!("operations/sprite_quad_worklist.rs");
 include!("operations/ui4.rs");
 include!("operations/surfaces.rs");
 include!("operations/lab256.rs");
+include!("operations/spirit_vfx.rs");
 include!("operations/probes.rs");
 include!("operations/submission_2d.rs");
 include!("operations/effects.rs");
@@ -39,6 +40,7 @@ include!("rcs/commands.rs");
 include!("rcs/context.rs");
 include!("rcs/scene_aabb.rs");
 include!("rcs/lab256.rs");
+include!("rcs/spirit_vfx.rs");
 
 pub(crate) fn submit_tenant_scene_aabb(
     tenant_root_phys: u64,

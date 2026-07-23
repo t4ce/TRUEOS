@@ -66,10 +66,22 @@ module truega_lfm25_feed_frontend (
     localparam [31:0] FEED_COMMIT_MAGIC = 32'h324d_4346; // "FCM2"
 
     localparam integer STAGING_SLOTS = 144;
+    // BAR offsets retain three 144-slot apertures, but the immutable shape
+    // table only needs all 144 slots in bank 0.  Every multi-lane mode has at
+    // most 32 stages, so banks 1 and 2 can share a compact physical layout
+    // without changing a single host-visible address.
+    localparam integer STAGING_BANK0_SLOTS = 144;
+    localparam integer STAGING_BANK1_SLOTS = 32;
+    localparam integer STAGING_BANK2_SLOTS = 32;
     localparam integer STAGING_BANKS = 3;
+    localparam integer STAGING_BANK1_BASE = STAGING_BANK0_SLOTS;
+    localparam integer STAGING_BANK2_BASE = STAGING_BANK1_BASE
+        + STAGING_BANK1_SLOTS;
     localparam integer WORDS_PER_SLOT = 16;
     localparam integer TOTAL_SLOTS = STAGING_SLOTS * STAGING_BANKS;
-    localparam integer TOTAL_WORDS = TOTAL_SLOTS * WORDS_PER_SLOT;
+    localparam integer TOTAL_PAYLOAD_SLOTS = STAGING_BANK0_SLOTS
+        + STAGING_BANK1_SLOTS + STAGING_BANK2_SLOTS;
+    localparam integer TOTAL_WORDS = TOTAL_PAYLOAD_SLOTS * WORDS_PER_SLOT;
     localparam [18:0] COMMIT_OFFSET = 19'h7f000;
 
     assign capability_magic_o = FEED_CAPABILITY_MAGIC;
@@ -97,6 +109,7 @@ module truega_lfm25_feed_frontend (
     reg [31:0] request_token;
     reg [31:0] expected_sequence;
     reg [31:0] expected_item;
+    reg validation_active;
 
     wire staging_bank0_hit = bar2_write_address_i < 19'h02400;
     wire staging_bank1_hit = bar2_write_address_i >= 19'h04000
@@ -109,7 +122,8 @@ module truega_lfm25_feed_frontend (
         && bar2_write_address_i < COMMIT_OFFSET + 19'd60;
     wire commit_magic_hit = bar2_write_address_i == COMMIT_OFFSET + 19'd60;
     wire recognized_write = staging_hit || commit_header_hit || commit_magic_hit;
-    assign bar2_write_ready_o = recognized_write && !poisoned_o && !item_valid_o;
+    assign bar2_write_ready_o = recognized_write && !poisoned_o
+        && !item_valid_o && !validation_active;
 
     wire [1:0] write_bank = staging_bank0_hit ? 2'd0
         : staging_bank1_hit ? 2'd1 : 2'd2;
@@ -118,20 +132,21 @@ module truega_lfm25_feed_frontend (
     wire [13:0] write_bank_relative = bar2_write_address_i - write_bank_base;
     wire [7:0] write_slot = write_bank_relative[13:6];
     wire [3:0] write_word = write_bank_relative[5:2];
+    wire write_payload_slot_in_range = (write_bank == 2'd0
+            && write_slot < STAGING_BANK0_SLOTS)
+        || (write_bank == 2'd1 && write_slot < STAGING_BANK1_SLOTS)
+        || (write_bank == 2'd2 && write_slot < STAGING_BANK2_SLOTS);
 
     integer write_slot_linear;
+    integer write_payload_slot_linear;
     integer write_word_linear;
     integer commit_index;
     integer byte_index;
-    integer read_slot_linear;
+    integer read_payload_slot_linear;
     integer read_word_linear;
-    integer check_bank;
-    integer check_slot;
-    integer check_linear;
     reg [63:0] write_byte_bits;
     reg [63:0] needed_byte_mask;
     reg [8:0] required_slot_count;
-    reg required_payload_valid;
     reg mode_valid;
     reg layer_valid;
     reg context_valid;
@@ -145,7 +160,18 @@ module truega_lfm25_feed_frontend (
     reg [31:0] mode_shape_tag;
     reg [31:0] expected_stage_generation_comb;
     reg payload_read_ok;
+    reg payload_read_physical_ok;
     reg [31:0] payload_read_word_mask;
+
+    // Validate a published payload one slot per cycle.  A single-cycle
+    // reduction over all 432 validity/mask entries makes synthesis flatten an
+    // enormous compare/fanout graph; the fixed ABI needs at most 144 checks.
+    reg [1:0] validation_bank;
+    reg [7:0] validation_slot;
+    reg [1:0] validation_lanes;
+    reg [7:0] validation_stages;
+    reg [63:0] validation_needed_byte_mask;
+    integer validation_linear;
 
     function automatic [63:0] byte_mask_for_count;
         input [15:0] count;
@@ -231,22 +257,14 @@ module truega_lfm25_feed_frontend (
 
     always @* begin
         needed_byte_mask = byte_mask_for_count(mode_payload_bytes);
-        required_slot_count = mode_stages * mode_lanes;
-        required_payload_valid = mode_valid
-            && stage_valid_count == required_slot_count;
-        for (check_bank = 0; check_bank < STAGING_BANKS;
-             check_bank = check_bank + 1) begin
-            for (check_slot = 0; check_slot < STAGING_SLOTS;
-                 check_slot = check_slot + 1) begin
-                check_linear = check_bank * STAGING_SLOTS + check_slot;
-                if (check_bank < mode_lanes && check_slot < mode_stages) begin
-                    if (!stage_slot_valid[check_linear]
-                            || (stage_byte_mask[check_linear] & needed_byte_mask)
-                                != needed_byte_mask)
-                        required_payload_valid = 1'b0;
-                end
-            end
-        end
+        case (mode_lanes)
+            8'd0: required_slot_count = 9'd0;
+            8'd1: required_slot_count = mode_stages[8:0];
+            8'd2: required_slot_count = {mode_stages[7:0], 1'b0};
+            8'd3: required_slot_count = mode_stages[8:0]
+                + {mode_stages[7:0], 1'b0};
+            default: required_slot_count = 9'h1ff;
+        endcase
 
         expected_stage_generation_comb = (commit_word[5] + 1'b1)
             * mode_stages * mode_lanes;
@@ -290,17 +308,39 @@ module truega_lfm25_feed_frontend (
                 == (mode_stages == 0 ? 32'd0 : expected_stage_generation_comb)
             && commit_word[12] == mode_shape_tag
             && commit_word[13] == FEED_MODEL_GENERATION
-            && commit_word[14] == 32'd0
-            && required_payload_valid;
+            && commit_word[14] == 32'd0;
+    end
+
+    always @* begin
+        validation_linear = validation_bank * STAGING_SLOTS
+            + validation_slot;
     end
 
     assign payload_read_ready_o = item_valid_o && !poisoned_o;
     always @* begin
-        read_slot_linear = payload_read_bank_i * STAGING_SLOTS
-            + payload_read_slot_i;
-        read_word_linear = read_slot_linear * WORDS_PER_SLOT
+        read_payload_slot_linear = 0;
+        payload_read_physical_ok = 1'b0;
+        case (payload_read_bank_i)
+            2'd0: if (payload_read_slot_i < STAGING_BANK0_SLOTS) begin
+                read_payload_slot_linear = payload_read_slot_i;
+                payload_read_physical_ok = 1'b1;
+            end
+            2'd1: if (payload_read_slot_i < STAGING_BANK1_SLOTS) begin
+                read_payload_slot_linear = STAGING_BANK1_BASE
+                    + payload_read_slot_i;
+                payload_read_physical_ok = 1'b1;
+            end
+            2'd2: if (payload_read_slot_i < STAGING_BANK2_SLOTS) begin
+                read_payload_slot_linear = STAGING_BANK2_BASE
+                    + payload_read_slot_i;
+                payload_read_physical_ok = 1'b1;
+            end
+            default: begin end
+        endcase
+        read_word_linear = read_payload_slot_linear * WORDS_PER_SLOT
             + payload_read_word_i;
-        payload_read_ok = payload_read_bank_i < mode_lanes
+        payload_read_ok = payload_read_physical_ok
+            && payload_read_bank_i < mode_lanes
             && payload_read_slot_i < mode_stages
             && payload_read_word_i < WORDS_PER_SLOT
             && (payload_read_word_i * 4) < mode_payload_bytes;
@@ -317,8 +357,23 @@ module truega_lfm25_feed_frontend (
     end
 
     always @* begin
+        // Metadata preserves the complete three-aperture v2 behavior: writes
+        // to unused high slots are counted and make the later exact commit
+        // fail.  Only payload storage is compact because no valid fixed shape
+        // can ever read those high bank-1/2 addresses.
         write_slot_linear = write_bank * STAGING_SLOTS + write_slot;
-        write_word_linear = write_slot_linear * WORDS_PER_SLOT + write_word;
+        write_payload_slot_linear = 0;
+        case (write_bank)
+            2'd0: if (write_slot < STAGING_BANK0_SLOTS)
+                write_payload_slot_linear = write_slot;
+            2'd1: if (write_slot < STAGING_BANK1_SLOTS)
+                write_payload_slot_linear = STAGING_BANK1_BASE + write_slot;
+            2'd2: if (write_slot < STAGING_BANK2_SLOTS)
+                write_payload_slot_linear = STAGING_BANK2_BASE + write_slot;
+            default: begin end
+        endcase
+        write_word_linear = write_payload_slot_linear * WORDS_PER_SLOT
+            + write_word;
         commit_index = (bar2_write_address_i - COMMIT_OFFSET) >> 2;
         write_byte_bits = 64'd0;
         for (byte_index = 0; byte_index < 4; byte_index = byte_index + 1)
@@ -339,6 +394,12 @@ module truega_lfm25_feed_frontend (
             payload_read_rsp_valid_o <= 1'b0;
             payload_read_data_o <= 32'd0;
             payload_read_error_o <= 1'b0;
+            validation_active <= 1'b0;
+            validation_bank <= 2'd0;
+            validation_slot <= 8'd0;
+            validation_lanes <= 2'd0;
+            validation_stages <= 8'd0;
+            validation_needed_byte_mask <= 64'd0;
             item_mode_o <= 8'd0;
             item_layer_o <= 8'd0;
             item_lane_mask_o <= 8'd0;
@@ -364,6 +425,12 @@ module truega_lfm25_feed_frontend (
             expected_item <= 32'd0;
             payload_read_rsp_valid_o <= 1'b0;
             payload_read_error_o <= 1'b0;
+            validation_active <= 1'b0;
+            validation_bank <= 2'd0;
+            validation_slot <= 8'd0;
+            validation_lanes <= 2'd0;
+            validation_stages <= 8'd0;
+            validation_needed_byte_mask <= 64'd0;
         end else begin
             payload_read_rsp_valid_o <= 1'b0;
             payload_read_error_o <= 1'b0;
@@ -373,6 +440,49 @@ module truega_lfm25_feed_frontend (
                 payload_read_data_o <= payload_read_ok
                     ? payload_memory[read_word_linear] & payload_read_word_mask
                     : 32'd0;
+            end
+
+            if (validation_active) begin
+                if (!stage_slot_valid[validation_linear]
+                        || (stage_byte_mask[validation_linear]
+                            & validation_needed_byte_mask)
+                            != validation_needed_byte_mask) begin
+                    validation_active <= 1'b0;
+                    poisoned_o <= 1'b1;
+                end else if (validation_slot + 1'b1
+                        == validation_stages) begin
+                    if (validation_bank + 1'b1 == validation_lanes) begin
+                        validation_active <= 1'b0;
+                        item_valid_o <= 1'b1;
+                        item_mode_o <= commit_word[3][7:0];
+                        item_layer_o <= commit_word[3][15:8];
+                        item_lane_mask_o <= commit_word[3][23:16];
+                        item_payload_format_o <= commit_word[3][31:24];
+                        item_session_epoch_o <= commit_word[4];
+                        item_sequence_o <= commit_word[5];
+                        item_position_o <= commit_word[6];
+                        item_token_o <= commit_word[7];
+                        item_index_o <= commit_word[8];
+                        item_stages_per_lane_o <= commit_word[9][15:0];
+                        item_last_stage_slot_o <= commit_word[9][31:16];
+                        item_payload_bytes_per_stage_o <= commit_word[10][15:0];
+                        item_stage_generation_o <= commit_word[11];
+                        item_shape_tag_o <= commit_word[12];
+                        if (!request_active) begin
+                            request_active <= 1'b1;
+                            request_mode <= commit_word[3][7:0];
+                            request_layer <= commit_word[3][15:8];
+                            request_session_epoch <= commit_word[4];
+                            request_position <= commit_word[6];
+                            request_token <= commit_word[7];
+                        end
+                    end else begin
+                        validation_bank <= validation_bank + 1'b1;
+                        validation_slot <= 8'd0;
+                    end
+                end else begin
+                    validation_slot <= validation_slot + 1'b1;
+                end
             end
 
             if (item_valid_o && item_ready_i) begin
@@ -395,12 +505,13 @@ module truega_lfm25_feed_frontend (
                         || bar2_write_strobe_i == 4'd0) begin
                     poisoned_o <= 1'b1;
                 end else if (staging_hit) begin
-                    for (byte_index = 0; byte_index < 4;
-                         byte_index = byte_index + 1)
-                        if (bar2_write_strobe_i[byte_index])
-                            payload_memory[write_word_linear]
-                                [byte_index * 8 +: 8]
-                                <= bar2_write_data_i[byte_index * 8 +: 8];
+                    if (write_payload_slot_in_range)
+                        for (byte_index = 0; byte_index < 4;
+                             byte_index = byte_index + 1)
+                            if (bar2_write_strobe_i[byte_index])
+                                payload_memory[write_word_linear]
+                                    [byte_index * 8 +: 8]
+                                    <= bar2_write_data_i[byte_index * 8 +: 8];
                     if (!stage_slot_valid[write_slot_linear]) begin
                         stage_slot_valid[write_slot_linear] <= 1'b1;
                         stage_byte_mask[write_slot_linear] <= write_byte_bits;
@@ -422,8 +533,16 @@ module truega_lfm25_feed_frontend (
                 end else if (commit_magic_hit) begin
                     if (bar2_write_strobe_i != 4'hf
                             || bar2_write_data_i != FEED_COMMIT_MAGIC
-                            || !commit_fields_valid) begin
+                            || !commit_fields_valid
+                            || stage_valid_count != required_slot_count) begin
                         poisoned_o <= 1'b1;
+                    end else if (required_slot_count != 0) begin
+                        validation_active <= 1'b1;
+                        validation_bank <= 2'd0;
+                        validation_slot <= 8'd0;
+                        validation_lanes <= mode_lanes[1:0];
+                        validation_stages <= mode_stages[7:0];
+                        validation_needed_byte_mask <= needed_byte_mask;
                     end else begin
                         item_valid_o <= 1'b1;
                         item_mode_o <= commit_word[3][7:0];

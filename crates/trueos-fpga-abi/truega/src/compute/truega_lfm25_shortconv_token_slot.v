@@ -82,8 +82,30 @@ module truega_lfm25_shortconv_token_slot (
 
     reg [271:0] activation_memory [0:31];
     reg [271:0] activation_block;
-    reg signed [63:0] state_oldest_memory [0:10239];
-    reg signed [63:0] state_newest_memory [0:10239];
+    // Keep each recurrent layer in its own 1K-deep physical bank.  Flattening
+    // this as 10,240x64 makes Gowin select its 16K-deep BSRAM geometry and
+    // wastes almost half of every primitive.  The explicit banks preserve the
+    // exact ten-layer state while mapping each 1,024x64 bank densely.
+    reg signed [63:0] state_oldest_memory_0 [0:1023];
+    reg signed [63:0] state_oldest_memory_1 [0:1023];
+    reg signed [63:0] state_oldest_memory_2 [0:1023];
+    reg signed [63:0] state_oldest_memory_3 [0:1023];
+    reg signed [63:0] state_oldest_memory_4 [0:1023];
+    reg signed [63:0] state_oldest_memory_5 [0:1023];
+    reg signed [63:0] state_oldest_memory_6 [0:1023];
+    reg signed [63:0] state_oldest_memory_7 [0:1023];
+    reg signed [63:0] state_oldest_memory_8 [0:1023];
+    reg signed [63:0] state_oldest_memory_9 [0:1023];
+    reg signed [63:0] state_newest_memory_0 [0:1023];
+    reg signed [63:0] state_newest_memory_1 [0:1023];
+    reg signed [63:0] state_newest_memory_2 [0:1023];
+    reg signed [63:0] state_newest_memory_3 [0:1023];
+    reg signed [63:0] state_newest_memory_4 [0:1023];
+    reg signed [63:0] state_newest_memory_5 [0:1023];
+    reg signed [63:0] state_newest_memory_6 [0:1023];
+    reg signed [63:0] state_newest_memory_7 [0:1023];
+    reg signed [63:0] state_newest_memory_8 [0:1023];
+    reg signed [63:0] state_newest_memory_9 [0:1023];
     reg signed [63:0] state_oldest;
     reg signed [63:0] state_newest;
     reg [9:0] state_read_channel;
@@ -93,7 +115,6 @@ module truega_lfm25_shortconv_token_slot (
     reg [31:0] layer_next_position [0:9];
     integer metadata_index;
 
-    wire [13:0] state_address = {active_layer, 10'd0} + channel_index;
     wire command_layer_valid = layer_slot_i < 4'd10;
     wire command_position_valid = command_layer_valid
         && !layer_state_poisoned[layer_slot_i]
@@ -301,12 +322,52 @@ module truega_lfm25_shortconv_token_slot (
                     triplet_start <= 1'b1;
                     activation_block <= activation_memory[0];
                     state_read_channel <= channel_index;
-                    if (layer_state_valid[active_layer]) begin
-                        state_oldest <= state_oldest_memory[state_address];
-                        state_newest <= state_newest_memory[state_address];
-                    end else begin
+                    if (!layer_state_valid[active_layer]) begin
                         state_oldest <= 64'sd0;
                         state_newest <= 64'sd0;
+                    end else begin
+                        case (active_layer)
+                            4'd0: begin
+                                state_oldest <= state_oldest_memory_0[channel_index];
+                                state_newest <= state_newest_memory_0[channel_index];
+                            end
+                            4'd1: begin
+                                state_oldest <= state_oldest_memory_1[channel_index];
+                                state_newest <= state_newest_memory_1[channel_index];
+                            end
+                            4'd2: begin
+                                state_oldest <= state_oldest_memory_2[channel_index];
+                                state_newest <= state_newest_memory_2[channel_index];
+                            end
+                            4'd3: begin
+                                state_oldest <= state_oldest_memory_3[channel_index];
+                                state_newest <= state_newest_memory_3[channel_index];
+                            end
+                            4'd4: begin
+                                state_oldest <= state_oldest_memory_4[channel_index];
+                                state_newest <= state_newest_memory_4[channel_index];
+                            end
+                            4'd5: begin
+                                state_oldest <= state_oldest_memory_5[channel_index];
+                                state_newest <= state_newest_memory_5[channel_index];
+                            end
+                            4'd6: begin
+                                state_oldest <= state_oldest_memory_6[channel_index];
+                                state_newest <= state_newest_memory_6[channel_index];
+                            end
+                            4'd7: begin
+                                state_oldest <= state_oldest_memory_7[channel_index];
+                                state_newest <= state_newest_memory_7[channel_index];
+                            end
+                            4'd8: begin
+                                state_oldest <= state_oldest_memory_8[channel_index];
+                                state_newest <= state_newest_memory_8[channel_index];
+                            end
+                            default: begin
+                                state_oldest <= state_oldest_memory_9[channel_index];
+                                state_newest <= state_newest_memory_9[channel_index];
+                            end
+                        endcase
                     end
                     state <= ST_ROW_FEED;
                 end
@@ -354,8 +415,48 @@ module truega_lfm25_shortconv_token_slot (
                             error_o <= 1'b1;
                         end else begin
                             // Committed only after all channel arithmetic succeeds.
-                            state_oldest_memory[state_address] <= channel_state_oldest;
-                            state_newest_memory[state_address] <= channel_state_newest;
+                            case (active_layer)
+                                4'd0: begin
+                                    state_oldest_memory_0[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_0[channel_index] <= channel_state_newest;
+                                end
+                                4'd1: begin
+                                    state_oldest_memory_1[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_1[channel_index] <= channel_state_newest;
+                                end
+                                4'd2: begin
+                                    state_oldest_memory_2[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_2[channel_index] <= channel_state_newest;
+                                end
+                                4'd3: begin
+                                    state_oldest_memory_3[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_3[channel_index] <= channel_state_newest;
+                                end
+                                4'd4: begin
+                                    state_oldest_memory_4[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_4[channel_index] <= channel_state_newest;
+                                end
+                                4'd5: begin
+                                    state_oldest_memory_5[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_5[channel_index] <= channel_state_newest;
+                                end
+                                4'd6: begin
+                                    state_oldest_memory_6[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_6[channel_index] <= channel_state_newest;
+                                end
+                                4'd7: begin
+                                    state_oldest_memory_7[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_7[channel_index] <= channel_state_newest;
+                                end
+                                4'd8: begin
+                                    state_oldest_memory_8[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_8[channel_index] <= channel_state_newest;
+                                end
+                                default: begin
+                                    state_oldest_memory_9[channel_index] <= channel_state_oldest;
+                                    state_newest_memory_9[channel_index] <= channel_state_newest;
+                                end
+                            endcase
                             channels_retired_o <= channels_retired_o + 11'd1;
                             quant_sample <= channel_y;
                             quant_sample_valid <= 1'b1;

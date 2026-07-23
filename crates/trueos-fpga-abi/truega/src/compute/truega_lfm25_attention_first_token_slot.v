@@ -1,8 +1,11 @@
 // Honest no-DDR baseline for the first token of each LFM2.5 attention layer.
 //
 // This wrapper deliberately implements position 0 only.  It keeps the six
-// layer-local state slots in truega_lfm25_attention_token_slot, but gives each
-// slot exactly one cache position and uses inferred FPGA-local RAM.  It is not
+// layer-local admission states in truega_lfm25_attention_token_slot, but gives
+// the accepted position-zero operation one shared 1,024-word K/V scratch and
+// uses inferred FPGA-local RAM.  Payload aliasing across layers is exact for
+// this wrapper because every nonzero position is rejected before execution;
+// no accepted transaction can observe an earlier layer's scratch.  It is not
 // a 16K-context implementation.
 //
 // Before start, software/model-loading logic supplies all 64 Q RMSNorm and all
@@ -128,7 +131,8 @@ module truega_lfm25_attention_first_token_slot (
 
     truega_lfm25_attention_token_slot #(
         .CACHE_POSITIONS(1),
-        .EXTERNAL_CACHE(0)
+        .EXTERNAL_CACHE(0),
+        .CACHE_LAYER_SLOTS(1)
     ) core (
         .clk(clk),
         .reset_n(reset_n),

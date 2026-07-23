@@ -251,7 +251,7 @@ module truega_lfm25_decode_endpoint_tb;
         stage_embedding();
         publish_embedding();
         watchdog = 0;
-        while (feed_state != 32'd2 && watchdog < 30) begin
+        while (feed_state != 32'd2 && watchdog < 200) begin
             @(negedge clk);
             watchdog = watchdog + 1;
         end

@@ -244,8 +244,16 @@ module truega_lfm25_feed_frontend_tb;
     endtask
 
     task automatic publish_magic;
+        integer watchdog;
         begin
             bar_write(19'h7f03c, 32'h324d_4346, 4'hf);
+            watchdog = 0;
+            while (!item_valid && !poisoned && watchdog < 500) begin
+                @(negedge clk);
+                watchdog = watchdog + 1;
+            end
+            check(item_valid || poisoned,
+                "sequential commit validation terminates");
         end
     endtask
 
@@ -320,6 +328,30 @@ module truega_lfm25_feed_frontend_tb;
         read_payload_word(1, 31, 0, payload_pattern(1, 31, 0, 8'h22));
         consume_item();
         reset_state(); // The 4,608-item request was intentionally not continued.
+
+        // The largest lane count uses all three compact physical banks.
+        stage_shape(3, 32, 34, 8'h2a);
+        write_commit_header(5, 0, 7, 3, 8, 0, 0, 32'hffff_ffff, 0,
+            32, 31, 34, 96, 32'h51ef7cfe, 32'h0000_01ff);
+        publish_magic();
+        check(item_valid && item_mode == 5 && item_lane_mask == 7,
+            "three-lane short-convolution row publishes atomically");
+        read_payload_word(2, 31, 8,
+            payload_pattern(2, 31, 8, 8'h2a) & 32'h0000_ffff);
+        consume_item();
+        reset_state(); // The 1,024-item request was intentionally not continued.
+
+        // Slots 32..143 remain accepted and tracked exactly as before, but no
+        // sealed multi-lane shape can read them.  The extra-slot count makes
+        // the exact commit poison without allocating unreachable payload RAM.
+        stage_shape(1, 32, 34, 8'h2b);
+        bar_write(bank_base(1) + 32 * 64, 32'hdeca_fbad, 4'hf);
+        write_commit_header(0, 8'hff, 1, 3, 8, 0, 0, 23, 0,
+            32, 31, 34, 32, 32'h46ea2684, 32'h0000_01ff);
+        publish_magic();
+        check(poisoned && !item_valid,
+            "unused compact bank slot poisons at exact commit");
+        reset_state();
 
         // Maximum staging shape: all 144 physical slots in one lane.
         stage_shape(1, 144, 34, 8'h33);

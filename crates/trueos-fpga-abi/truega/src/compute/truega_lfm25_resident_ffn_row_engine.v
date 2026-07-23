@@ -101,7 +101,11 @@ module truega_lfm25_resident_ffn_row_engine (
     reg down_block_in_flight;
 
     reg [271:0] activation_memory [0:31];
-    reg signed [63:0] silu_group_memory [0:31];
+    // Keep this tiny 32-word scratch in registers so the much larger resident
+    // tensor stores retain the scarce BSRAM blocks.  The synchronous
+    // read/write behavior is unchanged.
+    reg signed [63:0] silu_group_memory [0:31]
+        /* synthesis syn_ramstyle="registers" */;
     reg [271:0] down_activation_memory [0:143];
     reg signed [63:0] output_memory [0:1023];
 

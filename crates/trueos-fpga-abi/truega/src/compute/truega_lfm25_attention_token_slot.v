@@ -12,7 +12,14 @@
 module truega_lfm25_attention_token_slot #(
     parameter integer CACHE_POSITIONS = 16384,
     parameter integer EXTERNAL_CACHE = 1,
-    parameter integer CACHE_TOTAL_WORDS = 6 * CACHE_POSITIONS * 8 * 64 * 2
+    // The general/external-cache circuit retains an independent KV history
+    // for each of the six attention layers.  A deliberately position-zero-only
+    // wrapper may set this to one: no accepted transaction can revisit cached
+    // payload from an earlier layer, while valid_positions[] still enforces
+    // each layer's independent one-shot state.
+    parameter integer CACHE_LAYER_SLOTS = 6,
+    parameter integer CACHE_TOTAL_WORDS =
+        CACHE_LAYER_SLOTS * CACHE_POSITIONS * 8 * 64 * 2
 ) (
     input  wire                clk,
     input  wire                reset_n,
@@ -144,6 +151,8 @@ module truega_lfm25_attention_token_slot #(
     reg [5:0] cache_address_element;
     reg cache_address_value;
     reg [63:0] cache_address_wide;
+    wire [2:0] cache_layer_ordinal = CACHE_LAYER_SLOTS == 1
+        ? 3'd0 : layer_ordinal;
     always @* begin
         cache_address_position = transaction_position;
         cache_address_head = cache_write_head;
@@ -160,7 +169,7 @@ module truega_lfm25_attention_token_slot #(
             cache_address_element = attention_element;
             cache_address_value = 1'b1;
         end
-        cache_address_wide = (((((layer_ordinal * CACHE_POSITIONS)
+        cache_address_wide = (((((cache_layer_ordinal * CACHE_POSITIONS)
             + cache_address_position) * 8 + cache_address_head) * 64
             + cache_address_element) * 2 + cache_address_value);
     end

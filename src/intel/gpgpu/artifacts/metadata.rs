@@ -183,3 +183,21 @@ pub(crate) const LAB256_MULTIPHASE_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKer
     spv: LAB256_MULTIPHASE_ADLS_SPV,
     bin_sha256: LAB256_MULTIPHASE_ADLS_BIN_SHA256,
 };
+
+pub(crate) const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact {
+        name: SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME,
+        target: "adls",
+        bin: SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN,
+        spv: SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_SPV,
+        bin_sha256: SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN_SHA256,
+    };
+
+pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact {
+        name: SPIRIT_VFX_SPRITE_RGBA8_KERNEL_NAME,
+        target: "adls",
+        bin: SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN,
+        spv: SPIRIT_VFX_SPRITE_RGBA8_ADLS_SPV,
+        bin_sha256: SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256,
+    };

@@ -1,5 +1,9 @@
 # Lab256 multi-phase GPGPU exploration
 
+> Historical Spirit bring-up note: Lab256 remains the Shell2/UI4 exploration
+> artifact, but it is no longer Spirit's live cursor producer. The replacement
+> two-layer path is documented in `SPIRIT_VFX_EXPLORE.md`.
+
 ## Outcome
 
 `lab256_multiphase.cl` proves that the local Intel IGC path can produce one
@@ -33,9 +37,9 @@ three-pass persistent architecture:
 - a quiet initial state, broad 18-pixel brush, and doubled explicit decay keep that wake
   restrained instead of growing autonomous reaction colonies.
 
-The artifact is hash-allowlisted and wired into both TrueOS-Spirit's
-continuous cursor-plane stream and the live UI4 preview service. Shell2 can
-exercise that exact runtime path as a fixed-size premultiplied-alpha window.
+The artifact is hash-allowlisted and retained in the live UI4 preview service.
+Shell2 can exercise it as a fixed-size premultiplied-alpha window; the Spirit
+cursor-plane stream now uses the separate background-plus-sprite VFX batch.
 
 ## Why 256x256 is an advantage
 
@@ -156,10 +160,10 @@ seeds the first window at its 60 Hz target. The dot is green above 50 FPS,
 yellow from 30 through 50 FPS, and orange below 30 FPS. GuC admission and
 producer-marker completion do not count as visible frames.
 
-## Host bridge
+## Historical Spirit host bridge
 
-TrueOS-Spirit now uses one GuC/direct-RCS submission containing three IDDs and
-three walkers, not three separately polled submissions:
+The original Spirit bring-up used one GuC/direct-RCS submission containing
+three IDDs and three walkers, not three separately polled submissions:
 
 1. Add a hash-locked `lab256_multiphase` artifact entry and one upload VA.
 2. Allocate persistent page-aligned A, B, control, and report storage; map the
@@ -180,10 +184,9 @@ three walkers, not three separately polled submissions:
 9. After retirement, audit report magic/version/frame and all 16 lane markers
    without adding a CPU producer gate, then swap A/B.
 
-The resulting producer path is Spirit Embassy worker -> GPU executor -> vGPU ->
-physical GuC scheduler. CUR_SURFLIVE remains the separate display-retirement
-proof that completes the Spirit fence; no CPU producer bit participates in the
-continuous stream's GPU-only producer gate.
+That producer established the detached marker and GPU-only latch semantics now
+retained by Spirit VFX. CUR_SURFLIVE remains the separate display-retirement
+proof that completes the Spirit fence.
 
 ## Capability and privilege boundary
 

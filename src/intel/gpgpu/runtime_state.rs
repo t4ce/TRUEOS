@@ -21,6 +21,9 @@ static FONT_OUTLINE_MESH_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::
 static FONT_OUTLINE_COVERAGE_R8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SCENE_AABB_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LAB256_MULTIPHASE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
+    Mutex::new(None);
+static SPIRIT_VFX_SPRITE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static LAB256_RUNTIME: Mutex<Option<Lab256Runtime>> = Mutex::new(None);
 static FONT_COVERAGE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);

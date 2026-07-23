@@ -78,6 +78,25 @@ const CODEC_BEGIN_MARKER: u32 = 0x4156_4302;
 const CODEC_END_MARKER: u32 = 0x4156_4303;
 const COMPLETE_MARKER: u32 = 0x4156_4304;
 
+// Xe_LPM+ VDBOX0 completion/status registers. Keep these as a read-only,
+// timeout-only diagnostic surface; command-stream status stores remain the
+// authority once the hardware encode path is promoted beyond this probe.
+const MFX_ERROR_FLAG: usize = 0x1C_0800;
+const MFX_FRAME_CRC: usize = 0x1C_0850;
+const MFX_MB_COUNT: usize = 0x1C_0868;
+const MFC_BITSTREAM_BYTECOUNT_FRAME: usize = 0x1C_08A0;
+const MFC_BITSTREAM_SE_BITCOUNT_FRAME: usize = 0x1C_08A4;
+const MFC_IMAGE_STATUS_MASK: usize = 0x1C_08B4;
+const MFC_IMAGE_STATUS_CONTROL: usize = 0x1C_08B8;
+const MFC_QP_STATUS_COUNT: usize = 0x1C_08BC;
+const MFC_BITSTREAM_BYTECOUNT_SLICE: usize = 0x1C_08D0;
+const MFC_AVC_NUM_SLICES: usize = 0x1C_0954;
+const GEN8_RING_FAULT_REG: usize = 0x0000_4094;
+const GEN8_FAULT_TLB_DATA0: usize = 0x0000_4B10;
+const GEN8_FAULT_TLB_DATA1: usize = 0x0000_4B14;
+const GEN12_FAULT_TLB_DATA0: usize = 0x0000_CEB8;
+const GEN12_FAULT_TLB_DATA1: usize = 0x0000_CEBC;
+
 const MI_FORCE_WAKEUP_MFX: [u32; 2] = [0x0e80_0000, 0x0300_0200];
 const MFX_PIPE_MODE_SELECT: [u32; 5] = [0x7000_0003, 0x0002_22d2, 0, 0, 0];
 const MFX_SURFACE_RECON: [u32; 6] = [
@@ -283,6 +302,99 @@ pub(crate) enum AvcEncodeProbeFailure {
     ContextTeardown,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AvcEncodeTimeoutDiagnostics {
+    pub(crate) valid: bool,
+    pub(crate) ring_start: u32,
+    pub(crate) ring_ctl: u32,
+    pub(crate) ring_head: u32,
+    pub(crate) ring_tail: u32,
+    pub(crate) ring_acthd_lo: u32,
+    pub(crate) ring_acthd_hi: u32,
+    pub(crate) acthd_region: &'static str,
+    pub(crate) acthd_offset_bytes: u32,
+    pub(crate) acthd_dword: u32,
+    pub(crate) bbaddr_lo: u32,
+    pub(crate) bbaddr_hi: u32,
+    pub(crate) dma_fadd_lo: u32,
+    pub(crate) dma_fadd_hi: u32,
+    pub(crate) bbstate: u32,
+    pub(crate) esr: u32,
+    pub(crate) instdone: u32,
+    pub(crate) instps: u32,
+    pub(crate) psmi_ctl: u32,
+    pub(crate) nopid: u32,
+    pub(crate) ipeir: u32,
+    pub(crate) ipehr: u32,
+    pub(crate) fault_gen8: u32,
+    pub(crate) fault_gen12: u32,
+    pub(crate) fault_tlb_data0_gen8: u32,
+    pub(crate) fault_tlb_data1_gen8: u32,
+    pub(crate) fault_tlb_data0_gen12: u32,
+    pub(crate) fault_tlb_data1_gen12: u32,
+    pub(crate) mfx_error: u32,
+    pub(crate) mfx_frame_crc: u32,
+    pub(crate) mfx_mb_count: u32,
+    pub(crate) mfc_bitstream_bytecount_frame: u32,
+    pub(crate) mfc_bitstream_se_bitcount_frame: u32,
+    pub(crate) mfc_bitstream_bytecount_slice: u32,
+    pub(crate) mfc_image_status_mask: u32,
+    pub(crate) mfc_image_status_control: u32,
+    pub(crate) mfc_qp_status_count: u32,
+    pub(crate) mfc_avc_num_slices: u32,
+    pub(crate) bitstream_head: [u32; 8],
+    pub(crate) mfx_stats_head: [u32; 4],
+    pub(crate) vdenc_stats_head: [u32; 4],
+    pub(crate) slice_size_head: [u32; 4],
+}
+
+impl AvcEncodeTimeoutDiagnostics {
+    const EMPTY: Self = Self {
+        valid: false,
+        ring_start: 0,
+        ring_ctl: 0,
+        ring_head: 0,
+        ring_tail: 0,
+        ring_acthd_lo: 0,
+        ring_acthd_hi: 0,
+        acthd_region: "none",
+        acthd_offset_bytes: 0,
+        acthd_dword: 0,
+        bbaddr_lo: 0,
+        bbaddr_hi: 0,
+        dma_fadd_lo: 0,
+        dma_fadd_hi: 0,
+        bbstate: 0,
+        esr: 0,
+        instdone: 0,
+        instps: 0,
+        psmi_ctl: 0,
+        nopid: 0,
+        ipeir: 0,
+        ipehr: 0,
+        fault_gen8: 0,
+        fault_gen12: 0,
+        fault_tlb_data0_gen8: 0,
+        fault_tlb_data1_gen8: 0,
+        fault_tlb_data0_gen12: 0,
+        fault_tlb_data1_gen12: 0,
+        mfx_error: 0,
+        mfx_frame_crc: 0,
+        mfx_mb_count: 0,
+        mfc_bitstream_bytecount_frame: 0,
+        mfc_bitstream_se_bitcount_frame: 0,
+        mfc_bitstream_bytecount_slice: 0,
+        mfc_image_status_mask: 0,
+        mfc_image_status_control: 0,
+        mfc_qp_status_count: 0,
+        mfc_avc_num_slices: 0,
+        bitstream_head: [0; 8],
+        mfx_stats_head: [0; 4],
+        vdenc_stats_head: [0; 4],
+        slice_size_head: [0; 4],
+    };
+}
+
 impl AvcEncodeProbeFailure {
     pub(crate) const fn name(self) -> &'static str {
         match self {
@@ -337,6 +449,7 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) complete: u32,
     pub(crate) poll_iters: u32,
     pub(crate) elapsed_us: u64,
+    pub(crate) timeout_diagnostics: AvcEncodeTimeoutDiagnostics,
 }
 
 impl AvcEncodeProbeReport {
@@ -368,6 +481,7 @@ impl AvcEncodeProbeReport {
         complete: 0,
         poll_iters: 0,
         elapsed_us: 0,
+        timeout_diagnostics: AvcEncodeTimeoutDiagnostics::EMPTY,
     };
 }
 
@@ -580,6 +694,7 @@ pub(crate) fn run_once() -> AvcEncodeProbeReport {
     report.codec_end = media::read_result_dword(result_virt, media::MEDIA_RESULT_POSTSUBMIT_SLOT);
     report.complete = media::read_result_dword(result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
     if !report.retired {
+        report.timeout_diagnostics = capture_timeout_diagnostics(dev, engine, backing);
         return quarantine(lane, report, AvcEncodeProbeFailure::CompletionTimeout, started_ns);
     }
 
@@ -888,6 +1003,110 @@ fn fnv1a32(bytes: &[u8]) -> u32 {
         hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
+}
+
+fn capture_timeout_diagnostics(
+    dev: crate::intel::Dev,
+    engine: media::MediaEngineDescriptor,
+    backing: &ProbeBacking,
+) -> AvcEncodeTimeoutDiagnostics {
+    let bitstream_virt = unsafe { backing.arena_virt.add(BITSTREAM_OFFSET) };
+    let mfx_stats_virt = unsafe { backing.arena_virt.add(MFX_STATS_OFFSET) };
+    let vdenc_stats_virt = unsafe { backing.arena_virt.add(VDENC_STATS_OFFSET) };
+    let slice_size_virt = unsafe { backing.arena_virt.add(SLICE_SIZE_OFFSET) };
+    crate::intel::dma_flush(bitstream_virt, 8 * core::mem::size_of::<u32>());
+    crate::intel::dma_flush(mfx_stats_virt, 4 * core::mem::size_of::<u32>());
+    crate::intel::dma_flush(vdenc_stats_virt, 4 * core::mem::size_of::<u32>());
+    crate::intel::dma_flush(slice_size_virt, 4 * core::mem::size_of::<u32>());
+
+    let base = engine.ring_base;
+    let ring_acthd_lo = crate::intel::mmio_read(dev, base + media::RING_ACTHD);
+    let ring_acthd_hi = crate::intel::mmio_read(dev, base + media::RING_ACTHD_UDW);
+    let acthd = ((ring_acthd_hi as u64) << 32) | ring_acthd_lo as u64;
+    let (acthd_region, acthd_offset_bytes, acthd_dword) =
+        classify_acthd(acthd, backing);
+
+    AvcEncodeTimeoutDiagnostics {
+        valid: true,
+        ring_start: crate::intel::mmio_read(dev, base + media::RING_START),
+        ring_ctl: crate::intel::mmio_read(dev, base + media::RING_CTL),
+        ring_head: crate::intel::mmio_read(dev, base + media::RING_HEAD),
+        ring_tail: crate::intel::mmio_read(dev, base + media::RING_TAIL),
+        ring_acthd_lo,
+        ring_acthd_hi,
+        acthd_region,
+        acthd_offset_bytes,
+        acthd_dword,
+        bbaddr_lo: crate::intel::mmio_read(dev, base + media::RING_BBADDR),
+        bbaddr_hi: crate::intel::mmio_read(dev, base + media::RING_BBADDR_UDW),
+        dma_fadd_lo: crate::intel::mmio_read(dev, base + media::RING_DMA_FADD),
+        dma_fadd_hi: crate::intel::mmio_read(dev, base + media::RING_DMA_FADD_UDW),
+        bbstate: crate::intel::mmio_read(dev, base + media::RING_BBSTATE),
+        esr: crate::intel::mmio_read(dev, base + media::RING_ESR),
+        instdone: crate::intel::mmio_read(dev, base + media::RING_INSTDONE),
+        instps: crate::intel::mmio_read(dev, base + media::RING_INSTPS),
+        psmi_ctl: crate::intel::mmio_read(dev, base + media::RING_PSMI_CTL),
+        nopid: crate::intel::mmio_read(dev, base + media::RING_NOPID),
+        ipeir: crate::intel::mmio_read(dev, base + media::RING_IPEIR),
+        ipehr: crate::intel::mmio_read(dev, base + media::RING_IPEHR),
+        fault_gen8: crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG),
+        fault_gen12: crate::intel::mmio_read(dev, media::GEN12_RING_FAULT_REG),
+        fault_tlb_data0_gen8: crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA0),
+        fault_tlb_data1_gen8: crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA1),
+        fault_tlb_data0_gen12: crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA0),
+        fault_tlb_data1_gen12: crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA1),
+        mfx_error: crate::intel::mmio_read(dev, MFX_ERROR_FLAG),
+        mfx_frame_crc: crate::intel::mmio_read(dev, MFX_FRAME_CRC),
+        mfx_mb_count: crate::intel::mmio_read(dev, MFX_MB_COUNT),
+        mfc_bitstream_bytecount_frame: crate::intel::mmio_read(
+            dev,
+            MFC_BITSTREAM_BYTECOUNT_FRAME,
+        ),
+        mfc_bitstream_se_bitcount_frame: crate::intel::mmio_read(
+            dev,
+            MFC_BITSTREAM_SE_BITCOUNT_FRAME,
+        ),
+        mfc_bitstream_bytecount_slice: crate::intel::mmio_read(
+            dev,
+            MFC_BITSTREAM_BYTECOUNT_SLICE,
+        ),
+        mfc_image_status_mask: crate::intel::mmio_read(dev, MFC_IMAGE_STATUS_MASK),
+        mfc_image_status_control: crate::intel::mmio_read(dev, MFC_IMAGE_STATUS_CONTROL),
+        mfc_qp_status_count: crate::intel::mmio_read(dev, MFC_QP_STATUS_COUNT),
+        mfc_avc_num_slices: crate::intel::mmio_read(dev, MFC_AVC_NUM_SLICES),
+        bitstream_head: read_dword_head::<8>(bitstream_virt),
+        mfx_stats_head: read_dword_head::<4>(mfx_stats_virt),
+        vdenc_stats_head: read_dword_head::<4>(vdenc_stats_virt),
+        slice_size_head: read_dword_head::<4>(slice_size_virt),
+    }
+}
+
+fn classify_acthd(acthd: u64, backing: &ProbeBacking) -> (&'static str, u32, u32) {
+    if let Some(offset) = acthd.checked_sub(BATCH_GPU) {
+        if offset < BATCH_BYTES as u64 {
+            let offset = offset as usize;
+            let dword = unsafe {
+                core::ptr::read_volatile(backing.arena_virt.add(BATCH_OFFSET + offset).cast())
+            };
+            return ("batch", offset as u32, dword);
+        }
+    }
+    if let Some(offset) = acthd.checked_sub(RING_GPU) {
+        if offset < RING_BYTES as u64 {
+            let offset = offset as usize;
+            let dword = unsafe { core::ptr::read_volatile(backing.ring_virt.add(offset).cast()) };
+            return ("ring", offset as u32, dword);
+        }
+    }
+    ("other", 0, 0)
+}
+
+fn read_dword_head<const N: usize>(ptr: *mut u8) -> [u32; N] {
+    let mut words = [0u32; N];
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = unsafe { core::ptr::read_volatile(ptr.add(index * 4).cast::<u32>()) };
+    }
+    words
 }
 
 fn deferred(failure: AvcEncodeProbeFailure) -> AvcEncodeProbeReport {
