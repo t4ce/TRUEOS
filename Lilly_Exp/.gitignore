@@ -4,4 +4,4 @@ outputs/
 reports/*.json
 __pycache__/
 *.py[cod]
-
+*.egg-info/

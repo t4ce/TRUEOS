@@ -17,10 +17,15 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
 fi
 
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install --editable "$EXP_ROOT"
+"$VENV_DIR/bin/python" -m pip install --requirement "$EXP_ROOT/requirements.lock"
+"$VENV_DIR/bin/python" -m pip install --editable "$EXP_ROOT" --no-deps
 
 if [[ ! -d "$RIFE_DIR/.git" ]]; then
     git clone https://github.com/hzwer/Practical-RIFE.git "$RIFE_DIR"
+fi
+
+if [[ -d "$RIFE_DIR/__MACOSX" ]]; then
+    rm -rf -- "$RIFE_DIR/__MACOSX"
 fi
 
 if [[ -n "$(git -C "$RIFE_DIR" status --porcelain)" ]]; then
@@ -41,7 +46,9 @@ if [[ ! -f "$RIFE_DIR/train_log/flownet.pkl" ]]; then
     fi
     mv "$archive_tmp" "$MODEL_ARCHIVE"
     "$VENV_DIR/bin/python" -m zipfile -e "$MODEL_ARCHIVE" "$RIFE_DIR"
+    if [[ -d "$RIFE_DIR/__MACOSX" ]]; then
+        rm -rf -- "$RIFE_DIR/__MACOSX"
+    fi
 fi
 
 "$VENV_DIR/bin/lilly-exp" doctor
-

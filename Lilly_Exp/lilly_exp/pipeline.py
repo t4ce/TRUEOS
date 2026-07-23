@@ -9,22 +9,30 @@ from typing import Literal
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import binary_erosion, distance_transform_edt
 
 from .backend import RifeBackend
 
 
 QuantizeMode = Literal["pair", "none"]
+QUALITY_GATE = {
+    "minimum_alpha_iou": 0.85,
+    "minimum_edge_f1_with_1px_tolerance": 0.70,
+    "maximum_rgb_mae_on_shared_opaque": 0.05,
+    "minimum_alpha_area_ratio": 0.85,
+    "maximum_alpha_area_ratio": 1.15,
+}
 
 
 @dataclass(frozen=True)
 class InterpolationSettings:
-    work_scale: int = 4
+    work_scale: int = 8
     timestep: float = 0.5
     alpha_threshold: float = 0.5
     quantize: QuantizeMode = "pair"
     background: int = 127
     inference_scale: float = 1.0
+    blend_mode: Literal["temporal-alpha", "rife"] = "rife"
 
 
 @dataclass(frozen=True)
@@ -90,7 +98,11 @@ def extend_opaque_rgb(rgba: np.ndarray) -> np.ndarray:
 
 
 def _resize_rgb(rgb: np.ndarray, size: tuple[int, int], resample: int) -> np.ndarray:
-    return np.asarray(Image.fromarray(rgb, mode="RGB").resize(size, resample=resample))
+    return np.array(
+        Image.fromarray(rgb, mode="RGB").resize(size, resample=resample),
+        dtype=np.uint8,
+        copy=True,
+    )
 
 
 def _resize_float(channel: np.ndarray, size: tuple[int, int], resample: int) -> np.ndarray:
@@ -121,7 +133,7 @@ def _quantize_to_palette(rgb: np.ndarray, colors: np.ndarray) -> np.ndarray:
         palette=palette,
         dither=Image.Dither.NONE,
     )
-    return np.asarray(quantized.convert("RGB"), dtype=np.uint8)
+    return np.array(quantized.convert("RGB"), dtype=np.uint8, copy=True)
 
 
 def interpolate_pair(
@@ -176,6 +188,7 @@ def interpolate_pair(
         payload1,
         timestep=settings.timestep,
         inference_scale=settings.inference_scale,
+        blend_mode=settings.blend_mode,
     )
 
     rgb_work = np.rint(interpolated[:, :, :3] * 255.0).astype(np.uint8)
@@ -327,4 +340,155 @@ def interpolate_sequence(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     write_previews(output_frames, output_dir)
+    return report
+
+
+def _prediction_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str, float]:
+    predicted_mask = prediction[:, :, 3] == 255
+    target_mask = target[:, :, 3] == 255
+    intersection = np.count_nonzero(predicted_mask & target_mask)
+    union = np.count_nonzero(predicted_mask | target_mask)
+    predicted_area = np.count_nonzero(predicted_mask)
+    target_area = np.count_nonzero(target_mask)
+
+    both = predicted_mask & target_mask
+    if np.any(both):
+        rgb_mae = float(
+            np.abs(
+                prediction[:, :, :3][both].astype(np.int16)
+                - target[:, :, :3][both].astype(np.int16)
+            ).mean()
+            / 255.0
+        )
+    else:
+        rgb_mae = 1.0
+
+    structure = np.ones((3, 3), dtype=bool)
+    predicted_edge = predicted_mask ^ binary_erosion(
+        predicted_mask, structure=structure, border_value=0
+    )
+    target_edge = target_mask ^ binary_erosion(
+        target_mask, structure=structure, border_value=0
+    )
+    predicted_edge_count = np.count_nonzero(predicted_edge)
+    target_edge_count = np.count_nonzero(target_edge)
+    target_distance = distance_transform_edt(~target_edge)
+    predicted_distance = distance_transform_edt(~predicted_edge)
+    edge_precision = (
+        float(np.count_nonzero(predicted_edge & (target_distance <= 1.5)))
+        / predicted_edge_count
+        if predicted_edge_count
+        else 0.0
+    )
+    edge_recall = (
+        float(np.count_nonzero(target_edge & (predicted_distance <= 1.5)))
+        / target_edge_count
+        if target_edge_count
+        else 0.0
+    )
+    edge_f1 = (
+        2.0 * edge_precision * edge_recall / (edge_precision + edge_recall)
+        if edge_precision + edge_recall
+        else 0.0
+    )
+    rgba_exact = float(np.all(prediction == target, axis=2).mean())
+    return {
+        "alpha_iou": float(intersection / union) if union else 1.0,
+        "alpha_area_ratio": float(predicted_area / target_area) if target_area else 1.0,
+        "edge_f1_with_1px_tolerance": edge_f1,
+        "rgb_mae_on_shared_opaque": rgb_mae,
+        "rgba_exact_fraction": rgba_exact,
+    }
+
+
+def _passes_quality_gate(metrics: dict[str, float]) -> bool:
+    return bool(
+        metrics["alpha_iou"] >= QUALITY_GATE["minimum_alpha_iou"]
+        and metrics["edge_f1_with_1px_tolerance"]
+        >= QUALITY_GATE["minimum_edge_f1_with_1px_tolerance"]
+        and metrics["rgb_mae_on_shared_opaque"]
+        <= QUALITY_GATE["maximum_rgb_mae_on_shared_opaque"]
+        and QUALITY_GATE["minimum_alpha_area_ratio"]
+        <= metrics["alpha_area_ratio"]
+        <= QUALITY_GATE["maximum_alpha_area_ratio"]
+    )
+
+
+def evaluate_sequence(
+    backend: RifeBackend,
+    input_dir: Path,
+    output_dir: Path,
+    settings: InterpolationSettings,
+    loop: bool,
+) -> dict[str, object]:
+    """Predict held-out keyframes from their two temporal neighbours."""
+
+    sources = sorted(input_dir.glob("frame_*.png"))
+    if len(sources) != 4:
+        raise ValueError(f"{input_dir} must contain exactly four frame_*.png files")
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(f"output directory is not empty: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    evaluations = [
+        ("frame_02", sources[0], sources[2], sources[1]),
+        ("frame_03", sources[1], sources[3], sources[2]),
+    ]
+    if loop:
+        evaluations.extend(
+            (
+                ("frame_04_loop", sources[2], sources[0], sources[3]),
+                ("frame_01_loop", sources[3], sources[1], sources[0]),
+            )
+        )
+
+    results: list[dict[str, object]] = []
+    preview_paths: list[Path] = []
+    for name, endpoint_a, endpoint_b, target_path in evaluations:
+        prediction_path = output_dir / f"predicted_{name}.png"
+        frame_report = interpolate_pair(
+            backend,
+            endpoint_a,
+            endpoint_b,
+            prediction_path,
+            settings,
+        )
+        prediction = load_rgba(prediction_path)
+        target = load_rgba(target_path)
+        metrics = _prediction_metrics(prediction, target)
+        results.append(
+            {
+                "name": name,
+                "endpoint_a": str(endpoint_a.resolve()),
+                "endpoint_b": str(endpoint_b.resolve()),
+                "target": str(target_path.resolve()),
+                "target_sha256": sha256_file(target_path),
+                "prediction": asdict(frame_report),
+                "metrics": metrics,
+                "passes_quality_gate": _passes_quality_gate(metrics),
+            }
+        )
+        preview_paths.extend((endpoint_a, prediction_path, target_path, endpoint_b))
+
+    metric_names = tuple(results[0]["metrics"].keys())
+    means = {
+        name: float(np.mean([result["metrics"][name] for result in results]))
+        for name in metric_names
+    }
+    report = {
+        "input_directory": str(input_dir.resolve()),
+        "output_directory": str(output_dir.resolve()),
+        "loop": loop,
+        "backend": asdict(backend.info),
+        "quality_gate": QUALITY_GATE,
+        "passes_quality_gate": all(
+            bool(result["passes_quality_gate"]) for result in results
+        ),
+        "mean_metrics": means,
+        "evaluations": results,
+    }
+    (output_dir / "evaluation.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    write_previews(preview_paths, output_dir)
     return report

@@ -64,7 +64,18 @@ class RifeBackend:
                 for key, value in state.items()
                 if key.startswith("module.")
             }
-        self.net.load_state_dict(state, strict=True)
+        load_result = self.net.load_state_dict(state, strict=False)
+        allowed_extra_prefixes = ("teacher.", "caltime.")
+        unexpected = [
+            key
+            for key in load_result.unexpected_keys
+            if not key.startswith(allowed_extra_prefixes)
+        ]
+        if load_result.missing_keys or unexpected:
+            raise RuntimeError(
+                "RIFE checkpoint does not match its inference network: "
+                f"missing={load_result.missing_keys}, unexpected={unexpected}"
+            )
         self.net.eval()
 
         gpu_name = None
@@ -84,6 +95,7 @@ class RifeBackend:
         payload1: np.ndarray,
         timestep: float,
         inference_scale: float = 1.0,
+        blend_mode: str = "rife",
     ) -> np.ndarray:
         """Infer motion from RGB and apply the same flow/mask to RGBA payloads."""
 
@@ -131,7 +143,26 @@ class RifeBackend:
             mask = torch.sigmoid(mask_logits)
             warped0 = self._warp(payload0_t, flow[:, :2])
             warped1 = self._warp(payload1_t, flow[:, 2:4])
-            merged = warped0 * mask + warped1 * (1.0 - mask)
+            rife_merged = warped0 * mask + warped1 * (1.0 - mask)
+            if blend_mode == "rife":
+                merged = rife_merged
+            elif blend_mode == "temporal-alpha":
+                alpha0 = warped0[:, 3:4].clamp(0.0, 1.0)
+                alpha1 = warped1[:, 3:4].clamp(0.0, 1.0)
+                both_opaque = (alpha0 > 1e-4) & (alpha1 > 1e-4)
+                weight0 = torch.where(both_opaque, mask * alpha0, alpha0)
+                weight1 = torch.where(both_opaque, (1.0 - mask) * alpha1, alpha1)
+                weight_sum = weight0 + weight1
+                rgb = (
+                    warped0[:, :3] * weight0 + warped1[:, :3] * weight1
+                ) / weight_sum.clamp_min(1e-6)
+                rgb = torch.where(weight_sum > 1e-6, rgb, rife_merged[:, :3])
+                alpha = (
+                    alpha0 * (1.0 - timestep) + alpha1 * timestep
+                ).clamp(0.0, 1.0)
+                merged = torch.cat((rgb, alpha), dim=1)
+            else:
+                raise ValueError(f"unknown payload blend mode: {blend_mode}")
 
         result = (
             merged[0, :, :height, :width]
@@ -141,4 +172,3 @@ class RifeBackend:
             .numpy()
         )
         return result
-

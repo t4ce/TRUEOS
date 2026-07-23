@@ -4,7 +4,11 @@ import unittest
 
 import numpy as np
 
-from lilly_exp.pipeline import extend_opaque_rgb
+from lilly_exp.pipeline import (
+    _passes_quality_gate,
+    _prediction_metrics,
+    extend_opaque_rgb,
+)
 
 
 class EdgeExtensionTests(unittest.TestCase):
@@ -21,6 +25,21 @@ class EdgeExtensionTests(unittest.TestCase):
         self.assertEqual(filled[1, 1].tolist(), [1, 2, 3])
 
 
+class MetricTests(unittest.TestCase):
+    def test_identical_frame_passes_quality_gate(self) -> None:
+        rgba = np.zeros((8, 8, 4), dtype=np.uint8)
+        rgba[2:6, 2:6] = (10, 20, 30, 255)
+        metrics = _prediction_metrics(rgba, rgba)
+        self.assertEqual(metrics["alpha_iou"], 1.0)
+        self.assertEqual(metrics["edge_f1_with_1px_tolerance"], 1.0)
+        self.assertTrue(_passes_quality_gate(metrics))
+
+    def test_missing_sprite_fails_quality_gate(self) -> None:
+        prediction = np.zeros((8, 8, 4), dtype=np.uint8)
+        target = np.zeros((8, 8, 4), dtype=np.uint8)
+        target[2:6, 2:6] = (10, 20, 30, 255)
+        self.assertFalse(_passes_quality_gate(_prediction_metrics(prediction, target)))
+
+
 if __name__ == "__main__":
     unittest.main()
-

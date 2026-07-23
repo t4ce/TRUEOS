@@ -6,7 +6,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .backend import RifeBackend
-from .pipeline import InterpolationSettings, interpolate_pair, interpolate_sequence
+from .pipeline import (
+    InterpolationSettings,
+    evaluate_sequence,
+    interpolate_pair,
+    interpolate_sequence,
+)
 
 
 EXP_ROOT = Path(__file__).resolve().parents[1]
@@ -21,17 +26,23 @@ def _settings(args: argparse.Namespace) -> InterpolationSettings:
         quantize=args.quantize,
         background=args.background,
         inference_scale=args.inference_scale,
+        blend_mode=args.blend_mode,
     )
 
 
 def _add_common_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--work-scale", type=int, default=4, choices=(1, 2, 4, 8))
+    parser.add_argument("--work-scale", type=int, default=8, choices=(1, 2, 4, 8))
     parser.add_argument("--timestep", type=float, default=0.5)
     parser.add_argument("--alpha-threshold", type=float, default=0.5)
     parser.add_argument("--quantize", choices=("pair", "none"), default="pair")
     parser.add_argument("--background", type=int, default=127)
     parser.add_argument(
         "--inference-scale", type=float, default=1.0, choices=(0.5, 1.0, 2.0)
+    )
+    parser.add_argument(
+        "--blend-mode",
+        choices=("temporal-alpha", "rife"),
+        default="rife",
     )
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     parser.add_argument("--rife-dir", type=Path, default=DEFAULT_RIFE_DIR)
@@ -60,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
     sequence.add_argument("output_dir", type=Path)
     sequence.add_argument("--loop", action="store_true")
     _add_common_options(sequence)
+
+    evaluate = commands.add_parser(
+        "evaluate", help="predict held-out keyframes and calculate accuracy metrics"
+    )
+    evaluate.add_argument("input_dir", type=Path)
+    evaluate.add_argument("output_dir", type=Path)
+    evaluate.add_argument("--loop", action="store_true")
+    _add_common_options(evaluate)
     return parser
 
 
@@ -86,6 +105,28 @@ def main() -> None:
         print(report_json, end="")
         return
 
+    if args.command == "evaluate":
+        report = evaluate_sequence(
+            backend,
+            args.input_dir,
+            args.output_dir,
+            _settings(args),
+            loop=args.loop,
+        )
+        print(
+            json.dumps(
+                {
+                    "output_directory": report["output_directory"],
+                    "evaluated_keyframes": len(report["evaluations"]),
+                    "passes_quality_gate": report["passes_quality_gate"],
+                    "mean_metrics": report["mean_metrics"],
+                    "backend": report["backend"],
+                },
+                indent=2,
+            )
+        )
+        return
+
     report = interpolate_sequence(
         backend,
         args.input_dir,
@@ -104,4 +145,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

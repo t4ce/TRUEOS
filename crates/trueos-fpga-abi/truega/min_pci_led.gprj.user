@@ -8,13 +8,14 @@
         <Process ID="Gao" State="2"/>
         <Process ID="Rtl_Gao" State="2"/>
         <Process ID="Gvio" State="0"/>
-        <Process ID="Place" State="3"/>
+        <Process ID="Place" State="2"/>
     </FlowState>
     <ResultFileList>
-        <ResultFile ResultFileType="RES.netlist" ResultFilePath="impl/gwsynthesis/audit_shortconv_banked.vg"/>
+        <ResultFile ResultFileType="RES.netlist" ResultFilePath="impl/gwsynthesis/min_pci_led.vg"/>
+        <ResultFile ResultFileType="RES.pnr.posp.bin" ResultFilePath="impl/pnr/min_pci_led.db"/>
         <ResultFile ResultFileType="RES.serdes.csr" ResultFilePath="src/serdes/serdes.csr"/>
-        <ResultFile ResultFileType="RES.syn.report" ResultFilePath="impl/gwsynthesis/audit_shortconv_banked_syn.rpt.html"/>
-        <ResultFile ResultFileType="RES.syn.resource" ResultFilePath="impl/gwsynthesis/audit_shortconv_banked_syn_rsc.xml"/>
+        <ResultFile ResultFileType="RES.syn.report" ResultFilePath="impl/gwsynthesis/min_pci_led_syn.rpt.html"/>
+        <ResultFile ResultFileType="RES.syn.resource" ResultFilePath="impl/gwsynthesis/min_pci_led_syn_rsc.xml"/>
     </ResultFileList>
     <Ui></Ui>
     <FpUi></FpUi>

@@ -71,16 +71,46 @@ Original frames are copied byte-for-byte. Each output directory also contains
 Useful tuning switches:
 
 ```text
---work-scale 4        nearest-neighbour working enlargement
+--work-scale 8        nearest-neighbour working enlargement
 --timestep 0.5        interpolation position
 --alpha-threshold 0.5 hard-alpha coverage threshold
 --quantize pair       restrict opaque RGB to endpoint palette
 --quantize none       retain RIFE's new colours
 --background 127      neutral flow-estimation background, 0..255
+--blend-mode rife      use RIFE's learned occlusion blend for all RGBA
+--blend-mode temporal-alpha
+                       experimentally retain one-sided sprite occupancy
 ```
 
 The defaults favor canonical pixel-art output: box-filtered reduction followed
-by endpoint-palette quantization and strictly binary alpha.
+by endpoint-palette quantization and strictly binary alpha. The experimental
+`temporal-alpha` mode still uses RIFE's shared bidirectional flow, but prevents
+the learned mask from deleting a limb that exists at only one endpoint. That
+can retain disoccluded parts at the cost of double edges, so it is deliberately
+not the default.
+
+## Held-out accuracy check
+
+Before trusting a model or setting across the library, predict the existing
+middle keyframes from their two neighbours:
+
+```bash
+./run.sh evaluate \
+  ../tools/Lilly/Waving/waving-smile_frames \
+  outputs/evaluate-waving-smile \
+  --loop
+```
+
+This predicts source frame 2 from frames 1 and 3, source frame 3 from frames 2
+and 4, and optionally the two loop-boundary cases. The report records alpha
+IoU, one-pixel-tolerant edge F1, shared-opaque RGB error, exact RGBA agreement,
+and silhouette area ratio. These are proxy measurements because artistic
+keyframes are not guaranteed to have linear timing, but they are useful for
+comparing model versions and settings on Lilly herself.
+
+The initial automated gate requires every held-out case to have alpha IoU at
+least 0.85, edge F1 at least 0.70, RGB MAE no more than 0.05, and silhouette
+area ratio between 0.85 and 1.15. Passing means “safe to review”, not “approved”.
 
 ## Safety and acceptance
 
@@ -95,4 +125,3 @@ Every generated canonical frame must pass these invariants:
 This tool establishes technical validity, not artistic approval. Fingers, eyes,
 mouths, hair tips, and loop closure still need visual review before a frame is
 promoted into `tools/Lilly`.
-
