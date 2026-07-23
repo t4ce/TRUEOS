@@ -557,7 +557,7 @@ impl SpiritVfxAlphaBackground {
         opacity: 0.70,
         scale: 1.0,
         speed: 2.0,
-        intensity: 1.25,
+        intensity: 2.0,
         bg_color_a: SpiritVfxRgb8::rgb(0xF1, 0x5F, 0xFF),
         bg_color_b: SpiritVfxRgb8::rgb(0x61, 0xEA, 0xFF),
     };

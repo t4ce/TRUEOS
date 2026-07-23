@@ -33,7 +33,8 @@ const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 /// Two ordered conversions may occupy the immutable RCS job slots at once.
 /// The current AVC path retains three references in four slots; the playback
 /// loop additionally drains this queue before every later IDR reuses slot 0.
-const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = 2;
+const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = crate::intel::gpgpu::UI4_COMPOSITOR_RCS_JOB_SLOTS;
+const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 1);
 const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
 const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US: u64 = 250;

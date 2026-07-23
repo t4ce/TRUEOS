@@ -577,9 +577,12 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     if runtime.pending.len() >= UI4_COMPOSITOR_RCS_JOB_SLOTS {
         return Err(Ui4CompositorSubmitError::Busy);
     }
-    let Some(job_slot) = (0..UI4_COMPOSITOR_RCS_JOB_SLOTS)
-        .find(|slot| runtime.pending.iter().all(|pending| pending.job_slot != *slot))
-    else {
+    let Some(job_slot) = (0..UI4_COMPOSITOR_RCS_JOB_SLOTS).find(|slot| {
+        runtime
+            .pending
+            .iter()
+            .all(|pending| pending.job_slot != *slot)
+    }) else {
         return Err(Ui4CompositorSubmitError::Busy);
     };
     let source_gpu = UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
@@ -630,8 +633,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         runtime.state_mapped = true;
     }
     let phase_started_tick = direct_rcs_now_tick();
-    let ppgtt_ok =
-        mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(shared_state));
+    let ppgtt_ok = mapped_ok && (runtime.ppgtt_initialized || direct_rcs_init_ppgtt(shared_state));
     probe.ppgtt_init_us = direct_rcs_elapsed_us_since(phase_started_tick);
     if ppgtt_ok {
         runtime.ppgtt_initialized = true;
@@ -786,6 +788,18 @@ fn remember_ui4_compositor_completion(
     }
 }
 
+fn observe_ui4_pending_h2g_consumption(pending: &mut Ui4CompositorPending) {
+    if pending.stats.probe.gpu_h2g_consumed_observe_timestamp == 0
+        && crate::intel::guc_ctb::h2g_sequence_consumed(
+            pending.stats.probe.guc_h2g_publish_sequence,
+        )
+    {
+        pending.stats.probe.gpu_h2g_consumed_observe_timestamp = super::claimed_device()
+            .map(direct_rcs_read_render_timestamp)
+            .unwrap_or(0);
+    }
+}
+
 /// Observe one compositor marker exactly once.  This function never spins.
 pub(crate) fn poll_ui4_compositor_submission(
     submission: Ui4CompositorSubmission,
@@ -800,22 +814,28 @@ pub(crate) fn poll_ui4_compositor_submission(
     {
         return *completion;
     }
-    let Some(mut pending) = runtime.pending.front().copied() else {
+    let Some(position) = runtime
+        .pending
+        .iter()
+        .position(|pending| pending.submission == submission)
+    else {
         return Ui4CompositorCompletion::InvalidSubmission;
     };
-    if pending.submission != submission {
-        return if runtime
-            .pending
-            .iter()
-            .any(|queued| queued.submission == submission)
-        {
-            // The RCS ring is ordered. A later slot cannot be retired ahead of
-            // its predecessor even if an observer happens to poll it first.
-            Ui4CompositorCompletion::Pending
-        } else {
-            Ui4CompositorCompletion::InvalidSubmission
-        };
+    if position != 0 {
+        let pending = &mut runtime.pending[position];
+        pending.stats.probe.completion_polls =
+            pending.stats.probe.completion_polls.saturating_add(1);
+        // Keep the H2G split meaningful for a queued follower. Retirement is
+        // ordered, but observing its exact CTB stream position is independent
+        // and must not wait for the predecessor's marker.
+        observe_ui4_pending_h2g_consumption(pending);
+        return Ui4CompositorCompletion::Pending;
     }
+    let mut pending = runtime
+        .pending
+        .front()
+        .copied()
+        .expect("position zero requires a front submission");
     let Some(shared_state) = *UI4_COMPOSITOR_RCS_STATE.lock() else {
         let _ = runtime.pending.pop_front();
         let completion = Ui4CompositorCompletion::Failed;
@@ -833,15 +853,7 @@ pub(crate) fn poll_ui4_compositor_submission(
         return completion;
     };
     pending.stats.probe.completion_polls = pending.stats.probe.completion_polls.saturating_add(1);
-    if pending.stats.probe.gpu_h2g_consumed_observe_timestamp == 0
-        && crate::intel::guc_ctb::h2g_sequence_consumed(
-            pending.stats.probe.guc_h2g_publish_sequence,
-        )
-    {
-        pending.stats.probe.gpu_h2g_consumed_observe_timestamp = super::claimed_device()
-            .map(direct_rcs_read_render_timestamp)
-            .unwrap_or(0);
-    }
+    observe_ui4_pending_h2g_consumption(&mut pending);
     let observed = direct_rcs_read_result_slot(state, pending.marker_slot);
     if observed == pending.marker_value {
         let host_observe = super::claimed_device()

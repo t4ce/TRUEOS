@@ -261,12 +261,7 @@ fn direct_rcs_map_state(dev: super::Dev, state: DirectRcsState) -> bool {
                 state.gpu_va.context,
             )
             && super::map_ggtt(dev, state.batch_phys, batch_alloc_bytes, state.gpu_va.batch)
-            && super::map_ggtt(
-                dev,
-                state.result_phys,
-                result_alloc_bytes,
-                state.gpu_va.result,
-            );
+            && super::map_ggtt(dev, state.result_phys, result_alloc_bytes, state.gpu_va.result);
     let auxiliary_mapped = !state.gpu_va.map_general_auxiliary
         || (super::map_ggtt(
             dev,
