@@ -22,6 +22,7 @@ pub mod sleep;
 // pub mod dmar;
 
 pub(crate) const SDT_HEADER_LEN: usize = 36;
+const DIAGNOSTIC_SDT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 static ACPI_TABLES: Once<Option<AcpiTables<AcpiIdentityHandler>>> = Once::new();
 
@@ -75,10 +76,15 @@ pub(crate) fn ensure_tables() -> Option<&'static AcpiTables<AcpiIdentityHandler>
 
 pub(crate) fn map_table_bytes(phys: usize) -> Option<&'static [u8]> {
     let phys = limine::try_as_phys_addr(phys as u64).unwrap_or(phys as u64);
+    if !limine::memmap_contains_phys_range(phys, SDT_HEADER_LEN) {
+        return None;
+    }
     let hdr_ptr = mmio::map_mmio_region_exact(phys, SDT_HEADER_LEN).ok()?;
     let hdr = unsafe { core::slice::from_raw_parts(hdr_ptr.as_ptr(), SDT_HEADER_LEN) };
     let len = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]) as usize;
-    if len < SDT_HEADER_LEN {
+    if !(SDT_HEADER_LEN..=DIAGNOSTIC_SDT_MAX_BYTES).contains(&len)
+        || !limine::memmap_contains_phys_range(phys, len)
+    {
         return None;
     }
     let ptr = mmio::map_mmio_region_exact(phys, len).ok()?;

@@ -2662,11 +2662,8 @@ fn append_intel_gpu_dump(out: &mut String) {
     writeln!(out).unwrap();
 
     writeln!(out, "=== Intel Copy Engine BCS0 ===").unwrap();
-    writeln!(
-        out,
-        "capture_policy=read-only register snapshot (no copy probe or engine reset)"
-    )
-    .unwrap();
+    writeln!(out, "capture_policy=read-only register snapshot (no copy probe or engine reset)")
+        .unwrap();
     let copy = crate::intel::copy_engine_activity_snapshot();
     writeln!(
         out,
@@ -2691,11 +2688,7 @@ fn append_intel_gpu_dump(out: &mut String) {
     writeln!(
         out,
         "execlist_status=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X}",
-        copy.execlist_status_hi,
-        copy.execlist_status_lo,
-        copy.ipeir,
-        copy.ipehr,
-        copy.eir
+        copy.execlist_status_hi, copy.execlist_status_lo, copy.ipeir, copy.ipehr, copy.eir
     )
     .unwrap();
     writeln!(out).unwrap();
@@ -3400,12 +3393,7 @@ pub(crate) async fn build_dump_text() -> String {
             "Idx", "Name", "MAC Address", "MAC State", "Primary"
         )
         .unwrap();
-        writeln!(
-            out,
-            "{:-<4}  {:-<20}  {:-<17}  {:-<18}  {:-<10}",
-            "", "", "", "", ""
-        )
-        .unwrap();
+        writeln!(out, "{:-<4}  {:-<20}  {:-<17}  {:-<18}  {:-<10}", "", "", "", "", "").unwrap();
         let primary = crate::net::primary_device_index();
         for index in 0..net_count {
             let name = crate::net::device_name_at(index).unwrap_or("Unknown");

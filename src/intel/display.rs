@@ -2003,7 +2003,13 @@ pub(crate) fn diagnostic_snapshot_text() -> String {
     let _ = writeln!(
         out,
         "device={:02X}:{:02X}.{} did=0x{:04X} rev=0x{:02X} mmio=0x{:016X} mmio_len=0x{:X}",
-        dev.bus, dev.slot, dev.function, dev.device_id, dev.revision_id, dev.mmio as u64, dev.mmio_len
+        dev.bus,
+        dev.slot,
+        dev.function,
+        dev.device_id,
+        dev.revision_id,
+        dev.mmio as u64,
+        dev.mmio_len
     );
     let snapshots = display_pipeline_snapshots_for_dev(dev);
     let selection = select_compatibility_pipeline_from_snapshots(&snapshots);
@@ -2077,6 +2083,26 @@ pub(crate) fn diagnostic_snapshot_text() -> String {
         "power_wells aux_bios=0x{:08X} aux_driver=0x{:08X} aux_debug=0x{:08X} ddi_bios=0x{:08X} ddi_driver=0x{:08X} ddi_debug=0x{:08X} fuse=0x{:08X}",
         aux_bios, aux_driver, aux_debug, ddi_bios, ddi_driver, ddi_debug, fuse
     );
+    if let Some(gpu) = primary_surface_gpu_addr() {
+        let _ = writeln!(out, "tracked_primary_surface_gpu=0x{:016X}", gpu);
+    } else {
+        let _ = writeln!(out, "tracked_primary_surface_gpu=unavailable");
+    }
+    if let Some(samples) = capture_primary_surface_samples() {
+        let _ = writeln!(
+            out,
+            "tracked_primary_samples tl=0x{:08X} center=0x{:08X} br=0x{:08X} apex=0x{:08X} centroid=0x{:08X} left=0x{:08X} right=0x{:08X}",
+            samples.tl,
+            samples.center,
+            samples.br,
+            samples.apex,
+            samples.centroid,
+            samples.left,
+            samples.right
+        );
+    } else {
+        let _ = writeln!(out, "tracked_primary_samples=unavailable");
+    }
     out
 }
 

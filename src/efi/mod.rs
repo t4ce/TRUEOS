@@ -113,6 +113,8 @@ pub struct EfiSystemTableValidation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EfiConfigurationTableError {
     SystemTableUnavailable,
+    SystemTableHeaderInvalid,
+    SystemTableChecksumInvalid,
     NoEntries,
     TooManyEntries,
     AddressInvalid,
@@ -306,10 +308,8 @@ pub fn system_table_validation() -> Option<EfiSystemTableValidation> {
 
     let raw = limine::efi_system_table_address()?;
     let physical_address = limine::try_as_phys_addr(raw)?;
-    if !limine::memmap_contains_phys_range(
-        physical_address,
-        core::mem::size_of::<EfiTableHeader>(),
-    ) {
+    if !limine::memmap_contains_phys_range(physical_address, core::mem::size_of::<EfiTableHeader>())
+    {
         return None;
     }
     let header_ptr = mmio::map_limine_struct::<EfiTableHeader>(physical_address).ok()?;
@@ -366,6 +366,11 @@ pub fn configuration_tables() -> Result<&'static [EfiConfigurationTable], EfiCon
     const MAX_CONFIGURATION_TABLES: usize = 4096;
 
     let st = system_table().ok_or(EfiConfigurationTableError::SystemTableUnavailable)?;
+    let validation =
+        system_table_validation().ok_or(EfiConfigurationTableError::SystemTableHeaderInvalid)?;
+    if !validation.crc_valid {
+        return Err(EfiConfigurationTableError::SystemTableChecksumInvalid);
+    }
     let count = st.number_of_table_entries;
     if count == 0 {
         return Err(EfiConfigurationTableError::NoEntries);
