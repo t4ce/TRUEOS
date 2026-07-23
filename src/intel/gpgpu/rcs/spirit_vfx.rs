@@ -91,7 +91,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
     if !background_valid
         || sprite_upload.bin_sha256 != SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256
         || sprite_upload.gpu != SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
-        || sprite_upload.bytes < 0xB880
+        || sprite_upload.bytes < 0x709C0
         || dst.width != SPIRIT_VFX_SIZE
         || dst.height != SPIRIT_VFX_SIZE
         || dst.pitch_bytes < SPIRIT_VFX_SIZE * 4

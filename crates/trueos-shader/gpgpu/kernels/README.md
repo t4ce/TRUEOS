@@ -124,12 +124,12 @@ use one ordered two-walker batch; the clean default omits the background
 walker. The background artifact implements the selected nine-mode set:
 `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`, `Portal vortex`,
 `Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel burst`. The sprite
-artifact implements `Original / clean` and `Aura bloom`. Their ADL-S binary
-hashes are:
+artifact implements the complete stable ID 0–15 preview set from
+`Original / clean` through `Dream bloom`. Their ADL-S binary hashes are:
 
 ```text
 spirit_vfx_background_rgba8.bin  527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f
-spirit_vfx_sprite_rgba8.bin      7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33
+spirit_vfx_sprite_rgba8.bin      f1264ac062d5645c8d4da55e1585ee22c56cfb7a341d28407d3b934e97821ddc
 ```
 
 The exact control-page, UI JSON, artifact, and display-release contracts are

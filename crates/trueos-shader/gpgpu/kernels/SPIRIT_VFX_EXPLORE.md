@@ -23,8 +23,11 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
    preserves an unaffected inner 60%, then uses a broad linear allocation-edge
    alpha ramp terminating in four fully transparent border pixels.
    The media-state/HDC dependency then precedes the sprite walker.
-3. The sprite pass supports shader IDs 0 (`Original / clean`) and 1
-   (`Aura bloom`); unsupported sprite effects deliberately use the clean pass.
+3. The sprite pass implements the complete stable ID range 0 through 15:
+   `Original / clean`, `Aura bloom`, `Neon edge`, `Fire rim`, `Ice shimmer`,
+   `Hologram`, `RGB glitch`, `Dissolve`, `Ghost trail`, `Electric arc`,
+   `Rainbow prism`, `Hit flash`, `Pixel wave`, `Toon ink`, `Liquid warp`, and
+   `Dream bloom`.
 4. The GuC post-sync marker releases Spirit's GPU producer latch. Only then can
    the worker program `CUR_BASE`; `CUR_SURFLIVE` remains the final display proof.
 
@@ -104,6 +107,14 @@ resident-source geometry, destination pitch, UI revision, the half-second
 presentation-rate estimate, and final edge-feather width. Both kernel entry
 points validate magic/version and their own surface dimensions.
 
+## Offline selection grids
+
+`tools/spirit-vfx-offline` renders the retained nine procedural backgrounds.
+`tools/spirit-sprite-vfx-offline` independently renders the complete 16-mode
+Sprite shader set as a 4x4 grid. Both tools compile and dispatch the production
+OpenCL sources on a host GPU; neither carries a CPU or duplicate shader
+implementation.
+
 ## Baked ADL-S artifacts
 
 `ocloc validate` decodes each artifact successfully and reports one kernel:
@@ -111,7 +122,7 @@ points validate magic/version and their own surface dimensions.
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `spirit_vfx_background_rgba8.bin` | 54,472 | 2 | 64 | 96 | `527042d30fdfeaf111d491b9497ad7d6f0fb5c51369da2968a53b85344da752f` |
-| `spirit_vfx_sprite_rgba8.bin` | 73,728 | 3 | 96 | 96 | `7baa6b3613d9656ea1920f3eb4e28eeba88d939f54e0f6fbc7373ff163710b33` |
+| `spirit_vfx_sprite_rgba8.bin` | 547,392 | 3 | 96 | 96 | `f1264ac062d5645c8d4da55e1585ee22c56cfb7a341d28407d3b934e97821ddc` |
 
 Both artifacts use text offset `0x40` within their own zebin. The clean default
 maps only the sprite at `0x0D440000`, uses that mapping as the instruction base,

@@ -2,8 +2,9 @@
 //!
 //! Names, ranges, and defaults mirror `preview.html`.  The control model is
 //! deliberately independent of the current 256x256 Intel cursor-plane backend:
-//! UI/service code publishes the complete panel while the 256x256 background
-//! artifact implements every named procedural layer from `preview.html`.
+//! UI/service code publishes the complete panel while the bounded 256x256
+//! artifacts implement the retained background set and every named Sprite
+//! shader from `preview.html`.
 
 extern crate alloc;
 
@@ -1018,10 +1019,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
         alpha_cutoff: panel.alpha_cutoff,
         edge_fade_pixels: panel.edge_fade_pixels,
         sampling: panel.sampling as u32,
-        shader_mode: match panel.sprite_shader.effect {
-            SpiritVfxEffect::AuraBloom => 1,
-            _ => 0,
-        },
+        shader_mode: panel.sprite_shader.effect as u32,
         shader_parameters: panel.sprite_shader.parameters,
         fx_color_a: panel.sprite_shader.fx_color_a.packed_rgb(),
         fx_color_b: panel.sprite_shader.fx_color_b.packed_rgb(),

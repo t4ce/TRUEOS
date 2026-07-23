@@ -1,9 +1,9 @@
 //! Lumen module adapter for the fixed LFM2.5 decode scheduler.
 //!
-//! The adapter owns exactly one [`DecodeSession`] and one kernel backend. A
-//! forward call therefore represents one token on the same single-worker lane
-//! as the underlying AOT requests. There is no CPU tensor implementation,
-//! graph interpreter, or fallback backend in this module.
+//! The adapter owns exactly one [`DecodeSession`] and one backend. A forward
+//! call therefore represents one token on one ordered lane. Production may use
+//! either the complete TGD1/TGF2 firmware or the scalar CPU backend with the
+//! proven TRUEGA FFN function; neither path interprets a runtime graph.
 
 use core::cell::RefCell;
 use core::future::Future;
@@ -94,6 +94,17 @@ pub(crate) async fn open_truega() -> Result<
     crate::r::truega_decode_backend::KernelDecodeDataPlaneError,
 > {
     let backend = crate::r::truega_decode_backend::open_kernel_backend().await?;
+    Ok(Lfm25Decode::new(backend))
+}
+
+/// Bind the sealed scalar CPU stages and the admitted BAR2/MSI FFN function to
+/// the same fixed 99-operation Lumen module.
+#[cfg(target_os = "trueos")]
+pub(crate) async fn open_hybrid_cpu() -> Result<
+    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
+    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+> {
+    let backend = crate::r::lfm25_hybrid_cpu_backend::open_hybrid_backend().await?;
     Ok(Lfm25Decode::new(backend))
 }
 

@@ -73,6 +73,7 @@ smoltcp = { version = "0.13", default-features = false, features = ["alloc", "pr
 dma-api = { version = "=0.7.3", default-features = false }
 crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
+trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
 trueos-fs = { path = "crates/trueos-fs" }
 trueos-c4 = { path = "crates/trueos-c4" }
 v = { path = "crates/trueos-v" }

@@ -126,6 +126,27 @@ fn spirit_vfx_bounded(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     }
 }
 
+fn spirit_vfx_shader_defaults(mode: u32) -> [f32; 4] {
+    match mode {
+        1 => [12.0, 1.15, 1.2, 0.18],
+        2 => [3.2, 1.35, 1.1, 0.12],
+        3 => [3.1, 16.0, 1.7, 1.25],
+        4 => [3.4, 1.2, 10.0, 0.28],
+        5 => [95.0, 3.5, 1.4, 0.82],
+        6 => [2.7, 8.0, 2.8, 0.36],
+        7 => [0.42, 0.08, 9.5, 1.45],
+        8 => [11.0, 0.8, 1.2, 0.68],
+        9 => [4.1, 14.0, 2.4, 1.65],
+        10 => [0.55, 5.5, 0.58, 2.2],
+        11 => [0.82, 2.2, 4.5, 1.5],
+        12 => [3.2, 11.0, 1.7, 7.0],
+        13 => [6.0, 1.7, 1.18, 1.2],
+        14 => [4.3, 7.5, 1.1, 1.6],
+        15 => [13.0, 0.9, 0.65, 0.28],
+        _ => [0.0; 4],
+    }
+}
+
 fn spirit_vfx_write_control(
     control_buffer: SpiritVfxBuffer,
     frame: u32,
@@ -192,12 +213,15 @@ fn spirit_vfx_write_control(
             spirit_vfx_bounded(control.alpha_cutoff, 0.0, 0.3, 0.02).to_bits(),
         );
         core::ptr::write_volatile(dwords.add(16), control.sampling.min(1));
-        core::ptr::write_volatile(dwords.add(17), (control.shader_mode == 1) as u32);
+        let shader_mode = matches!(control.shader_mode, 0..=15)
+            .then_some(control.shader_mode)
+            .unwrap_or(0);
+        core::ptr::write_volatile(dwords.add(17), shader_mode);
+        let shader_defaults = spirit_vfx_shader_defaults(shader_mode);
         for (index, value) in control.shader_parameters.iter().copied().enumerate() {
-            let fallback = [12.0, 1.15, 1.2, 0.18][index];
             core::ptr::write_volatile(
                 dwords.add(18 + index),
-                spirit_vfx_bounded(value, -128.0, 256.0, fallback).to_bits(),
+                spirit_vfx_bounded(value, -128.0, 256.0, shader_defaults[index]).to_bits(),
             );
         }
         core::ptr::write_volatile(dwords.add(22), control.fx_color_a & 0x00FF_FFFF);

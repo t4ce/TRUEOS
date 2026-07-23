@@ -63,13 +63,15 @@ pub(crate) fn try_parse(
             Err(_) => false,
         },
         Command::Decode(token) => {
-            if !crate::r::fpga_offload::lfm25_decode_transport_available()
-                || !crate::r::fpga_offload::lfm25_feed_transport_available()
-            {
+            let complete_firmware =
+                crate::r::fpga_offload::lfm25_decode_transport_available()
+                    && crate::r::fpga_offload::lfm25_feed_transport_available();
+            let hybrid_cpu = crate::r::fpga_offload::lfm25_row_stream_available();
+            if !complete_firmware && !hybrid_cpu {
                 set_matrix_target_active(&target, false);
                 print_shell_line(
                     io,
-                    "lumen: decode unavailable; exact TGD1+TGF2 firmware is not admitted",
+                    "lumen: decode unavailable; neither TGD1+TGF2 nor the BAR2/MSI FFN fallback is admitted",
                 );
                 return ParseOutcome::Handled;
             }
@@ -91,25 +93,46 @@ pub(crate) fn try_parse(
 
 #[embassy_executor::task]
 async fn lumen_decode_task(target: MatrixTarget, token: u32) {
+    let complete_firmware =
+        crate::r::fpga_offload::lfm25_decode_transport_available()
+            && crate::r::fpga_offload::lfm25_feed_transport_available();
+    let backend_name = if complete_firmware {
+        "truega"
+    } else {
+        "hybrid-cpu+truega-ffn"
+    };
     print_matrix_target_line(
         &target,
         alloc::format!(
-            "lumen: decode=start token={} position=0 plan_ops={} backend=truega model=sealed-native-image",
+            "lumen: decode=start token={} position=0 plan_ops={} backend={} model=sealed-native-image",
             token,
             trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN,
+            backend_name,
         )
         .as_str(),
     );
     let start_tick = embassy_time_driver::now();
     let before = crate::r::fpga_offload::stats();
-    let result = match crate::lumen::decode::open_truega().await {
-        Ok(module) => ::lumen::async_module::forward(
-            &module,
-            crate::lumen::decode::Lfm25DecodeInput::new(token),
-        )
-        .await
-        .map_err(|error| alloc::format!("{error:?}")),
-        Err(error) => Err(alloc::format!("model-open={error:?}")),
+    let result = if complete_firmware {
+        match crate::lumen::decode::open_truega().await {
+            Ok(module) => ::lumen::async_module::forward(
+                &module,
+                crate::lumen::decode::Lfm25DecodeInput::new(token),
+            )
+            .await
+            .map_err(|error| alloc::format!("{error:?}")),
+            Err(error) => Err(alloc::format!("model-open={error:?}")),
+        }
+    } else {
+        match crate::lumen::decode::open_hybrid_cpu().await {
+            Ok(module) => ::lumen::async_module::forward(
+                &module,
+                crate::lumen::decode::Lfm25DecodeInput::new(token),
+            )
+            .await
+            .map_err(|error| alloc::format!("{error:?}")),
+            Err(error) => Err(alloc::format!("model-open={error:?}")),
+        }
     };
     let after = crate::r::fpga_offload::stats();
 
@@ -134,7 +157,11 @@ async fn lumen_decode_task(target: MatrixTarget, token: u32) {
             );
             print_matrix_target_line(
                 &target,
-                "lumen: decode path=async-module->fixed-99-op-plan->sealed-range-feed->bar2->msi-worker-callback no-host-math",
+                if complete_firmware {
+                    "lumen: decode path=async-module->fixed-99-op-plan->sealed-range-feed->bar2->msi-worker-callback"
+                } else {
+                    "lumen: decode path=async-module->fixed-99-op-plan->cpu-mixers+truega-ffn->msi-worker-callback"
+                },
             );
         }
         Err(error) => print_matrix_target_line(

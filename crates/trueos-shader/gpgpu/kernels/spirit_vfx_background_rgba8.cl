@@ -177,6 +177,7 @@ __kernel void spirit_vfx_background_rgba8(
         color_mix = 0.5f + 0.5f * native_sin(angle * 3.0f + time * speed);
     } else if (background_id == 3u) {
         // preview.html: Magic circle
+        float animated_time = time * speed;
         float ring1 = native_exp(-fabs(radius - 0.32f) * 130.0f);
         float ring2 = native_exp(-fabs(radius - 0.24f) * 160.0f) * 0.7f;
         float spokes = vfx_powi(
@@ -184,13 +185,13 @@ __kernel void spirit_vfx_background_rgba8(
             * smoothstep(0.12f, 0.18f, radius)
             * (1.0f - smoothstep(0.30f, 0.37f, radius));
         float ticks = vfx_powi(
-            0.5f + 0.5f * native_cos(angle * 48.0f - time * speed * 0.35f),
+            0.5f + 0.5f * native_cos(angle * 48.0f - animated_time * 0.35f),
             36u)
             * native_exp(-fabs(radius - 0.28f) * 42.0f);
         float glyph_cell = floor((angle + VFX_PI) * (24.0f / VFX_TAU));
         float glyph = step(
             0.78f,
-            vfx_hash21f((float2)(glyph_cell, floor(time * 0.4f))))
+            vfx_hash21f((float2)(glyph_cell, floor(animated_time * 0.4f))))
             * native_exp(-fabs(radius - 0.205f) * 90.0f) * 0.6f;
         alpha = (ring1 + ring2 + spokes * 0.65f + ticks * 0.55f + glyph)
             * intensity;
