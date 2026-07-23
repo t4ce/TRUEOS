@@ -2380,6 +2380,11 @@ fn pan_gridpaper(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4PanEvent)
     }
 }
 
+fn is_gridpaper_print_key(event: crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
+    event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        && event.key_code == crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN
+}
+
 fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::Ui4InputEvent) {
     if runtime.presented_window() != Some(input_event_window(event)) {
         return;
@@ -2391,14 +2396,15 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
         {
             select_gridpaper_cell(runtime, event.local_x, event.local_y);
         }
-        crate::ui4::Ui4InputEvent::Keyboard(event)
-            if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10 =>
-        {
+        crate::ui4::Ui4InputEvent::Keyboard(event) if is_gridpaper_print_key(event.event) => {
             if let Some(snapshot) = runtime.latest_snapshot.as_ref()
                 && queue_print_request(runtime.surface.instance_id, snapshot).is_none()
             {
-                crate::log_os::print2d_job_state(0, "request-dropped", "gridpaper-F10-queue-full");
+                crate::log_os::print2d_job_state(
+                    0,
+                    "request-dropped",
+                    "gridpaper-PrintScreen-queue-full",
+                );
             }
         }
         crate::ui4::Ui4InputEvent::Keyboard(event) => {
@@ -2956,6 +2962,19 @@ mod tests {
         let cell = &snapshot.raw[offset..offset + CELL_BYTES];
         assert_eq!(cell[PRIMARY_LENGTH_OFFSET], 1);
         assert_eq!(cell[UPPER_LENGTH_OFFSET], 0);
+    }
+
+    #[test]
+    fn print_screen_triggers_print_but_f10_does_not() {
+        let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent {
+            kind: crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY,
+            key_code: crate::r::keyboard::KEYBOARD_KEY_PRINT_SCREEN,
+            ..Default::default()
+        };
+        assert!(is_gridpaper_print_key(event));
+
+        event.key_code = crate::r::keyboard::KEYBOARD_KEY_F10;
+        assert!(!is_gridpaper_print_key(event));
     }
 
     #[test]

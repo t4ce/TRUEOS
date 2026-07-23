@@ -25,6 +25,7 @@ pub const KEYBOARD_KEY_ARROW_DOWN: u16 = 13;
 pub const KEYBOARD_KEY_ARROW_LEFT: u16 = 14;
 pub const KEYBOARD_KEY_ARROW_RIGHT: u16 = 15;
 pub const KEYBOARD_KEY_START: u16 = 16;
+pub const KEYBOARD_KEY_PRINT_SCREEN: u16 = 17;
 pub const KEYBOARD_KEY_F1: u16 = 101;
 pub const KEYBOARD_KEY_F2: u16 = 102;
 pub const KEYBOARD_KEY_F3: u16 = 103;
@@ -269,6 +270,7 @@ fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
         0x43 => Some(KEYBOARD_KEY_F10),
         0x44 => Some(KEYBOARD_KEY_F11),
         0x45 => Some(KEYBOARD_KEY_F12),
+        0x46 => Some(KEYBOARD_KEY_PRINT_SCREEN),
         0x49 => Some(KEYBOARD_KEY_INSERT),
         0x4A => Some(KEYBOARD_KEY_HOME),
         0x4B => Some(KEYBOARD_KEY_PAGE_UP),
@@ -571,4 +573,17 @@ pub fn inject_key(slot_id: u32, codepoint: u32, key_code: u16, modifiers: u8, fl
         flags | KEYBOARD_OUTPUT_FLAG_PRESS,
     );
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn print_screen_boot_usage_maps_to_named_key() {
+        assert_eq!(
+            hid_boot_keycode_to_named_key(0x46),
+            Some(KEYBOARD_KEY_PRINT_SCREEN)
+        );
+    }
 }

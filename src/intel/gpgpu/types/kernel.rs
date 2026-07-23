@@ -279,6 +279,18 @@ impl CppDemoRgba8Params {
 }
 
 #[derive(Copy, Clone, Debug)]
+struct CppAudioVisualizerRgba8Params {
+    audio_gpu: u64,
+    dst_gpu: u64,
+    dst_pitch_bytes: u32,
+    dst_width: u32,
+    dst_height: u32,
+    time_seconds: f32,
+    frame: u32,
+    flags: u32,
+}
+
+#[derive(Copy, Clone, Debug)]
 struct FontOutlineMeshParams {
     src_gpu: u64,
     dst_gpu: u64,

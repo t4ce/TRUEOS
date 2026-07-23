@@ -1,0 +1,310 @@
+// TRUEOS single-kernel C++ for OpenCL audiovisual instrument.
+//
+// The CPU side publishes one bounded, immutable snapshot of the final
+// interleaved stereo mix immediately before HDA DMA. A conventional 2048-point
+// mid/side FFT produces the compact bands consumed here. This kernel owns all
+// visual synthesis: waveform ribbons, a stereo phase field, spectral
+// architecture, a circular prism, bass bloom, onset rings, and high-frequency
+// particles are composed in one dispatch.
+//
+// One SIMD lane shades a horizontal pair of output pixels. At 2560x1440 this
+// deliberately launches 1,843,200 lanes rather than one lane per pixel.
+
+#include "include/trueos_clcpp.hpp"
+
+namespace trueos::gpgpu::audio_visualizer {
+
+#define TRUEOS_AUDIO_VIZ_INLINE __attribute__((always_inline)) inline
+
+inline constexpr uint snapshot_magic = 0x315A5641u; // "AVZ1"
+inline constexpr uint snapshot_version = 1u;
+inline constexpr uint feature_base = 8u;
+inline constexpr uint waveform_base = 32u;
+inline constexpr uint waveform_count = 128u;
+inline constexpr uint spectrum_base = 320u;
+inline constexpr uint spectrum_count = 64u;
+inline constexpr float tau = 6.28318530718f;
+
+enum Feature : uint {
+    feature_rms_left = 0u,
+    feature_rms_right = 1u,
+    feature_peak = 2u,
+    feature_stereo_width = 3u,
+    feature_low = 4u,
+    feature_mid = 5u,
+    feature_high = 6u,
+    feature_beat = 7u,
+    feature_centroid = 8u,
+    feature_flux = 9u,
+    feature_tempo_phase = 10u,
+    feature_signal = 11u,
+};
+
+TRUEOS_AUDIO_VIZ_INLINE float saturate(float value)
+{
+    return clamp(value, 0.0f, 1.0f);
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float audio_float(
+    __global const uint *snapshot,
+    uint word,
+    float fallback)
+{
+    const float value = as_float(snapshot[word]);
+    return isfinite(value) ? value : fallback;
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float feature(
+    __global const uint *snapshot,
+    Feature index)
+{
+    return saturate(audio_float(snapshot, feature_base + static_cast<uint>(index), 0.0f));
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float waveform(
+    __global const uint *snapshot,
+    float position,
+    uint channel)
+{
+    const uint index = min(
+        static_cast<uint>(saturate(position) * static_cast<float>(waveform_count - 1u)),
+        waveform_count - 1u);
+    return clamp(
+        audio_float(snapshot, waveform_base + index * 2u + min(channel, 1u), 0.0f),
+        -1.0f,
+        1.0f);
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float spectrum(
+    __global const uint *snapshot,
+    float position)
+{
+    const float scaled = saturate(position) * static_cast<float>(spectrum_count - 1u);
+    const uint left = min(static_cast<uint>(scaled), spectrum_count - 1u);
+    const uint right = min(left + 1u, spectrum_count - 1u);
+    const float blend = scaled - static_cast<float>(left);
+    const float a = saturate(audio_float(snapshot, spectrum_base + left, 0.0f));
+    const float b = saturate(audio_float(snapshot, spectrum_base + right, 0.0f));
+    return mix(a, b, blend);
+}
+
+TRUEOS_AUDIO_VIZ_INLINE uint hash_u32(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7FEB352Du;
+    value ^= value >> 15;
+    value *= 0x846CA68Bu;
+    value ^= value >> 16;
+    return value;
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float hash_unit(int2 cell, uint seed)
+{
+    const uint mixed = hash_u32(
+        as_uint(cell.x) * 0x9E3779B9u
+        ^ as_uint(cell.y) * 0x85EBCA6Bu
+        ^ seed);
+    return static_cast<float>(mixed & 0x00FFFFFFu) * (1.0f / 16777216.0f);
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float vector_length(float2 value)
+{
+    return native_sqrt(dot(value, value));
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float3 palette(float phase)
+{
+    return (float3)(
+        0.50f + 0.50f * native_cos(tau * (phase + 0.00f)),
+        0.50f + 0.50f * native_cos(tau * (phase + 0.32f)),
+        0.50f + 0.50f * native_cos(tau * (phase + 0.67f)));
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float line_glow(float distance, float sharpness)
+{
+    return native_exp(-sharpness * fabs(distance));
+}
+
+TRUEOS_AUDIO_VIZ_INLINE float3 render_instrument(
+    __global const uint *snapshot,
+    float2 normalized,
+    float aspect,
+    float time,
+    uint frame)
+{
+    const float2 centered = normalized * 2.0f - 1.0f;
+    const float2 uv = (float2)(centered.x * aspect, centered.y);
+    const float radius = vector_length(uv);
+    const float angle = atan2(uv.y, uv.x);
+    const float angle01 = (angle + 3.14159265359f) * (1.0f / tau);
+
+    const float rms_l = feature(snapshot, feature_rms_left);
+    const float rms_r = feature(snapshot, feature_rms_right);
+    const float peak = feature(snapshot, feature_peak);
+    const float stereo = feature(snapshot, feature_stereo_width);
+    const float low = feature(snapshot, feature_low);
+    const float mid = feature(snapshot, feature_mid);
+    const float high = feature(snapshot, feature_high);
+    const float beat = feature(snapshot, feature_beat);
+    const float centroid = feature(snapshot, feature_centroid);
+    const float flux = feature(snapshot, feature_flux);
+    const float tempo = feature(snapshot, feature_tempo_phase);
+    const float signal = feature(snapshot, feature_signal);
+
+    const float band_x = spectrum(snapshot, normalized.x);
+    const float angular_band = spectrum(snapshot, angle01);
+    const float wave_l = waveform(snapshot, normalized.x, 0u);
+    const float wave_r = waveform(snapshot, normalized.x, 1u);
+    const float circular_wave =
+        0.5f * (waveform(snapshot, angle01, 0u) + waveform(snapshot, angle01, 1u));
+
+    const float flow =
+        native_sin(uv.x * 2.7f + time * 0.23f + low * 4.0f)
+        + native_cos(uv.y * 3.1f - time * 0.19f + mid * 3.0f)
+        + native_sin((uv.x + uv.y) * 1.9f + centroid * tau);
+    float3 color = (float3)(0.0035f, 0.006f, 0.018f);
+    color += palette(0.62f + centroid * 0.28f + flow * 0.025f)
+        * (0.012f + 0.026f * signal + 0.020f * low)
+        * (1.0f - saturate(radius * 0.52f));
+
+    // Mirrored logarithmic spectrum architecture.
+    const float lower_height = 0.08f + band_x * (0.18f + 0.42f * signal);
+    const float upper_height = 0.04f + band_x * (0.10f + 0.25f * high);
+    const float lower_edge = line_glow(normalized.y - (1.0f - lower_height), 170.0f);
+    const float upper_edge = line_glow(normalized.y - upper_height, 190.0f);
+    const float lower_fill =
+        smoothstep(1.0f - lower_height, 1.0f - lower_height - 0.018f, normalized.y);
+    const float upper_fill =
+        smoothstep(upper_height, upper_height + 0.014f, normalized.y);
+    const float3 spectral_color = palette(0.88f - normalized.x * 0.52f + centroid * 0.18f);
+    color += spectral_color
+        * (lower_fill * (0.035f + band_x * 0.34f) + lower_edge * 0.72f);
+    color += spectral_color.zxy
+        * (upper_fill * (0.018f + band_x * 0.17f) + upper_edge * 0.35f);
+
+    // Independent left/right waveform ribbons.
+    const float left_path = -0.19f + wave_l * (0.08f + rms_l * 0.19f);
+    const float right_path = 0.19f + wave_r * (0.08f + rms_r * 0.19f);
+    const float left_ribbon = line_glow(uv.y - left_path, 135.0f);
+    const float right_ribbon = line_glow(uv.y - right_path, 135.0f);
+    color += (float3)(0.10f, 0.82f, 1.00f) * left_ribbon * (0.25f + signal * 0.85f);
+    color += (float3)(1.00f, 0.16f, 0.68f) * right_ribbon * (0.25f + signal * 0.85f);
+    color += (float3)(0.55f, 0.75f, 1.00f)
+        * line_glow(uv.y - 0.5f * (left_path + right_path), 42.0f)
+        * stereo * 0.20f;
+
+    // Circular waveform prism with spectrum-driven teeth.
+    const float prism_radius =
+        0.40f + circular_wave * (0.035f + 0.11f * signal) + angular_band * 0.095f;
+    const float prism = line_glow(radius - prism_radius, 115.0f);
+    const float prism_halo = line_glow(radius - prism_radius, 24.0f);
+    const float spokes =
+        0.52f + 0.48f * native_sin(angle * 64.0f + time * 0.7f + angular_band * 5.0f);
+    const float3 prism_color = palette(angle01 + centroid * 0.35f + time * 0.012f);
+    color += prism_color * prism * (0.42f + angular_band * 1.35f);
+    color += prism_color * prism_halo * spokes * (0.04f + high * 0.16f);
+
+    // Stereo phase-scope constellation. It is derived from the same point in
+    // each channel, so width and correlation are visible without a second
+    // rendering pass.
+    const float phase_l = waveform(snapshot, angle01, 0u);
+    const float phase_r = waveform(snapshot, angle01, 1u);
+    const float2 phase_point =
+        (float2)(phase_l + phase_r, phase_l - phase_r) * (0.20f + stereo * 0.16f);
+    const float phase_glow = native_exp(-34.0f * vector_length(uv - phase_point));
+    color += (float3)(0.72f, 0.46f, 1.00f) * phase_glow * (0.05f + stereo * 0.26f);
+
+    // Beat/onset wavefronts.
+    const float beat_radius = 0.18f + 0.88f * tempo;
+    const float beat_ring = line_glow(radius - beat_radius, 95.0f);
+    const float bass_bloom = native_exp(-3.6f * radius * radius);
+    color += palette(0.02f + centroid * 0.22f)
+        * beat_ring * beat * (0.35f + flux * 1.4f);
+    color += (float3)(0.16f, 0.035f, 0.25f)
+        * bass_bloom * low * (0.28f + beat * 0.85f);
+
+    // Sparse high-frequency particles on a stable cell lattice.
+    const float2 particle_grid = normalized * (float2)(72.0f, 40.5f);
+    const int2 particle_cell = convert_int2_rtn(floor(particle_grid));
+    const float2 particle_local = particle_grid - floor(particle_grid) - 0.5f;
+    const float particle_seed = hash_unit(particle_cell, frame >> 2);
+    const float particle_gate =
+        step(0.985f - high * 0.045f - beat * 0.025f, particle_seed);
+    const float particle = native_exp(-32.0f * dot(particle_local, particle_local))
+        * particle_gate;
+    color += palette(particle_seed + centroid) * particle * (0.18f + high * 0.72f);
+
+    // Peak flash and restrained scan texture.
+    color += (float3)(0.35f, 0.42f, 0.65f)
+        * native_exp(-5.0f * radius) * peak * peak * 0.16f;
+    color *= 0.975f + 0.025f * native_sin(normalized.y * 1440.0f * 0.42f);
+    color *= saturate(1.13f - 0.28f * dot(centered, centered));
+    color = color / (color + (float3)(1.0f));
+    color = native_sqrt(clamp(color, (float3)(0.0f), (float3)(1.0f)));
+    return color;
+}
+
+TRUEOS_AUDIO_VIZ_INLINE uint pack_opaque(float3 color)
+{
+    const float3 bounded = clamp(color, (float3)(0.0f), (float3)(1.0f));
+    const uint red = static_cast<uint>(bounded.x * 255.0f + 0.5f);
+    const uint green = static_cast<uint>(bounded.y * 255.0f + 0.5f);
+    const uint blue = static_cast<uint>(bounded.z * 255.0f + 0.5f);
+    return 0xFF000000u | (blue << 16) | (green << 8) | red;
+}
+
+} // namespace trueos::gpgpu::audio_visualizer
+
+#undef TRUEOS_AUDIO_VIZ_INLINE
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void cpp_audio_visualizer_rgba8(
+    __global const uint *audio_snapshot,
+    __global uint *dst_rgba,
+    uint dst_pitch_bytes,
+    uint dst_width,
+    uint dst_height,
+    float time_seconds,
+    uint frame,
+    uint flags)
+{
+    using namespace trueos::gpgpu::audio_visualizer;
+
+    const uint pair_x = static_cast<uint>(get_global_id(0));
+    const uint y = static_cast<uint>(get_global_id(1));
+    const uint x = pair_x * 2u;
+    if (x >= dst_width || y >= dst_height || dst_width == 0u || dst_height == 0u) {
+        return;
+    }
+
+    const bool snapshot_valid =
+        audio_snapshot[0] == snapshot_magic
+        && audio_snapshot[1] == snapshot_version
+        && audio_snapshot[5] == spectrum_count
+        && audio_snapshot[6] == waveform_count;
+    const float safe_time = isfinite(time_seconds) ? time_seconds : 0.0f;
+    const float2 normalized = (float2)(
+        (static_cast<float>(min(x + 1u, dst_width - 1u)) + 0.5f)
+            / static_cast<float>(dst_width),
+        (static_cast<float>(y) + 0.5f) / static_cast<float>(dst_height));
+    float3 color = snapshot_valid
+        ? render_instrument(
+            audio_snapshot,
+            normalized,
+            static_cast<float>(dst_width)
+                / fmax(1.0f, static_cast<float>(dst_height)),
+            safe_time,
+            frame)
+        : (float3)(0.025f, 0.0f, 0.045f);
+    if ((flags & 1u) != 0u && !snapshot_valid) {
+        color += (float3)(0.12f, 0.0f, 0.08f);
+    }
+
+    const uint packed = pack_opaque(color);
+    const uint pitch_pixels =
+        dst_pitch_bytes / trueos::gpgpu::rgba8_bytes_per_pixel;
+    dst_rgba[y * pitch_pixels + x] = packed;
+    if (x + 1u < dst_width) {
+        dst_rgba[y * pitch_pixels + x + 1u] = packed;
+    }
+}

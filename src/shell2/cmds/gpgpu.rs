@@ -93,7 +93,7 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                 print_shell_line(
                     io,
                     alloc::format!(
-                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 frames={} windows={} buffering={} plane_layout={} slot_policy=fixed-per-window/no-round-robin interaction=movable-fixed-size",
+                        "gpgpu preview start: queued=1 request={} preset={} service_online={} duration_ms={} cadence_ms={} publish_every={} ui4_consumer=kernel-app-5 frames={} windows={} buffering={} plane_layout={} slot_policy=fixed-per-window/no-round-robin interaction={}",
                         serial,
                         preset.label(),
                         status.online as u8,
@@ -104,6 +104,11 @@ fn run_preview(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
                         preview_surface_count(preset),
                         preset.buffering_label(),
                         preset.plane_layout_label(),
+                        if preset.is_cpp() {
+                            "application-movable-maximize-resize"
+                        } else {
+                            "movable-fixed-size"
+                        },
                     )
                     .as_str(),
                 );
@@ -163,7 +168,8 @@ const fn preview_surface_count(preset: crate::ui4::GpgpuPreviewPreset) -> usize 
         | crate::ui4::GpgpuPreviewPreset::CppAurora
         | crate::ui4::GpgpuPreviewPreset::CppJulia
         | crate::ui4::GpgpuPreviewPreset::CppSdf
-        | crate::ui4::GpgpuPreviewPreset::CppVoronoi => 1,
+        | crate::ui4::GpgpuPreviewPreset::CppVoronoi
+        | crate::ui4::GpgpuPreviewPreset::CppAudio => 1,
     }
 }
 
@@ -172,7 +178,7 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         alloc::format!(
-            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} buffering={} plane_layout={} interaction=movable-fixed-size error={}",
+            "gpgpu preview status: online={} phase={} desired_running={} request={} applied={} preset={} duration_ms={} cadence_ms={} publish_every={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} buffering={} plane_layout={} interaction={} error={}",
             status.online as u8,
             status.phase.label(),
             status.desired_running as u8,
@@ -194,6 +200,11 @@ fn print_preview_status(io: &'static dyn ShellBackend2) {
             status.metrics.elapsed_ms,
             status.config.preset.buffering_label(),
             status.config.preset.plane_layout_label(),
+            if status.config.preset.is_cpp() {
+                "application-movable-maximize-resize"
+            } else {
+                "movable-fixed-size"
+            },
             status.last_error,
         )
         .as_str(),

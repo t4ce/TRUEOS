@@ -148,8 +148,8 @@ fn enqueue(owner: u8, document: PrintDocument) -> Result<u32, i64> {
 fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
     let id = {
         // Keep queue capacity and request consumption atomic from the caller's
-        // perspective. A full print queue leaves the F10 token available for
-        // the Blueprint to retry on its next cooperative poll.
+        // perspective. A full print queue leaves the Print Screen token
+        // available for the Blueprint to retry on its next cooperative poll.
         let mut queue = PRINT_QUEUE.lock();
         if !queue.has_job_capacity() {
             return Err(ERROR_QUEUE_FULL);
@@ -173,7 +173,7 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
         });
         id
     };
-    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted-f10");
+    crate::log_os::print2d_job_state(id, PrintJobState::Queued.name(), "accepted-print-screen");
     Ok(id)
 }
 

@@ -2274,6 +2274,11 @@ impl PcmStreamHandle {
         self.dma_len_samples = cap;
         self.info = PcmStreamInfo::current(cap * PCM_SAMPLE_BYTES);
 
+        // Non-consuming audiovisual tee: publish the exact accepted
+        // interleaved s16 stream before it crosses into the HDA DMA ring.
+        // The tap is allocation-free and disabled when no visualizer runs.
+        crate::aud::audio_visualizer_tap::publish_i16_stereo_48k(samples);
+
         let mut copied = 0usize;
         while copied < samples.len() {
             let chunk = (samples.len() - copied).min(cap - self.write_cursor);

@@ -347,7 +347,7 @@ pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) 
         flags::LogArea::Net,
         log::Level::Info,
         format_args!(
-            "print2d: gridpaper request owner={} token={} generation={} trigger=F10\n",
+            "print2d: gridpaper request owner={} token={} generation={} trigger=PrintScreen\n",
             owner, token, generation
         ),
     );

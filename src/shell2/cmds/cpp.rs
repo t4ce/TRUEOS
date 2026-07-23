@@ -8,12 +8,14 @@ use super::super::{ShellBackend2, print_shell_line};
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const CPP_DEMO_DEFAULT_DURATION_MS: u64 = 30_000;
+const CPP_AUDIO_DEFAULT_DURATION_MS: u64 = 0;
+const CPP_AUDIO_DEFAULT_CADENCE_MS: u64 = 50;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi]");
+    print_shell_line(io, "cpp [gallery|aurora|julia|sdf|voronoi|audio]");
     print_shell_line(
         io,
-        "cpp start [gallery|aurora|julia|sdf|voronoi] [duration_ms] [cadence_ms] [publish_every]",
+        "cpp start [gallery|aurora|julia|sdf|voronoi|audio] [duration_ms] [cadence_ms] [publish_every]",
     );
     print_shell_line(io, "cpp list");
     print_shell_line(io, "cpp status");
@@ -33,20 +35,18 @@ fn parse_mode(raw: &str) -> Option<crate::ui4::GpgpuPreviewPreset> {
         Some(crate::ui4::GpgpuPreviewPreset::CppSdf)
     } else if raw.eq_ignore_ascii_case("voronoi") {
         Some(crate::ui4::GpgpuPreviewPreset::CppVoronoi)
+    } else if raw.eq_ignore_ascii_case("audio")
+        || raw.eq_ignore_ascii_case("av")
+        || raw.eq_ignore_ascii_case("visualizer")
+    {
+        Some(crate::ui4::GpgpuPreviewPreset::CppAudio)
     } else {
         None
     }
 }
 
 const fn is_cpp_preset(preset: crate::ui4::GpgpuPreviewPreset) -> bool {
-    matches!(
-        preset,
-        crate::ui4::GpgpuPreviewPreset::CppGallery
-            | crate::ui4::GpgpuPreviewPreset::CppAurora
-            | crate::ui4::GpgpuPreviewPreset::CppJulia
-            | crate::ui4::GpgpuPreviewPreset::CppSdf
-            | crate::ui4::GpgpuPreviewPreset::CppVoronoi
-    )
+    preset.is_cpp()
 }
 
 fn expect_no_more(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) -> bool {
@@ -97,10 +97,21 @@ fn start(
     preset: crate::ui4::GpgpuPreviewPreset,
     args: &mut SplitWhitespace<'_>,
 ) {
-    let Some(duration_ms) = parse_u64(io, args, CPP_DEMO_DEFAULT_DURATION_MS) else {
+    let audio = preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
+    let default_duration_ms = if audio {
+        CPP_AUDIO_DEFAULT_DURATION_MS
+    } else {
+        CPP_DEMO_DEFAULT_DURATION_MS
+    };
+    let default_cadence_ms = if audio {
+        CPP_AUDIO_DEFAULT_CADENCE_MS
+    } else {
+        crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS
+    };
+    let Some(duration_ms) = parse_u64(io, args, default_duration_ms) else {
         return;
     };
-    let Some(cadence_ms) = parse_u64(io, args, crate::ui4::GPGPU_PREVIEW_DEFAULT_CADENCE_MS) else {
+    let Some(cadence_ms) = parse_u64(io, args, default_cadence_ms) else {
         return;
     };
     let Some(publish_every) = parse_u32(io, args, crate::ui4::GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY)
@@ -123,15 +134,21 @@ fn start(
             print_shell_line(
                 io,
                 alloc::format!(
-                    "cpp start: queued=1 request={} mode={} service_online={} duration_ms={} cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel=cpp_demo_rgba8 simd=16 ui4_window=1 buffering=double plane=slot1-direct stop=\"cpp stop\"",
+                    "cpp start: queued=1 request={} mode={} service_online={} duration_ms={} cadence_ms={} publish_every={} frontend=cpp-for-opencl backend=intel-igc-aot runtime_compiler=0 artifact={} zebin_sha256={} target=8086:4680-r0C kernel={} simd=16 ui4_window=1 buffering=double plane=slot1-direct maximize=dynamic-frame{} stop=\"cpp stop\"",
                     serial,
                     cpp_mode_label(preset),
                     status.online as u8,
                     duration_ms,
                     cadence_ms,
                     publish_every,
-                    crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.name,
-                    artifact_hash(),
+                    artifact_name(preset),
+                    artifact_hash(preset),
+                    kernel_name(preset),
+                    if audio {
+                        " pcm=post-mix/pre-hda-s16le-stereo-48k fft=2048-mid-side bands=64 walker=horizontal-pairs/50pct"
+                    } else {
+                        ""
+                    },
                 )
                 .as_str(),
             );
@@ -151,6 +168,7 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
         crate::ui4::GpgpuPreviewPreset::CppJulia => "julia",
         crate::ui4::GpgpuPreviewPreset::CppSdf => "sdf",
         crate::ui4::GpgpuPreviewPreset::CppVoronoi => "voronoi",
+        crate::ui4::GpgpuPreviewPreset::CppAudio => "audio",
         _ => "not-cpp",
     }
 }
@@ -178,6 +196,10 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
+        "cpp demo: mode=audio explores=one-composed-instrument/waveform+phase+64-band-spectrum+bass-bloom+beat-rings+particles pcm=exact-pre-hda-tee fft=2048-mid-side walker=50pct",
+    );
+    print_shell_line(
+        io,
         "cpp suite: source=cpp_demo_rgba8.clcpp frontend=cpp-for-opencl backend=intel-igc-aot build_time_only=1 exact_target=8086:4680-r0C",
     );
     print_shell_line(
@@ -189,11 +211,17 @@ fn print_list(io: &'static dyn ShellBackend2) {
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = crate::ui4::gpgpu_preview_status();
     let active_cpp = status.desired_running && is_cpp_preset(status.config.preset);
-    let upload = crate::intel::gpgpu::cpp_demo_rgba8_upload_status();
+    let audio = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
+    let upload = if audio {
+        crate::intel::gpgpu::cpp_audio_visualizer_rgba8_upload_status()
+    } else {
+        crate::intel::gpgpu::cpp_demo_rgba8_upload_status()
+    };
+    let audio_status = crate::aud::audio_visualizer::status();
     print_shell_line(
         io,
         alloc::format!(
-            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 error={}",
+            "cpp status: active={} online={} phase={} request={} applied={} mode={} frame={} window={} attempted={} submitted={} completed={} published={} dropped_busy={} failed={} late={} elapsed_ms={} marker=0x{:08X} submit_ms={} artifact={} resident={} verified={} gpu=0x{:X} zebin_sha256={} runtime_compiler=0 maximize=dynamic-frame pcm_tap={} pcm_sequence={} pcm_frames={} signal={} rms={:.4} peak={:.4} low={:.3} mid={:.3} high={:.3} beat={:.3} error={}",
             active_cpp as u8,
             status.online as u8,
             status.phase.label(),
@@ -216,19 +244,45 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.metrics.elapsed_ms,
             status.metrics.last_marker,
             status.metrics.last_submit_ms,
-            crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.name,
+            artifact_name(status.config.preset),
             upload.is_some() as u8,
             upload.is_some_and(|artifact| artifact.verified) as u8,
             upload.map(|artifact| artifact.gpu).unwrap_or(0),
-            artifact_hash(),
+            artifact_hash(status.config.preset),
+            audio_status.enabled as u8,
+            audio_status.sequence,
+            audio_status.captured_frames,
+            audio_status.active as u8,
+            audio_status.rms,
+            audio_status.peak,
+            audio_status.low,
+            audio_status.mid,
+            audio_status.high,
+            audio_status.beat,
             status.last_error,
         )
         .as_str(),
     );
 }
 
-fn artifact_hash() -> String {
-    format_hash(crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.bin_sha256)
+fn artifact_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
+    if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
+        crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.name
+    } else {
+        crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.name
+    }
+}
+
+fn kernel_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
+    artifact_name(preset)
+}
+
+fn artifact_hash(preset: crate::ui4::GpgpuPreviewPreset) -> String {
+    if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
+        format_hash(crate::intel::gpgpu::CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT.bin_sha256)
+    } else {
+        format_hash(crate::intel::gpgpu::CPP_DEMO_RGBA8_ADLS_ARTIFACT.bin_sha256)
+    }
 }
 
 fn format_hash(hash: [u8; 32]) -> String {

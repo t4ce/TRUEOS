@@ -11,6 +11,8 @@
 #[cfg(target_os = "trueos")]
 pub mod alsa_trueos_backend;
 pub mod audio_live_http;
+pub(crate) mod audio_visualizer;
+pub(crate) mod audio_visualizer_tap;
 pub mod backing_pattern;
 pub mod cabi;
 pub mod dmg;

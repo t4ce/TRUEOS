@@ -195,7 +195,7 @@ fn spirit_vfx_write_control(
         );
         // Spirit's Lilly presentation scale is architectural, not a mutable
         // VFX parameter. Keep dword 13 for the kernel ABI, but lock its value.
-        core::ptr::write_volatile(dwords.add(13), 1.0f32.to_bits());
+        core::ptr::write_volatile(dwords.add(13), 0.65f32.to_bits());
         core::ptr::write_volatile(
             dwords.add(14),
             spirit_vfx_bounded(

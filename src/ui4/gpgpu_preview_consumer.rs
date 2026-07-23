@@ -57,6 +57,7 @@ pub(crate) enum GpgpuPreviewPreset {
     CppJulia,
     CppSdf,
     CppVoronoi,
+    CppAudio,
 }
 
 impl GpgpuPreviewPreset {
@@ -74,7 +75,20 @@ impl GpgpuPreviewPreset {
             Self::CppJulia => "cpp-julia",
             Self::CppSdf => "cpp-sdf",
             Self::CppVoronoi => "cpp-voronoi",
+            Self::CppAudio => "cpp-audio",
         }
+    }
+
+    pub(crate) const fn is_cpp(self) -> bool {
+        matches!(
+            self,
+            Self::CppGallery
+                | Self::CppAurora
+                | Self::CppJulia
+                | Self::CppSdf
+                | Self::CppVoronoi
+                | Self::CppAudio
+        )
     }
 
     pub(crate) const fn buffering_label(self) -> &'static str {
@@ -98,7 +112,8 @@ impl GpgpuPreviewPreset {
             | Self::CppAurora
             | Self::CppJulia
             | Self::CppSdf
-            | Self::CppVoronoi => "slot1-direct",
+            | Self::CppVoronoi
+            | Self::CppAudio => "slot1-direct",
         }
     }
 }
@@ -395,7 +410,7 @@ pub(crate) fn gpgpu_preview_status() -> GpgpuPreviewStatus {
 pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview-consumer carrier online owner={:?} placement=worker-ap2+ assigned_slot={} current_slot={} display_api=none activation=Shell2/on-demand buffering=double compute_release=completion-marker-before-publish interaction=movable-fixed-size\n",
+        "ui4 gpgpu-preview-consumer carrier online owner={:?} placement=worker-ap2+ assigned_slot={} current_slot={} display_api=none activation=Shell2/on-demand buffering=double compute_release=completion-marker-before-publish interaction=movable/maximize-resize-cpp\n",
         PREVIEW_OWNER,
         worker_slot,
         crate::percpu::current_slot(),
@@ -426,6 +441,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             }
             applied_serial = desired.serial;
             if desired.running {
+                crate::aud::audio_visualizer::set_enabled(
+                    desired.config.preset == GpgpuPreviewPreset::CppAudio,
+                );
                 mark_starting(desired);
                 match initialize_previews(desired) {
                     Ok(previews) => {
@@ -468,6 +486,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                         active = previews;
                     }
                     Err(reason) => {
+                        crate::aud::audio_visualizer::set_enabled(false);
                         mark_faulted(desired, reason);
                         crate::log_warn!(
                             target: "ui4";
@@ -478,6 +497,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     }
                 }
             } else {
+                crate::aud::audio_visualizer::set_enabled(false);
                 mark_idle(applied_serial, "stopped");
             }
         }
@@ -681,10 +701,14 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             opacity: u8::MAX,
             visible: true,
         },
-        // Compute previews keep their proven fixed-size double-buffer rings.
-        // UI4 may move them or center the unchanged pixels through its generic
-        // maximize/restore placement path, without asking compute to resize.
-        interaction: super::WindowInteraction::MOVABLE_FRAME,
+        // Every C++ demo consumes UI4's maximize/restore extent notification
+        // and replaces its double-buffer frame. Other probes retain their
+        // proven fixed-size placement behavior.
+        interaction: if desired.config.preset.is_cpp() {
+            super::WindowInteraction::APPLICATION
+        } else {
+            super::WindowInteraction::MOVABLE_FRAME
+        },
     }) {
         Ok(window) => window,
         Err(_) => {
@@ -981,7 +1005,8 @@ fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'static str>
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => match gpu_release {
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
         },
@@ -1313,6 +1338,25 @@ fn dispatch_preview_kernel(
                 error: "cpp-demo-dispatch-failed",
             }
         }
+        GpgpuPreviewPreset::CppAudio => {
+            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
+            let snapshot = crate::aud::audio_visualizer::snapshot();
+            let result = crate::intel::gpgpu::cpp_audio_visualizer_rgba8_surface_full(
+                surface,
+                seconds,
+                preview.metrics.attempted as u32,
+                &snapshot,
+            );
+            PreviewDispatchResult {
+                ok: result.ok,
+                submitted: result.submitted,
+                iterations: crate::aud::audio_visualizer::AUDIO_VISUALIZER_FFT_FRAMES as u32,
+                marker: result.marker,
+                submit_ms: result.submit_ms,
+                release: result.release,
+                error: "cpp-audio-visualizer-dispatch-failed",
+            }
+        }
     }
 }
 
@@ -1326,7 +1370,8 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => "pipe-control+post-marker-exact-surface",
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => "pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Lab256 => "three-pass+pipe-control+post-marker-exact-surface",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             "clflush-mfence-before-publish"
@@ -1346,7 +1391,8 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => "guc-cpp-demo-single",
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
     }
 }
 
@@ -1362,9 +1408,8 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => {
-            WindowPlane::Universal(preview_plane_slot(preset) as u8)
-        }
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => WindowPlane::Universal(preview_plane_slot(preset) as u8),
         GpgpuPreviewPreset::Lab256 => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
     }
 }
@@ -1380,7 +1425,8 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => "ui4-cpp-demo-slot1",
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => "ui4-cpp-resizable-slot1",
         GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => "ui4-overlay",
     }
 }
@@ -1508,6 +1554,12 @@ fn stop_active_previews(
     let Some(first) = previews.first() else {
         return;
     };
+    if previews
+        .iter()
+        .any(|preview| preview.config.preset == GpgpuPreviewPreset::CppAudio)
+    {
+        crate::aud::audio_visualizer::set_enabled(false);
+    }
     // One source per hardware slot can close through pipe-scaler geometry and
     // plane constant alpha beside fresh GGTT aliases for the same allocation.
     // No composition target is created; UI4 owns retirement through the final
@@ -1776,7 +1828,8 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi => None,
+        | GpgpuPreviewPreset::CppVoronoi
+        | GpgpuPreviewPreset::CppAudio => None,
     }
 }
 
@@ -1788,6 +1841,7 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
             | GpgpuPreviewPreset::CppJulia
             | GpgpuPreviewPreset::CppSdf
             | GpgpuPreviewPreset::CppVoronoi
+            | GpgpuPreviewPreset::CppAudio
     ) {
         return 1;
     }
@@ -1841,6 +1895,7 @@ mod tests {
             GpgpuPreviewPreset::CppJulia,
             GpgpuPreviewPreset::CppSdf,
             GpgpuPreviewPreset::CppVoronoi,
+            GpgpuPreviewPreset::CppAudio,
         ];
         for mode in modes {
             assert_eq!(preview_extent(mode), (PREVIEW_WIDTH, PREVIEW_HEIGHT));

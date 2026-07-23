@@ -1133,7 +1133,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             .saturating_sub(MOVE_PORTAL_STARTED_MS.load(Ordering::Acquire));
         let mut background = SpiritVfxAlphaBackground::MOVE_PORTAL;
         let ramp = move_portal_ramp(elapsed_ms);
-        background.scale = 0.25 + (background.scale - 0.25) * ramp;
+        background.scale = 0.5 + (background.scale * 2.0 - 0.5) * ramp;
         background.speed *= ramp;
         background.intensity = 0.5 + (background.intensity - 0.5) * ramp;
         background
