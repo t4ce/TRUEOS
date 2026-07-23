@@ -1069,6 +1069,7 @@ pub(crate) async fn gpu_completion_reaper_task() {
         let pending = UI4_COMPOSITOR_RUNTIME
             .lock()
             .pending
+            .front()
             .map(|pending| pending.submission);
         let Some(submission) = pending else {
             active = None;
@@ -1088,12 +1089,13 @@ pub(crate) async fn gpu_completion_reaper_task() {
         }
         // Completion belongs to the task which queued the exact request.  In
         // particular, consuming a video conversion here can let a following
-        // compositor job overwrite `last_completion` before the video task
-        // observes its release. Keep this task observer-only; every current
-        // submission class has a persistent owner which polls and retires it.
+        // compositor job retire before the video task observes its release.
+        // Keep this task observer-only; every current submission class has a
+        // persistent owner which polls and retires it.
         if UI4_COMPOSITOR_RUNTIME
             .lock()
             .pending
+            .front()
             .is_none_or(|pending| pending.submission != submission)
         {
             active = None;
