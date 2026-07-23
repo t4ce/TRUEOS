@@ -1,5 +1,6 @@
+extern crate alloc;
+
 use alloc::string::String;
-use core::fmt::Write;
 
 use embassy_executor::Spawner;
 
@@ -9,13 +10,11 @@ use crate::shell2::{
     print_shell_line, set_matrix_target_active,
 };
 
-fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "lumen: usage `lumen hello` or `lumen decode <token>`");
-}
+const MAX_PROMPT_BYTES: usize = 512;
+const MAX_REPLY_TOKENS: usize = 32;
 
-enum Command {
-    Hello,
-    Decode(u32),
+fn usage(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, "lum: usage `lum \"hello how are you\"`");
 }
 
 pub(crate) fn try_parse(
@@ -23,220 +22,235 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    let command = match (args.next(), args.next(), args.next()) {
-        (Some("hello"), None, None) => Command::Hello,
-        (Some("decode"), Some(token), None) => {
-            let Ok(token) = token.parse::<u32>() else {
-                usage(io);
-                return ParseOutcome::Handled;
-            };
-            if token >= trueos_fpga_abi::lfm25::MODEL_VOCABULARY_SIZE {
-                print_shell_line(io, "lumen: token outside the sealed 65536-row vocabulary");
-                return ParseOutcome::Handled;
-            }
-            Command::Decode(token)
-        }
-        (Some("help" | "-h" | "--help"), None, None) => {
-            usage(io);
+    let prompt = match parse_quoted_prompt(rest.trim()) {
+        Ok(prompt) if !prompt.trim().is_empty() => prompt,
+        Ok(_) => {
+            print_shell_line(io, "lum: prompt is empty");
             return ParseOutcome::Handled;
         }
-        _ => {
+        Err(error) => {
+            print_shell_line(io, alloc::format!("lum: {error}").as_str());
             usage(io);
             return ParseOutcome::Handled;
         }
     };
-
-    if !crate::tga::is_online() {
-        print_shell_line(io, "lumen: truega backend unavailable; admitted firmware is offline");
+    if prompt.len() > MAX_PROMPT_BYTES {
+        print_shell_line(io, "lum: prompt exceeds 512 UTF-8 bytes");
+        return ParseOutcome::Handled;
+    }
+    if !crate::r::fpga_offload::lfm25_row_stream_available() {
+        print_shell_line(
+            io,
+            "lum: FPGA FFN function unavailable; flash the admitted BAR2/MSI firmware",
+        );
         return ParseOutcome::Handled;
     }
 
     let target = matrix_target_for_backend(io);
     set_matrix_target_active(&target, true);
-    let spawned = match command {
-        Command::Hello => match lumen_hello_task(target.clone()) {
-            Ok(task) => {
-                spawner.spawn(task);
-                true
-            }
-            Err(_) => false,
-        },
-        Command::Decode(token) => {
-            let complete_firmware =
-                crate::r::fpga_offload::lfm25_decode_transport_available()
-                    && crate::r::fpga_offload::lfm25_feed_transport_available();
-            let hybrid_cpu = crate::r::fpga_offload::lfm25_row_stream_available();
-            if !complete_firmware && !hybrid_cpu {
-                set_matrix_target_active(&target, false);
-                print_shell_line(
-                    io,
-                    "lumen: decode unavailable; neither TGD1+TGF2 nor the BAR2/MSI FFN fallback is admitted",
-                );
-                return ParseOutcome::Handled;
-            }
-            match lumen_decode_task(target.clone(), token) {
-                Ok(task) => {
-                    spawner.spawn(task);
-                    true
-                }
-                Err(_) => false,
-            }
+    match lum_task(target.clone(), prompt) {
+        Ok(task) => spawner.spawn(task),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "lum: async conversation task unavailable");
         }
-    };
-    if !spawned {
-        set_matrix_target_active(&target, false);
-        print_shell_line(io, "lumen: async module task unavailable");
     }
     ParseOutcome::Handled
 }
 
 #[embassy_executor::task]
-async fn lumen_decode_task(target: MatrixTarget, token: u32) {
-    let complete_firmware =
-        crate::r::fpga_offload::lfm25_decode_transport_available()
-            && crate::r::fpga_offload::lfm25_feed_transport_available();
-    let backend_name = if complete_firmware {
-        "truega"
-    } else {
-        "hybrid-cpu+truega-ffn"
-    };
-    print_matrix_target_line(
-        &target,
-        alloc::format!(
-            "lumen: decode=start token={} position=0 plan_ops={} backend={} model=sealed-native-image",
-            token,
-            trueos_fpga_abi::lfm25_decode::OPS_PER_TOKEN,
-            backend_name,
-        )
-        .as_str(),
-    );
-    let start_tick = embassy_time_driver::now();
-    let before = crate::r::fpga_offload::stats();
-    let result = if complete_firmware {
-        match crate::lumen::decode::open_truega().await {
-            Ok(module) => ::lumen::async_module::forward(
-                &module,
-                crate::lumen::decode::Lfm25DecodeInput::new(token),
-            )
-            .await
-            .map_err(|error| alloc::format!("{error:?}")),
-            Err(error) => Err(alloc::format!("model-open={error:?}")),
-        }
-    } else {
-        match crate::lumen::decode::open_hybrid_cpu().await {
-            Ok(module) => ::lumen::async_module::forward(
-                &module,
-                crate::lumen::decode::Lfm25DecodeInput::new(token),
-            )
-            .await
-            .map_err(|error| alloc::format!("{error:?}")),
-            Err(error) => Err(alloc::format!("model-open={error:?}")),
-        }
-    };
-    let after = crate::r::fpga_offload::stats();
-
-    match result {
-        Ok(output) => {
-            print_matrix_target_line(
-                &target,
-                alloc::format!(
-                    "lumen: decode=pass input_token={} output_token={} score_q30={} position={} callbacks={} irq_delta={} timeout_recovery_delta={} elapsed_ms={}",
-                    token,
-                    output.token,
-                    output.score_q30,
-                    output.input_position,
-                    output.callback_sequence,
-                    after.interrupts.saturating_sub(before.interrupts),
-                    after
-                        .timeout_recoveries
-                        .saturating_sub(before.timeout_recoveries),
-                    elapsed_ms_since(start_tick),
-                )
-                .as_str(),
-            );
-            print_matrix_target_line(
-                &target,
-                if complete_firmware {
-                    "lumen: decode path=async-module->fixed-99-op-plan->sealed-range-feed->bar2->msi-worker-callback"
-                } else {
-                    "lumen: decode path=async-module->fixed-99-op-plan->cpu-mixers+truega-ffn->msi-worker-callback"
-                },
-            );
-        }
-        Err(error) => print_matrix_target_line(
-            &target,
-            alloc::format!("lumen: decode=fail error={error}").as_str(),
-        ),
-    }
-    set_matrix_target_active(&target, false);
-}
-
-#[embassy_executor::task]
-async fn lumen_hello_task(target: MatrixTarget) {
-    use crate::r::lfm25_ffn;
-
-    print_matrix_target_line(
-        &target,
-        alloc::format!(
-            "lumen: hello=start module=lfm25.layer0.ffn input=sealed-vector0 backend=truega expected_calls={}",
-            lfm25_ffn::expected_fpga_calls(),
-        )
-        .as_str(),
-    );
-    let start_tick = embassy_time_driver::now();
-
-    match crate::lumen::hello().await {
-        Ok(output) => {
-            let tensor = output.tensor();
-            let report = output.report();
-            let values = tensor.as_slice();
-            let first = values.first().copied().unwrap_or_default();
-            let last = values.last().copied().unwrap_or_default();
-            print_matrix_target_line(
-                &target,
-                alloc::format!(
-                    "lumen: hello=pass module=lfm25.layer0.ffn output_shape=[{}] q30_first={} q30_last={} elapsed_ms={}",
-                    tensor.shape()[0],
-                    first,
-                    last,
-                    elapsed_ms_since(start_tick),
-                )
-                .as_str(),
-            );
-            print_matrix_target_line(
-                &target,
-                alloc::format!(
-                    "lumen: hello output_q30_sha256={} calls={} irq_delta={} timeout_recovery_delta={}",
-                    digest_hex(&report.output_sha256),
-                    report.fpga_calls,
-                    report.interrupt_delta,
-                    report.timeout_recovery_delta,
-                )
-                .as_str(),
-            );
-            print_matrix_target_line(
-                &target,
-                "lumen: hello path=async-module->generated-aot-op->truega-backend->bar2-row-stream completion=msi",
-            );
-        }
+async fn lum_task(target: MatrixTarget, prompt: String) {
+    print_matrix_target_line(&target, "lum: loading sealed tokenizer and LFM2.5 CPU+FPGA session");
+    let started = embassy_time_driver::now();
+    let tokenizer = match crate::r::lfm25_tokenizer::load().await {
+        Ok(tokenizer) => tokenizer,
         Err(error) => {
             print_matrix_target_line(
                 &target,
-                alloc::format!("lumen: hello=fail error={error:?}").as_str(),
+                alloc::format!("lum: failed tokenizer={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let prompt_tokens = match tokenizer.encode_user_turn(&prompt) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed tokenization={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    if prompt_tokens.len().saturating_add(MAX_REPLY_TOKENS)
+        >= trueos_fpga_abi::lfm25::MODEL_INITIAL_CONTEXT as usize
+    {
+        print_matrix_target_line(&target, "lum: failed prompt exceeds model context");
+        set_matrix_target_active(&target, false);
+        return;
+    }
+
+    let module = match crate::lumen::decode::open_hybrid_cpu().await {
+        Ok(module) => module,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed model-open={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "lum: running prompt_tokens={} backend=cpu+truega-ffn completion=msi",
+            prompt_tokens.len(),
+        )
+        .as_str(),
+    );
+
+    let before = crate::r::fpga_offload::stats();
+    let mut next_token = None;
+    let mut last_callback = 0u64;
+    for (index, &token) in prompt_tokens.iter().enumerate() {
+        match ::lumen::async_module::forward(
+            &module,
+            crate::lumen::decode::Lfm25DecodeInput::new(token),
+        )
+        .await
+        {
+            Ok(output) => {
+                next_token = Some(output.token);
+                last_callback = output.callback_sequence;
+            }
+            Err(error) => {
+                print_matrix_target_line(
+                    &target,
+                    alloc::format!(
+                        "lum: failed stage=prefill token={}/{} error={error:?}",
+                        index + 1,
+                        prompt_tokens.len(),
+                    )
+                    .as_str(),
+                );
+                set_matrix_target_active(&target, false);
+                return;
+            }
+        }
+        if (index + 1) % 4 == 0 || index + 1 == prompt_tokens.len() {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: prefill={}/{}", index + 1, prompt_tokens.len()).as_str(),
             );
         }
     }
 
+    let mut generated = alloc::vec::Vec::new();
+    let mut stopped = false;
+    for index in 0..MAX_REPLY_TOKENS {
+        let Some(token) = next_token else {
+            break;
+        };
+        if tokenizer.is_stop(token) {
+            stopped = true;
+            break;
+        }
+        generated.push(token);
+        if index + 1 == MAX_REPLY_TOKENS {
+            break;
+        }
+        match ::lumen::async_module::forward(
+            &module,
+            crate::lumen::decode::Lfm25DecodeInput::new(token),
+        )
+        .await
+        {
+            Ok(output) => {
+                next_token = Some(output.token);
+                last_callback = output.callback_sequence;
+            }
+            Err(error) => {
+                print_matrix_target_line(
+                    &target,
+                    alloc::format!("lum: failed stage=reply token={} error={error:?}", index + 1,)
+                        .as_str(),
+                );
+                set_matrix_target_active(&target, false);
+                return;
+            }
+        }
+    }
+
+    let reply_bytes = match tokenizer.decode(&generated, true) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            print_matrix_target_line(
+                &target,
+                alloc::format!("lum: failed detokenization={error:?}").as_str(),
+            );
+            set_matrix_target_active(&target, false);
+            return;
+        }
+    };
+    let reply = String::from_utf8_lossy(&reply_bytes);
+    let after = crate::r::fpga_offload::stats();
+    print_matrix_target_line(&target, alloc::format!("lum: {reply}").as_str());
+    print_matrix_target_line(
+        &target,
+        alloc::format!(
+            "lum: done prompt_tokens={} reply_tokens={} stop={} callbacks={} irq_delta={} timeout_recovery_delta={} elapsed_ms={}",
+            prompt_tokens.len(),
+            generated.len(),
+            if stopped { "eot" } else { "limit" },
+            last_callback,
+            after.interrupts.saturating_sub(before.interrupts),
+            after
+                .timeout_recoveries
+                .saturating_sub(before.timeout_recoveries),
+            elapsed_ms_since(started),
+        )
+        .as_str(),
+    );
+    print_matrix_target_line(
+        &target,
+        "lum: path=quoted-prompt->sealed-bpe->lumen-async-session->cpu-stages+truega-ffn->msi",
+    );
     set_matrix_target_active(&target, false);
 }
 
-fn digest_hex(digest: &[u8; 32]) -> String {
-    let mut encoded = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(&mut encoded, "{byte:02x}");
+fn parse_quoted_prompt(input: &str) -> Result<String, &'static str> {
+    let quoted = input
+        .strip_prefix('"')
+        .ok_or("prompt must begin with a quote")?;
+    let mut prompt = String::new();
+    let mut escaped = false;
+    for (offset, ch) in quoted.char_indices() {
+        if escaped {
+            match ch {
+                '"' | '\\' => prompt.push(ch),
+                'n' => prompt.push('\n'),
+                'r' => prompt.push('\r'),
+                't' => prompt.push('\t'),
+                _ => return Err("unsupported quoted escape"),
+            }
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '"' => {
+                if !quoted[offset + ch.len_utf8()..].trim().is_empty() {
+                    return Err("unexpected text after closing quote");
+                }
+                return Ok(prompt);
+            }
+            _ => prompt.push(ch),
+        }
     }
-    encoded
+    Err("missing closing quote")
 }
 
 fn elapsed_ms_since(start_tick: u64) -> u64 {
@@ -244,4 +258,20 @@ fn elapsed_ms_since(start_tick: u64) -> u64 {
         .saturating_sub(start_tick)
         .saturating_mul(1_000)
         / embassy_time_driver::TICK_HZ
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_quoted_prompt;
+
+    #[test]
+    fn accepts_one_quoted_sentence() {
+        assert_eq!(parse_quoted_prompt("\"hello how are you\"").unwrap(), "hello how are you");
+    }
+
+    #[test]
+    fn rejects_unquoted_or_trailing_arguments() {
+        assert!(parse_quoted_prompt("hello").is_err());
+        assert!(parse_quoted_prompt("\"hello\" again").is_err());
+    }
 }

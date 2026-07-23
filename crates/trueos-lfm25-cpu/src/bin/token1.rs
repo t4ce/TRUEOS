@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use trueos_fpga_abi::lfm25::{
-    self, LayerKind, NativeTensorDescriptor, TensorRole,
-};
+use trueos_fpga_abi::lfm25::{self, LayerKind, NativeTensorDescriptor, TensorRole};
 use trueos_fpga_abi::lfm25_decode::{self, LayerStateSlot};
 use trueos_lfm25_cpu as cpu;
 
@@ -16,20 +14,17 @@ const FFN: usize = lfm25::MODEL_FEED_FORWARD_SIZE as usize;
 fn main() -> Result<(), String> {
     let mut arguments = std::env::args();
     let program = arguments.next().unwrap_or_else(|| "token1".into());
-    let native_path = arguments.next().ok_or_else(|| {
-        format!("usage: {program} NATIVE.truega.bin TOKEN1.golden.bin")
-    })?;
-    let golden_path = arguments.next().ok_or_else(|| {
-        format!("usage: {program} NATIVE.truega.bin TOKEN1.golden.bin")
-    })?;
+    let native_path = arguments
+        .next()
+        .ok_or_else(|| format!("usage: {program} NATIVE.truega.bin TOKEN1.golden.bin"))?;
+    let golden_path = arguments
+        .next()
+        .ok_or_else(|| format!("usage: {program} NATIVE.truega.bin TOKEN1.golden.bin"))?;
     if arguments.next().is_some() {
-        return Err(format!(
-            "usage: {program} NATIVE.truega.bin TOKEN1.golden.bin"
-        ));
+        return Err(format!("usage: {program} NATIVE.truega.bin TOKEN1.golden.bin"));
     }
 
-    let native = fs::read(&native_path)
-        .map_err(|error| format!("read {native_path}: {error}"))?;
+    let native = fs::read(&native_path).map_err(|error| format!("read {native_path}: {error}"))?;
     if native.len() != lfm25::PINNED_NATIVE_IMAGE_BYTES as usize {
         return Err(format!(
             "native image bytes={} expected={}",
@@ -64,10 +59,8 @@ fn main() -> Result<(), String> {
 
     for layer in 0..lfm25::MODEL_LAYER_COUNT as u8 {
         let operator_residual = hidden.clone();
-        let operator_weights = bf16_tensor(
-            &native,
-            descriptor(Some(layer), TensorRole::OperatorNorm)?,
-        )?;
+        let operator_weights =
+            bf16_tensor(&native, descriptor(Some(layer), TensorRole::OperatorNorm)?)?;
         let normalized = cpu::rms_norm(&hidden, &operator_weights).map_err(kernel)?;
         compare(&golden, checkpoint, &normalized)?;
         checkpoint += 1;
@@ -90,8 +83,7 @@ fn main() -> Result<(), String> {
         checkpoint += 1;
 
         let ffn_residual = hidden.clone();
-        let ffn_weights =
-            bf16_tensor(&native, descriptor(Some(layer), TensorRole::FfnNorm)?)?;
+        let ffn_weights = bf16_tensor(&native, descriptor(Some(layer), TensorRole::FfnNorm)?)?;
         let ffn_input = cpu::rms_norm(&hidden, &ffn_weights).map_err(kernel)?;
         compare(&golden, checkpoint, &ffn_input)?;
         checkpoint += 1;
@@ -116,8 +108,7 @@ fn main() -> Result<(), String> {
         checkpoint += 1;
     }
 
-    let final_weights =
-        bf16_tensor(&native, descriptor(None, TensorRole::TokenEmbeddingNorm)?)?;
+    let final_weights = bf16_tensor(&native, descriptor(None, TensorRole::TokenEmbeddingNorm)?)?;
     let normalized = cpu::rms_norm(&hidden, &final_weights).map_err(kernel)?;
     compare(&golden, checkpoint, &normalized)?;
     checkpoint += 1;
@@ -136,7 +127,13 @@ fn main() -> Result<(), String> {
         .iter()
         .copied()
         .enumerate()
-        .reduce(|best, candidate| if candidate.1 > best.1 { candidate } else { best })
+        .reduce(|best, candidate| {
+            if candidate.1 > best.1 {
+                candidate
+            } else {
+                best
+            }
+        })
         .ok_or_else(|| "empty logits".to_string())?;
     println!(
         "PASS cpu token1 checkpoints={} output_token={} expected_token={} score={:.9}",
@@ -154,18 +151,11 @@ fn shortconv_layer(
     input: &[f32],
     state: &mut [[f32; 2]],
 ) -> Result<Vec<f32>, String> {
-    let projected = project(
-        native,
-        descriptor(Some(layer), TensorRole::ShortConvInput)?,
-        input,
-    )?;
+    let projected = project(native, descriptor(Some(layer), TensorRole::ShortConvInput)?, input)?;
     if projected.len() != 3 * HIDDEN || state.len() != HIDDEN {
         return Err(format!("layer {layer} shortconv input shape"));
     }
-    let kernel = bf16_tensor(
-        native,
-        descriptor(Some(layer), TensorRole::ShortConvKernel)?,
-    )?;
+    let kernel = bf16_tensor(native, descriptor(Some(layer), TensorRole::ShortConvKernel)?)?;
     if kernel.len() != 3 * HIDDEN {
         return Err(format!("layer {layer} shortconv kernel shape"));
     }
@@ -190,18 +180,10 @@ fn shortconv_layer(
         state[channel] = [oldest, newest];
         mixed.push(output);
     }
-    project(
-        native,
-        descriptor(Some(layer), TensorRole::ShortConvOutput)?,
-        &mixed,
-    )
+    project(native, descriptor(Some(layer), TensorRole::ShortConvOutput)?, &mixed)
 }
 
-fn attention_position_zero(
-    native: &[u8],
-    layer: u8,
-    input: &[f32],
-) -> Result<Vec<f32>, String> {
+fn attention_position_zero(native: &[u8], layer: u8, input: &[f32]) -> Result<Vec<f32>, String> {
     let mut query = project(native, descriptor(Some(layer), TensorRole::Query)?, input)?;
     let mut key = project(native, descriptor(Some(layer), TensorRole::Key)?, input)?;
     let value = project(native, descriptor(Some(layer), TensorRole::Value)?, input)?;
@@ -211,8 +193,7 @@ fn attention_position_zero(
     {
         return Err(format!("layer {layer} attention projection shape"));
     }
-    let query_norm =
-        bf16_tensor(native, descriptor(Some(layer), TensorRole::QueryNorm)?)?;
+    let query_norm = bf16_tensor(native, descriptor(Some(layer), TensorRole::QueryNorm)?)?;
     let key_norm = bf16_tensor(native, descriptor(Some(layer), TensorRole::KeyNorm)?)?;
     for head in query.chunks_exact_mut(HEAD_DIM) {
         cpu::rms_norm_head_in_place(head, &query_norm).map_err(kernel)?;
@@ -230,11 +211,7 @@ fn attention_position_zero(
         let kv_head = query_head * KV_HEADS / HEADS;
         context.extend_from_slice(&value[kv_head * HEAD_DIM..(kv_head + 1) * HEAD_DIM]);
     }
-    project(
-        native,
-        descriptor(Some(layer), TensorRole::AttentionOutput)?,
-        &context,
-    )
+    project(native, descriptor(Some(layer), TensorRole::AttentionOutput)?, &context)
 }
 
 fn project(
@@ -259,10 +236,7 @@ fn project(
     .map_err(kernel)
 }
 
-fn bf16_tensor(
-    native: &[u8],
-    descriptor: NativeTensorDescriptor,
-) -> Result<Vec<f32>, String> {
+fn bf16_tensor(native: &[u8], descriptor: NativeTensorDescriptor) -> Result<Vec<f32>, String> {
     cpu::decode_bf16_vector(tensor(native, descriptor)?).map_err(kernel)
 }
 
@@ -275,10 +249,7 @@ fn descriptor(layer: Option<u8>, role: TensorRole) -> Result<NativeTensorDescrip
         .ok_or_else(|| format!("missing tensor layer={layer} role={role:?}"))
 }
 
-fn tensor(
-    native: &[u8],
-    descriptor: NativeTensorDescriptor,
-) -> Result<&[u8], String> {
+fn tensor(native: &[u8], descriptor: NativeTensorDescriptor) -> Result<&[u8], String> {
     let start = descriptor.native_offset as usize;
     let end = start
         .checked_add(descriptor.native_bytes as usize)
@@ -337,11 +308,7 @@ fn read_golden(path: &Path) -> Result<Vec<GoldenCheckpoint>, String> {
     Ok(checkpoints)
 }
 
-fn compare(
-    golden: &[GoldenCheckpoint],
-    index: usize,
-    actual: &[f32],
-) -> Result<(), String> {
+fn compare(golden: &[GoldenCheckpoint], index: usize, actual: &[f32]) -> Result<(), String> {
     let expected = golden
         .get(index)
         .ok_or_else(|| format!("missing golden checkpoint {index}"))?;
@@ -362,10 +329,7 @@ fn compare(
         squared += f64::from(error) * f64::from(error);
     }
     let rmse = libm::sqrt(squared / actual.len() as f64);
-    println!(
-        "checkpoint={index:02} name={} max_abs={maximum:.9e} rmse={rmse:.9e}",
-        expected.name
-    );
+    println!("checkpoint={index:02} name={} max_abs={maximum:.9e} rmse={rmse:.9e}", expected.name);
     Ok(())
 }
 

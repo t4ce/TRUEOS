@@ -205,8 +205,7 @@ pub fn sealed_layer0_activation() -> Result<Vec<Q8_0Block>, Error> {
     quantize_golden_vector(0)
 }
 
-/// Keep `lumen hello` an exact sealed-vector proof while it exercises the
-/// production runtime-input path.
+/// Verify the exact sealed vector through the production runtime-input path.
 pub fn verify_sealed_layer0_forward(report: &ForwardReport) -> Result<(), Error> {
     if report.layer != 0 {
         return Err(Error::Layer);

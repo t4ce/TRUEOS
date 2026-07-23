@@ -12,3 +12,7 @@ trueos-fpga-abi = { path = "../trueos-fpga-abi" }
 [[bin]]
 name = "lfm25-cpu-token1"
 path = "src/bin/token1.rs"
+
+[[bin]]
+name = "lfm25-tokenizer-seal"
+path = "src/bin/tokenizer_seal.rs"

@@ -176,7 +176,7 @@ impl<const ELEMENTS: usize> Q8_0<ELEMENTS> {
 }
 
 impl Q8_0<{ lfm25_ffn::FFN_INPUT_ELEMENTS }> {
-    /// Produce the sealed vector used by `lumen hello` and the layer-0 proof.
+    /// Produce the sealed vector used by the internal layer-0 proof.
     /// The returned value is an ordinary runtime tensor, not a special token.
     pub(crate) fn sealed_vector0() -> Result<Self, lfm25_ffn::Error> {
         Self::from_blocks(lfm25_ffn::sealed_layer0_activation()?)

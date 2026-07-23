@@ -7,6 +7,8 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+use alloc::vec;
 use alloc::vec::Vec;
 use half::{bf16, f16};
 
@@ -21,8 +23,401 @@ pub const HALF_HEAD_DIMENSION: usize = HEAD_DIMENSION / 2;
 pub enum Error {
     Shape,
     Encoding,
+    Artifact,
+    Vocabulary,
     Allocation,
     NonFinite,
+}
+
+const TOKENIZER_MAGIC: [u8; 8] = *b"LFTOK1\0\0";
+const TOKENIZER_VERSION: u32 = 1;
+const TOKENIZER_HEADER_BYTES: usize = 72;
+
+/// Compact no_std view of the exact LFM2.5 GPT-2/Llama-3 BPE vocabulary.
+///
+/// The companion host binary extracts this from the pinned GGUF. TRUEOS loads
+/// the resulting artifact beside the native tensor image, so tokenization
+/// remains ordinary CPU code and never becomes FPGA or kernel compiler state.
+pub struct Lfm25Tokenizer {
+    pieces: Vec<Vec<u8>>,
+    token_types: Vec<u8>,
+    token_to_id: BTreeMap<Vec<u8>, u32>,
+    merges: BTreeMap<(u32, u32), (u32, u32)>,
+    byte_tokens: [u32; 256],
+    bos: u32,
+    eos: u32,
+    pad: u32,
+    im_start: u32,
+    im_end: u32,
+}
+
+impl Lfm25Tokenizer {
+    pub fn from_artifact(artifact: &[u8]) -> Result<Self, Error> {
+        if artifact.len() < TOKENIZER_HEADER_BYTES || artifact[..8] != TOKENIZER_MAGIC {
+            return Err(Error::Artifact);
+        }
+        let version = artifact_u32(artifact, 8)?;
+        let vocabulary = artifact_u32(artifact, 12)? as usize;
+        let merge_count = artifact_u32(artifact, 16)? as usize;
+        let bos = artifact_u32(artifact, 20)?;
+        let eos = artifact_u32(artifact, 24)?;
+        let pad = artifact_u32(artifact, 28)?;
+        let im_start = artifact_u32(artifact, 32)?;
+        let im_end = artifact_u32(artifact, 36)?;
+        if version != TOKENIZER_VERSION
+            || vocabulary != trueos_fpga_abi::lfm25::MODEL_VOCABULARY_SIZE as usize
+            || artifact[40..72] != trueos_fpga_abi::lfm25::PINNED_GGUF_SHA256
+        {
+            return Err(Error::Artifact);
+        }
+
+        let mut pieces = Vec::new();
+        let mut token_types = Vec::new();
+        let mut token_to_id = BTreeMap::new();
+        pieces
+            .try_reserve_exact(vocabulary)
+            .map_err(|_| Error::Allocation)?;
+        token_types
+            .try_reserve_exact(vocabulary)
+            .map_err(|_| Error::Allocation)?;
+        let mut cursor = TOKENIZER_HEADER_BYTES;
+        for token in 0..vocabulary {
+            let token_type = *artifact.get(cursor).ok_or(Error::Artifact)?;
+            cursor = cursor.checked_add(1).ok_or(Error::Artifact)?;
+            let bytes = artifact_u32(artifact, cursor)? as usize;
+            cursor = cursor.checked_add(4).ok_or(Error::Artifact)?;
+            let end = cursor.checked_add(bytes).ok_or(Error::Artifact)?;
+            let piece = artifact.get(cursor..end).ok_or(Error::Artifact)?.to_vec();
+            cursor = end;
+            let token = u32::try_from(token).map_err(|_| Error::Artifact)?;
+            if token_to_id.insert(piece.clone(), token).is_some() {
+                return Err(Error::Vocabulary);
+            }
+            pieces.push(piece);
+            token_types.push(token_type);
+        }
+
+        let mut merges = BTreeMap::new();
+        for rank in 0..merge_count {
+            let left = artifact_u32(artifact, cursor)?;
+            let right = artifact_u32(artifact, cursor + 4)?;
+            let merged = artifact_u32(artifact, cursor + 8)?;
+            cursor = cursor.checked_add(12).ok_or(Error::Artifact)?;
+            if left as usize >= vocabulary
+                || right as usize >= vocabulary
+                || merged as usize >= vocabulary
+                || merges
+                    .insert(
+                        (left, right),
+                        (u32::try_from(rank).map_err(|_| Error::Artifact)?, merged),
+                    )
+                    .is_some()
+            {
+                return Err(Error::Vocabulary);
+            }
+        }
+        if cursor != artifact.len()
+            || [bos, eos, pad, im_start, im_end]
+                .iter()
+                .any(|&token| token as usize >= vocabulary)
+        {
+            return Err(Error::Artifact);
+        }
+
+        let mut byte_tokens = [u32::MAX; 256];
+        for byte in 0u16..=255 {
+            if let Some(&token) = token_to_id.get(&vec![byte as u8]) {
+                byte_tokens[byte as usize] = token;
+            }
+        }
+        if byte_tokens.iter().any(|&token| token == u32::MAX) {
+            return Err(Error::Vocabulary);
+        }
+
+        Ok(Self {
+            pieces,
+            token_types,
+            token_to_id,
+            merges,
+            byte_tokens,
+            bos,
+            eos,
+            pad,
+            im_start,
+            im_end,
+        })
+    }
+
+    pub const fn bos_id(&self) -> u32 {
+        self.bos
+    }
+
+    pub const fn eos_id(&self) -> u32 {
+        self.eos
+    }
+
+    pub const fn pad_id(&self) -> u32 {
+        self.pad
+    }
+
+    pub const fn im_start_id(&self) -> u32 {
+        self.im_start
+    }
+
+    pub const fn im_end_id(&self) -> u32 {
+        self.im_end
+    }
+
+    pub fn is_stop(&self, token: u32) -> bool {
+        token == self.eos || token == self.im_end || token == self.im_start
+    }
+
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>, Error> {
+        let mut output = Vec::new();
+        for piece in llama3_pieces(text) {
+            self.encode_piece(piece.as_bytes(), &mut output)?;
+        }
+        Ok(output)
+    }
+
+    /// Exact single-user Liquid chat envelope used by the pinned GGUF.
+    pub fn encode_user_turn(&self, prompt: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = Vec::new();
+        tokens
+            .try_reserve_exact(prompt.len().saturating_add(10))
+            .map_err(|_| Error::Allocation)?;
+        tokens.push(self.bos);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("user\n")?);
+        tokens.extend(self.encode(prompt)?);
+        tokens.push(self.im_end);
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode("assistant\n")?);
+        Ok(tokens)
+    }
+
+    pub fn decode(&self, tokens: &[u32], skip_special: bool) -> Result<Vec<u8>, Error> {
+        let mut output = Vec::new();
+        for &token in tokens {
+            let index = token as usize;
+            let piece = self.pieces.get(index).ok_or(Error::Vocabulary)?;
+            let token_type = *self.token_types.get(index).ok_or(Error::Vocabulary)?;
+            if skip_special && matches!(token_type, 3 | 4 | 5) {
+                continue;
+            }
+            output
+                .try_reserve(piece.len())
+                .map_err(|_| Error::Allocation)?;
+            output.extend_from_slice(piece);
+        }
+        clean_tokenizer_spaces(&mut output);
+        Ok(output)
+    }
+
+    fn encode_piece(&self, piece: &[u8], output: &mut Vec<u32>) -> Result<(), Error> {
+        if piece.is_empty() {
+            return Ok(());
+        }
+        // LFM2's `ignore_merges` policy emits a complete regex piece directly
+        // when the vocabulary owns it.
+        if let Some(&token) = self.token_to_id.get(piece) {
+            output.push(token);
+            return Ok(());
+        }
+
+        let mut symbols = Vec::new();
+        symbols
+            .try_reserve_exact(piece.len())
+            .map_err(|_| Error::Allocation)?;
+        for &byte in piece {
+            symbols.push(self.byte_tokens[byte as usize]);
+        }
+        while symbols.len() > 1 {
+            let mut best: Option<(u32, usize, u32)> = None;
+            for index in 0..symbols.len() - 1 {
+                let Some(&(rank, merged)) = self.merges.get(&(symbols[index], symbols[index + 1]))
+                else {
+                    continue;
+                };
+                if best.is_none_or(|(best_rank, best_index, _)| {
+                    rank < best_rank || (rank == best_rank && index < best_index)
+                }) {
+                    best = Some((rank, index, merged));
+                }
+            }
+            let Some((_, index, merged)) = best else {
+                break;
+            };
+            symbols[index] = merged;
+            symbols.remove(index + 1);
+        }
+        output
+            .try_reserve(symbols.len())
+            .map_err(|_| Error::Allocation)?;
+        output.extend(symbols);
+        Ok(())
+    }
+}
+
+fn artifact_u32(bytes: &[u8], offset: usize) -> Result<u32, Error> {
+    let end = offset.checked_add(4).ok_or(Error::Artifact)?;
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(offset..end)
+            .ok_or(Error::Artifact)?
+            .try_into()
+            .map_err(|_| Error::Artifact)?,
+    ))
+}
+
+fn is_letter(ch: char) -> bool {
+    ch.is_alphabetic()
+}
+
+fn is_number(ch: char) -> bool {
+    ch.is_numeric()
+}
+
+fn is_symbol(ch: char) -> bool {
+    !ch.is_whitespace() && !is_letter(ch) && !is_number(ch)
+}
+
+fn next_char(text: &str, offset: usize) -> Option<(char, usize)> {
+    let ch = text.get(offset..)?.chars().next()?;
+    Some((ch, offset + ch.len_utf8()))
+}
+
+fn contraction_bytes(text: &str, offset: usize) -> Option<usize> {
+    let tail = text.get(offset..)?;
+    ["'re", "'ve", "'ll", "'s", "'t", "'m", "'d"]
+        .iter()
+        .find_map(|suffix| {
+            let candidate = tail.get(..suffix.len())?;
+            candidate
+                .eq_ignore_ascii_case(suffix)
+                .then_some(offset + suffix.len())
+        })
+}
+
+/// Deterministic scanner equivalent to LFM2's single Llama-3 pre-tokenizer
+/// expression. Returned slices preserve the original UTF-8 bytes.
+fn llama3_pieces(text: &str) -> Vec<&str> {
+    let mut output = Vec::new();
+    let mut offset = 0usize;
+    while offset < text.len() {
+        if let Some(end) = contraction_bytes(text, offset) {
+            output.push(&text[offset..end]);
+            offset = end;
+            continue;
+        }
+        let Some((first, first_end)) = next_char(text, offset) else {
+            break;
+        };
+
+        let letter_start = if is_letter(first) {
+            Some(first_end)
+        } else if first != '\r' && first != '\n' && !is_number(first) {
+            next_char(text, first_end)
+                .filter(|(next, _)| is_letter(*next))
+                .map(|(_, end)| end)
+        } else {
+            None
+        };
+        if let Some(mut end) = letter_start {
+            while let Some((next, next_end)) = next_char(text, end) {
+                if !is_letter(next) {
+                    break;
+                }
+                end = next_end;
+            }
+            output.push(&text[offset..end]);
+            offset = end;
+            continue;
+        }
+
+        if is_number(first) {
+            let mut end = first_end;
+            let mut count = 1usize;
+            while count < 3 {
+                let Some((next, next_end)) = next_char(text, end) else {
+                    break;
+                };
+                if !is_number(next) {
+                    break;
+                }
+                end = next_end;
+                count += 1;
+            }
+            output.push(&text[offset..end]);
+            offset = end;
+            continue;
+        }
+
+        let symbol_start = if first == ' ' {
+            next_char(text, first_end)
+                .filter(|(next, _)| is_symbol(*next))
+                .map(|(_, end)| end)
+        } else if is_symbol(first) {
+            Some(first_end)
+        } else {
+            None
+        };
+        if let Some(mut end) = symbol_start {
+            while let Some((next, next_end)) = next_char(text, end) {
+                if !is_symbol(next) {
+                    break;
+                }
+                end = next_end;
+            }
+            while let Some((next, next_end)) = next_char(text, end) {
+                if next != '\r' && next != '\n' {
+                    break;
+                }
+                end = next_end;
+            }
+            output.push(&text[offset..end]);
+            offset = end;
+            continue;
+        }
+
+        if first.is_whitespace() {
+            let mut end = first_end;
+            let mut contains_newline = first == '\r' || first == '\n';
+            while let Some((next, next_end)) = next_char(text, end) {
+                if !next.is_whitespace() {
+                    break;
+                }
+                contains_newline |= next == '\r' || next == '\n';
+                end = next_end;
+            }
+            if contains_newline || end == text.len() {
+                output.push(&text[offset..end]);
+                offset = end;
+                continue;
+            }
+            output.push(&text[offset..end]);
+            offset = end;
+            continue;
+        }
+
+        output.push(&text[offset..first_end]);
+        offset = first_end;
+    }
+    output
+}
+
+fn clean_tokenizer_spaces(bytes: &mut Vec<u8>) {
+    let mut write = 0usize;
+    for read in 0..bytes.len() {
+        let byte = bytes[read];
+        if write > 0 && bytes[write - 1] == b' ' && matches!(byte, b'?' | b'!' | b'.' | b',') {
+            write -= 1;
+        }
+        bytes[write] = byte;
+        write += 1;
+    }
+    bytes.truncate(write);
 }
 
 #[inline]
@@ -101,17 +496,18 @@ pub fn q8_row_dot(row: &[u8], input: &[f32]) -> Result<f32, Error> {
     }
 }
 
-pub fn q8_row_dot_q8(
-    row: &[u8],
-    input: &[[u8; Q8_BLOCK_BYTES]],
-) -> Result<f32, Error> {
-    if row.len() != input.len().checked_mul(Q8_BLOCK_BYTES).ok_or(Error::Shape)? {
+pub fn q8_row_dot_q8(row: &[u8], input: &[[u8; Q8_BLOCK_BYTES]]) -> Result<f32, Error> {
+    if row.len()
+        != input
+            .len()
+            .checked_mul(Q8_BLOCK_BYTES)
+            .ok_or(Error::Shape)?
+    {
         return Err(Error::Shape);
     }
     let mut sum = 0.0f32;
     for (weight, activation) in row.chunks_exact(Q8_BLOCK_BYTES).zip(input) {
-        let weight_scale =
-            f16::from_bits(u16::from_le_bytes([weight[0], weight[1]])).to_f32();
+        let weight_scale = f16::from_bits(u16::from_le_bytes([weight[0], weight[1]])).to_f32();
         let activation_scale =
             f16::from_bits(u16::from_le_bytes([activation[0], activation[1]])).to_f32();
         if !weight_scale.is_finite() || !activation_scale.is_finite() {
@@ -235,8 +631,7 @@ pub fn rms_norm_head_in_place(head: &mut [f32], weights: &[f32]) -> Result<(), E
     for value in head.iter() {
         sum_squares += value * value;
     }
-    let inverse_rms =
-        1.0 / libm::sqrtf(sum_squares / HEAD_DIMENSION as f32 + RMS_EPSILON);
+    let inverse_rms = 1.0 / libm::sqrtf(sum_squares / HEAD_DIMENSION as f32 + RMS_EPSILON);
     for (value, weight) in head.iter_mut().zip(weights) {
         *value = *value * inverse_rms * *weight;
     }
@@ -250,8 +645,7 @@ pub fn rope_neox_in_place(head: &mut [f32], position: u32) -> Result<(), Error> 
     }
     for pair in 0..HALF_HEAD_DIMENSION {
         let exponent = pair as f32 / HALF_HEAD_DIMENSION as f32;
-        let angle =
-            position as f32 / libm::powf(ROPE_FREQUENCY_BASE, exponent);
+        let angle = position as f32 / libm::powf(ROPE_FREQUENCY_BASE, exponent);
         let cosine = libm::cosf(angle);
         let sine = libm::sinf(angle);
         let low = head[pair];
@@ -266,10 +660,7 @@ pub fn softmax_in_place(values: &mut [f32]) -> Result<(), Error> {
     if values.is_empty() {
         return Err(Error::Shape);
     }
-    let maximum = values
-        .iter()
-        .copied()
-        .fold(f32::NEG_INFINITY, f32::max);
+    let maximum = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut sum = 0.0f32;
     for value in values.iter_mut() {
         *value = libm::expf(*value - maximum);
@@ -298,8 +689,7 @@ pub fn shortconv_channel(
     kernel: [f32; 3],
 ) -> Result<(f32, f32, f32), Error> {
     let bx = b * x;
-    let convolution =
-        kernel[0] * state_oldest + kernel[1] * state_newest + kernel[2] * bx;
+    let convolution = kernel[0] * state_oldest + kernel[1] * state_newest + kernel[2] * bx;
     let output = c * convolution;
     if bx.is_finite() && output.is_finite() {
         Ok((output, state_newest, bx))

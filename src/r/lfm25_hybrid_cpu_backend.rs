@@ -11,17 +11,13 @@ use alloc::vec::Vec;
 use embassy_time::{Duration, Timer};
 use sha2::{Digest, Sha256};
 
-use trueos_fpga_abi::lfm25::{
-    self, NativeTensorDescriptor, TensorFormat, TensorRole,
-};
-use trueos_fpga_abi::lfm25_decode::{
-    DecodeCapabilities, DecodeOpKind, LayerStateSlot,
-};
+use trueos_fpga_abi::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};
+use trueos_fpga_abi::lfm25_decode::{DecodeCapabilities, DecodeOpKind, LayerStateSlot};
 use trueos_lfm25_cpu as cpu;
 
 use crate::r::lfm25_decode::{
-    AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest,
-    HiddenQ8, HiddenQ30, ResidentTensorHandle,
+    AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, HiddenQ8, HiddenQ30,
+    ResidentTensorHandle,
 };
 use crate::r::{lfm25_ffn, lfm25_model};
 
@@ -96,9 +92,7 @@ pub struct HybridCpuAotDecodeBackend {
 
 pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCpuBackendError> {
     if !crate::r::fpga_offload::lfm25_row_stream_available() {
-        return Err(HybridCpuBackendError::Ffn(
-            lfm25_ffn::Error::StreamUnavailable,
-        ));
+        return Err(HybridCpuBackendError::Ffn(lfm25_ffn::Error::StreamUnavailable));
     }
     let image = lfm25_model::open().await?;
     let bytes = usize::try_from(image.len()).map_err(|_| HybridCpuBackendError::Allocation)?;
@@ -162,10 +156,7 @@ impl HybridCpuAotDecodeBackend {
             .ok_or(HybridCpuBackendError::Tensor)
     }
 
-    fn tensor(
-        &self,
-        descriptor: NativeTensorDescriptor,
-    ) -> Result<&[u8], HybridCpuBackendError> {
+    fn tensor(&self, descriptor: NativeTensorDescriptor) -> Result<&[u8], HybridCpuBackendError> {
         let start = descriptor.native_offset as usize;
         let end = start
             .checked_add(descriptor.native_bytes as usize)
@@ -219,10 +210,7 @@ impl HybridCpuAotDecodeBackend {
         Ok(output)
     }
 
-    fn handle_index(
-        &self,
-        handle: ResidentTensorHandle,
-    ) -> Result<usize, HybridCpuBackendError> {
+    fn handle_index(&self, handle: ResidentTensorHandle) -> Result<usize, HybridCpuBackendError> {
         if handle.connection_generation() != CPU_CONNECTION_GENERATION
             || handle.session_epoch() != CPU_SESSION_EPOCH
         {
@@ -257,7 +245,10 @@ impl HybridCpuAotDecodeBackend {
         }
     }
 
-    fn allocate(&mut self, tensor: CpuTensor) -> Result<ResidentTensorHandle, HybridCpuBackendError> {
+    fn allocate(
+        &mut self,
+        tensor: CpuTensor,
+    ) -> Result<ResidentTensorHandle, HybridCpuBackendError> {
         let index = if let Some(index) = self.slots.iter().position(Option::is_none) {
             self.slots[index] = Some(tensor);
             index
@@ -270,20 +261,14 @@ impl HybridCpuAotDecodeBackend {
             index
         };
         let slot = u16::try_from(index).map_err(|_| HybridCpuBackendError::Allocation)?;
-        Ok(ResidentTensorHandle::new(
-            CPU_CONNECTION_GENERATION,
-            CPU_SESSION_EPOCH,
-            slot,
-        ))
+        Ok(ResidentTensorHandle::new(CPU_CONNECTION_GENERATION, CPU_SESSION_EPOCH, slot))
     }
 
     fn allocate_q30(&mut self, values: Vec<f32>) -> Result<HiddenQ30, HybridCpuBackendError> {
         if values.len() != HIDDEN {
             return Err(HybridCpuBackendError::Tensor);
         }
-        Ok(HiddenQ30::from_resident(
-            self.allocate(CpuTensor::Q30(values))?,
-        ))
+        Ok(HiddenQ30::from_resident(self.allocate(CpuTensor::Q30(values))?))
     }
 
     fn allocate_q8(&mut self, values: Vec<f32>) -> Result<HiddenQ8, HybridCpuBackendError> {
@@ -291,9 +276,7 @@ impl HybridCpuAotDecodeBackend {
             return Err(HybridCpuBackendError::Tensor);
         }
         let blocks = cpu::quantize_q8(&values)?;
-        Ok(HiddenQ8::from_resident(
-            self.allocate(CpuTensor::Q8(CpuQ8Tensor { values, blocks }))?,
-        ))
+        Ok(HiddenQ8::from_resident(self.allocate(CpuTensor::Q8(CpuQ8Tensor { values, blocks }))?))
     }
 
     fn release(&mut self, handle: ResidentTensorHandle) -> Result<(), HybridCpuBackendError> {
@@ -346,19 +329,14 @@ impl HybridCpuAotDecodeBackend {
         input: HiddenQ8,
     ) -> Result<HiddenQ30, HybridCpuBackendError> {
         let slot = match state_slot {
-            LayerStateSlot::ShortConv(slot)
-                if (slot as usize) < self.shortconv.len() =>
-            {
+            LayerStateSlot::ShortConv(slot) if (slot as usize) < self.shortconv.len() => {
                 slot as usize
             }
             _ => return Err(HybridCpuBackendError::State),
         };
         let input_values = self.q8_tensor(input)?.values.clone();
         let projected = self
-            .project(
-                Self::descriptor(Some(layer), TensorRole::ShortConvInput)?,
-                &input_values,
-            )
+            .project(Self::descriptor(Some(layer), TensorRole::ShortConvInput)?, &input_values)
             .await?;
         if projected.len() != 3 * HIDDEN {
             return Err(HybridCpuBackendError::Tensor);
@@ -393,10 +371,7 @@ impl HybridCpuAotDecodeBackend {
             mixed.push(output);
         }
         let output = self
-            .project(
-                Self::descriptor(Some(layer), TensorRole::ShortConvOutput)?,
-                &mixed,
-            )
+            .project(Self::descriptor(Some(layer), TensorRole::ShortConvOutput)?, &mixed)
             .await?;
         self.release_q8(input)?;
         self.allocate_q30(output)
@@ -423,16 +398,12 @@ impl HybridCpuAotDecodeBackend {
         let value = self
             .project(Self::descriptor(Some(layer), TensorRole::Value)?, &input_values)
             .await?;
-        if query.len() != HEADS * HEAD_DIM
-            || key.len() != KV_ELEMENTS
-            || value.len() != KV_ELEMENTS
+        if query.len() != HEADS * HEAD_DIM || key.len() != KV_ELEMENTS || value.len() != KV_ELEMENTS
         {
             return Err(HybridCpuBackendError::Tensor);
         }
-        let query_norm =
-            self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::QueryNorm)?)?;
-        let key_norm =
-            self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::KeyNorm)?)?;
+        let query_norm = self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::QueryNorm)?)?;
+        let key_norm = self.bf16_tensor(Self::descriptor(Some(layer), TensorRole::KeyNorm)?)?;
         for head in query.chunks_exact_mut(HEAD_DIM) {
             cpu::rms_norm_head_in_place(head, &query_norm)?;
             cpu::rope_neox_in_place(head, position)?;
@@ -485,18 +456,14 @@ impl HybridCpuAotDecodeBackend {
             for dimension in 0..HEAD_DIM {
                 let mut sum = 0.0f32;
                 for (cache_position, &weight) in scores.iter().enumerate() {
-                    let value_index =
-                        cache_position * KV_ELEMENTS + kv_head * HEAD_DIM + dimension;
+                    let value_index = cache_position * KV_ELEMENTS + kv_head * HEAD_DIM + dimension;
                     sum += weight * self.kv[slot].values[value_index];
                 }
                 context[output_start + dimension] = sum;
             }
         }
         let output = self
-            .project(
-                Self::descriptor(Some(layer), TensorRole::AttentionOutput)?,
-                &context,
-            )
+            .project(Self::descriptor(Some(layer), TensorRole::AttentionOutput)?, &context)
             .await?;
         self.release_q8(input)?;
         self.allocate_q30(output)
@@ -547,7 +514,13 @@ impl HybridCpuAotDecodeBackend {
             .iter()
             .copied()
             .enumerate()
-            .reduce(|best, candidate| if candidate.1 > best.1 { candidate } else { best })
+            .reduce(|best, candidate| {
+                if candidate.1 > best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            })
             .ok_or(HybridCpuBackendError::Tensor)?;
         self.release_q8(input)?;
         Ok((
@@ -556,11 +529,7 @@ impl HybridCpuAotDecodeBackend {
         ))
     }
 
-    fn callback(
-        &mut self,
-        operation: DecodeOpKind,
-        output: AotDecodeOutput,
-    ) -> AotDecodeCallback {
+    fn callback(&mut self, operation: DecodeOpKind, output: AotDecodeOutput) -> AotDecodeCallback {
         self.callback_sequence = self.callback_sequence.wrapping_add(1);
         AotDecodeCallback {
             operation,
@@ -590,13 +559,9 @@ impl AotDecodeBackend for HybridCpuAotDecodeBackend {
             AotDecodeRequest::TokenEmbedding { row } => {
                 AotDecodeOutput::HiddenQ30(self.embedding(row.native_offset, row.native_bytes)?)
             }
-            AotDecodeRequest::OperatorRmsNorm { layer, input } => {
-                AotDecodeOutput::HiddenQ8(self.norm(
-                    Some(layer),
-                    TensorRole::OperatorNorm,
-                    input,
-                )?)
-            }
+            AotDecodeRequest::OperatorRmsNorm { layer, input } => AotDecodeOutput::HiddenQ8(
+                self.norm(Some(layer), TensorRole::OperatorNorm, input)?,
+            ),
             AotDecodeRequest::ShortConv {
                 layer,
                 position,
@@ -630,20 +595,11 @@ impl AotDecodeBackend for HybridCpuAotDecodeBackend {
                 residual, branch, ..
             } => AotDecodeOutput::HiddenQ30(self.residual(residual, branch)?),
             AotDecodeRequest::FinalRmsNorm { input } => {
-                AotDecodeOutput::HiddenQ8(self.norm(
-                    None,
-                    TensorRole::TokenEmbeddingNorm,
-                    input,
-                )?)
+                AotDecodeOutput::HiddenQ8(self.norm(None, TensorRole::TokenEmbeddingNorm, input)?)
             }
             AotDecodeRequest::TiedLmHeadArgmax { head, input } => {
                 let (token, score_q30) = self
-                    .lm_head(
-                        input,
-                        head.native_offset,
-                        head.rows,
-                        head.row_bytes,
-                    )
+                    .lm_head(input, head.native_offset, head.rows, head.row_bytes)
                     .await?;
                 AotDecodeOutput::Argmax {
                     token,

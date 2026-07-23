@@ -6,6 +6,7 @@ LFM2.5-350M model.
 ## Installed artifacts
 
 - Model: `LFM2.5-350M-Q8_0.gguf`
+- TRUEOS tokenizer: `LFM2.5-350M-Q8_0.tokenizer.bin` (generated)
 - Upstream: `LiquidAI/LFM2.5-350M-GGUF`
 - Upstream revision: `bb7ee58b243e4cede04187e323e760b04f8a0091`
 - Exact size: `379217632` bytes (379 MB decimal, 361.6 MiB)
@@ -64,8 +65,10 @@ From the repository root, seal the pinned GGUF into the deterministic TRUEGA mod
 ./crates/trueos-fpga-abi/truega/tools/build_lfm25_image.sh
 ```
 
-The generated `LFM2.5-350M-Q8_0.truega.bin` remains ignored beside the GGUF. This is an
-offline conversion only; the command does not invoke Gowin, PCIe, JTAG, or flashing.
+The generated `LFM2.5-350M-Q8_0.truega.bin` and
+`LFM2.5-350M-Q8_0.tokenizer.bin` remain ignored beside the GGUF. Install both
+under `trueosfs:/models/lfm2.5/`. This is an offline conversion only; the
+command does not invoke Gowin, PCIe, JTAG, or flashing.
 
 ## Capture the layer-0 FFN golden vectors
 
