@@ -26,7 +26,7 @@ pub(crate) use crate::shell2::backends::{
     CONTAINER_SHELL_BACKEND, NET_TCP_SHELL_BACKEND, container_shell_drain_output,
     container_shell_read_output_byte, container_shell_submit_input, crlf,
 };
-pub(crate) use interface::{ShellBackend2, ShellIo2};
+pub(crate) use interface::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
 use shell2_apps::AppsPromptMode;
 use shell2_surf::SurfPromptPrefix;
 
@@ -1760,9 +1760,7 @@ pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
         // consuming the user's next command as stale confirmation input.
         prune_finished_command_sessions(&mut command_sessions);
 
-        if (output_mask & OUTPUT_NET_TCP_MASK) != 0
-            && crate::shell2::backends::net_tcp::net_shell_direct_active()
-        {
+        if io.terminal_handoff_active() {
             Timer::after(EmbassyDuration::from_millis(10)).await;
             continue;
         }

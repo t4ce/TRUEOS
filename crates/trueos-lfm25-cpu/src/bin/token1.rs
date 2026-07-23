@@ -13,6 +13,8 @@ const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
 const FFN: usize = lfm25::MODEL_FEED_FORWARD_SIZE as usize;
 const ATTENTION_SLOTS: usize = 256;
+const CHECKPOINTS_PER_TOKEN: usize = 275;
+const LLAMA_COMMIT: &[u8; 40] = b"76f46ad29d61fd8c1401e8221842934bf62a6064";
 const TOKENS: [u32; 10] = [1, 6, 6423, 708, 6928, 7, 708, 6, 64015, 708];
 const SIDECAR_SHA256: [u8; 32] = [
     0xa6, 0x0c, 0x0d, 0x28, 0xe5, 0xe0, 0xf4, 0x83, 0x06, 0x99, 0x26, 0x0f, 0xbd, 0x9c, 0x01, 0x15,
@@ -715,6 +717,7 @@ fn read_golden(path: &Path) -> Result<GoldenTrace, String> {
     if bytes.get(..8) != Some(b"TGALDE2\0")
         || read_u32(&bytes, 8)? != 2
         || read_u32(&bytes, 12)? != 256
+        || bytes.get(112..152) != Some(LLAMA_COMMIT.as_slice())
         || bytes.get(152..184) != Some(lfm25::PINNED_GGUF_SHA256.as_slice())
         || bytes.get(184..216) != Some(lfm25::PINNED_NATIVE_IMAGE_SHA256.as_slice())
         || bytes.get(216..248) != Some(lfm25::generated::MODEL_CONTRACT_SHA256.as_slice())
@@ -725,7 +728,7 @@ fn read_golden(path: &Path) -> Result<GoldenTrace, String> {
     let checkpoints_per_token = read_u32(&bytes, 20)? as usize;
     let total_checkpoints = read_u32(&bytes, 24)? as usize;
     if token_count != TOKENS.len()
-        || checkpoints_per_token == 0
+        || checkpoints_per_token != CHECKPOINTS_PER_TOKEN
         || total_checkpoints != token_count * checkpoints_per_token
     {
         return Err("hi trace count contract".to_string());

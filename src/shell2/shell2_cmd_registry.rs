@@ -22,6 +22,7 @@ const STATUS_GREEN_RGB: (u8, u8, u8) = (60, 220, 120);
 const STATUS_GREEN_SQUARE_BRACKET_RGB: (u8, u8, u8) = (78, 232, 136);
 const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
+const STATUS_NETWORK_RGB: (u8, u8, u8) = (70, 220, 210);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
 const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
 const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
@@ -45,6 +46,7 @@ const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"str
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"IPv4 address and TCP port in ip:port form."}},"required":["endpoint"],"additionalProperties":false}"#;
 const TOOL_JSON_TGA: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","add","xor"],"description":"Inspect TRUEGA or issue an end-to-end work package."},"a":{"type":"integer","minimum":0,"maximum":4294967295,"description":"First u32 argument for add or xor."},"b":{"type":"integer","minimum":0,"maximum":4294967295,"description":"Second u32 argument for add or xor."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TXT: &str = r#"{"type":"object","properties":{"file":{"type":"string","description":"Optional file path to open in the Blueprint terminal editor."}},"required":[],"additionalProperties":false}"#;
@@ -116,6 +118,10 @@ fn dispatch_sha(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::smp::try_parse(io, &mut args)
+}
+
+fn dispatch_ssh(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::ssh::try_parse(spawner, io, rest)
 }
 
 fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -502,6 +508,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_description: Some("Inspect SMP slot state."),
         tool_parameters_json: Some(TOOL_JSON_SMP),
     },
+    BuiltinShell2CmdEntry {
+        name: "ssh",
+        mode: "tui",
+        color: Some(STATUS_NETWORK_RGB),
+        advertised: true,
+        handler: dispatch_ssh,
+        tool_description: Some("Open a raw terminal handoff to a TRUEOS Shell2 IPv4 TCP endpoint."),
+        tool_parameters_json: Some(TOOL_JSON_SSH),
+    },
 ];
 
 fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
@@ -560,8 +575,8 @@ pub(crate) fn try_dispatch(
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
         "7z", "lsd", "rm", "mv", "sha", "disc", "install", "update", "hyper", "net", "c4", "qjs",
-        "txt", "grid", "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb", "smp",
-        "etc",
+        "ssh", "txt", "grid", "tts", "stt", "fnt", "gpgpu", "vgpu", "vid", "cry", "acpi", "tlb",
+        "smp", "etc",
     ];
 
     let mut out = AllocString::new();

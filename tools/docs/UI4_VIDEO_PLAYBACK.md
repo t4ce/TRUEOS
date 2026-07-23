@@ -61,6 +61,68 @@ There is no CPU pixel conversion or full-frame CPU copy after decode. The CPU st
 
 Older Rust/kernel artifact symbols still contain `Tile64` for baked ABI compatibility. The proven VDBOX byte layout is the legacy 128x32 media Y-tile swizzle; human-facing logs now say `media-ytile-nv12` to avoid repeating that bring-up mistake.
 
+## Latency probe architecture
+
+The live ordered conversion path carries one probe record from the conversion
+worker through the GuC submission and back into the 200-frame playback
+aggregate. All GPU phase samples use the same 36-bit RCS timestamp domain:
+
+```text
+host pre-submit sample
+  -> GuC H2G FAST_REQUEST publication
+  -> host observes GuC H2G-head consumption
+  -> GPU batch-entry PIPE_CONTROL timestamp
+  -> pre-walker PIPE_CONTROL timestamp
+  -> post-walker PIPE_CONTROL timestamp
+  -> post-release PIPE_CONTROL timestamp
+  -> host completion observation
+```
+
+The first complete 600-frame capture showed a 3.652 ms walker and a stable
+18 us batch prologue, but a 10.665-10.911 ms average from the host pre-submit
+sample to batch entry. The last 200 frames split that start delay into 103
+approximately 230 us starts, 28 starts between 7 and 16 ms, and 69
+approximately 25 ms starts. The ordered GPU phases closed to within the
+timestamp conversion rounding error, placing the dominant variance before
+batch entry rather than in the IGC kernel, release sequence, or AP-side
+completion observation.
+
+The follow-up harness gives every H2G publication a monotonic stream position
+and carries that position through the physical submission, vGPU timeline, and
+executor token. Existing completion polls non-blockingly observe the GuC H2G
+head and take an RCS-clock sample when it passes the exact submission. This
+adds no synchronous GuC wait. A split is reported only when that observation
+precedes batch entry:
+
+- `pre_submit_to_h2g_consumed_observe` is an upper bound on CTB intake time,
+  because the host may observe consumption after GuC actually consumed it.
+- `h2g_consumed_observe_to_batch` is the corresponding lower bound on
+  scheduler/context-residency and RCS dispatch time.
+- Fast jobs whose batch starts before the first host observation remain valid
+  complete phase samples but are excluded from the H2G split aggregate.
+
+Per-frame `ui4/guc-compositor: complete` records include the publish sequence,
+both split intervals, and `gpu_h2g_split_valid`. The playback
+`conversion-probe` line aggregates sample count, average, maximum, p50, and
+p95 for both intervals.
+
+SURFLIVE is the software-visible scanout boundary, not part of the converter.
+The path leading to it still matters to presentation latency: publication,
+compositor import, plane-flip timing, and a possible display/vblank interval
+all happen after producer release and before SURFLIVE. Once SURFLIVE proves
+the replacement allocation is display-live, the remaining kernel path only
+releases the previous display lease and records retirement; it performs no
+pixel conversion, copy, or per-frame GuC work. It therefore cannot account
+for the measured conversion-worker or RCS submission latency. Physical
+scanout propagation and panel response remain beyond this software boundary
+if a photon-level latency measurement is required.
+
+Display lifetime can still backpressure a later conversion before this
+boundary: an RGBA target is not reusable until a replacement SURFLIVE releases
+its old display lease. That wait is intentionally charged to the conversion
+worker's `rgba_acquire` phase. It is distinct from both the 10-11 ms
+pre-batch-entry delay and the negligible bookkeeping after observed SURFLIVE.
+
 ## Lifecycle
 
 1. Shell2 reserves the singleton UI4 video lifetime. No Frame/window is allocated yet.

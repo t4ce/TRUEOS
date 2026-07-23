@@ -243,7 +243,14 @@ pub async fn net_shell_task() {
                         let mut rx_data = data;
                         let direct_mode =
                             crate::shell2::backends::net_tcp::net_shell_direct_active();
-                        if initial_repaint_handle == Some(handle) && !direct_mode {
+                        let direct_passthrough =
+                            crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active();
+                        if direct_passthrough {
+                            initial_repaint_handle = None;
+                            initial_repaint_ticks = 0;
+                            initial_rx_probe.clear();
+                            resize_rx_probe.clear();
+                        } else if initial_repaint_handle == Some(handle) && !direct_mode {
                             initial_rx_probe.extend_from_slice(&rx_data);
                             if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&initial_rx_probe)
@@ -480,7 +487,10 @@ pub async fn net_shell_task() {
                 }
             }
 
-            if initial_repaint_handle.is_none() {
+            if crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active() {
+                resize_query_ticks = 0;
+                resize_rx_probe.clear();
+            } else if initial_repaint_handle.is_none() {
                 let active_handle = {
                     let st = NET_SHELL_STATE.lock();
                     st.handle

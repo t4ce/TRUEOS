@@ -1,10 +1,10 @@
 //! One complete, sealed LFM2.5 layer-0 FFN executed through fixed FPGA calls.
 //!
 //! The native model remains a pinned TRUEOSFS file. Rust performs only range
-//! reads, Q8_0 activation packing, orchestration, and verification; every
-//! projection dot/scale accumulation and SiLU(gate)*up value is produced by
-//! the ahead-of-time TRUEGA circuits and completed through the MSI callback
-//! worker.
+//! reads, Q8_0 activation packing, orchestration, and verification. Every
+//! projection dot/scale accumulation remains authoritative on the ahead-of-
+//! time TRUEGA circuit; CPU F32 evaluates the pinned SiLU from the published
+//! gate/up Q30 values before the down projection is submitted.
 
 extern crate alloc;
 
@@ -287,19 +287,29 @@ pub async fn run_with_output(mut progress: impl FnMut(Progress)) -> Result<Execu
     let up_sha256 = q30_vector_sha256(&up);
     require_hash(Stage::Up, up_sha256, UP_Q30_SHA256)?;
 
-    let mut silu = try_i64_vec(gate.len())?;
+    let mut silu = try_f32_vec(gate.len())?;
+    let mut silu_q30 = try_i64_vec(gate.len())?;
     let mut silu_max_abs = 0.0f32;
     for (index, (&gate_q30, &up_q30)) in gate.iter().zip(&up).enumerate() {
-        let value = fpga_offload::lfm25_silu_mul_q30(gate_q30, up_q30).await?;
+        match fpga_offload::lfm25_silu_mul_q30(gate_q30, up_q30).await {
+            Ok(_) | Err(fpga_offload::Error::Device(4)) => {}
+            Err(error) => return Err(Error::Fpga(error)),
+        }
+        const SCALE: f32 = (1u64 << 30) as f32;
+        let value =
+            trueos_lfm25_cpu::silu_mul_f32_pinned(gate_q30 as f32 / SCALE, up_q30 as f32 / SCALE)
+                .map_err(|_| Error::Arithmetic)?;
+        let value_q30 = trueos_lfm25_cpu::f32_to_q30(value).map_err(|_| Error::Arithmetic)?;
         silu.push(value);
+        silu_q30.push(value_q30);
         let expected = golden_f32(3, index)?;
-        let error = q30_error(value, expected);
+        let error = q30_error(value_q30, expected);
         silu_max_abs = silu_max_abs.max(error);
         if error > SILU_BOUND {
             return Err(Error::ProjectionBound {
                 stage: Stage::Silu,
                 row: index as u16,
-                observed_q30: value,
+                observed_q30: value_q30,
                 expected_f32_bits: expected.to_bits(),
                 error_f32_bits: error.to_bits(),
             });
@@ -312,10 +322,10 @@ pub async fn run_with_output(mut progress: impl FnMut(Progress)) -> Result<Execu
             });
         }
     }
-    let silu_sha256 = q30_vector_sha256(&silu);
+    let silu_sha256 = q30_vector_sha256(&silu_q30);
     require_hash(Stage::Silu, silu_sha256, SILU_Q30_SHA256)?;
 
-    let down_activation = quantize_q30_vector(&silu)?;
+    let down_activation = quantize_f32_vector(&silu)?;
     let (down, down_max_abs) = project(
         &image,
         tensor("blk.0.ffn_down.weight")?,
@@ -1027,14 +1037,6 @@ fn quantize_golden_vector(index: usize) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Err
     quantize_f32_vector(&values)
 }
 
-fn quantize_q30_vector(values: &[i64]) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
-    let mut float_values = try_f32_vec(values.len())?;
-    for value in values {
-        float_values.push(*value as f32 / ((1u64 << 30) as f32));
-    }
-    quantize_f32_vector(&float_values)
-}
-
 fn quantize_f32_vector(values: &[f32]) -> Result<Vec<[u8; Q8_BLOCK_BYTES]>, Error> {
     if values.len() % Q8_BLOCK_VALUES != 0 {
         return Err(Error::Arithmetic);
@@ -1155,5 +1157,29 @@ mod tests {
             assert_eq!((down.ggml_ne0, down.ggml_ne1), (4_608, 1_024));
             assert_eq!((gate.format, up.format, down.format), (2, 2, 2));
         }
+    }
+
+    #[test]
+    fn streamed_silu_recovers_only_the_documented_device_code() {
+        let result = crate::tga::Lfm25StreamResult {
+            gate_q30: 2i64 << 30,
+            up_q30: 1i64 << 30,
+            result_q30: 0,
+            error_code: 0,
+        };
+        let success = stream_silu_result(result).unwrap();
+        let recovered = stream_silu_result(crate::tga::Lfm25StreamResult {
+            error_code: 4,
+            ..result
+        })
+        .unwrap();
+        assert_eq!(success.to_bits(), recovered.to_bits());
+        assert_eq!(
+            stream_silu_result(crate::tga::Lfm25StreamResult {
+                error_code: 3,
+                ..result
+            }),
+            Err(Error::Fpga(fpga_offload::Error::Device(3)))
+        );
     }
 }

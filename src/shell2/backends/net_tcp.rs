@@ -1,9 +1,9 @@
 use alloc::collections::VecDeque;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::net::adapter::NetHandle;
-use crate::shell2::{ShellBackend2, ShellIo2};
+use crate::shell2::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
 
 pub(crate) use crate::r::net::ports::NET_SHELL_TCP_PORT;
 
@@ -13,7 +13,7 @@ pub(crate) static NET_TCP_SHELL_BACKEND: NetTcpShellBackend = NetTcpShellBackend
 
 static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
-static NET_SHELL_DIRECT_VM: AtomicU8 = AtomicU8::new(0);
+static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 // Direct terminal apps may stop before their userspace guard flushes its
 // cleanup, and release_net_shell_direct intentionally drops queued app paint.
@@ -66,9 +66,9 @@ pub(crate) fn net_shell_direct_reset_terminal() {
     net_shell_write_bytes(NET_SHELL_DIRECT_TERMINAL_RESET);
 }
 
-pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
-    let owner = vm_id.saturating_add(1);
-    let previous = NET_SHELL_DIRECT_VM
+fn claim_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
+    let owner = owner.raw();
+    let previous = NET_SHELL_DIRECT_OWNER
         .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)
         .unwrap_or_else(|current| current);
     if previous != 0 && previous != owner {
@@ -80,16 +80,15 @@ pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
     st.tx.clear();
     NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
-    NET_SHELL_DIRECT_VM.store(owner, Ordering::Release);
+    NET_SHELL_DIRECT_OWNER.store(owner, Ordering::Release);
     drop(st);
     net_shell_direct_reset_terminal();
     true
 }
 
-pub(crate) fn release_net_shell_direct(vm_id: u8) {
-    let owner = vm_id.saturating_add(1);
-    if NET_SHELL_DIRECT_VM
-        .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
+fn release_net_shell_terminal(owner: TerminalHandoffOwner) {
+    if NET_SHELL_DIRECT_OWNER
+        .compare_exchange(owner.raw(), 0, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
         {
@@ -105,11 +104,47 @@ pub(crate) fn release_net_shell_direct(vm_id: u8) {
 }
 
 pub(crate) fn net_shell_direct_active() -> bool {
-    NET_SHELL_DIRECT_VM.load(Ordering::Acquire) != 0
+    NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != 0
+}
+
+pub(crate) fn net_shell_direct_passthrough_active() -> bool {
+    (NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) & TerminalHandoffOwner::STREAM_KIND) != 0
+}
+
+fn net_shell_terminal_owned_by(owner: TerminalHandoffOwner) -> bool {
+    NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == owner.raw()
+}
+
+fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize {
+    if out.is_empty() || !net_shell_terminal_owned_by(owner) {
+        return 0;
+    }
+    let mut st = NET_SHELL_STATE.lock();
+    let read = out.len().min(st.rx.len());
+    for byte in &mut out[..read] {
+        *byte = st.rx.pop_front().unwrap_or_default();
+    }
+    read
+}
+
+fn net_shell_terminal_write(owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
+    if !net_shell_terminal_owned_by(owner) {
+        return false;
+    }
+    net_shell_write_bytes(bytes);
+    true
+}
+
+pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
+    claim_net_shell_terminal(TerminalHandoffOwner::blueprint(vm_id))
+}
+
+pub(crate) fn release_net_shell_direct(vm_id: u8) {
+    release_net_shell_terminal(TerminalHandoffOwner::blueprint(vm_id));
 }
 
 pub(crate) fn net_shell_direct_owned_by(vm_id: u8) -> bool {
-    NET_SHELL_DIRECT_VM.load(Ordering::Acquire) == vm_id.saturating_add(1)
+    net_shell_terminal_owned_by(TerminalHandoffOwner::blueprint(vm_id))
 }
 
 pub(crate) fn net_shell_direct_inject_input(vm_id: u8, bytes: &[u8]) -> bool {
@@ -215,5 +250,29 @@ impl ShellBackend2 for NetTcpShellBackend {
     #[inline]
     fn read_byte(&self) -> Option<u8> {
         net_shell_read_byte()
+    }
+
+    fn claim_terminal_handoff(&self, owner: TerminalHandoffOwner) -> bool {
+        claim_net_shell_terminal(owner)
+    }
+
+    fn release_terminal_handoff(&self, owner: TerminalHandoffOwner) {
+        release_net_shell_terminal(owner);
+    }
+
+    fn terminal_handoff_active(&self) -> bool {
+        net_shell_direct_active()
+    }
+
+    fn supports_terminal_handoff(&self) -> bool {
+        true
+    }
+
+    fn terminal_handoff_read(&self, owner: TerminalHandoffOwner, out: &mut [u8]) -> usize {
+        net_shell_terminal_read(owner, out)
+    }
+
+    fn terminal_handoff_write(&self, owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
+        net_shell_terminal_write(owner, bytes)
     }
 }
